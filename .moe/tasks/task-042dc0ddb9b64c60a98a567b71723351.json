@@ -1,0 +1,35 @@
+{
+  "id": "task-042dc0ddb9b64c60a98a567b71723351",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-06] Wrappers: Serena root, shared memory and skills links, and the link manifest",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §5.2 (skills link), §5.3, §5.4 and §1.10 (write side).\n\nObjective: a seat in W gets LSP over the task's own bytes while sharing the project's Serena memories and Claude skills with every other seat, and every link it makes is recorded so removal (WT-14) can unlink it safely.\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins:\n- Serena root: when the resolved Serena root is the control checkout (the default), it becomes W. A serenaProject or MOE_SERENA_PROJECT override that resolves outside the control checkout is kept and prints MOE_WORKTREE_SERENA_OUTSIDE.\n- Links:\n  - W/.serena/memories → <control>/.serena/memories\n  - W/.claude/skills → <control>/.claude/skills\n  - Each is a symlink on Linux and a directory junction on Windows, and is appended to <gitdir>/moe/worktree/<taskId>.links (one W-relative path per line).\n  - A failed link prints MOE_WORKTREE_LINK_FAILED; the seat launches without that tool, never with a control-rooted fallback.\n- Copy <control>/.serena/project.yml into W with its project_name line rewritten to <name>@<taskId>; nothing is copied when it is missing.\n- For each tracked package-lock.json directory in W without node_modules, print MOE_WORKTREE_DEPS_MISSING <dir>, and add one worktree-mode prompt line telling the worker to run `npm ci --prefer-offline` (plus `npm run build` where tests need dist/) before testing that package. Nothing is linked for node_modules.\n- Cases in scripts/tests/postflight.sh and postflight.ps1. Depends on WT-05 (task-c4cccb84948c472d93263c9de60fed1d).\n\nNOT in scope: removal or unlinking (WT-14); landing (WT-07 onward); installing dependencies; docs (WT-18).\n\nVerification: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh (and on a Windows seat: node scripts/tests/postflight-safe.mjs powershell)",
+  "definitionOfDone": [
+    "postflight case (both harnesses): the Serena server written for the seat is rooted at W by default; an override outside the control checkout is kept and prints MOE_WORKTREE_SERENA_OUTSIDE.",
+    "postflight case: W/.serena/memories and W/.claude/skills resolve to the control checkout's directories, and both paths are listed in <gitdir>/moe/worktree/<taskId>.links.",
+    "postflight case: W/.serena/project.yml exists with project_name '<name>@<taskId>'; a forced link failure prints MOE_WORKTREE_LINK_FAILED and the seat still launches.",
+    "postflight case: a tracked package-lock.json directory without node_modules prints MOE_WORKTREE_DEPS_MISSING <dir>, and no node_modules link is created anywhere in W.",
+    "Both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes (grep -oE diff over moe-agent.sh vs moe-agent.ps1 is empty).",
+    "The verification command exits 0; postflight.ps1 passes via node scripts/tests/postflight-safe.mjs powershell."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-c4cccb84948c472d93263c9de60fed1d"
+  ],
+  "priority": "HIGH",
+  "order": 7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:50:38.545Z",
+  "updatedAt": "2026-10-30T11:50:38.545Z"
+}

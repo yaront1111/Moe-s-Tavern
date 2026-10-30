@@ -1,0 +1,35 @@
+{
+  "id": "task-b319b263fada419d9d7de279682dc5f4",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-07] Wrappers: checkpoint landing to the task branch with worktree attribution",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §2.4, §2.6 (the pre-push part) and §3.\n\nObjective: every non-completion exit of a worktree-mode worker session lands its bytes on moe/task/<taskId>, never on the target. Attribution inside the private worktree collapses to \"every non-DENY dirty path is the task's own\".\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins:\n- Steps L0-L2 of §2.2:\n  - the owner guard (landing_owner_guard / Get-MoeOwnerGuard, unchanged; get_commit_scope is used for assigneeProtected only);\n  - the W dirty set (`git -C W status --porcelain=v1 -z --untracked-files=all`) minus the worktree DENY variant denied_wt / Test-MoeDenyPathWorktree (today's list, no BOARD tier, plus .claude/skills/**);\n  - a temp-index commit with parent T and a CAS of refs/heads/moe/task/<taskId>, then `git -C W reset -q`.\n- In worktree mode, no baseline file is written and the PLANNED/MEASURED/PEER/CONTESTED/PREEXISTING tiers are not computed.\n- record_commit: kind checkpoint, ref refs/heads/moe/task/<taskId>, empty inferredPaths and unattributedPaths.\n- The task branch is pushed per checkpointPush with no force; a rejection is announced and changes nothing. No remote: no push.\n- At pre-flight, W dirt left by a crashed session becomes a recovery checkpoint (MOE_CHECKPOINT_RECOVERED).\n- A Ctrl+C teardown in worktree mode checkpoints to the task branch or leaves W dirty; it makes no shared-branch rescue.\n- Control-checkout seats (architect, QA, governor) land nothing in worktree mode and record MOE_COMMIT_NOTHING_TO_COMMIT.\n- Stray edits:\n  - the pre-flight writes <gitdir>/moe/worktree/<taskId>.control-dirt;\n  - at post-flight, new non-DENY non-.moe dirt in the control checkout prints MOE_WORKTREE_STRAY_EDIT and one add_comment (at most 20 paths);\n  - those bytes are never landed and never reverted.\n- Cases in scripts/tests/postflight.sh and postflight.ps1. Depends on WT-06 (task-042dc0ddb9b64c60a98a567b71723351).\n\nNOT in scope: completion landing to the target (WT-08/WT-09); the gate (WT-10); the unlanded route and MERGE_HEAD handling (WT-11); board snapshots (WT-12); shared-mode attribution, which must stay unchanged; docs (WT-18).\n\nVerification: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh (and on a Windows seat: node scripts/tests/postflight-safe.mjs powershell)",
+  "definitionOfDone": [
+    "postflight case (both harnesses): a WORKING exit in worktree mode commits every dirty non-DENY W path to moe/task/<taskId> (parent = previous tip), leaves the target and the control checkout untouched, and records a checkpoint with ref refs/heads/moe/task/<taskId>.",
+    "postflight case: DENY paths in W (.mcp.json, .codex/x, .claude/skills link, an untracked .serena file) print MOE_ATTR_EXCLUDED and are not in the commit; no <gitdir>/moe/baseline/<taskId>.tsv is written in worktree mode.",
+    "postflight case: W dirt at pre-flight becomes a checkpoint with MOE_CHECKPOINT_RECOVERED; an architect/QA seat exit in worktree mode records MOE_COMMIT_NOTHING_TO_COMMIT.",
+    "postflight case: a file the seat writes into the control checkout prints MOE_WORKTREE_STRAY_EDIT, appears in one task comment, and is neither committed nor reverted.",
+    "postflight: all existing shared-mode attribution cases pass unchanged; both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes (grep -oE diff is empty).",
+    "The verification command exits 0; postflight.ps1 passes via node scripts/tests/postflight-safe.mjs powershell."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-042dc0ddb9b64c60a98a567b71723351"
+  ],
+  "priority": "HIGH",
+  "order": 8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:51:18.624Z",
+  "updatedAt": "2026-10-30T11:51:18.624Z"
+}
