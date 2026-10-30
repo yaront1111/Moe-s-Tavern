@@ -197,6 +197,23 @@ function pathnameOf(url: string): string {
   }
 }
 
+/**
+ * Origins a WebSocket upgrade may carry. Empty: browsers attach Origin to every
+ * WebSocket upgrade and apply no CORS to it, and no Moe client is a browser (the
+ * IDE plugins, moe-proxy, the Claude plugin hook and the local runner send none).
+ * Add an origin here only for a first-party browser client; there is
+ * deliberately no setting or environment knob.
+ */
+const ALLOWED_WS_ORIGINS: readonly string[] = Object.freeze([]);
+/** ws reads Origin for a version-13 handshake and Sec-WebSocket-Origin for version 8; check both. */
+const ORIGIN_HEADERS = ['origin', 'sec-websocket-origin'] as const;
+const LOGGED_ORIGIN_MAX_CHARS = 120;
+
+/** True for an absent Origin (undefined) or an allowed one. A present 'null' or '' is refused. */
+export function isAllowedUpgradeOrigin(origin: string | undefined): boolean {
+  return origin === undefined || ALLOWED_WS_ORIGINS.includes(origin);
+}
+
 export class MoeWebSocketServer {
   private wss: WSS;
   private pluginClients = new Set<WebSocket>();
@@ -224,11 +241,44 @@ export class MoeWebSocketServer {
   ) {
     // Cap incoming frame size to prevent memory exhaustion from malicious clients.
     // 2MB is generous for state snapshots and MCP tool args; activity log queries are paginated.
-    this.wss = new WSS({ server: httpServer, maxPayload: 2 * 1024 * 1024 });
+    // verifyClient runs inside ws's handleUpgrade, so every 'upgrade' routed here is checked
+    // before 'connection'. The 2-argument form is required: ws refuses the 1-argument form with 401.
+    this.wss = new WSS({
+      server: httpServer,
+      maxPayload: 2 * 1024 * 1024,
+      verifyClient: (info, done) => this.verifyUpgradeOrigin(info, done),
+    });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
     this.wss.on('error', (error) => {
       logger.error({ error }, 'WebSocket server error');
     });
+  }
+
+  /** Refuse, with a fixed 403 body that never echoes the origin, any upgrade on any path whose Origin is not allowed. */
+  private verifyUpgradeOrigin(
+    info: { req: IncomingMessage },
+    done: (verified: boolean, code?: number, message?: string) => void,
+  ): void {
+    // done(true) stays outside the check's try: it runs 'connection' synchronously.
+    if (this.upgradeOriginAllowed(info.req)) done(true);
+    else done(false, 403, 'Forbidden');
+  }
+
+  /** False, after a warn log, for a present Origin outside ALLOWED_WS_ORIGINS or any exception (fail closed). */
+  private upgradeOriginAllowed(req: IncomingMessage): boolean {
+    try {
+      const refused = ORIGIN_HEADERS.flatMap((name) => req.headersDistinct[name] ?? [])
+        .find((origin) => !isAllowedUpgradeOrigin(origin));
+      if (refused === undefined) return true;
+      logger.warn({
+        remoteAddress: req.socket?.remoteAddress,
+        path: pathnameOf(req.url || '/'),
+        origin: refused.slice(0, LOGGED_ORIGIN_MAX_CHARS),
+      }, 'Refused WebSocket upgrade: Origin not allowed');
+    } catch (error) {
+      logger.warn({ error, remoteAddress: req.socket?.remoteAddress }, 'Refused WebSocket upgrade: Origin check failed');
+    }
+    return false;
   }
 
   /**

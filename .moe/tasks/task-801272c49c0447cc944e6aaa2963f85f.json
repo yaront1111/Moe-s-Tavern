@@ -11,9 +11,88 @@
     "`cd packages/moe-daemon && npm test` exits 0, with its output supplied to complete_task."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST: create packages/moe-daemon/src/server/webSocketOrigin.test.ts.\n\nHarness: follow server/runnerChannel.test.ts:\n- a temp project with StateManager and McpAdapter;\n- a real `createServer()` listening on 127.0.0.1:0;\n- `new MoeWebSocketServer(httpServer, state, adapter)`;\n- close everything in afterEach.\nUse two helpers:\n- `rawUpgrade(path, headerLines)`: net.connect, write exact bytes, resolve the first response line;\n- a 'ws' client helper that resolves 'open' or the 'unexpected-response' status.\n\nREFUSED rows. Each expects the status line `HTTP/1.1 403` and a response body that never contains the origin value. For /ws and /mcp, with `vi.spyOn(server as any, 'onConnection')`, assert onConnection is NEVER called: no snapshot is sent and no MCP client is attached.\n- Origin 'https://example.com', on /ws and on /mcp;\n- Origin 'null';\n- an empty Origin value (raw `Origin: \\r\\n`; present means `!== undefined`, never truthiness);\n- a mixed-case header name (`oRiGiN: https://example.com`; Node lowercases names);\n- an Origin on /runner WITH a valid runner key: still 403, because the rule applies on every path.\n\nACCEPTED rows (no Origin), one per real client:\n- 'ws' `new WebSocket(url)` with no options (moe-proxy, VS Code, wrapper RPC): opens on /ws and /mcp;\n- the claude-plugin's exact raw bytes from packages/moe-claude-plugin/src/daemonClient.ts:291-297 (GET, Host, `Upgrade: websocket`, `Connection: Upgrade`, Sec-WebSocket-Key, `Sec-WebSocket-Version: 13`): `HTTP/1.1 101`;\n- Node's global WebSocket (`globalThis.WebSocket`; skip when undefined): opens on /mcp. Probed at planning: Node v24's handshake carries no Origin;\n- the Java-WebSocket 1.6.0 header set (moe-jetbrains/build.gradle.kts pins org.java-websocket:Java-WebSocket:1.6.0): Host, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version. Confirm the exact names, order and casing against the 1.6.0 source (Draft_6455 and WebSocketClient) and cite it in a test comment. Expect `HTTP/1.1 101`;\n- /runner without an Origin still authenticates by its key: refused without the key, accepted with it. Reuse runnerChannel.test.ts's key helpers (ensureRunnerKey, RUNNER_KEY_HEADER).\n\nRun `npx vitest run src/server/webSocketOrigin.test.ts` in the snapshot (step 4) and confirm that only the refusal rows fail before step 2.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/server/webSocketOrigin.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/webSocketOrigin.test.ts"
+      ],
+      "note": "New webSocketOrigin.test.ts (harness after runnerChannel.test.ts: real http server + MoeWebSocketServer; rawUpgrade via net.connect + ws client helper). RED in Linux snapshot /tmp/moe-8012-gate.4AxopU (HEAD 227833f4, node v24.21.0): 17 failed / 7 passed. Every refusal row (/ws, /mcp, /, query, 'null', '', mixed-case name, /runner+valid key, ws origin option, truncation, fail-closed) plus the isAllowedUpgradeOrigin unit fail; all 7 accepted real-client rows pass. Beyond plan, two small rows: ws 8.22 reads ONLY sec-websocket-origin for a version-8 handshake (websocket-server.js:328-329), so a v8 upgrade with Origin would slip past info.origin. The rows cover v8+Origin and v13+Sec-WebSocket-Origin, and the impl reads both headers from req.headersDistinct. Java-WebSocket 1.6.0 was verified from the gradle-cache jar: no 'Origin' string in any class; HandshakedataImpl1 is a TreeMap(CASE_INSENSITIVE_ORDER), so headers go out alphabetically (Connection, Host, Sec-WebSocket-Key, Sec-WebSocket-Version, Upgrade). JetBrains uses WebSocketClient(URI(ws://127.0.0.1:port/ws)) with no headers. Shared checkout has ~848 dirty peer paths; none touched.",
+      "startedAt": "2026-10-30T07:40:07.379Z",
+      "completedAt": "2026-10-30T07:42:12.071Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement in packages/moe-daemon/src/server/WebSocketServer.ts.\n\n(1) Add a module constant `const ALLOWED_WS_ORIGINS: readonly string[] = Object.freeze([])`. Its comment: no Moe client is a browser; an origin is added here only for a first-party browser client; there is no setting or env knob.\n\n(2) Add `export function isAllowedUpgradeOrigin(origin: string | undefined): boolean`, returning `origin === undefined || ALLOWED_WS_ORIGINS.includes(origin)`. So 'null' and '' are present and refused.\n\n(3) In the constructor, pass `verifyClient` in the WSS options: `new WSS({ server: httpServer, maxPayload: 2 * 1024 * 1024, verifyClient: (info, done) => this.verifyUpgradeOrigin(info, done) })`.\n- Use the 2-argument callback form: ws 8.22 aborts the 1-argument form with 401.\n- The rule must live in the WSS options, not in onConnection. ws runs verifyClient inside handleUpgrade, so sibling task-2f2484b4's forwarded 'upgrade' events pass through it too.\n\n(4) Add `private verifyUpgradeOrigin(info, done)`:\n- An allowed origin calls `done(true)`.\n- Otherwise: `logger.warn({ remoteAddress: info.req.socket?.remoteAddress, path: pathnameOf(info.req.url || '/'), origin: <first 120 chars> }, 'Refused WebSocket upgrade: Origin not allowed')`, then `done(false, 403, 'Forbidden')`. The response body is the fixed 'Forbidden' and never echoes the origin.\n\nError handling: wrap the body in try/catch. Any exception refuses with `done(false, 403, 'Forbidden')` after a warn log, so the check fails closed. Nothing else in the file changes: onConnection, /runner key auth and /health stay as they are.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "note": "WebSocketServer.ts changes:\n- ALLOWED_WS_ORIGINS, a frozen empty set whose comment says it has no knob and admits a first-party browser client only.\n- ORIGIN_HEADERS ['origin','sec-websocket-origin'], because ws reads only the latter for a version-8 handshake.\n- export isAllowedUpgradeOrigin, which compares `=== undefined`.\n- verifyClient in the 2-argument form in the WSS options.\n- verifyUpgradeOrigin calls done(true), or done(false, 403, 'Forbidden') with a fixed body. One deviation from the plan's literal shape: done(true) sits OUTSIDE the try, because it runs 'connection' and onConnection synchronously, and a throw there must not abort an already-upgraded socket.\n- upgradeOriginAllowed reads req.headersDistinct, logs a warn with remoteAddress, path and the origin truncated to 120 chars, and fails closed on an exception.\nonConnection, /runner auth and /health are unchanged.\n\nResults in snapshot /tmp/moe-8012-gate.4AxopU:\n- webSocketOrigin and runnerChannel: 65/65 pass.\n- tsc --noEmit exits 0; a scratch tsconfig over the test file also exits 0.\n- 5 mutants, all killed: falsy-presence (3 fail), dropping sec-websocket-origin (1), no truncation (1), fail-open on exception (1), 401 (16).",
+      "startedAt": "2026-10-30T07:42:13.774Z",
+      "completedAt": "2026-10-30T07:43:32.340Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs, at the problem-class level with no exploit walkthrough. Both files are planned by parked integration rows (66e8d7d1, b621ddc9, ced85748, f3f364a6, f4811a72), so:\n- check that `git status --porcelain -- docs/CONFIGURATION.md docs/TROUBLESHOOTING.md` is empty first;\n- call moe.declare_files for both before the first Edit;\n- edit with the Edit tool;\n- if a peer's hunks are dirty there, coordinate before editing.\n\n(1) docs/CONFIGURATION.md, '### Daemon Configuration': add a short paragraph:\n- the daemon refuses any WebSocket upgrade (/ws, /mcp, /runner) that carries an Origin header, with HTTP 403, before any message is processed;\n- no Moe client sends Origin (the IDE plugins, moe-proxy, the Claude plugin hook, the local runner), while browsers always do;\n- the allowed set is empty and has no setting or environment knob.\n\n(2) docs/TROUBLESHOOTING.md: add a '### WebSocket upgrade refused with HTTP 403' entry where the connection problems live (near 'Plugin can't connect to daemon' or under MCP/Proxy Issues). Give:\n- the symptom: a client's handshake gets 403, and the daemon log shows 'Refused WebSocket upgrade: Origin not allowed';\n- the cause: the client sent an Origin header, as browser-hosted or custom clients do;\n- the fix: connect from a non-browser client without Origin. Browser clients are not supported.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "Both docs were clean in git status (empty porcelain) before editing and were declared via declare_files first; edits used the Edit tool.\n- CONFIGURATION.md: a '**WebSocket Origin rule.**' paragraph at the end of '### Daemon Configuration'. It says any upgrade carrying Origin or Sec-WebSocket-Origin is refused with 403 before any message, on /ws, /mcp and /runner, including null and empty values. Browsers always send Origin; no Moe client does. The allowed set is empty with no knob, and /runner keeps its key.\n- TROUBLESHOOTING.md: a new '### WebSocket upgrade refused with HTTP 403' entry under Plugin Issues, right after 'Plugin can't connect to daemon', giving the symptom (403 plus the log line), the cause and the fix. Browsers are not supported.\nProblem-class level only, with no exploit steps.",
+      "startedAt": "2026-10-30T07:43:34.128Z",
+      "completedAt": "2026-10-30T07:43:59.003Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY, once and fresh: `cd packages/moe-daemon && npm test`, the full daemon suite, because WebSocketServer is shared transport. The checkout's node_modules are Windows builds, so run it in a Linux-native snapshot, per `mem:gotcha-daemon-linux-snapshot-gate` and `mem:gotcha-linux-vitest-reuse-native-node-modules`:\n- `git archive HEAD` into a scratch dir;\n- copy in this task's 2 source files, cmp-equal to the worktree;\n- link or install a native Linux node_modules whose lock matches HEAD;\n- run under env -i with a Linux node on PATH and NO_COLOR=1.\nAlso run `npx tsc --noEmit` there.\n\nRecord the file and test counts. Before claiming green, attribute any failure outside the touched files with git log. This command's fresh output is the complete_task verification evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "note": "I ran the gate fresh in a Linux-native snapshot, /tmp/moe-8012-final.C3TqDm.\n- Built from `git archive HEAD` at e2499815, with the 4 owned files overlaid; each is cmp-equal to the worktree.\n- node_modules is a hardlink copy of a native install whose package-lock matches HEAD after stripping CR.\n- Ran under env -i with node v24.21.0 and NO_COLOR=1.\n\nResults:\n- `npm test` exited 0: 202 files passed, 5670 tests passed and 16 skipped (5686), in 26.91s. webSocketOrigin.test.ts ran 24 tests.\n- `npx tsc --noEmit` exited 0.\n- No failures, so none needed attributing.",
+      "startedAt": "2026-10-30T07:44:01.095Z",
+      "completedAt": "2026-10-30T07:44:46.933Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff (load adversarial-self-review). Check that:\n\n(a) The check runs before 'connection' on EVERY path, and no handler, snapshot or MCP attach happens for a refused upgrade.\n(b) 'null', '' and mixed-case header names are refused; an absent Origin is accepted.\n(c) The 403 body and status text never contain the origin, and the log value is truncated.\n(d) An exception inside the verifier refuses.\n(e) Real-client rows cover ws, the raw plugin bytes, Node's WebSocket and Java-WebSocket 1.6.0, with the source cited.\n(f) /runner key authentication is unchanged, and /health is untouched.\n(g) The docs carry no exploit steps.\n\nReport the net LOC in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/webSocketOrigin.test.ts",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "Adversarial self-review of my own diff found nothing to fix.\n(a) verifyClient is in the WSS options with no `path` option, so ws runs it in handleUpgrade for every path before 'connection'. Rows for /, /ws, /ws?query, /mcp and /runner assert onConnection is never called and the plugin/MCP client sets stay empty.\n(b) 'null', '' and mixed-case header names are refused. Beyond the plan, Origin on a version-8 handshake and Sec-WebSocket-Origin on version 13 are refused too, since ws reads only one header per version. An absent Origin is accepted.\n(c) The body is the fixed 'Forbidden' with status text 'Forbidden', and the logged origin is sliced to 120 chars; pino JSON-escapes it.\n(d) An exception refuses: the try covers only the check. done(true) stays outside it, so a throw inside onConnection can never write a 403 onto an upgraded socket.\n(e) Real-client rows: ws, the plugin's raw bytes, the global WebSocket and Java-WebSocket 1.6.0, each with its source cited.\n(f) onConnection, /runner auth and /health are untouched.\n(g) The docs contain no exploit steps.\nInputs: an oversized Origin is bounded by Node's 16KB header cap; duplicate Origin headers are each checked via headersDistinct (Node >= 22.22 per engines). Concurrency: the verifier is synchronous and keeps no state.\n\nNet LOC (own): WebSocketServer.ts +51/-1, test +231 (new), CONFIGURATION.md +2, TROUBLESHOOTING.md +10. Net 293; runtime+docs 62, tests 231.\n\nSHARED FILE: docs/CONFIGURATION.md also holds peer task-66e8d7d1's (worker-0062feec, WORKING, its doc step-4 COMPLETED) finished but unlanded `repairPolicy` row at line 190, which it re-edited after my step-4 snapshot. Whole-file landing means whichever wrapper commits the path first carries both hunks. I did not touch the peer's row and posted a heads-up as msg-d29367a2. I re-ran the 3 daemon doc tests that read CONFIGURATION.md (daemonGitDocs, executionContractDocs, taskTimeBudgetDocs) with the peer's row present: 38/38 pass, so carrying it cannot break HEAD.",
+      "startedAt": "2026-10-30T07:44:49.186Z",
+      "completedAt": "2026-10-30T07:46:30.755Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,8 +102,115 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 285.1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-c4ea1aec63be479aa6189edf01366174",
+      "author": "architect-e4b7eee0",
+      "content": "Planner notes from the split (architect-e4b7eee0, 2026-10-30):\n- \"Present\" means the header exists. Compare against undefined, never truthiness: an empty Origin value '' must be refused too. Add a row for it next to 'null'.\n- Node lowercases header names, so ws's verifyClient info.origin covers any casing; a row with a mixed-case header name proves it.\n- verifyClient runs inside ws's handleUpgrade. Sibling task-2f2484b4 forwards extra listeners' 'upgrade' events to the primary server, so this one rule must stay in the WSS options, not in onConnection, or those listeners would bypass it.\n- Refuse with 403 and never echo the origin in the HTTP response body. The warn log carries it, truncated.\n- Keep the docs paragraph at the problem-class level, with no exploit steps.",
+      "timestamp": "2026-10-30T07:34:26.949Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:32:46.880Z",
-  "updatedAt": "2026-10-30T07:32:46.880Z"
+  "updatedAt": "2026-10-30T07:48:21.923Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:35:07.652Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-e60b90bd"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:37:47.974Z",
+  "executionContract": {
+    "intendedBehavior": "The daemon's WebSocket server refuses, with HTTP 403 and before any connection handler runs, every upgrade that carries an Origin header outside an empty, frozen allowed set. This applies on /ws, /mcp and /runner; /runner keeps its key authentication on top. An absent Origin is accepted. Each refusal is logged at warn level with the remote address, the path and a truncated origin.",
+    "acceptanceCriteria": [
+      "Upgrades to /ws and /mcp with Origin https://example.com, 'null', '' or a mixed-case header name get 403, and onConnection is never called",
+      "Upgrades without Origin are accepted on /ws and /mcp, and /runner still requires its key",
+      "Real-client rows pass: ws with no options, the claude-plugin raw bytes, Node's global WebSocket, and the Java-WebSocket 1.6.0 header set",
+      "CONFIGURATION.md and TROUBLESHOOTING.md state the rule and the 403 symptom",
+      "`cd packages/moe-daemon && npm test` exits 0 (Linux-native snapshot)"
+    ],
+    "invariants": [
+      "The rule lives in the WSS verifyClient, so any 'upgrade' routed to this server is checked",
+      "The refusal never echoes the origin to the client",
+      "The verifier fails closed on an exception"
+    ],
+    "compatibility": [
+      "Every existing client handshake (moe-proxy, VS Code, wrapper RPC, claude-plugin hook, vm-control, runner-client, JetBrains) sends no Origin and keeps working",
+      "No setting, env knob or client change; /health is untouched; the WSL bind belongs to the sibling tasks"
+    ],
+    "approvedScope": [
+      "WebSocketServer.ts: ALLOWED_WS_ORIGINS, isAllowedUpgradeOrigin, verifyClient in the WSS options, and verifyUpgradeOrigin",
+      "New server/webSocketOrigin.test.ts",
+      "docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md paragraphs"
+    ],
+    "reuse": [
+      "The runnerChannel.test.ts harness (real http server plus MoeWebSocketServer, key helpers)",
+      "pathnameOf and logger already used in WebSocketServer.ts"
+    ],
+    "sourceAssumptions": [
+      "WebSocketServer.ts constructor: `new WSS({ server: httpServer, maxPayload: 2 * 1024 * 1024 })`, with onConnection routing /mcp, /runner and /ws",
+      "ws 8.22.0 websocket-server.js: info.origin comes from req.headers.origin (sec-websocket-origin for version 8); the 2-argument verifyClient calls abortHandshake(socket, code || 401, message)",
+      "packages/moe-claude-plugin/src/daemonClient.ts:291-297 raw handshake lines; moe-jetbrains/build.gradle.kts pins Java-WebSocket 1.6.0",
+      "Node v24 global WebSocket sends no Origin (probed at planning: host, connection, upgrade, sec-websocket-key/version/extensions, accept, sec-fetch-mode, user-agent, pragma, cache-control, accept-encoding)"
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- A sync 1-argument verifyClient: rejected, because ws aborts it with 401, not 403.\n- A check in onConnection: rejected. By then the upgrade is complete, and forwarded upgrades from sibling 2f2484b4 must pass the same gate.\n- A configurable allowed list: excluded by the task (no knob).",
+    "codebaseInsights": "The WSS attaches to the shared HTTP server, so its 'upgrade' listener runs handleUpgrade, then verifyClient, then 'connection'. onConnection routes /mcp (attachMcpClient), /runner (authenticateRunner), and everything else as a /ws plugin client. Sibling 2f2484b4 already depends on this row; the parent 724e31fa depends on this row, 2f2484b4 and 0c72d59a.",
+    "risks": "- Verify Java-WebSocket 1.6.0's real header set from its source. Do not guess it.\n- Some test environments lack globalThis.WebSocket, so skip that row only when it is undefined.\n- docs/CONFIGURATION.md and TROUBLESHOOTING.md are planned by five parked integration rows, so declare the files early and check they are clean before editing.\n- Run the daemon suite only in a Linux-native snapshot (the checkout holds Windows node_modules).",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/server/runnerChannel.test.ts",
+      "packages/moe-daemon/node_modules/ws/lib/websocket-server.js",
+      "packages/moe-claude-plugin/src/daemonClient.ts",
+      "moe-jetbrains/build.gradle.kts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:37:47.994Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:40:07.379Z",
+  "declaredFiles": [
+    "docs/CONFIGURATION.md",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "reviewStartedAt": "2026-10-30T07:48:21.921Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Linux-native snapshot /tmp/moe-8012-final2.8xD8Kb = git archive HEAD 5f62b98f + owned files (WebSocketServer.ts, webSocketOrigin.test.ts, docs/CONFIGURATION.md, docs/TROUBLESHOOTING.md; each cmp-equal to the worktree); native node_modules whose lock matches HEAD; env -i, node v24.21.0, NO_COLOR=1.\n ✓ src/server/webSocketOrigin.test.ts (24 tests) 2044ms\n\n Test Files  203 passed (203)\n      Tests  5718 passed | 16 skipped (5734)\n   Start at  09:47:21\n   Duration  32.58s (tests 91%, import 5%, transform 4%)\n\nnpm test exit=0; npx tsc --noEmit exit=0",
+    "reportedAt": "2026-10-30T07:48:21.921Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/server/webSocketOrigin.test.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "docs/CONFIGURATION.md",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completionSummary": "The daemon's WSS now refuses, with HTTP 403 and before 'connection', any upgrade on any path (/ws, /mcp, /runner, others) that carries an Origin header outside a frozen, empty allowed set. 'null' and '' count as present and are refused. An absent Origin is accepted.\n\nWebSocketServer.ts (+51/-1):\n- ALLOWED_WS_ORIGINS, with no knob, as the comment says.\n- exported isAllowedUpgradeOrigin.\n- verifyClient in the 2-argument form in the WSS options, so forwarded upgrades from 2f2484b4 are checked too.\n- verifyUpgradeOrigin and upgradeOriginAllowed. The body is the fixed 'Forbidden' and never echoes the origin. A warn log carries remoteAddress, path and the origin truncated to 120. An exception fails closed.\n\nBeyond the plan:\n- Both Origin and Sec-WebSocket-Origin are checked via req.headersDistinct, because ws's info.origin reads only sec-websocket-origin on a version-8 handshake.\n- done(true) stays outside the try, so a throw in onConnection can never 403 an already-upgraded socket.\n- onConnection, /runner key auth and /health are unchanged.\n\nNew webSocketOrigin.test.ts, 24 tests:\n- Refusal rows: /ws, /mcp, /, a query path, 'null', '', a mixed-case name, v8+Origin, v13+Sec-WebSocket-Origin, /runner with a valid key, the ws origin option, truncation and fail-closed. Each asserts onConnection is never called and no client set grows.\n- Accepted rows: ws with no options on /ws and /mcp; the claude-plugin's raw bytes; Node's global WebSocket; the Java-WebSocket 1.6.0 header set, verified from the jar (no 'Origin' string; TreeMap order) and cited; /runner key auth with and without the key.\n- RED before the impl: 17 failed, 7 passed. 5 mutants, all killed.\n\nDocs: a CONFIGURATION.md 'WebSocket Origin rule' paragraph and a TROUBLESHOOTING.md 'WebSocket upgrade refused with HTTP 403' entry, at problem-class level.\n\nNet own LOC: 293 (runtime+docs 62, tests 231).\n\nThe gate ran in a Linux-native snapshot of HEAD 5f62b98f with the 4 owned files overlaid and cmp-equal; the shared checko"
 }

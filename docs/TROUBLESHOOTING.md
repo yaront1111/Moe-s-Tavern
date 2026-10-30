@@ -150,6 +150,16 @@ cat .moe/daemon.json
 
 ---
 
+### WebSocket upgrade refused with HTTP 403
+
+**Symptom:** A client's WebSocket handshake to `/ws`, `/mcp` or `/runner` gets `HTTP/1.1 403 Forbidden`. The daemon log shows a warning: `Refused WebSocket upgrade: Origin not allowed`, with the remote address, the path and a truncated origin.
+
+**Cause:** The client sent an `Origin` (or `Sec-WebSocket-Origin`) header. Browser-hosted clients always send one, and some custom clients do too. The daemon refuses every such upgrade before any message is processed (see `docs/CONFIGURATION.md`, **WebSocket Origin rule**). The bundled clients never send it: the IDE plugins, moe-proxy, the Claude plugin hook and the local runner.
+
+**Solution:** Connect from a non-browser client that sends no `Origin` header. Browser clients are not supported, and there is no setting that allows an origin.
+
+---
+
 ### Plugin shows stale data
 
 **Symptom:** Tasks don't update after changes.
