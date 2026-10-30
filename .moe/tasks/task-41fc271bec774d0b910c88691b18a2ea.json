@@ -11,7 +11,8 @@
   ],
   "taskRails": [
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
-    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass.",
+    "CQ-R11e5 DoD 2 reading (governor ruling 2026-10-30; the planner architect-e4b7eee0 is DEAD): a symlinked lockfile, or a lockfile dir reached through a link, is refused by the existing reown (K4) step with exit 65 before the install phase runs. That pre-install refusal satisfies DoD 2's fail-closed requirement: no install, no frame, no check job, and the host-visible outcome is identical. The phase's own exit-81 refusal for symlinked lockfiles is proven as a second layer with reown stubbed (the KI3 NO_REOWN rows). Do not reorder the phase ahead of reown: the task description fixes it in check_job after reown, session_home and protect_mounts, and before relay()."
   ],
   "implementationPlan": [
     {
@@ -82,7 +83,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -97,19 +98,35 @@
   ],
   "priority": "HIGH",
   "order": 253.45,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-57899c435a0b46179c77ee2f89151fe0",
+      "author": "worker-e60b90bd",
+      "content": "@qa-ba3f4f35 Re msg-55d54239 (full reply is chat msg-40e470e0; its routingTargets came back [], so I'm repeating it here). Confirmed: keep the existing reown gate, no reordering. The description puts the phase in check_job after reown, session_home and protect_mounts and before relay(). reown (K4) refuses every workspace link with 65 first, so a symlinked lockfile, or a lockfile dir reached through a link, stops at 65. The last KI3 assertion pins that without the stub: [65, empty stdout, no relay, no install]. The phase's own 81 check (blob_oid's WALK/READ walk, no link followed, every lockfile checked before any install) is a second layer. Only the two link rows stub reown; the missing-lockfile and lockfile-is-a-directory rows reach 81 with reown live. The host sees the same result either way: outcomeOf (check-session.mjs:144-145) maps only 79-with-no-frame to 'skipped', so 65 and 81 before hello both become infra-failure. Snapshot inputs outside scripts/ are only .github/workflows/ci.yml (L279, L1360) and packages/moe-daemon/package-lock.json (L1269), both from rows that predate KI.",
+      "timestamp": "2026-10-30T14:11:39.510Z"
+    },
+    {
+      "id": "comment-9d096af961824fd28636ea759ae44c5a",
+      "author": "governor-693b7073",
+      "content": "@qa-ba3f4f35 Governor ruling on your DoD 2 question (msg-0c933fc0). The planner, architect-e4b7eee0, is DEAD, so I've ruled under the human's delegation.\n- TASK rail prop-08cf17f3 is APPROVED and now live on this row.\n- The existing reown (K4) exit-65 refusal of a symlinked lockfile, or a linked lockfile dir, before the install phase satisfies DoD 2's fail-closed requirement. The host outcome is identical.\n- The phase's exit-81 check is proven as the second layer with reown stubbed (the KI3 NO_REOWN rows).\n- No reordering: the description fixes the phase after reown, session_home and protect_mounts, and before relay().\n- Apply DoD 2 as the rail reads, and decide the rest of the review on its merits.",
+      "timestamp": "2026-10-30T14:12:48.762Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:53:31.651Z",
-  "updatedAt": "2026-10-30T13:53:23.784Z",
+  "updatedAt": "2026-10-30T14:13:55.842Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T23:03:01.441Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T14:13:55.842Z",
+    "wallClockMs": 54654401
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-ba3f4f35"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -204,5 +221,9 @@
     "kind": "completion",
     "sessionId": "worker-e60b90bd@2026-10-30T13:34:31Z",
     "at": "2026-10-30T13:53:23.783Z"
-  }
+  },
+  "completedAt": "2026-10-30T14:13:55.842Z",
+  "reviewCompletedAt": "2026-10-30T14:13:55.842Z",
+  "reviewSummary": "Reviewed completion 4624b18a6bbd3ec9ac94d57208843b5c74b7d332 (tree 8ec739c31b4aa1387eef1a50d1457781b0f1d557), contained by moe/work-2026-10-24. Source/tests +244/-15 (259 changed, 229 net); entire commit with board state +343/-36 (379 changed). Reviewed recorded diff, relevant callers and tests; no shared-source edits/Git writes.\nFresh Git-archive verification: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner.test.mjs -> exit 0: 385 tests, 382 pass, 0 fail, 3 existing skips; KI1-KI4 ran. Log /tmp/qa-r11e5-ba3f4f35-final.log; snapshot /tmp/moe-qa-r11e5-Ua72xO. Initial archive lacked CI yaml/package lock (3 ENOENT failures); corrected from same commit, no code edits. Scoped git diff-tree --check passed.\nVerified ordered installs after reown/protection and before relay, strict bounded list, nofollow regular lockfiles, exact offline argv/flags, check PATH, GUARD identity/limits/umask/netns configuration, timeout kill-before-reap, failure/no-frame/no-job, no-manifest compatibility, host infra-failure mapping, header/export docs; bridge PATH unchanged.\nEarlier-gate precedence clarified by worker comment-57899c435a0b46179c77ee2f89151fe0: real reown rejects workspace symlinks with existing 65 before the dependency phase; phase-level validation returns 81. Independent symlinked-lock probe verified 65 with real reown, 81 with reown-only stub, both zero output/no relay. Preserves mandated ordering and existing safety gate.\nUnverified existing skips: root mounts (CQ-R13), pinned Codex smoke, native macOS. No VM/isolation/verified-local claim. Linux-guest scope and platform-neutral host classification reviewed. Complexity: lean; net 0 lines recommended. Requested Serena handoff retained.",
+  "requiredCheckAtDone": null
 }

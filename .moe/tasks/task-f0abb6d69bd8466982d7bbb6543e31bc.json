@@ -8,9 +8,42 @@
     "vitest covers the chosen behavior; a foreign DNS name still gets 403."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first, in packages/moe-daemon/src/server/healthHost.test.ts: a new block C, 'the daemon CLI probe of a daemon bound by a DNS name'. It runs in-process with no signals, so it also runs on win32, unlike Part B.\n\nLanding check before any edit: run moe.get_commit_scope { taskId, phase: 'postflight' }. Both plan files may be declared by other nonterminal rows (CONTESTED). They land without a wrapper-observed editing tool only if each path was clean at THIS session's pre-flight and every peerDeclared[].peerActive is false (mem:decision-contested-idle-peer-exception). If either fails, stop and comment on the task.\n\nFixture:\n- An in-process `http.createServer` on 127.0.0.1, port 0. Its handler applies the REAL `isAllowedHealthHost(req.headers.host, req.socket.localAddress)`. A refused Host gets 403 text/plain 'Forbidden'; otherwise it answers 200 JSON {status:'healthy', projectPath: root, pid: process.pid}. It records every request's Host header.\n- info = {port, pid: process.pid, startedAt: new Date().toISOString(), projectPath: root, bindHost: NAME}, where NAME = 'moe-health-probe.test' (the reserved .test TLD; root is a mkdtemp dir). isDaemonInfoShape needs port, pid, startedAt and a non-blank projectPath.\n- Stub resolution with `import dns from 'dns'`: vi.spyOn(dns.promises, 'lookup') and vi.spyOn(dns, 'lookup') map NAME to {address:'127.0.0.1', family:4} and reject every other name with an ENOTFOUND error. Stubbing the callback form too lets a probe that dials the name reach the server, so the RED run fails on the Host rule's 403 rather than on resolution. Say in the step note whether that spy took effect. Restore every spy in afterEach and close the server in afterAll.\n\nRows:\n(a) `daemon.probeDaemonHealth(info, root, 2000)` is true, and the single Host the server recorded is `127.0.0.1:<port>`.\n(b) bindHost '127.0.0.1', and no bindHost at all, still return true, and dns.promises.lookup is never called.\n(c) A name the stub cannot resolve returns false, and no request reaches the server.\n(d) A lookup that never settles returns false within the probe's timeout: timeoutMs 300, result false, elapsed under 2000 ms.\n(e) A raw request to the same server with Host `evil.example:<port>` still gets 403 'Forbidden' (DoD 2). Part A's tables stay as they are.\n\nRED: run `npx vitest run src/server/healthHost.test.ts` from packages/moe-daemon against the unchanged index.ts. Row (a) must fail. Keep that output for the step note.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/healthHost.test.ts"
+      ],
+      "startedAt": "2026-10-30T14:13:27.065Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix, in packages/moe-daemon/src/index.ts. The probe dials an IP literal, and the Host guard is NOT loosened.\n- Add `import dns from 'dns';` with the other node imports. Call it as `dns.promises.lookup(...)` at call time, not as a destructured import, so the test's spy applies.\n- Add `healthProbeAddress(target: string, timeoutMs: number): Promise<string | null>` above probeDaemonHealth:\n  - an IP literal (net.isIP(target) !== 0) is returned as is;\n  - otherwise it returns the address from `dns.promises.lookup(target)`, raced against a timer of timeoutMs that is unref()'d;\n  - it returns null on a rejection or on timeout, and clears the timer in finally.\n- probeDaemonHealth becomes `async` with the same signature and the same Promise<boolean> result. After the existing shape/project check:\n  - `const address = await healthProbeAddress(host ?? (info.bindHost ? probeHostFor(info.bindHost) : DEFAULT_BIND_HOST), timeoutMs); if (address === null) return false;`\n  - the request uses `hostname: address`;\n  - everything else in it stays byte-identical.\n- One why-comment: the /health Host rule (server/healthHost.ts) admits IP literals and localhost, never a configured name. Dialing the resolved address sends that literal, which is the connection's arrival address, so the rule admits the daemon's own probe. Admitting the configured name instead would trust whoever controls that name's DNS.\n- Error handling: a lookup failure or timeout is a failed probe (false), exactly like a refused connection today. No rejection escapes, so the callers (validateDaemonInfoForProject, start, status, the supervisor) need no change.\n- Do not edit server/healthHost.ts. Node's listen(port, name) and dns.promises.lookup(name) share the default lookup (family 0, verbatim order), so the probe dials the address the daemon bound. Node brackets an IPv6 result in the Host header, and the rule admits it as the arrival address.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run ONE fresh command; its output is the complete_task evidence:\ncd packages/moe-daemon && npx tsc --noEmit && npx vitest run src/server/healthHost.test.ts src/server/bindHosts.test.ts\n\nWhat it covers:\n- the new block C;\n- Part A's pure table and Part B's real-daemon foreign-name 403 rows (DoD 2);\n- bindHosts.test.ts, which probes real daemons with bindHost undefined, 0.0.0.0, :: and wsl through the same probeDaemonHealth.\nFrom WSL over a Windows node_modules, run it in a Linux-native snapshot of HEAD plus this task's two files (mem:gotcha-linux-vitest-reuse-native-node-modules), and say so in the evidence.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's own diff. Load the adversarial-self-review skill. Check each item, and fix anything that fails:\n1. The guard is untouched: `git diff --quiet -- packages/moe-daemon/src/server/healthHost.ts` succeeds. No name of any kind is newly admitted, and a foreign DNS name still gets 403.\n2. Every probeDaemonHealth caller still gets a boolean. No lookup rejection or timeout escapes as an unhandled rejection.\n3. Resources: after a lookup timeout no timer keeps the process alive (unref + clearTimeout), and no request is started for a null address.\n4. Twice concurrently: two probes in flight share nothing mutable.\n5. Tests: the spies are restored after each test, the fake name uses the reserved .test TLD and never reaches real DNS, and the server closes in afterAll.\n6. Size: QA rejects more than 400 net changed LOC; `git diff --numstat` over the two files should come to about 100 net.\n7. Landing: re-run moe.get_commit_scope { taskId, phase: 'postflight' } and apply step 1's rule.\nIf this step changed any byte, re-run step 3's command and submit THAT fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/server/healthHost.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -19,17 +52,94 @@
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
-    "task-80930ce6f0b54f7996e2c7eb7c835107"
+    "task-80930ce6f0b54f7996e2c7eb7c835107",
+    "task-25ba449ab87d4039a283426f07302cbc"
   ],
   "priority": "LOW",
   "order": 6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-7781e232c491435c9dc04ca8b4496ef1",
+      "author": "worker-55e6716a",
+      "content": "Step 1 landing check failed before edits: packages/moe-daemon/src/index.ts is in THIS session's full preflight-dirty-751419.tsv (blob cc4356adf1d695ae4b778a5a9fa3f8f578b2416b). get_commit_scope(postflight, since=2026-10-30T14:12:42Z) also reports index.ts contested by active task-25ba449ab87d4039a283426f07302cbc. Its existing diff already changes probeDaemonHealth (project-path canonicalization). Per the approved step's explicit stop rule and epic serialize-overlapping-files rail, no source bytes edited and no tests claimed/run. Parking until that peer lands; please ensure dependency/serialization before retry. Other pre-existing dirty paths are untouched.",
+      "timestamp": "2026-10-30T14:13:58.270Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:25:13.970Z",
-  "updatedAt": "2026-10-30T12:55:52.723Z",
+  "updatedAt": "2026-10-30T14:13:58.377Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:52.723Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:08:26.961Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-bc59d28a",
+    "worker-55e6716a"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:12:40.420Z",
+  "executionContract": {
+    "intendedBehavior": "A daemon started with --host <DNS name> passes its own CLI /health probe. probeDaemonHealth resolves a non-IP probe host with a lookup bounded by the probe timeout, then dials the resolved address, so it sends that IP literal as Host. That literal is the connection's arrival address, which the unchanged Host rule admits. A lookup failure or timeout makes the probe fail (false). Foreign DNS names still get 403.",
+    "acceptanceCriteria": [
+      "healthHost.test.ts block C: a probe of a daemon bound by a stubbed name returns true and sends Host 127.0.0.1:<port>; IP-literal and absent bindHost still return true without a lookup; an unresolvable name or a hung lookup returns false within the timeout; a foreign Host still gets 403.",
+      "Part A, Part B and bindHosts.test.ts pass unchanged, and tsc --noEmit is clean."
+    ],
+    "invariants": [
+      "server/healthHost.ts is byte-identical: no name is newly admitted by the DNS-rebinding guard.",
+      "probeDaemonHealth never rejects; its signature and boolean result are unchanged."
+    ],
+    "compatibility": [
+      "IP-literal, wildcard and wsl bind hosts take the same path as before, with no DNS lookup."
+    ],
+    "approvedScope": [
+      "index.ts: the dns import, healthProbeAddress and an async probeDaemonHealth that dials the resolved address.",
+      "healthHost.test.ts: block C."
+    ],
+    "reuse": [
+      "The real isAllowedHealthHost in the test server; probeHostFor and the existing request and response handling in probeDaemonHealth."
+    ],
+    "sourceAssumptions": [
+      "index.ts probeDaemonHealth (~313) dials `host ?? (info.bindHost ? probeHostFor(info.bindHost) : DEFAULT_BIND_HOST)`, and Node sends that hostname as Host.",
+      "probeHostFor returns a named bind host unchanged.",
+      "Node's HTTP server requires a Host on HTTP/1.1, so omitting it (setHost:false) would get 400, not 200."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Admit the operator-configured bind name in isAllowedHealthHost: rejected. It loosens the DNS-rebinding guard, and a bind name served by a third-party DNS (for example a public name pointing at 127.0.0.1) could then be rebound by whoever controls that DNS.\n2. Send no Host header (setHost:false): rejected. Node's server answers an HTTP/1.1 request without a Host with 400.\n3. Refuse --host <DNS name> at startup with documented advice: rejected, because it loses a working configuration when the probe fix is about 20 lines.\nChosen: the probe resolves the name and dials the IP literal.",
+    "codebaseInsights": "- probeDaemonHealth backs validateDaemonInfoForProject (start ~601/641, status ~1046) and the WSL foreign-daemon probe list.\n- Part B of healthHost.test.ts is POSIX-only because of signal cleanup.\n- index.test.ts was peer-dirty at planning time, so this plan avoids it.",
+    "risks": "- DNS lookups have no timeout of their own, so race them against the probe timeout.\n- Spying the callback dns.lookup may not reach Node's dialer; the RED run fails either way.\n- Names that resolve to several addresses: listen and lookup share Node's default order.\n- Other clients that dial by a name (the proxy, moe-agent.sh with a named MOE_DAEMON_HOST) still get 403 on /health. The proxy maps that to 'unknown' and connects anyway. That is out of this DoD; comment it on the task if it matters.",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/server/healthHost.ts",
+      "packages/moe-daemon/src/server/healthHost.test.ts",
+      "packages/moe-daemon/src/server/bindHosts.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:12:40.448Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T14:13:27.065Z",
+  "blockedReason": "Approved step 1 mandates stop before edits if a planned contested path was dirty at this session's preflight or any peer is active. Both fail for packages/moe-daemon/src/index.ts: preflight-dirty-751419.tsv records blob cc4356adf1d695ae4b778a5a9fa3f8f578b2416b, and fresh get_commit_scope(postflight,since=2026-10-30T14:12:42Z) reports peerActive:true for task-25ba449ab87d4039a283426f07302cbc. Peer already modifies probeDaemonHealth. Need that overlapping task landed and a fresh clean preflight to satisfy serialization and landing checks. No source changes or verification performed.",
+  "blockedOnTaskIds": [
+    "task-25ba449ab87d4039a283426f07302cbc"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-30T14:13:58.377Z"
 }
