@@ -2,7 +2,7 @@
 // FileWatcher - watches .moe for external changes
 // =============================================================================
 
-import chokidar from 'chokidar';
+import chokidar, { type FSWatcher } from 'chokidar';
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger.js';
@@ -13,7 +13,7 @@ export type FileChangeEvent = {
 };
 
 export class FileWatcher {
-  private watcher: chokidar.FSWatcher | null = null;
+  private watcher: FSWatcher | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
   private pendingEvent: FileChangeEvent | null = null;
   private isProcessing = false;
@@ -58,20 +58,24 @@ export class FileWatcher {
   start(): void {
     if (this.watcher) return;
 
-    const root = this.watchRoot().split(path.sep).join('/');
-    const patterns = [
-      `${root}/project.json`,
-      `${root}/epics/*.json`,
-      `${root}/tasks/*.json`,
-      `${root}/workers/*.json`,
-      `${root}/proposals/*.json`,
-      `${root}/channels/*.json`,
-      `${root}/pins/*.json`,
-      `${root}/decisions/*.json`
-    ];
-
-    this.watcher = chokidar.watch(patterns, {
+    const root = this.watchRoot();
+    const directories = new Set(['epics', 'tasks', 'workers', 'proposals', 'channels', 'pins', 'decisions']);
+    // Chokidar 6 paths are literal, not globs. Watch the stable root so
+    // entity directories created later are covered, without widening scope.
+    this.watcher = chokidar.watch(root, {
       ignoreInitial: true,
+      depth: 1,
+      ignored: (filePath, stats) => {
+        const relative = path.relative(root, filePath);
+        if (!relative) return false;
+        const parts = relative.split(path.sep);
+        if (parts.length === 1) {
+          if (parts[0] === 'project.json') return stats?.isDirectory() === true;
+          return !directories.has(parts[0]) || stats?.isFile() === true;
+        }
+        return parts.length !== 2 || !directories.has(parts[0]) ||
+          !parts[1].endsWith('.json') || stats?.isDirectory() === true;
+      },
       awaitWriteFinish: { stabilityThreshold: 100 }
     });
 

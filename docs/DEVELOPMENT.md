@@ -6,7 +6,7 @@ This guide describes how to build and run the current implementation in this rep
 
 ## Prereqs
 
-- Node.js 18+ (Node 20/24 also works)
+- Node.js 24 LTS recommended; supported installer/build lines are 22.22+, 24, and 26
 - Java 17+ (for JetBrains plugin build/run)
 - Git
 

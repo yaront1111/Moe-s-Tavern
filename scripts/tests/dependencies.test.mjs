@@ -135,6 +135,22 @@ test('existing compatible tools require no downloads, package installs, or npm c
   assert.doesNotMatch(log(dir), /apt-get (update|install)|dnf install|brew install|curl --fail|npm install|npm config set/);
 });
 
+for (const version of ['v22.12.0', 'v22.21.1']) {
+  test(`Node ${version} below the daemon minimum is replaced with verified Node 24`, t => {
+    const dir = fixture(t);
+    passed(run(dir, 'none', false, { MOE_FIXTURE_NODE_VERSION: version }));
+    assert.match(log(dir), /https:\/\/nodejs.org\/dist\/latest-v24.x\/SHASUMS256.txt/);
+  });
+}
+
+for (const version of ['v22.22.0', 'v22.23.1', 'v24.0.0', 'v26.0.0']) {
+  test(`supported Node ${version} is reused without a download`, t => {
+    const dir = fixture(t);
+    passed(run(dir, 'none', false, { MOE_FIXTURE_NODE_VERSION: version }));
+    assert.doesNotMatch(log(dir), /curl --fail|tar -xzf/);
+  });
+}
+
 for (const blocked of ['.local', '.local/share/moe/env.sh', '.profile']) {
   test(`environment persistence stops when ${blocked} cannot be written`, t => {
     const dir = fixture(t);

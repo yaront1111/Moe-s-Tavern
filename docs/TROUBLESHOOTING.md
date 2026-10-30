@@ -57,9 +57,10 @@ chmod -R 755 .moe/
 
 **Symptom:** Syntax errors or missing features.
 
-**Solution:** Ensure Node.js 18+ is installed:
+**Solution:** Use Node.js 22.22+, 24 LTS (recommended), or 26. Node.js 18/20 and
+Node.js 22.12–22.21 cannot run the current daemon dependencies:
 ```bash
-node --version  # Should be v18.x or higher
+node --version  # Use v22.22+ on the 22.x line, v24.x (recommended), or v26.x
 ```
 
 #### daemon.json is stale
@@ -94,6 +95,24 @@ node -e "require('./.moe/project.json')"
 # From JetBrains plugin: Tools > Moe > Initialize Project
 # Or manually create .moe/project.json
 ```
+
+### `submit_plan` refusal ends with `spawn git ENOENT` (Windows, JetBrains)
+
+**Symptom:** On Windows, `moe.submit_plan` refuses an affected path that is missing from a stale checkout,
+and the refusal ends with ``The cached-origin fallback also failed: `git rev-parse --show-toplevel: ENOENT:
+spawn git ENOENT` ``, although `git` runs fine in a terminal. Handoff notes also lose their disk-state
+fingerprint, because `util/diskState.ts` reads the same failure as "unknown".
+
+**Cause:** Plugin builds before 2026-10-29 started the daemon with a PATH holding only Node's directory.
+Windows names the variable `Path`, and `ProcessBuilder.environment()` keys stay case-sensitive there, so
+the plugin read no `PATH` and added a second `PATH` key beside `Path`. Node keeps the lexicographically
+first spelling, so every `git` the daemon spawned failed to resolve.
+
+**Fix:** rebuild and reinstall the plugin (`.\scripts\install-all.ps1 -BuildPlugin -InstallPlugin
+-IdeVersion <IDE folder>`), then restart the IDE. A running daemon keeps the environment it started with,
+and the plugin reuses any daemon whose `.moe/daemon.json` pid and port are still live. That pid is the
+`_run` child, which can outlive the IDE, so after closing the IDE confirm that no
+`node.exe … moe-jetbrains\daemon\index.js` process is left before reopening the project.
 
 ---
 
@@ -283,9 +302,15 @@ exits at once with
 error: unexpected argument '--full-auto' found
 ```
 
-and the wrapper reports `[launch-failure] CLI exited 2 after 0s, before doing any work (streak N)`, backs
-off (60 s, 120 s, … up to 15 min) and relaunches forever. The held task stays WORKING (correct — nothing
-was lost, the checkpoint landed), but no code gets written.
+and the wrapper reports `[launch-failure] CLI exited 2 after 0s, before doing any work (streak N)` and backs
+off (60 s, 120 s, … up to 15 min). From the third failure in a row a claiming worker or QA seat enters
+launch outage mode (`[launch-outage]`): once that iteration's post-flight has landed the checkpoint, it
+releases the held task once, with a handoff that names the seat outage. The task stays claimable in place
+(WORKING stays WORKING), so another seat resumes it; a BLOCKED task, or a release the daemon refuses, stays
+held. The seat then claims no new task and relaunches only as a taskless launch probe on the same backoff;
+the first launch that runs ends the outage and claiming resumes. A governor seat, or one with auto-claim
+off, relaunches on the backoff with its task still held. Either way this seat writes no code until the fix
+below.
 
 **Cause:** codex-cli 0.147.0 (August 2026) hard-removed `--full-auto`
 ([openai/codex#36054](https://github.com/openai/codex/pull/36054), after the
@@ -847,6 +872,23 @@ again. Headless `-p` seats never run this step.
 
 **Fix:** start claude once in the project under that account (its folder is `claude-accounts/<id>` next to the account
 list) and accept the trust dialog. The next lease finds the project trusted and launches.
+
+### An architect session ends after it finds nothing to plan
+
+**Symptom:** an interactive claude architect shows the toast `Moe: this seat holds no task. This session ends in 10 s
+and the wrapper claims the next one.` and exits. The wrapper then prints `[no-task] No claimable task for role
+architect; not launching a CLI without one` until a PLANNING task appears, and launches a fresh session for it.
+
+**Cause:** expected. The wrapper claims the next task only once the CLI exits, and a TUI stays open after the model
+stops, so a seat that ran out of work used to park until someone typed `/exit`. Where the wrapper's loop claims for
+the seat (auto-claim on, not a governor), the `moe-account-switch` mod ends the session when a main turn ends with
+the seat holding no task: a claim found nothing, the session planned `MOE_ARCHITECT_TASKS_PER_SESSION` tasks, or
+the session only answered notifications. An interrupted turn (Esc) keeps the session. A claim made after the toast
+is refused, so the task goes to the fresh session.
+
+**Fix:** none needed. To keep such a TUI open, run the seat with `--no-auto-claim`, or set
+`MOE_DISABLE_ACCOUNT_SWITCH_MOD=1`, which also stops its account switching. A codex, gemini or grok TUI has no mod:
+exit it by hand.
 
 ### `MOE_ACCOUNT_WAIT retry_in=…`
 

@@ -522,7 +522,7 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 {
   taskId: string,
   verification: {          // REQUIRED — attestation of a fresh verification run
-    command: string,       // the exact command that was run (≤500 chars)
+    command: string,       // the exact command that was run, verbatim (≤10000 chars, the step-description cap)
     exitCode: number,      // must be 0 — a non-zero exit code is rejected
     outputTail?: string    // tail of its output (kept to the last 2000 chars)
   },
@@ -542,7 +542,7 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 - Missing/malformed `verification` → `MISSING_REQUIRED`/`INVALID_INPUT`; `exitCode !== 0` → `INVALID_INPUT` telling the worker to fix and re-run before completing.
 - `summary` is persisted as `task.completionSummary` (it used to be accepted and silently discarded) and surfaced via `moe.get_context` — both on the task itself and on the `epicSiblings` entries of every dependent task, so a later task can read what its prerequisite actually delivered without grepping HEAD.
 - The evidence is persisted as `task.verification` (with `reportedAt`, and `source: "agent-reported"` stamped after validation), and the union of completed steps' `modifiedFiles ?? affectedFiles` seeds `task.filesModified` — the ASSERTED attribution tier, which the wrapper commits when the task produced the path's dirty bytes (`MOE_ATTR_ASSERTED_FOREIGN` otherwise); `moe.record_commit` later unions the non-inferred paths it actually landed. Both are surfaced to QA via `moe.get_context`, whose QA guidance is to re-run the command. The daemon never executes the command itself, and never checks these reports against git.
-- **Candidate-less, agent-reported evidence.** `task.verification` names no candidate or tree, so the daemon labels it `source: "agent-reported"` on every write and every read (see **Verification provenance** under `moe.get_context`). There is no `source` input: fields a caller adds inside `verification` are not stored. Validation is unchanged: `command` at most 500 characters, `exitCode` exactly 0, and the tail kept to its last 2000 *characters*, unlike the 16384-byte UTF-8 tail of a `CheckRun`. Runner-observed results for a candidate's exact tree are recorded separately with `moe.record_check_run`.
+- **Candidate-less, agent-reported evidence.** `task.verification` names no candidate or tree, so the daemon labels it `source: "agent-reported"` on every write and every read (see **Verification provenance** under `moe.get_context`). There is no `source` input: fields a caller adds inside `verification` are not stored. Validation is unchanged: `command` at most 10000 characters (the step-description cap, so any command a plan step names fits verbatim), `exitCode` exactly 0, and the tail kept to its last 2000 *characters*, unlike the 16384-byte UTF-8 tail of a `CheckRun`. Runner-observed results for a candidate's exact tree are recorded separately with `moe.record_check_run`.
 - **The commit happens after the CLI exits.** `complete_task` only flips the status; the wrapper's post-flight lands the completion commit (`feat|fix(task-<id>): <title>` with `Moe-Task`/`Moe-Kind: completion`/`Moe-Session`/`Moe-Status` trailers), pushes it and reports it via `moe.record_commit` seconds later. A QA that wakes on the REVIEW write can see an empty `task.commits` for that window — `qa_approve` warns (`NO-COMPLETION-COMMIT`) rather than rejecting. If QA raced ahead and the task is already `DONE` when the wrapper looks, the completion commit still lands (`Moe-Status: DONE`).
 - **Branch policy** (`settings.consolidationBranch`, a literal branch name or a `*` glob such as `moe/work-*`; case-sensitive, anchored at both ends). Unset or empty disables the check entirely and no `branchPolicy` key appears in the response. When it is set there are three outcomes: `currentBranch` matches → completion proceeds and the response carries `branchPolicy: { pattern, currentBranch, matched: true }`; `currentBranch` does not match → `CONSTRAINT_VIOLATION` whose message starts `BRANCH-POLICY-FAIL:` and names both branches, thrown **before** the task update so the task stays `WORKING` with no verification persisted; `currentBranch` missing or blank → **never blocked**; the response carries `branchPolicy: { pattern, matched: null, warning }` and `#governors` gets one line per 24 h about it (in-memory window, not one line per completion).
 - `currentBranch` is reported by the agent (the CLI), not by the wrapper: the wrapper's landing happens *after* this call, on the branch its safe-branch step picks (a literal `consolidationBranch` doubles as that peel target; otherwise `moe/work-<YYYY-MM-DD>`), and the branch it actually landed on arrives afterwards as `record_commit.ref` / `task.commits[].ref`. That is why an absent `currentBranch` warns instead of failing.
@@ -1459,31 +1459,36 @@ same rules.
 
 ### moe.set_task_dependencies
 
-Architect/governor escape hatch: replace a task's `dependsOn` list so a mis-declared dependency can never permanently withhold a row from WORKING claims. `dependsOn` is normally declared at `moe.create_task`; this tool edits it after the fact.
+Architect/governor escape hatch: replace or edit a task's `dependsOn` list so a mis-declared dependency can never permanently withhold a row from WORKING claims. `dependsOn` is normally declared at `moe.create_task`; this tool edits it after the fact.
 
-**Parameters:**
+**Parameters:** pass `dependsOn` (replace) or `addDependsOn`/`removeDependsOn` (edit in place), never both.
 ```typescript
 {
   taskId: string,
-  dependsOn: string[],   // full replacement, not a union; [] clears. Existing task ids, deduped, capped at 20, no cycles
-  workerId?: string      // caller (auto-injected by proxy); role must resolve to architect or governor
+  dependsOn?: string[],        // full replacement, not a union; [] clears. Existing task ids, deduped, capped at 20, no cycles
+  addDependsOn?: string[],     // ids to add to the list in force when the call runs; already-listed ids are left as is. Same validation as dependsOn
+  removeDependsOn?: string[],  // ids to drop from that list; an id not listed (or no longer on the board) is ignored
+  workerId?: string            // caller (auto-injected by proxy); role must resolve to architect or governor
 }
 ```
 
-**Errors:** `[INVALID_INPUT]` for a non-array, a non-string entry, an unknown id, a self-dependency, more than 20 ids, or an id that would close a dependency cycle (`would close a dependency cycle: task-A → task-B → task-A` — the walk follows `dependsOn ∪ blockedOnTaskIds` transitively, ignoring edges out of `DONE`/`ARCHIVED` rows); `[NOT_ALLOWED]` when the caller acts as neither architect nor governor (team role, else the `architect-`/`governor-` id prefix — see `moe.amend_plan_step`); `[NOT_FOUND]` for an unknown `taskId`. Nothing is written on any error.
+**Errors:** `[INVALID_INPUT]` for a non-array, a non-string entry, an unknown id, a self-dependency, more than 20 ids after the edit, an id in both `addDependsOn` and `removeDependsOn`, `dependsOn` combined with an edit, or an id that would close a dependency cycle (`would close a dependency cycle: task-A → task-B → task-A` — the walk follows `dependsOn ∪ blockedOnTaskIds` transitively, ignoring edges out of `DONE`/`ARCHIVED` rows); `[MISSING_REQUIRED]` when neither mode is given; `[NOT_ALLOWED]` when the caller acts as neither architect nor governor (team role, else the `architect-`/`governor-` id prefix — see `moe.amend_plan_step`); `[NOT_FOUND]` for an unknown `taskId`. Nothing is written on any error.
 
 **Returns:**
 ```typescript
 {
   success: true, taskId,
   dependsOn: string[],           // the list now in force
-  previousDependsOn: string[],   // what it replaced
+  previousDependsOn: string[],   // what it replaced or edited
+  added?: string[],              // edit mode only: ids this call added
+  removed?: string[],            // edit mode only: ids this call removed
   dependsOnUnmet: number,        // how many of the new targets are not yet DONE/ARCHIVED (0 = claimable now)
   message: string
 }
 ```
 
 **Notes:**
+- **Use the edit mode when other seats edit the same row**, for example when several seats each register their task on one verification-batch row. A read followed by a `dependsOn` replacement loses whatever another seat added between the read and the write; `addDependsOn`/`removeDependsOn` apply to the list in force when the call runs (tool handlers run under the daemon's state mutex), so concurrent registrations keep each other's ids. An edit that changes nothing writes nothing: no activity event and no chat line.
 - `dependsOn` gates **WORKING-status claims only** (`claim_next_task`/`wait_for_task`): the task is not offered for execution until every target is `DONE`/`ARCHIVED`. Planning proceeds regardless, and a missing/deleted id counts as satisfied — a deleted prerequisite can never wedge its dependents.
 - Withheld rows are explainable: `moe.list_tasks` rows carry `dependsOnUnmet`.
 - **Cycles are rejected**, not stored: a `dependsOn` cycle (A→B then B→A, directly or through a longer chain) would leave every member claim-gated forever with nothing — no sweep, no alert, no wrapper path — ever looking at it. This tool is the hard-validation escape hatch, so it throws and names the path; `create_task` and `report_blocked` apply the same check advisorily (drop + warning).

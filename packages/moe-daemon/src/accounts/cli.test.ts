@@ -212,10 +212,14 @@ describe('accounts CLI', { timeout: 30_000 }, () => {
 
   it('says when claude cannot be found, and leaves the recorded sign-in alone', () => {
     cli(['add']);
-    const missing = { MOE_CLAUDE_BIN: 'moe-no-such-claude-binary' };
+    // An inherited PATH can contain inaccessible directories (for example in
+    // WSL), causing execvp to report EACCES for a name that does not exist.
+    // This owned absolute path makes the missing-binary fixture deterministic.
+    const missingBin = path.join(dir, 'moe-no-such-claude-binary');
+    const missing = { MOE_CLAUDE_BIN: missingBin };
     const check = cli(['check'], missing);
     expect(check.code).toBe(1);
-    expect(check.err.join('\n')).toContain('MOE_CLAUDE_NOT_FOUND: could not run "moe-no-such-claude-binary"');
+    expect(check.err.join('\n')).toContain(`MOE_CLAUDE_NOT_FOUND: could not run "${missingBin}"`);
     expect(account('acct-1').signInCheckedAt).toBeNull();
     expect(cli(['login', 'acct-1'], missing).err.join('\n')).toContain('MOE_CLAUDE_NOT_FOUND');
     expect(account('acct-1').signInCheckedAt).toBeNull();

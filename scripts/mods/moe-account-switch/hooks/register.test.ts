@@ -1,6 +1,6 @@
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, RenderSurface, SessionUsage } from 'claude-code'
-import { EXIT_DELAY_MS } from './register.ts'
+import { EXIT_DELAY_MS, IDLE } from './register.ts'
 
 const SEAT = { MOE_WORKER_ID: 'governor-1', MOE_ACCOUNT_ID: 'acct-1' }
 const CAUSE = 'Claude account One is at 93% of its usage limit (Moe switches at 90%)'
@@ -528,3 +528,69 @@ for (const [reason, deny] of [
     expect(seen.commands).toEqual(['exit'])
   })
 }
+
+// A seat the wrapper's loop claims for (MOE_SESSION_ENDS_WHEN_IDLE), and its
+// .moe/workers record as core's file reader serves it (none: unreadable).
+const LOOP_SEAT = { MOE_WORKER_ID: 'architect-1', MOE_SESSION_ENDS_WHEN_IDLE: '1', MOE_PROJECT_PATH: '/proj' }
+const IDLE_TOAST = 'Moe: this seat holds no task. This session ends in 10 s and the wrapper claims the next one.'
+function record(on: On, workerId: string, currentTaskId?: string | null) {
+  on('fs.read', ($, e) => {
+    const path = e.path.replaceAll('\\', '/')
+    if (currentTaskId === undefined || !path.endsWith(`/proj/.moe/workers/${workerId}.json`)) throw new Error(`ENOENT ${e.path}`)
+    return { value: JSON.stringify({ id: workerId, currentTaskId }) }
+  })
+}
+
+test('a claimed seat left holding no task ends its session once the turn is over', async ($, on) => {
+  mock.env(on, LOOP_SEAT)
+  const clock = mock.clock(on)
+  record(on, 'architect-1', null)
+  const seen = engine(on, { claim_next_task: { hasNext: false, nextAction: { tool: 'moe.wait_for_task' } } })
+  await $.turn.start({ text: 'plan', turnId: 't1' })
+  await call($, 'claim_next_task', { statuses: ['PLANNING'] })
+  await $.turn.complete({ ...TURN, turnId: 't1' })
+  expect(seen.toasts).toEqual([IDLE_TOAST])
+
+  // Nothing claims inside a session that is about to end: the next one does.
+  await $.turn.start({ text: 'one more', turnId: 't2' })
+  expect((await call($, 'claim_next_task', { statuses: ['PLANNING'] })).deny).toBe(IDLE)
+  expect(seen.aborted).toEqual(['t2'])
+  expect(seen.calls).toHaveLength(1)
+  await clock.advance(EXIT_DELAY_MS - 1)
+  expect(seen.commands).toEqual([])
+  await clock.advance(1)
+  expect(seen.commands).toEqual(['exit'])
+})
+
+for (const [label, env, workerId, currentTaskId] of [
+  ['still holds its task', LOOP_SEAT, 'architect-1', 'task-1'],
+  ['has no readable record', LOOP_SEAT, 'architect-1', undefined],
+  ['is not claimed for by the loop (a governor, --no-auto-claim)', { MOE_WORKER_ID: 'governor-1', MOE_PROJECT_PATH: '/proj' }, 'governor-1', null],
+] as const) {
+  test(`a seat that ${label} keeps its session`, async ($, on) => {
+    mock.env(on, env)
+    const clock = mock.clock(on)
+    record(on, workerId, currentTaskId)
+    const seen = engine(on)
+    await $.turn.start({ text: 'work', turnId: 't1' })
+    await $.turn.complete({ ...TURN, turnId: 't1' })
+    await clock.advance(EXIT_DELAY_MS)
+    expect(seen.commands).toEqual([])
+    expect(seen.toasts).toEqual([])
+  })
+}
+
+test('an interrupted turn keeps a taskless session; the next finished turn ends it', async ($, on) => {
+  mock.env(on, LOOP_SEAT)
+  const clock = mock.clock(on)
+  record(on, 'architect-1', null)
+  const seen = engine(on)
+  await $.turn.start({ text: 'notify', turnId: 't1' })
+  await $.turn.complete({ ...TURN, turnId: 't1', isAborted: true, reason: 'aborted' })
+  await clock.advance(EXIT_DELAY_MS)
+  expect(seen.commands).toEqual([])
+  await $.turn.start({ text: 'notify', turnId: 't2' })
+  await $.turn.complete({ ...TURN, turnId: 't2' })
+  await clock.advance(EXIT_DELAY_MS)
+  expect(seen.commands).toEqual(['exit'])
+})

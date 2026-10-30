@@ -89,8 +89,7 @@ export function activate(context: vscode.ExtensionContext) {
             TaskDetailPanel.createOrShow(
                 context.extensionUri,
                 daemonClient,
-                taskId,
-                daemonClient.currentState
+                taskId
             );
         })
     );
@@ -376,7 +375,6 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
             daemonClient.requestActivityLog(50);
-            let timeoutHandle: NodeJS.Timeout | undefined;
             const disposable = daemonClient.onActivityLog((events) => {
                 if (timeoutHandle) { clearTimeout(timeoutHandle); }
                 disposable.dispose();
@@ -392,7 +390,7 @@ export function activate(context: vscode.ExtensionContext) {
                 );
             });
             // Bail if the daemon never replies — avoid leaking the listener.
-            timeoutHandle = setTimeout(() => {
+            const timeoutHandle = setTimeout(() => {
                 disposable.dispose();
                 vscode.window.showWarningMessage('Activity log request timed out.');
             }, 10000);

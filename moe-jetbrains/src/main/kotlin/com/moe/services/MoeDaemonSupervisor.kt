@@ -122,7 +122,7 @@ class MoeDaemonSupervisor(
             // direct[1] is the installed daemon: an IDE started inside a repository must not lend it that working directory.
             if (isProtected && direct != null) pb.directory(File(direct[1]).parentFile)
             val env = pb.environment()
-            env["PATH"] = daemonPath(env["PATH"] ?: "", direct?.firstOrNull())
+            applyDaemonPath(env, direct?.firstOrNull())
             if (isProtected) protectedDaemonEnvironment(env, projectBasePath)
             val process = processStarter(pb)
             if (isProtected) recordProtectedSpawn(projectBasePath, process)
@@ -246,7 +246,9 @@ class MoeDaemonSupervisor(
     internal fun protectedDaemonEnvironment(env: MutableMap<String, String>, basePath: String) {
         env.remove("NODE_OPTIONS")
         env.remove("NODE_PATH")
-        env["PATH"]?.let { env["PATH"] = protectedPathEntries(it, basePath).joinToString(File.pathSeparator) }
+        // After applyDaemonPath a Windows map may hold the variable as "Path"; filter whichever one it kept.
+        val pathName = if (isWindows()) env.keys.firstOrNull { it.equals("PATH", ignoreCase = true) } ?: "PATH" else "PATH"
+        env[pathName]?.let { env[pathName] = protectedPathEntries(it, basePath).joinToString(File.pathSeparator) }
     }
 
     // In-process: running `where`/`which` by bare name could start a copy in the IDE's working directory.
@@ -407,6 +409,19 @@ class MoeDaemonSupervisor(
         ).filter { it.isDirectory }.map { it.absolutePath } else emptyList()
         return (listOfNotNull(nodeDir?.absolutePath) + current.split(File.pathSeparator) + bootstrapDirs)
             .filter { it.isNotBlank() }.distinct().joinToString(File.pathSeparator)
+    }
+
+    // Windows names the variable "Path", and ProcessBuilder.environment() keys
+    // stay case-sensitive there. Writing "PATH" beside "Path" gave the daemon a
+    // second PATH holding only Node's directory; Node keeps the lexicographically
+    // first spelling, so every git the daemon ran failed with "spawn git ENOENT".
+    // Keep one spelling, the one Node would read.
+    internal fun applyDaemonPath(env: MutableMap<String, String>, nodeCommand: String?, windows: Boolean = isWindows()) {
+        val names = if (windows) env.keys.filter { it.equals("PATH", ignoreCase = true) }.sorted() else listOf("PATH")
+        val name = names.firstOrNull() ?: "PATH"
+        val current = env[name] ?: ""
+        names.drop(1).forEach { env.remove(it) }
+        env[name] = daemonPath(current, nodeCommand, windows = windows)
     }
 
     internal fun resolveNodeExecutable(

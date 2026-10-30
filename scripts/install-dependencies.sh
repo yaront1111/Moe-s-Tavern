@@ -15,7 +15,7 @@ moe_node_ready() {
     major=${version%%.*}
     minor=${version#*.}; minor=${minor%%.*}
     [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
-    { [ "$major" -eq 22 ] && [ "$minor" -ge 12 ]; } || [ "$major" -eq 24 ] || [ "$major" -eq 26 ]
+    { [ "$major" -eq 22 ] && [ "$minor" -ge 22 ]; } || [ "$major" -eq 24 ] || [ "$major" -eq 26 ]
 }
 
 moe_package_install() {

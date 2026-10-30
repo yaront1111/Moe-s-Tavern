@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { MoeDaemonClient } from '../services/MoeDaemonClient';
-import type { Epic, MoeStateSnapshot } from '../types/moe';
+import type { MoeStateSnapshot } from '../types/moe';
 
 export class EpicDetailPanel implements vscode.Disposable {
     public static readonly viewType = 'moe.epicDetail';

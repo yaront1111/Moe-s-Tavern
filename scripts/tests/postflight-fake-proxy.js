@@ -565,6 +565,20 @@ switch (tool) {
     break;
   }
   case 'declare_files': ok({ success: true, taskId: args.taskId, declaredFiles: strList(args.paths), addedPaths: strList(args.paths) }); break;
+  case 'release_task': {
+    // releaseTask.ts in miniature for scenario AH: every call is logged in
+    // order with the other RPCs; FAKE_RELEASE_REFUSE=<codeName> refuses it the
+    // way the ownership and fencing gates do, before anything is written.
+    appendRpc();
+    const refuse = process.env.FAKE_RELEASE_REFUSE;
+    if (refuse) {
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32003,message:'['+refuse+'] fixture release refused',
+        data:{tool:'moe.release_task',codeName:refuse}}}) + '\n');
+      break;
+    }
+    ok({ success: true, taskId: args.taskId, previousWorkerId: args.workerId, releasedBy: args.workerId, status: 'WORKING', message: `Task ${args.taskId} released from ${args.workerId}` });
+    break;
+  }
   case 'deregister_worker': {
     // The EXIT-trap deregister; scenario W proves it still runs after the
     // teardown rescue.

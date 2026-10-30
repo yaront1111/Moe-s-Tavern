@@ -6,6 +6,7 @@ import { currentAttempt, listAttempts, MAX_ATTEMPT_GENERATION } from '../state/a
 import { renderGot } from '../state/candidateStore.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired } from './errors.js';
 import { logger } from './logger.js';
+import { MAX_STEP_DESCRIPTION_CHARS } from './planSize.js';
 
 // Deprecation warning dedupe: we log at most once per (task, tool) pair per daemon
 // lifetime so a misbehaving client doesn't flood the log. The set is bounded so
@@ -272,8 +273,13 @@ export function assertAllStepsCompleted(task: Task): void {
   );
 }
 
-/** Upper bound on verification.command — a payload guard, not a style limit. */
-export const MAX_VERIFICATION_COMMAND_CHARS = 500;
+/**
+ * Upper bound on verification.command — a payload guard, not a style limit.
+ * It equals the step-description cap so any command a plan step names can be
+ * recorded verbatim: under the old 500-char cap, seats paraphrased longer plan
+ * commands into evidence QA could not re-run.
+ */
+export const MAX_VERIFICATION_COMMAND_CHARS = MAX_STEP_DESCRIPTION_CHARS;
 /** verification.outputTail is truncated (not rejected) past this length. */
 export const MAX_VERIFICATION_OUTPUT_CHARS = 2000;
 

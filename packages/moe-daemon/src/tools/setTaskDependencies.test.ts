@@ -9,6 +9,8 @@ interface SetDepsResult {
   taskId: string;
   dependsOn: string[];
   previousDependsOn: string[];
+  added?: string[];
+  removed?: string[];
   dependsOnUnmet: number;
   message: string;
 }
@@ -150,5 +152,107 @@ describe('moe.set_task_dependencies', () => {
     await h.state.flushActivityLog();
     const events = h.state.getActivityLog(100);
     expect(events.some((e) => e.event === 'TASK_DEPENDENCIES_SET' && e.taskId === 'task-1')).toBe(true);
+  });
+
+  describe('addDependsOn / removeDependsOn (in-place edit)', () => {
+    it('two seats registering on one row keep both ids (the read-then-replace race this mode removes)', async () => {
+      // Both seats read [task-old111]. A read-then-replace by the second seat
+      // would write [task-old111, task-d0ne11] and drop the first seat's id.
+      const first = await setDeps({ addDependsOn: ['task-dep111'] });
+      expect(first.added).toEqual(['task-dep111']);
+
+      const second = await setDeps({ workerId: 'architect-1', addDependsOn: ['task-d0ne11'] });
+      expect(second.previousDependsOn).toEqual(['task-old111', 'task-dep111']);
+      expect(second.dependsOn).toEqual(['task-old111', 'task-dep111', 'task-d0ne11']);
+      expect(second.added).toEqual(['task-d0ne11']);
+      expect(second.removed).toEqual([]);
+      expect(second.dependsOnUnmet).toBe(2);
+      expect(h.state.getTask('task-1')!.dependsOn).toEqual(['task-old111', 'task-dep111', 'task-d0ne11']);
+    });
+
+    it('removeDependsOn drops listed ids and ignores ids that are not listed or not on the board', async () => {
+      const result = await setDeps({ removeDependsOn: ['task-old111', 'task-gone99', 'task-dep111'] });
+      expect(result.dependsOn).toEqual([]);
+      expect(result.removed).toEqual(['task-old111']);
+      expect(result.added).toEqual([]);
+      expect(h.state.getTask('task-1')!.dependsOn).toEqual([]);
+    });
+
+    it('a prerequisite deleted from the board can still be removed', async () => {
+      await h.state.updateTask('task-1', { dependsOn: ['task-old111', 'task-ghost1'] });
+      const result = await setDeps({ removeDependsOn: ['task-ghost1'] });
+      expect(result.dependsOn).toEqual(['task-old111']);
+      expect(result.removed).toEqual(['task-ghost1']);
+    });
+
+    it('adds and removes in one call', async () => {
+      const result = await setDeps({ addDependsOn: ['task-dep111'], removeDependsOn: ['task-old111'] });
+      expect(result.dependsOn).toEqual(['task-dep111']);
+      expect(result.added).toEqual(['task-dep111']);
+      expect(result.removed).toEqual(['task-old111']);
+      expect(result.message).toContain('Dependencies edited on task-1; 1 unmet (task-dep111)');
+    });
+
+    it('an edit that changes nothing writes nothing: no event, no chat line', async () => {
+      const post = vi.spyOn(h.state, 'postSystemMessage');
+      const update = vi.spyOn(h.state, 'updateTask');
+      const result = await setDeps({ addDependsOn: ['task-old111', ' task-old111 '], removeDependsOn: ['task-dep111'] });
+      expect(result.success).toBe(true);
+      expect(result.dependsOn).toEqual(['task-old111']);
+      expect(result.added).toEqual([]);
+      expect(result.removed).toEqual([]);
+      expect(result.dependsOnUnmet).toBe(1);
+      expect(result.message).toContain('unchanged');
+      expect(update).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+      await h.state.flushActivityLog();
+      expect(h.state.getActivityLog(100).some((e) => e.event === 'TASK_DEPENDENCIES_SET')).toBe(false);
+    });
+
+    it('records the delta in the chat line and the activity log', async () => {
+      const post = vi.spyOn(h.state, 'postSystemMessage');
+      await setDeps({ addDependsOn: ['task-dep111'], removeDependsOn: ['task-old111'] });
+      expect(post).toHaveBeenCalledWith(
+        'task-1',
+        '🔗 architect-1 edited dependencies on task-1 (+[task-dep111] -[task-old111]): [task-dep111] (was [task-old111])'
+      );
+      await h.state.flushActivityLog();
+      expect(h.state.getActivityLog(100).some((e) => e.event === 'TASK_DEPENDENCIES_SET' && e.taskId === 'task-1')).toBe(true);
+    });
+
+    it('refuses dependsOn combined with an edit, an id in both lists, and a call with neither mode', async () => {
+      await expect(setDeps({ dependsOn: [], addDependsOn: ['task-dep111'] }))
+        .rejects.toThrow(/either dependsOn .* or addDependsOn\/removeDependsOn/);
+      await expect(setDeps({ addDependsOn: ['task-dep111'], removeDependsOn: ['task-dep111'] }))
+        .rejects.toThrow(/ids in both addDependsOn and removeDependsOn: task-dep111/);
+      await expect(setDeps({})).rejects.toThrow(/Missing required field: dependsOn \(or addDependsOn\/removeDependsOn\)/);
+      await expect(setDeps({ addDependsOn: 'task-dep111' })).rejects.toThrow(/addDependsOn: must be an array/);
+      await expect(setDeps({ removeDependsOn: [7] })).rejects.toThrow(/removeDependsOn: each entry must be a string/);
+      expect(h.state.getTask('task-1')!.dependsOn).toEqual(['task-old111']);
+    });
+
+    it('added ids get the same hard validation as a replacement, and nothing is written on an error', async () => {
+      await expect(setDeps({ addDependsOn: ['task-dep111', 'task-nope'] })).rejects.toThrow(/addDependsOn: unknown task id: task-nope/);
+      await expect(setDeps({ addDependsOn: ['task-1'] })).rejects.toThrow(/cannot depend on itself/);
+      await expect(setDeps({ taskId: 'task-old111', addDependsOn: ['task-1'] }))
+        .rejects.toThrow(/dependency cycle: task-old111 → task-1 → task-old111/);
+      await expect(setDeps({ workerId: undefined, addDependsOn: ['task-dep111'] }))
+        .rejects.toThrow(/architect or governor role required/);
+      expect(h.state.getTask('task-1')!.dependsOn).toEqual(['task-old111']);
+      expect(h.state.getTask('task-old111')!.dependsOn ?? []).toEqual([]);
+    });
+
+    it('the 20-id cap applies to the edited list', async () => {
+      const ids: string[] = [];
+      for (let i = 0; i < 20; i += 1) {
+        const t = await h.state.createTask({ epicId: 'epic-1', title: `dep ${i}`, status: 'WORKING' });
+        ids.push(t.id);
+      }
+      await setDeps({ dependsOn: ids.slice(0, 19) });
+      const atCap = await setDeps({ addDependsOn: [ids[19]] });
+      expect(atCap.dependsOn).toHaveLength(20);
+      await expect(setDeps({ addDependsOn: ['task-dep111'] })).rejects.toThrow(/too many ids \(21\); maximum 20/);
+      expect(h.state.getTask('task-1')!.dependsOn).toHaveLength(20);
+    });
   });
 });

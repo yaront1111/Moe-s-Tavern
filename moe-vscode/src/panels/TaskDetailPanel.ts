@@ -3,7 +3,6 @@ import { MoeDaemonClient } from '../services/MoeDaemonClient';
 import { PlanReviewPanel, seedRevisionAttribute, showApprovalRefusal } from './PlanReviewPanel';
 import type {
     HandoffNote,
-    MoeStateSnapshot,
     Task,
     TaskComment,
     TaskPriority,
@@ -167,8 +166,7 @@ export class TaskDetailPanel implements vscode.Disposable {
     static createOrShow(
         extensionUri: vscode.Uri,
         client: MoeDaemonClient,
-        taskId: string,
-        _state: MoeStateSnapshot | undefined
+        taskId: string
     ): TaskDetailPanel {
         const existing = TaskDetailPanel.currentPanels.get(taskId);
         if (existing) {

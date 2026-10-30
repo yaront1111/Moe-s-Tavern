@@ -16,9 +16,10 @@ function between(source, start, end) {
 }
 const ps = read('ps1');
 const sh = read('sh');
-// This post-fetch region held the context curation until cfd3803; rendering it keeps
-// any curation reintroduced there under the comment-retention assertions.
-const shPreflightContext = between(sh, '                    if [ -z "$PREFLIGHT_TASK_CHANNEL" ] && [ -n "$PREFLIGHT_CONTEXT" ] && [ -n "$PYTHON_CMD" ]; then', '\n                fi\n\n                # 6.');
+// All of step 5: the fetch (moe_rpc is stubbed below) and the post-fetch region that held the
+// context curation until cfd3803, so any curation reintroduced there stays under the
+// comment-retention assertions.
+const shContext = between(sh, '                # 5. Fetch context for the claimed task', '                # 6. Read task channel backlog');
 const psContext = between(ps, '    $dynamicContext = ""', '    # -------- Pre-flight baseline');
 const psBody = between(ps, '    $claimPromptBody = $null', '    $script:CliLaunchedAt = Get-Date');
 const shPrompt = between(sh, '    DYNAMIC_CONTEXT=""', '    # -------- Pre-flight landing: recovery');
@@ -44,10 +45,12 @@ PREFLIGHT_OK=${bool(o.claimed)}; PREFLIGHT_NO_TASK=${bool(o.noTask)}
 PREFLIGHT_IS_RESUME=${bool(o.resume)}; PREFLIGHT_TASK_ID=${o.claimed ? 'task-fixture' : ''}
 PREFLIGHT_CLAIM_FAILED=${bool(o.claimFailed)}
 PREFLIGHT_ROUTED_MENTIONS_COUNT=1; PREFLIGHT_ROUTED_MENTIONS_JSON='[{"content":"reply-fixture"}]'
-PYTHON_CMD=${windows ? 'python' : 'python3'}; PREFLIGHT_CONTEXT="$MOE_FIXTURE_CONTEXT"
+PYTHON_CMD=${windows ? 'python' : 'python3'}; PREFLIGHT_CONTEXT=''; PREFLIGHT_TASK_CHANNEL=''
+moe_rpc() { if [ "$1" = get_context ]; then printf '%s' "$MOE_FIXTURE_CONTEXT"; else return 1; fi; }
+plan_progress_mark() { :; }
 STATUSES='["WORKING"]'; PROJECT=/nonexistent-moe-prompt-fixture
 `;
-    script = setup + shPreflightContext + '\n' + shPrompt + '\nprintf "\\036%s\\036%s" "$DYNAMIC_CONTEXT" "$PROMPT_BODY"';
+    script = setup + shContext + '\n' + shPrompt + '\nprintf "\\036%s\\036%s" "$DYNAMIC_CONTEXT" "$PROMPT_BODY"';
   } else {
     const setup = `$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -90,10 +93,15 @@ for (const [engine, executable] of engines) {
   for (const comments of [[], [{ id: 'comment-governor', author: 'governor-fixture', content: 'HOLD: amend host before run; preserve pin/oracle 漢字.' }]]) {
     test(`${engine}: resumed task retains ${comments.length} recent comments and omission metadata`, () => {
       const commentSummary = { total: 17, returned: comments.length, omitted: 17 - comments.length, truncated: 1 };
-      const context = { task: { id: 'task-fixture', comments, commentSummary } };
+      const context = {
+        epic: { architectureNotes: 'Preserve the shared service and its callers.' },
+        task: { id: 'task-fixture', comments, commentSummary, implementationPlan: [{ affectedFiles: ['src/shared.ts'] }] },
+        futureContextField: { preserved: true },
+      };
       const rendered = render(engine, executable, { claimed: true, noTask: false, resume: true, context });
       const injected = JSON.parse(between(rendered.context, '<claimed_task_context>', '</claimed_task_context>').replace('<claimed_task_context>', '').trim());
-      assert.deepEqual(injected.task.comments, comments, 'governor holds must survive preflight curation');
+      assert.deepEqual(injected, context, 'handoff must retain the complete daemon-scoped context, including future fields');
+      assert.deepEqual(injected.task.comments, comments, 'governor holds must survive preflight transport');
       assert.deepEqual(injected.task.commentSummary, commentSummary, 'omissions must remain visible');
       assert.doesNotMatch(rendered.body, /full context/);
       assert.match(rendered.body, /Read the recent task comments before acting/);

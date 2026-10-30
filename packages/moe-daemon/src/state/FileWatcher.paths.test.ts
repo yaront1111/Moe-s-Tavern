@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import chokidar from 'chokidar';
+import chokidar, { type FSWatcher } from 'chokidar';
 import { FileWatcher } from './FileWatcher.js';
 
 vi.mock('chokidar', () => ({ default: { watch: vi.fn() } }));
@@ -28,7 +28,7 @@ describe('FileWatcher canonical paths', () => {
     events = new EventEmitter();
     vi.mocked(chokidar.watch).mockReturnValue(Object.assign(events, {
       close: vi.fn().mockResolvedValue(undefined)
-    }) as unknown as chokidar.FSWatcher);
+    }) as unknown as FSWatcher);
     onChange = vi.fn();
     watcher = new FileWatcher(aliasRoot, onChange);
   });
@@ -45,11 +45,8 @@ describe('FileWatcher canonical paths', () => {
     watcher.start();
 
     expect(nativePath).toHaveBeenCalledWith(path.resolve(aliasRoot));
-    const patterns = vi.mocked(chokidar.watch).mock.lastCall![0] as string[];
-    const root = canonicalRoot.split(path.sep).join('/');
-    expect(patterns).toContain(`${root}/project.json`);
-    expect(patterns).toContain(`${root}/tasks/*.json`);
-    expect(patterns.every(pattern => pattern.startsWith(`${root}/`))).toBe(true);
+    expect(vi.mocked(chokidar.watch).mock.lastCall![0]).toBe(canonicalRoot);
+    expect(vi.mocked(chokidar.watch).mock.lastCall![1]).toEqual(expect.objectContaining({ depth: 1, ignoreInitial: true }));
   });
 
   for (const type of ['add', 'change', 'unlink'] as const) {

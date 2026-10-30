@@ -130,9 +130,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     resolveWebviewView(
-        webviewView: vscode.WebviewView,
-        _context: vscode.WebviewViewResolveContext,
-        _token: vscode.CancellationToken
+        webviewView: vscode.WebviewView
     ): void {
         dbg('resolveWebviewView called');
         this._view = webviewView;
@@ -318,8 +316,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             TaskDetailPanel.createOrShow(
                 this.extensionUri,
                 this.daemonClient,
-                taskId,
-                state
+                taskId
             );
         }
     }
