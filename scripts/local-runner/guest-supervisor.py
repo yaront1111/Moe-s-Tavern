@@ -1316,7 +1316,7 @@ def install_toolchain(in_fd, out_fd, toolchain=TOOLCHAIN):
             shutil.rmtree(toolchain, ignore_errors=True)
             raise
         return 0
-    except (ValueError, RecursionError, EOFError, KeyError, tarfile.TarError, lzma.LZMAError, zlib.error):
+    except (ValueError, OverflowError, RecursionError, EOFError, KeyError, tarfile.TarError, lzma.LZMAError, zlib.error):
         return os.EX_DATAERR
     except OSError:
         return os.EX_IOERR

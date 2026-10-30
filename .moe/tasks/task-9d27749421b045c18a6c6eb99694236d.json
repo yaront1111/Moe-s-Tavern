@@ -1,0 +1,32 @@
+{
+  "id": "task-9d27749421b045c18a6c6eb99694236d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: Codex/Gemini/Grok seats can never release a contested hold, yet MOE_CONTESTED_HELD's remedy tells them a Serena editor will",
+  "description": "Filed by the governor from a stall observed on 2026-10-30.\n\nWhat happened:\n- task-2cf1c6be's Codex seat (worker-262588d0, session 09:40:34Z) followed the MOE_CONTESTED_HELD remedy. It re-edited scripts/tests/local-runner.test.mjs with Serena replace_in_files, but completion 8f62fa0f still held the path.\n- QA rejected the row for a delivery gap: the code was fine, but its bytes were never committed.\n- The R11e2 fix round (worker-6e57c4f8, also Codex) hit the same wall. That file was dirty at the seat's pre-flight, so the seat can't land its TC6 rows at all.\n\nRoot cause: a documented wrapper limit. Per docs/CONFIGURATION.md \"Session touch evidence\" and TROUBLESHOOTING \"Current witness limit\", only one-shot Claude stream-json editing events feed the TOOL tier. Codex, Gemini, Grok and interactive Claude sessions never produce a witness, Serena edits included. Yet the remedy text says otherwise. It tells every seat \"edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write)\", in:\n- scripts/moe-agent.sh:4251;\n- scripts/moe-agent.ps1:3794;\n- packages/moe-daemon/src/tools/recordCommit.ts:24 (the #governors alert);\n- the docs/MCP_SERVER.md:805 row.\nA Codex seat that obeys still gets held. That costs a QA reject round each time. On the hot files (local-runner.test.mjs, moe-agent.{sh,ps1}, postflight.{sh,ps1}) it can push a chain head toward the reopen cap.\n\nSecond defect, same area: the label `held=<path>(task-<peer>)` names the peer entry's first claimant in id order (taskIds[0]). That may not be the peer that caused the hold. At 8f62fa0f it named idle, dependency-gated R11e (task-001d8ab3), while the contester that was actually live was R11e2 (task-1e7f5a2d, just reassigned). QA was misled into suggesting a governor archive R11e as \"stale\".\n\nFix, in parity across sh and ps1:\n(1) Make the remedy honest about who can release a hold. One-shot Claude Edit/Write and Serena editors count. A Codex, Gemini, Grok or interactive Claude session cannot release it by editing. Its routes are: a one-shot Claude session of the same task touches the path, or a later session of the task whose pre-flight saw the path clean while every contesting peer is idle, or the peer completes. Update the wrapper lines, recordCommit.ts, MCP_SERVER/TROUBLESHOOTING, and the exact-string assertions in scripts/tests/postflight.{sh,ps1} and recordCommit.test.ts.\n(2) Make the held= label name the peer(s) that caused the hold: editing peers first, then active ones, then the rest. Check first what task-01f37ac6 (per-path peer lists from get_commit_scope, which this row depends on) already changes here, and build on it.\n(3) Candidate for a SPIDR split if it exceeds the size caps: harvest TOOL witnesses for `codex exec` seats from `codex exec --json` JSONL events. That means apply_patch file changes plus successful Serena editing MCP calls, under the same success-only rules as the claude stream parser, so Codex seats can land contested paths they edited.\n\nKeep the policy itself unchanged: never weaken attribution.contested.",
+  "definitionOfDone": [
+    "The MOE_CONTESTED_HELD remedy text (moe-agent.sh, moe-agent.ps1, recordCommit.ts alert, docs/MCP_SERVER.md and TROUBLESHOOTING.md) no longer tells a seat that cannot produce a TOOL witness to use a Serena editor. It states which sessions can release a hold and the alternative routes, and bash scripts/tests/parity-check.sh passes.",
+    "held=<path>(task-<peer>) names the contesting peer that caused the hold, editing or active peers before idle plan-only claimants, proven by a postflight.{sh,ps1} row with an idle first claimant and an active second peer.",
+    "scripts/tests/postflight.{sh,ps1} and packages/moe-daemon recordCommit tests pass with the updated exact strings; attribution.contested semantics are unchanged.",
+    "Either codex exec seats harvest TOOL witnesses from --json events (with postflight rows proving that a Codex-edited contested path lands), or that work is split into its own task and named in the completion summary."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-01f37ac63316409ab581f5a189002cb8"
+  ],
+  "priority": "HIGH",
+  "order": 291.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T10:07:46.761Z",
+  "updatedAt": "2026-10-30T10:07:46.761Z"
+}

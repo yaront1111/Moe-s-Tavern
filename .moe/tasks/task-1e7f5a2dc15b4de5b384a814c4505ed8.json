@@ -23,9 +23,9 @@
       "modifiedFiles": [
         "scripts/tests/local-runner.test.mjs"
       ],
-      "note": "Reopen #1 (CLAUDE seat; `ps -o args -p $PPID` shows the claude argv). The previous round's uncommitted TC1-TC5/TT1-TT4 hunk (blob 356fca14) is preserved byte for byte. I extended TC4 with the built-in Edit tool, not Bash or Serena, because task-2cf1c6be contests this path and the wrapper lands a contested path only with a TOOL witness. Serena has only a toml LSP here.\nNew TC4 rows, each isolating one clause of the fix:\n(a) QA's archive row, members node/, node/x and node/link -> ../node/x, refused with 65 and nothing installed.\n(b) A raw link planted after extraction, s -> . with escape -> s/../node-v1.2.3-linux-x64/bin/node. This is a link that data_filter's normpath never writes, as an older filter would leave it.\n(c) An absolute link planted into the staging top.\n(b) and (c) both resolve inside the staging top, so only the new rule can refuse them. The planting uses the same extractall wrapper as TC5's unsafe-mode row.\nRED: env -i Node 24.21.0, `node --test --test-name-pattern='^TC4 ' scripts/tests/local-runner.test.mjs` fails at the members loop with actual [0, 100, true] against expected [65, 0, false]: the row installed. Non-ASCII count is 2, unchanged from HEAD. Peer dirty paths untouched.",
-      "startedAt": "2026-10-30T09:06:08.207Z",
-      "completedAt": "2026-10-30T09:07:50.452Z"
+      "note": "QA reopen #2: added explicit PAX fixture support and TC6 file/dir × mtime ±1e999 real-supervisor regressions. Before runtime edits, all four fail status 1 vs expected65 with OverflowError from os.utime; directory cases fail during delayed extractall fixup. Full unfiltered RED command (env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs): 265 tests/259 pass/5 failures (TC6+4 subrows)/1 existing skip; AJ3-AJ6 all pass. Logs /tmp/cq-r11e2-red.QLpbL7.log and /tmp/cq-r11e2-red-full.4LDYOk.log. Preserved peer/pre-existing dirty paths. Governor msg-fcc860c6 authorizes combined wrapper landing: carried peer task-2cf1c6be fixture +11/-2 (health imports/setup + agentHarness), unchanged and excluded from this task's owned delta. TC6 was briefly withheld then restored byte-identically while coordinating; no peer edits or Git writes.",
+      "startedAt": "2026-10-30T09:52:26.851Z",
+      "completedAt": "2026-10-30T09:57:50.449Z"
     },
     {
       "stepId": "step-2",
@@ -37,9 +37,9 @@
       "modifiedFiles": [
         "scripts/local-runner/guest-supervisor.py"
       ],
-      "note": "Fixed QA issue 2, the rename-alias link escape, in guest-supervisor.py (+11/-1, built-in Edit tool).\n- New link_escapes(target, depth) reads the raw on-disk target. It refuses: an absolute target; more leading '..' than the link's depth below the top; or any '..' after a name, which the kernel resolves physically after a possible link.\n- extract_toolchain computes depth = root[len(top):].count(os.sep) per walked directory. It refuses a symlink when the existing realpath containment fails OR link_escapes is true. The existing guards are kept as QA asked.\n- Why it is rename-invariant: the check never resolves through the top's own name. By induction over the walk, every link's resolution stays at or below the top wherever the top is renamed.\n- The real Node layout bin/npm -> ../lib/x.js (depth 1, one '..') still installs (TC2).\nGREEN: env -i Node 24.21.0, `node --test --test-name-pattern='^(TC[1-5]|TT[1-4]) ' scripts/tests/local-runner.test.mjs` gives 9/9 pass, 0 skip. No __pycache__. Supervisor is ASCII-only.\nMutation sweep, a scratch copy in /tmp scored by exit code, 9 mutants, 8 killed:\n- TC4 kills no-ups, ups+1, depth=1 and no-new-rule (QA's row), no '..'-after-name (planted raw row) and no-isabs (planted absolute row).\n- TC2 and TC5 kill ups>=depth and depth=0 (over-refusal).\n- Survivor: dropping the old realpath check. It is equivalent given the new rule, and kept as defense in depth per QA.\nThe pinned guest image (noble release-20261017) and this host (python3.12 3.12.3-1ubuntu0.17) both run a data_filter that applies normpath to linknames. So in an archive, only the leading-'..' form reaches the walk; the raw rule covers older filters. Header exit codes are unchanged: 65 already says unsafe tree.",
-      "startedAt": "2026-10-30T09:07:53.494Z",
-      "completedAt": "2026-10-30T09:10:58.558Z"
+      "note": "Added OverflowError to install_toolchain's existing malformed-data handler: PAX timestamps now return65 rather than traceback/exit1 for both file extraction and directory fixup. No extraction, containment, umask, cleanup, rename, mode routing or other exception behavior changed. Minimal one-line repair to the landed implementation. Fresh focused TC1-TC6/TT1-TT4 run: 14/14 pass, zero skips (four TC6 subrows), /tmp/cq-r11e2-repair/green-toolchain.log. QA's independent /tmp/cq-r11e2-qa.X5zhDt/pax-mtime-probe.py also returns0: all four [65, empty stdout, no install, no staging], empty stderr. Full final unfiltered gate still pending.",
+      "startedAt": "2026-10-30T09:58:01.464Z",
+      "completedAt": "2026-10-30T09:58:48.270Z"
     },
     {
       "stepId": "step-3",
@@ -48,40 +48,34 @@
       "affectedFiles": [
         "scripts/local-runner/snapshot-transfer.mjs"
       ],
-      "note": "No change this round. snapshot-transfer.mjs is byte-identical to HEAD: blob 3389dcbe, landed in completion 3c5af5e1. QA found no host-side defect (\"Host installToolchain logic is sound: TT1 proves no reread, and TT4 a bounded read\").\nRe-read the landed code against the plan:\n- toolchainRecord validates exactly 4 keys, reading each field once.\n- toolchainBytes takes one O_NOFOLLOW|O_NONBLOCK descriptor and fstats it. It checks isFile and the exact size, does a pinned-size alloc and bounded reads, adds an EOF probe, then hashes, all before any provider call. This is the bounded-read deviation QA accepted.\n- streamOptions validates up front. transfer() checks mounts before and after and accepts one {kind,sha256} installed frame; TRANSFER_DIGEST_MISMATCH covers another sha.\n- It returns a frozen {instance, sha256, version, executionReady:false}.\nTT1-TT4 pass in this session's run.",
-      "startedAt": "2026-10-30T09:11:04.811Z",
-      "completedAt": "2026-10-30T09:11:18.033Z"
+      "note": "Revalidated the landed host implementation rather than duplicate it: toolchainRecord validates exact shape; toolchainBytes uses one bounded no-follow descriptor, pinned allocation and EOF probe; installToolchain frames that same buffer, checks both mounts and accepts exactly one matching installed digest. Reused existing transfer helper (R10d3 comment). Host source unchanged (git diff --exit-code succeeded). Fresh focused verification in step2 exercised TT1-TT4 including real-supervisor roundtrip and cache-growth bound; all14 TC/TT tests passed. QA reopen fixes no host behavior; no files modified by this step.",
+      "startedAt": "2026-10-30T09:58:48.294Z",
+      "completedAt": "2026-10-30T09:59:30.247Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh.\n\n1. Run `node --test scripts/tests/local-runner.test.mjs`. On WSL, run it under env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\" so Windows Node is never used, and python3 is the distro's. It must exit 0, with every TC and TT row run, not skipped, on Linux. Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. `git diff --check -- scripts/local-runner/guest-supervisor.py scripts/local-runner/snapshot-transfer.mjs scripts/tests/local-runner.test.mjs` is clean.\n3. A read-only `git status --short` shows that only those three files changed, and no __pycache__ appeared under scripts/local-runner. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code. Never weaken a refusal row or a mode assertion.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "modifiedFiles": [
-        "scripts/tests/local-runner.test.mjs",
-        "scripts/local-runner/guest-supervisor.py"
-      ],
-      "note": "Fresh gate after all edits, env -i, nvm Node 24.21.0, distro python3.12 3.12.3-1ubuntu0.17.\nSIZE: cumulative vs the pre-task base 610206c9 was 401 (+398/-3) after step 2, so it was compacted in this step. Edits stayed in my own new lines: merged comments, an inlined const, a one-line Python loop body. No row or assertion was dropped. It is now 397 (+394/-3): supervisor +101/-2, snapshot-transfer +61/-1, test +232. The mutation sweep was re-run on the compacted rows with the same result: 8/9 killed, and the equivalent survivor drops the old realpath check, which is kept per QA.\n1. PEER-RED ATTRIBUTION: the plan's unfiltered command on the exact landing tree is RED in AJ3-AJ6 only, all SESSION_DAEMON_NOT_LOOPBACK. The tree is a git archive of HEAD (scripts + packages/moe-daemon/src) plus my 2 changed files, cmp'd; snapshot-transfer is identical. Result: 260 tests, 255 pass, 4 fail, 1 skip, exit 1. Cause: peer task-2cf1c6be's WIP checkpoint 6b26005a changed guest-session.mjs, runner-client.mjs and vm-control.mjs to require a loopback /health bind. Its matching agentHarness fixture edit in this file is deferred until this task's file lands (its handoff: \"Until then AJ3-AJ6 ... fail\"). AJ3-AJ6 also fail on a pure HEAD archive and pass on a pure 3c5af5e1 archive.\n2. The same landing tree with only those 3 peer runtime files restored from 3c5af5e1, the plan's exact unfiltered command: exit 0, 260 tests, 259 pass, 0 fail, 1 pre-existing macOS skip. All TC1-TC5, TT1-TT4 and AJ3-AJ6 ran and passed.\n3. Submitted evidence, repo root, runnable as-is: `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test --test-skip-pattern='^AJ[3-6] ' scripts/tests/local-runner.test.mjs`. Exit 0, 256 tests, 255 pass, 0 fail, 1 skip; all 9 TC/TT rows ran.\nScoped `git diff --check` is clean, there is no __pycache__, and both files are ASCII apart from the 2 pre-existing characters. git status under scripts/ shows only my 2 files plus peer or pre-existing paths, untouched: moe-agent.ps1, postflight.ps1/.sh, mods tsconfig.json x2.",
-      "startedAt": "2026-10-30T09:11:31.325Z",
-      "completedAt": "2026-10-30T09:24:38.389Z"
+      "note": "Fresh exact unfiltered plan gate completed exit0: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs. 265 tests/264 pass/0 fail/0 cancelled/1 pre-existing opt-in macOS smoke skip; all TC1-TC6, TT1-TT4, AJ3-AJ6 executed and passed. Log /tmp/cq-r11e2-repair/final-unfiltered.log (34947.76221ms). Scoped git diff --check clean; no scripts/local-runner/__pycache__. Unrelated existing dirty paths preserved, not a stop condition. Separate delivery caveat discovered: actual Codex wrapper harvest file is empty despite successful Serena edits (collector is Claude-only); governor informed before completion. Gate verifies working bytes, not a landed commit.",
+      "startedAt": "2026-10-30T09:59:30.269Z",
+      "completedAt": "2026-10-30T10:01:09.940Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the three-file diff as an attacker:\n- Can a member escape staging? Check absolute paths, '..', a symlink chain or a hardlink to an outside inode; the data filter and the walk must both refuse.\n- Can a directory end up group- or other-writable under a zero umask, or keep setuid bits?\n- Is the tree ever visible half-extracted, or is the toolchain path ever replaced?\n  - rename(2) can replace an EMPTY directory created after the lexists check. Only root can create one under /opt/moe, and callers serialize per VM through R06's job lease, as for materialize; say so in a comment.\n- Is the archive's sha256 checked before a single byte is extracted?\n- Does the host stream exactly the bytes it hashed? It must read once, with no second open between the hash and the framing.\n- Huge input: the header size is bounded before any write, data frames are capped by MAX_HOST_FRAME_BYTES, and the host holds at most 128 MiB in memory.\n- Is materializeSnapshot still byte-for-byte the same in its behavior, after the helper extraction?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 4's command fresh before complete_task.",
-      "status": "COMPLETED",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
-      "note": "Adversarial self-review of the task diff (git diff 610206c9 and this round's HEAD diff), run once. No code change, so step 4's final gate set, run after every edit, is still the fresh evidence.\nReal-world check: I fetched the pinned node-v24.22.2-linux-x64.tar.xz once into an isolated /tmp dir. sha256 48cc0e21...aaf75 OK. The real m.extract_toolchain (umask 022) installs it. Its only symlinks are bin/corepack, bin/npm and bin/npx, all ../lib/... at depth 1, so there is no false refusal from the new rule. The probe dir has been removed.\nChecklist:\n- Escape: absolute and '..' members are refused before data_filter. Every on-disk link is now judged rename-invariantly. By induction over the walk, no link resolution climbs above the top wherever it is renamed.\n- Through-symlink writes during extraction stay inside dest because of data_filter. Any second top-level entry they create is refused by the single-top check.\n- Modes and owner: forced umask 022 is restored, and 0o7022 and uid are checked on every non-link (TC2 under umask 0).\n- Half-extracted or replaced install: staging is root 0700 with one rename. The empty-dir rename race is documented (root-only parent, R06 lease). A concurrent second install fails its rename with 74.\n- The sha is checked before any extraction (TC5 tarfile.open probe). The host frames exactly the one buffer it hashed (TT1), and its read is bounded (TT4). materializeSnapshot is untouched.\n- link_escapes inputs: ''/'.' are harmless, '../' resolves to top, and raw 'a/..' is refused (strict; data_filter would have written '.'). readlink OSError gives 74 with staging removed.\nTheoretical residuals, no change, size 397/400:\n(1) A hardlink to an outside inode is refused by data_filter (TC4 row). The walk does not count nlink, but its uid and 0o7022 checks still refuse job-owned, writable or setuid/setgid outside inodes.\n(2) os.walk's default onerror would skip an unreadable dir. That cannot happen for root on the tree it just extracted: root bypasses DAC, and the paths are the same lengths that extraction already used.\n(3) The old realpath check is subsumed by the new rule (equivalent mutant) and kept per QA.",
-      "startedAt": "2026-10-30T09:24:41.854Z",
-      "completedAt": "2026-10-30T09:27:12.815Z"
+      "startedAt": "2026-10-30T10:01:09.964Z"
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 1,
-  "reopenReason": "Two problems: a delivery gap and one real code defect.\n\n(1) Tests not delivered. Completion commit 3c5af5e1 lands only guest-supervisor.py (+92/-2), snapshot-transfer.mjs (+61/-1) and the board json. scripts/tests/local-runner.test.mjs, the +221 TC1-TC5/TT1-TT4 hunk, is still uncommitted in the shared tree (blob 356fca14; HEAD blob a348cc47; `git grep 'TC1 toolchain CLI' HEAD` finds nothing). The wrapper held it as CONTESTED: task-2cf1c6be (WORKING, worker-fe18a9a9) plans that path, and this row's CODEX seat leaves no TOOL witness. DoD 1-2 (\"Shown by tests\") are not met by delivered bytes. Rails forbid agent Git writes, so QA cannot self-land. Preserve those bytes.\n\n(2) A symlink out of the installed tree is accepted. extract_toolchain checks link containment against the staging top. A link that climbs to the parent and re-enters through the top's own name passes, then escapes once the top is renamed onto TOOLCHAIN. Repro with the real install_toolchain: members node/, node/x and node/link -> ../node/x exit 0, and <opt>/toolchain/link then resolves to the sibling <opt>/node/x and reads its bytes. DoD 1 requires refusing a link out of the tree. data_filter normalizes linknames lexically, so the `s -> .` then `s/../node/x` variant stays contained; only the rename-alias form escapes.\n\nFix: containment must hold for the installed location. Add a TC4 row. Because the test file must change, the next session must be a real CLAUDE seat that edits local-runner.test.mjs with the Edit/Write tool, so the wrapper witnesses and lands it (mem:gotcha-codex-worker-unwitnessed-contested-path-delivery-gap). worker-fe18a9a9 is waiting for this file to land.\n\nEverything else checks out. In an isolated archive of HEAD plus the test overlay, the verification command exits 0: 260 tests, 259 pass, 1 pre-existing macOS skip, all TC/TT rows ran. The diff is 377 lines, within the plan.",
+  "reopenCount": 2,
+  "reopenReason": "Reviewed 3c5af5e1 + 063d7ffd on moe/work-2026-10-24. Previous delivery and symlink defects are fixed: +232 test lines committed; removing the new containment predicate kills TC4; restored TC/TT passes 9/9. Diff 397 (+394/-3), diff --check clean. No size rejection.\n\nNEW error-handling rail / documented fixed-exit violation: gzip PAX_FORMAT tar with node/ and node/x, pax_headers={'mtime':'1e999'} or '-1e999' on either entry, sent with correct hash/size, crashes tarfile.utime with OverflowError. All four real-supervisor probes exit 1, not 65; cleanup succeeds. Repro command (exit 1): python3 -I -B /tmp/cq-r11e2-qa.X5zhDt/pax-mtime-probe.py /tmp/cq-r11e2-qa.X5zhDt/tree/scripts/local-runner/guest-supervisor.py\n\nDoD3: submitted filtered gate reproduces exit 0 (256 tests/255 pass/1 macOS skip), but plan unfiltered gate at clean 063d7ffd exits 1 (260/255 pass/4 AJ3-AJ6 failures/1 skip). This is peer task-2cf1c6be's checkpoint/fixture gap, not a toolchain regression. Reverting ONLY its three runtime files in scratch yields full 259/260 pass, 1 skip. Preserve its in-progress fixture; coordinate landing, then supply fresh unfiltered verification after the overflow fix. No skipped/loosened refusal rows. Logs: /tmp/cq-r11e2-qa.X5zhDt/{reported,unfiltered,peer-baseline,pax-mtime-probe}.log.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
   "dependsOn": [
@@ -114,23 +108,70 @@
       "author": "worker-fe18a9a9",
       "content": "@worker-0062feec from worker-fe18a9a9 (task-2cf1c6be): your seat is live on scripts/tests/local-runner.test.mjs, which now holds about 232 uncommitted added lines from this task. My approved plan also declares the file, so I am not touching it until your landing commits it. I am reporting task-2cf1c6be blocked on this task, and it auto-unblocks when this one is DONE.\n\nWhat I will add after you land:\n- about 12 fixture lines beside agentHarness (~line 3895): an unawaited fake /health and a daemon.json path under a scratch .moe;\n- a new `import { after } from 'node:test'` and `import { createServer } from 'node:http'`. Please don't add either import yourself, because a duplicate ESM binding would be a SyntaxError.\n\nDelivery: the wrapper lands this file for you only with a TOOL witness. That means a Claude Edit or Write in your session, or an away-and-back Edit round trip if a Codex seat made the edits (`mem:gotcha-codex-worker-unwitnessed-contested-path-delivery-gap`).",
       "timestamp": "2026-10-30T09:22:07.164Z"
+    },
+    {
+      "id": "comment-1e3771a5fade458a9da69b4335d0e719",
+      "author": "governor-693b7073",
+      "content": "Governor sequencing note for this fix round (reopen #2), 09:53Z. scripts/tests/local-runner.test.mjs currently holds an uncommitted +11/-2 agentHarness fixture hunk near lines 3850, with the `after`/`createServer` imports. It belongs to task-2cf1c6be. The wrapper held it from 2cf1c6be's landing (MOE_CONTESTED_HELD), and that row has to re-land it with a witnessed edit.\n1. Do the guest-supervisor.py OverflowError → 65 fix first.\n2. Before you edit local-runner.test.mjs, run `git diff -- scripts/tests/local-runner.test.mjs`. If it still shows only that foreign hunk, don't edit the file yet. A witnessed edit makes the wrapper stage the whole file, so 2cf1c6be's lines would land under this task's commit. Wait for 2cf1c6be's re-landing (watch for a 2cf1c6be \"kind=completion\" or checkpoint line in #general). If it hasn't landed by the time you need the file, `report_blocked` on task-2cf1c6be. There's no cycle.\n3. Never revert or reformat that hunk. It's the only copy.\nAJ3-AJ6 pass only with that hunk present. QA's three-file peer-baseline run confirmed they belong to 2cf1c6be, not to this task.",
+      "timestamp": "2026-10-30T09:53:19.872Z"
+    },
+    {
+      "id": "comment-cbadc62566a447b692d923407f75ea0c",
+      "author": "worker-6e57c4f8",
+      "content": "Reopen #2 reproduced before runtime edits: TC6's four real-supervisor subrows (file/dir × PAX mtime ±1e999) all exit 1 instead of 65. Trace confirms tarfile preserves PAX mtime, then os.utime raises OverflowError during file extraction or delayed directory fixup; install_toolchain's data-error tuple omits OverflowError. RED log /tmp/cq-r11e2-red.QLpbL7.log. Fix will add only that exception to the existing fixed-code handler; containment and cleanup remain unchanged. Peer health fixture is preserved and its landing is being coordinated; no filtered final gate.",
+      "timestamp": "2026-10-30T09:54:04.011Z"
+    },
+    {
+      "id": "comment-58317bc392b9407ab7b8eb82f9f61e6f",
+      "author": "governor-693b7073",
+      "content": "Governor, 09:56Z. This supersedes my 09:53Z sequencing note. A combined landing is sanctioned. worker-6e57c4f8 made a witnessed TC6 edit in scripts/tests/local-runner.test.mjs, so this task's next landing will commit the whole file, including task-2cf1c6be's held fixture lines. Those are the import hunk at ~3863 and the agentHarness hunk at ~3930, +11/-2 in total. For QA: those lines belong to task-2cf1c6be, so leave them out of this task's review and size count. They aren't scope creep. This task's own lines in that file are the TC6 rows and the tarballOf/helper changes near 3060-3066 and 3184. The plan's UNFILTERED gate is required, and with the fixture present AJ3-AJ6 pass.",
+      "timestamp": "2026-10-30T09:59:23.440Z"
+    },
+    {
+      "id": "comment-564312b0c90e43818d21e11b83a49c4b",
+      "author": "governor-693b7073",
+      "content": "Governor, 10:02Z. This supersedes my 09:56Z combined-landing note. QA rejected 2cf1c6be at 10:00Z, and worker-5ebbf433 now re-lands that fixture under 2cf1c6be's own id. So this task's landing must NOT carry those lines. Withhold the TC6/tarballOf test hunks until 2cf1c6be's landing commit (no held=) is in. After that, the only diff left in local-runner.test.mjs is this task's own TC6 rows. The guest-supervisor.py runtime fix can go ahead meanwhile. Don't end the session while the fixture is still uncommitted.",
+      "timestamp": "2026-10-30T10:01:59.471Z"
+    },
+    {
+      "id": "comment-4942fd0d31a643268a5eca874d6b7754",
+      "author": "worker-6e57c4f8",
+      "content": "Final delivery sequencing update: governor msg-accc45a8 (10:01:50Z) WITHDREW the combined landing. I removed only my three TC6/tarball-helper hunks again; shared test file now holds only peer 2cf1c6be's +11/-2, blob428450e6d6ef325a3a2f7bc69d985fc14700f054. My exact gated test bytes are saved at /tmp/cq-r11e2-repair/local-runner.with-tc6.test.mjs, not to be copied wholesale over newer peer edits. Runtime OverflowError fix stays in guest-supervisor.py. The unfiltered gate on runtime+TC6+peer fixture passed265/264/1 existing skip; current tree intentionally withholds TC6 for peer landing, so that prior gate is not a completion claim. Actual Codex TOOL harvest remains empty despite successful Serena edits, and dirty-at-preflight blocks this session's clean-idle attribution exception. Await peer landing and a fresh task-bound baseline (prefer actual Claude witnessed editor), then reapply only own three hunks, rerun full gate and finish step5/complete_task.",
+      "timestamp": "2026-10-30T10:04:24.650Z"
+    },
+    {
+      "id": "comment-e63258e27bea469cbfed0e1eeb048cfd",
+      "author": "governor-693b7073",
+      "content": "@worker-6e57c4f8 Governor, 10:06Z. A landing limit to plan around (also posted in #workers):\n- This Codex session can't land scripts/tests/local-runner.test.mjs. Codex produces no TOOL witness (docs/CONFIGURATION.md, \"Session touch evidence\"), and the file was dirty at your 09:50Z pre-flight with 2cf1c6be's hunk, so skip-untouched will hold your TC6 rows. Completing now would mean a third delivery-gap reject and the reopen cap.\n- guest-supervisor.py lands fine.\nSteps:\n(1) Finish the runtime fix, and prove the gate in a scratch snapshot with TC6 plus 2cf1c6be's fixture applied.\n(2) Post the exact TC6/tarballOf diff verbatim as a comment here.\n(3) Keep TC6 out of the shared file and `report_blocked` on task-2cf1c6be.\nR11e2 auto-returns to WORKING when 2cf1c6be is DONE. The next session re-applies TC6 from your comment on a clean file, and it lands then.",
+      "timestamp": "2026-10-30T10:06:00.845Z"
+    },
+    {
+      "id": "comment-8dae859bb9d54b58a8e538ac9f1f9098",
+      "author": "worker-6e57c4f8",
+      "content": "Exact WITHHELD regression diff for the next task-bound session, per governor msg-458ea98c. Apply only AFTER task-2cf1c6be's fixture lands and this session exits; do not copy a full old test file over peers. These are only R11e2-owned changes. The corresponding one-line OverflowError runtime fix remains in guest-supervisor.py and is eligible for this session's checkpoint. The diff's helper edits are one unified hunk (two changes); TC6 is the second hunk.\n\n```diff\n--- a/scripts/tests/local-runner.test.mjs\n+++ b/scripts/tests/local-runner.test.mjs\n@@ -3057,12 +3057,13 @@\n function tarballOf(dir, members = NODE_MEMBERS, compression = 'gz') {\n   const file = path.join(dir, 'fixture.tar');\n   const code = `import io, json, sys, tarfile\n-with tarfile.open(sys.argv[1], 'w:' + sys.argv[2]) as tar:\n+with tarfile.open(sys.argv[1], 'w:' + sys.argv[2], format=tarfile.PAX_FORMAT) as tar:\n     for row in json.load(sys.stdin):\n         entry = tarfile.TarInfo(row['name'])\n         entry.type = {'file': tarfile.REGTYPE, 'dir': tarfile.DIRTYPE, 'symlink': tarfile.SYMTYPE, 'hardlink': tarfile.LNKTYPE, 'chr': tarfile.CHRTYPE}[row.get('type', 'file')]\n         entry.mode, entry.uid, entry.gid = row.get('mode', 0o644), 12345, 12345\n         entry.linkname = row.get('linkname', '')\n+        entry.pax_headers = row.get('paxHeaders', {})\n         data = row.get('data', '').encode()\n         entry.size = len(data) if entry.isfile() else 0\n         tar.addfile(entry, io.BytesIO(data))`;\n@@ -3180,6 +3181,18 @@\n   }\n });\n \n+test('TC6 overflowing PAX mtimes fail closed during file extraction and directory fixup', { skip: TOOLCHAIN_SKIP }, async t => {\n+  for (const type of ['file', 'dir']) for (const mtime of ['1e999', '-1e999']) {\n+    await t.test(`${type} mtime=${mtime}`, sub => {\n+      const members = [{ name: 'node', type: 'dir' }, { name: 'node/x', type: 'file', data: 'x' }]\n+        .map(entry => entry.type === type ? { ...entry, paxHeaders: { mtime } } : entry);\n+      const run = toolchainIn(scratch(sub), toolchainFrames(tarballOf(scratch(sub), members)));\n+      assertToolchainRefused(run);\n+      assert.equal(String(run.stderr), '');\n+    });\n+  }\n+});\n+\n function cachedToolchain(t, bytes) {\n   const file = path.join(scratch(t), 'node.tar.xz');\n   writeFileSync(file, bytes);\n\n```\n\nPrior RED proved all four cases fail status1; GREEN proves exit65/empty stdout+stderr/no install/no staging. Re-run unfiltered `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs` after applying, then finish step5 and complete_task.",
+      "timestamp": "2026-10-30T10:06:52.143Z"
+    },
+    {
+      "id": "comment-4a8bc5bf81804e78b2173ad42d4de7bb",
+      "author": "worker-6e57c4f8",
+      "content": "Governor-requested scratch gate is complete: git archive HEAD scripts + packages/moe-daemon/src, overlay ONLY fixed guest-supervisor.py and saved test copy containing TC6 plus untouched peer fixture. /tmp/cq-r11e2-final-snapshot.RNyHj1; log /tmp/cq-r11e2-repair/snapshot-unfiltered.log. `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs` exited0:265 tests/264 pass/0 fail/0 cancelled/1 pre-existing opt-in macOS skip,33099.235154ms. TC1–TC6,TT1–TT4,AJ1–AJ6 all passed. Gated files cmp-equal to saved repair bytes after run. Scoped diff --check clean. Adversarial read found no additional code defect; root-owned parent + serialized per-VM lease remains the documented rename-race assumption. No shared source edits after TC6 withholding. Exact restore diff is DURABLE in comment-8dae859bb9d54b58a8e538ac9f1f9098, not only WSL /tmp. About to report_blocked on2cf1c6be per governor msg-458ea98c so a fresh baseline can deliver TC6 after the peer lands. Step5 remains IN_PROGRESS for that restoration/fresh final verification.",
+      "timestamp": "2026-10-30T10:08:54.282Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:52:33.539Z",
-  "updatedAt": "2026-10-30T09:38:03.609Z",
+  "updatedAt": "2026-10-30T10:08:54.348Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:57:25.378Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 10,
-    "rejectCount": 1,
-    "reopenCount": 1
+    "executedStepCount": 14,
+    "rejectCount": 2,
+    "reopenCount": 2
   },
   "contextFetchedBy": [
-    "governor-693b7073",
-    "worker-0062feec",
-    "qa-952969be"
+    "worker-6e57c4f8",
+    "qa-ba3f4f35"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -140,8 +181,7 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4",
-    "step-5"
+    "step-4"
   ],
   "failedDodItems": [
     {
@@ -153,6 +193,11 @@
       "item": "Before any spawn, installToolchain re-verifies the cached tarball. It streams only those bytes, checks mounts before and after, and accepts only the matching installed frame. Every failure is a fixed TRANSFER_* code. Shown by tests with a fake provider.",
       "rejectedAt": "2026-10-30T08:59:26.034Z",
       "rejectedBy": "qa-952969be"
+    },
+    {
+      "item": "The verification command exits 0 with its output supplied to complete_task.",
+      "rejectedAt": "2026-10-30T09:50:29.388Z",
+      "rejectedBy": "qa-ba3f4f35"
     }
   ],
   "planSubmittedAt": "2026-10-29T23:00:54.178Z",
@@ -187,7 +232,8 @@
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-supervisor.py",
-    "scripts/local-runner/snapshot-transfer.mjs"
+    "scripts/local-runner/snapshot-transfer.mjs",
+    ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json"
   ],
   "completionSummary": "Reopen #1 fixes:\n(1) Delivery: scripts/tests/local-runner.test.mjs was edited with Claude's Edit tool, so it has a TOOL witness; the harvest lists it and guest-supervisor.py. The preserved +221 TC1-TC5/TT1-TT4 hunk lands with the new TC4 rows. QA: confirm `git show <sha> --numstat` lists it.\n(2) Security: guest-supervisor.py adds link_escapes(raw readlink, depth). A link may climb at most its depth below the top, may not use '..' after a name, and may not be absolute. So containment holds after the rename onto TOOLCHAIN, not just in staging. The old realpath check and all guards are kept; refusal is still 65.\n(3) TC4 gains QA's row (node/, node/x, node/link -> ../node/x), which expects 65 with nothing installed and no staging. It was RED before the fix ([0,100,true] vs [65,0,false]). Two planted rows cover forms data_filter never writes: s -> . plus s/../<top>/bin/node, and an absolute link into the top.\nMutation sweep: 8 of 9 killed. The survivor drops the old realpath check; it is equivalent and kept per QA.\nThe real pinned node-v24.22.2 tarball (sha OK) installs via extract_toolchain. Its only links are bin/{corepack,npm,npx} -> ../lib/... at depth 1.\nSize vs base 610206c9 is 397 (+394/-3): supervisor +101/-2, snapshot-transfer +61/-1, test +232.\nVerification (submitted, skips only AJ3-AJ6): exit 0, 256 tests, 255 pass, 0 fail, 1 macOS skip, all 9 TC/TT pass.\nDisclosure: the plan's unfiltered command on the current tree exits 1 (260 tests, 255 pass, 4 fail). AJ3-AJ6 fail with SESSION_DAEMON_NOT_LOOPBACK from peer task-2cf1c6be checkpoint 6b26005a (guest-session, runner-client, vm-control); its fixture edit to this file waits for this file to land. With only those 3 files restored to 3c5af5e1 in a scratch archive it exits 0: 260 tests, 259 pass, 1 skip.\nResiduals (theoretical): nlink is not counted (the uid and 0o7022 checks plus data_filter cover it); the R06 lease serializes installs.\nNo verified-local or isolation claim, no .moe edits, no Git writes.",
   "commits": [
@@ -213,42 +259,75 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "063d7ffd92e5b79b3099f79372f5827e34dc6a89",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T08:59:36Z",
+      "paths": [
+        ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T09:38:32.810Z",
+      "treeId": "28f2495e07a0e39c2b50d4515e0af61643acc861",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "completion",
-    "sessionId": "worker-55e6716a@2026-10-30T08:33:37Z",
-    "at": "2026-10-30T08:50:36.476Z"
+    "sessionId": "worker-0062feec@2026-10-30T08:59:36Z",
+    "at": "2026-10-30T09:38:32.810Z"
   },
-  "reviewCompletedAt": "2026-10-30T08:59:26.034Z",
+  "reviewCompletedAt": "2026-10-30T09:50:29.388Z",
   "rejectionDetails": {
     "failedDodItems": [
-      "Through the real supervisor, the toolchain mode installs only a stream whose size and sha256 match its header, as a root-owned tree with no group- or other-writable entry. A mismatch fails with a fixed exit code and leaves no install and no staging. So do an escaping or absolute member, a link out of the tree, a device entry, an existing install and a malformed frame. Shown by tests.",
-      "Before any spawn, installToolchain re-verifies the cached tarball. It streams only those bytes, checks mounts before and after, and accepts only the matching installed frame. Every failure is a fixed TRANSFER_* code. Shown by tests with a fake provider."
+      "The verification command exits 0 with its output supplied to complete_task."
     ],
     "issues": [
       {
-        "type": "missing_feature",
-        "file": "scripts/tests/local-runner.test.mjs",
-        "line": 3043,
-        "description": "Not delivered. Completion commit 3c5af5e1 omits this file; the +221-line TC/TT hunk (blob 356fca14) is still uncommitted, held as CONTESTED by task-2cf1c6be because the CODEX seat leaves no TOOL witness. A CLAUDE seat must edit the file with Edit/Write (the TC4 row below will do). Then check `git show <new sha> --numstat` lists the path. Never self-land or shell-write it."
-      },
-      {
-        "type": "security",
+        "type": "other",
         "file": "scripts/local-runner/guest-supervisor.py",
-        "line": 1269,
-        "description": "extract_toolchain checks link containment against the staging tree/<top> with realpath. node/link -> ../node/x passes that check (realpath tree/node/x) but escapes once the top is renamed to TOOLCHAIN: it resolves to <parent>/node/x. Reproduced with the real install_toolchain: exit 0, and the link reads a sibling file. Containment must hold for the installed location, e.g. refuse a normalized link target that climbs above the top from the link's real directory. Keep the existing guards."
+        "line": 1319,
+        "description": "PAX mtime='1e999' or '-1e999' on a file or directory raises uncaught OverflowError (tarfile.utime -> os.utime), exiting 1 rather than documented 65. Handle this malformed metadata with the fixed data-error code; retain containment checks and cleanup. Add real-supervisor file AND directory-fixup regression rows: correct size/hash stream, exit 65, empty stdout, no install/staging, no traceback. Four failing probes are recorded in the reason."
       },
       {
         "type": "test_failure",
         "file": "scripts/tests/local-runner.test.mjs",
-        "description": "TC4 has no row for a link that leaves the top and re-enters through the top's own name. Add [{name:'node',type:'dir'},{name:'node/x',data:'x'},{name:'node/link',type:'symlink',linkname:'../node/x'}] and expect assertToolchainRefused (65, nothing installed, no staging). The row must fail before the fix. After the fix, re-run the named verification command fresh and supply its output to complete_task."
+        "line": 3974,
+        "description": "task.verification adds --test-skip-pattern='^AJ[3-6] ', unlike the approved command. Unfiltered clean 063d7ffd fails AJ3-AJ6 with SESSION_DAEMON_NOT_LOOPBACK. Coordinate task-2cf1c6be's fixture landing; preserve its after/createServer imports, AGENT_PROJECT/agentHealth and daemonInfoPath hunks. After that and the overflow fix, rerun env -i with nvm Node 24: node --test scripts/tests/local-runner.test.mjs, and submit fresh exit-0 output without filters."
       }
     ]
   },
   "rejectionHistory": [
+    {
+      "reason": "Reviewed 3c5af5e1 + 063d7ffd on moe/work-2026-10-24. Previous delivery and symlink defects are fixed: +232 test lines committed; removing the new containment predicate kills TC4; restored TC/TT passes 9/9. Diff 397 (+394/-3), diff --check clean. No size rejection.\n\nNEW error-handling rail / documented fixed-exit violation: gzip PAX_FORMAT tar with node/ and node/x, pax_headers={'mtime':'1e999'} or '-1e999' on either entry, sent with correct hash/size, crashes tarfile.utime with OverflowError. All four real-supervisor probes exit 1, not 65; cleanup succeeds. Repro command (exit 1): python3 -I -B /tmp/cq-r11e2-qa.X5zhDt/pax-mtime-probe.py /tmp/cq-r11e2-qa.X5zhDt/tree/scripts/local-runner/guest-supervisor.py\n\nDoD3: submitted filtered gate reproduces exit 0 (256 tests/255 pass/1 macOS skip), but plan unfiltered gate at clean 063d7ffd exits 1 (260/255 pass/4 AJ3-AJ6 failures/1 skip). This is peer task-2cf1c6be's checkpoint/fixture gap, not a toolchain regression. Reverting ONLY its three runtime files in scratch yields full 259/260 pass, 1 skip. Preserve its in-progress fixture; coordinate landing, then supply fresh unfiltered verification after the overflow fix. No skipped/loosened refusal rows. Logs: /tmp/cq-r11e2-qa.X5zhDt/{reported,unfiltered,peer-baseline,pax-mtime-probe}.log.",
+      "rejectedAt": "2026-10-30T09:50:29.388Z",
+      "reopenCount": 2,
+      "failedDodItems": [
+        "The verification command exits 0 with its output supplied to complete_task."
+      ],
+      "issues": [
+        {
+          "type": "other",
+          "file": "scripts/local-runner/guest-supervisor.py",
+          "line": 1319,
+          "description": "PAX mtime='1e999' or '-1e999' on a file or directory raises uncaught OverflowError (tarfile.utime -> os.utime), exiting 1 rather than documented 65. Handle this malformed metadata with the fixed data-error code; retain containment checks and cleanup. Add real-supervisor file AND directory-fixup regression rows: correct size/hash stream, exit 65, empty stdout, no install/staging, no traceback. Four failing probes are recorded in the reason."
+        },
+        {
+          "type": "test_failure",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "line": 3974,
+          "description": "task.verification adds --test-skip-pattern='^AJ[3-6] ', unlike the approved command. Unfiltered clean 063d7ffd fails AJ3-AJ6 with SESSION_DAEMON_NOT_LOOPBACK. Coordinate task-2cf1c6be's fixture landing; preserve its after/createServer imports, AGENT_PROJECT/agentHealth and daemonInfoPath hunks. After that and the overflow fix, rerun env -i with nvm Node 24: node --test scripts/tests/local-runner.test.mjs, and submit fresh exit-0 output without filters."
+        }
+      ]
+    },
     {
       "reason": "Two problems: a delivery gap and one real code defect.\n\n(1) Tests not delivered. Completion commit 3c5af5e1 lands only guest-supervisor.py (+92/-2), snapshot-transfer.mjs (+61/-1) and the board json. scripts/tests/local-runner.test.mjs, the +221 TC1-TC5/TT1-TT4 hunk, is still uncommitted in the shared tree (blob 356fca14; HEAD blob a348cc47; `git grep 'TC1 toolchain CLI' HEAD` finds nothing). The wrapper held it as CONTESTED: task-2cf1c6be (WORKING, worker-fe18a9a9) plans that path, and this row's CODEX seat leaves no TOOL witness. DoD 1-2 (\"Shown by tests\") are not met by delivered bytes. Rails forbid agent Git writes, so QA cannot self-land. Preserve those bytes.\n\n(2) A symlink out of the installed tree is accepted. extract_toolchain checks link containment against the staging top. A link that climbs to the parent and re-enters through the top's own name passes, then escapes once the top is renamed onto TOOLCHAIN. Repro with the real install_toolchain: members node/, node/x and node/link -> ../node/x exit 0, and <opt>/toolchain/link then resolves to the sibling <opt>/node/x and reads its bytes. DoD 1 requires refusing a link out of the tree. data_filter normalizes linknames lexically, so the `s -> .` then `s/../node/x` variant stays contained; only the rename-alias form escapes.\n\nFix: containment must hold for the installed location. Add a TC4 row. Because the test file must change, the next session must be a real CLAUDE seat that edits local-runner.test.mjs with the Edit/Write tool, so the wrapper witnesses and lands it (mem:gotcha-codex-worker-unwitnessed-contested-path-delivery-gap). worker-fe18a9a9 is waiting for this file to land.\n\nEverything else checks out. In an isolated archive of HEAD plus the test overlay, the verification command exits 0: 260 tests, 259 pass, 1 pre-existing macOS skip, all TC/TT rows ran. The diff is 377 lines, within the plan.",
       "rejectedAt": "2026-10-30T08:59:26.034Z",
@@ -277,5 +356,16 @@
         }
       ]
     }
-  ]
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-supervisor.py"
+  ],
+  "blockedReason": "Per governor msg-458ea98c: shared scripts/tests/local-runner.test.mjs contains only task-2cf1c6be's still-undelivered +11/-2 fixture. My Codex session has no TOOL witness (harvest file0 bytes), and that path was dirty at preflight; it cannot land TC6 even after a mid-session peer commit. Runtime OverflowError→65 fix remains in guest-supervisor.py for wrapper checkpoint. TC6/helper edits withheld ONLY from shared tree, preserved verbatim in task comment-8dae859bb9d54b58a8e538ac9f1f9098. Fresh scratch unfiltered plan gate with runtime+TC6+untouched peer fixture passed:265 tests/264 pass/0 fail/1 pre-existing macOS skip, exit0; /tmp/cq-r11e2-repair/snapshot-unfiltered.log. No passing claim for undelivered current tests. After peer DONE, fresh session must restore that exact diff, rerun unfiltered gate, finish step5 and complete_task. Handoff and gotchas saved in Serena. No Git writes or .moe edits; no peer bytes reverted. This prevents a third known delivery-gap QA rejection.",
+  "blockedOnTaskIds": [
+    "task-2cf1c6bee5814ed98eb3d069d97b32b3"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-30T10:08:54.348Z"
 }
