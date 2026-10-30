@@ -119,7 +119,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -136,16 +136,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T18:02:39.016Z",
-  "updatedAt": "2026-10-30T18:57:22.314Z",
+  "updatedAt": "2026-10-30T19:07:47.860Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T18:02:59.654Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T19:07:47.860Z",
+    "wallClockMs": 3888206
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -290,5 +293,9 @@
     "reportedAt": "2026-10-30T18:56:59.642Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-R13f1 adds the 'check-containment' certify check, applying the architect prototype verbatim.\n\nThe new scripts/local-runner/certify-containment.mjs (131 lines) exports containmentSnapshot() and CONTAINMENT_CHECKS. It runs runCheckJob three times on one generated snapshot, each run with a fresh owner, credential and VM:\n- probe: must be passed/intact; probe exits 10-14 map to NETWORK/CREDENTIAL/PROTECTED/RLIMIT/FSIZE;\n- integrity: a root truncate of the protected file through one fixed argv, fired on the session's first stdout bytes; must be inconclusive with exitCode 0 and the change witnessed;\n- edit: must be passed/changed.\nA VM-delete leak is checked first, then runCheckJob's own failure code, then each run's rule. The first failure stops the later runs. A rejection keeps its stable code.\n\ncertify.mjs (+9/-6): BODY splices the check after BRIDGE_CHECKS and teardown stays last. The context gains cacheDir and supervisor, and c.observed is renamed c.platform. c.ledger stays the base ledger and the native deps stay {}.\n\nTests (+169/-12): containmentRig, CHANGE_ARGV and the certifyHarness containment/change options, the 'certify-integrity' bridge script, the pinned id lists, and CC1-CC6. CC2 is POSIX-only. The bundle shipped list gains the new module (+2/-2). Total 331 changed lines, under the 380 cap, with no peer hunks.\n\nEvidence:\n- RED first: ERR_MODULE_NOT_FOUND plus the bundle's missing-asset failure.\n- Fresh verification: exit 0, 339 tests, 338 pass, 1 existing macOS-native skip.\n- 13/13 planned mutants were killed by AssertionErrors in a scratch archive, which was restored cmp-identical.\n- Windows node v24.16 run of the CF/CB/GN/CC rows: 31 pass, CC2 skipped.\n- diff --check is clean.\n\nNon-blocking:\n- certifyCore's doc comment does not list the test-only containment seam (outside the approved hunks).\n- A non-function provider.spawn becomes infra-failure, not CHECK_SESSION_FAILED. Both fail closed.\n\nNative certify was not run; it is operator-only. executionRead"
+  "completionSummary": "CQ-R13f1 adds the 'check-containment' certify check, applying the architect prototype verbatim.\n\nThe new scripts/local-runner/certify-containment.mjs (131 lines) exports containmentSnapshot() and CONTAINMENT_CHECKS. It runs runCheckJob three times on one generated snapshot, each run with a fresh owner, credential and VM:\n- probe: must be passed/intact; probe exits 10-14 map to NETWORK/CREDENTIAL/PROTECTED/RLIMIT/FSIZE;\n- integrity: a root truncate of the protected file through one fixed argv, fired on the session's first stdout bytes; must be inconclusive with exitCode 0 and the change witnessed;\n- edit: must be passed/changed.\nA VM-delete leak is checked first, then runCheckJob's own failure code, then each run's rule. The first failure stops the later runs. A rejection keeps its stable code.\n\ncertify.mjs (+9/-6): BODY splices the check after BRIDGE_CHECKS and teardown stays last. The context gains cacheDir and supervisor, and c.observed is renamed c.platform. c.ledger stays the base ledger and the native deps stay {}.\n\nTests (+169/-12): containmentRig, CHANGE_ARGV and the certifyHarness containment/change options, the 'certify-integrity' bridge script, the pinned id lists, and CC1-CC6. CC2 is POSIX-only. The bundle shipped list gains the new module (+2/-2). Total 331 changed lines, under the 380 cap, with no peer hunks.\n\nEvidence:\n- RED first: ERR_MODULE_NOT_FOUND plus the bundle's missing-asset failure.\n- Fresh verification: exit 0, 339 tests, 338 pass, 1 existing macOS-native skip.\n- 13/13 planned mutants were killed by AssertionErrors in a scratch archive, which was restored cmp-identical.\n- Windows node v24.16 run of the CF/CB/GN/CC rows: 31 pass, CC2 skipped.\n- diff --check is clean.\n\nNon-blocking:\n- certifyCore's doc comment does not list the test-only containment seam (outside the approved hunks).\n- A non-function provider.spawn becomes infra-failure, not CHECK_SESSION_FAILED. Both fail closed.\n\nNative certify was not run; it is operator-only. executionRead",
+  "completedAt": "2026-10-30T19:07:47.860Z",
+  "reviewCompletedAt": "2026-10-30T19:07:47.860Z",
+  "reviewSummary": "QA verified CQ-R13f1 against completion 5934a58d and checkpoint 5e885d02, both on moe/work-2026-10-24.\n\nVerification re-run, fresh: env -i node v24.21.0 --test local-runner + bundle -> exit 0, 339 tests, 338 pass, 1 existing skip. CF1-8, CB1, CB6, GN5 and CC1-6 pass.\n\nDoD:\n1. verdict order: leak, then failure, then vm, then RULES; the first failure stops (CC5, 23 rows with call counts).\n2. Input keys exact, shared snapshot/platform/ledger/supervisor/provider, fresh owner and credential, deps [], budget from bounds (CC3). oid c847a247 re-derived. Change argv fixed, once, on first stdout (CC4). Base ledger (CC6).\n3. Context platform/cacheDir/supervisor; order guest-network, check-containment, teardown (CB1, GN5, CF1).\n4. Exit 0.\n\nSource checks: hello is written after holds, reown and protect_mounts; exit 80 on relay=0 with changed paths; runCheckSession attaches its stdout listener in the spawn tick, so the tee loses no bytes; `sudo -n` exec precedent exists; rlimits soft=hard; native deps {}.\n\nMy own mutants, in a scratch archive (baseline 32/32): 11/11 killed by AssertionErrors (vm check dropped, change guard, edit accepts intact, route check dropped, generation, change timeout, splice order, no stop-on-first-failure, credential reuse, dependencies, FSIZE errno). Restored cmp-identical.\n\nSize: 331 changed lines (311 net) across the 4 approved files. No scope drift and no weakened tests.\n\nNon-blocking: the certifyCore doc does not name the deps.containment test seam. Native certify is operator-only and was not run. executionReady false.",
+  "requiredCheckAtDone": null
 }
