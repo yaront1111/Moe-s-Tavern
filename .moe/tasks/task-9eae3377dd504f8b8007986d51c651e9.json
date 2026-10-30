@@ -78,7 +78,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -102,16 +102,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:42:24.991Z",
-  "updatedAt": "2026-10-30T19:08:13.251Z",
+  "updatedAt": "2026-10-30T19:12:24.356Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T13:42:37.502Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T19:12:24.356Z",
+    "wallClockMs": 19786854
   },
   "contextFetchedBy": [
     "architect-76a2c8bb",
-    "worker-681f4f22"
+    "worker-681f4f22",
+    "qa-ba3f4f35"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -157,7 +160,44 @@
     "packages/moe-daemon/src/server/WebSocketServer.ts",
     "packages/moe-daemon/src/server/WebSocketServer.test.ts",
     "packages/moe-daemon/src/state/workerLifecycle.ts",
-    "packages/moe-daemon/src/tools/releaseTask.test.ts"
+    "packages/moe-daemon/src/tools/releaseTask.test.ts",
+    ".moe/tasks/task-4e2ab1584c3140019be709b94c71f1cc.json",
+    ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
+    ".moe/tasks/task-9eae3377dd504f8b8007986d51c651e9.json"
   ],
-  "completionSummary": "Hardened landingRetry at both common boundaries in the four approved files (+101/-4, net +97). Board UPDATE_TASK now strips daemon-owned retry objects/null echoes before forwarding while allowed title edits apply. Requeue keeps completed-step WORKING retries WORKING/unassigned; null/absent still REVIEW; park remains BACKLOG. Added 10 typed integration regressions checking forwarded keys, task memory/disk preservation, completed steps, retry metadata and seat cleanup. All callers pass full Task. TDD observed 3 WS and 2 release failures before minimal fixes; park-order mutation caught exactly one expected failure. Final adversarial review clean. Fresh governor-authorized Linux HEAD snapshot gate: native build passed, focused 190 tests, full daemon 213 suites/6214 passed/20 skipped, parity PASS, owned-source cmp/diff-check clean, exit 0. Shared live daemon dist/Windows deps and peer dirty paths untouched; wrapper owns landing. Serena handoff/gotcha saved."
+  "completionSummary": "Hardened landingRetry at both common boundaries in the four approved files (+101/-4, net +97). Board UPDATE_TASK now strips daemon-owned retry objects/null echoes before forwarding while allowed title edits apply. Requeue keeps completed-step WORKING retries WORKING/unassigned; null/absent still REVIEW; park remains BACKLOG. Added 10 typed integration regressions checking forwarded keys, task memory/disk preservation, completed steps, retry metadata and seat cleanup. All callers pass full Task. TDD observed 3 WS and 2 release failures before minimal fixes; park-order mutation caught exactly one expected failure. Final adversarial review clean. Fresh governor-authorized Linux HEAD snapshot gate: native build passed, focused 190 tests, full daemon 213 suites/6214 passed/20 skipped, parity PASS, owned-source cmp/diff-check clean, exit 0. Shared live daemon dist/Windows deps and peer dirty paths untouched; wrapper owns landing. Serena handoff/gotcha saved.",
+  "commits": [
+    {
+      "sha": "ede0f012118c944306a4a2277637fd7738feb30d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-681f4f22@2026-10-30T19:00:11Z",
+      "paths": [
+        ".moe/tasks/task-4e2ab1584c3140019be709b94c71f1cc.json",
+        ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
+        ".moe/tasks/task-9eae3377dd504f8b8007986d51c651e9.json",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ],
+      "recordedBy": "worker-681f4f22",
+      "recordedAt": "2026-10-30T19:09:02.967Z",
+      "treeId": "205809c54bcf18c26f5adf06289f51b6fca1855f",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-681f4f22@2026-10-30T19:00:11Z",
+    "at": "2026-10-30T19:09:02.967Z"
+  },
+  "completedAt": "2026-10-30T19:12:24.356Z",
+  "reviewCompletedAt": "2026-10-30T19:12:24.356Z",
+  "reviewSummary": "Reviewed recorded completion ede0f012118c944306a4a2277637fd7738feb30d (tree 205809c54bcf18c26f5adf06289f51b6fca1855f), confirmed branch containment on moe/work-2026-10-24. Source +101/-4 (net +97); whole commit including daemon-owned board metadata +216/-28 (net +188). Independently reran task.verification.command verbatim in isolated native Linux snapshot /tmp/wt03b-gate.FOI7v2 with MOE_* cleared: npm ci; npm run build; npx vitest run src/server/WebSocketServer.test.ts src/tools/releaseTask.test.ts src/state/workerStore.test.ts (3 suites/190 passed); npm test (213 suites/6214 passed/20 skipped); bash scripts/tests/parity-check.sh PASS; overall exit 0. Owned files cmp-equal to recorded commit; diff checks clean. Log /tmp/wt03b-qa-verification.log. Verified object/null/stale board echoes stripped before updateTask while title applies, memory/disk retry preservation, assigned/unassigned completed-plan retry requeue WORKING, null/absent REVIEW, park BACKLOG, seat cleanup and all full-Task callers. Separate scratch mutation checks caught removed denylist (3 failures), removed retry guard (2 failures), guard-before-park (1 failure); verified snapshot unmodified. No source scope drift or weakened tests; docs deferred explicitly to WT-17; no shared dist/dependency writes or peer edits. Complexity: Lean already. Ship. Handoff reusable facts folded into gotcha-landing-retry-release-routing; handoff archival checked collision-free before approval.",
+  "requiredCheckAtDone": null
 }
