@@ -6440,6 +6440,78 @@ get_account_lease() {
     done
 }
 
+# Process-scoped Git hooks: the wrapper and its sidecars never inherit this overlay.
+prepare_agent_git_guard() {
+    local entry
+    AGENT_GIT_GUARD_ROOT=$("$NODE_CMD" - "$PROJECT" "$SECURE_TEMP_DIR" <<'MOE_GIT_GUARD_JS'
+const fs = require('fs'), path = require('path'), cp = require('child_process');
+const [project, temp] = process.argv.slice(-2), win = process.platform === 'win32';
+const native = p => win ? p.replaceAll('\\', '/') : p;
+const env = { ...process.env, LC_ALL: 'C' };
+const git = (cwd, args, e = env) => cp.spawnSync('git', ['-C', cwd, ...args], { env: e, encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 });
+const value = r => { if (r.status !== 0) throw Error('git'); return r.stdout.replace(/\n$/, ''); };
+const shell = s => "'" + s.replaceAll("'", "'\\''") + "'";
+let root;
+try {
+    const count = process.env.GIT_CONFIG_COUNT || '', n = Number(count);
+    if (!/^\d*$/.test(count) || !Number.isSafeInteger(n) || n > 2147483646) throw Error('config');
+    const identity = git(project, ['rev-parse', '--absolute-git-dir']);
+    if (identity.status === 128 && /^fatal: not a git repository\b/.test(identity.stderr || '')) {
+        // A broken/redirected repository is not an ordinary non-Git project.
+        if (['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR'].some(k => process.env[k])) throw Error('identity');
+        for (let dir = path.resolve(project);;) {
+            try { fs.lstatSync(path.join(dir, '.git')); throw Error('identity'); }
+            catch (e) { if (e.code !== 'ENOENT') throw e; }
+            const parent = path.dirname(dir); if (parent === dir) break; dir = parent;
+        }
+        process.exit(0); // No Git protection is claimed.
+    }
+    const gitdir = native(value(identity));
+    const top = value(git(project, ['rev-parse', '--is-bare-repository'])) === 'true'
+        ? gitdir : value(git(project, ['rev-parse', '--show-toplevel']));
+    const original = native(value(git(top, ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'])));
+    for (const p of [gitdir, original, temp]) if (!path.isAbsolute(p) || /[\x00-\x1f\x7f]/.test(p)) throw Error('path');
+    root = fs.mkdtempSync(path.join(temp, 'moe-git-guard-'));
+    fs.chmodSync(root, 0o700);
+    if (win) {
+        const acl = "$ErrorActionPreference='Stop'; $p='" + root.replaceAll("'", "''") + "'; $a=Get-Acl -LiteralPath $p; $a.SetAccessRuleProtection($true,$false); " +
+            "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User,'FullControl','ContainerInherit,ObjectInherit','None','Allow')); Set-Acl -LiteralPath $p -AclObject $a";
+        value(cp.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(acl, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 }));
+    }
+    const hooks = native(path.join(root, 'hooks')), config = native(path.join(root, 'config'));
+    fs.mkdirSync(hooks, { mode: 0o700 });
+    let names;
+    try { names = fs.readdirSync(original); } catch (e) { if (e.code !== 'ENOENT') throw e; names = []; }
+    for (const name of new Set(['pre-commit', 'pre-push', ...names])) {
+        const target = shell(native(path.join(original, name)));
+        const deny = ['pre-commit', 'pre-push'].includes(name)
+            ? 'if [ "${MOE_ALLOW_AGENT_GIT_WRITES:-}" != 1 ]; then\n  echo "MOE_AGENT_GIT_REFUSED: the wrapper lands the work" >&2\n  exit 1\nfi\n' : '';
+        fs.writeFileSync(path.join(hooks, name), '#!/bin/sh\n' + deny + `if [ -x ${target} ] && [ ! -d ${target} ]; then exec ${target} "$@"; fi\nexit 0\n`, { mode: 0o700 });
+    }
+    // Wildmatch, config-value quoting and shell quoting are independent layers.
+    fs.writeFileSync(config, '[core]\n hooksPath = "' + hooks.replace(/[\\"]/g, '\\$&') + '"\n', { mode: 0o600 });
+    const key = `includeIf.gitdir${win ? '/i' : ''}:${gitdir.replace(/[\\*?[]/g, '\\$&')}.path`;
+    const added = { [`GIT_CONFIG_KEY_${n}`]: key, [`GIT_CONFIG_VALUE_${n}`]: config, GIT_CONFIG_COUNT: String(n + 1) };
+    if (native(value(git(top, ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'], { ...env, ...added }))) !== hooks) throw Error('validation');
+    fs.writeFileSync(path.join(root, "env.json"), JSON.stringify(added), { mode: 0o600 });
+    fs.writeFileSync(path.join(root, "env"), Object.entries(added).map(([k,v]) => k+"="+v+"\0").join(""), { mode: 0o600 });
+    process.stdout.write(root);
+} catch {
+    try { if (root) fs.rmSync(root, { recursive: true, force: true }); } catch {}
+    process.stderr.write('MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI\n'); process.exit(1);
+}
+MOE_GIT_GUARD_JS
+    ) || return 1
+    AGENT_GIT_GUARD_ENV=()
+    [ -n "$AGENT_GIT_GUARD_ROOT" ] || return 0
+    while IFS= read -r -d '' entry; do AGENT_GIT_GUARD_ENV+=("$entry"); done < "$AGENT_GIT_GUARD_ROOT/env"
+    [ ${#AGENT_GIT_GUARD_ENV[@]} -eq 3 ]
+}
+agent_git_exec() (
+    if [ ${#AGENT_GIT_GUARD_ENV[@]} -gt 0 ]; then export "${AGENT_GIT_GUARD_ENV[@]}"; fi
+    exec "$@"
+)
+
 # Runs inside the CLI's subshell, so the account's directory and the removed
 # token variables never reach this wrapper's own environment.
 apply_account_env() {
@@ -7762,6 +7834,9 @@ $PROMPT_BODY"
     if [ "$MOE_SKIP_LAUNCH" != true ] && [ "$CLI_TYPE" = claude ]; then
         get_account_lease
     fi
+    if [ "$MOE_SKIP_LAUNCH" != true ]; then
+        prepare_agent_git_guard || { echo 'MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI' >&2; exit 1; }
+    fi
     CLI_LAUNCHED_AT=$(date +%s)
     start_heartbeat_sidecar "$WORKER_ID"
 
@@ -7914,11 +7989,11 @@ $PROMPT_BODY"
             if [ "${CODEX_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != "1" ]; then
                 CODEX_ARGV_PROBED=true
                 PROBE_EXIT=0
-                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
+                PROBE_OUT="$(agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
                 if [ "$PROBE_EXIT" -ne 0 ] && printf '%s\n' "$PROBE_OUT" | grep -qiE 'unexpected argument|unrecognized subcommand|unexpected value'; then
                     PROBE_LINE="$(printf '%s\n' "$PROBE_OUT" | grep -i 'error' | head -n1)"
                     [ -n "$PROBE_LINE" ] || PROBE_LINE="exit $PROBE_EXIT"
-                    CODEX_VERSION="$("$COMMAND_BIN" --version 2>&1 | head -n1)"
+                    CODEX_VERSION="$(agent_git_exec "$COMMAND_BIN" --version 2>&1 | head -n1)"
                     echo -e "${RED}[ERROR]${NC} MOE_CLI_ARGV_REJECTED: the installed codex ($CODEX_VERSION) rejects the wrapper's launch argv -- $PROBE_LINE. Rebuild and reinstall the Moe plugin (or pin the codex version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check."
                     if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
                         ARGV_MSG="@governors $WORKER_ID: MOE_CLI_ARGV_REJECTED - the installed codex ($CODEX_VERSION) rejects the wrapper's launch argv ($PROBE_LINE). Seat exiting and deregistering (the task returns to the queue); rebuild and reinstall the Moe plugin or pin codex before relaunching."
@@ -7941,7 +8016,7 @@ $PROMPT_BODY"
             # forward the wrapper's environment to MCP servers, and the shared
             # .codex/config.toml cannot carry per-seat values without sibling
             # seats clobbering them.
-            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
+            agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
                 -c "$CODEX_MOE_OVERRIDE" \
                 "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
@@ -7957,7 +8032,7 @@ $PROMPT_BODY"
             start_moe_usage_receipt codex interactive
             set +e
 
-            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
+            agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
                 -c "$CODEX_MOE_OVERRIDE" \
                 "${CODEX_TASK_ARGS[@]}" -C "$PROJECT" "$SHORT_PROMPT"
@@ -8019,7 +8094,7 @@ $PROMPT_BODY"
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --print \"<prompt>\" --dangerously-skip-permissions"
             set +e
 
-            (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --print "$SHORT_PROMPT" --dangerously-skip-permissions)
+            (cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --print "$SHORT_PROMPT" --dangerously-skip-permissions)
 
             CLI_EXIT_CODE=$?
 
@@ -8031,7 +8106,7 @@ $PROMPT_BODY"
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --prompt-interactive \"<prompt>\""
             set +e
 
-            (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-interactive "$SHORT_PROMPT")
+            (cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-interactive "$SHORT_PROMPT")
 
             CLI_EXIT_CODE=$?
 
@@ -8121,7 +8196,7 @@ $PROMPT_BODY"
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --prompt-file \"$GROK_PROMPT_FILE\" --yolo --cwd \"$PROJECT\" --no-auto-update --output-format plain$GROK_EXTRA_DISPLAY"
             set +e
 
-            (cd "$PROJECT" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-file "$GROK_PROMPT_FILE" --yolo --cwd "$PROJECT" --no-auto-update --output-format plain "${GROK_MODEL_ARGS[@]}" "${GROK_EFFORT_ARGS[@]}")
+            (cd "$PROJECT" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-file "$GROK_PROMPT_FILE" --yolo --cwd "$PROJECT" --no-auto-update --output-format plain "${GROK_MODEL_ARGS[@]}" "${GROK_EFFORT_ARGS[@]}")
 
             CLI_EXIT_CODE=$?
 
@@ -8134,7 +8209,7 @@ $PROMPT_BODY"
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --cwd \"$PROJECT\"${GROK_MODEL_ARGS:+ ${GROK_MODEL_ARGS[*]}} \"<prompt>\""
             set +e
 
-            (cd "$PROJECT" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --cwd "$PROJECT" "${GROK_MODEL_ARGS[@]}" "$GROK_POINTER_PROMPT")
+            (cd "$PROJECT" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --cwd "$PROJECT" "${GROK_MODEL_ARGS[@]}" "$GROK_POINTER_PROMPT")
 
             CLI_EXIT_CODE=$?
 
@@ -8574,10 +8649,10 @@ PYEOF
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 # Pipe through the parser; the subshell's exit (the CLI's) is
                 # PIPESTATUS[0] — the parser's own status is irrelevant.
-                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (apply_account_env; cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
-                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "$PROMPT")
+                (apply_account_env; cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "$PROMPT")
                 CLI_EXIT_CODE=$?
             fi
 
@@ -8587,11 +8662,11 @@ PYEOF
 
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 start_moe_usage_receipt "$CLI_TYPE" headless
-                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (apply_account_env; cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
                 start_moe_usage_receipt "$CLI_TYPE" interactive
-                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT")
+                (apply_account_env; cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT")
                 CLI_EXIT_CODE=$?
             fi
 
@@ -8599,6 +8674,7 @@ PYEOF
         fi
     fi
 
+    if [ -n "${AGENT_GIT_GUARD_ROOT:-}" ]; then rm -rf -- "$AGENT_GIT_GUARD_ROOT"; AGENT_GIT_GUARD_ROOT=""; fi
     stop_heartbeat_sidecar
 
     # Launch-failure classification (tracker declared above the main loop).

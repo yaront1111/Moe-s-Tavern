@@ -13,46 +13,74 @@
     {
       "stepId": "step-1",
       "description": "Read mem:task-task-c4cd6dce82bf49648dafdd9c538ff328-handoff and use test-driven-development. Add a compact parameterized node:test harness driving the REAL sh/ps1 wrappers with the existing postflight-fake-proxy.js and fake CLI, not just extracted guard functions. Every fixture is an absolute temp path; all setup git commands use explicit cwd/-C and check exit status. The fake CLI deliberately runs a nested shell with a failed scratch cd followed by ordinary git commit -am D (without errexit), plus staged-only commit, and attempts a push to a disposable local bare remote. Assert refusal text names wrapper landing, HEAD/remote refs and staged/dirty peer+human sentinels are unchanged before postflight. Include control subdirectory/git -C access, a separate scratch repo and linked worktree where ordinary hooks still operate, spaces/Unicode/path metacharacters, and native Windows Git/PowerShell 5.1 cases. Keep one shared fixture and bounded/redacted logs; do not edit the held-out or shared postflight suites.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/agent-git-guard.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/agent-git-guard.test.mjs"
+      ],
+      "note": "Added compact real-wrapper/fake-proxy harness (shared cross-platform fixture, absolute scratch paths, checked git setup, bounded/redacted result metadata). RED: node --test scripts/tests/agent-git-guard.test.mjs exited 1: nested failed cd followed by commit -am D succeeded (0), and push to disposable bare remote succeeded (0), with no refusal marker. Staged-only/subdirectory, sentinel snapshots, linked-worktree/scratch/original-hook probes included; launch matrix and remaining cases extended in step 3. Existing unrelated dirty paths noted and untouched; shared/held-out suites untouched.",
+      "startedAt": "2026-10-30T16:08:14.152Z",
+      "completedAt": "2026-10-30T16:12:13.359Z"
     },
     {
       "stepId": "step-2",
       "description": "Implement twin agent Git-guard preparation using native Git process-scoped configuration, never persistent git config or installed-hook replacement. Resolve the control checkout's absolute gitdir and existing effective hook directory BEFORE adding the overlay. In a per-seat secure temp directory generate LF/no-BOM shell hooks and a tiny config setting core.hooksPath. Append an includeIf.gitdir:<exact escaped absolute control gitdir>.path entry through GIT_CONFIG_COUNT/KEY_n/VALUE_n; use Git-compatible Windows paths/case handling, no trailing-slash recursive match, and escape Git wildmatch/config/shell syntax independently. Existing caller config entries remain intact. Generate pre-commit/pre-push refusal hooks with MOE_AGENT_GIT_REFUSED and 'the wrapper lands the work'; only explicit MOE_ALLOW_AGENT_GIT_WRITES=1 delegates to the original hook. Forward other installed executable hooks to their original absolute files with unchanged args/stdin/status, not copied bodies or eval. Preserve original hook failures on bypass. Validate the effective hooksPath using the actual prospective child env. Error handling: failed identity/config/temp/permission/validation means MOE_AGENT_GIT_GUARD_FAILED and no CLI launch, never an unprotected fallback. Non-Git projects remain supported without claiming Git protection.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Implemented matching native Git conditional-include preparation in both wrappers using existing Node runtime and stdlib, LF/no-BOM forwarding hooks, independently escaped wildmatch/config/shell paths, original absolute hooks resolved before overlay, inherited runtime configuration append, and prospective-child hooksPath validation. Non-Git returns no overlay; errors are redacted/fail closed. bash -n passes; actual embedded preparation probe in an absolute disposable Unicode/glob/metacharacter repo passed (refusal exit 1, wrapper-rule diagnostic, no installed-hook modification). Full-wrapper RED remains until step 3 launch wiring. Bash rewritten by syntax-checked atomic rename, PS BOM preserved.",
+      "startedAt": "2026-10-30T16:12:13.378Z",
+      "completedAt": "2026-10-30T16:14:53.270Z"
     },
     {
       "stepId": "step-3",
       "description": "Apply the prepared environment at every real CLI invocation (Claude/Codex/Gemini/Grok/custom command, interactive/headless, taskless notification and loop/reload paths), preserving command args, stdin/TTY, pipeline exit status and account environment. Use child subshell scope on sh; PS saves/restores only its own appended runtime-config entries in a finally before wrapper postflight/teardown, including launch failure/cancellation. Do not globally export the guard into wrapper Git or sidecars. Extend the new tests to prove normal completion with commitHooks=false and true, checkpoint plumbing, original hook denial, explicit one-command human bypass, ordinary human commit outside the session, concurrent seats with separate guard temps, and caller GIT_CONFIG_COUNT restoration (including existing core.hooksPath). Verify spawned descendant shells inherit the guard; document explicit env/config stripping as deliberate bypass, not a sandbox guarantee. Reuse existing secure-temp lifecycle; no .moe writes, no PATH git shim, no general Git protocol changes. Keep guard files alive through the CLI and remove only the seat's own temp files after exit.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
       ],
       "newFiles": [
         "scripts/tests/agent-git-guard.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/agent-git-guard.test.mjs"
+      ],
+      "note": "Wired all Claude/custom, Codex (including argv probe), Gemini and Grok interactive/headless launches through child-only guard environment. Bash export lives in exec subshell; PS saves/restores only the appended three variables in finally, before postflight, retaining preexisting unused entries too. Unique per-seat guard temps removed after CLI/outer cleanup; Windows root ACL restricted to current SID. Tests: Linux 19/19; native Windows PS5.1 17/17 plus new plumbing-completion/launch-failure 2/2; parity passes. Coverage includes sentinel preservation, ordinary human writes, one-command bypass + original hook rejection, forwarded args/stdin/resource-relative $0, non-Git stdin, precedence/count/setup refusal, taskless notifications, native argv, concurrent seat lifetimes, hookful/plumbing completions/checkpoints, failure exit 23 and caller env restoration. Filed unrelated existing PS wildcard project discovery defect as task-3ad573a754574dfd92083b2e813c0bff; used separate absolute wildcard-containing gitdir to test guard wildmatch without touching that lane. Shared suites untouched.",
+      "startedAt": "2026-10-30T16:14:53.288Z",
+      "completedAt": "2026-10-30T16:26:39.577Z"
     },
     {
       "stepId": "step-4",
       "description": "Document the accidental-write guard under scripts/CLAUDE.md 'Land on every exit' and a focused TROUBLESHOOTING entry. Explain control-only scope, wrapper-only landing, setup-failure diagnostic, settings.commitHooks unchanged, original human hooks unchanged, and that this is not a malicious-agent sandbox (--no-verify/explicit hooksPath or removing inherited Git config can bypass). Show a deliberately scoped human override in bash and PowerShell with restoration in finally; do not teach agents to use the bypass as their normal repair. Use cd ... && git ... or git -C absolute-path for all scratch examples.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/CLAUDE.md",
         "docs/TROUBLESHOOTING.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "Documented exact checkout/process scope, wrapper-only landing, unchanged commitHooks/original hooks, fail-closed setup diagnostic, non-Git behavior and explicit non-sandbox limits. Human-only examples scope bypass to one reviewed-path commit, with PowerShell restoration in finally; no agent recovery bypass recommended. Scratch examples use absolute git -C or cd &&. npm run docs:lint passed (39/30/35 role lines, all under 40).",
+      "startedAt": "2026-10-30T16:26:39.595Z",
+      "completedAt": "2026-10-30T16:27:09.145Z"
     },
     {
       "stepId": "step-5",
       "description": "Run the concentrated verification gate fresh: node --test scripts/tests/agent-git-guard.test.mjs && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh && npm run docs:lint . Submit its exact command/exitCode/outputTail as completion evidence. Also require native Windows execution of the new node test and node scripts/tests/postflight-safe.mjs powershell (no PS skip counted as a pass); inspect supported-launch argv/environment across all four CLI paths. New tests must fail with the guard removed and demonstrate the incident failure before the fix; current harnesses pass unchanged. Report platform availability honestly rather than substituting Linux pwsh for Windows Git/PS5.1.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
@@ -61,12 +89,15 @@
       ],
       "newFiles": [
         "scripts/tests/agent-git-guard.test.mjs"
-      ]
+      ],
+      "note": "Fresh concentrated gate passed exit 0: unset ${!MOE_@} ${!CLAUDE_@} ${!FAKE_@}; node --test scripts/tests/agent-git-guard.test.mjs && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh && npm run docs:lint. New suite 19/19, zero skips; unchanged bash postflight-safe exit=0 failureClass=NONE lastScenario=Z; parity PASS; docs lint 39/30/35 lines. Native Windows node.exe new suite 19/19 (zero skips) and node.exe scripts/tests/postflight-safe.mjs powershell passed exit=0 failureClass=NONE lastScenario=Z on Windows Git/PS5.1, not Linux pwsh. Supported argv flags asserted across all four CLI branches and custom. In an isolated copied tree, removing only child overlay application makes the incident test fail on both platforms (commit -am D and push both return 0 with refused=false), proving RED without editing shared files. No shared/held-out suite changes.",
+      "startedAt": "2026-10-30T16:27:09.164Z",
+      "completedAt": "2026-10-30T16:47:10.237Z"
     },
     {
       "stepId": "step-6",
       "description": "Final adversarial self-review of this task's diff: can a failed cd/nested shell hit the control checkout, can an inherited config override silently disable hooks, can glob/case/path quoting affect another repo, can two seats remove each other's guards, and can cancellation leak the guard into wrapper hook commits? Confirm no persistent Git config/hook edits, no peer index changes, no credentials/config values in logs, and exact restoration on success/failure. Check task-owned net growth <=400 lines, no borrowed lane edits, and preserve Bash grouped-loop/reload fences. Correct any finding and rerun the named gate before complete_task; hand off to QA, never approve your own work.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
@@ -75,11 +106,19 @@
       ],
       "newFiles": [
         "scripts/tests/agent-git-guard.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/agent-git-guard.test.mjs"
+      ],
+      "note": "Adversarial review complete. RED/GREEN fixes: preserve trailing spaces in original hook paths; strip only terminal LF so CR paths fail closed; read Windows case-insensitive process.env count before spreading; distinguish broken .git/explicit invalid GIT_DIR from ordinary non-Git. Final full named gate exit 0: 24/24 new Bash tests, unchanged bash postflight NONE/Z, parity PASS, docs lint OK. Native Windows node.exe/PS5.1 gate exit 0: 24/24 new tests, unchanged powershell postflight NONE/Z, zero skips. Final five-file hashes stable; git diff --check, bash -n, twin embedded-code parity and PS BOM checks pass. +388/-24 = 364 net LOC; no borrowed lane/shared-suite edits, persistent Git changes, or peer index writes. Exact env restoration, config precedence fail-closed, per-seat lifetimes, wrapper landing, quoting and grouped-loop/reload fences reviewed. Docs unchanged since step 4. Unrelated wildcard project-path bug filed task-3ad573a754574dfd92083b2e813c0bff. Human override/non-sandbox limits explicit. Serena handoff and runtime gotchas saved; no manual commit, wrapper lands at exit.",
+      "startedAt": "2026-10-30T16:47:10.258Z",
+      "completedAt": "2026-10-30T17:24:10.125Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,7 +131,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:35:35.156Z",
-  "updatedAt": "2026-10-30T13:53:35.570Z",
+  "updatedAt": "2026-10-30T17:24:33.575Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:35:41.628Z",
@@ -101,10 +140,12 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T13:39:18.586Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
-    "architect-eb7de546"
+    "architect-eb7de546",
+    "worker-6e57c4f8"
   ],
   "dependsOn": [
     "task-01f37ac63316409ab581f5a189002cb8"
@@ -113,7 +154,14 @@
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:53:35.545Z",
   "planningNotes": {
@@ -136,5 +184,22 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T13:53:35.570Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T16:08:14.152Z",
+  "reviewStartedAt": "2026-10-30T17:24:33.573Z",
+  "verification": {
+    "command": "unset ${!MOE_@} ${!CLAUDE_@} ${!FAKE_@}; node --test scripts/tests/agent-git-guard.test.mjs && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh && npm run docs:lint",
+    "exitCode": 0,
+    "outputTail": "{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS parity-check.sh\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 35 lines (max 40)\n",
+    "reportedAt": "2026-10-30T17:24:33.573Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/agent-git-guard.test.mjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completionSummary": "Implemented child-only, exact-control-gitdir commit/push guards in both launchers. Native process-scoped Git conditional config and private forwarding hooks preserve caller config, original hook behavior, wrapper landings and human/scratch writes; setup fails closed. All CLI launch paths covered, Bash subshell isolation and PS finally restoration retained. Documented human-only scoped bypass and non-sandbox limits. Final fresh gate: 24/24 Bash guard tests, unchanged bash postflight exit 0/NONE/Z, parity PASS and docs lint OK. Native Windows node.exe guard suite 24/24, zero skips, followed by unchanged powershell postflight exit 0/NONE/Z on Git/PS5.1. Initial incident RED and isolated guard-removal RED proved on both platforms. Adversarial RED/GREEN fixes cover trailing-space/CR hooks paths, Windows lowercase runtime count and corrupt/redirected Git identity. All five source hashes stable throughout final gates; +388/-24 = 364 net LOC. No shared-suite/peer-path edits or manual commit. Unrelated PS wildcard discovery bug filed as task-3ad573a754574dfd92083b2e813c0bff. Serena task handoff and runtime gotchas saved."
 }

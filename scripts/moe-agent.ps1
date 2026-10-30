@@ -5923,6 +5923,92 @@ function Get-MoeAccountLease {
     }
 }
 
+# Process-scoped Git hooks: only the native CLI call owns the appended entries.
+function Initialize-MoeAgentGitGuard {
+    $program = @'
+const fs = require('fs'), path = require('path'), cp = require('child_process');
+const [project, temp] = process.argv.slice(-2), win = process.platform === 'win32';
+const native = p => win ? p.replaceAll('\\', '/') : p;
+const env = { ...process.env, LC_ALL: 'C' };
+const git = (cwd, args, e = env) => cp.spawnSync('git', ['-C', cwd, ...args], { env: e, encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 });
+const value = r => { if (r.status !== 0) throw Error('git'); return r.stdout.replace(/\n$/, ''); };
+const shell = s => "'" + s.replaceAll("'", "'\\''") + "'";
+let root;
+try {
+    const count = process.env.GIT_CONFIG_COUNT || '', n = Number(count);
+    if (!/^\d*$/.test(count) || !Number.isSafeInteger(n) || n > 2147483646) throw Error('config');
+    const identity = git(project, ['rev-parse', '--absolute-git-dir']);
+    if (identity.status === 128 && /^fatal: not a git repository\b/.test(identity.stderr || '')) {
+        // A broken/redirected repository is not an ordinary non-Git project.
+        if (['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR'].some(k => process.env[k])) throw Error('identity');
+        for (let dir = path.resolve(project);;) {
+            try { fs.lstatSync(path.join(dir, '.git')); throw Error('identity'); }
+            catch (e) { if (e.code !== 'ENOENT') throw e; }
+            const parent = path.dirname(dir); if (parent === dir) break; dir = parent;
+        }
+        process.exit(0); // No Git protection is claimed.
+    }
+    const gitdir = native(value(identity));
+    const top = value(git(project, ['rev-parse', '--is-bare-repository'])) === 'true'
+        ? gitdir : value(git(project, ['rev-parse', '--show-toplevel']));
+    const original = native(value(git(top, ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'])));
+    for (const p of [gitdir, original, temp]) if (!path.isAbsolute(p) || /[\x00-\x1f\x7f]/.test(p)) throw Error('path');
+    root = fs.mkdtempSync(path.join(temp, 'moe-git-guard-'));
+    fs.chmodSync(root, 0o700);
+    if (win) {
+        const acl = "$ErrorActionPreference='Stop'; $p='" + root.replaceAll("'", "''") + "'; $a=Get-Acl -LiteralPath $p; $a.SetAccessRuleProtection($true,$false); " +
+            "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User,'FullControl','ContainerInherit,ObjectInherit','None','Allow')); Set-Acl -LiteralPath $p -AclObject $a";
+        value(cp.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(acl, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 }));
+    }
+    const hooks = native(path.join(root, 'hooks')), config = native(path.join(root, 'config'));
+    fs.mkdirSync(hooks, { mode: 0o700 });
+    let names;
+    try { names = fs.readdirSync(original); } catch (e) { if (e.code !== 'ENOENT') throw e; names = []; }
+    for (const name of new Set(['pre-commit', 'pre-push', ...names])) {
+        const target = shell(native(path.join(original, name)));
+        const deny = ['pre-commit', 'pre-push'].includes(name)
+            ? 'if [ "${MOE_ALLOW_AGENT_GIT_WRITES:-}" != 1 ]; then\n  echo "MOE_AGENT_GIT_REFUSED: the wrapper lands the work" >&2\n  exit 1\nfi\n' : '';
+        fs.writeFileSync(path.join(hooks, name), '#!/bin/sh\n' + deny + `if [ -x ${target} ] && [ ! -d ${target} ]; then exec ${target} "$@"; fi\nexit 0\n`, { mode: 0o700 });
+    }
+    // Wildmatch, config-value quoting and shell quoting are independent layers.
+    fs.writeFileSync(config, '[core]\n hooksPath = "' + hooks.replace(/[\\"]/g, '\\$&') + '"\n', { mode: 0o600 });
+    const key = `includeIf.gitdir${win ? '/i' : ''}:${gitdir.replace(/[\\*?[]/g, '\\$&')}.path`;
+    const added = { [`GIT_CONFIG_KEY_${n}`]: key, [`GIT_CONFIG_VALUE_${n}`]: config, GIT_CONFIG_COUNT: String(n + 1) };
+    if (native(value(git(top, ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'], { ...env, ...added }))) !== hooks) throw Error('validation');
+    fs.writeFileSync(path.join(root, "env.json"), JSON.stringify(added), { mode: 0o600 });
+    fs.writeFileSync(path.join(root, "env"), Object.entries(added).map(([k,v]) => k+"="+v+"\0").join(""), { mode: 0o600 });
+    process.stdout.write(root);
+} catch {
+    try { if (root) fs.rmSync(root, { recursive: true, force: true }); } catch {}
+    process.stderr.write('MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI\n'); process.exit(1);
+}
+'@
+    $script:AgentGitGuardRoot = $program | & node - $projectPath ([IO.Path]::GetTempPath())
+    if ($LASTEXITCODE -ne 0) { throw 'MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI' }
+    $script:AgentGitGuard = if ($script:AgentGitGuardRoot) {
+        [IO.File]::ReadAllText((Join-Path $script:AgentGitGuardRoot "env.json")) | ConvertFrom-Json
+    } else { $null }
+}
+function Invoke-MoeGuardedCommand {
+    $saved = @{}
+    try {
+        foreach ($p in $script:AgentGitGuard.PSObject.Properties) {
+            $saved[$p.Name] = [Environment]::GetEnvironmentVariable($p.Name)
+            [Environment]::SetEnvironmentVariable($p.Name, $p.Value)
+        }
+        & $Command @args
+        $code = $LASTEXITCODE
+    } finally {
+        foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+    }
+    $global:LASTEXITCODE = $code
+}
+function Remove-MoeAgentGitGuard {
+    if ($script:AgentGitGuardRoot) { Remove-Item -LiteralPath $script:AgentGitGuardRoot -Recurse -Force }
+    $script:AgentGitGuardRoot = $null
+    $script:AgentGitGuard = $null
+}
+
 # The values never leave this process: they are held in memory only to put
 # back right after the spawn, so an unrotated launch later still sees them.
 function Set-MoeAccountEnv {
@@ -6953,6 +7039,7 @@ $mentionsJson
         # A wait for a free or trusted account is not launch time.
         $script:CliLaunchedAt = Get-Date
     }
+    if (-not $moeSkipLaunch) { Initialize-MoeAgentGitGuard }
     if ($moeSkipLaunch) {
         if ($preflightClaimFailed) {
             Write-Host "MOE_TASKLESS_NO_LAUNCH reason=claim-failed role=$Role worker=$WorkerId - the claim RPC is unreachable; no CLI is launched without a task bound." -ForegroundColor Yellow
@@ -7116,7 +7203,7 @@ $mentionsJson
                     $probePrevEap = $ErrorActionPreference
                     $ErrorActionPreference = 'Continue'
                     try {
-                        $probeOut = (& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)
+                        $probeOut = (Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)
                         $probeExit = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
                     } catch { $probeOut = "$_"; if ($probeExit -eq 0) { $probeExit = 1 } } finally { $ErrorActionPreference = $probePrevEap }
                     if ($probeExit -ne 0 -and $probeOut -match 'unexpected argument|unrecognized subcommand|unexpected value') {
@@ -7124,7 +7211,7 @@ $mentionsJson
                         $probeLine = if ($probeLine.Count -gt 0) { $probeLine[0].Trim() } else { "exit $probeExit" }
                         $codexVersion = 'unknown'
                         $ErrorActionPreference = 'Continue'
-                        try { $codexVersion = (& $Command --version 2>&1 | Out-String).Trim() } catch {} finally { $ErrorActionPreference = $probePrevEap }
+                        try { $codexVersion = (Invoke-MoeGuardedCommand --version 2>&1 | Out-String).Trim() } catch {} finally { $ErrorActionPreference = $probePrevEap }
                         Write-Host "[ERROR] MOE_CLI_ARGV_REJECTED: the installed codex ($codexVersion) rejects the wrapper's launch argv -- $probeLine. Rebuild and reinstall the Moe plugin (or pin the codex version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check." -ForegroundColor Red
                         if ($generalChannelId) {
                             $argvMsg = "@governors ${WorkerId}: MOE_CLI_ARGV_REJECTED - the installed codex ($codexVersion) rejects the wrapper's launch argv ($probeLine). Seat exiting and deregistering (the task returns to the queue); rebuild and reinstall the Moe plugin or pin codex before relaunching."
@@ -7137,7 +7224,7 @@ $mentionsJson
                 Write-Host "Command: $Command $($codexSeatArgs -join ' ') $($codexExecOverrides -join ' ') exec --json -C `"$projectPath`"$codexSandboxBanner `"<prompt>`""
                 Start-MoeUsageReceipt 'codex' 'headless'
                 & {
-                    & $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"
+                    Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"
                     $script:CliExitCode = $LASTEXITCODE
                 } | ForEach-Object -Begin {
                     # PS 5.1 holds a native-to-native pipe until the producer exits, so
@@ -7158,7 +7245,7 @@ $mentionsJson
                 # Interactive TUI mode: codex -c <seat overrides> -C <project> "<prompt>"
                 Write-Host "Command: $Command $($codexSeatArgs -join ' ') -C `"$projectPath`" `"<prompt>`""
                 Start-MoeUsageReceipt 'codex' 'interactive'
-                & $Command @CommandArgs @codexSeatArgs -C "$projectPath" "$shortPrompt"
+                Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs -C "$projectPath" "$shortPrompt"
                 $script:CliExitCode = $LASTEXITCODE
             }
         } finally {
@@ -7217,7 +7304,7 @@ $mentionsJson
                 Write-Host "Command: $Command --print `"<prompt>`" --dangerously-skip-permissions"
                 try {
                     Push-Location $projectPath
-                    & $Command @CommandArgs --print "$shortPrompt" --dangerously-skip-permissions
+                    Invoke-MoeGuardedCommand @CommandArgs --print "$shortPrompt" --dangerously-skip-permissions
                     $script:CliExitCode = $LASTEXITCODE
                 } finally { Pop-Location }
             } else {
@@ -7225,7 +7312,7 @@ $mentionsJson
                 Write-Host "Command: $Command --prompt-interactive `"<prompt>`""
                 try {
                     Push-Location $projectPath
-                    & $Command @CommandArgs --prompt-interactive "$shortPrompt"
+                    Invoke-MoeGuardedCommand @CommandArgs --prompt-interactive "$shortPrompt"
                     $script:CliExitCode = $LASTEXITCODE
                 } finally { Pop-Location }
             }
@@ -7341,7 +7428,7 @@ $mentionsJson
                     Write-Host "Command: $Command --cwd `"$projectPath`" $($grokModelArgs -join ' ') `"<prompt>`""
                     try {
                         Push-Location $projectPath
-                        & $Command @CommandArgs --cwd "$projectPath" @grokModelArgs "$grokPointerPrompt"
+                        Invoke-MoeGuardedCommand @CommandArgs --cwd "$projectPath" @grokModelArgs "$grokPointerPrompt"
                         $script:CliExitCode = $LASTEXITCODE
                     } finally { Pop-Location }
                 } else {
@@ -7352,7 +7439,7 @@ $mentionsJson
                     Write-Host "Command: $Command --prompt-file `"$($script:GrokPromptFile)`" --yolo --cwd `"$projectPath`" --no-auto-update --output-format plain $($grokModelArgs -join ' ') $($grokEffortArgs -join ' ')"
                     try {
                         Push-Location $projectPath
-                        & $Command @CommandArgs --prompt-file "$($script:GrokPromptFile)" --yolo --cwd "$projectPath" --no-auto-update --output-format plain @grokModelArgs @grokEffortArgs
+                        Invoke-MoeGuardedCommand @CommandArgs --prompt-file "$($script:GrokPromptFile)" --yolo --cwd "$projectPath" --no-auto-update --output-format plain @grokModelArgs @grokEffortArgs
                         $script:CliExitCode = $LASTEXITCODE
                     } finally { Pop-Location }
                 }
@@ -7695,11 +7782,11 @@ $mentionsJson
                     $script:moeToolName = $null
                     $script:moeInText = $false
                     & {
-                        & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs "$userPromptForCli" 2>&1
+                        Invoke-MoeGuardedCommand @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs "$userPromptForCli" 2>&1
                         $script:CliExitCode = $LASTEXITCODE
                     } | ForEach-Object { & $parseStreamJson $_ }
                 } else {
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs "$userPromptForCli"
+                    Invoke-MoeGuardedCommand @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs "$userPromptForCli"
                     $script:CliExitCode = $LASTEXITCODE
                 }
             } else {
@@ -7707,11 +7794,11 @@ $mentionsJson
                 if ($usePrintMode) {
                     $script:moeToolJson = ""
                     & {
-                        & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs 2>&1
+                        Invoke-MoeGuardedCommand @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs 2>&1
                         $script:CliExitCode = $LASTEXITCODE
                     } | ForEach-Object { & $parseStreamJson $_ }
                 } else {
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs
+                    Invoke-MoeGuardedCommand @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs
                     $script:CliExitCode = $LASTEXITCODE
                 }
             }
@@ -7726,6 +7813,8 @@ $mentionsJson
             }
         }
     }
+
+    Remove-MoeAgentGitGuard
 
     # Launch-failure classification (tracker declared above the main loop).
     $cliElapsedSec = if ($script:CliLaunchedAt) { [int]((Get-Date) - $script:CliLaunchedAt).TotalSeconds } else { -1 }
@@ -8070,6 +8159,7 @@ $mentionsJson
     # the next session's pre-flight lands the work on the branch. This finally
     # is SKIPPED on console-window close / SIGKILL (nothing runs; the
     # persisted baseline is the recovery there).
+    try { Remove-MoeAgentGitGuard } catch {}
     try { Stop-MoeGateChild } catch {}
     try { Invoke-MoeTeardownRescue } catch {}
     try { Complete-MoePostflight | Out-Null } catch {}

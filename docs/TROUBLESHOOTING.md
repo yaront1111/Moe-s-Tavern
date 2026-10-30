@@ -765,6 +765,30 @@ no completion commit from anyone is still a merge with no reviewed diff.
 
 ---
 
+### Agent Git-write refusal
+
+`MOE_AGENT_GIT_REFUSED: the wrapper lands the work` means an ordinary commit/push came from an agent CLI (or descendant shell) in the shared control checkout. Report the task's paths with `moe.complete_step`; let the wrapper land them. Do not repair this by bypassing the guard or committing peers' staged files. Scratch commands must use `cd /absolute/scratch && git ...` or `git -C /absolute/scratch ...`.
+
+The temporary, inherited Git configuration matches only that checkout's exact gitdir, not separate scratch repositories or linked worktrees. The wrapper and sidecars do not inherit it; `settings.commitHooks` is unchanged, and existing human hooks/configuration remain untouched. `MOE_AGENT_GIT_GUARD_FAILED` stops CLI launch rather than falling back unprotected: check Git/repository access, inherited `GIT_CONFIG_*` overrides and temporary-directory permissions, then relaunch. Non-Git projects remain supported without Git protection.
+
+This prevents accidents, not hostile agents: `--no-verify`, explicitly replacing `core.hooksPath`, or removing inherited Git configuration defeats it. For a **deliberately reviewed human operation only**, the following one-command override delegates to the original hook (including its failures). It is not an agent recovery procedure:
+
+```bash
+MOE_ALLOW_AGENT_GIT_WRITES=1 git -C /absolute/control commit --only reviewed-file.txt -m 'Reviewed human change'
+```
+
+```powershell
+$previous = $env:MOE_ALLOW_AGENT_GIT_WRITES
+try {
+    $env:MOE_ALLOW_AGENT_GIT_WRITES = '1'
+    git -C 'C:/absolute/control' commit --only reviewed-file.txt -m 'Reviewed human change'
+} finally { [Environment]::SetEnvironmentVariable('MOE_ALLOW_AGENT_GIT_WRITES', $previous) }
+```
+
+A human outside the agent session needs no override. Do not persist it in a profile or weaken Git configuration to make agent writes routine.
+
+---
+
 ### `MOE_COMMIT_INDEX_REFRESH_FAILED`
 
 **Symptom:** `[WARN] MOE_COMMIT_INDEX_REFRESH_FAILED` after an `[OK] Committed …` banner; `git status`
