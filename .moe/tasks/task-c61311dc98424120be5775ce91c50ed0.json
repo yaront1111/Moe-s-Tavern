@@ -9,9 +9,34 @@
     "After `cd packages/moe-daemon && npm run build`, that step's exact `node --test` command, run from the repo root, exits 0. Its output is supplied to complete_task."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Check the preconditions, then make the one-line edit. DoD 1 and 2.\n(a) Confirm that dependency task-2cf1c6bee5814ed98eb3d069d97b32b3 landed. Either get_context epicSiblings shows landing.merged:true for it, or `git log moe/work-2026-10-24 --grep 'Moe-Task: task-2cf1c6bee5814ed98eb3d069d97b32b3'` finds its completion.\n(b) `git ls-files --error-unmatch scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs` must exit 0, so both files are tracked at HEAD. If either file is missing or was renamed, call moe.report_blocked with blockedOnTaskIds [task-2cf1c6bee5814ed98eb3d069d97b32b3]. Never create or edit a test file.\n(c) `git status --porcelain -- .github/workflows/ci.yml` must print nothing. If a peer has in-flight bytes there, do not edit over them. Call moe.report_blocked and name that peer.\n(d) Use the Edit tool. In the build-all-platforms job, change only the `run:` line of the step named `Test local runner prerequisite bundles` (about line 236). It is a single line today. Append ` scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs` after `scripts/tests/local-runner-dispatch.test.mjs`. Each path gets one leading space, in that order. Keep the 8 existing paths and their order. Do not add a glob, quotes, an `if:`, a line continuation, a rename, or a new step. Keep LF endings (.gitattributes has `* text=auto eol=lf`).\n(e) Run the mechanical checks. `grep -c 'scripts/tests/local-runner-vm-control.test.mjs' .github/workflows/ci.yml` prints 1. `grep -c 'scripts/tests/local-runner-daemon-bind.test.mjs' .github/workflows/ci.yml` prints 1. `git diff --numstat -- .github/workflows/ci.yml` prints `1\t1\t.github/workflows/ci.yml`.\nThe checkout is shared and holds other sessions' dirty paths, so an unscoped `git diff --stat` lists them too. Evidence for DoD 2 is the scoped numstat above, plus modifiedFiles = [.github/workflows/ci.yml]. The landed completion commit's non-board stat must show only this file. The task's own .moe/tasks JSON is a wrapper board path and does not count.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Run the gate once. DoD 3.\n(1) Run `cd packages/moe-daemon && npm run build`. local-runner-channel.test.mjs:243 fails fast in before() on a dist that predates the /health bindHost report. The prebuild regenerates the tracked packages/moe-daemon/src/generated/{initFiles,skillFiles}.ts from docs/. If `git status --porcelain -- packages/moe-daemon/src/generated/` shows them dirty after the build, they are not this task's bytes. Leave them out of modifiedFiles, do not commit or revert them, and note them.\n(2) From the repo root, run exactly this. It is the new line 236 without `run: `:\nnode --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs\nGive it a long timeout (Bash timeout 600000, or run_in_background). It must exit 0. Pass it to complete_task as verification: command = that exact line, the exitCode, and an outputTail that includes the ℹ tests/pass/fail/skipped summary.\n(3) Secondary check, not the evidence. Run the two added suites under Windows node to cover the windows-latest leg. From WSL: `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs`. From a native Windows shell, use plain `node --test …`. At planning (HEAD bb0e8820), Linux gave 19/19 pass. Windows node v24.16 gave 17 pass, 0 fail, and 2 skips by design (VC-L3 and VC-M2: 'a Windows process never has a /mnt cwd'). No macOS host is available, so state that leg as unverified.\nError handling: this task changes only YAML, so it cannot change any test outcome. First check `git status --porcelain -- scripts/ packages/moe-daemon/src` for peer in-flight bytes. At planning, scripts/tests/local-runner.test.mjs carried 221 uncommitted lines from task-1e7f5a2dc15b4de5b384a814c4505ed8. If peer bytes could explain the failure, re-run in a fresh snapshot: `git archive HEAD` into a scratch dir, then `cd packages/moe-daemon && npm ci && npm run build`, then the same command from the snapshot root. If that passes, submit it and name the shared-tree failure and its owner in the summary. If it also fails at clean HEAD, or fails under Windows node, call moe.report_blocked. Give the failing rows and blockedOnTaskIds for the task that owns them, for example task-2cf1c6bee5814ed98eb3d069d97b32b3 for daemon-bind, vm-control, channel or agentHarness AJ rows. Do not edit tests, add `if:` guards, or touch peer bytes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarially review the one-line diff (load adversarial-self-review), then write the completion summary.\nCheck `git diff -- .github/workflows/ci.yml`:\n- It shows exactly one -/+ pair, inside the `Test local runner prerequisite bundles` step.\n- Both paths are spelled exactly as on disk. Linux and macOS runners are case-sensitive.\n- Each path appears once, separated by single spaces, with no trailing whitespace and no CR.\n- The line still works under each runner's default shell: bash on ubuntu and macOS, pwsh on windows. It holds only plain space-separated relative paths with forward slashes: no glob, quote, `$`, `: ` or ` #`, so the YAML plain scalar and both shells read it the same way.\n- In CI, 'Build daemon' and 'Build proxy' run earlier in the same job, so the channel and daemon-bind suites have what they need.\nThen re-run the sweep for suites missing from CI: `for f in scripts/tests/*.test.mjs; do grep -qF \"$f\" .github/workflows/ci.yml || echo \"$f\"; done`. Name every hit in the completion summary, but do not add any (out of scope). At planning, after this edit, the hits were scripts/tests/account-trust-docs.test.mjs and scripts/tests/postflight-owner-scope.test.mjs. Neither is run by another workflow, a runner script or a package.json script.\nThe summary also states:\n- the Windows-node result for the two suites;\n- that the macOS leg was not verified locally;\n- whether the gate ran in the shared tree or a snapshot.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -27,10 +52,69 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T08:07:00.870Z",
-  "updatedAt": "2026-10-30T08:46:38.891Z",
+  "updatedAt": "2026-10-30T09:03:52.252Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T08:46:38.891Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T08:54:11.432Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T09:03:52.233Z",
+  "executionContract": {
+    "intendedBehavior": "CI's build-all-platforms job (ubuntu-latest, windows-latest, macos-latest) runs scripts/tests/local-runner-vm-control.test.mjs and scripts/tests/local-runner-daemon-bind.test.mjs. They run in the existing 'Test local runner prerequisite bundles' step, because both paths are appended to its single-line node --test list. Nothing else in ci.yml changes.",
+    "acceptanceCriteria": [
+      "`grep -c 'scripts/tests/local-runner-vm-control.test.mjs' .github/workflows/ci.yml` prints 1, and `grep -c 'scripts/tests/local-runner-daemon-bind.test.mjs' .github/workflows/ci.yml` prints 1.",
+      "`git diff --numstat -- .github/workflows/ci.yml` prints 1 insertion and 1 deletion. The completion commit's non-board stat lists only .github/workflows/ci.yml.",
+      "After `cd packages/moe-daemon && npm run build`, the step's exact node --test command, run from the repo root, exits 0. Its output tail is the complete_task evidence."
+    ],
+    "invariants": [
+      "The 8 existing paths keep their order and spelling. The step name, job, matrix, triggers and every other step are unchanged.",
+      "No test, script, source or doc content changes.",
+      "ci.yml keeps LF endings and has no trailing whitespace on the edited line."
+    ],
+    "compatibility": [
+      "The workflow keeps running unchanged on bash (ubuntu, macOS) and pwsh (windows): the appended tokens are plain relative paths with forward slashes."
+    ],
+    "sourceAssumptions": [
+      ".github/workflows/ci.yml:235-236 is step 'Test local runner prerequisite bundles' in job build-all-platforms. Its run: line is a single-line node --test list of 8 local-runner suites, ending in scripts/tests/local-runner-dispatch.test.mjs.",
+      "scripts/tests/local-runner-daemon-bind.test.mjs is tracked since eea1bcaf (task-2cf1c6be), and scripts/tests/local-runner-vm-control.test.mjs is tracked (last touched 6b26005a). Neither appears in any workflow.",
+      "scripts/tests/local-runner-channel.test.mjs:243 asserts that packages/moe-daemon/dist/index.js holds the /health bindHost report, so the daemon must be built before the gate."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm run build",
+      "node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: append both paths to the existing single-line `node --test` list. That is a one-line diff, as DoD 2 requires.\nRejected:\n- A separate CI step: DoD says nothing else in ci.yml changes.\n- A glob such as scripts/tests/local-runner*.test.mjs: pwsh (Windows default shell) and bash expand it differently, and it silently changes which suites run.\n- `if: runner.os` guards: both suites already skip their own platform-specific rows (vm-control VC-L3 and VC-M2 on win32; daemon-bind ::1 rows when ::1 cannot bind). Both pass under Linux node and Windows node today.",
+    "codebaseInsights": "- .github/workflows/ci.yml:235-236 is step 'Test local runner prerequisite bundles' in job build-all-platforms. That job is a 3-OS matrix (ubuntu-latest, windows-latest, macos-latest) on Node 24. 'Build daemon' and 'Build proxy' run before it.\n- The run: line is one plain YAML scalar listing 8 local-runner suites.\n- Before the edit, both new paths have grep -c 0 in ci.yml.\n- local-runner-daemon-bind.test.mjs was added in eea1bcaf (task-2cf1c6be WIP). Its fake /health servers listen on loopback and need no built daemon.\n- local-runner-vm-control.test.mjs needs no dist.\n- local-runner-channel.test.mjs:243 asserts that the built dist/index.js holds the /health bindHost report, so build the daemon first.\n- local-runner-bundle.test.mjs fabricates its own dist stubs; no proxy build is needed for local runs.\n- No local-runner module imports an npm package.\n- ci.yml has LF endings, and .gitattributes enforces eol=lf.\n- Epic rail 'All fixes must include regression tests or test updates': this change satisfies it by bringing two existing regression suites into CI. The task scope forbids changing test content.",
+    "risks": "1. The checkout is shared and dirty. At planning (HEAD bb0e8820), scripts/tests/local-runner.test.mjs carried 221 uncommitted lines from task-1e7f5a2d, which is in REVIEW. Per task-2cf1c6be's handoff, agentHarness rows AJ3-AJ6 fail until 2cf1c6be's deferred fixture edit lands. dependsOn holds this task until 2cf1c6be is DONE. If a row still fails, use the snapshot fallback or report_blocked from step 2's error handling. Never edit tests.\n2. The daemon prebuild runs `npm run clean`, then regenerates tracked src/generated/*.ts from docs/. If those come out dirty, they are not this task's bytes.\n3. The windows-latest and macos-latest legs run vm-control in CI for the first time. Windows node passed it at planning. macOS cannot be checked locally, but both suites use only loopback and temp dirs, and skip ::1 rows when ::1 cannot bind.\n4. An unscoped `git diff --stat` in the shared tree lists peers' paths. DoD 2 is judged by the scoped numstat and the completion commit's non-board stat.",
+    "keyFiles": [
+      ".github/workflows/ci.yml",
+      "scripts/tests/local-runner-vm-control.test.mjs",
+      "scripts/tests/local-runner-daemon-bind.test.mjs",
+      "scripts/tests/local-runner-channel.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T09:03:52.252Z",
+  "approvedPlanRevision": 1
 }

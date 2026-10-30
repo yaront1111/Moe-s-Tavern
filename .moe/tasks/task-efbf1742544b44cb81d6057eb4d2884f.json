@@ -128,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:10:57.855Z",
-  "updatedAt": "2026-10-30T09:01:03.656Z",
+  "updatedAt": "2026-10-30T09:01:39.744Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:15:35.745Z",
@@ -232,19 +232,42 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "591ec520f04784a83857f857a94282f16b44df00",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T08:32:18Z",
+      "paths": [
+        ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T09:01:39.743Z",
+      "treeId": "99874f913f8715b97312f7b94ba37478af29898f",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
     "packages/moe-daemon/src/delivery/requiredChecks.ts",
-    "packages/moe-daemon/src/delivery/policy.ts"
+    "packages/moe-daemon/src/delivery/policy.ts",
+    ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "completion",
-    "sessionId": "worker-093a65d0@2026-10-30T08:04:20Z",
-    "at": "2026-10-30T08:21:44.804Z"
+    "sessionId": "worker-093a65d0@2026-10-30T08:32:18Z",
+    "at": "2026-10-30T09:01:39.743Z"
   },
   "workStartedAt": "2026-10-30T08:05:54.747Z",
   "reviewStartedAt": "2026-10-30T09:01:03.654Z",
@@ -257,7 +280,9 @@
   },
   "completionSummary": "Round 2 after qa_reject #1; completion 8d977add is kept. Under verified-local, no owed architecture check delivers on a candidate-built checker, whether a definition or the qualityGate owes it. 3 files; this round +82/-18 (64 net), about 178 net non-board LOC for the task.\n\nQA issue 2, the gate route: FIXED.\n- policy.ts checkShortfall judges the owed gate through untrustedArchitectureChecks([{id:'(qualityGate)', command}]). The owed gate is the live qualityGate, or requiredCheckAtDone once DONE.\n- The result is `required-check-untrusted-checker:(qualityGate)`, a label no definition id can take. It comes first and survives a passing run.\n- The reason names \"the quality gate (settings.qualityGate)\". Legacy and observe are untouched (trusted === null).\n\nFound in self-review: FIXED, under the architect's \"recognizable form\" condition.\n- A def whose listed DIRECTORY covers checkArchitecture.ts or architectureRules.ts slipped past, because only path suffixes matched.\n- untrustedArchitectureChecks(defs, entries) now also reads the approved snapshot's measured entries under each def's own roots.\n- The mention regex also names the engine: /check-?architecture|architecture-?rules/i.\n\nQA issue 1, the opaque wrapper: unchanged. Architect-4ae016fb ruled it a V12 pre-activation item that does not block DoD 1 (chat msg-b2345781; V12 comment-bde17873). Reasoning is in comment-708a213d.\n\nTests (requiredChecks.strong.test.ts, 83):\n- UC6: gate-only and gate-beside-passing-defs are refused, and the installed gate delivers. Rows assert exact tokens, the projection, dependencyShortfall and unmetDependsOn.\n- UC7: the DONE requiredCheckAtDone route.\n- UC4: legacy/observe x definition/gate, unchanged.\n- UC5: the gate reason.\n- UC1: 5 directory rows and an engine row.\n- UC8: a directory root through a real snapshot.\nRED: 4 failed. Mutants M4-M12 were all killed, and the sources restored cmp-identical.\n\nKnown false refusals, failing closed: unit-test commands that name checkArchitecture or ar",
   "touchedFiles": [
-    "packages/moe-daemon/src/delivery/requiredChecks.ts"
+    "packages/moe-daemon/src/delivery/requiredChecks.ts",
+    "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+    "packages/moe-daemon/src/delivery/policy.ts"
   ],
   "reviewCompletedAt": "2026-10-30T08:32:09.646Z",
   "rejectionDetails": {

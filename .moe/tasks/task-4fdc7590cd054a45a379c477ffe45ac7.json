@@ -1,0 +1,31 @@
+{
+  "id": "task-4fdc7590cd054a45a379c477ffe45ac7",
+  "epicId": "epic-be924fb8",
+  "title": "bug: ps1 sends a second failed record_commit row from Invoke-MoeLanding's finally when a peel-failed rescue had nothing to park (sh sends one)",
+  "description": "A completion whose branch peel fails while Invoke-MoeRescueRef returns $null ('nothing to rescue') leaves $res.Ref empty. The finally block's `$res.Outcome -eq 'failed' -and -not $res.Ref` branch then runs a second rescue (reason commit-failed) and sends a second failed/MOE_COMMIT_FAILED_PEEL ledger row. sh's run_landing records exactly one failed row on the same path.\nRepro: postflight.ps1 scenario AJ2 (task-dfbda1a8). record_commit.jsonl holds 2 failed rows on ps1 and 1 on sh, and the task system message posts MOE_CONTESTED_HELD twice (the #governors alert is rate-limited per task).",
+  "definitionOfDone": [
+    "A ps1 peel failure with nothing to rescue records exactly one failed ledger row, as sh does",
+    "A real exception after attribution still records its failed row from finally",
+    "postflight.{sh,ps1} assert the row count on the AJ2 shape; parity-check passes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-dfbda1a8230a4fe5b57dbe512fa62a33"
+  ],
+  "priority": "LOW",
+  "order": 291.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T09:04:11.016Z",
+  "updatedAt": "2026-10-30T09:04:11.016Z"
+}
