@@ -4333,7 +4333,7 @@ EOF
       git -C "$SCOPE_AF_DIR" log -1 --format=%B | grep -Fq 'Moe-Contested: contested.txt (task-peer)' \
         || scope_fail AF1 "the completion must keep the Moe-Contested trailer" "$scope_af_out"
       case "$scope_af_line" in
-        *' held='*) scope_fail AF1 "nothing was held, so no held= suffix; got [$scope_af_line]" "$scope_af_out" ;;
+        *' held='*|*'MOE_CONTESTED_HELD'*) scope_fail AF1 "nothing was held, so no held= suffix or remedy; got [$scope_af_line]" "$scope_af_out" ;;
       esac
     else
       [ "$scope_af_files" = "owned-a.txt " ] \
@@ -4374,14 +4374,92 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AF] ok"
 
+  # Scenario AG -- declare_files does not release a contested hold, and the
+  # session-ended line names the remedy that does (task-c2a900aa, option B).
+  # Six paths declared onto the owner (declaredFiles, served as `declared`),
+  # one with a space and a non-ASCII letter, are dirty BEFORE the pre-flight
+  # and declared by a peer too, so each stays held whatever the peer's state.
+  # held= shows five then `+1 more`, and one remedy follows. STREAM_CLI's
+  # witnessed Write of tool-written.txt (asserted, also peer-declared) lands
+  # under skip-untouched and is never named as held. Only a landed contested
+  # path gets a Moe-Contested trailer.
+  #   AG1  idle peer                   -> six held, untouched remedy, witnessed path lands
+  #   AG2  live peer                   -> same
+  #   AG3  no peerActive (older daemon) -> same
+  #   AG4  idle peer, contested=skip   -> the witnessed path is held too, strict remedy only
+  # Twin: postflight.ps1.
+  echo "[scenario AG] a declared, pre-flight-dirty contested path stays held and the session-ended line names the working remedy"
+  scope_ag_untouched="MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task. declare_files, unblocking or a shell touch alone does not release a hold."
+  scope_ag_strict="MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
+  scope_ag_declared=('held é.txt' z1.txt z2.txt z3.txt z4.txt z5.txt)
+  scope_ag_peers='held é.txt:task-peer,z1.txt:task-peer,z2.txt:task-peer,z3.txt:task-peer,z4.txt:task-peer,z5.txt:task-peer,tool-written.txt:task-peer'
+  for scope_ag_run in 1 2 3 4; do
+    SCOPE_AG_DIR="$TMP_DIR/scope-ag$scope_ag_run"
+    scope_ag_out="$TMP_DIR/scope-ag$scope_ag_run.out"
+    scope_ag_settings='{}'; scope_ag_active=0; scope_ag_remedy="$scope_ag_untouched"; scope_ag_other="$scope_ag_strict"
+    scope_ag_code='MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'; scope_ag_files="tool-written-abs.txt tool-written.txt "
+    case "$scope_ag_run" in
+      2) scope_ag_active=1 ;;
+      3) scope_ag_active='' ;;
+      4) scope_ag_settings='{"attribution":{"contested":"skip"}}'; scope_ag_remedy="$scope_ag_strict"; scope_ag_other="$scope_ag_untouched"
+         scope_ag_code='MOE_ATTR_CONTESTED'; scope_ag_files="tool-written-abs.txt " ;;
+    esac
+    make_scope_project "$SCOPE_AG_DIR" '["tool-written.txt"]' REVIEW '[]' "$scope_ag_settings"
+    "$NODE_FOR_TEST" -e 'const [f,...d]=process.argv.slice(1),fs=require("fs");const t=JSON.parse(fs.readFileSync(f,"utf8"));t.declaredFiles=d;fs.writeFileSync(f,JSON.stringify(t)+"\n");' \
+      "$SCOPE_AG_DIR/.moe/tasks/task-postflight.json" "${scope_ag_declared[@]}"
+    git -C "$SCOPE_AG_DIR" commit -qm ag-declared .moe/tasks/task-postflight.json >/dev/null
+    for scope_ag_p in "${scope_ag_declared[@]}"; do echo pre > "$SCOPE_AG_DIR/$scope_ag_p"; done
+    set +e
+    FAKE_SCOPE_DECLARED_FIELD=1 FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED="$scope_ag_peers" FAKE_SCOPE_PEER_ACTIVE="$scope_ag_active" \
+      run_scope_wrapper "$SCOPE_AG_DIR" "$scope_ag_out" "$STREAM_CLI"
+    scope_ag_rc=$?
+    set -e
+    [ "$scope_ag_rc" -eq 0 ] || scope_fail "AG$scope_ag_run" "wrapper exited with $scope_ag_rc" "$scope_ag_out"
+    [ "$(committed_paths "$SCOPE_AG_DIR")" = "$scope_ag_files" ] \
+      || scope_fail "AG$scope_ag_run" "expected [$scope_ag_files] committed; got [$(committed_paths "$SCOPE_AG_DIR")]" "$scope_ag_out"
+    # A Moe-Contested trailer claims a landed contested path: never a held one.
+    scope_ag_trailers="$(git -C "$SCOPE_AG_DIR" log -1 --format=%B | grep '^Moe-Contested:' || true)"
+    scope_ag_want='Moe-Contested: tool-written.txt (task-peer)'
+    [ "$scope_ag_run" = 4 ] && scope_ag_want=''
+    [ "$scope_ag_trailers" = "$scope_ag_want" ] \
+      || scope_fail "AG$scope_ag_run" "Moe-Contested trailers must name only the landed contested paths; got [$scope_ag_trailers]" "$scope_ag_out"
+    scope_ag_status="$(git -C "$SCOPE_AG_DIR" status --porcelain -z | tr '\0' '\n')"
+    for scope_ag_p in "${scope_ag_declared[@]}"; do
+      grep -Fq "[skip] $scope_ag_p $scope_ag_code" "$scope_ag_out" \
+        || scope_fail "AG$scope_ag_run" "expected '[skip] $scope_ag_p $scope_ag_code'" "$scope_ag_out"
+      printf '%s\n' "$scope_ag_status" | grep -Fqx "?? $scope_ag_p" \
+        || scope_fail "AG$scope_ag_run" "$scope_ag_p must stay untracked" "$scope_ag_out"
+    done
+    # The ledger's skipped data names every held path with its code (AG4: the
+    # witnessed path too); the daemon builds MOE_CONTESTED_HELD from it.
+    "$NODE_FOR_TEST" -e '
+const [f,code,...want]=process.argv.slice(1);
+const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse);
+const got=(rows[rows.length-1].skipped||[]).filter(s=>s.code===code).map(s=>s.path).sort();
+if(JSON.stringify(got)!==JSON.stringify(want.sort())){console.error("skipped "+code+": "+JSON.stringify(got));process.exit(1);}' \
+      "$SCOPE_AG_DIR/.moe/record_commit.jsonl" "$scope_ag_code" "${scope_ag_declared[@]}" $([ "$scope_ag_run" = 4 ] && echo tool-written.txt) \
+      || scope_fail "AG$scope_ag_run" "record_commit skipped must name exactly the held paths under $scope_ag_code" "$scope_ag_out"
+    scope_ag_line="$(scope_af_ended "$SCOPE_AG_DIR")"
+    case "$scope_ag_line" in
+      *" held=held é.txt(task-peer),tool-written.txt(task-peer),z1.txt(task-peer),z2.txt(task-peer),z3.txt(task-peer),+2 more $scope_ag_remedy\"}") [ "$scope_ag_run" = 4 ] ;;
+      *" held=held é.txt(task-peer),z1.txt(task-peer),z2.txt(task-peer),z3.txt(task-peer),z4.txt(task-peer),+1 more $scope_ag_remedy\"}") [ "$scope_ag_run" != 4 ] ;;
+      *) false ;;
+    esac || scope_fail "AG$scope_ag_run" "the session-ended line must end with the bounded held= list and its one remedy; got [$scope_ag_line]" "$scope_ag_out"
+    case "$scope_ag_line" in
+      *"$scope_ag_other"*) scope_fail "AG$scope_ag_run" "the other policy's remedy must not appear; got [$scope_ag_line]" "$scope_ag_out" ;;
+    esac
+  done
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AG] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  scope_expected_runs=38
-  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=37
+  scope_expected_runs=39
+  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=38
   if [ "$SCOPE_SCENARIOS_RUN" -ne "$scope_expected_runs" ]; then
-    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF); ran $SCOPE_SCENARIOS_RUN" >&2
+    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

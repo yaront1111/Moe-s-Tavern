@@ -379,10 +379,13 @@ was already dirty at that pre-flight stays held even when this session rewrote i
 can carry the peer's earlier hunks. A crash-recovery landing, an older daemon without the
 field and the disk-fallback scope never use the exception. A landing (completion or
 checkpoint) that still holds an own contested path names it on the `#general` session-ended
-line as `held=<path>(task-<peer>)`, comma-joined, at most five entries then `+N more`.
-Otherwise resolve the task ownership through the normal Moe workflow until the peer
-declaration no longer applies, or use an explicitly chosen project policy appropriate
-to the reviewed ownership arrangement. `contested: "commit"` is permission to
+line as `held=<path>(task-<peer>)`, comma-joined, at most five entries then `+N more`,
+followed by one `MOE_CONTESTED_HELD remedy:` sentence for the policy that held it.
+`moe.declare_files` does not release a hold. Under `skip-untouched`, verify the bytes are the
+task's and coordinate any live peer; then either the task's assignee session edits the path
+with a supported editing tool before its next exit, or the stale peer task is legitimately
+completed or archived. Under `skip` only the peer route works. Never change the policy as
+the fix. `contested: "commit"` is permission to
 land a whole contested path, not proof that its hunks belong to one session. Editing a file
 again does not establish ownership of the other changes already in it. Uncontested paths
 continue to follow the existing ASSERTED, PLANNED and MEASURED rules.

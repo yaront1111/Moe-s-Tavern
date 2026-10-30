@@ -3733,21 +3733,32 @@ function Resolve-MoeAttribution {
 }
 
 # The own contested paths a landing held back, as `<path>(<peer>)` joined by
-# ',', at most 5 then `,+<N> more` (sh twin: attr_held_list). Feeds the
-# session-ended line's held= suffix; a missing Skipped/Contested gives ''.
+# ',', at most 5 then `,+<N> more`, then one MOE_CONTESTED_HELD remedy (sh
+# twin: attr_held_list). Feeds the session-ended line's held= suffix; a
+# missing Skipped/Contested gives ''.
 function Get-MoeHeldList($Attr) {
     $held = @()
+    $strict = $false
     foreach ($sk in @($Attr.Skipped)) {
         if ($null -eq $sk) { continue }
         if ($sk.Code -match '^MOE_ATTR_CONTESTED_UNTOUCHED\((.*)\)$') {
             $held += "$($sk.Path)($($matches[1]))"
         } elseif ($sk.Code -eq 'MOE_ATTR_CONTESTED') {
+            $strict = $true
             $c = @($Attr.Contested) | Where-Object { $null -ne $_ -and $_.Path -ceq $sk.Path } | Select-Object -First 1
             $held += "$($sk.Path)($(if ($c) { $c.TaskId } else { '' }))"
         }
     }
     $out = ($held | Select-Object -First 5) -join ','
     if ($held.Count -gt 5) { $out += ",+$($held.Count - 5) more" }
+    # Neither a declaration nor an idle peer releases a path dirty at
+    # pre-flight, so name what does. Strict skip wins: no editing tool
+    # releases MOE_ATTR_CONTESTED.
+    if ($strict) {
+        $out += " MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
+    } elseif ($held.Count -gt 0) {
+        $out += " MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task. declare_files, unblocking or a shell touch alone does not release a hold."
+    }
     return $out
 }
 
@@ -4775,7 +4786,11 @@ function Invoke-MoeLanding {
                 return $res
             }
             $landedInferred = @($landed | Where-Object { $_.Inferred }).Count
-            $msg = New-MoeCommitMessage -Kind $Kind -TaskId $TaskId -Title $Title -Status $Status -ReopenCount $ReopenCount -Role $Role -Sid $Sid -CliExit $CliExit -Recovered $recovered -PathCount $landed.Count -InferredCount $landedInferred -Contested $attr.Contested -Reason ''
+            # A trailer claims a landed contested path, so a held one (still in
+            # Contested for the ledger) gets none (sh twin: write_commit_message).
+            $landedPaths = @($landed | ForEach-Object { $_.Path })
+            $landedContested = @(@($attr.Contested) | Where-Object { $null -ne $_ -and $landedPaths -ccontains $_.Path })
+            $msg = New-MoeCommitMessage -Kind $Kind -TaskId $TaskId -Title $Title -Status $Status -ReopenCount $ReopenCount -Role $Role -Sid $Sid -CliExit $CliExit -Recovered $recovered -PathCount $landed.Count -InferredCount $landedInferred -Contested $landedContested -Reason ''
             if ($msgFile) { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
             $msgFile = Write-MoeMessageFile $Git.GitDir $TaskId $msg
             if ($usePorcelain) {

@@ -4197,11 +4197,11 @@ attr_print_skips() {
 }
 
 # attr_held_list ATTR_DIR -- the own contested paths a landing held back, as
-# `<path>(<peer>)` joined by ',', at most 5 then `,+<N> more` (ps1 twin:
-# Get-MoeHeldList). Feeds the session-ended line's held= suffix; an unreadable
-# file gives ''.
+# `<path>(<peer>)` joined by ',', at most 5 then `,+<N> more`, then one
+# MOE_CONTESTED_HELD remedy (ps1 twin: Get-MoeHeldList). Feeds the
+# session-ended line's held= suffix; an unreadable file gives ''.
 attr_held_list() {
-    local rec code p peer crec out="" n=0
+    local rec code p peer crec out="" n=0 strict=""
     [ -r "$1/skipped" ] || return 0
     while IFS= read -r -d '' rec; do
         code="${rec%%"$MOE_TAB"*}"
@@ -4209,6 +4209,7 @@ attr_held_list() {
         case "$code" in
             "MOE_ATTR_CONTESTED_UNTOUCHED("*")") peer="${code#MOE_ATTR_CONTESTED_UNTOUCHED(}"; peer="${peer%)}" ;;
             MOE_ATTR_CONTESTED)
+                strict=1
                 peer=""
                 while IFS= read -r -d '' crec; do
                     [ "${crec#*"$MOE_TAB"}" = "$p" ] && { peer="${crec%%"$MOE_TAB"*}"; break; }
@@ -4220,6 +4221,14 @@ attr_held_list() {
         [ "$n" -le 5 ] && out="${out:+$out,}$p($peer)"
     done < "$1/skipped"
     [ "$n" -gt 5 ] && out="$out,+$((n - 5)) more"
+    # Neither a declaration nor an idle peer releases a path dirty at
+    # pre-flight, so name what does. Strict skip wins: no editing tool
+    # releases MOE_ATTR_CONTESTED.
+    if [ -n "$strict" ]; then
+        out="$out MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
+    elif [ "$n" -gt 0 ]; then
+        out="$out MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task. declare_files, unblocking or a shell touch alone does not release a hold."
+    fi
     printf '%s' "$out"
 }
 
@@ -4436,12 +4445,18 @@ ensure_safe_branch() {
 # write_commit_message KIND OUT N_PATHS N_INFERRED
 write_commit_message() {
     local kind="$1" out="$2" n_paths="${3:-0}" n_inferred="${4:-0}"
-    local subject body contested_lines="" rec peer p
+    local subject body contested_lines="" rec srec peer p
+    # A trailer claims a landed contested path, so a held one (still in the
+    # contested list for the ledger) gets none (ps1 twin: New-MoeCommitMessage caller).
     while IFS= read -r -d '' rec; do
         peer="${rec%%"$MOE_TAB"*}"
         p="${rec#*"$MOE_TAB"}"
-        contested_lines="$contested_lines
+        while IFS= read -r -d '' srec; do
+            [ "${srec#*"$MOE_TAB"*"$MOE_TAB"}" = "$p" ] || continue
+            contested_lines="$contested_lines
 Moe-Contested: $p ($peer)"
+            break
+        done 2>/dev/null < "${LAND_STAGED_FILE:-/dev/null}"
     done < "$ATTR_DIR/contested"
     if [ "$kind" = "completion" ]; then
         local ctype="feat" suffix=""

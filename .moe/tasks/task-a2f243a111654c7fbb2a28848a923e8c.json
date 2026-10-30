@@ -1,0 +1,28 @@
+{
+  "id": "task-a2f243a111654c7fbb2a28848a923e8c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: ps1 unchanged-tree 'nothing' landing sends record_commit without skipped/contested, so held contested paths raise no #governors MOE_CONTESTED_HELD alert",
+  "description": "scripts/moe-agent.ps1 has two gaps against sh, whose record_commit_rpc always sends skipped and contested:\n- The `-not $built.Changed` branch (~line 4785, MOE_COMMIT_NOTHING_TO_COMMIT) calls Send-MoeRecordCommit with no `skipped` and no `contested`. A landing whose candidates match the branch tip but which still holds own contested paths therefore gets no daemon MOE_CONTESTED_HELD task line or #governors alert. The session-ended held= line is still posted, because $res.Held is set after attribution.\n- The no-candidate send (~4677) omits `contested`, so a strict MOE_ATTR_CONTESTED hold names its peer '?'.\nFix: send the same `skipped` (+$dropped) and `contested` lists as the committed send (~4910). Add a postflight.ps1/.sh regression for an unchanged-tree `nothing` landing with a held contested path. One way to build it: settings.consolidationBranch pre-holding the own file's bytes, with the checkout on main. Found in task-c2a900aa's step-6 review.",
+  "definitionOfDone": [
+    "ps1 MOE_COMMIT_NOTHING_TO_COMMIT (unchanged tree) and no-candidate record_commit carry skipped and contested like sh's record_commit_rpc",
+    "postflight.ps1 and postflight.sh assert the record_commit row of an unchanged-tree nothing landing names the held path under its MOE_ATTR_CONTESTED* code",
+    "postflight.{sh,ps1} and parity-check pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 269.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T03:10:25.864Z",
+  "updatedAt": "2026-10-30T03:10:25.864Z"
+}

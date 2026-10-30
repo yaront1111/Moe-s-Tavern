@@ -74,7 +74,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T16:47:48.719Z",
-  "updatedAt": "2026-10-30T01:14:49.624Z",
+  "updatedAt": "2026-10-30T01:16:18.194Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T17:00:24.524Z",
@@ -170,7 +170,8 @@
     "packages/moe-daemon/src/index.ts",
     ".moe/tasks/task-9faf1ef30b0a4264b6dccce1e7bf5b1d.json",
     ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json",
-    ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json"
+    ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
+    ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json"
   ],
   "completionSummary": "QA round 1 fix. Relative and non-normalized project paths under /mnt/<d> match a native daemon again, and the WSL/Windows foreign-file handling from 65e4866 is unchanged.\n- index.ts comparableProjectPath (+9/-6) maps /mnt/<letter> only after normalizing:\n  - A raw drive form is win32-normalized, as before.\n  - Off win32, the match runs on path.resolve(raw). '.', 'sub/..', '/mnt/d/x/./' and '/mnt/d//x' all match '/mnt/d/x' and 'D:\\x' again.\n  - On win32, the match runs on path.posix.normalize(raw), since path.resolve would prefix the cwd drive.\n  - A non-match falls back to path.resolve, as before.\n  - canonicalProjectPath (the written form), the foreign guards, statusDaemon, stopDaemon, existingDaemonBlocksStart and main() are untouched. No MCP contract change.\n- index.test.ts (+43). X1-X8 are unchanged. New rows, all red on 65e4866:\n  - X9 (skipIf win32, cwd spied to /mnt/d/projexts/app): QA's four pairs in both orders, plus 'sub/..', '/mnt/d//…' and unequal 'sub' and '..'.\n  - X10: the win32 branch. Off Windows it flips the platform and stands in path.win32.resolve.\n  - X11: QA's row (b), validateDaemonInfoForProject('.', a live healthy info at /mnt/d/projexts/app) toEqual {valid:true, info}.\n- Evidence:\n  - A tsx replay of QA's repro (real temp cwd, patched process.cwd, stubbed kill): on 65e4866, start '.' deleted daemon.json and daemon.lock, and stop '.' deleted them unsignalled. Now start reports \"already running\" and keeps both files, and stop SIGTERMs the native pid.\n  - A fuzz over 240k relative/absolute pairs and 6 cwds found 0 ddce8a3-equal or 65e4866-equal pairs lost. The rule is symmetric, and the only new matches resolve under /mnt/<d>.\n  - Mutants M1-M5 (raw match, resolve on win32, always posix-normalize, no trailing strip, POSIX lowercase) are each caught.\n- Gate, fresh: HEAD 400bd50 plus both files, Linux snapshot, exit 0. tsc clean; index.test.ts 31/31; suite 187 files, 5253 passed, 16 skipped.\n- Follow-up: task-ea57601db42448dabefbbbe6557a0b9d (LO",
   "commits": [
@@ -211,6 +212,22 @@
       "treeId": "fcdcba6d259f816c73992d2d964c2486c8581817",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "9a28b0fb7fd557c044ec157e915625de690cbf36",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T01:02:41Z",
+      "paths": [
+        ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json",
+        ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T01:16:18.193Z",
+      "treeId": "32d348ddb34b4ac15f99f72ca8656f4615bcc7ec",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -220,9 +237,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-0062feec@2026-10-29T23:51:35Z",
-    "at": "2026-10-30T00:10:29.181Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T01:02:41Z",
+    "at": "2026-10-30T01:16:18.193Z"
   },
   "reviewCompletedAt": "2026-10-30T01:14:49.624Z",
   "rejectionDetails": {

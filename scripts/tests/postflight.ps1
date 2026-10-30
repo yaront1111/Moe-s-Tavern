@@ -3627,7 +3627,7 @@ if (mode === 'link') fs.symlinkSync('crlf-copy.txt', f, 'file');
                         if ($afPaths -ne 'contested.txt owned-a.txt') { Write-Host $afText; throw "SCENARIO AF1 FAILED: an idle peer's clean contested path must land; got [$afPaths]" }
                         if ($afText.Contains('[skip] contested.txt')) { Write-Host $afText; throw 'SCENARIO AF1 FAILED: contested.txt must not be skipped' }
                         if ((@(& git -C $afDir log -1 --format=%B 2>$null) -join "`n") -notlike '*Moe-Contested: contested.txt (task-peer)*') { throw 'SCENARIO AF1 FAILED: the completion must keep the Moe-Contested trailer' }
-                        if ($afLine -like '* held=*') { throw "SCENARIO AF1 FAILED: nothing was held, so no held= suffix; got [$afLine]" }
+                        if ($afLine -like '* held=*' -or $afLine -like '*MOE_CONTESTED_HELD*') { throw "SCENARIO AF1 FAILED: nothing was held, so no held= suffix or remedy; got [$afLine]" }
                         continue
                     }
                     if ($afPaths -ne 'owned-a.txt') { Write-Host $afText; throw "SCENARIO $afName FAILED: a live peer's or a pre-flight-dirty contested path must stay out; got [$afPaths]" }
@@ -3642,13 +3642,91 @@ if (mode === 'link') fs.symlinkSync('crlf-copy.txt', f, 'file');
                 $scopeScenariosRun++
                 Write-Host '[scenario AF] ok'
 
+                # Scenario AG — declare_files does not release a contested
+                # hold, and the session-ended line names the remedy that does
+                # (task-c2a900aa, option B; same fixture as postflight.sh). Six
+                # paths declared onto the owner (declaredFiles, served as
+                # `declared`), one with a space and a non-ASCII letter, are
+                # dirty BEFORE the pre-flight and declared by a peer too, so
+                # each stays held whatever the peer's state. held= shows five
+                # then `+1 more`, and one remedy follows. stream-json.cmd's
+                # witnessed Write of tool-written.txt (asserted, also
+                # peer-declared) lands under skip-untouched and is never held.
+                # Only a landed contested path gets a Moe-Contested trailer.
+                #   AG1  idle peer                    -> six held, untouched remedy, witnessed path lands
+                #   AG2  live peer                    -> same
+                #   AG3  no peerActive (older daemon) -> same
+                #   AG4  idle peer, contested=skip    -> the witnessed path is held too, strict remedy only
+                # The console [skip] lines are checked for the ASCII paths
+                # only: a redirected child's console encoding is the OEM code
+                # page. The ledger and the chat line are UTF-8 JSON.
+                Write-Host '[scenario AG] a declared, pre-flight-dirty contested path stays held and the session-ended line names the working remedy'
+                $agUntouched = "MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task. declare_files, unblocking or a shell touch alone does not release a hold."
+                $agStrict = "MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
+                $agDeclared = @("held $([char]0xE9).txt", 'z1.txt', 'z2.txt', 'z3.txt', 'z4.txt', 'z5.txt')
+                $agUtf8 = New-Object System.Text.UTF8Encoding($false)
+                foreach ($agRun in 1..4) {
+                    $agName = "AG$agRun"
+                    $agDir = Join-Path $tempRoot "scope-ag$agRun"
+                    $agOut = Join-Path $tempRoot "scope-ag$agRun.out"
+                    $agStrictRun = ($agRun -eq 4)
+                    $agSettings = if ($agStrictRun) { @{ attribution = @{ contested = 'skip' } } } else { $null }
+                    New-ScopeProject $agDir @('tool-written.txt') -Settings $agSettings
+                    # Literal JSON: PS 5.1's ConvertTo-Json unwraps one-element arrays.
+                    [System.IO.File]::WriteAllText((Join-Path $agDir '.moe\tasks\task-postflight.json'),
+                        ('{"id":"task-postflight","title":"Postflight smoke","status":"REVIEW","filesModified":["tool-written.txt"],"declaredFiles":["' + ($agDeclared -join '","') + '"]}'), $agUtf8)
+                    & git -C $agDir commit -qm ag-declared .moe/tasks/task-postflight.json 2>$null | Out-Null
+                    foreach ($p in $agDeclared) { [System.IO.File]::WriteAllText((Join-Path $agDir $p), "pre`n", $agUtf8) }
+                    $env:FAKE_SCOPE_DECLARED_FIELD = '1'
+                    $env:FAKE_SCOPE_PEERS_ACTIVE = '1'
+                    $env:FAKE_SCOPE_PEER_DECLARED = ((@($agDeclared) + 'tool-written.txt' | ForEach-Object { "${_}:task-peer" }) -join ',')
+                    if ($agRun -eq 2) { $env:FAKE_SCOPE_PEER_ACTIVE = '1' } elseif ($agRun -ne 3) { $env:FAKE_SCOPE_PEER_ACTIVE = '0' }
+                    try {
+                        Assert-ScopeRun $agName (Invoke-GateWrapper $agDir $agOut -Command $streamJsonCmd) $agOut
+                    } finally {
+                        foreach ($v in 'FAKE_SCOPE_DECLARED_FIELD', 'FAKE_SCOPE_PEERS_ACTIVE', 'FAKE_SCOPE_PEER_DECLARED', 'FAKE_SCOPE_PEER_ACTIVE') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $agText = Get-Content -Raw -Path $agOut
+                    $agWantPaths = if ($agStrictRun) { 'tool-edited.txt' } else { 'tool-edited.txt tool-written.txt' }
+                    if ((Get-CommittedPaths $agDir) -ne $agWantPaths) { Write-Host $agText; throw "SCENARIO $agName FAILED: expected [$agWantPaths] committed; got [$(Get-CommittedPaths $agDir)]" }
+                    # A Moe-Contested trailer claims a landed contested path: never a held one.
+                    $agTrailers = (@(& git -C $agDir log -1 --format=%B 2>$null) | Where-Object { $_ -like 'Moe-Contested:*' }) -join '|'
+                    $agWantTrailers = if ($agStrictRun) { '' } else { 'Moe-Contested: tool-written.txt (task-peer)' }
+                    if ($agTrailers -ne $agWantTrailers) { throw "SCENARIO $agName FAILED: Moe-Contested trailers must name only the landed contested paths; got [$agTrailers]" }
+                    $agCode = if ($agStrictRun) { 'MOE_ATTR_CONTESTED' } else { 'MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)' }
+                    foreach ($p in $agDeclared) {
+                        if ($p -match '^z' -and -not $agText.Contains("[skip] $p $agCode")) { Write-Host $agText; throw "SCENARIO $agName FAILED: expected '[skip] $p $agCode'" }
+                        & git -C $agDir cat-file -e "HEAD:$p" 2>$null
+                        if ($LASTEXITCODE -eq 0 -or [System.IO.File]::ReadAllText((Join-Path $agDir $p)) -ne "pre`n") { throw "SCENARIO $agName FAILED: $p must stay dirty and out of the commit" }
+                    }
+                    # The ledger's skipped data names every held path with its
+                    # code (AG4: the witnessed path too); the daemon builds
+                    # MOE_CONTESTED_HELD from it.
+                    $agRow = Get-Content -Encoding UTF8 -Path (Join-Path $agDir '.moe\record_commit.jsonl') | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json
+                    $agGot = (@($agRow.skipped | Where-Object { $_.code -eq $agCode } | ForEach-Object { $_.path }) | Sort-Object) -join '|'
+                    $agWantHeld = (@($agDeclared) + @(if ($agStrictRun) { 'tool-written.txt' }) | Sort-Object) -join '|'
+                    if ($agGot -ne $agWantHeld) { throw "SCENARIO $agName FAILED: record_commit skipped under $agCode must be [$agWantHeld]; got [$agGot]" }
+                    $agLine = Get-Content -Encoding UTF8 -Path (Join-Path $agDir '.moe\messages\chan-general.jsonl') |
+                        Where-Object { $_ -like '*worker session ended: task=task-postflight*' } | Select-Object -Last 1 | ConvertFrom-Json
+                    $agHeld = "$($agDeclared[0])(task-peer),z1.txt(task-peer),z2.txt(task-peer),z3.txt(task-peer),z4.txt(task-peer),+1 more"
+                    if ($agStrictRun) { $agHeld = "$($agDeclared[0])(task-peer),tool-written.txt(task-peer),z1.txt(task-peer),z2.txt(task-peer),z3.txt(task-peer),+2 more" }
+                    $agRemedy = if ($agStrictRun) { $agStrict } else { $agUntouched }
+                    $agOther = if ($agStrictRun) { $agUntouched } else { $agStrict }
+                    if (-not $agLine -or -not ([string]$agLine.content).EndsWith(" held=$agHeld $agRemedy", [System.StringComparison]::Ordinal)) {
+                        throw "SCENARIO $agName FAILED: the session-ended line must end with the bounded held= list and its one remedy; got [$($agLine.content)]"
+                    }
+                    if (([string]$agLine.content).Contains($agOther)) { throw "SCENARIO $agName FAILED: the other policy's remedy must not appear; got [$($agLine.content)]" }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AG] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                $scopeExpectedRuns = 37
-                if ($symlinksOk) { $scopeExpectedRuns = 38 }
+                $scopeExpectedRuns = 38
+                if ($symlinksOk) { $scopeExpectedRuns = 39 }
                 if ($scopeScenariosRun -ne $scopeExpectedRuns) {
-                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF); ran $scopeScenariosRun"
+                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)
