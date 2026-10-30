@@ -824,9 +824,10 @@ test('H4 replies, bounds and failures each answer once or end the session with a
     return { proc, ended };
   };
   const spawned = proc => until(() => proc.calls.length === 1, 'spawned');
-  const late = Promise.withResolvers();
-  const slow = await ends('SESSION_TIMEOUT', { timeoutMs: 100, answer: () => late.promise }, proc => proc.send(HELLO, REQUEST));
-  late.resolve({ content: [] }); // too late: never written
+  let finish;
+  const late = new Promise(resolve => { finish = resolve; });
+  const slow = await ends('SESSION_TIMEOUT', { timeoutMs: 100, answer: () => late }, proc => proc.send(HELLO, REQUEST));
+  finish({ content: [] }); // too late: never written
   await sleep(20);
   assert.deepEqual([slow.proc.written, slow.ended.signals.map(signal => signal.aborted)], [[], [true]]);
   await ends('SESSION_TIMEOUT', { timeoutMs: 100, fake: { write: () => {} } }, proc => proc.send(HELLO, REQUEST)); // stdin never drains

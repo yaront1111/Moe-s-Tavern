@@ -1062,7 +1062,7 @@ test('C5 each outcome arises only from its condition, and only hello, one observ
     ['code 3', proc => { proc.send(HELLO, exited(3)); proc.exit(0); }, ended('code-failure', 3)],
     ['SIGKILL', proc => { proc.send(HELLO, exited(null, 'SIGKILL')); proc.exit(0); }, ended('code-failure', null, 'SIGKILL')],
     ...[0, 3].map(code => [`80 after ${code}`, proc => { proc.send(HELLO, exited(code)); proc.exit(80); }, ended('inconclusive', code)]),
-    ['79, no frame', proc => proc.exit(79), ended('skipped')], ['81, no frame', proc => proc.exit(DEPENDENCIES_FAILED)], ['close before EOF', proc => { proc.send(HELLO, OBS); proc.emit('close', 0, null); }],
+    ['79, no frame', proc => proc.exit(79), ended('skipped')], ['81, no frame', proc => proc.exit(DEPENDENCIES_FAILED)], ['close before EOF', proc => { proc.send(HELLO, OBS); setImmediate(() => proc.emit('close', 0, null)); }],
     ['79 after hello', proc => { proc.send(HELLO); proc.exit(79); }], ['79 after the observation', clean(79)],
     ['80 without observation', proc => { proc.send(HELLO); proc.exit(80); }], ...[74, 71, 1].map(code => [`exit ${code}`, clean(code)]),
     ['hello only', proc => { proc.send(HELLO); proc.exit(0); }], ['no frame, exit 0', proc => proc.exit(0)],
