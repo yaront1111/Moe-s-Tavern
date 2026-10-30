@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:27:29.451Z",
-  "updatedAt": "2026-10-30T14:34:11.133Z",
+  "updatedAt": "2026-10-30T14:47:10.294Z",
   "planningEntry": {
     "from": "BLOCKED",
     "at": "2026-10-30T13:53:23.489Z",
@@ -124,7 +124,9 @@
     "plannedDistinctFileCount": 2,
     "executedStepCount": 11,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T14:47:10.294Z",
+    "wallClockMs": 6673933
   },
   "contextFetchedBy": [
     "worker-262588d0",
@@ -132,7 +134,9 @@
     "architect-eb7de546",
     "worker-093a65d0",
     "architect-bd1eb82d",
-    "architect-899a90d6"
+    "architect-899a90d6",
+    "architect-bc59d28a",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -221,7 +225,11 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/index.test.ts",
-    "packages/moe-daemon/src/index.ts"
+    "packages/moe-daemon/src/index.ts",
+    ".moe/tasks/task-24a5ad5bb5d74180bb71f5cbff76225a.json",
+    ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json"
   ],
   "completionSummary": "Reopen #1 (rev2): native lifecycle identity is now reconciled in packages/moe-daemon/src/index.ts. Only index.ts (+15/-6) and index.test.ts (+99/-1) changed; the six landed transport files are untouched. Task-wide net is 275 of 400.\n\nQA P1-1 (existingDaemonBlocksStart under //tmp/x vs /tmp/x, or C:\\x vs /x, deleted a healthy daemon.json and lock with 0 probes): fixed. validateDaemonInfoForProject and probeDaemonHealth (metadata check and /health body) now compare recorded and reported paths, as written, against own = canonicalProjectPath(--project). Only our own request is resolved. X12, canonical and alias: start is blocked after 1 probe, the files are byte-identical, status reports running/local, and stop sends SIGTERM only to the validated pid. X13: the probe accepts an alias of our own path and rejects a recorded or reported alias.\n\nQA P1-2 (staleLockReason unlinked a live lock and admitted a second writer): fixed. It now compares the lock's canonical path with canonicalProjectPath(--project). X14, canonical/alias and alias/alias: a real child process holds the lock, the contender's acquireLock returns false, the lock bytes are unchanged and the owner stays alive.\n\nQA 3 (permanent tests): X12×2, X13 and X14×2 run and pass on both Linux and native Windows, with no skips. Against HEAD's index.ts, 4 fail; mutating each site fails its matching test.\n\nUnchanged: foreign classification of the original spelling, local pids never trusted for foreign metadata, storage, health and MCP shapes, cleanup, TTL and lock policy, and the transport table. One fail-safe edge: a daemon started under an alias is treated as foreign, so start exits 1 and status says unknown, but nothing is deleted.\n\nFiled, all pre-existing: task-eea78d1d (a symlink spelling deletes a live daemon.json), task-4ca62c89 (an empty lock in the create-to-write window gets replaced), task-f33bf7af (doctor and proxy own-path checks). task-c83d7847 is superseded and has a comment saying so.",
   "commits": [
@@ -270,6 +278,26 @@
       "treeId": "687db0f73f37042c61e6164011b1b767692a10c6",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "aeeca0456ce2f29a769bf29e2f031bc539318589",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T13:58:13Z",
+      "paths": [
+        ".moe/tasks/task-24a5ad5bb5d74180bb71f5cbff76225a.json",
+        ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T14:34:29.847Z",
+      "treeId": "ab046bdc378d7649ac7aaf1dc9edbcc4f7279d1b",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -283,11 +311,11 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-262588d0@2026-10-30T13:49:56Z",
-    "at": "2026-10-30T13:53:18.376Z"
+    "kind": "completion",
+    "sessionId": "worker-093a65d0@2026-10-30T13:58:13Z",
+    "at": "2026-10-30T14:34:29.847Z"
   },
-  "reviewCompletedAt": "2026-10-30T13:49:44.718Z",
+  "reviewCompletedAt": "2026-10-30T14:47:10.294Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Proxy/daemon identity and discovery suites cover the corrected comparison on Linux and native Windows without regressing drive-/mnt spellings.",
@@ -350,5 +378,8 @@
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "Approved-scope conflict after QA rejection: executionContract invariants/approvedScope and step-2 explicitly prohibit changes to staleLockReason, probeDaemonHealth, validateDaemonInfoForProject and every lifecycle deleter, but the required safety fix must reconcile their native filesystem identity with the new transport key. Fresh Linux temp-project repro against the QA candidate (source byte-identical to current index.ts): existingDaemonBlocksStart('//tmp/...') returns false, performs 0 health probes, deletes healthy daemon.json and live daemon.lock; parent returns true, probes once, preserves both. Logs /tmp/worker262588-25ba-live-{candidate,parent}.log. QA also proved native-Windows metadata loss and two-process live-lock replacement on both OSes. Need narrow architect amendment/replan authorizing lifecycle-consumer fix plus permanent Linux/Windows metadata-preservation and real-contention regressions; preserve cross-OS comparison contract and foreign-PID protections, audit stop/status. No source edits or shared builds; no passing gate claimed. Handoff and gotcha memories updated. This is not waiting on a dependency or an authorized follow-up deferral.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-30T14:47:10.294Z",
+  "reviewSummary": "Approve reopen #1 completion aeeca045 (tree ab046bdc), on moe/work-2026-10-24 and origin. It changes only daemon index.ts (+15/-6) and index.test.ts (+99/-1), plus board JSON; checkpoint a2d32963 is board-only. Size: reopen net 107; task-wide 6 files net 275 (<400). Scope matches the rev2 approvedScope; the proxy and cap files are untouched.\nGATE: exact task.verification command, isolated Linux snapshot of aeeca045, lock-matching native node_modules, MOE_*/CLAUDE_* unset: EXIT 0. Proxy 290/290; daemon 113/113; cap 16 pass / 0 fail / 46 skip (no PS on Linux) / 1 todo (WSL share, task-3def0804). Log /tmp/qa952-25ba-gate-linux.log.\nNATIVE WINDOWS (temp snapshot, robocopied node_modules matching the lock): proxy 287 pass/3 skip; daemon 94 pass/19 skip. Verbose index run: 33 pass/3 skip (the existing X9, X11, /dev/zero); X12x2, X13 and X14x2 ran. Cap 57 pass/3 todo (WSL share)/3 skip (Git Bash)/0 fail; PS5.1 and PS7 ran. All rc 0. Logs /tmp/qa952-25ba-win-*.log.\nRED: the new tests against aeeca045^ index.ts give 4 assertion failures (X12 alias, X13, X14x2). Mutants that resolve the reported or recorded path in probeDaemonHealth fail X13.\nREJECT-1 REPROS (qa25ba-live-daemon/lock-race.mjs) against the built candidate, on Linux and on native Windows: start is blocked after 1 probe with daemon.json and lock kept, and the contender is refused with the owner's pid and lock bytes kept.\nDoD: 1) case-distinct POSIX paths stay distinct; 2) UNC/WSL-share rules match JetBrains and the launchers on both OSes; 3) the lifecycle suites cover native aliases, drive and /mnt rows unchanged. Epic rail: daemon.json and lock files recorded canonically survive any native alias.\nNOTE (non-blocking): a daemon STARTED with an alias (//x on Linux, /x on Windows) records it raw and is classed foreign, so a later start exits 1 and status says unknown; nothing is deleted. The contract forbids native-OR equality. Follow-ups eea78d1d, 4ca62c89 and f33bf7af are filed. No leftover processes or dirs.",
+  "requiredCheckAtDone": null
 }

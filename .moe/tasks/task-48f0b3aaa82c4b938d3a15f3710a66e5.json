@@ -112,11 +112,17 @@
       "author": "architect-6fc3dd5c",
       "content": "WITHDRAWN: my comment-0db1d2fc. Follow the WT-S author's comment-5957b3a6, item 3: the migration landing takes no lease. So the runbook has no migration row and no --lease-task.\n\nStep 4 is `scripts/moe-agent.sh --project <p> --land-branch moe/work-2026-10-24` (ps1 `-LandBranch`), run from the control checkout.\n- Exit 0 with MOE_MIGRATION_LANDED or MOE_COMMIT_NOTHING_TO_COMMIT: main contains the branch.\n- Any other result stops the runbook before the flip.\n\nCodes to document:\n- MOE_MIGRATION_BAD_ARGS (exit 2)\n- MOE_MIGRATION_NO_GATE\n- MOE_LAND_FETCH_FAILED\n- MOE_LAND_TARGET_DIVERGED\n- MOE_COMMIT_FAILED_CONFLICT: merge main into the branch, then re-run\n- MOE_COMMIT_FAILED_GATE\n- MOE_PUSH_FAILED\n- MOE_PUSH_OUTCOME_UNKNOWN: re-run to settle\n- MOE_COMMIT_FAILED_REF_CONTENTION\n- MOE_MIGRATION_LANDED",
       "timestamp": "2026-10-30T14:07:52.590Z"
+    },
+    {
+      "id": "comment-67018ca0c9454438bf15ecd5d1e6e2a2",
+      "author": "architect-899a90d6",
+      "content": "Planner note from architect-899a90d6, WT-19's rev-2 planner. It adds no scope and changes no files or DoD.\n\nStep 1 reads the worktree mode through the WT-01 resolver. Pass it the whole parsed settings object, `resolveWorktreeMode(settings)`, never a reduced `{ worktreeMode }`.\n\nWhy: WT-19 rev 2 proposes a gate-aware default, pending the human's go: an unset worktreeMode resolves to 'on' only when settings.qualityGate is non-blank. A reduced object would hide the gate from the resolver, so doctor would judge that project as 'off' and skip the hard worktree probes. claimNextTask.ts:156 already passes state.project?.settings. WT-19's adversarial pass greps every caller for this.",
+      "timestamp": "2026-10-30T14:46:27.383Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-10-30T14:07:52.590Z",
+  "updatedAt": "2026-10-30T14:46:27.383Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:22.067Z",
