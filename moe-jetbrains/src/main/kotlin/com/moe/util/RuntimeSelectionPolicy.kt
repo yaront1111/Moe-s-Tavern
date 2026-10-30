@@ -61,8 +61,7 @@ object RuntimeSelectionPolicy {
     private val DRIVE_QUALIFIED = Regex("""^[A-Za-z]:\\""")
     // A whole local volume, never a folder in one, a shadow copy or any other device family.
     private val LOCAL_DEVICE = Regex("""^\\Device\\(?:HarddiskVolume\d+|CdRom\d+|Floppy\d+|Ramdisk\d*)$""", RegexOption.IGNORE_CASE)
-    // A subst target: a drive-qualified folder whose segments are not empty and do not end in '.' or ' ' (Win32 renames those).
-    private val DOS_TARGET = Regex("""^\\\?\?\\([A-Za-z]:(?:\\[^\\/:*?"<>|\x00-\x1F]*[^\\/:*?"<>|\x00-\x1F. ])*)\\?$""")
+    private val DRIVE_LETTER = Regex("[A-Za-z]:")
     private const val MAX_WINDOWS_PATH = 32767
     private const val PLUGIN_ID = "com.moe.jetbrains"
 
@@ -82,7 +81,12 @@ object RuntimeSelectionPolicy {
 
     private fun storedProfile(basePath: String, key: String): StoredProfile {
         return try {
-            val text = usableStore(basePath)?.read(recordsFile("profile:$key")) ?: return StoredProfile.ABSENT
+            // A pin only restricts, so it is read even from a store no drive mapping can place: unprovable is not absent,
+            // and must not turn a pinned project legacy. Writes still need a store provably outside the project.
+            val readable = store()?.takeIf {
+                it.usableFor(basePath) || windowsHost && listOf(it.root.toString(), basePath).any(::unprovableDrive)
+            }
+            val text = readable?.read(recordsFile("profile:$key")) ?: return StoredProfile.ABSENT
             val root = parseStrict(text, "the profile record").fields(PROFILE_FIELDS, "the profile record")
             if (root.get("version").exactLong() != 1L) throw UntrustedSetting("the profile record is not version 1")
             if (root.get("project").stringOrNull() != key) throw UntrustedSetting("the profile record is for another project")
@@ -249,10 +253,21 @@ object RuntimeSelectionPolicy {
                 null
             } ?: return null
             if (LOCAL_DEVICE.matches(mapping)) return current
-            current = (DOS_TARGET.matchEntire(mapping) ?: return null).groupValues[1] + current.substring(2)
+            current = (dosTarget(mapping) ?: return null) + current.substring(2)
         }
         return null
     }
+
+    // A subst target: `\??\` and a drive-qualified folder whose segments are not empty and do not end in '.' or ' ' (Win32
+    // renames those). Checked segment by segment, not by one regex: Java's regex recurses once per repeated group, so a deep
+    // folder overflowed the stack.
+    private fun dosTarget(mapping: String): String? {
+        val target = mapping.takeIf { it.startsWith("\\??\\") }?.substring(4)?.removeSuffix("\\") ?: return null
+        val segments = target.split('\\')
+        return target.takeIf { DRIVE_LETTER.matches(segments[0]) && segments.drop(1).all(::plainSegment) }
+    }
+
+    private fun plainSegment(s: String) = s.isNotEmpty() && s.last() !in ". " && s.none { it < ' ' || it in "/:*?\"<>|" }
 
     // The IDE's own JNA, never a helper process; plain JUnit points it at the SDK's native library (build.gradle.kts).
     // Any failure, a JNA that cannot load included, is resolveWindowsDrivePath's to refuse.
@@ -597,11 +612,11 @@ object RuntimeSelectionPolicy {
         }
     }
 
-    // The store, unless it lies inside the project: a runIde sandbox under the repository it opens keeps nothing.
+    // The store, only where it is provably outside the project: a runIde sandbox under the repository it opens keeps nothing.
     private fun usableStore(basePath: String): ProtectedStateStore? {
         val candidate = store() ?: return null
         if (candidate.usableFor(basePath)) return candidate
-        log.debug("Moe daemon provenance is not persisted: the IDE state store is inside the project")
+        log.debug("Moe protected state is not persisted: the IDE state store is not provably outside the project")
         return null
     }
 

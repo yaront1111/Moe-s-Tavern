@@ -145,6 +145,44 @@ class RuntimeSelectionPolicyTest {
     }
 
     @Test
+    fun `D9 a protected pin survives a restart on which no drive mapping can be read`() = withProfileStore { store, dir, asks ->
+        assumeTrue("Windows drive mappings", RuntimeSelectionPolicy.windowsHost)
+        val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        writeProfile(dir, "legacy")
+        val fresh = project("""{"settings":{"executionProfile":"legacy"}}""")
+        listOf<(String) -> String?>({ null }, { throw UnsatisfiedLinkError("jnidispatch") }).forEachIndexed { i, unreadable ->
+            withDriveTargets(unreadable) {
+                // Unprovable is not absent: a store this host cannot place is never written, yet its pin still holds.
+                assertFalse("$i", store.usableFor(dir.path))
+                RuntimeSelectionPolicy.forgetSessionForTest()
+                assertEquals("$i", RuntimeProfile.PROTECTED, profileOf(dir))
+                assertEquals("$i", List(i + 1) { dir.path }, asks.paths)
+                asks.answers.last()(true)
+                assertEquals("$i", profileJson(dir, "protected"), store.read(name))
+                assertEquals("$i", RuntimeProfile.LEGACY, profileOf(fresh))
+            }
+        }
+        assertEquals("a fresh legacy project is never asked", 2, asks.paths.size)
+        // Either side is enough: a store, or a project, behind a drive whose mapping cannot be read still keeps its pin.
+        withSubst(dir.parentFile) { d ->
+            val native = RuntimeSelectionPolicy.windowsDriveTarget
+            listOf(dir.path to ProtectedStateStore(Paths.get("$d\\stores")), "$d\\${dir.name}" to store).forEach { (base, side) ->
+                RuntimeSelectionPolicy.store = { side }
+                RuntimeSelectionPolicy.forgetSessionForTest()
+                writeProfile(dir, "verified-local")
+                assertEquals(base, RuntimeProfile.PROTECTED, RuntimeSelectionPolicy.profile(base))
+                writeProfile(dir, "legacy")
+                withDriveTargets({ if (it == d) null else native(it) }) {
+                    RuntimeSelectionPolicy.forgetSessionForTest()
+                    assertEquals(base, RuntimeProfile.PROTECTED, RuntimeSelectionPolicy.profile(base))
+                    assertEquals(base, base, asks.paths.last())
+                }
+            }
+        }
+    }
+
+    @Test
     fun `D3 untrusted profile documents fail closed and explicit confirmation repairs them`() = withProfileStore { store, dir, asks ->
         val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
         val valid = profileJson(dir, "protected")
@@ -598,6 +636,17 @@ class RuntimeSelectionPolicyTest {
         }
         maps.remove("Z:")
         assertNull("no mapping", expand("Z:\\x"))
+        // Depth is no limit of its own: a deep mapping is checked segment by segment, and only the expansion's length is capped.
+        val deep = "\\??\\C:\\" + "a b.c\\".repeat(4000) + "last"
+        maps["Z:"] = deep
+        assertEquals("C:\\" + "a b.c\\".repeat(4000) + "last\\x", expand("Z:\\x"))
+        val malformed = listOf("$deep.", "$deep ", "$deep\\\\x", deep + Char(31), "\\\\?\\" + deep.substring(4)) + "/:*?\"<>|".map { deep + it }
+        malformed.forEach { maps["Z:"] = it; assertNull(it.take(4) + it.takeLast(2), expand("Z:\\x")) }
+        maps["Z:"] = "\\??\\C:" + "\\a".repeat(16380)
+        val longest = "C:" + "\\a".repeat(16380) + "\\xxxx"
+        assertEquals(32767, longest.length)
+        assertEquals(longest, expand("Z:\\xxxx"))
+        assertNull("one character past the longest path", expand("Z:\\xxxxx"))
         maps += mapOf("A:" to "\\??\\B:\\x", "B:" to "\\??\\a:\\y", "S:" to "\\??\\S:\\x")
         assertNull(expand("A:\\z"))
         assertEquals("a cycle stops at its first repeated drive", listOf("A:", "B:"), asked)
