@@ -1,0 +1,36 @@
+{
+  "id": "task-d00dafdf2dde4a41bf5983b1f7d495de",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R13e] Certify bridge and network probes",
+  "description": "Objective: add certify checks that close CQ-R08's uncertified points, from the worker handoff on CQ-R13 (2026-10-26):\n- host EOF on stdin propagates through `multipass exec --no-map-working-directory <name> -- sudo -n <supervisor> ...` with no pty, so the supervisor kills the job;\n- frame bytes are exact in both directions;\n- no guest identity can reach the host's daemon ports.\n\nSplit out of CQ-R13 (task-f4811a72) by architect-e4b7eee0 on 2026-10-30. It depends on CQ-R13d, for certify.mjs and its registry.\n\nDeliverable: three checks appended to CERTIFY_CHECKS. They run in the certify VM, which has the real supervisor, after 'no-mounts' and before 'teardown'. Generate and materialize a small snapshot first, since the check mode needs a workspace.\n- 'bridge-eof': a supervisor check session whose approved command blocks, such as `sleep 600`. The host closes stdin, and within a fixed bound the session must end with the supervisor's host-EOF exit (74). Pass or fail comes from the provider's exit, never from a local kill.\n- 'bridge-framing':\n  - guest to host: a check job writes a deterministic payload (python3 derives 2 MiB from a fixed seed). The host reassembles the output frames, and they must be byte-exact: the same sha256 the host computes itself.\n  - host to guest: the R09c materialize digest check of the generated snapshot.\n- 'guest-network':\n  - From the check identity, in its private netns, a TCP connect to the host's gateway address on the daemon port must fail.\n  - From the agent identity (`multipass exec <name> -- sudo -n -u moe-agent python3 -I -c <probe>`), the same connect must also fail.\n  - The probe ports are a certify-owned listener on host 127.0.0.1 and, when a daemon is running, the port in the project's daemon.json, read-only.\n  - The daemon's bind host is recorded, so a 0.0.0.0 bind (WSL agent mode) shows up as a failure.\n\nEvery probe argv is a fixed literal plus validated numbers, with no shell interpolation of guest data. Every outcome maps to a fixed code.\n\nTests in scripts/tests/local-runner.test.mjs use fake providers: each check's pass and fail mapping, and its argv. The native behavior is certified only by the operator run.\n\nOut of scope:\n- the containment, cancellation, recovery and canary checks;\n- enabling verified-local;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "'bridge-eof' passes only when closing the host's stdin ends a blocked check session within its bound with the supervisor's host-EOF exit. Shown by tests with a fake provider for both outcomes.",
+    "'bridge-framing' passes only when a deterministic guest payload arrives byte-exact and a generated snapshot materializes with a matching digest. Shown by tests.",
+    "'guest-network' passes only when neither the check identity nor the agent identity can connect to the host's daemon port at the gateway address. A successful connect fails the check. Shown by tests.",
+    "Each probe's argv is fixed apart from validated numbers, and every outcome maps to a fixed code. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-f4811a729f9e436ba129a65c12d348c1",
+  "priority": "HIGH",
+  "order": 254.35,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:04:05.532Z",
+  "updatedAt": "2026-10-30T06:05:00.690Z",
+  "dependsOn": [
+    "task-a8a3a502b8264cc5adcb660f59656a00"
+  ]
+}

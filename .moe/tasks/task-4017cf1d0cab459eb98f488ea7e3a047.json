@@ -72,12 +72,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "Size-only rejection: no DoD item failed and the substance is green. Completion baa52df (on moe/work-2026-10-24; its 4 source files unchanged at HEAD) changes 576 lines by numstat, excluding .moe JSON: agent-cache.mjs +275, agent-binaries.json +21, local-runner-agents.test.mjs +273, local-runner-bundle.test.mjs +6/-1. The QA cap is 400 net, and plan step 4 also said to stay at or under 400. The epic size rail names only R01/R02/R03/R06/R07/R08/R08c/R09/R09c; other tasks keep normal limits. There is no proposal for this row in .moe/proposals.\n\nQA verified (fresh, env -i, Node 24.21.0):\n- DoD command: exit 0, 32/32 pass.\n- local-runner.test.mjs: exit 0, 241 pass, 1 skipped (pre-existing).\n- Full diff read: verify before parse and before rename, .part cleanup in finally, manual https-only redirects, O_NOFOLLOW re-verify on a hit, fixed-text errors. DoD 1-4 are shown by AB1-AB11.\n- 6 independent mutants on a git-archive copy, all killed: archive verify before parse removed; corrupt entry not unlinked; member header-size bound removed; cacheDir mode 0755; member typeflag check removed; content-length bound removed.\n- Accepted deviation: the agent files are in `shipped`, not `required`. The bundle carries both byte-equal, the bundled module loads its manifest, and build.gradle.kts includes local-runner/**.\n\nFix: no code change. Do not re-slice or rewrite the landed bytes.\n1. File moe.propose_rail as an EPIC ADD_RAIL under 1000 chars: a CQ-R10d2 size exception naming baa52df, the four files with the numstat above, and a 576-line cap. It may grow only by QA-required defect fixes and waives size only: every DoD item, AB1-AB11, fresh verification and fail-closed behavior still apply, and verified-local stays unavailable.\n2. Post the proposal id in #governors.\n3. Re-run the verification command fresh, then complete_task. QA parks the row while the proposal is PENDING and approves once the rail is in allRails.epic.",
+  "reopenReason": "Size waiver prop-1d021909fe024d5ba7586cab816d91c9 was APPROVED by the human at 2026-10-30T05:56:00Z, and the CQ-R10d2 576-line rail is now in the epic's epicRails. Resuming the row's QA park route, APPROVED -> REVIEW. Next QA: confirm the rail text in allRails.epic matches the numstat of baa52df, re-run the gate, and decide.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -95,14 +95,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:04.014Z",
-  "updatedAt": "2026-10-30T01:28:02.942Z",
+  "updatedAt": "2026-10-30T06:04:31.623Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:26:25.711Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T06:04:31.622Z",
+    "wallClockMs": 27485911
   },
   "contextFetchedBy": [
     "worker-e60b90bd",
@@ -262,7 +264,7 @@
     "sessionId": "qa-952969be@2026-10-30T01:16:51Z",
     "at": "2026-10-30T01:28:02.941Z"
   },
-  "reviewCompletedAt": "2026-10-30T01:01:35.021Z",
+  "reviewCompletedAt": "2026-10-30T06:04:31.622Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -286,8 +288,13 @@
       ]
     }
   ],
-  "blockedReason": "Size waiver pending, substance green. QA round 2 cannot approve, because the landed slice (completion baa52df, unchanged at HEAD 9a28b0f) is 576 changed lines (+575/-1) against the 400 cap, and no epic rail waives it yet. The worker's waiver is prop-1d021909fe024d5ba7586cab816d91c9 (EPIC ADD_RAIL, 576 cap, filed 01:05Z). It was still PENDING at 01:25Z and only a human can resolve it. A second reject would only burn a reopen, so the row is parked.\n\nFresh evidence (pure git archive of HEAD, env -i, Node 24.21.0):\n- DoD command: exit 0, 32/32.\n- local-runner.test.mjs: exit 0, 241 pass, 1 skipped (existing).\n- 10 independent mutants, all killed.\n- All 4 pins match the vendor release metadata.\n- Real codex x64 fetch: member pin matched, and the cache hit made 0 fetches.\nFull detail is in the latest QA comment on this row.\n\nRoute:\n- APPROVED: set_task_status REVIEW. QA confirms the rail text in allRails.epic matches the numstat, re-runs the gate and approves.\n- REJECTED: set_task_status PLANNING, and split the review scope (not the bytes) per the proposal: agent-cache.mjs plus agent-binaries.json (296 changed lines) and the two test files (280).\nunblock_worker cannot reach the parked, unassigned row.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-30T01:26:48.288Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Size waiver pending, substance green. QA round 2 cannot approve, because the landed slice (completion baa52df, unchanged at HEAD 9a28b0f) is 576 changed lines (+575/-1) against the 400 cap, and no epic rail waives it yet. The worker's waiver is prop-1d021909fe024d5ba7586cab816d91c9 (EPIC ADD_RAIL, 576 cap, filed 01:05Z). It was still PENDING at 01:25Z and only a human can resolve it. A second reject would only burn a reopen, so the row is parked.\n\nFresh evidence (pure git archive of HEAD, env -i, Node 24.21.0):\n- DoD command: exit 0, 32/32.\n- local-runner.test.mjs: exit 0, 241 pass, 1 skipped (existing).\n- 10 independent mutants, all killed.\n- All 4 pins match the vendor release metadata.\n- Real codex x64 fetch: member pin matched, and the cache hit made 0 fetches.\nFull detail is in the latest QA comment on this row.\n\nRoute:\n- APPROVED: set_task_status REVIEW. QA confirms the rail text in allRails.epic matches the numstat, re-runs the gate and approves.\n- REJECTED: set_task_status PLANNING, and split the review scope (not the bytes) per the proposal: agent-cache.mjs plus agent-binaries.json (296 changed lines) and the two test files (280).\nunblock_worker cannot reach the parked, unassigned row.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-30T06:04:31.622Z",
+  "reviewSummary": "QA round 3 (qa-952969be): APPROVED.\nSize: waiver prop-1d021909 APPROVED by HUMAN 05:56:00Z; its rail is in allRails.epic and equals baa52df's numstat: agent-cache.mjs +275, agent-binaries.json +21, local-runner-agents.test.mjs +273, local-runner-bundle.test.mjs +6/-1 = 576 (+575/-1), at the cap (board JSON not counted).\nBytes: baa52df is on moe/work-2026-10-24; at HEAD eb0ebaa the 4 owned blobs equal baa52df's, untouched since and clean in the worktree. Retry completion 6b62196 is board JSON only.\nFresh gates on a pure git archive of HEAD (4 files cmp-equal baa52df), env -i, Node 24.21.0:\n- DoD command: exit 0, 32/32, AB1-AB11 pass.\n- local-runner.test.mjs: exit 0, 241 pass, 1 skip (pre-existing macOS smoke).\nSubstance (agent-cache.mjs read in full, plus AB1-AB11):\n- DoD1: exact keys per level, url === code-built https template, strict version/sha256/size/member (AB1-AB3: 30+ off-shape rows, seam refused with 0 fetches, 64 KiB bound).\n- DoD2: archive hashed before gunzip, member before atomic rename; manual https-only redirects <=5; length and stream bounds; .part unlinked in finally. AB4-AB7 assert an empty cacheDir after every refusal.\n- DoD3: hit re-hashed via an O_NOFOLLOW fd, 0 fetches; 3 corruptions each removed and refetched exactly once; dir/symlink refused untouched (AB8-AB9).\n- DoD4: task.verification exit 0 with tail, reproduced.\n- AC5 fixed code+text only. No forbidden patterns; no isolation/verified-local claim; image-cache.mjs and certified-provider.json unchanged. ci.yml:236 runs both files on the OS matrix (Windows/macOS not run here).\n21 distinct guard mutants killed in earlier rounds; not re-run.\nAccepted: agent files in `shipped`, not `required` (copied byte-equal, bundled module loads its manifest). Advisory: fetchAgentBinary(input, null) raw TypeError.\nPonytail: lean already (writeBody/holdsPin mirror image-cache.mjs private helpers; contract froze that file). net: -0 lines possible.",
+  "requiredCheckAtDone": null
 }

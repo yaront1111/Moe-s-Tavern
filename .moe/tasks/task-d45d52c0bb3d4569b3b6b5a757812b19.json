@@ -1,0 +1,36 @@
+{
+  "id": "task-d45d52c0bb3d4569b3b6b5a757812b19",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R13f] Certify writer and check containment probes",
+  "description": "Objective: add certify checks showing, on real hardware, that a malicious writer (the agent identity) and a malicious test (the check identity) stay contained, and that replacement attempts inside the guest fail. These cover CQ-R13 DoD items 1 and 2.\n\nSplit out of CQ-R13 (task-f4811a72) by architect-e4b7eee0 on 2026-10-30. It depends on CQ-R13e (the certify.mjs edit order) and on CQ-R11e (task-001d8ab3): runCheckJob complete, with its toolchain and workspace verify.\n\nDeliverable: three checks appended to CERTIFY_CHECKS.\n\n'writer-containment', run as moe-agent through `sudo -n -u moe-agent` probes in the certify VM. Each probe must fail with a permission error:\n- reading the supervisor credential, or the root-only workspace manifest;\n- writing under /opt/moe, or into another session home;\n- writing the supervisor or the toolchain.\n\n'check-containment', through runCheckJob on generated snapshots:\n- A probe script is the approved command. It exits 0 only when each attack failed:\n  - network egress, inside the private netns;\n  - reading the credential;\n  - writing a protected path (EROFS);\n  - exceeding RLIMIT_NPROC or RLIMIT_FSIZE, which must be bounded.\n- A second run, whose command overwrites a protected file, must resolve 'inconclusive'.\n- A third run, which edits a tracked unprotected file, must resolve with workspace 'changed'.\n\n'controller-replacement':\n- As root in the certify VM, replace the supervisor bytes and re-run the readiness probes. They must fail with the supervisor hash mismatch.\n- A ledger record rewritten to another owner must not be deleted by this run's cleanup.\n- It runs LAST among the checks that use the certify VM, because it taints that VM.\n\nEvery outcome maps to a fixed code. Tests in scripts/tests/local-runner.test.mjs use fake providers and fake runCheckJob results. The native behavior is certified only by the operator run.\n\nOut of scope:\n- cancellation and recovery (CQ-R13h);\n- the canary toolchain check (CQ-R13g);\n- the host-side replacement regression (CQ-R13 itself);\n- enabling verified-local;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "'writer-containment' passes only when every agent-identity probe is refused: credential, root-only manifest, /opt/moe, another home, supervisor and toolchain. Any success fails the check. Shown by tests.",
+    "'check-containment' passes only when the probe run passes, the protected-overwrite run resolves 'inconclusive' and the tracked-edit run resolves workspace 'changed'. Any other outcome fails the check. Shown by tests with fake runCheckJob results.",
+    "'controller-replacement' passes only when readiness refuses a replaced supervisor and this run's cleanup leaves a foreign-owned ledger record alone. It runs last among the certify-VM checks. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-f4811a729f9e436ba129a65c12d348c1",
+  "priority": "HIGH",
+  "order": 254.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:04:16.594Z",
+  "updatedAt": "2026-10-30T06:05:00.794Z",
+  "dependsOn": [
+    "task-d00dafdf2dde4a41bf5983b1f7d495de",
+    "task-001d8ab383ef41088e045b2e41ed0e1e"
+  ]
+}

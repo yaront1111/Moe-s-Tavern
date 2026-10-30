@@ -1,0 +1,35 @@
+{
+  "id": "task-7fffec67fbb44d1e9a509f214105e2bb",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R13b] Inherited local-runner test gaps",
+  "description": "Objective: close two test weaknesses that QA left on CQ-R13 for the hardening pass.\n\nSplit out of CQ-R13 (task-f4811a72) by architect-e4b7eee0 on 2026-10-30. It depends on CQ-R11e (task-001d8ab3) and CQ-R10d (task-90847011), the last planned editors of the two test files.\n\n1. scripts/tests/local-runner-bridge.test.mjs, row H4 (qa-6fa5d758 on CQ-R08):\n   - It uses Promise.withResolvers(), which needs Node 22+, so it fails under the WSL default /usr/local/bin/node 20.18.\n   - Replace it with a manual resolver: `let finish; const late = new Promise(resolve => { finish = resolve; });`.\n   - docs/DEVELOPMENT.md keeps 'Node.js 18+'.\n2. scripts/tests/local-runner-check.test.mjs, row C5's 'close before EOF' (qa-952969be on CQ-R11c; details in comment-997358d583ff4f2b9c0f9c779df7172f on task-53daa94f):\n   - It emits close synchronously, before HELLO and OBS are delivered, so check-session.mjs outcomeOf's `|| !s.ended` guard is never pinned.\n   - Defer the close, e.g. setImmediate(() => proc.emit('close', 0, null)). The frames then parse first, and close 0 arrives with stdout still open.\n   - The row must stay infra-failure, and must still kill the stop-after-settle mutant it was added for.\n\nDeliverable: the two test edits only. Prove that the mutant is now killed:\n- temporarily remove `|| !s.ended` from outcomeOf and watch the row fail;\n- restore check-session.mjs byte-for-byte;\n- record the runs in the step note, and never commit the mutant.\n\nOut of scope:\n- any runtime change;\n- other rows;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs (on WSL: env -i with the nvm Node 24 PATH). Also run `/usr/local/bin/node --test --test-name-pattern='^H4 ' scripts/tests/local-runner-bridge.test.mjs` and report its exit code.",
+  "definitionOfDone": [
+    "H4 no longer uses Promise.withResolvers, and it passes under the WSL default Node 20.18 (`/usr/local/bin/node --test --test-name-pattern='^H4 '`) as well as under Node 24. Shown by both runs' output.",
+    "C5's 'close before EOF' row delivers hello and the observation before close 0 arrives with stdout still open, and resolves infra-failure. With `|| !s.ended` temporarily removed from outcomeOf, the row fails, and check-session.mjs is restored unchanged afterwards. Shown by the recorded runs.",
+    "Only the two test files change.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-f4811a729f9e436ba129a65c12d348c1",
+  "dependsOn": [
+    "task-001d8ab383ef41088e045b2e41ed0e1e",
+    "task-90847011452544dc868039ff435b018b"
+  ],
+  "priority": "MEDIUM",
+  "order": 254.15,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:03:16.380Z",
+  "updatedAt": "2026-10-30T06:03:16.380Z"
+}

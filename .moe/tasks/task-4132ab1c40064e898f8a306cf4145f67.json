@@ -1,0 +1,35 @@
+{
+  "id": "task-4132ab1c40064e898f8a306cf4145f67",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R13h] Certify cancellation and recovery probes",
+  "description": "Objective: add certify checks showing, on real hardware, that a cancelled run tears down cleanly and that a crashed controller's VM is recovered. Both are in CQ-R13's objective: cancellation and recovery.\n\nSplit out of CQ-R13 (task-f4811a72) by architect-e4b7eee0 on 2026-10-30. It depends on CQ-R13f, for the edit order on certify.mjs.\n\nDeliverable: two checks appended to CERTIFY_CHECKS, each in its own VM.\n- 'cancellation': runCheckJob with an approved command that blocks, and an AbortSignal that fires once the session has started. The run must resolve with VM 'deleted', an outcome other than 'passed', and no live ledger record of its attempt.\n- 'recovery':\n  - A child node process runs a provisioning, and this check SIGKILLs it once the VM is launched. The child is spawned with process.execPath and a fixed module argument, never a shell.\n  - Then, in the parent, lifecycle reconcile and cleanupOwned, with the child's attempt closed, must delete exactly that VM.\n  - A foreign VM record present in the same ledger must survive.\n\nEvery timing bound is a fixed constant, and every outcome maps to a fixed code.\n\nTests in scripts/tests/local-runner.test.mjs use fake providers and fake child processes. The native behavior is certified only by the operator run.\n\nOut of scope:\n- the canary toolchain check (CQ-R13g);\n- enabling verified-local;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "'cancellation' passes only when an aborted check run resolves without 'passed', with its VM deleted and no live ledger record of its attempt. Shown by tests.",
+    "'recovery' passes only when, after its controller child is SIGKILLed mid-provision, reconcile and cleanup delete exactly that orphaned VM and leave a foreign record intact. Shown by tests.",
+    "The child process is spawned without a shell, with a fixed argv, and is always reaped. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-f4811a729f9e436ba129a65c12d348c1",
+  "priority": "HIGH",
+  "order": 254.42,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:04:25.134Z",
+  "updatedAt": "2026-10-30T06:05:00.897Z",
+  "dependsOn": [
+    "task-d45d52c0bb3d4569b3b6b5a757812b19"
+  ]
+}
