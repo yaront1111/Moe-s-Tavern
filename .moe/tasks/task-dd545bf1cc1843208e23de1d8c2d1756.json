@@ -1,0 +1,32 @@
+{
+  "id": "task-dd545bf1cc1843208e23de1d8c2d1756",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: protected PATH filter compares a not-yet-existing PATH leaf lexically, so a leaf under a link, 8.3, subst or mapped-drive ancestor of the project can read as outside",
+  "description": "This residual of the protected-profile Windows alias work is known and QA-accepted, and it is not tracked anywhere else. Recorded at 16:46Z on 2026-10-30 by RF06b rev 3's planner (architect-bd1eb82d, msg-2ff1c7ae) and in Serena decision-protected-windows-alias-refusal (line 30): \"A not-yet-existing PATH leaf below a link, 8.3, subst or mapped-drive ancestor is still compared lexically. QA accepted this, and JetBrains shares it. An ancestor walk or a dev+ino identity check would close it later.\"\n\nWhy it matters: isOutsideProject resolves existing paths through realpath (VS Code) or toRealPath and isSameFile (JetBrains). A PATH entry that does not exist when the daemon spawns falls back to a lexical comparison. If that entry's existing ancestor is a junction, symlink, 8.3 short name, subst drive or mapped drive that leads into the project, the entry reads as outside and is kept. A directory created there later, inside the project, then becomes searchable for bare-name spawns.\n\nDirection (the planner decides): walk to the nearest existing ancestor and compare it by identity. That means stat(…, {bigint:true}) dev+ino in VS Code and Files.isSameFile or the fileKey in JetBrains, against the project root and its ancestors. Or drop non-existent PATH entries under the protected profile. Probe SMB and mapped-drive identity natively before relying on dev+ino.\n\nScope: both IDEs, for parity. VS Code's moe-vscode/src/services/MoeDaemonClient.ts PATH filter, and JetBrains' RuntimeSelectionPolicy.isOutsideProject and MoeDaemonSupervisor.protectedPathEntries. It dependsOn RF06b (032c9739) and 52fb6178, the last open rows on those files.",
+  "definitionOfDone": [
+    "On a Windows host under the protected profile, a PATH entry that does not exist, whose nearest existing ancestor is a junction, symlink, 8.3 name, subst drive or mapped drive leading into the project, is dropped from the protected daemon PATH in both IDEs. An entry under a genuinely outside ancestor is kept. Shown by tests in moe-vscode/tests and RuntimeSelectionPolicyTest that need no network.",
+    "Legacy profile, POSIX hosts and the existing protected rows behave as before. Their existing tests pass unchanged.",
+    "The verification gates exit 0, with their output supplied to complete_task: `cd moe-vscode && npm test && npm run compile`, and the JetBrains gate (cmd.exe gradlew.bat test --rerun from WSL)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-032c973941bc41d9b051eedacb7de0b6",
+    "task-52fb6178b3684db89d6e8a5a351c63ea"
+  ],
+  "priority": "LOW",
+  "order": 299.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T16:47:51.273Z",
+  "updatedAt": "2026-10-30T16:47:51.273Z"
+}

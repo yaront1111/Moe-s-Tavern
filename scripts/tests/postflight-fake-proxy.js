@@ -49,6 +49,13 @@ function declaredSets(task) {
   return { asserted: [...asserted], planned: [...planned] };
 }
 function csv(v) { return String(v || '').split(',').map((s) => s.trim()).filter(Boolean); }
+// A JSON-valued knob: unset is undefined; malformed JSON throws, so the fixture
+// fails loudly instead of answering a half-built payload.
+function jsonKnob(name) { const v = process.env[name]; return v ? JSON.parse(v) : undefined; }
+// FAKE_CLAIM_WORKSPACE: WT-01's {mode, path, branch, target}, served on the
+// hasNext:true claim (never on the resume/alreadyAssigned replies) and pinned on
+// the attempt record as workspace/workspaceMode, as openClaimAttempt does.
+const claimWorkspace = jsonKnob('FAKE_CLAIM_WORKSPACE');
 
 // Candidate/check/finalize recorder: reject invalid payloads instead of green
 // mocks accepting arbitrary calls. This fixture never calls the live daemon.
@@ -73,7 +80,8 @@ function attemptFixture() {
   if (!fs.existsSync(file) || reopen) fs.writeFileSync(file, JSON.stringify({
     id, generation, taskId, workerId: args.workerId, runnerId: args.workerId,
     phase: process.env.FAKE_ATTEMPT_PHASE || 'running', workspace: project, startedAt: new Date().toISOString(), lastPhaseAt: new Date().toISOString(),
-    ...(args.processStartedAt === undefined ? {} : {processStartedAt: args.processStartedAt, host: args.host})
+    ...(args.processStartedAt === undefined ? {} : {processStartedAt: args.processStartedAt, host: args.host}),
+    ...(claimWorkspace ? {workspace: claimWorkspace.path, workspaceMode: claimWorkspace.mode} : {})
   }));
   if (process.env.FROZEN_MODE === 'claim-missing' || process.env.FAKE_CLAIM_TOKENS === 'missing') return {};
   return {attemptId: id, generation: process.env.FROZEN_MODE === 'claim-malformed' ? '7' : generation};
@@ -370,7 +378,8 @@ switch (tool) {
       // the wrapper launch a CLI and tell it to claim itself.
       ok({ hasNext: false });
     } else {
-      ok({ ...attemptFixture(), hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } });
+      ok({ ...attemptFixture(), hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' },
+        ...(claimWorkspace ? { workspace: claimWorkspace } : {}) });
     }
     break;
   }
@@ -414,9 +423,19 @@ switch (tool) {
       if (process.env.FAKE_CTX_IS_EPIC_FINAL_AT === 'top') ctxPayload.isEpicFinal = iefVal;
       else ctxPayload.task.isEpicFinal = iefVal;
     }
+    // FAKE_CTX_WORKSPACE: WT-02's top-level workspace (JSON). FAKE_CTX_COMMITS:
+    // task.commits (a JSON array), the ledger rows the mode-mismatch guard reads.
+    const ctxWorkspace = jsonKnob('FAKE_CTX_WORKSPACE'), ctxCommits = jsonKnob('FAKE_CTX_COMMITS');
+    if (ctxWorkspace) ctxPayload.workspace = ctxWorkspace;
+    if (ctxCommits !== undefined) {
+      if (!Array.isArray(ctxCommits)) throw new Error('FAKE_CTX_COMMITS must be a JSON array');
+      ctxPayload.task.commits = ctxCommits;
+    }
     ok(ctxPayload);
     break;
   }
+  // report_blocked: logged in order with the other RPCs; the task parks.
+  case 'report_blocked': appendRpc(); ok({ success: true, status: 'BLOCKED' }); break;
   case 'list_tasks': {
     const epicTasks = [
       { id: 'task-postflight', status: process.env.FAKE_TASK_STATUS || 'WORKING', reopenCount: 0, epicId: 'epic-1', order: 1 },
