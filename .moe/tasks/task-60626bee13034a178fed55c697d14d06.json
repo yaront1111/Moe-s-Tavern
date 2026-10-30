@@ -120,7 +120,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:35.352Z",
-  "updatedAt": "2026-10-30T08:22:33.312Z",
+  "updatedAt": "2026-10-30T08:22:56.383Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:29:27.778Z",
     "plannedStepCount": 4,
@@ -231,18 +231,44 @@
       "treeId": "593cfbff304c02b04c6e99f33b0ec895c02863db",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "cb4997e3e82ed1b26d930822ddc14ddb8467043c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T08:05:33Z",
+      "paths": [
+        ".moe/tasks/task-3fa69c192a2147fa8555b33c86ad2f82.json",
+        ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T08:22:56.383Z",
+      "treeId": "886f5f6bb9324bea0aad7104910c537142636b7f",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner-bridge.test.mjs",
+          "taskId": "task-2cf1c6bee5814ed98eb3d069d97b32b3"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/tests/local-runner-bridge.test.mjs",
-    "scripts/local-runner/guest-supervisor.py"
+    "scripts/local-runner/guest-supervisor.py",
+    ".moe/tasks/task-3fa69c192a2147fa8555b33c86ad2f82.json",
+    ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-55e6716a@2026-10-30T07:39:30Z",
-    "at": "2026-10-30T07:45:54.076Z"
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-30T08:05:33Z",
+    "at": "2026-10-30T08:22:56.383Z"
   },
   "reviewStartedAt": "2026-10-30T08:22:33.310Z",
   "verification": {
@@ -252,5 +278,9 @@
     "reportedAt": "2026-10-30T08:22:33.310Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-R10d4 headless launch spec. guest-supervisor.py: SHIM, PROMPTS (worker/qa, each starting 'Call moe.get_context for your assigned task first.'), LAUNCH and prepare_launch; start_job runs relay(argv) from the fixed template. JOBS 2-tuple unchanged (B17).\n- claude: -p PROMPT --mcp-config <home>/.moe-mcp.json --strict-mcp-config --dangerously-skip-permissions.\n- codex: exec --sandbox danger-full-access --skip-git-repo-check PROMPT, CODEX_HOME=<home>/.codex whose config.toml is the amended FOUR-line moe table (env_vars = [\"MOE_ROLE\"], approval 'approve').\n- Config files are created via dir-fd WALK, O_EXCL|O_NOFOLLOW, 0600 files / 0700 .codex, fchown to the job uid, in the fresh home; a creation failure is 71 with no job. No resume/continue. Credential env-only.\nSelf-review findings (probed on the pinned binaries):\n- FIXED: pinned codex exec loads <workspace>/.codex/config.toml even with a fresh CODEX_HOME. start_job now refuses a codex job whose WORKSPACE holds any .codex entry (65, before any home/frame/job). LA6 pins it.\n- Confirmed: claude --strict-mcp-config ignores hostile workspace .mcp.json/.claude/settings.json (control starts the server).\n- Noted for CQ-R10/R10d/R13: claude's MCP server inherits the whole env, credential included (MOE_ROLE is forwarded); a hostile workspace .claude/settings.json could redirect ANTHROPIC_BASE_URL; one live job per VM.\nTests: LA1-LA4 and LA6 (LA5 opt-in pinned codex); LA2 also spies fchown to close a non-root blind spot. 25 scratch mutants, 24 killed, 1 equivalent (drop O_NOFOLLOW alone; O_EXCL covers). Other modes byte-identical (AST). ~244 changed lines (cap 400). No verified-local or isolation claim; executionReady unchanged; no .moe edits."
+  "completionSummary": "CQ-R10d4 headless launch spec. guest-supervisor.py: SHIM, PROMPTS (worker/qa, each starting 'Call moe.get_context for your assigned task first.'), LAUNCH and prepare_launch; start_job runs relay(argv) from the fixed template. JOBS 2-tuple unchanged (B17).\n- claude: -p PROMPT --mcp-config <home>/.moe-mcp.json --strict-mcp-config --dangerously-skip-permissions.\n- codex: exec --sandbox danger-full-access --skip-git-repo-check PROMPT, CODEX_HOME=<home>/.codex whose config.toml is the amended FOUR-line moe table (env_vars = [\"MOE_ROLE\"], approval 'approve').\n- Config files are created via dir-fd WALK, O_EXCL|O_NOFOLLOW, 0600 files / 0700 .codex, fchown to the job uid, in the fresh home; a creation failure is 71 with no job. No resume/continue. Credential env-only.\nSelf-review findings (probed on the pinned binaries):\n- FIXED: pinned codex exec loads <workspace>/.codex/config.toml even with a fresh CODEX_HOME. start_job now refuses a codex job whose WORKSPACE holds any .codex entry (65, before any home/frame/job). LA6 pins it.\n- Confirmed: claude --strict-mcp-config ignores hostile workspace .mcp.json/.claude/settings.json (control starts the server).\n- Noted for CQ-R10/R10d/R13: claude's MCP server inherits the whole env, credential included (MOE_ROLE is forwarded); a hostile workspace .claude/settings.json could redirect ANTHROPIC_BASE_URL; one live job per VM.\nTests: LA1-LA4 and LA6 (LA5 opt-in pinned codex); LA2 also spies fchown to close a non-root blind spot. 25 scratch mutants, 24 killed, 1 equivalent (drop O_NOFOLLOW alone; O_EXCL covers). Other modes byte-identical (AST). ~244 changed lines (cap 400). No verified-local or isolation claim; executionReady unchanged; no .moe edits.",
+  "touchedFiles": [
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-supervisor.py"
+  ]
 }

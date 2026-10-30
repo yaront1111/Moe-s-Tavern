@@ -99,7 +99,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -122,16 +122,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:33:01.209Z",
-  "updatedAt": "2026-10-30T08:17:58.992Z",
+  "updatedAt": "2026-10-30T08:26:27.312Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:36:28.519Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T08:26:27.311Z",
+    "wallClockMs": 2998792
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-55e6716a"
+    "worker-55e6716a",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -218,7 +221,53 @@
     "packages/moe-daemon/src/server/bindHosts.ts",
     "packages/moe-daemon/src/index.ts",
     "docs/CONFIGURATION.md",
-    "docs/TROUBLESHOOTING.md"
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
+    ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json"
   ],
-  "completionSummary": "Implemented the five-file WSL bind slice (373 net LOC). server/bindHosts.ts exports WSL_BIND_HOST='wsl', resolveBindHosts and listenOnHosts. Exact wsl binds loopback first plus deduplicated non-internal IPv4 WSL-adapter addresses; wildcard/malformed adapter addresses are excluded. Other host values retain their meaning. Extra HTTP listeners share one port/handler and forward upgrades to the primary's existing Origin-gated WSS. Partial failures destroy accepted sockets, close attempted listeners and release the startup lock.\nindex.ts probes wsl on loopback, falls back safely if adapter enumeration throws, checks every address during port selection and closes every listener during shutdown. Existing daemon.json persists literal bindHost wsl; local-runner non-loopback refusal is unchanged.\nDoD 1: exact R resolver rows. DoD 2: real WSS L/L-fail/L-socket/L-port rows prove HTTP/MCP, Origin 403, rollback and occupied-extra-address selection. DoD 3: real tsx _run D rows prove flag/env precedence, probes, interface failure, lock cleanup and traced multi-listener shutdown. DoD 4: configuration and WSL troubleshooting updated; Origin/peer text preserved. DoD 5: fresh tsc + full npm test exits 0: 206 files, 5789 passed/16 skipped; all 22 new rows ran. New test also type-checks separately.\n13 scratch mutants killed by real failed Tests lines; restored/cmp-checked. Adversarial review fixed test portability and strengthened shutdown evidence. D subprocess rows explicitly skip Windows because SIGTERM kills rather than dispatches handlers there (confirmed with an owned native probe); portable R/L remain enabled. Live Windows/WSL integration stays with task-724e31fa. Task handoff and gotcha-daemon-subprocess-tests memory updated. No manual .moe edits or Git writes; wrapper owns landing."
+  "completionSummary": "Implemented the five-file WSL bind slice (373 net LOC). server/bindHosts.ts exports WSL_BIND_HOST='wsl', resolveBindHosts and listenOnHosts. Exact wsl binds loopback first plus deduplicated non-internal IPv4 WSL-adapter addresses; wildcard/malformed adapter addresses are excluded. Other host values retain their meaning. Extra HTTP listeners share one port/handler and forward upgrades to the primary's existing Origin-gated WSS. Partial failures destroy accepted sockets, close attempted listeners and release the startup lock.\nindex.ts probes wsl on loopback, falls back safely if adapter enumeration throws, checks every address during port selection and closes every listener during shutdown. Existing daemon.json persists literal bindHost wsl; local-runner non-loopback refusal is unchanged.\nDoD 1: exact R resolver rows. DoD 2: real WSS L/L-fail/L-socket/L-port rows prove HTTP/MCP, Origin 403, rollback and occupied-extra-address selection. DoD 3: real tsx _run D rows prove flag/env precedence, probes, interface failure, lock cleanup and traced multi-listener shutdown. DoD 4: configuration and WSL troubleshooting updated; Origin/peer text preserved. DoD 5: fresh tsc + full npm test exits 0: 206 files, 5789 passed/16 skipped; all 22 new rows ran. New test also type-checks separately.\n13 scratch mutants killed by real failed Tests lines; restored/cmp-checked. Adversarial review fixed test portability and strengthened shutdown evidence. D subprocess rows explicitly skip Windows because SIGTERM kills rather than dispatches handlers there (confirmed with an owned native probe); portable R/L remain enabled. Live Windows/WSL integration stays with task-724e31fa. Task handoff and gotcha-daemon-subprocess-tests memory updated. No manual .moe edits or Git writes; wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "ec13091d307e0b658e713c37466d56d5a23348d4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T07:56:45Z",
+      "paths": [
+        ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
+        ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/server/bindHosts.test.ts",
+        "packages/moe-daemon/src/server/bindHosts.ts"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T08:18:24.382Z",
+      "treeId": "f8f512648911f624fc17c33f3f4878edc27c056b",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-01f37ac63316409ab581f5a189002cb8"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-01f37ac63316409ab581f5a189002cb8"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-55e6716a@2026-10-30T07:56:45Z",
+    "at": "2026-10-30T08:18:24.382Z"
+  },
+  "completedAt": "2026-10-30T08:26:27.311Z",
+  "reviewCompletedAt": "2026-10-30T08:26:27.311Z",
+  "reviewSummary": "Reviewed completion ec13091d: on moe/work-2026-10-24 and its origin, in task.commits, pushed. 373 net non-board LOC, under the 400 cap. The doc hunks are this task's own.\n\nGate: clean `git archive ec13091d`, fresh native npm ci, env -i, Node 24.21.0. `cd packages/moe-daemon && npx tsc --noEmit && npm test` EXIT 0: 206 files, 5789 passed / 16 skipped. Verbose bindHosts.test.ts: all 22 rows ran and passed. A scratch type-check of the test file exited 0.\n\nDoD1: R table with exact arrays. Loopback first, ordered and deduplicated; IPv6, internal and wildcard entries dropped; numeric family accepted. No adapter or an empty map gives loopback. Literal hosts and 'WSL' map to themselves.\nDoD2: L uses a real WSS on 127.0.0.1 and 127.0.0.2, one port, no wildcard. /health, /mcp 101 and Origin 403 work on both. L-fail and L-socket prove rollback; L-port proves the held-extra-port case.\nDoD3: D runs the real _run with the flag (beating env 0.0.0.0), with env wsl, and with an interfaces throw. bindHost is 'wsl', loopback probes pass, older bindHost values still probe, and SIGTERM cleans up. D-multi traces both closes; D-fail releases the lock. These rows are POSIX-only.\nDoD4: the CONFIGURATION and TROUBLESHOOTING entries are present.\nDoD5: as above.\n\nQA mutants (restored and cmp-checked), all killed with real failures:\n- no upgrade forward (2)\n- internal kept (1)\n- probeHostFor drops wsl (4)\n- first-address-only port check (1)\n- primary-only shutdown (1)\n- no rollback (2)\n- bindHost omitted (3)\n- case-insensitive token (1)\n\nAdversarial read: there is a single Origin-gated WSS. A listen failure now releases the lock. Shutdown closes are bounded. Non-wsl paths are unchanged, and local-runner is untouched.\n\nTaste-only notes: the hosts.length>0 guard and the sockets.clear() are defensive. Live Windows/WSL checking stays with task-724e31fa.",
+  "requiredCheckAtDone": null
 }
