@@ -1,0 +1,29 @@
+{
+  "id": "task-9775fb21ecc34025a045352d643b277f",
+  "epicId": "epic-be924fb8",
+  "title": "moe-proxy identity probe is skipped when MOE_DAEMON_HOST holds a CR/TAB/LF or percent-encoding",
+  "description": "Follow-up from QA of task-86093c3efd8645748f460db870073392 (approved; completion 6c55aefa on moe/work-2026-10-24). Non-blocking residual of the same probe-vs-WebSocket host divergence class as that task's bracketed-IPv6 fix.\n\nFound: packages/moe-proxy/src/daemonIdentity.ts:101-103 hands getDaemonHost() to http.request as `hostname` (brackets are stripped only for a valid IPv6 literal). Meanwhile index.ts openDaemonSocket opens `ws://${getDaemonHost()}:${port}/mcp`, which ws parses with WHATWG `new URL()`. WHATWG removes ASCII TAB/LF/CR anywhere in the input and percent-decodes the host; http.request does neither.\n- So for MOE_DAEMON_HOST '127.0.0.1\\r', '127.0.0.1\\t', '127.0.0.1\\n', '[::1]\\r' or '%31%32%37.0.0.1', http.request throws ERR_INVALID_CHAR on the Host header (or fails DNS with ENOTFOUND). The probe then resolves 'unknown', which fails open, and ws connects to the same daemon.\n- QA repro: the built proxy (snapshot of 6c55aefa) against a fake daemon whose /health names another project. Each of those 5 values gave health=0, upgrades=1, exit 0.\n- Correctly refused (health=1, upgrades=0, exit 1): 127.0.0.1, [::1], [0:0:0:0:0:0:0:1], [::ffff:127.0.0.1], localhost, LOCALHOST, 127.1, 0x7f000001, '127.0.0.1.'.\n- ' 127.0.0.1' and '[127.0.0.1]' open nothing, because ws throws Invalid URL on them.\n\nExposure is low. These are not valid hostnames.\n- moe-agent.sh's WSL discovery cannot export a CR value: its Python urllib probe raises InvalidURL (\"URL can't contain control characters\"), and IFS word-splitting splits on TAB and LF.\n- moe-agent.ps1 never assigns MOE_DAEMON_HOST.\n- Only a hand-set operator value reaches this, for example captured Windows-tool output in WSL, which keeps a trailing CR. For that seat the foreign-daemon check is then silently off.\n\nSuggested fix (daemonIdentity.ts only): build the probe target from the same parse ws uses, `http.request(new URL(`http://${host}:${port}/health`), { method: 'GET', timeout: timeoutMs }, cb)`.\n- Node's urlToHttpOptions strips IPv6 brackets, so this also replaces the hand-rolled isIPv6 check.\n- Verified on Node 24: all 5 values above normalize to the hostname ws connects to.\n- '[127.0.0.1]' and ' 127.0.0.1' still throw synchronously, which the probe turns into 'unknown'. ws throws on the same input, so no socket opens.\n- The deferred daemon-side project parameter on the /mcp upgrade would close this class and the /health->/mcp TOCTOU together.\n\nAlso consider: the ::1 test rows bind unconditionally. scripts/tests/local-runner-daemon-bind.test.mjs instead skips when ::1 cannot bind. A host with IPv6 disabled therefore fails npm test where it could skip.",
+  "definitionOfDone": [
+    "With a fake daemon whose /health names another project, MOE_DAEMON_HOST values '127.0.0.1\\r', '127.0.0.1\\t', '127.0.0.1\\n' and '%31%32%37.0.0.1' each make the built proxy exit 1 with the error naming both projects, after exactly one GET /health and with zero /mcp upgrades. Proven by daemonIdentity.test.ts e2e rows.",
+    "The existing daemonIdentity.test.ts rows all still pass unchanged: IPv4 and [::1] E1-E4, the path-spelling rows, the unknown rows, and invalid bracketed IPv4 staying 'unknown'.",
+    "packages/moe-proxy/src/utils.ts and packages/moe-proxy/src/index.ts are unchanged.",
+    "`cd packages/moe-proxy && npm test` exits 0 in a Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate), with its output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 295.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T09:48:28.018Z",
+  "updatedAt": "2026-10-30T09:48:28.018Z"
+}
