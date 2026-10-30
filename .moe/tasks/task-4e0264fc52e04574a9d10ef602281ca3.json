@@ -122,7 +122,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:51.453Z",
-  "updatedAt": "2026-10-30T06:21:53.657Z",
+  "updatedAt": "2026-10-30T06:22:25.425Z",
   "dependsOn": [
     "task-34632f08a9a549a28bcf2b9f6946244b",
     "task-fef5ca575850416ea1052ee1a7b8e22e",
@@ -203,7 +203,9 @@
     ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
     ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
     ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json",
-    ".moe/tasks/task-edda38a1b19d41fa8bc09d424edee81d.json"
+    ".moe/tasks/task-edda38a1b19d41fa8bc09d424edee81d.json",
+    ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
+    ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json"
   ],
   "completionSummary": "CQ-C11 (epic-final). Two new e2e files, no production change.\n\ncontextInvalidation.e2e.test.ts (8 tests, DoD1):\n- r09b dirty-snapshot positives.\n- Snapshot/repository negatives: absent/stale/unknown; an undecodable hit is refused.\n- Semantic analyzer-absent refused as a negative.\n- D1-D7: real claims through every C06 delta/full reason, incl. a legacy read having no contextDelta.\n- Recipes: hash fallback; assessPostpatch mismatch/inputs/extra-edits; recipes.json as protected-check-changed.\n\nplannerBoundaries.e2e.test.ts (16 tests, DoD2/3):\n- 0 planner calls only for C07 reuse/refresh and an eligible TURBO recipe.\n- 1 call each for reassess, replan WORKING/REVIEW, DoD change, contract change and 5 recipe fallbacks.\n- CONTROL/SPEED gates hold.\n- RECIPE_ACTOR refused; forged recipeInstance stripped.\n- An explicit planner claim during an assessment keeps the row.\n\nGate (Linux snapshot, HEAD eb0ebaa + files):\n- daemon npm test: 196 files, 5480 pass, 16 skip.\n- tsc 0.\n- root lint 0.\n- prompt-cache-launcher: 29 pass, 0 fail, 2 skip.\n- Proxy untouched.\n\nMutants killed: SPEED delay→0; the C07 assignedWorkerId guard; always-emit contextDelta.\n\nDeviation: the plan said refresh needs a planner, but the landed C07 resumes reuse and refresh to WORKING; tests assert that.\n\nSweep of 63 epic commits: no .moe hand edits, no forbidden tokens, all runtime git reads only.\n\nFindings (M05/M06):\n1. C07 reuse does not anchor .moe/recipes.json. A changed definition can resume WORKING, then fails closed downstream.\n2. C08 QA notes still open.\n3. C05 stale negatives are evicted only by LRU.\n\nOpen on purpose:\n- the assessPostpatch call site;\n- seat-side contextEpoch stamping;\n- C02/C03 providers in served packets.\nVerified-local and claim isolation stay off.",
   "commits": [
@@ -227,6 +229,24 @@
       "treeId": "41d062aaf260c68a12024dae6a7b7de74d25cd51",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "2b1b487160a9a3d1ccb962c0db0c3ee38cdf0f62",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T06:15:53Z",
+      "paths": [
+        ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+        ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
+        ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json",
+        ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T06:22:25.425Z",
+      "treeId": "9bc071e0d0c2ede909fb326f1d43188ea8452f6e",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -236,9 +256,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-0062feec@2026-10-30T05:40:35Z",
-    "at": "2026-10-30T06:02:11.949Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T06:15:53Z",
+    "at": "2026-10-30T06:22:25.425Z"
   },
   "completedAt": "2026-10-30T06:21:53.657Z",
   "reviewCompletedAt": "2026-10-30T06:21:53.657Z",

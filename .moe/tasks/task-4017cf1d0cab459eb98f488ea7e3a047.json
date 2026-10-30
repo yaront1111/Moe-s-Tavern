@@ -95,7 +95,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:04.014Z",
-  "updatedAt": "2026-10-30T06:04:31.623Z",
+  "updatedAt": "2026-10-30T06:05:14.895Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:26:25.711Z",
     "plannedStepCount": 5,
@@ -195,7 +195,17 @@
   "filesModified": [
     "scripts/tests/local-runner-bundle.test.mjs",
     ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json",
-    ".moe/tasks/task-5b0a2bcf70f34c62ba29df0f7ff99988.json"
+    ".moe/tasks/task-5b0a2bcf70f34c62ba29df0f7ff99988.json",
+    ".moe/tasks/task-10af73355e1b4748b1e07491a7a891cb.json",
+    ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+    ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+    ".moe/tasks/task-6f5cf10f78184c38a46e6973cadda817.json",
+    ".moe/tasks/task-7fffec67fbb44d1e9a509f214105e2bb.json",
+    ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json",
+    ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
+    ".moe/tasks/task-d00dafdf2dde4a41bf5983b1f7d495de.json",
+    ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
+    ".moe/tasks/task-ea8b44c9964442e3a5ca80b2a1cc2ad7.json"
   ],
   "completionSummary": "CQ-R10d2 reopen 1, size-only QA reject. No code change, as QA asked (no re-slice): the 4 source files are byte-equal to completion baa52df at HEAD b9ea011 and in the shared tree.\n\nQA fix items:\n1. Filed prop-1d021909fe024d5ba7586cab816d91c9, an EPIC ADD_RAIL of 845 chars on one line. It is a CQ-R10d2 size exception for baa52df: at most 576 changed lines (+575/-1 numstat) across exactly agent-cache.mjs +275, agent-binaries.json +21, local-runner-agents.test.mjs +273 and local-runner-bundle.test.mjs +6/-1.\n   - It grows only by QA-required defect fixes and waives size only: every DoD item, AB1-AB11, fresh verification and fail-closed behavior still apply, and verified-local stays unavailable.\n   - Status: PENDING.\n2. Posted the id in #governors (msg-f602fd88).\n3. Fresh verification, below.\n\nEvidence (env -i, Node 24.21.0):\n- DoD command: exit 0, 32/32 in the shared tree; 32/32 again on a pure git archive of HEAD.\n- local-runner.test.mjs (archive): exit 0, 241 pass, 1 skipped (pre-existing macOS smoke).\n- Red check: with agent-cache.mjs and the manifest removed, the agents file fails with ERR_MODULE_NOT_FOUND and the bundle row fails.\n- Pins against vendor metadata: claude 2.1.308 manifest.json (linux-x64/arm64) and the codex rust-v0.166.0 GitHub asset digests (x86_64/aarch64). All 4 MATCH.\n- Real network, shipped manifest:\n  - claude x64: 1 fetch;\n  - codex x64 and arm64: 2 fetches each (302);\n  - member sha and size equal the pins, files are 0600 in a 0700 dir, and repeat calls made 0 fetches.\n- Plan mutants on archive copies, 5/5 killed:\n  - (i) redirect follow, by AB4;\n  - (ii) verify after rename, by AB5;\n  - (iii) symlink member, by AB7;\n  - (iv) no re-verify on a hit, by AB8;\n  - (v) unvalidated seam, by AB2.\n- Self-review: no real risk. 6 theoretical notes are in the step-5 note (path reopen inside the private cacheDir, mkdir not tightening an existing dir, a SIGKILL .part, a benign concurrent-repair race, null options, Windows O_NOFOLLOW).\n\nApprove once the ra",
   "commits": [
@@ -249,6 +259,31 @@
       "treeId": "bd3fb9c85309b7e3af1240394aec0b48a50cc582",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "3254c2d86955700266c1e98d087a0e047de75e55",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T05:58:31Z",
+      "paths": [
+        ".moe/tasks/task-10af73355e1b4748b1e07491a7a891cb.json",
+        ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json",
+        ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+        ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+        ".moe/tasks/task-6f5cf10f78184c38a46e6973cadda817.json",
+        ".moe/tasks/task-7fffec67fbb44d1e9a509f214105e2bb.json",
+        ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json",
+        ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
+        ".moe/tasks/task-d00dafdf2dde4a41bf5983b1f7d495de.json",
+        ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
+        ".moe/tasks/task-ea8b44c9964442e3a5ca80b2a1cc2ad7.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T06:05:14.895Z",
+      "treeId": "19310118db10e75cccc3a6e9140fa588ee8795ca",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -261,8 +296,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-952969be@2026-10-30T01:16:51Z",
-    "at": "2026-10-30T01:28:02.941Z"
+    "sessionId": "qa-952969be@2026-10-30T05:58:31Z",
+    "at": "2026-10-30T06:05:14.895Z"
   },
   "reviewCompletedAt": "2026-10-30T06:04:31.622Z",
   "rejectionDetails": {

@@ -3,6 +3,8 @@
 // environment cannot choose a manifest or a URL. Integrity comes from those pins: a download is verified before any
 // byte is parsed, a member before its rename, and a cached file on every hit. https is defense in depth. cacheDir must
 // be controller-private and is chosen by the caller. Copying into a guest is CQ-R10d3; nothing here is an isolation claim.
+// The download-and-verify core is exported as fetchPinnedFile, with neutral PINNED_ codes, for the toolchain (CQ-R11e1)
+// and dependency (CQ-R11e3) caches; fetchAgentBinary maps those codes to its own.
 import { createHash, randomBytes } from 'node:crypto';
 import { constants, createReadStream } from 'node:fs';
 import { lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
@@ -22,6 +24,7 @@ const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const TAR_SLACK_BYTES = 2 ** 20;
 const CONTROL = /[\x00-\x1f\x7f]/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const DIGESTS = new Map([['sha256', SHA256], ['sha512', /^[a-f0-9]{128}$/]]);
 const VERSION = /^(?:0|[1-9]\d{0,5})(?:\.(?:0|[1-9]\d{0,5})){2}$/;
 const TRIPLES = { x64: 'x86_64', arm64: 'aarch64' };
 // The vendors' own release URLs: Anthropic's install.sh and the openai/codex GitHub releases.
@@ -39,12 +42,22 @@ const MESSAGES = {
   AGENT_BINARY_ARCHIVE_INVALID: 'The agent binary archive was malformed.',
   AGENT_BINARY_UNREADABLE: 'The cached agent binary could not be read.',
 };
+const PINNED_MESSAGES = {
+  PINNED_INPUT_INVALID: 'The pinned download request was invalid.',
+  PINNED_DOWNLOAD_FAILED: 'The pinned file could not be downloaded.',
+  PINNED_CHECKSUM_MISMATCH: 'The pinned file did not match its checksum.',
+  PINNED_TOO_LARGE: 'The pinned file exceeded its size bound.',
+  PINNED_UNREADABLE: 'The cached pinned file could not be read.',
+};
 
 /** One of the fixed codes with its fixed text; anything else (fs, zlib, fetch errors) becomes fallback. */
-function refuse(code, fallback = 'AGENT_BINARY_DOWNLOAD_FAILED') {
-  const known = typeof code === 'string' && Object.hasOwn(MESSAGES, code) ? code : fallback;
-  return Object.assign(new Error(MESSAGES[known]), { code: known });
+function fixed(messages, code, fallback) {
+  const known = typeof code === 'string' && Object.hasOwn(messages, code) ? code : fallback;
+  return Object.assign(new Error(messages[known]), { code: known });
 }
+const pinned = (code, fallback = 'PINNED_DOWNLOAD_FAILED') => fixed(PINNED_MESSAGES, code, fallback);
+/** fetchAgentBinary's refusals: a core PINNED_<kind> becomes AGENT_BINARY_<kind>. */
+const refuse = (code, fallback = 'AGENT_BINARY_DOWNLOAD_FAILED') => fixed(MESSAGES, typeof code === 'string' ? code.replace(/^PINNED_/, 'AGENT_BINARY_') : code, fallback);
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, keys) => record(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const matches = (value, pattern) => typeof value === 'string' && pattern.test(value);
@@ -81,40 +94,45 @@ export async function loadAgentManifest() {
   } catch { throw refuse('AGENT_BINARY_MANIFEST_INVALID'); }
 }
 
-/** Whether file holds exactly the pinned bytes, read through one no-follow descriptor; a non-regular file is refused. */
-async function holdsPin(file, { sha256, size }) {
+// A pin is { url, size, maxBytes, algorithm, digest }; size null means only maxBytes bounds the bytes.
+const sha256Pin = ({ url, sha256, size }) => ({ url, size, maxBytes: size, algorithm: 'sha256', digest: sha256 });
+
+/** The verified length when file holds exactly the pinned bytes, read through one no-follow descriptor, else false; a non-regular file is refused. */
+async function holdsPin(file, { size, maxBytes, algorithm, digest }) {
   let handle;
   try { handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)); } catch (error) {
-    throw refuse(error?.code === 'ELOOP' ? 'AGENT_BINARY_INPUT_INVALID' : 'AGENT_BINARY_UNREADABLE');
+    throw pinned(error?.code === 'ELOOP' ? 'PINNED_INPUT_INVALID' : 'PINNED_UNREADABLE');
   }
   try {
     const stats = await handle.stat();
-    if (!stats.isFile()) throw refuse('AGENT_BINARY_INPUT_INVALID');
-    if (stats.size !== size) return false;
-    const hash = createHash('sha256');
+    if (!stats.isFile()) throw pinned('PINNED_INPUT_INVALID');
+    const bound = size ?? maxBytes;
+    if (size === null ? stats.size > bound : stats.size !== size) return false;
+    const hash = createHash(algorithm);
     let total = 0;
     for await (const chunk of handle.createReadStream({ autoClose: false })) {
       total += chunk.length;
-      if (total > size) return false;
+      if (total > bound) return false;
       hash.update(chunk);
     }
-    return total === size && hash.digest('hex') === sha256;
+    return (size === null || total === size) && hash.digest('hex') === digest ? total : false;
   } catch (error) {
-    throw refuse(error?.code, 'AGENT_BINARY_UNREADABLE');
+    throw pinned(error?.code, 'PINNED_UNREADABLE');
   } finally { await handle.close().catch(() => {}); }
 }
 
-/** True for a verified cached entry; false when absent, or corrupt and removed (the caller then downloads once). */
-async function cached(target, binary) {
+/** The verified length of a cached entry; false when absent, or corrupt and removed (the caller then downloads once). */
+async function cached(target, pin) {
   let stats;
   try { stats = await lstat(target); } catch (error) {
     if (error?.code === 'ENOENT') return false;
-    throw refuse('AGENT_BINARY_UNREADABLE');
+    throw pinned('PINNED_UNREADABLE');
   }
-  if (!stats.isFile()) throw refuse('AGENT_BINARY_INPUT_INVALID');
-  if (await holdsPin(target, binary)) return true;
+  if (!stats.isFile()) throw pinned('PINNED_INPUT_INVALID');
+  const length = await holdsPin(target, pin);
+  if (length !== false) return length;
   await unlink(target).catch(error => {
-    if (error?.code !== 'ENOENT') throw refuse('AGENT_BINARY_UNREADABLE');
+    if (error?.code !== 'ENOENT') throw pinned('PINNED_UNREADABLE');
   });
   return false;
 }
@@ -133,7 +151,7 @@ async function respond(url, fetch) {
     if (!REDIRECTS.has(response?.status)) return response;
     await drop(response);
     url = hop < MAX_REDIRECTS ? httpsUrl(response.headers?.get?.('location'), url) : null;
-    if (url === null) throw refuse('AGENT_BINARY_DOWNLOAD_FAILED');
+    if (url === null) throw pinned('PINNED_DOWNLOAD_FAILED');
   }
 }
 
@@ -144,9 +162,9 @@ async function writeAll(handle, chunk) {
 async function writeBody(handle, body, maxBytes) {
   let total = 0;
   for await (const chunk of body) {
-    if (!(chunk instanceof Uint8Array)) throw refuse('AGENT_BINARY_DOWNLOAD_FAILED');
+    if (!(chunk instanceof Uint8Array)) throw pinned('PINNED_DOWNLOAD_FAILED');
     total += chunk.byteLength;
-    if (total > maxBytes) throw refuse('AGENT_BINARY_TOO_LARGE');
+    if (total > maxBytes) throw pinned('PINNED_TOO_LARGE');
     await writeAll(handle, chunk);
   }
 }
@@ -226,35 +244,60 @@ async function writePart(file, parts, fill) {
   return file;
 }
 
-/** Downloads into private .part files: the download is verified before parsing, the binary before the atomic rename. */
-async function download(pin, binary, cacheDir, target, fetch) {
+/** Downloads into private .part files: the download is verified before parsing, a member before the atomic rename. */
+async function download(pin, target, fetch, archive, member) {
   const nonce = `${process.pid}.${randomBytes(4).toString('hex')}`;
   const parts = [];
   let response;
   try {
     response = await respond(pin.url, fetch);
-    if (response?.ok !== true || !response.body || !String(response.url).startsWith('https://')) throw refuse('AGENT_BINARY_DOWNLOAD_FAILED');
+    if (response?.ok !== true || !response.body || !String(response.url).startsWith('https://')) throw pinned('PINNED_DOWNLOAD_FAILED');
     const declared = response.headers?.get?.('content-length') ?? null;
-    if (declared !== null && !(Number(declared) <= pin.size)) throw refuse('AGENT_BINARY_TOO_LARGE');
-    const file = await writePart(path.join(cacheDir, `.${pin.sha256}.${nonce}.part`), parts, handle => writeBody(handle, response.body, pin.size));
-    if (!(await holdsPin(file, pin))) throw refuse('AGENT_BINARY_CHECKSUM_MISMATCH');
+    if (declared !== null && !(Number(declared) <= pin.maxBytes)) throw pinned('PINNED_TOO_LARGE');
+    const file = await writePart(path.join(path.dirname(target), `.${pin.digest}.${nonce}.part`), parts, handle => writeBody(handle, response.body, pin.maxBytes));
+    let length = await holdsPin(file, pin);
+    if (length === false) throw pinned('PINNED_CHECKSUM_MISMATCH');
     let verified = file;
-    if (pin.archive) {
-      verified = await writePart(path.join(cacheDir, `.${binary.sha256}.${nonce}.part`), parts, async handle => {
-        try { await pipeline(createReadStream(file), createGunzip(), source => untar(source, handle, pin)); } catch (error) {
+    if (archive) {
+      verified = await writePart(path.join(path.dirname(target), `.${member.digest}.${nonce}.part`), parts, async handle => {
+        try { await pipeline(createReadStream(file), createGunzip(), source => untar(source, handle, archive)); } catch (error) {
           throw refuse(error?.code, 'AGENT_BINARY_ARCHIVE_INVALID');
         }
       });
-      if (!(await holdsPin(verified, binary))) throw refuse('AGENT_BINARY_CHECKSUM_MISMATCH');
+      length = await holdsPin(verified, member);
+      if (length === false) throw pinned('PINNED_CHECKSUM_MISMATCH');
     }
     await rename(verified, target);
+    return length;
   } catch (error) {
     await drop(response); // a body already read is released, and cancelling it again is a no-op
-    throw refuse(error?.code);
+    throw Object.hasOwn(MESSAGES, error?.code) ? error : pinned(error?.code); // the archive path's own codes pass through
   } finally {
     // An EEXIST collision is never recorded: that .part belongs to another call. A renamed one is already gone.
     for (const part of parts) await unlink(part).catch(() => {});
   }
+}
+
+/**
+ * The shared download-and-verify core, every option validated before any I/O. url is https (each of at most 5 redirects
+ * too); file is the absolute path the verified bytes are kept at, in a directory the caller created 0700, beside which
+ * this call's .part files sit; size is the exact byte count, or null when only maxBytes (a positive integer of at most
+ * MAX_AGENT_BINARY_BYTES) bounds the body; algorithm is 'sha256' or 'sha512' and digest its lowercase hex. A cached file
+ * is re-verified every call, and a corrupt one removed and fetched once. Resolves the frozen { file, size } with the
+ * verified length; rejects only with a fixed PINNED_ code, leaving no .part. It never creates directories, extracts or logs.
+ */
+export async function fetchPinnedFile(options, { fetch = globalThis.fetch } = {}) {
+  const { url, file, size, maxBytes, algorithm, digest } = record(options) ? options : {};
+  const pattern = DIGESTS.get(algorithm);
+  if (typeof url !== 'string' || httpsUrl(url) === null || typeof file !== 'string' || !path.isAbsolute(file) || CONTROL.test(file)
+      || !validSize(maxBytes) || !(size === null || (validSize(size) && size <= maxBytes)) || !pattern || !matches(digest, pattern)
+      || typeof fetch !== 'function') throw pinned('PINNED_INPUT_INVALID');
+  const pin = { url, size, maxBytes, algorithm, digest };
+  try {
+    let length = await cached(file, pin);
+    if (length === false) length = await download(pin, file, fetch);
+    return Object.freeze({ file, size: length });
+  } catch (error) { throw pinned(error?.code); }
 }
 
 /**
@@ -269,7 +312,10 @@ export async function fetchAgentBinary(input, { fetch = globalThis.fetch, manife
   const pin = (manifest === undefined ? await loadAgentManifest() : validateAgentManifest(manifest)).binaries[cli][arch];
   const binary = pin.archive ? { sha256: pin.memberSha256, size: pin.memberSize } : pin;
   try { await mkdir(cacheDir, { recursive: true, mode: 0o700 }); } catch { throw refuse('AGENT_BINARY_INPUT_INVALID'); }
-  const target = path.join(cacheDir, `${binary.sha256}.bin`);
-  if (!(await cached(target, binary))) await download(pin, binary, cacheDir, target, fetch);
+  const [target, member] = [path.join(cacheDir, `${binary.sha256}.bin`), sha256Pin(binary)];
+  try {
+    if (!pin.archive) await fetchPinnedFile({ ...member, file: target }, { fetch });
+    else if ((await cached(target, member)) === false) await download(sha256Pin(pin), target, fetch, pin, member);
+  } catch (error) { throw refuse(error?.code); }
   return Object.freeze({ file: target, sha256: binary.sha256, size: binary.size });
 }

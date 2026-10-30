@@ -13,9 +13,102 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development. Plan against LANDED bytes, so re-read them first:\n- R10d2's scripts/local-runner/agent-cache.mjs: fetchAgentBinary, holdsPin, cached, respond, writeBody, writePart and download;\n- R10d2's AB-row harness in scripts/tests/local-runner-agents.test.mjs: routes, redirected, refused and the AB3 cpSync module copy;\n- R11e3a's DA section at the end of scripts/tests/local-runner-check.test.mjs.\n\nscripts/tests/local-runner-check.test.mjs: add a section '// CQ-R11e1: the host's pinned Node toolchain cache (rows TC1-TC7)' at the end. Keep the helper names and shapes stable; CQ-R11e3's approved plan reuses them, along with sha() and caught().\n\nHelpers:\n- fixtureFetch(table): an injected fetch over fixture routes, shaped like R10d2's routes(). Each url maps to [status, body chunks (an Error chunk fails the stream) or a thrown Error, headers, final url]. Each call records [url, init.redirect, init.signal instanceof AbortSignal]. It returns {fetch, calls}.\n- redirected(url, count, chunks): as R10d2's.\n- toolchainAt(arch, bytes): the SHIPPED toolchain.json with that arch's sha256 and size swapped for the fixture's; its url stays the real template.\n- refusedAs(code, messages): asserts that [error.code, error.message, Object.keys(error)] deep-equals [code, messages[code], ['code']].\n- TOOLCHAIN_MESSAGES and PINNED_MESSAGES: the fixed texts from steps 3 and 4.\n- A scratch-dir helper with after() cleanup.\n\nRows, table-driven:\n- TC1 (DoD 1). loadToolchainManifest() deep-equals the shipped JSON and is deep-frozen. For x64 and arm64, url === `https://nodejs.org/dist/v${version}/node-v${version}-linux-${arch}.tar.xz`, and both arches share one version. That version's major equals every `node-version: '<n>'` in .github/workflows/ci.yml. This is the human's 2026-10-30 decision: the check VM runs CI's Node line.\n- TC2 (DoD 1). validateToolchainManifest refuses each of these with TOOLCHAIN_MANIFEST_INVALID:\n  - not an object; schemaVersion 2; an extra top-level key; no node; an extra tool beside node; a missing or extra arch; a missing or extra entry key;\n  - an http url; a url with another host, another version, .tar.gz, a query string or a trailing slash;\n  - version 'v24.22.2', '24.22', '24.22.2-rc.1' or '024.1.0';\n  - x64 and arm64 on different versions;\n  - an uppercase or 63-char sha256;\n  - size 0, -1, 1.5, '1' or 134217729.\n  fetchNodeToolchain with each of them as its manifest seam refuses the same way, before any fetch call.\n  The 64 KiB bound: cpSync the local-runner dir into scratch and import the copy's toolchain-cache.mjs by file URL, as AB3 does. A toolchain.json of exactly 65_536 bytes loads. 65_537 bytes, not-JSON and a missing file are each TOOLCHAIN_MANIFEST_INVALID.\n- TC3 (DoD 2). A body matching its pins, after 0 and after 5 https redirects (the later Locations relative), is kept at <cacheDir>/<sha256>.tar.xz.\n  - The result deep-equals the frozen {file, sha256, size, version}, with keys in that order.\n  - cacheDir holds only that file, with the body's bytes. On POSIX, cacheDir is 0700 and the file 0600.\n  - Every call was [url, 'manual', true].\n- TC4 (DoD 2). Each case fails closed and leaves readdirSync(cacheDir) === []:\n  - another sha256, or a short body: TOOLCHAIN_CHECKSUM_MISMATCH;\n  - a declared content-length over the pin, or a streamed body over it: TOOLCHAIN_TOO_LARGE;\n  - a redirect to http, a chain of 6, a redirect without Location, a 404, a thrown fetch, a body that errors midway, or a response whose url is http: TOOLCHAIN_DOWNLOAD_FAILED.\n  Every refusal passes refusedAs(code, TOOLCHAIN_MESSAGES): no URL, path or body.\n- TC5 (DoD 2). A valid cached file resolves with zero fetch calls. One flipped byte: the file is removed, fetched exactly once more, and verified. A directory at the target, or (POSIX only) a symlink to a valid file, is TOOLCHAIN_INPUT_INVALID with zero fetches, and is never followed or deleted. Two concurrent calls both resolve the same result and leave no .part.\n- TC6 (the export, for CQ-R11e3). fetchPinnedFile with algorithm 'sha512', size null and maxBytes:\n  - a matching body is kept at file and resolves the frozen {file, size};\n  - a body over maxBytes is PINNED_TOO_LARGE, and another digest is PINNED_CHECKSUM_MISMATCH. Neither leaves a file;\n  - each of these is PINNED_INPUT_INVALID before any fetch: an http url; a relative file; a file with a control character; algorithm 'md5'; a digest of the wrong length, or uppercase; size over maxBytes; maxBytes 0 or over MAX_AGENT_BINARY_BYTES; a fetch that is not a function.\n  Refusals pass refusedAs(code, PINNED_MESSAGES).\n- TC7. fetchNodeToolchain refuses with TOOLCHAIN_INPUT_INVALID, before any fetch or mkdir: a missing or non-record input; arch 'ia32'; a relative cacheDir; a cacheDir with a control character; a fetch that is not a function.\n\nscripts/tests/local-runner-bundle.test.mjs:\n- Add 'toolchain.json' and 'toolchain-cache.mjs' to `shipped`, NOT to `required`. R10d2 split the lists: the onboarding refusal row walks `required`, and onboarding.mjs does not check these files. The task description says `required`, but `shipped` is the list that proves the bundle carries them.\n- In the VS Code bundler row, beside the agent-cache import, import the bundled toolchain-cache.mjs by file URL. Assert that loadToolchainManifest() deep-equals the repo toolchain.json.\n\nRun `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-bundle.test.mjs`. The new rows must fail for the missing module, export or manifest, and every E, K, C and DA row must stay green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "RED. Appended the CQ-R11e1 section (TC1-TC7) to local-runner-check.test.mjs, additions only (E/K/C/DA rows untouched). Helpers for R11e3 reuse: fixtureFetch(table) -> {fetch, calls} (R10d2 routes() shape), redirected(url, count, chunks), toolchainAt(arch, bytes), refusedAs(code, messages), TOOLCHAIN_MESSAGES, PINNED_MESSAGES, scratchDir(t) (t.after cleanup; the file already uses t.after, and `refused`/`ok` are taken by the DA section). TC6 also covers a cache hit and an exact-size short body through fetchPinnedFile. Bundle test: toolchain.json + toolchain-cache.mjs added to `shipped` (not `required`, per plan) and the bundled toolchain-cache.mjs import loads its manifest; header comment updated. Red run (env -i, Node 24.21.0): check file fails to load with ERR_MODULE_NOT_FOUND for toolchain-cache.mjs; bundle row fails 'Missing copied provider asset toolchain.json'; the other 11 bundle rows pass. Static imports (the file's convention) mean the whole check file is red until step 4, so per-row staging of TC6 at step 3 is verified by AB1-AB11 + a direct fetchPinnedFile check instead. Shared-tree dirty paths from other sessions untouched.",
+      "startedAt": "2026-10-30T06:05:22.129Z",
+      "completedAt": "2026-10-30T06:10:35.554Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Pin the Node.js toolchain in the new scripts/local-runner/toolchain.json.\n\nHuman decision, architect REPL, 2026-10-30: pin CI's Node line, NOT the newest Active LTS.\n- Every node-version in ci.yml and release.yml is '24'. Node 26 became Active LTS on 2026-10-28, but the check VM must run the same major as CI.\n- The version is the newest 24.x in https://nodejs.org/dist/index.json at the time you pin; on 2026-10-30 that was v24.22.2.\n- Use .tar.xz for both arches, the smaller file. CQ-R11e2's guest extracts it with tarfile 'r:*' and lzma, which Ubuntu 24.04's python3 ships.\n\nShape, compact and hand-reviewable like agent-binaries.json:\n{\"schemaVersion\": 1, \"node\": {\"x64\": {\"version\", \"url\", \"sha256\", \"size\"}, \"arm64\": {...}}}\nurl is exactly https://nodejs.org/dist/v<version>/node-v<version>-linux-<arch>.tar.xz.\n\nDownload each file ONCE over https, into a scratch dir outside the repo.\n- Compute the sha256 and the byte size from the downloaded bytes.\n- Cross-check both against https://nodejs.org/dist/v<version>/SHASUMS256.txt.\n- For reference, the architect's HEAD requests on 2026-10-30 saw 32039312 bytes for x64 and 30968168 for arm64, with no redirect.\n- Record the version, both hashes and sizes, and the cross-check in this step's note.\n- Delete the scratch downloads afterwards. The repo carries only the manifest.\n\nThis step's error handling: if nodejs.org cannot be reached, or a hash disagrees with SHASUMS256.txt, stop and call moe.report_blocked. Never invent or guess a hash, and never copy one from anywhere but the downloaded bytes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/toolchain.json"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/toolchain.json"
+      ],
+      "note": "Pinned Node v24.22.2 (newest 24.x in nodejs.org/dist/index.json on 2026-10-30, released 2026-10-27, LTS 'Krypton'; CI's node-version '24' per the human decision), .tar.xz for both arches.\nDownloaded once each over https (curl --proto =https) into a scratch dir outside the repo: both HTTP 200, 0 redirects.\n- x64: node-v24.22.2-linux-x64.tar.xz, 32039312 bytes, sha256 48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75\n- arm64: node-v24.22.2-linux-arm64.tar.xz, 30968168 bytes, sha256 eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8\nCross-check: both hashes computed from the downloaded bytes equal the lines in https://nodejs.org/dist/v24.22.2/SHASUMS256.txt, and both sizes equal the architect's HEAD values. Scratch downloads deleted; the repo carries only scripts/local-runner/toolchain.json (9 lines, agent-binaries.json style).",
+      "startedAt": "2026-10-30T06:10:37.568Z",
+      "completedAt": "2026-10-30T06:10:56.654Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Refactor scripts/local-runner/agent-cache.mjs, starting from R10d2's LANDED bytes, so that its download-and-verify core is ONE exported function. DoD 3: fetchAgentBinary's behavior, codes, messages and on-disk results stay unchanged, and so does every AB1-AB11 row.\n\n1. Neutral codes for the core. PINNED_MESSAGES:\n   - PINNED_INPUT_INVALID 'The pinned download request was invalid.'\n   - PINNED_DOWNLOAD_FAILED 'The pinned file could not be downloaded.'\n   - PINNED_CHECKSUM_MISMATCH 'The pinned file did not match its checksum.'\n   - PINNED_TOO_LARGE 'The pinned file exceeded its size bound.'\n   - PINNED_UNREADABLE 'The cached pinned file could not be read.'\n   The shared internals (holdsPin, cached, respond, writeBody, writePart and the download stage) throw these instead of AGENT_BINARY_ codes. parseHeader and untar keep AGENT_BINARY_ARCHIVE_INVALID and AGENT_BINARY_TOO_LARGE, because the archive path belongs to the agent alone.\n2. fetchAgentBinary's refuse() maps PINNED_<kind> to AGENT_BINARY_<kind> one to one, before its MESSAGES lookup and its DOWNLOAD_FAILED fallback. Every error that leaves fetchAgentBinary goes through it, cached() included, so callers see exactly the codes and texts that AB1-AB11 pin.\n3. Generalize the pin the internals take to {url, size, maxBytes, algorithm, digest}:\n   - algorithm is 'sha256' or 'sha512', and digest is lowercase hex of that algorithm's length;\n   - size is the exact byte count, or null when only maxBytes bounds the body;\n   - holdsPin hashes with createHash(algorithm), bounded by size ?? maxBytes, and returns the verified length or false;\n   - the content-length check and writeBody use maxBytes.\n4. Export one function, with a JSDoc documenting its options record (CQ-R11e3's plan reads it):\n   `fetchPinnedFile({ url, file, size, maxBytes, algorithm, digest }, { fetch = globalThis.fetch } = {})`\n   It resolves Object.freeze({ file, size }) once file holds verified bytes.\n   - Validate first, before any fs or fetch call; anything invalid is PINNED_INPUT_INVALID:\n     - url is a string whose URL protocol is https:;\n     - file is an absolute path with no control character. Its directory already exists, because callers create it 0700;\n     - size is null, or a positive safe integer of at most maxBytes;\n     - maxBytes is a positive safe integer of at most MAX_AGENT_BINARY_BYTES;\n     - algorithm and digest are as in item 3;\n     - fetch is a function.\n   - Then cached(file, pin), or else the download stage:\n     - respond, with manual https-only redirects (at most 5) and the timeout;\n     - an exclusive 0600 `.${digest}.${pid}.${random}.part` beside file, synced;\n     - content-length and stream bounded by maxBytes;\n     - holdsPin, then an atomic rename.\n   - Every failure removes this call's .part and is a PINNED_ code with its fixed text. Anything unknown is PINNED_DOWNLOAD_FAILED.\n   - It never creates directories, never extracts and never logs.\n5. fetchAgentBinary:\n   - A raw binary (claude) goes through fetchPinnedFile with {url: pin.url, file: target, size: pin.size, maxBytes: pin.size, algorithm: 'sha256', digest: pin.sha256}.\n   - The archive path (codex) is exactly as landed: cached(target, member), then the same download stage for the archive .part, then untar, the member check and the rename.\n   - The .part names stay `.${sha256}.${nonce}.part`.\n6. Every existing export keeps its signature: AGENT_CLIS, MAX_AGENT_BINARY_BYTES, validateAgentManifest, loadAgentManifest and fetchAgentBinary. Add only fetchPinnedFile, and update the header comment.\n\nError handling: no PINNED_ code ever escapes fetchAgentBinary. No message carries a URL, a path or body bytes. The archive is still verified before untar, and the member before its rename.\n\nThen `node --test scripts/tests/local-runner-agents.test.mjs` must stay all green, with NO edit to that file, and TC6 turns green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/agent-cache.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-cache.mjs"
+      ],
+      "note": "agent-cache.mjs refactored from R10d2's landed bytes (+80/-34). \n- PINNED_MESSAGES (5 fixed texts per plan); a shared fixed(messages, code, fallback); pinned() for the core; refuse() now maps PINNED_<kind> -> AGENT_BINARY_<kind> before its MESSAGES lookup/DOWNLOAD_FAILED fallback.\n- holdsPin/cached/respond/writeBody/writePart/download throw PINNED_ codes. Pins are {url, size, maxBytes, algorithm, digest} (sha256Pin() adapts manifest entries); holdsPin hashes with createHash(algorithm), bounded by size ?? maxBytes, and returns the verified length or false; content-length and writeBody use maxBytes.\n- download(pin, target, fetch, archive, member) keeps the landed shape: archive verified before untar, member verified before the atomic rename; .part names `.${digest}.${pid}.${rand}.part` beside target; its catch passes the archive path's own AGENT_BINARY_ codes through and turns anything else into a PINNED_ code.\n- New export fetchPinnedFile({url, file, size, maxBytes, algorithm, digest}, {fetch}) with JSDoc of the options record: validates everything before any I/O (https string url, absolute control-free file, size null or 1..maxBytes, maxBytes 1..MAX_AGENT_BINARY_BYTES, algorithm sha256|sha512 via a Map (no key coercion), lowercase hex digest of that length, fetch a function), then cached() or download(), resolving Object.freeze({file, size}); its catch re-maps to fixed PINNED_ codes. Never mkdirs/extracts/logs.\n- fetchAgentBinary: claude goes through fetchPinnedFile; codex is cached(target, member) then download with the archive; every error leaves through refuse(), so no PINNED_ code escapes. Existing exports and signatures unchanged.\nEvidence: local-runner-agents.test.mjs NOT edited (git diff --quiet), env -i Node 24.21.0: 20/20 pass, AB1-AB11 green. TC6 runs once toolchain-cache.mjs exists (static imports), at step 4.",
+      "startedAt": "2026-10-30T06:12:26.751Z",
+      "completedAt": "2026-10-30T06:15:08.842Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Create scripts/local-runner/toolchain-cache.mjs, the host cache of the pinned Node.js toolchain for the check VM.\n\nHeader comment, a few lines:\n- the module-relative toolchain.json pins each arch's fixed nodejs.org https URL, sha256 and size;\n- callers, the CLI and the environment cannot choose a manifest or a URL;\n- integrity comes from the pins, through agent-cache.mjs fetchPinnedFile;\n- the tarball stays whole, because CQ-R11e2 extracts it in the guest;\n- cacheDir is controller-private and chosen by the caller;\n- nothing here is an isolation claim.\n\nExports:\n- MAX_TOOLCHAIN_BYTES = 134_217_728, the same bound CQ-R11e2's installToolchain enforces.\n- validateToolchainManifest(value), checked on a structuredClone:\n  - exact keys ['schemaVersion', 'node'], schemaVersion 1, and node keys exactly IMAGE_ARCHES;\n  - each entry has exactly ['version', 'url', 'sha256', 'size'];\n  - version follows the same strict x.y.z rule as agent-cache.mjs's VERSION; copy the regex, and do not widen agent-cache's exports;\n  - url === `https://nodejs.org/dist/v${version}/node-v${version}-linux-${arch}.tar.xz`;\n  - sha256 is 64 lowercase hex, and size is a positive safe integer of at most MAX_TOOLCHAIN_BYTES;\n  - both arches carry the same version.\n  It returns a deep-frozen copy. Anything else is TOOLCHAIN_MANIFEST_INVALID.\n- loadToolchainManifest(): reads the module-relative toolchain.json, at most 65_536 bytes, then parses and validates it. Any failure is TOOLCHAIN_MANIFEST_INVALID.\n- fetchNodeToolchain({ arch, cacheDir }, { fetch = globalThis.fetch, manifest } = {}):\n  1. Validate the input before any fs or fetch call: a record, arch in IMAGE_ARCHES, an absolute cacheDir with no control character, and a function fetch. Anything else is TOOLCHAIN_INPUT_INVALID.\n  2. manifest is a test seam only, validated by validateToolchainManifest like the installed one.\n  3. mkdir(cacheDir, {recursive: true, mode: 0o700}). A failure is TOOLCHAIN_INPUT_INVALID.\n  4. file = <cacheDir>/<sha256>.tar.xz. Call fetchPinnedFile({url, file, size, maxBytes: size, algorithm: 'sha256', digest: sha256}, {fetch}).\n  5. A PINNED_<kind> rejection becomes TOOLCHAIN_<kind>, one to one, with this module's fixed text. Anything else is TOOLCHAIN_DOWNLOAD_FAILED.\n  6. Resolve Object.freeze({ file, sha256, size, version }), in that key order.\n\nFixed texts, none carrying a URL, a path or body bytes:\n- TOOLCHAIN_INPUT_INVALID 'The toolchain request was invalid.'\n- TOOLCHAIN_MANIFEST_INVALID 'The installed toolchain manifest is invalid or unavailable.'\n- TOOLCHAIN_DOWNLOAD_FAILED 'The pinned toolchain could not be downloaded.'\n- TOOLCHAIN_CHECKSUM_MISMATCH 'The toolchain did not match its pinned checksum.'\n- TOOLCHAIN_TOO_LARGE 'The toolchain exceeded its pinned size.'\n- TOOLCHAIN_UNREADABLE 'The cached toolchain could not be read.'\n\nImports: only node:fs/promises, node:path, ./agent-cache.mjs (fetchPinnedFile) and ./guest-bootstrap.mjs (IMAGE_ARCHES). No new dependency.\n\nError handling: every rejection is a fixed TOOLCHAIN_ code, so CQ-R11e passes it through. A failed call leaves no file, because fetchPinnedFile cleans up its own .part.\n\nThen TC1-TC7 and the bundle rows go green.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/toolchain-cache.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/toolchain-cache.mjs"
+      ],
+      "note": "New scripts/local-runner/toolchain-cache.mjs (72 lines). Exports MAX_TOOLCHAIN_BYTES = 134_217_728, validateToolchainManifest (structuredClone copy; exact keys; schemaVersion 1; node keys exactly IMAGE_ARCHES; entry keys exactly version/url/sha256/size; strict x.y.z VERSION regex copied from agent-cache; url === the fixed nodejs.org .tar.xz template; lowercase sha256; size 1..MAX_TOOLCHAIN_BYTES; one version for both arches; deep-frozen), loadToolchainManifest (module-relative, <=65_536 bytes, any failure TOOLCHAIN_MANIFEST_INVALID) and fetchNodeToolchain({arch, cacheDir}, {fetch, manifest}) (input validated before any fs/fetch -> manifest -> mkdir 0700 -> fetchPinnedFile sha256 with maxBytes = size -> PINNED_<kind> mapped to TOOLCHAIN_<kind>, anything else TOOLCHAIN_DOWNLOAD_FAILED -> frozen {file, sha256, size, version}). Six fixed TOOLCHAIN_ texts, none with URL/path/body. Imports only node:fs/promises, node:path, ./agent-cache.mjs, ./guest-bootstrap.mjs.\nGREEN (env -i, Node 24.21.0): `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-bundle.test.mjs` exit 0, 53 tests, 52 pass, 1 skip (K9, pre-existing); TC1-TC7 and the bundle row pass; every E/K/C/DA row still green.\nSize so far: agent-cache +80/-34, toolchain-cache +72, toolchain.json +9, check test +258, bundle test +5/-3 = 461, over the 400 default; TC rows follow the plan's enumerated matrix, so a size-exception rail will be pre-filed at step 5 rather than cutting prescribed coverage.",
+      "startedAt": "2026-10-30T06:15:36.440Z",
+      "completedAt": "2026-10-30T06:17:11.234Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE, fresh. From the repo root, run:\n`node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs`\nOn WSL, run it as:\n`env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs`\n- It must exit 0. Give complete_task the command, the exit code and the output tail.\n- AB1-AB11 must pass with NO edit to local-runner-agents.test.mjs (DoD 3).\n\nOne manual check, reported in the completion summary; it is not a test: call fetchNodeToolchain with the SHIPPED manifest and the real fetch, into a temp cacheDir, for the host's arch. A second call must then hit the cache with zero fetches. If there is no network, say so. Delete the temp cacheDir afterwards.\n\nRecord `git diff --numstat` for the five files. If anything fails, edit only what the failure needs. Never touch other sessions' dirty paths.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-cache.mjs",
+        "scripts/local-runner/toolchain-cache.mjs",
+        "scripts/local-runner/toolchain.json",
+        "scripts/tests/local-runner-check.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "VERIFY, fresh: `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs` -> exit 0; tests 73, pass 72, fail 0, skipped 1 (K9, pre-existing). AB1-AB11 all pass and local-runner-agents.test.mjs is unedited (DoD 3). TC1-TC7 pass.\nManual live check (not a test): fetchNodeToolchain with the SHIPPED manifest and real fetch, host arch x64, temp cacheDir: round 1 = 1 fetch, resolved frozen {file:<cacheDir>/48cc0e21...aaf75.tar.xz, sha256 48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75, size 32039312, version 24.22.2}, file 0600 in a 0700 dir, only that file present; round 2 = 0 fetches, same result. Temp dir deleted.\nnumstat: agent-cache.mjs +80/-34, toolchain-cache.mjs +72 (new), toolchain.json +9 (new), local-runner-check.test.mjs +258, local-runner-bundle.test.mjs +5/-3 = 461 changed lines.\nDisclosure: to get numstat for the two untracked files I briefly ran `git add -N` on them and immediately `git reset -q` those same two paths (index entries for only my own new files; nothing else touched; status shows them untracked again). No other git writes.",
+      "startedAt": "2026-10-30T06:17:14.491Z",
+      "completedAt": "2026-10-30T06:17:54.673Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a network attacker, and as a careless future caller of fetchPinnedFile.\n- Is any byte trusted before its digest is checked? Is a cache hit re-verified on one no-follow descriptor?\n- Can a caller's options reach a path outside the file's directory, follow a link or skip https? Is every option validated before any I/O?\n- Is any .part left behind on any failure: an abort, a timeout, a stream error, a full disk or a failed rename?\n- Does a PINNED code ever escape fetchAgentBinary or fetchNodeToolchain unmapped? Does any message carry a URL, a path or a body?\n- Does the archive path still verify the archive before untar, and the member before the rename?\n- Concurrency: unique .part names, an exclusive create, an atomic rename.\n\nRun the mutation probes on a scratch copy, never in the shared tree:\n- cpSync scripts/local-runner and scripts/tests into a mktemp dir;\n- score each probe by exit code, with --test-name-pattern;\n- restore and cmp afterwards.\n\nEach mutant must be killed by the named rows:\n(i) fetchAgentBinary forgets to map PINNED_ codes: AB5 or AB9.\n(ii) fetchPinnedFile skips re-verification on a cache hit: TC5.\n(iii) holdsPin ignores algorithm and always uses sha256: TC6.\n(iv) size null skips the maxBytes bound: TC6.\n(v) The content-length check is removed: TC4.\n(vi) validateToolchainManifest accepts .tar.gz, or a different version per arch: TC2.\n(vii) The result is not frozen, or carries an extra key: TC3.\n(viii) fetchNodeToolchain calls mkdir before it validates the input: TC7.\n\nIf a mutant survives, add a test that kills it, unless the mutant is provably equivalent; then say why in the step note. If this review changes any byte, re-run the step-5 command and give complete_task that fresh output. Report the five files in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-cache.mjs",
+        "scripts/local-runner/toolchain-cache.mjs",
+        "scripts/local-runner/toolchain.json",
+        "scripts/tests/local-runner-check.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "ADVERSARIAL SELF-REVIEW done. No forbidden patterns in the diff.\nMutation probes ran on a mktemp copy of scripts/local-runner + scripts/tests (+ ci.yml), scored by exit code with --test-name-pattern, then restored; cmp vs the shared tree was clean and the scratch was deleted. KILLED:\n- (i) no mapping in fetchAgentBinary, and refuse() without the PINNED replace: both by AB5 and AB9.\n- (ii) no re-verify on a hit: TC5. (iii) always sha256: TC6. (iv) writeBody unbounded when size is null: TC6.\n- (v) no content-length check: TC4. (vi) .tar.gz accepted, or a version per arch: both TC2.\n- (vii) result not frozen, or an extra key: both TC3. (viii) mkdir before validation: TC7.\n- Mine: (ix) url not https-checked: TC6. (x) maxBytes unbounded: TC6. (xi) toolchain codes unmapped: TC4. (xii) .part never cleaned: TC4. (xiii) manifest seam unvalidated: TC2. (xiv) loader without the 64 KiB bound: TC2.\nSURVIVORS, both handled:\n- (iv-b) holdsPin bound size ?? Infinity (a cache hit over a lowered maxBytes). Fixed with a new TC6 row (+4 lines): a cached matching file over a lowered maxBytes is removed, refetched once, and refused PINNED_TOO_LARGE with an empty dir. The mutant is now killed by TC6.\n- (xv) dropping cached()'s lstat isFile check is EQUIVALENT on POSIX: O_NOFOLLOW refuses the symlink alone. Removing both guards is killed by TC5. On Windows, where O_NOFOLLOW is undefined, the lstat check is the only guard.\nTheoretical notes, not fixed (same as R10d2's landed behaviour):\n(a) a throwing getter on options or input, or a null second argument, rejects with a raw error rather than a fixed code;\n(b) mkdir does not tighten an existing cacheDir's mode;\n(c) a SIGKILL can leave a uniquely named .part, which is never read as a cache entry;\n(d) a corrupt-entry repair can race benignly with a concurrent rename;\n(e) holdsPin returns 0 for a verified empty file when size is null; every caller compares `=== false`, so that is consistent.\nThe archive path still verifies the archive before untar and the member before the rename. .part names are unique (pid + random), created with an exclusive 'wx' and renamed atomically. No message carries a URL, path or body.\nFresh re-run after the change, same command as step 5: exit 0, 73 tests, 72 pass, 1 skip (K9); the agents test is unedited.\nSize: 465 (+428/-37): agent-cache +80/-34, toolchain-cache +72, toolchain.json +9, check test +262, bundle test +5/-3. Waiver pre-filed: prop-d975cf4e82a64baba646abba431068c3 (EPIC ADD_RAIL, PENDING); #governors notified (msg-b7b40fed).",
+      "startedAt": "2026-10-30T06:17:57.040Z",
+      "completedAt": "2026-10-30T06:20:32.713Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,12 +117,135 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
   "dependsOn": [
-    "task-4017cf1d0cab459eb98f488ea7e3a047"
+    "task-4017cf1d0cab459eb98f488ea7e3a047",
+    "task-e40ad69f14194e2c89b43727588c2b25"
   ],
   "priority": "HIGH",
   "order": 253.1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-0b9052065ac84f4f97905ef4f6e136f3",
+      "author": "architect-e4b7eee0",
+      "content": "Consumer notes from architect-e4b7eee0, 2026-10-30.\n\nCQ-R11e2 (guest install mode) streams the file this row resolves. CQ-R11e (lifecycle) calls fetchNodeToolchain({arch: guest.image.source.arch, cacheDir}) after provisioning and feeds its sha256 into checkEnvironment as toolchainSha256. So:\n\n1. Every rejection code starts with TOOLCHAIN_; map the shared downloader's own codes. R11e passes them through and falls back to CHECK_TOOLCHAIN_FAILED.\n2. Keep the result exactly {file, sha256, size, version}, frozen. file is an absolute path inside cacheDir.\n3. The guest extracts with Python's tarfile in 'r:*' mode, so either .tar.xz or .tar.gz works. Pin whichever one you choose for both arches.\n4. Keep the shared downloader's export small: one function, with its options record documented. CQ-R11e3 reuses it for registry tarballs, verified by sha512 SRI rather than a hex sha256. So let the caller supply the verifier, or the expected digest algorithm.",
+      "timestamp": "2026-10-29T22:52:50.880Z"
+    },
+    {
+      "id": "comment-a31ca860454441979633892a03d1b77c",
+      "author": "architect-4ae016fb",
+      "content": "@architect-bd1eb82d From architect-4ae016fb (planning CQ-R11e3), 2026-10-30. Two things affect your plan.\n\n1. New dependency: this task now dependsOn CQ-R11e3a (task-e40ad69f) as well as R10d2. I split R11e3 to keep it under the 400-line cap. R11e3a is pure lockfile admission: it creates scripts/local-runner/dependency-cache.mjs and adds DA rows to scripts/tests/local-runner-check.test.mjs. That test file is one you edit too, so the dependency serializes it per the epic rail. R11e3a has no dependencies of its own and runs now beside R10d2, so it should not delay you.\n\n2. What R11e3 needs from the shared downloader you export from agent-cache.mjs. These are capabilities, not names; you pin the name and the options record.\n- Per call:\n  - the url;\n  - an expected digest in sha512. The lockfile SRI decodes to 64 bytes, 128 hex. Either an {algorithm, hex} expectation or a caller-supplied verifier works.\n  - a per-call maxBytes (R11e3 passes 64 MiB);\n  - a kept-file name inside cacheDir that the caller chooses or that is derived from the digest. R11e3 uses one file per sha512 hex.\n  - the injected {fetch} ({ok, status, url, headers, body}).\n- It resolves the kept file's absolute path and size.\n- A cache hit is re-verified against the same expectation, and a corrupt entry is unlinked and downloaded once.\n- Rejections use fixed codes that R11e3 can map by suffix: _DOWNLOAD_FAILED, _CHECKSUM_MISMATCH, _TOO_LARGE, _UNREADABLE. AGENT_BINARY_* or a neutral prefix are both fine.\n- If the export can only verify sha256, R11e3 cannot consume it. Its worker would report_blocked rather than fork a second downloader.\n\nNo change is asked of fetchNodeToolchain's own result shape.",
+      "timestamp": "2026-10-29T23:13:44.506Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:37:06.800Z",
-  "updatedAt": "2026-10-29T22:37:06.800Z"
+  "updatedAt": "2026-10-30T06:22:21.014Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:55:00.461Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "architect-4ae016fb",
+    "worker-5ebbf433"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:03:41.821Z",
+  "executionContract": {
+    "intendedBehavior": "The host obtains the pinned official Node.js 24 Linux tarball, for x64 and arm64, as the check VM's toolchain.\n\nscripts/local-runner/toolchain.json pins each arch's fixed nodejs.org https .tar.xz URL, sha256 and size. Both arches carry one version, whose major equals CI's node-version.\n\ntoolchain-cache.mjs fetchNodeToolchain({arch, cacheDir}) resolves a frozen {file, sha256, size, version} for <cacheDir>/<sha256>.tar.xz. The tarball is kept whole. It is fetched through agent-cache.mjs's newly exported fetchPinnedFile.\n\nfetchPinnedFile is the one shared download-and-verify core:\n- manual https-only redirects, at most 5;\n- a size bound;\n- an exclusive, synced 0600 .part;\n- digest verification (sha256 or sha512) before an atomic rename;\n- re-verification of a cache hit on one no-follow descriptor;\n- cleanup on every failure.\n\nIts codes are neutral PINNED_* ones. fetchAgentBinary maps them to its unchanged AGENT_BINARY_* codes, and fetchNodeToolchain maps them to TOOLCHAIN_*. Tests never touch the network.",
+    "acceptanceCriteria": [
+      "TC1: the shipped manifest loads deep-frozen at the fixed template, with one version whose major equals ci.yml's node-version.",
+      "TC2: every off-shape manifest is TOOLCHAIN_MANIFEST_INVALID, through the validator, the fetch seam and the 64 KiB module-relative loader.",
+      "TC3-TC5: only bytes matching their pins are kept, at <cacheDir>/<sha256>.tar.xz. A mismatch, an oversize, a non-https redirect or an interrupted transfer fails closed and leaves no file. A cache hit is re-verified. A directory or symlink is refused, never followed or deleted. Concurrent calls are safe.",
+      "TC6: fetchPinnedFile with sha512 and size null keeps only matching bytes within maxBytes, and validates every option before any I/O.",
+      "TC7: invalid toolchain input is refused before any fetch or mkdir.",
+      "AB1-AB11 pass with no edit (DoD 3). The bundle ships toolchain.json and toolchain-cache.mjs, and the bundled module loads its manifest."
+    ],
+    "invariants": [
+      "No byte is renamed into a cache before its digest and size verify, and a cache hit is re-verified every time.",
+      "URLs come only from a validated manifest: never from a caller, the environment or the network.",
+      "Every failure leaves no file of the failing call in the cache directory.",
+      "Messages are fixed text with no URL, path or body. PINNED codes never escape fetchAgentBinary or fetchNodeToolchain.",
+      "agent-cache.mjs adds exactly one export, fetchPinnedFile. Its existing exports and their behavior are unchanged.",
+      "Tests never touch the network. No .moe edits. No verified-local or isolation claim."
+    ],
+    "compatibility": [
+      "fetchAgentBinary, validateAgentManifest, loadAgentManifest, AGENT_CLIS and MAX_AGENT_BINARY_BYTES keep their signatures, codes, messages and on-disk results. local-runner-agents.test.mjs is not edited.",
+      "CQ-R11e consumes fetchNodeToolchain({arch, cacheDir}) and its TOOLCHAIN_ codes. CQ-R11e2 validates {file, sha256, size, version} with size at most 134217728. CQ-R11e3 calls fetchPinnedFile with sha512, size null and maxBytes, and maps its codes by suffix.",
+      "The IDE bundlers already copy scripts/local-runner/** minus tests and fixtures."
+    ],
+    "approvedScope": [
+      "agent-cache.mjs: PINNED_MESSAGES, the generalized internals, refuse()'s PINNED-to-AGENT_BINARY mapping, and the new export fetchPinnedFile.",
+      "New toolchain.json and toolchain-cache.mjs (MAX_TOOLCHAIN_BYTES, validateToolchainManifest, loadToolchainManifest, fetchNodeToolchain).",
+      "local-runner-check.test.mjs: the TC1-TC7 section and its helpers (fixtureFetch, redirected, toolchainAt, refusedAs).",
+      "local-runner-bundle.test.mjs: two `shipped` entries and the bundled toolchain import check."
+    ],
+    "reuse": [
+      "agent-cache.mjs's landed respond, writeBody, writePart, holdsPin and cached, generalized rather than copied.",
+      "image-cache.mjs DOWNLOAD_TIMEOUT_MS and guest-bootstrap.mjs IMAGE_ARCHES.",
+      "R10d2's AB-row harness shapes (routes, redirected, refused, and the cpSync module copy) for the TC rows."
+    ],
+    "sourceAssumptions": [
+      "agent-cache.mjs as landed in baa52df (CQ-R10d2):\n- refuse(code, fallback) maps unknown codes to AGENT_BINARY_DOWNLOAD_FAILED;\n- holdsPin(file, {sha256, size}) opens O_NOFOLLOW and returns a boolean;\n- cached(target, binary) lstats, refuses non-files with AGENT_BINARY_INPUT_INVALID, and unlinks a corrupt entry;\n- respond(url, fetch) follows at most 5 manual https redirects under AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);\n- download(pin, binary, cacheDir, target, fetch) writes `.${sha256}.${nonce}.part` files and untars the codex member.",
+      "local-runner-bundle.test.mjs: `shipped` = [...required, 'agent-binaries.json', 'agent-cache.mjs']. The VS Code bundler row walks it and also imports the bundled agent-cache.mjs. The onboarding refusal row walks `required`.",
+      "local-runner-check.test.mjs ends with R11e3a's DA section and has sha() and caught() at the top.",
+      "nodejs.org/dist/v24.22.2 serves node-v24.22.2-linux-x64.tar.xz (32039312 bytes) and node-v24.22.2-linux-arm64.tar.xz (30968168 bytes), with no redirect, and lists both in SHASUMS256.txt (architect check, 2026-10-30).",
+      ".github/workflows/ci.yml and release.yml set node-version: '24'."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Node line: Node 24 (CI's line) versus Node 26 (Active LTS since 2026-10-28). The human chose 24 in the architect REPL on 2026-10-30, so check results match CI. TC1 ties the pinned major to ci.yml's node-version, so the two move together.\n- Archive form: .tar.xz (about 31 MB) over .tar.gz (about 50 MB). CQ-R11e2's guest reads both, through tarfile 'r:*' and lzma.\n- Export codes, three options:\n  - neutral PINNED_* codes, mapped one to one by each caller: chosen;\n  - AGENT_BINARY_* codes inside the core: rejected, because the toolchain and CQ-R11e3 would then map 'agent binary' errors;\n  - a caller-supplied prefix threaded through every internal: rejected, too much churn in a landed security module.\n- Verifier: algorithm plus hex digest, chosen over a caller-supplied verify callback, which a bug could make accept anything. CQ-R11e3 converts its SRI to hex.\n- Size: size, or null plus maxBytes. CQ-R11e3's registry tarballs have no pinned size.\n- Directory creation stays with the callers; the export never calls mkdir.\n- `shipped` instead of `required` in the bundle test, because the onboarding refusal row walks `required`.",
+    "codebaseInsights": "- R10d2 landed in baa52df (REVIEW at planning time). Its core is respond, writeBody, writePart, holdsPin and cached, plus download with an archive branch.\n- The AB1-AB11 rows pin AGENT_BINARY codes and texts through refused().\n- The approved plans of CQ-R11e3 (task-ab029075), CQ-R11e (task-001d8ab3) and CQ-R11e2 (task-1e7f5a2d) already consume this task's names and shapes:\n  - R11e3 calls the export with the url, a sha512 expectation, maxBytes and a file named by the hex digest, plus {fetch}, and maps codes by suffix (_CHECKSUM_MISMATCH, _TOO_LARGE, _UNREADABLE);\n  - R11e calls fetchNodeToolchain({arch, cacheDir}) and passes TOOLCHAIN_ codes through;\n  - R11e2 validates the {file, sha256, size, version} record, with size at most 134217728.\n- nodejs.org was reachable from this WSL environment on 2026-10-30.",
+    "risks": "- QA could still reject R10d2 (in REVIEW) and change agent-cache.mjs. Refactor whatever lands, which dependsOn guarantees is DONE.\n- CQ-R10d3 (task-b8e7ad92, not yet planned) may also edit agent-cache.mjs or local-runner-bundle.test.mjs; its planner must serialize after this task.\n- Pinning needs network access. Without it, report_blocked; never invent a hash.\n- Windows CI: assert modes and symlinks on POSIX only. O_NOFOLLOW is undefined on win32, and the landed code already handles that.\n- The pinned tarball is about 31 MB. Stream it; never buffer it.\n- The global forbiddenPatterns (eval(, innerHTML, __proto__) apply to tests too.\n- The shared checkout carries other sessions' dirty paths. Report only the five files.",
+    "keyFiles": [
+      "scripts/local-runner/agent-cache.mjs",
+      "scripts/local-runner/image-cache.mjs",
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/tests/local-runner-agents.test.mjs",
+      "scripts/tests/local-runner-check.test.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:03:41.907Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:05:22.129Z",
+  "reviewStartedAt": "2026-10-30T06:22:21.012Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ TC4 a mismatched, oversized, redirected-to-http or interrupted download fails closed and leaves no file\n✔ TC5 a cache hit is re-verified without a fetch, a corrupt entry is refetched once, and a directory or symlink is never followed\n✔ TC6 fetchPinnedFile verifies sha512 within maxBytes when size is null, and validates every option before any I/O\n✔ TC7 invalid toolchain input is refused before any fetch or mkdir\nℹ tests 73\nℹ suites 0\nℹ pass 72\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 11603.364387",
+    "reportedAt": "2026-10-30T06:22:21.012Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    "scripts/local-runner/toolchain.json",
+    "scripts/local-runner/agent-cache.mjs",
+    "scripts/local-runner/toolchain-cache.mjs"
+  ],
+  "completionSummary": "CQ-R11e1 delivered: a host cache for the pinned Node toolchain.\n- Pins in scripts/local-runner/toolchain.json: Node 24.22.2 (CI's line, per the human decision), linux-x64 and linux-arm64 .tar.xz from nodejs.org.\n  - x64: sha256 48cc0e21…aaf75, size 32039312. arm64: sha256 eb187837…d9ba8, size 30968168.\n  - Both were hashed from downloaded bytes and match nodejs.org SHASUMS256.txt.\n- toolchain-cache.mjs exports fetchNodeToolchain, which returns a frozen {file, sha256, size, version} at <cacheDir>/<sha256>.tar.xz.\n  - Fixed TOOLCHAIN_* codes; no URL, path or body ever appears in a message.\n  - The module-relative manifest is validated strictly: exact keys, one version, the fixed URL template, size bound 128 MiB.\n  - Input is validated before any fetch or mkdir.\n- agent-cache.mjs now exports fetchPinnedFile, with neutral PINNED_* codes and a sha256 or sha512 digest. An exact size, or size null with a maxBytes bound, is for CQ-R11e3.\n  - fetchAgentBinary routes through it and maps PINNED_* to AGENT_BINARY_* one to one.\n  - AB1-AB11 are unedited and green.\n- Tests: TC1-TC7 were added to local-runner-check.test.mjs. The bundle test ships toolchain.json and toolchain-cache.mjs; the VS Code bundle deep-equals the manifest.\n  - Deviation: they are added to `shipped`, not `required`, because nothing wires them yet.\n- Live check: 1 fetch, then a cache hit with 0 fetches.\n- Mutation: 20 mutants probed.\n  - iv-b (holdsPin ignoring maxBytes on a hit) survived and is now killed by a new TC6 row.\n  - xv is equivalent on POSIX because O_NOFOLLOW also refuses.\n- Fresh run: 73 tests, 72 pass, 1 skip (the pre-existing K9 root-only skip), exit 0.\n- Size: 465 changed lines (+428/-37), runtime and manifest 195, tests 270. This is over the 400 cap. Waiver pre-filed as prop-d975cf4e82a64baba646abba431068c3 (EPIC ADD_RAIL, PENDING); #governors notified.\n- Disclosure: during step 5 I ran `git add -N` on my two new files to read numstat, then `git reset -q` on those same paths. No other index "
 }

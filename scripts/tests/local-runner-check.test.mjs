@@ -1150,3 +1150,265 @@ test('DA5 bounds refuse with fixed codes, and the repository lockfile is admitte
     assert.match(sha512, /^[0-9a-f]{128}$/);
   }
 });
+
+// CQ-R11e1: the host's pinned Node toolchain cache (rows TC1-TC7). Bodies come from an injected fetch over fixture
+// routes, never the network; test manifests keep the shipped fixed URLs and swap in fixture sizes and hashes.
+import { cpSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import { fetchPinnedFile, MAX_AGENT_BINARY_BYTES } from '../local-runner/agent-cache.mjs';
+import { fetchNodeToolchain, loadToolchainManifest, MAX_TOOLCHAIN_BYTES, validateToolchainManifest } from '../local-runner/toolchain-cache.mjs';
+
+const RUNNER_DIR = fileURLToPath(new URL('../local-runner/', import.meta.url));
+const TOOLCHAIN = JSON.parse(readFileSync(join(RUNNER_DIR, 'toolchain.json'), 'utf8'));
+const FIXTURE_HOST = 'https://cdn.fixture.test';
+const NODE_BYTES = Buffer.from('#!fixture node toolchain tarball\n'.repeat(64));
+const TOOLCHAIN_MESSAGES = {
+  TOOLCHAIN_INPUT_INVALID: 'The toolchain request was invalid.',
+  TOOLCHAIN_MANIFEST_INVALID: 'The installed toolchain manifest is invalid or unavailable.',
+  TOOLCHAIN_DOWNLOAD_FAILED: 'The pinned toolchain could not be downloaded.',
+  TOOLCHAIN_CHECKSUM_MISMATCH: 'The toolchain did not match its pinned checksum.',
+  TOOLCHAIN_TOO_LARGE: 'The toolchain exceeded its pinned size.',
+  TOOLCHAIN_UNREADABLE: 'The cached toolchain could not be read.',
+};
+const PINNED_MESSAGES = {
+  PINNED_INPUT_INVALID: 'The pinned download request was invalid.',
+  PINNED_DOWNLOAD_FAILED: 'The pinned file could not be downloaded.',
+  PINNED_CHECKSUM_MISMATCH: 'The pinned file did not match its checksum.',
+  PINNED_TOO_LARGE: 'The pinned file exceeded its size bound.',
+  PINNED_UNREADABLE: 'The cached pinned file could not be read.',
+};
+// A refusal carries only its fixed code and text, never a URL, a path or body bytes.
+const refusedAs = (code, messages) => error => assert.deepEqual([error.code, error.message, Object.keys(error)], [code, messages[code], ['code']]) ?? true;
+const scratchDir = t => {
+  const dir = mkdtempSync(join(tmpdir(), 'moe-toolchain-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+};
+const nodeUrl = arch => TOOLCHAIN.node[arch].url;
+const flip = (bytes, at = 9) => { const copy = Buffer.from(bytes); copy[at] ^= 1; return copy; };
+
+// An injected fetch over fixture routes: url -> [status, body chunks (an Error chunk fails the stream) or a thrown Error,
+// headers, the response's final url (as if the fetch had followed redirects itself)]. Each call is [url, redirect, signal?].
+function fixtureFetch(table) {
+  const calls = [];
+  const fetch = async (url, init) => {
+    calls.push([url, init.redirect, init.signal instanceof AbortSignal]);
+    const [status = 404, chunks = [], headers = {}, final = url] = table[url] ?? [];
+    if (chunks instanceof Error) throw chunks;
+    const queue = [...chunks];
+    const body = new ReadableStream({ pull(controller) {
+      const next = queue.shift();
+      if (next === undefined) controller.close(); else if (next instanceof Error) controller.error(next); else controller.enqueue(new Uint8Array(next));
+    } }, { highWaterMark: 0 });
+    return { ok: status >= 200 && status < 300, status, url: final, headers: new Headers(headers), body };
+  };
+  return { fetch, calls };
+}
+// url -> FIXTURE_HOST/hop/1 -> ... -> FIXTURE_HOST/hop/count, which serves chunks; every Location after the first is relative.
+function redirected(url, count, chunks) {
+  const stops = [url, ...Array.from({ length: count }, (_, at) => `${FIXTURE_HOST}/hop/${at + 1}`)];
+  return Object.fromEntries(stops.map((stop, at) => [stop, at === count ? [200, chunks] : [302, [], { location: at ? `/hop/${at + 1}` : stops[1] }]]));
+}
+// The shipped manifest with one arch's sha256 and size swapped for the fixture's; its url stays the real template.
+function toolchainAt(arch, bytes) {
+  const manifest = structuredClone(TOOLCHAIN);
+  Object.assign(manifest.node[arch], { sha256: sha(bytes), size: bytes.length });
+  return manifest;
+}
+const keptAt = (cacheDir, bytes) => ({ file: join(cacheDir, `${sha(bytes)}.tar.xz`), sha256: sha(bytes), size: bytes.length, version: TOOLCHAIN.node.x64.version });
+function toolchainCall(t, arch, manifest, table, cacheDir = join(scratchDir(t), 'toolchain cache')) {
+  const server = fixtureFetch(table);
+  return { server, cacheDir, result: fetchNodeToolchain({ arch, cacheDir }, { fetch: server.fetch, manifest }) };
+}
+
+test('TC1 the shipped toolchain manifest loads deep-frozen at the fixed nodejs.org template, on CI\'s Node major', async () => {
+  const manifest = await loadToolchainManifest();
+  assert.deepEqual(manifest, TOOLCHAIN);
+  for (const node of [manifest, manifest.node, manifest.node.x64, manifest.node.arm64]) assert.ok(Object.isFrozen(node));
+  const { version } = manifest.node.x64;
+  for (const arch of ['x64', 'arm64']) {
+    const entry = manifest.node[arch];
+    assert.deepEqual([Object.keys(entry), entry.version], [['version', 'url', 'sha256', 'size'], version], arch);
+    assert.equal(entry.url, `https://nodejs.org/dist/v${version}/node-v${version}-linux-${arch}.tar.xz`, arch);
+    assert.ok(entry.size <= MAX_TOOLCHAIN_BYTES, arch);
+  }
+  assert.equal(MAX_TOOLCHAIN_BYTES, 134_217_728);
+  // The human's 2026-10-30 decision: the check VM runs CI's Node line, so every CI node-version is the pinned major.
+  const ci = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
+  const lines = [...ci.matchAll(/node-version:\s*(\S+)/g)].map(match => match[1]);
+  assert.ok(lines.length > 0);
+  assert.deepEqual(lines, lines.map(() => `'${version.split('.')[0]}'`));
+});
+
+test('TC2 every off-shape toolchain manifest is TOOLCHAIN_MANIFEST_INVALID, through the validator, the fetch seam and the 64 KiB loader', async t => {
+  const set = (key, value, arch = 'x64') => m => { m.node[arch][key] = value; };
+  const url = nodeUrl('x64');
+  const template = (bad, arch) => `https://nodejs.org/dist/v${bad}/node-v${bad}-linux-${arch}.tar.xz`;
+  const versions = (bad, arches = ['x64', 'arm64']) => m => { for (const arch of arches) Object.assign(m.node[arch], { version: bad, url: template(bad, arch) }); };
+  const cases = [
+    ['an array', () => []], ['null', () => null], ['a string', () => 'manifest'], ['schemaVersion 2', m => { m.schemaVersion = 2; }],
+    ['an extra top-level key', m => { m.mirror = FIXTURE_HOST; }], ['no node', m => { delete m.node; }], ['an extra tool', m => { m.npm = m.node; }],
+    ['a missing arch', m => { delete m.node.arm64; }], ['an extra arch', m => { m.node.ia32 = m.node.x64; }],
+    ...['version', 'url', 'sha256', 'size'].map(key => [`no ${key}`, m => { delete m.node.x64[key]; }]), ['an extra entry key', set('mirror', FIXTURE_HOST)],
+    ['an http url', set('url', url.replace('https:', 'http:'))], ['another host', set('url', url.replace('nodejs.org', 'nodejs.org.fixture.test'))],
+    ['another version in the url', set('url', url.replace(`/v${TOOLCHAIN.node.x64.version}/`, '/v1.0.0/'))], ['a .tar.gz', set('url', url.replace('.tar.xz', '.tar.gz'))],
+    ['a query string', set('url', `${url}?x=1`)], ['a trailing slash', set('url', `${url}/`)], ["another arch's url", set('url', nodeUrl('arm64'))],
+    ...['v24.22.2', '24.22', '24.22.2-rc.1', '024.1.0', '24.22.2/..'].map(bad => [`version ${bad}`, versions(bad)]),
+    ['x64 and arm64 on different versions', versions('24.0.0', ['arm64'])],
+    ['an uppercase sha256', set('sha256', TOOLCHAIN.node.x64.sha256.toUpperCase())], ['a 63-char sha256', set('sha256', 'a'.repeat(63))],
+    ...[0, -1, 1.5, '1', MAX_TOOLCHAIN_BYTES + 1].map(size => [`size ${JSON.stringify(size)}`, set('size', size)]),
+  ];
+  for (const [label, change] of cases) {
+    const manifest = structuredClone(TOOLCHAIN);
+    const replaced = change(manifest);
+    const bad = replaced === undefined ? manifest : replaced;
+    assert.throws(() => validateToolchainManifest(bad), refusedAs('TOOLCHAIN_MANIFEST_INVALID', TOOLCHAIN_MESSAGES), label);
+    const seam = toolchainCall(t, 'x64', bad, {});
+    await assert.rejects(seam.result, refusedAs('TOOLCHAIN_MANIFEST_INVALID', TOOLCHAIN_MESSAGES), label);
+    assert.deepEqual([seam.server.calls, existsSync(seam.cacheDir)], [[], false], label);
+  }
+  const dir = join(scratchDir(t), 'local-runner');
+  cpSync(RUNNER_DIR, dir, { recursive: true });
+  const copy = await import(pathToFileURL(join(dir, 'toolchain-cache.mjs')).href);
+  const text = JSON.stringify(TOOLCHAIN);
+  for (const [label, bytes, loads] of [['exactly 64 KiB', text.padEnd(65_536), true], ['64 KiB + 1', text.padEnd(65_537)], ['not JSON', 'pinned: no'], ['missing']]) {
+    if (bytes === undefined) rmSync(join(dir, 'toolchain.json')); else writeFileSync(join(dir, 'toolchain.json'), bytes);
+    if (loads) assert.deepEqual(await copy.loadToolchainManifest(), TOOLCHAIN, label);
+    else await assert.rejects(copy.loadToolchainManifest(), refusedAs('TOOLCHAIN_MANIFEST_INVALID', TOOLCHAIN_MESSAGES), label);
+  }
+});
+
+test('TC3 a tarball matching its pins is kept whole at <cacheDir>/<sha256>.tar.xz, after at most 5 https-only manual redirects', async t => {
+  for (const [arch, hops, chunks] of [['x64', 0, [NODE_BYTES]], ['arm64', 5, [NODE_BYTES.subarray(0, 7), NODE_BYTES.subarray(7)]]]) {
+    const table = redirected(nodeUrl(arch), hops, chunks);
+    const { server, cacheDir, result } = toolchainCall(t, arch, toolchainAt(arch, NODE_BYTES), table);
+    const want = keptAt(cacheDir, NODE_BYTES);
+    const got = await result;
+    assert.deepEqual([got, Object.keys(got), Object.isFrozen(got)], [want, ['file', 'sha256', 'size', 'version'], true], arch);
+    assert.deepEqual(server.calls, Object.keys(table).map(stop => [stop, 'manual', true]), arch);
+    assert.deepEqual([readdirSync(cacheDir), readFileSync(want.file)], [[`${want.sha256}.tar.xz`], NODE_BYTES], arch);
+    if (process.platform !== 'win32') assert.deepEqual([statSync(want.file).mode & 0o777, statSync(cacheDir).mode & 0o777], [0o600, 0o700], arch);
+  }
+});
+
+test('TC4 a mismatched, oversized, redirected-to-http or interrupted download fails closed and leaves no file', async t => {
+  const url = nodeUrl('x64');
+  const http = url.replace('https:', 'http:');
+  for (const [label, table, code] of [
+    ['bytes missing the sha256', { [url]: [200, [flip(NODE_BYTES)]] }, 'TOOLCHAIN_CHECKSUM_MISMATCH'],
+    ['a short body', { [url]: [200, [NODE_BYTES.subarray(1)]] }, 'TOOLCHAIN_CHECKSUM_MISMATCH'],
+    ['a declared length over the pin', { [url]: [200, [NODE_BYTES], { 'content-length': String(NODE_BYTES.length + 1) }] }, 'TOOLCHAIN_TOO_LARGE'],
+    ['a streamed body over the pin', { [url]: [200, [NODE_BYTES, Buffer.from('x')]] }, 'TOOLCHAIN_TOO_LARGE'],
+    ['a redirect to http', { [url]: [301, [], { location: http }], [http]: [200, [NODE_BYTES]] }, 'TOOLCHAIN_DOWNLOAD_FAILED'],
+    ['a redirect chain over 5', redirected(url, 6, [NODE_BYTES]), 'TOOLCHAIN_DOWNLOAD_FAILED'],
+    ['a redirect without a Location', { [url]: [302, []] }, 'TOOLCHAIN_DOWNLOAD_FAILED'],
+    ['a 404', {}, 'TOOLCHAIN_DOWNLOAD_FAILED'],
+    ['a thrown fetch', { [url]: [200, Object.assign(new Error(`${url} secret`), { code: 'ECONNRESET' })] }, 'TOOLCHAIN_DOWNLOAD_FAILED'],
+    ['a body that errors midway', { [url]: [200, [NODE_BYTES.subarray(0, 9), new Error(`${url} secret`)]] }, 'TOOLCHAIN_DOWNLOAD_FAILED'],
+    ['a response whose url is http', { [url]: [200, [NODE_BYTES], {}, http] }, 'TOOLCHAIN_DOWNLOAD_FAILED'],
+  ]) {
+    const { server, cacheDir, result } = toolchainCall(t, 'x64', toolchainAt('x64', NODE_BYTES), table);
+    await assert.rejects(result, refusedAs(code, TOOLCHAIN_MESSAGES), label);
+    assert.deepEqual(readdirSync(cacheDir), [], label);
+    assert.deepEqual(server.calls.filter(([target]) => !target.startsWith('https://')), [], label);
+  }
+});
+
+test('TC5 a cache hit is re-verified without a fetch, a corrupt entry is refetched once, and a directory or symlink is never followed', async t => {
+  const cacheDir = join(scratchDir(t), 'toolchain cache');
+  const want = keptAt(cacheDir, NODE_BYTES);
+  const get = (body = NODE_BYTES) => toolchainCall(t, 'x64', toolchainAt('x64', NODE_BYTES), { [nodeUrl('x64')]: [200, [body]] }, cacheDir);
+  mkdirSync(cacheDir);
+  writeFileSync(want.file, NODE_BYTES);
+  const hit = get();
+  assert.deepEqual([await hit.result, hit.server.calls.length], [want, 0]);
+  for (const corrupt of [flip(NODE_BYTES), NODE_BYTES.subarray(1), Buffer.concat([NODE_BYTES, Buffer.from('x')])]) {
+    writeFileSync(want.file, corrupt);
+    const repair = get();
+    assert.deepEqual([await repair.result, repair.server.calls.length, readFileSync(want.file), readdirSync(cacheDir)], [want, 1, NODE_BYTES, [`${want.sha256}.tar.xz`]]);
+  }
+  writeFileSync(want.file, flip(NODE_BYTES));
+  const tampered = get(flip(NODE_BYTES));
+  await assert.rejects(tampered.result, refusedAs('TOOLCHAIN_CHECKSUM_MISMATCH', TOOLCHAIN_MESSAGES));
+  assert.deepEqual([tampered.server.calls.length, readdirSync(cacheDir)], [1, []]);
+  // Two concurrent calls each write their own .part and rename atomically.
+  const both = [1, 2].map(() => get());
+  assert.deepEqual(await Promise.all(both.map(call => call.result)), [want, want]);
+  assert.deepEqual([readdirSync(cacheDir), readFileSync(want.file), both.map(call => call.server.calls.length)], [[`${want.sha256}.tar.xz`], NODE_BYTES, [1, 1]]);
+  rmSync(want.file);
+  mkdirSync(want.file);
+  const dir = get();
+  await assert.rejects(dir.result, refusedAs('TOOLCHAIN_INPUT_INVALID', TOOLCHAIN_MESSAGES));
+  assert.deepEqual([dir.server.calls.length, statSync(want.file).isDirectory()], [0, true]);
+  if (process.platform === 'win32') return;
+  rmSync(want.file, { recursive: true });
+  const outside = join(cacheDir, '..', 'outside.tar.xz');
+  writeFileSync(outside, NODE_BYTES);
+  symlinkSync(outside, want.file);
+  const link = get();
+  await assert.rejects(link.result, refusedAs('TOOLCHAIN_INPUT_INVALID', TOOLCHAIN_MESSAGES));
+  assert.deepEqual([link.server.calls.length, lstatSync(want.file).isSymbolicLink(), readFileSync(outside)], [0, true, NODE_BYTES]);
+});
+
+test('TC6 fetchPinnedFile verifies sha512 within maxBytes when size is null, and validates every option before any I/O', async t => {
+  const blob = Buffer.from('fixture registry tarball\n'.repeat(40));
+  const hex = bytes => createHash('sha512').update(bytes).digest('hex');
+  const url = `${FIXTURE_HOST}/pkg/-/pkg-1.0.0.tgz`;
+  const pinCall = (table, patch = {}, extra = {}) => {
+    const dir = scratchDir(t);
+    const server = fixtureFetch(table);
+    const options = { url, file: join(dir, `${hex(blob)}.tgz`), size: null, maxBytes: blob.length + 7, algorithm: 'sha512', digest: hex(blob), ...patch };
+    return { dir, server, options, result: fetchPinnedFile(options, { fetch: server.fetch, ...extra }) };
+  };
+  const kept = pinCall({ [url]: [200, [blob.subarray(0, 5), blob.subarray(5)]] });
+  const got = await kept.result;
+  assert.deepEqual([got, Object.keys(got), Object.isFrozen(got)], [{ file: kept.options.file, size: blob.length }, ['file', 'size'], true]);
+  assert.deepEqual([readdirSync(kept.dir), readFileSync(kept.options.file), kept.server.calls], [[`${hex(blob)}.tgz`], blob, [[url, 'manual', true]]]);
+  const hit = pinCall({}, { file: kept.options.file });
+  assert.deepEqual([await hit.result, hit.server.calls.length], [got, 0]);
+  // A cached file over a lowered maxBytes is no hit, even with its digest: it is removed and the refetch refused.
+  const shrunk = pinCall({ [url]: [200, [blob]] }, { file: kept.options.file, maxBytes: blob.length - 1 });
+  await assert.rejects(shrunk.result, refusedAs('PINNED_TOO_LARGE', PINNED_MESSAGES));
+  assert.deepEqual([shrunk.server.calls.length, readdirSync(kept.dir)], [1, []]);
+  const exact = pinCall({ [url]: [200, [blob]] }, { size: blob.length, maxBytes: blob.length });
+  assert.deepEqual(await exact.result, { file: exact.options.file, size: blob.length });
+  const over = Buffer.concat([blob, Buffer.alloc(8, 0x20)]);
+  for (const [label, table, code, patch] of [
+    ['a body over maxBytes', { [url]: [200, [over]] }, 'PINNED_TOO_LARGE', { digest: hex(over) }],
+    ['a declared length over maxBytes', { [url]: [200, [blob], { 'content-length': String(blob.length + 8) }] }, 'PINNED_TOO_LARGE'],
+    ['another digest', { [url]: [200, [flip(blob)]] }, 'PINNED_CHECKSUM_MISMATCH'],
+    ['a body short of an exact size', { [url]: [200, [blob.subarray(1)]] }, 'PINNED_CHECKSUM_MISMATCH', { size: blob.length }],
+    ['a 404', {}, 'PINNED_DOWNLOAD_FAILED'],
+  ]) {
+    const call = pinCall(table, patch);
+    await assert.rejects(call.result, refusedAs(code, PINNED_MESSAGES), label);
+    assert.deepEqual(readdirSync(call.dir), [], label);
+  }
+  for (const [label, patch, extra] of [
+    ['an http url', { url: url.replace('https:', 'http:') }], ['a URL object', { url: new URL(url) }], ['a relative file', { file: 'pkg.tgz' }],
+    ['a file with a control character', { file: join(tmpdir(), 'pkg\n.tgz') }], ['algorithm md5', { algorithm: 'md5' }],
+    ['a sha256-length digest', { digest: sha(blob) }], ['an uppercase digest', { digest: hex(blob).toUpperCase() }],
+    ['size over maxBytes', { size: blob.length + 8 }], ['size 0', { size: 0 }], ['an undefined size', { size: undefined }],
+    ['maxBytes 0', { maxBytes: 0 }], ['maxBytes over MAX_AGENT_BINARY_BYTES', { maxBytes: MAX_AGENT_BINARY_BYTES + 1 }],
+    ['a fetch that is not a function', {}, { fetch: url }],
+  ]) {
+    const call = pinCall({ [url]: [200, [blob]] }, patch, extra);
+    await assert.rejects(call.result, refusedAs('PINNED_INPUT_INVALID', PINNED_MESSAGES), label);
+    assert.deepEqual([call.server.calls, readdirSync(call.dir)], [[], []], label);
+  }
+  for (const options of [undefined, null, 'options']) await assert.rejects(fetchPinnedFile(options), refusedAs('PINNED_INPUT_INVALID', PINNED_MESSAGES));
+});
+
+test('TC7 invalid toolchain input is refused before any fetch or mkdir', async t => {
+  const cacheDir = join(scratchDir(t), 'toolchain cache');
+  const server = fixtureFetch({});
+  const valid = { arch: 'x64', cacheDir };
+  for (const [input, options] of [
+    [undefined, {}], [null, {}], ['x64', {}], [[valid], {}], [{ ...valid, arch: 'ia32' }, {}], [{ ...valid, arch: 'constructor' }, {}],
+    [{ ...valid, cacheDir: 'relative cache' }, {}], [{ ...valid, cacheDir: `${cacheDir}\n` }, {}], [valid, { fetch: nodeUrl('x64') }],
+  ]) {
+    await assert.rejects(fetchNodeToolchain(input, { fetch: server.fetch, manifest: toolchainAt('x64', NODE_BYTES), ...options }),
+      refusedAs('TOOLCHAIN_INPUT_INVALID', TOOLCHAIN_MESSAGES), JSON.stringify([input, options]));
+  }
+  assert.deepEqual([server.calls, existsSync(cacheDir)], [[], false]);
+});
