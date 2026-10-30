@@ -92,7 +92,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -133,7 +133,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:23:28.136Z",
-  "updatedAt": "2026-10-30T19:22:33.193Z",
+  "updatedAt": "2026-10-30T19:29:53.177Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T17:28:09.996Z",
@@ -145,7 +145,9 @@
     "plannedDistinctFileCount": 3,
     "executedStepCount": 14,
     "rejectCount": 2,
-    "reopenCount": 2
+    "reopenCount": 2,
+    "doneAt": "2026-10-30T19:29:53.177Z",
+    "wallClockMs": 10951231
   },
   "contextFetchedBy": [
     "worker-73c29a03",
@@ -245,7 +247,9 @@
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
-    "moe-jetbrains/build.gradle.kts"
+    "moe-jetbrains/build.gradle.kts",
+    ".moe/tasks/task-1c2bfeca0ec34589b8cb498abc082549.json",
+    ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json"
   ],
   "completionSummary": "Reopen-2 fixes for QA's two items on d69f0f9f, in RuntimeSelectionPolicy.kt and its test.\n1) DoD 3, no downgrade. storedProfile reads the pin when usableFor(basePath) is true, or when windowsHost and the store root or basePath has an unprovable drive mapping. Unprovable is not absent. A read only restricts: PROTECTED or UNTRUSTED gives PROTECTED plus the ask; LEGACY or ABSENT is unchanged. persist() and provenance still need a provably-outside store (usableStore), so nothing is written to an unplaceable store. D2's inside-project store still reads ABSENT.\n2) Bounded parser. The recursive DOS_TARGET regex is now a split-based dosTarget/plainSegment with the same rules, linear, no recursion.\nTests:\n- New D9 (Windows), for null and UnsatisfiedLinkError providers: restart gives PROTECTED and the ask; answer(true) leaves the record exactly protected; a fresh legacy project stays LEGACY, never asked. Subst cases cover the store drive alone and the project drive alone.\n- N10: a 4000-segment mapping expands exactly. Deep malformed variants give null: '.', ' ', an empty segment, Char(31), each of / : * ? \" < > |, and a \\\\?\\ prefix. 32767 chars is exact; 32768 is null.\n- RED first (D9 got LEGACY; N10 threw StackOverflowError). 11 of 11 production mutants are killed.\nEvidence (lease released; subst empty): the gate exits 0, 28 fresh suites, 487 tests, 0 skipped/failures/errors. QA's unchanged probes, with the SDK jna.boot.library.path:\n- qa-1c2bfeca-7bbwzu81: SUBST_DESCENDANT_FAILURES=0, outside control Accepted;\n- qa-1c2bfeca-rev3-ba3f4f35: EDGE_FAILURES=0, PIN_NATIVE_FAILURE_PROFILE=PROTECTED, confirmation requested, recordUnchanged=true, 4000 segments returning 8009 chars.\nSize: net 460 cumulative (+471/-11), under the 600 cap in TASK rail prop-452e4340.\nUnchanged observation: profile() queries the native provider before the profile is known (FRESH_LEGACY nativeQueries=5).",
   "commits": [
@@ -300,6 +304,24 @@
       "treeId": "ada2d39706da75e265d981d2d01aaec9f7ec0007",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "7eec5dbeb5b1bb71deafdc85d495c030f34327c1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T18:46:11Z",
+      "paths": [
+        ".moe/tasks/task-1c2bfeca0ec34589b8cb498abc082549.json",
+        ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T19:22:54.036Z",
+      "treeId": "c017d13f121d4f8bf5ad1d518f2737853c932287",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -311,10 +333,10 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "completion",
-    "sessionId": "worker-093a65d0@2026-10-30T17:42:48Z",
-    "at": "2026-10-30T18:37:44.499Z"
+    "sessionId": "worker-73c29a03@2026-10-30T18:46:11Z",
+    "at": "2026-10-30T19:22:54.036Z"
   },
-  "reviewCompletedAt": "2026-10-30T18:46:05.556Z",
+  "reviewCompletedAt": "2026-10-30T19:29:53.177Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Drive paths that are not aliases, POSIX hosts and the legacy profile behave as before: the existing RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest cases pass unchanged."
@@ -410,5 +432,8 @@
       }
     ],
     "stepsCompleted": []
-  }
+  },
+  "completedAt": "2026-10-30T19:29:53.177Z",
+  "reviewSummary": "Approved recorded completion 7eec5dbeb5b1bb71deafdc85d495c030f34327c1 after git show/branch --contains review of it, 1f19140c and d69f0f9f on moe/work-2026-10-24. Cumulative three-file non-board diff +471/-11 = net 460, within this task's explicit 600-net rail. Reopen-2 growth is only required fixes/tests; existing assertions retained; diff --check clean.\nIndependent full gate on exact-commit archive (cwd substitution permitted by current rail): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\qa-1c2bfeca-reopen2-8y5p0r\\moe-jetbrains && .\\gradlew.bat test --rerun\". Exit 0, 43s, all 11 tasks executed. Fresh XML: 28 suites/487 tests, 0 failures/errors/skips; policy 61, supervisor 79, N8-N12/S7-S9/D9/W31-W35 executed. All 102 archive inputs match fresh export; loaded policy class matches fresh compiled class.\nUnchanged SubstProbe.java and EdgeProbe.java rerun via SDK java.exe @D:/qa-1c2bfeca-reopen2-8y5p0r/{SubstProbe,EdgeProbe}.args with SDK jna.boot.library.path; only classpath roots changed. Both exit 0: SUBST_DESCENDANT_FAILURES=0; EDGE_FAILURES=0. Subst/project-parent/descendant/junction aliases rejected with named reasons, filtered PATH and zero spawns; same-drive/outside positives retained. Native-failure restart stays PROTECTED, requests confirmation, record unchanged. Deep valid/malformed and 32767/32768 bounds covered without stack overflow. Existing local/legacy controls pass; POSIX branch statically reviewed, no POSIX runtime claim.\nLogs /tmp/qa-1c2bfeca-reopen2-{gate,subst,edge}.log. subst empty; lease released; no shared source/dist/Git writes. No task gate deferred; RF07 owns epic-wide docs/hardening, not certified here. Complexity pass: lean already, net 0 lines suggested.",
+  "requiredCheckAtDone": null
 }
