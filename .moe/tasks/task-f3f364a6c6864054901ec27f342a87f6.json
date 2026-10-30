@@ -89,11 +89,17 @@
       "author": "qa-952969be",
       "content": "Note from RF04 QA (qa-952969be, 2026-10-30) for this row's adversarial review (DoD 3). It is non-blocking, because the code is correct.\n\nRF04 completion 78c6671f handles a surviving supervisor root correctly: MoeDaemonSupervisor.OldTree.survivor() includes roots, so a root that survives TerminateProcess makes the restart refuse with survivor(S) and gates every start. But no RF04 test pins it. A scratch mutant that drops `roots` from survivor() passes all 73 MoeDaemonSupervisorTest rows. Only my probe QA1 fails on it, with an assertion.\n\nFour scratch probes pass on the unchanged production bytes (77/77 with --tests com.moe.services.MoeDaemonSupervisorTest):\n- QA1: a surviving root, in both profiles.\n- QA2: a PROTECTED STOP_FAILED signals nothing and gates starts, and a later restart clears it.\n- QA3: NOT_STARTED_HERE while a tree is retained signals nothing and keeps the gate.\n- QA4: a pid of 0 or -1 is never looked up or signaled on Windows.\n\nThe patch is at /mnt/d/moe-scratch/qa-rf04-qa-952969be/qa-probes.patch, and the mutant log is mutant-roots-survivor.log. Consider adopting QA1 as a permanent row, or filing it.",
       "timestamp": "2026-10-30T13:28:45.223Z"
+    },
+    {
+      "id": "comment-e4d51ca53c7043f6941b1469904f64f7",
+      "author": "governor-693b7073",
+      "content": "Input for RF07's planner and worker. This is not a DoD change; the planner decides whether to amend.\nBetween 15:40Z and 16:27Z the governor added three rows to dependsOn, all protected-profile containment fixes found during RF06b's reviews: 0ef30f9f (JetBrains quoted PATH entries, DONE), 526a2080 (JetBrains: only drive-qualified Windows forms are local, so UNC and device paths are refused) and 1c2bfeca (JetBrains subst/mapped-drive aliases). RF06b 032c9739 is being re-planned at reopen cap 3/3 for the inverse UNC-project-base case.\narchitect-4ae016fb suggests RF07's docs state the JetBrains accepted cost on Windows under the protected profile: share and device PATH entries, a node or plugin install on a share or device path, and a protected state root on a share are not used (the state stays session-only). VS Code's matching cost: a share-hosted or mapped-drive project fails closed (RF06b rev 3). The WSL-hosted (\\\\wsl$) project caveat in comment-88f86890 on 526a2080 belongs in the same paragraph.",
+      "timestamp": "2026-10-30T16:27:23.550Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:07:00.327Z",
-  "updatedAt": "2026-10-30T16:01:35.065Z",
+  "updatedAt": "2026-10-30T16:27:23.550Z",
   "dependsOn": [
     "task-b439d7fb2c3443789fe91971cad4ed04",
     "task-98ffe33f448746e6bc802db0b5624fd0",
@@ -101,7 +107,8 @@
     "task-465ee87556134a378c5f657008c1446b",
     "task-80930ce6f0b54f7996e2c7eb7c835107",
     "task-0ef30f9f1c0f4211946a16324dc60921",
-    "task-526a208079b5467db13cb9dd10da442e"
+    "task-526a208079b5467db13cb9dd10da442e",
+    "task-1c2bfeca0ec34589b8cb498abc082549"
   ],
   "planningEntry": {
     "from": "BACKLOG",
