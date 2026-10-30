@@ -228,7 +228,7 @@ class MoeDaemonSupervisor(
             is RuntimeSelection.Rejected -> return ProtectedDaemonCommand.Refused(selection.reason)
         }
         val command = mutableListOf(nodeFile.path, daemon.path, "start", "--project", basePath)
-        if (wslAgentsEnabled()) command += listOf("--host", "0.0.0.0")
+        if (wslAgentsEnabled()) command += listOf("--host", WSL_BIND_HOST)
         return ProtectedDaemonCommand.Ready(command)
     }
 
@@ -309,7 +309,7 @@ class MoeDaemonSupervisor(
         return true
     }
 
-    private fun buildDaemonCommand(basePath: String): String {
+    internal fun buildDaemonCommand(basePath: String): String {
         val raw = System.getenv("MOE_DAEMON_COMMAND")?.trim()
         if (!raw.isNullOrBlank()) {
             val normalized = raw.trim().trim('"')
@@ -329,7 +329,7 @@ class MoeDaemonSupervisor(
         }
 
         val installed = resolveInstalledDaemonCommand(basePath)
-        val hostSuffix = if (wslAgentsEnabled()) " --host 0.0.0.0" else ""
+        val hostSuffix = if (wslAgentsEnabled()) " --host $WSL_BIND_HOST" else ""
         if (installed != null) {
             return installed + hostSuffix
         }
@@ -341,10 +341,10 @@ class MoeDaemonSupervisor(
         val script = resolveLocalDaemonScript(basePath) ?: return null
         val node = resolveNodeExecutable() ?: "node"
         val command = mutableListOf(node, script.absolutePath, "start", "--project", basePath)
-        // WSL agent mode: agents inside WSL can't reach a loopback-only listener,
-        // so bind all interfaces (moe-agent.sh probes for the reachable address).
+        // WSL agent mode: agents inside WSL can't reach a loopback-only listener, so the daemon
+        // binds loopback plus the WSL adapter; moe-agent.sh probes loopback, then the WSL gateway.
         if (wslAgentsEnabled()) {
-            command += listOf("--host", "0.0.0.0")
+            command += listOf("--host", WSL_BIND_HOST)
         }
         return command
     }
@@ -603,6 +603,9 @@ class MoeDaemonSupervisor(
     }
 
     companion object {
+        // The daemon's symbolic bind host: loopback plus the WSL virtual adapter, never every interface.
+        private const val WSL_BIND_HOST = "wsl"
+
         // The daemon writes a few hundred bytes; 64 KiB still fits a 32K-character project path.
         internal const val MAX_DAEMON_JSON_BYTES = 64 * 1024
 

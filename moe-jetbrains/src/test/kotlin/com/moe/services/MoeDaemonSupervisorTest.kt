@@ -9,6 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -184,6 +185,48 @@ class MoeDaemonSupervisorTest {
             assertEquals("a legacy spawn and activation never consult the store", 0, consulted)
         } finally {
             RuntimeSelectionPolicy.resetForTest()
+        }
+    }
+
+    @Test
+    fun `W1 legacy direct start passes --host wsl only in WSL agent mode`() {
+        listOf(false, true).forEach { wsl ->
+            val root = initializedRoot("w1-$wsl")
+            val script = File(root, "packages/moe-daemon/dist/index.js").apply { parentFile.mkdirs() }.also { it.writeText("repo") }
+            val started = mutableListOf<List<String>>()
+            val supervisor = MoeDaemonSupervisor(
+                root.absolutePath, "Test Project",
+                processStarter = { started += it.command().toList(); FakeProcess() },
+                wslAgentsEnabled = { wsl }, profile = { RuntimeProfile.LEGACY }
+            )
+            assertTrue("wsl=$wsl", supervisor.ensureDaemonRunning())
+            val cmd = started.single()
+            val expected = listOf("start", "--project", root.absolutePath) + (if (wsl) listOf("--host", "wsl") else emptyList())
+            assertEquals("wsl=$wsl", expected, cmd.drop(2))
+            assertEquals("wsl=$wsl", script.canonicalFile, File(cmd[1]).canonicalFile)
+            assertFalse("wsl=$wsl", cmd.contains("0.0.0.0"))
+        }
+    }
+
+    @Test
+    fun `W2 legacy shell start command appends --host wsl only in WSL agent mode`() {
+        // MOE_DAEMON_COMMAND is the operator's verbatim command and never carries --host.
+        Assume.assumeTrue(System.getenv("MOE_DAEMON_COMMAND").isNullOrBlank())
+        listOf(false, true).forEach { wsl ->
+            val root = initializedRoot("w2-$wsl")
+            val supervisor = MoeDaemonSupervisor(
+                root.absolutePath, "Test Project", wslAgentsEnabled = { wsl }, profile = { RuntimeProfile.LEGACY }
+            )
+            val cmd = supervisor.buildDaemonCommand(root.absolutePath)
+            // Both the installed start-daemon.cmd branch and the `moe-daemon start` fallback end with the suffix.
+            if (wsl) {
+                assertTrue("wsl=$wsl: $cmd", cmd.endsWith(" --host wsl"))
+                assertEquals("wsl=$wsl: $cmd", 1, Regex("--host").findAll(cmd).count())
+                assertTrue("wsl=$wsl: $cmd", cmd.contains("--project \"${root.absolutePath}\""))
+            } else {
+                assertFalse("wsl=$wsl: $cmd", cmd.contains("--host"))
+            }
+            assertFalse("wsl=$wsl: $cmd", cmd.contains("0.0.0.0"))
         }
     }
 

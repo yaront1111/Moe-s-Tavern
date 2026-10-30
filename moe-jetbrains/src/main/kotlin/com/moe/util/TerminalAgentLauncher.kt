@@ -192,7 +192,7 @@ object TerminalAgentLauncher {
      * WSL agent mode (Windows IDE only): launch agents via moe-agent.sh with
      * /mnt/<drive>/ paths so they run as genuine Linux processes inside the
      * user's WSL terminal profile. Requires the daemon to listen beyond
-     * loopback (the daemon spawner passes --host 0.0.0.0 when this is on);
+     * loopback (the daemon spawner passes --host wsl when this is on: loopback plus the WSL adapter, not every interface);
      * moe-agent.sh discovers the reachable host and exports MOE_DAEMON_HOST.
      */
     fun isWslAgentsEnabled(project: Project): Boolean =

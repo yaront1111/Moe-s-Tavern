@@ -769,7 +769,7 @@ class RuntimeSelectionPolicyTest {
     @Test
     fun `S1 protected selection runs only the installed node and daemon`() {
         val (project, root, node) = protectedFixture()
-        listOf(false to emptyList(), true to listOf("--host", "0.0.0.0")).forEach { (wsl, host) ->
+        listOf(false to emptyList(), true to listOf("--host", "wsl")).forEach { (wsl, host) ->
             val started = mutableListOf<List<String>>()
             val dirs = mutableListOf<File?>()
             val supervisor = supervisorFor(project, root = { root }, node = { node.path }, wsl = wsl, started = started, dirs = dirs)

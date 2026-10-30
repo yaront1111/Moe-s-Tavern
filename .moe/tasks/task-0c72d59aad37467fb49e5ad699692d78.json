@@ -13,45 +13,78 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST. Load test-driven-development.\n\nPrerequisites. dependsOn gates the claim, not the bytes, so first confirm these are DONE:\n- RF01 (task-fd653cfb);\n- RF02 (task-f3485ac9);\n- the daemon's `--host wsl` (task-2f2484b4).\n\nThen read:\n- the LANDED MoeDaemonSupervisor.kt, MoeDaemonSupervisorTest.kt and RuntimeSelectionPolicyTest.kt. RF01/RF02 rewrote all three, so constructor parameters and line numbers may have moved.\n- mem:decision-daemon-origin-and-wsl-bind.\n- packages/moe-daemon/src/server/bindHosts.ts, read-only. 'wsl' means 127.0.0.1 plus each vEthernet (WSL...) adapter.\n\nRun `git status --short -- moe-jetbrains/src` before editing. Any dirty path you did not write belongs to a peer: preserve its bytes, with no checkout, stash or revert.\n\n1. moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt, test `S1 protected selection runs only the installed node and daemon`. Change only the pin `true to listOf(\"--host\", \"0.0.0.0\")` to `true to listOf(\"--host\", \"wsl\")`. The false row stays emptyList().\n\n2. moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt: add two tests beside the legacy-spawn test. Every expectation uses the literal \"wsl\", never the production constant: a pin that reads the constant follows a mutated constant.\n\n- `W1 legacy direct start passes --host wsl only in WSL agent mode`. For wsl in listOf(false, true):\n  - Set up root = initializedRoot(\"w1-$wsl\") and write packages/moe-daemon/dist/index.js under it. findInParents finds it before any bundled or global-config copy.\n  - Build the supervisor with named arguments: MoeDaemonSupervisor(root.absolutePath, \"Test Project\", processStarter = { started += it.command().toList(); FakeProcess() }, wslAgentsEnabled = { wsl }, profile = { RuntimeProfile.LEGACY }).\n  - assertTrue(ensureDaemonRunning()).\n  - With cmd = started.single(), assert exact equality of cmd.drop(2) with listOf(\"start\", \"--project\", root.absolutePath) + (if (wsl) listOf(\"--host\", \"wsl\") else emptyList()).\n  - Assert File(cmd[1]).canonicalFile equals the written script's canonicalFile.\n  - Assert \"0.0.0.0\" !in cmd.\n  - cmd[0], the node, depends on the environment and stays unasserted.\n\n- `W2 legacy shell start command appends --host wsl only in WSL agent mode`. It calls supervisor.buildDaemonCommand(root.absolutePath) directly. ensureDaemonRunning reaches that branch only when no repo, bundled or global-config script exists, which depends on the machine.\n  - Guard with Assume.assumeTrue(System.getenv(\"MOE_DAEMON_COMMAND\").isNullOrBlank()), because that override is the operator's verbatim command.\n  - wsl=true: the command ends with \" --host wsl\", has exactly one \"--host\", and contains `--project \"<root>\"`.\n  - wsl=false: the command contains no \"--host\".\n  - Neither contains \"0.0.0.0\".\n  - Both the Windows Program Files start-daemon.cmd branch and the `moe-daemon start` fallback end with the suffix, so the assertions hold on any machine. Say so in a one-line comment.\n\n3. So W2 compiles, change only `private fun buildDaemonCommand` to `internal fun buildDaemonCommand` in MoeDaemonSupervisor.kt. It is a test seam, as protectedDaemonCommand and findInParents already are (mem:gotcha-kotlin-internal-visible-from-test-sourceset).\n\nThe verify step's mutants prove these rows fail on the old 0.0.0.0 behavior, so no separate red run is needed here.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "S1 pin -> wsl; W1/W2 added; buildDaemonCommand made internal. Peers' dirty paths untouched.",
+      "startedAt": "2026-10-30T09:30:04.975Z",
+      "completedAt": "2026-10-30T09:30:33.906Z"
     },
     {
       "stepId": "step-2",
       "description": "IMPLEMENT in moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt.\n\n1. Companion object: add `private const val WSL_BIND_HOST = \"wsl\"`. Give it a one-line comment: the daemon's symbolic bind host, meaning loopback plus the WSL virtual adapter, never every interface.\n\n2. Use the constant at every site that adds --host for WSL agents. There are three today; if RF01/RF02 moved one, find them by grepping the landed file for host:\n- protectedDaemonCommand: `command += listOf(\"--host\", WSL_BIND_HOST)`.\n- buildDaemonCommand: `val hostSuffix = if (wslAgentsEnabled()) \" --host $WSL_BIND_HOST\" else \"\"`.\n- buildDirectDaemonCommand: `command += listOf(\"--host\", WSL_BIND_HOST)`. Rewrite the comment above it to say: agents inside WSL can't reach a loopback-only listener, so the daemon binds loopback plus the WSL adapter, and moe-agent.sh probes loopback, then the WSL gateway.\n\n3. Left unchanged on purpose:\n- the MOE_DAEMON_COMMAND override, which is operator-owned, used verbatim, and never carried --host;\n- the protected refusal path;\n- the environment, the working directory and the spawn bookkeeping.\n\nError handling: there is no fallback to 0.0.0.0. An older repo-local or npm-global daemon treats 'wsl' as a hostname, cannot bind it, and exits. The existing processStarter try/catch, onStatus and spawn cooldown plus max-attempts path reports that. Do not add a retry on another host. This step adds no new IO.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "startedAt": "2026-10-30T09:30:34.845Z",
+      "completedAt": "2026-10-30T09:30:43.811Z"
     },
     {
       "stepId": "step-3",
       "description": "TEXT.\n\n1. moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt, the KDoc on isWslAgentsEnabled. Replace '(the daemon spawner passes --host 0.0.0.0 when this is on)' with '(the daemon spawner passes --host wsl when this is on: loopback plus the WSL adapter, not every interface)'. This is a comment-only change.\n\n2. moe-jetbrains/src/main/resources/messages/MoeBundle.properties, key moe.panel.agentsMenu.wslAgents.on. Replace only 'bound to 0.0.0.0 so WSL can reach it' with 'bound to loopback and the WSL adapter so WSL can reach it'.\n- Keep the rest of the value byte-identical, including the existing em dash.\n- The file is UTF-8: do not re-encode or escape it.\n- Keep the new words ASCII (mem:gotcha-jetbrains-headless-presentation-bundle-keys).\n- Use an editing tool, not sed with a non-ASCII pattern.\n\n3. Check that `grep -rn '0\\.0\\.0\\.0' moe-jetbrains/src/main` prints nothing and exits 1. Quote the command and its result in complete_task's summary (DoD 2). build/resources is generated output and does not count.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
         "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "note": "grep -rn '0\\.0\\.0\\.0' moe-jetbrains/src/main -> no output, exit 1.",
+      "startedAt": "2026-10-30T09:30:44.762Z",
+      "completedAt": "2026-10-30T09:30:47.632Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\nLease:\n- Take it with moe.acquire_resource {resourceId: 'jetbrains-gradle', taskId, workerId, note}.\n- If the request is queued, call moe.report_blocked with that resourceId and stop; the grant unblocks the task.\n- Release it in every exit path, failures included (mem:convention-jetbrains-gradle-lease).\n- Check that `.\\gradlew.bat --status` is idle first (mem:gotcha-jetbrains-concurrent-gradle-cache).\n- WSL has no JDK, so every run goes through cmd.exe (mem:gotcha-jetbrains-gradle-from-wsl).\n\n1. Mutants, while holding the lease.\n- Copy MoeDaemonSupervisor.kt to the scratchpad first.\n- Apply each mutant with a script that asserts its occurrence count before writing.\n- Run the focused classes:\n  cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeDaemonSupervisorTest --tests com.moe.util.RuntimeSelectionPolicyTest --rerun\"\n- Restore from the copy and cmp it. Never use git checkout: it would discard this task's own uncommitted edits.\n- A kill counts only when assertions fail, never on a compile error.\n\nThe mutants:\n- M1: WSL_BIND_HOST = \"0.0.0.0\". The wsl=true rows of S1, W1 and W2 fail.\n- M2: buildDirectDaemonCommand ignores wslAgentsEnabled. W1 fails.\n- M3: hostSuffix is unconditional. W2's wsl=false row fails.\n\n2. GATE (DoD 3). Run fresh; it must exit 0, and its output tail goes to complete_task:\n   cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n- Count tests, failures and skipped from build/test-results/test/TEST-*.xml, not from the console.\n- Confirm S1, W1 and W2 ran, and that W2 is not skipped.\n- Report the command as the Windows equivalent of `cd moe-jetbrains && ./gradlew test`.\n\n3. Re-run the step-3 grep, then run `git status --short`. This task's paths are the five plan files. Every other dirty path was there before and is untouched.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Mutants M1 (3 rows fail), M2 (W1), M3 (W2) all killed by assertions; restored+cmp. Gate exit 0: 385 tests, 0 fail/err/skip; S1/W1/W2 ran, W2 not skipped. Lease released.",
+      "startedAt": "2026-10-30T09:30:48.451Z",
+      "completedAt": "2026-10-30T09:31:43.663Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as an attacker on the LAN and as an unlucky Windows user.\n\n- Can WSL mode still start a daemon on 0.0.0.0, or with no --host? Walk every path:\n  - protected;\n  - legacy direct;\n  - the installed start-daemon.cmd;\n  - the `moe-daemon start` fallback;\n  - the MOE_DAEMON_COMMAND override and its {projectPath} template, which stay verbatim by design. Say so in the summary.\n- Is --host ever added twice, or inside the quoted project path? Do `cmd /c` and `bash -lc` still parse the shell string?\n- What does an older daemon do with 'wsl'? Confirm it fails through the existing spawn backoff and that nothing retries with 0.0.0.0.\n- A daemon already running from an older plugin keeps its 0.0.0.0 bind until the toggle's restart or an IDE restart. That is outside this row: RF03 replaces an unverified running daemon. Name it in the summary.\n- With the toggle off, is there no --host at all, so the daemon default (loopback) applies?\n- Do the tests:\n  - pin literals;\n  - avoid the developer's environment, except the documented Assume;\n  - leave no temp files behind?\n- Rails:\n  - test coverage and error handling are present;\n  - no forbidden pattern;\n  - the diff stays inside the five files.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Self-review: all three --host sites use the constant; suffix added once after the quoted project path; no 0.0.0.0 fallback anywhere; toggle off adds no --host; MOE_DAEMON_COMMAND stays verbatim by design; older daemon treats 'wsl' as a hostname and fails via existing spawn backoff; already-running old-plugin daemon keeps 0.0.0.0 until restart (RF03's concern). Diff limited to five files.",
+      "startedAt": "2026-10-30T09:31:44.573Z",
+      "completedAt": "2026-10-30T09:31:49.011Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -70,20 +103,28 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:33:14.135Z",
-  "updatedAt": "2026-10-30T08:43:25.835Z",
+  "updatedAt": "2026-10-30T09:31:57.157Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:37:59.978Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-bd1eb82d"
+    "architect-bd1eb82d",
+    "worker-fe18a9a9"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T07:45:21.917Z",
   "planningNotes": {
@@ -105,5 +146,22 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T07:45:21.939Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T09:30:04.975Z",
+  "reviewStartedAt": "2026-10-30T09:31:57.155Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :test\n\nBUILD SUCCESSFUL in 9s\n11 actionable tasks: 6 executed, 5 up-to-date\n(XML totals: 385 tests, 0 failures, 0 errors, 0 skipped; S1, W1, W2 ran)",
+    "reportedAt": "2026-10-30T09:31:57.155Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+  ],
+  "completionSummary": "WSL agent mode now starts the daemon with `--host wsl`. A new private WSL_BIND_HOST constant in MoeDaemonSupervisor is used at all three sites: the protected direct command, the legacy direct command and the legacy shell hostSuffix. buildDaemonCommand became internal as a test seam. The TerminalAgentLauncher KDoc and the MoeBundle wslAgents.on message were updated (the new words are ASCII).\n\nTests: the RuntimeSelectionPolicyTest S1 pin is now `--host wsl`. New MoeDaemonSupervisorTest rows W1 (legacy direct argv, wsl on and off) and W2 (legacy shell string, wsl on and off) use the literal \"wsl\", not the constant. W2 is guarded by an Assume that MOE_DAEMON_COMMAND is unset; it ran and was not skipped.\n\nMutants, all killed by assertion failures and then restored and cmp-checked:\n- M1, constant set to 0.0.0.0: S1, W1 and W2 fail.\n- M2, direct command ignores wslAgentsEnabled: W1 fails.\n- M3, hostSuffix unconditional: W2 fails.\n\nDoD 2: `grep -rn '0\\.0\\.0\\.0' moe-jetbrains/src/main` prints nothing and exits 1.\n\nNot covered by this change:\n- The MOE_DAEMON_COMMAND override stays verbatim by design and never carries --host.\n- An older daemon treats 'wsl' as a hostname, fails to bind, and exits through the existing spawn backoff. Nothing retries with 0.0.0.0.\n- A daemon already running from an older plugin keeps its 0.0.0.0 bind until the toggle's restart or an IDE restart. RF03 handles that."
 }
