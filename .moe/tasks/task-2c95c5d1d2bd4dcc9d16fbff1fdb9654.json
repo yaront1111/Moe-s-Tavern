@@ -121,7 +121,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T20:43:22.675Z",
-  "updatedAt": "2026-10-30T21:12:03.558Z",
+  "updatedAt": "2026-10-30T21:12:20.962Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T20:43:49.179Z",
@@ -229,7 +229,44 @@
     "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts",
     "packages/moe-daemon/src/state/teamStore.ts",
     "packages/moe-daemon/src/types/schema.ts",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-2c95c5d1d2bd4dcc9d16fbff1fdb9654.json",
+    ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json"
+  ],
+  "completionSummary": "A join into a full team now evicts DEAD members first, so DEAD seats no longer hold a team at maxSize. addTeamMember (state/teamStore.ts) computes dead = memberIds whose record is DEAD and refuses with the unchanged `Team <name> is full (max N members)` only when live members fill maxSize, before any write. Otherwise the new local evictDeadMembers does one updateTeam (memberIds minus dead, formerMemberIds via withEvictionTombstones, the deleteWorker tombstone). It then clears teamId on each evicted record that points at this team, passing lastActivityAt back so the record stays DEAD and the repair is not presence. A failed pointer repair is logged and never fails the join. An existing member, including a DEAD one re-joining under its own id (wrapper_restart), still hits the idempotent early return and keeps its seat. A team below maxSize never evicts. A member with no worker record is not DEAD. Untouched: teamMembershipHeal.ts, claimEligibility.ts, claimNextTask.ts, MCP API, persisted fields. Also changed: Team.formerMemberIds doc comment (schema.ts) and the moe.join_team section of docs/MCP_SERVER.md. New joinTeam.deadMembers.test.ts has 7 cases; on the parent 4 fail with \"is full\" and 3 pin today's behavior. Mutants skip-tombstone, skip-teamId-reset and evict-below-maxSize were each killed. Not changed (outside approved scope): removeTeamMember still bumps a DEAD record's lastActivityAt (governor's planner input); noted in the handoff.",
+  "commits": [
+    {
+      "sha": "757dcce4e62c38110200e7216d6bc9e398c10d39",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-30T21:06:41Z",
+      "paths": [
+        ".moe/tasks/task-2c95c5d1d2bd4dcc9d16fbff1fdb9654.json",
+        ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-30T21:12:20.962Z",
+      "treeId": "2ca9cfb2a3a5bdced13003e4794636a1ccc51c5f",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts",
+    "packages/moe-daemon/src/state/teamStore.ts",
+    "packages/moe-daemon/src/types/schema.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "A join into a full team now evicts DEAD members first, so DEAD seats no longer hold a team at maxSize. addTeamMember (state/teamStore.ts) computes dead = memberIds whose record is DEAD and refuses with the unchanged `Team <name> is full (max N members)` only when live members fill maxSize, before any write. Otherwise the new local evictDeadMembers does one updateTeam (memberIds minus dead, formerMemberIds via withEvictionTombstones, the deleteWorker tombstone). It then clears teamId on each evicted record that points at this team, passing lastActivityAt back so the record stays DEAD and the repair is not presence. A failed pointer repair is logged and never fails the join. An existing member, including a DEAD one re-joining under its own id (wrapper_restart), still hits the idempotent early return and keeps its seat. A team below maxSize never evicts. A member with no worker record is not DEAD. Untouched: teamMembershipHeal.ts, claimEligibility.ts, claimNextTask.ts, MCP API, persisted fields. Also changed: Team.formerMemberIds doc comment (schema.ts) and the moe.join_team section of docs/MCP_SERVER.md. New joinTeam.deadMembers.test.ts has 7 cases; on the parent 4 fail with \"is full\" and 3 pin today's behavior. Mutants skip-tombstone, skip-teamId-reset and evict-below-maxSize were each killed. Not changed (outside approved scope): removeTeamMember still bumps a DEAD record's lastActivityAt (governor's planner input); noted in the handoff."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-25da16b2@2026-10-30T21:06:41Z",
+    "at": "2026-10-30T21:12:20.962Z"
+  }
 }
