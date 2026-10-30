@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { Effort, ProjectSettings, TaskStatus } from '../types/schema.js';
+import type { Effort, ProjectSettings, RecipeInstance, TaskStatus } from '../types/schema.js';
 import { MAX_CRITIQUE_BLOCKS_DEFAULT } from '../types/schema.js';
 import { checkPlanRails, type RailsCheckResult } from '../util/rails.js';
 import {
@@ -57,6 +57,20 @@ function missingPathsError(projectRoot: string, missingPaths: string[], cachedRe
 // The cap lives with the sanitizer's bound (util/planSize) so they cannot drift;
 // re-exported here for callers/tests that import it from this module.
 export { MAX_STEP_DESCRIPTION_CHARS };
+/** The internal recipe adapter's identity (CQ-C08). Never an architect id; no wire caller may use it. */
+export const RECIPE_ACTOR = 'moe-recipe';
+// Keyed by the argument object submitRecipePlan creates, so no MCP or /ws payload can be a key.
+const recipeSubmissions = new WeakMap<object, Omit<RecipeInstance, 'version' | 'planRevision'>>();
+
+/** A recipe's plan through the unchanged submit_plan flow as RECIPE_ACTOR, bound in the PLAN_SUBMITTED write. Outside the mutex. */
+export async function submitRecipePlan(
+  state: StateManager, args: Record<string, unknown>, recipeInstance: Omit<RecipeInstance, 'version' | 'planRevision'>,
+): Promise<{ status: TaskStatus; planRevision: number }> {
+  const call = { ...args, workerId: RECIPE_ACTOR };
+  recipeSubmissions.set(call, recipeInstance);
+  return await submitPlanTool(state).handler(call, state) as { status: TaskStatus; planRevision: number };
+}
+
 /** Tracks SPEED mode auto-approval timeouts by taskId so they can be cancelled. */
 const speedModeTimeouts = new Map<string, NodeJS.Timeout>();
 
@@ -302,6 +316,11 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
+      const recipeInstance = args && typeof args === 'object' ? recipeSubmissions.get(args) : undefined;
+      if (!recipeInstance && (args as { workerId?: unknown } | null)?.workerId === RECIPE_ACTOR) {
+        throw new MoeError(MoeErrorCode.NOT_ALLOWED, `workerId ${RECIPE_ACTOR} is reserved for recipe instantiation`,
+          { workerId: RECIPE_ACTOR }, 'NOT_ALLOWED');
+      }
       const input = args as { executionContract?: unknown; requiredCheckRevision?: unknown };
       const measuredContract = validateExecutionContract(input.executionContract, 'executionContract');
       const revision = input.requiredCheckRevision;
@@ -580,7 +599,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         // was actually committed with this plan. Reading the cache later would
         // report a stamp a concurrent write had already moved past.
         const submitted = await updateTask(state, task.id, updatePayload, 'PLAN_SUBMITTED', params.workerId,
-          { ...(snapshot ? { requiredCheckSnapshot: snapshot } : {}), ...(basis ? { planSourceBasis: basis } : {}) });
+          { ...(snapshot ? { requiredCheckSnapshot: snapshot } : {}), ...(basis ? { planSourceBasis: basis } : {}),
+            ...(recipeInstance ? { recipeInstance } : {}) });
         // Use the captured assignee because updateTask clears assignedWorkerId on
         // PLANNING -> AWAITING_APPROVAL handoff. touchWorker skips missing worker
         // records and never blocks a successfully submitted plan.

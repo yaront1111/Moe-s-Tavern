@@ -778,6 +778,32 @@ export interface PlanReuseRecord {
   candidate?: 'current' | 'revalidate';
 }
 
+/** One recipe (CQ-C08) in RECIPE_DEFINITIONS_PATH (context/recipes/recipe.ts), read only from committed bytes. */
+export interface RecipeDefinition {
+  id: string;
+  kind: string;
+  version: number;
+  /** Become the instantiated plan's protected checks. */
+  requiredChecks: ProtectedCheckDefinition[];
+  /** Kind-specific settings, checked by the kind's validateDefinition. */
+  params?: Record<string, unknown>;
+}
+
+/** Which recipe produced the current plan (CQ-C08). Decode with readRecipeInstance. Never approval or evidence. */
+export interface RecipeInstance {
+  version: 1;
+  recipeId: string;
+  kind: string;
+  recipeVersion: number;
+  definitionDigest: string;
+  /** Where the definitions, the source and the protected snapshot were read. */
+  commit: string;
+  inputs: Record<string, string | number | boolean>;
+  inputsDigest: string;
+  /** The revision the PLAN_SUBMITTED write committed; a later plan edit makes the binding stale. */
+  planRevision: number;
+}
+
 /**
  * Optional execution intent, canonicalized by validateExecutionContract. A docs
  * fix may supply only intendedBehavior; an API change may also need compatibility.
@@ -890,6 +916,8 @@ export interface Task {
    * updates and the /ws denylist. Decode with readPlanReuseRecord. Never approval, readiness or evidence.
    */
   planReuse?: PlanReuseRecord;
+  /** Daemon-owned: set only on PLAN_SUBMITTED by submit_plan's internal recipe channel; stripped from caller updates. */
+  recipeInstance?: RecipeInstance;
   status: TaskStatus;
   assignedWorkerId: string | null;
   branch: string | null;

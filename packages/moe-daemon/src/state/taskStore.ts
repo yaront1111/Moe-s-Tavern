@@ -18,7 +18,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { StateManager } from './StateManager.js';
-import type { ActivityEventType, ExecutionPolicySnapshot, PlanReuseRecord, RequiredCheckSnapshot, Task, TaskComment, TaskPriority, TaskStatus } from '../types/schema.js';
+import type { ActivityEventType, ExecutionPolicySnapshot, PlanReuseRecord, RecipeInstance, RequiredCheckSnapshot, Task, TaskComment, TaskPriority, TaskStatus } from '../types/schema.js';
 import {
   assertExecutionProfileReady,
   readExecutionPolicySnapshot,
@@ -427,7 +427,8 @@ export function assertNoFinalizingAttempt(state: StateManager, taskId: string): 
 export async function updateTask(
   state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string,
   daemonOwned?: { requiredCheckSnapshot?: RequiredCheckSnapshot; approvedPlanRevision?: number;
-    planSourceBasis?: { commit: string }; planReuse?: PlanReuseRecord },
+    planSourceBasis?: { commit: string }; planReuse?: PlanReuseRecord;
+    recipeInstance?: Omit<RecipeInstance, 'version' | 'planRevision'> },
 ): Promise<Task> {
   const task = state.tasks.get(taskId);
   if (!task) {
@@ -462,6 +463,8 @@ export async function updateTask(
   delete sanitized.planSourceBasis;
   delete sanitized.planningEntry;
   delete sanitized.planReuse;
+  // The recipe binding is daemon-owned: only submit_plan's internal recipe channel writes it (PLAN_SUBMITTED).
+  delete sanitized.recipeInstance;
   // Refused before any write: nothing is persisted, mapped or emitted.
   const reuse = daemonOwned?.planReuse === undefined ? undefined : validatePlanReuseRecord(daemonOwned.planReuse);
   if (Object.prototype.hasOwnProperty.call(sanitized, 'executionContract')) {
@@ -599,6 +602,8 @@ export async function updateTask(
     else delete updated.requiredCheckSnapshot;
     if (basis) updated.planSourceBasis = basis;
     else delete updated.planSourceBasis;
+    if (daemonOwned.recipeInstance) updated.recipeInstance = { version: 1, ...daemonOwned.recipeInstance, planRevision };
+    else delete updated.recipeInstance;
   }
   if (reuse) updated.planReuse = reuse;
   // How the task last entered PLANNING. Judged on the STORED row: an unblock

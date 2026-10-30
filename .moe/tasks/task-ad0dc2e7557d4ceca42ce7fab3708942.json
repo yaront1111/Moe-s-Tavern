@@ -97,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T13:43:36.349Z",
-  "updatedAt": "2026-10-30T04:31:40.416Z",
+  "updatedAt": "2026-10-30T04:32:25.385Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T14:23:40.801Z",
     "plannedStepCount": 5,
@@ -150,7 +150,8 @@
     "scripts/moe-agent.ps1",
     "scripts/tests/daemon-json-cap.test.mjs",
     ".moe/tasks/task-ad0dc2e7557d4ceca42ce7fab3708942.json",
-    ".moe/tasks/task-b8b8faba152a4d7fae09d9388407f707.json"
+    ".moe/tasks/task-b8b8faba152a4d7fae09d9388407f707.json",
+    ".moe/tasks/task-f12b03e83a1a491494a08e42c7a58504.json"
   ],
   "completionSummary": "Both launchers now read .moe/daemon.json through one bounded read of at most 65537 bytes. A larger file takes the existing unparseable path.\n- moe-agent.sh: new daemon_json_field helper. It does python open(p,'rb').read(65537), exits with 'daemon.json is larger than 64 KiB' above 65536, and writes via sys.stdout.write. All 4 reads use it (PID, port, projectPath, wait-loop PID). The PID read gains `|| PID_EXIT_CODE=$?`.\n- moe-agent.ps1: new Read-MoeDaemonJsonText, a FileStream into byte[65537] with the same throw, disposed in finally. Both Get-Content reads use it. BOM kept; parity passes.\n\nINTENDED behavior change (sh): a malformed or vanished daemon.json now prints '[WARN] Failed to parse daemon.json' and starts a daemon, as ps1 does. Before, the unguarded assignment under set -e silently aborted the launcher, so that WARN was dead code.\n\nDeviation from the plan, verified: the ps1 helper opens `Convert-Path -LiteralPath $Path`. Resolve-Path makes a UNC project's path provider-qualified (`Microsoft.PowerShell.Core\\FileSystem::\\\\...`). [IO.File]::OpenRead rejects that form; Get-Content accepted it. A ps1 test case covers it.\n\nNew scripts/tests/daemon-json-cap.test.mjs (14 tests) runs the real check blocks on bash/Git Bash, PS 5.1 and pwsh 7:\n- 65536-byte ok;\n- 65537-byte takes the WARN/catch path and the file is kept;\n- malformed;\n- the UNC path form;\n- ParseFile;\n- static checks: no unbounded read is left, the cap literals, the shared message.\n\nResults:\n- RED on pristine launchers: WSL bash (b)/(c) and the static check fail; on Windows Git Bash (b)/(c) and PS (b) fail too.\n- GREEN: WSL 4 pass / 10 PS skipped; Windows 14/14, 0 skipped.\n- Mutants (no Convert-Path, -gt 65537) are caught on both PS engines.\n- Edits went through a %TEMP% mirror, then a compare-and-swap Edit replay; the checkout is cmp-identical to the mirror.\n\nResiduals (pre-existing):\n- a live daemon with an unreadable daemon.json gets a second start, as on ps1;\n- a FIFO blocks the open;\n- the malformed",
   "commits": [
@@ -182,6 +183,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "b8c98cf02daf62d72fb214a2757acbf2a6cca6ff",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T04:28:24Z",
+      "paths": [
+        ".moe/tasks/task-ad0dc2e7557d4ceca42ce7fab3708942.json",
+        ".moe/tasks/task-f12b03e83a1a491494a08e42c7a58504.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T04:32:25.384Z",
+      "treeId": "416caac26c6109a7b8a8dbf3ee99f2736d641ebf",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -192,9 +209,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-b5749787@2026-10-30T04:09:38Z",
-    "at": "2026-10-30T04:27:56.394Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T04:28:24Z",
+    "at": "2026-10-30T04:32:25.384Z"
   },
   "completedAt": "2026-10-30T04:31:40.416Z",
   "reviewCompletedAt": "2026-10-30T04:31:40.416Z",
