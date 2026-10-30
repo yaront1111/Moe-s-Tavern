@@ -119,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T14:29:51.358Z",
-  "updatedAt": "2026-10-30T21:27:34.229Z",
+  "updatedAt": "2026-10-30T21:27:51.650Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T14:38:56.099Z",
@@ -234,7 +234,9 @@
     "packages/moe-daemon/src/commands/doctor.test.ts",
     "packages/moe-daemon/src/commands/doctor.ts",
     "packages/moe-daemon/src/index.ts",
-    "packages/moe-daemon/src/util/projectPath.ts"
+    "packages/moe-daemon/src/util/projectPath.ts",
+    ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+    ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json"
   ],
   "completionSummary": "moe-proxy and doctor now judge project identity the way the daemon lifecycle does: they resolve only their own path and compare the reported or recorded path as written. 7 files, +134/-49, 85 net. No docs, dependency or API change.\n- proxy utils.ts: getProjectPath = path.resolve(MOE_PROJECT_PATH || cwd). This is the single source of the proxy's own path. readDaemonInfoResult, classify and comparableProjectPath are untouched.\n- daemon: new util/projectPath.ts holds the contract, moved verbatim from index.ts (a scripted diff differs only in the export keywords). index.ts imports it and re-exports it via its existing export list. No cycle: the module imports only 'path'.\n- doctor.ts: isSameProjectPath(body.projectPath, canonicalProjectPath(expected)).\nTests:\n- proxy: the getProjectPath alias row, and E5, an e2e test where a //x (POSIX) or /x (win32) alias opens /mnt.\n- doctor: D1, a drive-case flip (win32) or //wsl$/Ubuntu share (POSIX), reports OK. D2: POSIX uppercase still FAILs. D3: runDoctor(alias) reports OK.\n- RED on HEAD: the alias row, E5 and D1 failed by assertion. D2 and D3 are guards.\n- On win32 the aliases use forward slashes, because a backslash \\x already resolves under the contract.\nLinux gate: exact command, fresh whole-repo archive of 04a3e180 with cmp'd overlays and lock-matching native deps. HEAD has since changed only board files.\nNative Windows:\n- proxy: 311 passed, 3 skipped.\n- daemon: 6212 passed, with 1 PRE-EXISTING failure. delivery/acceptance.test.ts fails identically on HEAD bytes: the pwsh7 Git guard hits a PSModulePath problem. Filed as task-44b817f9.\n- The new win32 rows ran and passed (D2 skips by design).\n- cap test: 0 fail.\nResidual, left by contract: doctor lacks namesOwnProject's realpath fallback, so a symlinked --project still FAILs.\nFiled LOW task-1f7409c5: the local runner has the same own-path class of issue.",
   "commits": [
@@ -258,6 +260,22 @@
       "treeId": "26bbd832f0eac795b6a4d348978a218651def80e",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "48f8a2e47946e4bd6d4758c90bdda063ac13bd82",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-30T21:17:45Z",
+      "paths": [
+        ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+        ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-30T21:27:51.650Z",
+      "treeId": "aed079ffe2a85d55f37676318ebbc2b87340759e",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -268,9 +286,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-25da16b2@2026-10-30T20:31:11Z",
-    "at": "2026-10-30T21:04:15.840Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-30T21:17:45Z",
+    "at": "2026-10-30T21:27:51.650Z"
   },
   "completedAt": "2026-10-30T21:27:34.228Z",
   "reviewCompletedAt": "2026-10-30T21:27:34.228Z",

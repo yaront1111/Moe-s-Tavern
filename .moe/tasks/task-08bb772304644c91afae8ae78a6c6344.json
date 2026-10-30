@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -97,16 +97,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:35:53.701Z",
-  "updatedAt": "2026-10-30T21:25:29.533Z",
+  "updatedAt": "2026-10-30T21:33:49.227Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T19:35:58.327Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T21:33:49.227Z",
+    "wallClockMs": 7070900
   },
   "contextFetchedBy": [
     "architect-6fc3dd5c",
-    "worker-c75a6f39"
+    "worker-c75a6f39",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -242,5 +245,9 @@
   "completionSummary": "On Windows a stored pin is now also read when the IDE state store root or the project base has no physical folder, meaning physicalFolder(path) == null. That covers a junction, link or subst onto a drive the lookup cannot place (\\Device\\ImDisk0, a null or throwing windowsDriveTarget), a real path Windows cannot find (toRealPath fails), and a store spelled without a drive. A stored PROTECTED pin keeps profile() PROTECTED and asks for the downgrade once. A confirmed downgrade writes nothing.\nChanges: RuntimeSelectionPolicy.kt +35/-18, with physicalFolder extracted verbatim from outsideByIdentity, whose answers are unchanged. The read gate is `usableFor || windowsHost && (physicalFolder(root)==null || unplainBase(base) || physicalFolder(Paths.get(base))==null)`, with 52fb's term byte-identical. RuntimeSelectionPolicyTest +127/-0 adds D10-D12 and withUnlistable.\nRED on parent 04a3e180, from a soft-report variant: all 12 D10 case/answer combinations (store through a junction, which is DoD 1; store on a drive rooted at a junction; project on such a drive, which is rail prop-a89f8112), D11 (volume GUID store), and both D12 cases (store or project below an unlistable folder). 52fb covers none of them. The final rows fail at their first PROTECTED assert.\nMutants: M2 (first-letter root checks) fails D10 cases 2 and 3 under all 4 answers, D11, and both D12 cases, while D10 case 1 survives. M3 (root term true) fails only the D2 sandbox control. GREEN: 69/69, and the full gate gives 495 tests with 0 failures.\nUnchanged: provably-outside stores, D2 inside stores on a placed drive (ABSENT), missing bases (ABSENT), fresh legacy projects (no ask), and all writes through usableStore.\nRF07 (f3f364a6): reads now also happen for a store spelled without a drive, and for a store under the project whose folder cannot be placed. Both only restrict, and an unreadable record there is PROTECTED plus the ask. A confirmed downgrade there is not persisted, so it is asked after every restart.\nResi",
   "touchedFiles": [
     "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
-  ]
+  ],
+  "completedAt": "2026-10-30T21:33:49.227Z",
+  "reviewCompletedAt": "2026-10-30T21:33:49.227Z",
+  "reviewSummary": "APPROVED. Reviewed completion 6c9295ca (pushed, on moe/work-2026-10-24). Tree bytes equal it (prod 9ef55664, test 6c2505a5). Parent 04a3e180.\nSize: prod +35/-18, test +127/-0 (net 144). Scope matches approvedScope:\n- physicalFolder is extracted verbatim, and outsideByIdentity's answers are unchanged.\n- The root term unprovableDrive -> physicalFolder(root)==null is a superset of the old term. It opens nothing for non-drive spellings.\n- 52fb's unplainBase is byte-identical and runs before the new base term.\n- persist, usableStore, the store, projectKey and the record format are untouched.\n- The tests only add rows.\nDoD1: D10 case 1 under ImDisk0, null, ISE and ULE gives PROTECTED, one ask, and the record and files unchanged. D10 cases 2-3, D11 and D12 cover the subst/GUID/unlistable stores and the base-side rail prop-a89f8112 (also governor comment-3696e987). Parent RED is stated.\nDoD2: the fresh-legacy and inside-sandbox controls read LEGACY with no ask (12 asks in all). Nothing is written under an unprovable store, and the old rows pass unchanged.\nQA mutants under the jetbrains-gradle lease, file sha-restored and git clean, run with `...gradlew.bat test --rerun --tests com.moe.util.RuntimeSelectionPolicyTest`:\n- Q1, base term dropped: KILLED (D10 project case, D12 project case).\n- Q2, root term back to unprovableDrive: KILLED (D10 case 1, D11, D12 store case).\nDoD3, a fresh Windows run under the lease: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` gave rc=0, BUILD SUCCESSFUL, :test executed. 28/28 XML files fresh: 495 tests, 0 skipped, failed or errored. RSPT 69/69 with D10-D12 executed; MDST 79/79. No subst drive was left behind.\nComplexity: nothing to cut.\nResiduals for RF07 (task-f3f364a6): the trailing-dot store root still reads ABSENT (worker-e60b90bd asked for it to be listed), and a confirmed downgrade under an unprovable store is re-asked after each restart.",
+  "requiredCheckAtDone": null
 }
