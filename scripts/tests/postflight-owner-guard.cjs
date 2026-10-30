@@ -154,6 +154,12 @@ const cases=[
   ['malformed','qa',{...dead,FAKE_SCOPE_OWNERSHIP_MODE:'malformed'},{},[],UNKNOWN],
   ['fallback-owner','architect',{FAKE_SCOPE_ASSIGNEE_ALIVE:'down'},{assignedWorkerId:'worker-live'},[],UNKNOWN],
   ['finalizing','architect',{FAKE_SCOPE_ASSIGNEE:'none'},{},[{id:'attempt-done',workerId:'worker-done',phase:'finalizing'}],ACTIVE],
+  // A well-formed get_commit_scope.finalizingAttempt or null decides; only an absent
+  // or malformed one, or the disk fallback, sends the wrapper to scan .moe/attempts.
+  ['finalizing-field','architect',{FAKE_SCOPE_ASSIGNEE:'none',FAKE_SCOPE_FINALIZING:'computed'},{},[{id:'attempt-done',workerId:'worker-done',phase:'finalizing'}],ACTIVE],
+  ['finalizing-own','architect',{FAKE_SCOPE_ASSIGNEE:'none',FAKE_SCOPE_FINALIZING:'computed'},{},[{id:'attempt-mine',workerId:'architect-og',phase:'finalizing'}],''],
+  ['finalizing-null','architect',{FAKE_SCOPE_ASSIGNEE:'none',FAKE_SCOPE_FINALIZING:'null'},{},[{id:'attempt-done',workerId:'worker-done',phase:'finalizing'}],''],
+  ['finalizing-malformed','architect',{FAKE_SCOPE_ASSIGNEE:'none',FAKE_SCOPE_FINALIZING:'malformed'},{},[{id:'attempt-done',workerId:'worker-done',phase:'finalizing'}],ACTIVE],
   ['recovered','architect',live,{},[],ACTIVE],
   ['dead','architect',dead,{},[{id:'attempt-dead',workerId:'worker-dead',phase:'closed'}],''],
   ['unassigned','qa',{FAKE_SCOPE_ASSIGNEE:'none'},{},[],''],
@@ -171,6 +177,8 @@ async function single([name,role,knobs,record,attempts,code]){
   const log=await finish(launch(p.dir,role,wid,knobs),name);
   if(!code)return assertLanded(name,p,wid,role,log);
   assertRefused(name,p,wid,role,code,JSON.parse(read(path.join(p.dir,'.moe','og-cli-'+wid+'.json'))),log,name==='recovered'?2:1);
+  // The field and the scan name the finalizing attempt with the same detail text.
+  if(name.startsWith('finalizing'))assert.ok(log.includes('attempt attempt-done of worker-done is still finalizing'),`[${name}] detail\n${log}`);
   assert.ok(!log.includes('MOE_CHECKPOINT_RECOVERED'),`[${name}] ${log}`);
 }
 

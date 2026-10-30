@@ -3424,7 +3424,10 @@ PYEOF
 # Get-MoeOwnerGuard; the rule is **Owner guard** in scripts/CLAUDE.md. Only the
 # assignee lands while it is protected (assigneeProtected; assigneeAlive is
 # presence, not death) or another seat's attempt is finalizing; only a JSON
-# false clears a foreign owner, anything else is OWNER_UNKNOWN.
+# false clears a foreign owner, anything else is OWNER_UNKNOWN. The finalizing
+# attempt comes from get_commit_scope.finalizingAttempt; .moe/attempts is
+# scanned only when that field is absent (older daemon) or malformed, or the
+# scope is the disk fallback.
 # ponytail: the scope read and the landing CAS are two steps, not one atomic check.
 landing_owner_guard() {
     local out=""
@@ -3454,6 +3457,14 @@ def verdict():
             return ACTIVE, 'it is assigned to %s, a live seat or one holding an open attempt' % owner
         if protected is not False:
             return UNKNOWN, 'it is assigned to %s with no assigneeProtected answer' % owner
+    fa = d.get('finalizingAttempt')
+    if fallback != '1' and 'finalizingAttempt' in d and (fa is None or (isinstance(fa, dict)
+            and isinstance(fa.get('attemptId'), str) and fa['attemptId'].strip()
+            and isinstance(fa.get('workerId'), str) and fa['workerId'].strip()
+            and type(fa.get('generation')) is int and 1 <= fa['generation'] <= 9007199254740991)):
+        if fa is not None and fa['workerId'] != me:
+            return ACTIVE, 'attempt %s of %s is still finalizing' % (fa['attemptId'], fa['workerId'])
+        return '', ''
     for f in sorted(glob.glob(os.path.join(project, '.moe', 'attempts', '*.json'))):
         try:
             with open(f, encoding='utf-8-sig') as fh:

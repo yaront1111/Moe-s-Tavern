@@ -491,8 +491,19 @@ switch (tool) {
     //                                daemon from before the field does. `malformed`
     //                                serves String(value), so 'false' arrives as a
     //                                string, the coercion trap a wrapper must refuse.
-    // The ALIVE, PROTECTED and OWNERSHIP_MODE knobs accept only the values above
-    // (empty counts as unset); anything else throws, so a typo cannot pass a scenario.
+    //   FAKE_SCOPE_FINALIZING=computed|null|malformed  unset leaves out
+    //                                finalizingAttempt, as a daemon from before the
+    //                                field does. `computed` serves the task's
+    //                                finalizing attempt as claimEligibility.ts
+    //                                finalizingAttemptsByTask selects it from
+    //                                .moe/attempts ({attemptId, workerId,
+    //                                generation}, highest generation, else null).
+    //                                `null` serves null whatever the records say.
+    //                                `malformed` serves the computed value with a
+    //                                string generation, or the string 'null'.
+    // The ALIVE, PROTECTED, OWNERSHIP_MODE and FINALIZING knobs accept only the
+    // values above (empty counts as unset); anything else throws, so a typo cannot
+    // pass a scenario.
     // Pre-flight answers with the record's own status (the FAKE_TASK_STATUS
     // knob models the status the task reaches AFTER the CLI ran).
     const knob = (name, allowed) => {
@@ -506,11 +517,31 @@ switch (tool) {
     const aliveKnob = knob('FAKE_SCOPE_ASSIGNEE_ALIVE', ['0', '1']);
     const protectedKnob = knob('FAKE_SCOPE_ASSIGNEE_PROTECTED', ['0', '1']);
     const ownershipMode = knob('FAKE_SCOPE_OWNERSHIP_MODE', ['omit', 'malformed']);
+    const finalizingMode = knob('FAKE_SCOPE_FINALIZING', ['computed', 'null', 'malformed']);
     const assigneeAlive = aliveKnob === null ? ownerKnob !== 'none' : aliveKnob === '1';
     const assigneeProtected = protectedKnob === null ? assignedWorkerId !== null : protectedKnob === '1';
     const taskId = args.taskId || 'task-postflight';
     const rec = readTask(taskId);
     const { asserted, planned } = rec ? declaredSets(rec) : { asserted: [], planned: [] };
+    let finalizingAttempt = null;
+    if (finalizingMode !== null) {
+      // isHoldingFinalizingAttempt: phase finalizing, non-blank id/workerId,
+      // safe-integer generation >= 1; the highest generation wins.
+      const nonBlank = (v) => typeof v === 'string' && v.trim() !== '';
+      let best = null;
+      let attemptFiles = [];
+      try { attemptFiles = fs.readdirSync(path.join(moe, 'attempts')).filter((f) => f.endsWith('.json')).sort(); } catch {}
+      for (const f of attemptFiles) {
+        let a;
+        try { a = JSON.parse(fs.readFileSync(path.join(moe, 'attempts', f), 'utf8').replace(/^\uFEFF/, '')); } catch { continue; }
+        if (!a || a.phase !== 'finalizing' || a.taskId !== taskId || !nonBlank(a.id) || !nonBlank(a.workerId)
+          || !Number.isSafeInteger(a.generation) || a.generation < 1) continue;
+        if (!best || a.generation >= best.generation) best = a;
+      }
+      const named = best && { attemptId: best.id, workerId: best.workerId, generation: best.generation };
+      if (finalizingMode === 'computed') finalizingAttempt = named || null;
+      if (finalizingMode === 'malformed') finalizingAttempt = named ? { ...named, generation: String(named.generation) } : 'null';
+    }
     const peerDeclared = [];
     const peerIds = [];
     const addPeer = (p, id) => { if (p && !peerDeclared.some((e) => e.path === p)) peerDeclared.push({ path: p, taskId: id }); };
@@ -541,6 +572,7 @@ switch (tool) {
       assignedWorkerId,
       assigneeAlive,
       ...(ownershipMode === 'omit' ? {} : { assigneeProtected: ownershipMode === 'malformed' ? String(assigneeProtected) : assigneeProtected }),
+      ...(finalizingMode === null ? {} : { finalizingAttempt }),
       asserted, planned,
       ...(process.env.FAKE_SCOPE_DECLARED_FIELD === '1' ? { declared: strList(rec?.declaredFiles) } : {}),
       touchedFiles: strList(rec?.touchedFiles), inferredPaths: strList(rec?.inferredPaths), unattributedPaths: strList(rec?.unattributedPaths),

@@ -3042,7 +3042,7 @@ function Get-MoeTaskDeclaredSets($Task) {
 function Get-MoeDiskScope([string]$TaskId) {
     $scope = @{
         Source = 'disk'; Found = $false; TaskId = $TaskId; Title = ''; Status = ''; ReopenCount = 0
-        OwnerSet = $false; Owner = $null; Protected = $null
+        OwnerSet = $false; Owner = $null; Protected = $null; FinalizingSet = $false; Finalizing = $null
         Asserted = @(); Declared = @(); Planned = @(); TouchedFiles = @(); InferredPaths = @(); UnattributedPaths = @()
         PeerDeclared = @{}; LivePeerIds = @(); LivePeerIdsKnown = $false; PeersActive = $true; ForceNever = $true
     }
@@ -3105,7 +3105,7 @@ function Get-MoeCommitScope([string]$TaskId, [string]$Phase, [string]$Sid) {
     if ($resp -and ($resp -isnot [string]) -and $resp.PSObject.Properties['taskId'] -and $resp.PSObject.Properties['asserted']) {
         $scope = @{
             Source = 'rpc'; Found = $true; TaskId = [string]$resp.taskId; Title = ''; Status = ''; ReopenCount = 0
-            OwnerSet = $false; Owner = $null; Protected = $null
+            OwnerSet = $false; Owner = $null; Protected = $null; FinalizingSet = $false; Finalizing = $null
             Asserted = @(); Declared = $null; Planned = @(); TouchedFiles = @(); InferredPaths = @(); UnattributedPaths = @()
             PeerDeclared = @{}; LivePeerIds = @(); LivePeerIdsKnown = $true; PeersActive = $false; ForceNever = $false
         }
@@ -3115,6 +3115,8 @@ function Get-MoeCommitScope([string]$TaskId, [string]$Phase, [string]$Sid) {
         # Raw, for Get-MoeOwnerGuard: JSON null (unassigned) and an absent key differ.
         $aw = $resp.PSObject.Properties['assignedWorkerId']; if ($aw) { $scope.OwnerSet = $true; $scope.Owner = $aw.Value }
         $ap = $resp.PSObject.Properties['assigneeProtected']; if ($ap) { $scope.Protected = $ap.Value }
+        # Raw, for Get-MoeOwnerGuard: JSON null (nothing finalizing) and an absent key (older daemon) differ.
+        $fp = $resp.PSObject.Properties['finalizingAttempt']; if ($fp) { $scope.FinalizingSet = $true; $scope.Finalizing = $fp.Value }
         $scope.Asserted = @(Get-MoeStringList (Get-MoeProp $resp 'asserted'))
         # moe.declare_files, the part of asserted committed regardless of the
         # baseline. Absent (a daemon older than the field) stays $null, which
@@ -3172,6 +3174,14 @@ function Get-MoeOwnerGuard([string]$TaskId, [string]$Sid) {
             if ($s.Source -ne 'rpc') { $g.Detail = "it is assigned to $owner and the daemon is unreachable"; return $g }
             if ($s.Protected -is [bool] -and $s.Protected) { $g.Code = $active; $g.Detail = "it is assigned to $owner, a live seat or one holding an open attempt"; return $g }
             if ($s.Protected -isnot [bool]) { $g.Detail = "it is assigned to $owner with no assigneeProtected answer"; return $g }
+        }
+        # get_commit_scope.finalizingAttempt decides when it is null or well-formed; an absent or
+        # malformed field (older daemon) or the disk scope falls back to the records scan below.
+        $fa = $s.Finalizing; $faId = Get-MoeProp $fa 'attemptId'; $faW = Get-MoeProp $fa 'workerId'
+        if ($s.Source -eq 'rpc' -and $s.FinalizingSet -and ($null -eq $fa -or ($fa -is [System.Management.Automation.PSCustomObject] -and
+                $faId -is [string] -and $faId.Trim() -and $faW -is [string] -and $faW.Trim() -and (Test-MoeGeneration (Get-MoeProp $fa 'generation'))))) {
+            if ($null -ne $fa -and $faW -cne $WorkerId) { $g.Code = $active; $g.Detail = "attempt $faId of $faW is still finalizing"; return $g }
+            $g.Code = ''; $g.Detail = ''; return $g
         }
         $files = @()
         try { $files = @(Get-ChildItem -LiteralPath (Join-Path $projectPath '.moe/attempts') -Filter '*.json' -ErrorAction Stop | Sort-Object Name) } catch { }
