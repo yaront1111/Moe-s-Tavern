@@ -56,20 +56,29 @@
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh.\n\n1. Run `node --test scripts/tests/local-runner.test.mjs`. On WSL, run it under env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\", so Windows Node is never used.\n   - It must exit 0, with the MD and TD rows run, not skipped, on Linux, and every M, T, TC and TT row still passing.\n   - Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. `git diff --check -- scripts/local-runner/guest-supervisor.py scripts/local-runner/snapshot-transfer.mjs scripts/tests/local-runner.test.mjs` is clean.\n3. A read-only `git status --short` shows that only those three files changed, and no __pycache__ appeared. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code, never by editing an M or T row.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-30T13:25:45.801Z"
+      "note": "Fresh full gate: env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs -> exit 0; 271 tests, 270 pass, 0 fail, 0 cancelled, 1 skip (the existing opt-in macOS native smoke); 48485.86 ms; log /tmp/r11e4-reopen1.log. MD1-MD3 and TD1-TD3 all ran (✔). Existing M/T/TC/TT rows are unedited and green. Scoped git diff --check is clean. Repair diff vs HEAD: snapshot-transfer.mjs +8/-2, local-runner.test.mjs +10/-0; guest-supervisor.py unchanged. No __pycache__. Other dirty scripts paths (CLAUDE.md, moe-agent.{sh,ps1}, postflight.sh, seat-registration.test.mjs, mods tsconfig) belong to peers or predate this session, and are untouched. Hashes after the gate: transfer 31644b81…, tests 358c9994…, supervisor 19e1ca2d….",
+      "startedAt": "2026-10-30T13:25:45.801Z",
+      "completedAt": "2026-10-30T13:27:11.847Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the three-file diff as an attacker:\n- Did the mode keyword or the staging prefix change anything for the workspace path? Check the root mode 0700, the prefix and the owner default.\n- Can any job identity write the dependency tree, its parent directories or the manifest? Root ownership, 0755 directories, 0644 files and a 0600 manifest must rule it out.\n- Can a tree be accepted without the guest-derived digest matching? A buffer changed after sealing, or a duplicate or colliding path, must be refused by receive().\n- Is the host's tree validation done before any provider call? Is it bounded? validateImport caps files and bytes, and the guest mirrors those caps.\n- If two installs race on one VM, R06's job lease serializes per VM, as for materialize; rename never replaces a non-empty tree.\n- Is materializeSnapshot's behavior byte-for-byte the same after the acceptor extraction?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 4's command fresh before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/snapshot-transfer.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Adversarial review of the repair diff (snapshot-transfer.mjs +8/-2, tests +10). No finding needed a code change, so no re-gate: the bytes are identical to the gated ones (hashes 31644b81…/358c9994…).\n- Inputs: a thrown null, undefined, primitive, non-string code, or inherited key such as 'toString'/'__proto__' maps to TRANSFER_MOUNTS_UNKNOWN. Each error is re-issued through transferError, so it carries a fixed message, only the key 'code', no cause and no provider text.\n- Assumption verified by reading the code: only the pre/post assertNoMounts calls throw non-TRANSFER errors inside transfer(). supervise/feed/the acceptor/delivered reject only via transferError, so the mapping does not mislabel any current path.\n- Theoretical only: a provider-supplied object with a throwing `code` getter could still escape. The provider is trusted host code and readGuestInfo has the same exposure.\n- Side effects: on a stream failure, supervise still kills the child. If the post-stream check fails after a successful stream, the guest tree is already installed and the call refuses fail-closed. This is the pre-existing sandwich semantics, as in materializeSnapshot; a retry gets 73, and R11e runs on fresh VMs.\n- Behavior unchanged: the shared transfer(), assertNoMounts and materializeSnapshot are untouched (R11e2's ruled helper passthrough is kept), and T1-T7 are green.\n- Landing note: human commit f6da2d7f (\"D\", 15:27Z, 71 files) already swept these exact repair hunks onto moe/work-2026-10-24. The working tree is clean vs HEAD for all three scoped paths, so the wrapper may find nothing new to commit. QA should review b364044c..f6da2d7f scoped to these two files.",
+      "startedAt": "2026-10-30T13:27:12.741Z",
+      "completedAt": "2026-10-30T13:27:49.172Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fe18a9a9",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -92,12 +101,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:53:09.580Z",
-  "updatedAt": "2026-10-30T13:25:45.801Z",
+  "updatedAt": "2026-10-30T13:28:17.981Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T23:01:14.250Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 8,
+    "executedStepCount": 10,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -111,7 +120,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [
     {
@@ -141,25 +152,20 @@
   "planApprovedAt": "2026-10-29T23:02:51.032Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T13:13:03.787Z",
-  "reviewStartedAt": "2026-10-30T13:19:09.776Z",
+  "reviewStartedAt": "2026-10-30T13:28:17.979Z",
   "verification": {
     "command": "env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs",
     "exitCode": 0,
-    "outputTail": "Log: /tmp/r11e4-final.log\nMD1-MD3, TD1-TD3, TC1-TC6 and TT1-TT4 all ran and passed; existing M/T rows unchanged and green.\nℹ tests 271\nℹ suites 0\nℹ pass 270\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 35918.552417\nScoped git diff --check clean; no __pycache__; sha256sum -c /tmp/r11e4-final.sha256 all OK.",
-    "reportedAt": "2026-10-30T13:19:09.776Z",
+    "outputTail": "Log: /tmp/r11e4-reopen1.log\n✔ MD1 dependencies CLI is exact, root-only and routes to the fixed root-owned layout\n✔ MD2 dependencies installs exact bytes with readable non-writable modes and a private manifest\n✔ MD3 dependencies refuses existing targets or bad streams without replacing or leaving bytes\n✔ TD1 installDependencies streams exactly the sealed tree between two mount checks\n✔ TD2 installDependencies rejects invalid input before I/O and refuses untrusted guest results\n✔ TD3 installDependencies installs through the real supervisor and refuses a second copy\n﹣ opt-in native provider smoke on real macOS hardware establishes support # native provider smoke not run\nℹ tests 271\nℹ suites 0\nℹ pass 270\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 48485.860432\nScoped git diff --check clean; no __pycache__; scoped files clean vs HEAD f6da2d7f.",
+    "reportedAt": "2026-10-30T13:28:17.979Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-supervisor.py",
-    "scripts/local-runner/snapshot-transfer.mjs",
-    ".moe/tasks/task-3def080415d3495a8557b514d6a0ab2a.json",
-    ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
-    ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
-    ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
-    ".moe/tasks/task-9d27749421b045c18a6c6eb99694236d.json"
+    "scripts/local-runner/snapshot-transfer.mjs"
   ],
-  "completionSummary": "Delivered CQ-R11e4 in three scoped files (+188/-15): root-only dependencies CLI reuses materialize with root-owned0755 tree/private0600 manifest; installDependencies validates and streams the sealed cache through shared framing/acceptor and pre/post mount checks, returning frozen executionReady:false. MD1-MD3/TD1-TD3 cover ownership/modes, unchanged installs/symlinks, malformed/digest/EOF refusals, input/frame/mount/exit handling and real-supervisor round trip. Review repaired null-options raw TypeError with red/green TD2; TD3 proves mutated sealed bytes produce65/no leftovers, restored bytes install, repeat73 preserves first. Existing test file byte-identical outside inserted block. Fresh full plan gate:271 tests,270 pass,0 fail,1 existing opt-in smoke skip; scoped diff --check clean, no __pycache__, source hashes stable. All steps complete; Serena handoff/gotcha saved. Unrelated dirty paths preserved, no Git writes/direct .moe edits, no isolation/verified-local claim. Wrapper owns landing.",
+  "completionSummary": "QA reopen 1 (DoD2) repaired at the installDependencies API boundary only.\n- snapshot-transfer.mjs (+8/-2): the transfer() call is wrapped. A known TRANSFER_* code (a string own key of MESSAGES) is re-issued through transferError, keeping its fixed message and only the key 'code'. Any other error becomes the fixed TRANSFER_MOUNTS_UNKNOWN. Only the pre/post assertNoMounts calls throw non-TRANSFER errors there (PROVIDER_*/LIFECYCLE_*); supervise/feed/the acceptor already reject via transferError. The shared transfer(), assertNoMounts and materializeSnapshot are unchanged, so R11e2's ruled passthrough and T1-T7 hold.\n- local-runner.test.mjs TD2 (+10): new rows for info ENOENT (0 spawns), info stdout 'bad json' (0 spawns) and post-stream mountinfo ENOENT (1 spawn). Each asserts TRANSFER_MOUNTS_UNKNOWN, a sanitized message and own keys exactly ['code']. RED before the fix (actual PROVIDER_NOT_FOUND), GREEN after; focused TD+T1-T7 10/10.\n- guest-supervisor.py is unchanged.\nFresh full plan gate: exit 0; 271 tests, 270 pass, 0 fail, 1 existing opt-in macOS smoke skip; MD1-MD3/TD1-TD3 ran; log /tmp/r11e4-reopen1.log. Scoped diff --check is clean, no __pycache__.\nLanding note: human commit f6da2d7f (\"D\", 71 files) swept these exact repair hunks onto moe/work-2026-10-24 mid-session. The tree is clean vs HEAD for all three scoped paths, so the wrapper may land nothing new. Review b364044c..f6da2d7f scoped to snapshot-transfer.mjs and local-runner.test.mjs.\nAdversarial review found nothing to fix. Theoretical only: a throwing `code` getter on a trusted provider's error object.\nNo agent Git writes, no .moe edits, peer dirty paths untouched, no verified-local/isolation claim; executionReady:false.",
   "commits": [
     {
       "sha": "b364044cf5eab32649ced0e0844e1986153ce530",
