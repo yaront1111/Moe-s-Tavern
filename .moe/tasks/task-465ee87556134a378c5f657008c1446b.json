@@ -9,9 +9,49 @@
     "Legacy (non-protected) behavior is unchanged, or the change is documented in docs/CONFIGURATION.md."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nSplit: the wrapper half of this row is task-aa85ff13. This row dependsOn it and on task-0c72d59a, which edits a comment in TerminalAgentLauncher.kt. Read both rows' landed bytes before editing.\n\nIn moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt, add rows for a new pure function: `TerminalAgentLauncher.agentCommandFor(profile: RuntimeProfile, explicit: String?, projectSetting: String?): AgentCommandChoice`, where AgentCommandChoice is Run(command) or Refused(message).\n- LEGACY is unchanged: explicit wins, else the setting, else \"claude\". Non-standard values pass through exactly, including '/opt/x/claude --foo' and 'C:\\\\tools\\\\claude.exe'.\n- PROTECTED, accepted:\n  - each of claude, codex, gemini, grok, explicit or from the setting, surrounding whitespace trimmed -> Run(<name>);\n  - both null -> Run(\"claude\").\n- PROTECTED, refused, each -> Refused whose message contains the rejected value verbatim:\n  - a custom explicit command;\n  - a non-standard setting: '/tmp/evil-agent', 'claude --dangerously-skip-permissions', 'claude.exe', '../claude', 'CLAUDE'. The match is exact and case-sensitive, like the wrapper's.\n- DoD 1's project.json row:\n  - write a temp <dir>/.moe/project.json {\"settings\": {\"executionProfile\": \"verified-local\", \"agentCommand\": \"/tmp/evil-agent\"}};\n  - assert RuntimeSelectionPolicy.profile(dir) == RuntimeProfile.PROTECTED;\n  - read agentCommand from that file with Gson, and assert agentCommandFor(profile, null, it) is Refused naming '/tmp/evil-agent'.\n\nRun `gradlew test --tests com.moe.util.TerminalAgentLauncherTest` and confirm it fails: agentCommandFor does not exist yet.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "In moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt:\n\n1. Add `internal sealed interface AgentCommandChoice { data class Run(val command: String); data class Refused(val message: String) }`. The known set is `AgentProvider.entries.filter { it != AgentProvider.CUSTOM }.map { it.command }` (~:144), so the menu's providers and the guard cannot drift apart.\n2. Add `internal fun agentCommandFor(profile, explicit, projectSetting): AgentCommandChoice`.\n   - LEGACY: return Run(explicit ?: projectSetting ?: \"claude\") exactly as today.\n   - PROTECTED: candidate = (explicit ?: projectSetting)?.trim() ?: \"claude\".\n     - Run(candidate) only when it is in the known set.\n     - Otherwise Refused(\"Protected execution profile: the agent command '<value>' (<from .moe/project.json settings.agentCommand | custom command>) is not one of claude, codex, gemini, grok, so no agent was started. Pick an agent from the Agents menu.\").\n     - Truncate the value to 200 characters and replace control characters, matching the wrapper's MOE_PROTECTED_AGENT_COMMAND_REFUSED rule.\n3. resolveContext (~:224) currently has `val resolvedCommand = agentCommand ?: MoeProjectService...settings?.agentCommand ?: \"claude\"`. Replace it:\n   - the profile is PROTECTED exactly when `selected != null`; do not read project.json a second time;\n   - call agentCommandFor(...);\n   - on Refused, Messages.showErrorDialog(project, message, \"Moe\") and return null, so no terminal and no wrapper start;\n   - on Run, use its command.\n\nChange nothing else: the legacy branches, the CUSTOM menu flow, the stored custom command and buildCommand stay as they are. Under PROTECTED, a user-typed custom command is refused at launch with the same dialog, because the wrapper (task-aa85ff13) would refuse it anyway.\n\nError handling: the decision is pure and never throws. A null basePath is still handled by the existing early return. Run TerminalAgentLauncherTest until it is green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/CONFIGURATION.md, the `agentCommand` row (~:179):\n\nAdd one sentence to its description cell, or a short note directly under the table:\n- Under the protected profile (settings.executionProfile verified-local), the IDE starts only claude, codex, gemini or grok by name.\n- A value from project.json, or a custom command, is refused with a dialog.\n- The wrappers refuse it again under MOE_RUNTIME_PROTECTED=1 (MOE_PROTECTED_AGENT_COMMAND_REFUSED). They resolve the CLI only from absolute PATH entries outside the project (MOE_PROTECTED_AGENT_CLI_NOT_FOUND when it is absent).\n- Legacy behavior is unchanged.\n\nCite the codes exactly as task-aa85ff13 landed them; read its landed bytes first.\n\nCONFIGURATION.md is edited by several open rows. Before editing, run a read-only `git status --short docs/CONFIGURATION.md`. If it holds bytes this task did not write and a peer is mid-step on it, wait or coordinate in chat instead of sweeping that peer's hunks. Change no other line.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh. This is the final check of BOTH slices: this row's DoD 2 is delivered by task-aa85ff13.\n\nTake the shared resource 'jetbrains-gradle' (moe.acquire_resource; if it is busy, moe.report_blocked with that resourceId). Run from the repo root on WSL:\n\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" && node --test scripts/tests/protected-agent-command.test.mjs && bash scripts/tests/parity-check.sh\n\nRelease the lease afterwards. The command must exit 0. Its command, exit code and output tail are complete_task's evidence. Confirm that TerminalAgentLauncherTest ran.\n\nMutants, on a scratch copy of TerminalAgentLauncher.kt, each turning the named rows red:\n(i) case-insensitive match: the 'CLAUDE' row;\n(ii) prefix match, e.g. startsWith(\"claude\"): the 'claude --dangerously-skip-permissions' and 'claude.exe' rows;\n(iii) PROTECTED falls back to \"claude\" instead of refusing a non-standard setting: the project.json row;\n(iv) the LEGACY branch filtered as well: the legacy pass-through rows.\n\nA read-only `git status --short` must show only this task's three paths. Never revert, stash, `git add -A` or commit peer or pre-existing paths.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then check:\n- Can repository content still choose the host binary under PROTECTED, through any other launch path? Look at StartAgentAction, the panel's provider and custom menu, startAgents and startAgent with an explicit command, buildWslBashCommand, and the accounts terminal command (~:384).\n- Does LEGACY behave byte-for-byte as before, including the CUSTOM flow?\n- Is the refusal shown before any terminal or wrapper starts?\n- Does the message carry anything beyond the bounded, sanitized value?\n- Do the docs match the codes as landed?\n\nAlso confirm RF07 (task-f3f364a6) lists this row in dependsOn. The architect added it on 2026-10-30.\n\nFix any finding, then re-run step 4 fresh. Report the three paths in complete_step.modifiedFiles. Write the Serena handoff 'task-task-465ee87556134a378c5f657008c1446b-handoff' for RF07 and the VS Code parity rows. VS Code's agent launcher needs the same rule; note it for CQ-RF06 (task-98ffe33f).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "docs/CONFIGURATION.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,5 +64,74 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:59:43.397Z",
-  "updatedAt": "2026-10-30T07:59:43.397Z"
+  "updatedAt": "2026-10-30T08:08:19.009Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T08:03:46.843Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T08:08:13.028Z",
+  "executionContract": {
+    "intendedBehavior": "Under RuntimeProfile.PROTECTED, the JetBrains launcher hands the wrapper only an exact known agent CLI name (claude, codex, gemini, grok). A non-standard value from .moe/project.json settings.agentCommand, or a custom command, is refused with a dialog naming it, and no terminal or wrapper starts. LEGACY is unchanged. docs/CONFIGURATION.md documents the IDE rule and the wrapper refusal from task-aa85ff13.",
+    "acceptanceCriteria": [
+      "agentCommandFor rows: LEGACY passes values through, PROTECTED accepts exactly the four names, and every non-standard value is refused with the value named.",
+      "A temp project.json with executionProfile verified-local and agentCommand '/tmp/evil-agent' yields PROTECTED and Refused.",
+      "The combined gradle, protected-agent-command and parity-check command exits 0."
+    ],
+    "invariants": [
+      "The known set derives from AgentProvider minus CUSTOM.",
+      "The refusal happens before any terminal or wrapper starts, and the message carries only the bounded, sanitized value."
+    ],
+    "compatibility": [
+      "The LEGACY launch command is byte-for-byte unchanged, including custom commands and project.json values."
+    ],
+    "approvedScope": [
+      "TerminalAgentLauncher.kt: AgentCommandChoice, agentCommandFor, and resolveContext's command resolution.",
+      "TerminalAgentLauncherTest.kt rows; docs/CONFIGURATION.md agentCommand note."
+    ],
+    "reuse": [
+      "AgentProvider for the known set; the existing Messages.showErrorDialog refusal pattern in resolveContext."
+    ],
+    "sourceAssumptions": [
+      "TerminalAgentLauncher.resolveContext (~:224-270): `selected` is non-null under PROTECTED; it resolves agentCommand from the explicit value, then project state settings, then \"claude\".",
+      "TerminalAgentLauncher.AgentProvider (~:144) enumerates CLAUDE, CODEX, GEMINI, GROK and CUSTOM.",
+      "RuntimeSelectionPolicy.profile (~:57) maps executionProfile verified-local to PROTECTED."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" && node --test scripts/tests/protected-agent-command.test.mjs && bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- A fixed set of known CLIs, matched by exact name (chosen; it is one of the task's suggested mechanisms). The set comes from the existing AgentProvider enum minus CUSTOM. The wrappers resolve the name from trusted PATH entries (task-aa85ff13).\n- Ignoring project.json's agentCommand entirely under PROTECTED: rejected. The IDE settings dialog writes agentCommand into project.json, so honoring a known name keeps that working. A non-standard value refuses, which is fail-closed and visible, rather than silently falling back to claude.\n- IDE-level storage of the command (PropertiesComponent): rejected, because workspace.xml can be committed too, and the CUSTOM flow already asks the user.\n- One row covering both slices: rejected for size (6+ files, two harnesses). The wrapper files are also serialized behind CQ-R13c2 and many other wrapper rows, so the wrapper half is task-aa85ff13. This row keeps the JetBrains slice, the docs and the final verification, and it dependsOn aa85ff13 and 0c72d59a.\n- RF07 dependsOn this row: yes. It is the CQ-RF integration task, so it must follow every CQ-RF row.",
+    "codebaseInsights": "- TerminalAgentLauncher.resolveContext (~:224-270) selects the protected runtime: `selected` is non-null exactly under PROTECTED. It then resolves `agentCommand ?: state.settings.agentCommand ?: \"claude\"` and passes it as the wrapper's --command/-Command.\n- AgentProvider (~:144): CLAUDE, CODEX, GEMINI and GROK carry their commands; CUSTOM is \"\".\n- The panel's provider menu (MoeToolWindowPanel ~:205-221) passes provider.command, or the user-confirmed custom input, as an explicit command.\n- RuntimeSelectionPolicy.profile(basePath) (~:57) reads project.json strictly; verified-local maps to PROTECTED.\n- MoeJson.parseProjectSettings is private, so the test reads agentCommand with Gson directly.\n- docs/CONFIGURATION.md:179 holds the agentCommand row.",
+    "risks": "- This row starts only after task-aa85ff13, which waits on CQ-R13c2, and after task-0c72d59a. That ordering is intended.\n- CONFIGURATION.md has many concurrent editors, so check its status before editing and never sweep a peer's hunks.\n- A case-sensitive exact match is deliberate: it is the wrapper's rule, so the IDE and the wrapper agree.\n- VS Code parity is not covered; it is noted for CQ-RF06.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "docs/CONFIGURATION.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T08:08:13.056Z",
+  "approvedPlanRevision": 1,
+  "dependsOn": [
+    "task-aa85ff13a8894913ae34242dbab6f395",
+    "task-0c72d59aad37467fb49e5ad699692d78"
+  ]
 }
