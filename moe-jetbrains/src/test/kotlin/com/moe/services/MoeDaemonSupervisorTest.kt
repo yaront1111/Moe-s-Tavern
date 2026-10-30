@@ -10,6 +10,7 @@ import com.moe.util.RuntimeSelectionPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume
@@ -910,15 +911,18 @@ class MoeDaemonSupervisorTest {
             assertEquals(2, f.stops.size)
         }
         WinRestart().use { f ->
-            f.proc(D, f.proc(S).also { f.own(it) }, 1, survives = true)
+            val child = f.proc(D, f.proc(S).also { f.own(it) }, 1, survives = true)
             f.onSleep = { throw InterruptedException() }
             assertEquals(INCOMPLETE, f.restart(null))
             Thread.interrupted()
             f.onSleep = {}
             f.own(f.proc(Q))
             f.stop = { 0 }
-            assertNull("the guard clears after a failed restart", f.restart(null))
+            assertEquals("the in-flight guard clears but the old child stays tracked", survivor(D), f.restart(null))
             assertEquals(2, f.stops.size)
+            child.alive = false
+            assertNull(f.restart(null))
+            assertEquals(3, f.stops.size)
         }
     }
 
@@ -1023,6 +1027,120 @@ class MoeDaemonSupervisorTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun `W23 legacy retry must not forget a surviving orphan`() = retrySurvivor(RuntimeProfile.LEGACY)
+
+    @Test
+    fun `W24 protected retry must not forget a surviving orphan`() = retrySurvivor(RuntimeProfile.PROTECTED)
+
+    private fun retrySurvivor(profile: RuntimeProfile) = WinRestart(profile).use { f ->
+        val s = f.proc(S)
+        val child = f.proc(D, s, 1, survives = true)
+        f.own(s)
+        assertEquals(survivor(D), f.restart(null))
+        assertFalse(s.alive)
+        assertTrue(child.alive)
+        s.kids.clear() // The captured child stays tracked even if a later enumeration omits it.
+        child.onKill = { if (R2 !in f.handles) f.proc(R2, child, 2) }
+        assertEquals("second restart still has an old orphan", survivor(D), f.restart(null))
+        assertFalse("the retained child is still walked for new orphans", f.handles.getValue(R2).alive)
+        assertEquals(2, f.stops.size)
+        child.alive = false
+        assertNull("a confirmed exit clears the retained tree", f.restart(null))
+        assertEquals(3, f.stops.size)
+    }
+
+    @Test
+    fun `W25 legacy retry must retain incomplete discovery refusal`() = retryIncomplete(RuntimeProfile.LEGACY)
+
+    @Test
+    fun `W26 protected retry must retain incomplete discovery refusal`() = retryIncomplete(RuntimeProfile.PROTECTED)
+
+    private fun retryIncomplete(profile: RuntimeProfile) = WinRestart(profile).use { f ->
+        val child = f.incompleteTree("missing", afterStop = true)
+        assertEquals(INCOMPLETE, f.restart(null))
+        assertTrue(child.alive)
+        assertEquals(0, child.kills)
+        assertEquals("second restart must not forget incomplete discovery", INCOMPLETE, f.restart(null))
+        assertEquals(1, f.stops.size) // The unresolved first walk still precedes the stop.
+        child.alive = false
+        f.handles.getValue(S).kids.clear() // An exited unidentified child is no longer enumerated.
+        f.stop = { 0 }
+        assertNull(f.restart(null))
+        assertEquals(2, f.stops.size)
+        assertEquals(0, child.kills)
+    }
+
+    @Test
+    fun `W27 retained survivor and incomplete trees gate starts until a clearing restart`() {
+        for (profile in RuntimeProfile.values()) for (incomplete in listOf(false, true)) WinRestart(profile).use { f ->
+            val child = if (incomplete) f.incompleteTree("missing", afterStop = true)
+                else f.proc(D, f.proc(S).also { f.own(it) }, 1, survives = true)
+            assertEquals(if (incomplete) INCOMPLETE else survivor(D), f.restart(null))
+            val events = f.events.toList()
+            assertFalse(f.service.ensureDaemonRunning())
+            assertEquals("the connect gate does not walk or wait", events, f.events)
+            assertEquals(0, f.starts)
+            child.alive = false
+            f.handles.getValue(S).kids.clear()
+            f.stop = { 0 }
+            assertNull(f.restart(null))
+            assertFalse("the fake starter deliberately refuses, but is now reached", f.service.ensureDaemonRunning())
+            assertEquals(1, f.starts)
+        }
+    }
+
+    @Test
+    fun `W28 retries retain a captured run and a watch-only foreign parent`() {
+        for (watched in listOf(false, true)) WinRestart().use { f ->
+            val parent = if (watched) f.proc(P, startSec = -1, survives = true) else null
+            val run = f.proc(f.self, parent, 1, survives = !watched)
+            val survivor = parent ?: run
+            assertEquals(survivor(survivor.pid()), f.restart(f.self))
+            assertEquals(survivor(survivor.pid()), f.restart(null))
+            assertEquals(0, parent?.kills ?: 0)
+            survivor.alive = false
+            assertNull(f.restart(null))
+            assertEquals(3, f.stops.size)
+        }
+    }
+
+    @Test
+    fun `W29 retries preserve the dead root cutoff against a pid reuser's child`() = WinRestart().use { f ->
+        val s = f.proc(S)
+        val child = f.proc(D, s, 1, survives = true)
+        f.own(s)
+        assertEquals(survivor(D), f.restart(null))
+        val retained = MoeDaemonSupervisor::class.java.getDeclaredField("unresolvedWindowsTree")
+            .apply { isAccessible = true }.get(f.service)
+        assertNotNull("the refused restart keeps its captured tree", retained)
+        // Pin the retained cutoff to a historical instant so this row does not depend on clock resolution.
+        retained.javaClass.getDeclaredField("deadSince").apply { isAccessible = true }
+            .set(retained, hashMapOf<ProcessHandle, Instant>(s to T0.plusSeconds(5)))
+        val reuserChild = TreeHandle(R2, T0.plusSeconds(6), f.events, survives = true)
+        s.kids += reuserChild
+        child.alive = false
+        assertNull(f.restart(null))
+        assertTrue(reuserChild.alive)
+        assertEquals(0, reuserChild.kills)
+        assertEquals(2, f.stops.size)
+    }
+
+    @Test
+    fun `W30 a fresh own tree is not hidden by retained handles with reused pids`() = WinRestart().use { f ->
+        val oldChild = f.proc(D, f.proc(S).also { f.own(it) }, 1, survives = true)
+        assertEquals(survivor(D), f.restart(null))
+        val freshRoot = f.proc(S, startSec = 10)
+        val freshChild = f.proc(D, freshRoot, 11)
+        f.own(freshRoot)
+        assertEquals(survivor(D), f.restart(null))
+        assertFalse(freshRoot.alive)
+        assertFalse(freshChild.alive)
+        assertTrue(oldChild.alive)
+        oldChild.alive = false
+        assertNull(f.restart(null))
     }
 
     /** Restart Daemon over [TreeHandle] fakes: every installed stop, signal and tree read lands in [events]. */

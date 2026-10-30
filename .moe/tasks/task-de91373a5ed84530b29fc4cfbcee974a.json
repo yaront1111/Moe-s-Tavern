@@ -66,13 +66,21 @@
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the 5-file diff as an attacker who controls .moe/daemon.json, and as an unlucky user:\n- Can any process be signaled that is outside this IDE's own spawn tree and outside a PROTECTED-verified tree? Try:\n  - a forged pid whose parent is the IDE JVM, explorer or a shell;\n  - a reused pid;\n  - a pid <= 0;\n  - a dead pid.\n- Can a supervisor respawn a `_run` after the confirm? Try:\n  - a respawn between capture and kill;\n  - an orphan of a killed root;\n  - a foreign supervisor after a failed stop.\n- Is every wait bounded, and does none of it run on the EDT?\n- Are Linux and macOS unchanged byte-for-byte, and do R1-R4 still pin that?\n- Are the refusal texts fixed, and do they avoid calling a repository pid a Moe daemon?\n- Rails:\n  - no .moe edits;\n  - no Git writes;\n  - nothing persisted;\n  - none of the global rails' forbidden patterns;\n  - verified-local stays unavailable.\n- Would I be embarrassed if this shipped?\n\nFix any finding, then re-run step 4's gate fresh before complete_task.\n\nThen write the Serena memory 'task-task-de91373a5ed84530b29fc4cfbcee974a-handoff' with the landed names, the rows and the evidence.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-30T12:04:51.782Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        ".serena/memories/task-task-de91373a5ed84530b29fc4cfbcee974a-handoff.md",
+        ".serena/memories/gotcha-windows-restart-incomplete-process-tree.md"
+      ],
+      "note": "Resumed existing IN_PROGRESS step5. Planner msg-27655a01 authorizes retry gap in plan; archived duplicate b645a256 creates no prerequisite. Fixed only supervisor/test: volatile unresolved OldTree before first walk; merged captured roots/descendants/runs/watch-only parents and original identity-keyed death cutoffs; clear only on confirmed success; ensure plain-read gate. Corrected W14, permanent W23-W30. RED70/6 assertion failures/0 errors; 26 scratch mutants assertion-killed and restored/cmp. Fresh exact step4 Windows test --rerun gate exit0, BUILD SUCCESSFUL24s:27 classes/448 tests, 0 failures/errors/skips/stale XML, supervisor73/policy49; start12:34:15.3845988Z. Scoped diff check and five source hashes clean; lease released12:34:53Z. Evidence /mnt/d/moe-scratch/rf04-worker-c2da129d/retry-final-*. Full adversarial checklist completed: authority, pid reuse, uncertainty, retries/reentry, bounded waits/interrupt cleanup, stream close, fixed refusals, pooled UI callers, unchanged non-Windows body, no persistence/strong activation/Git writes/.moe edits. Existing first-death enumeration timing and success-path metadata compare-delete limitations not widened; no cross-call connect locking redesign. Final handoff/gotcha stored in ignored Serena paths (listed for complete attribution). Peer/pre-existing dirty bytes preserved. Reopen aggregate +266/-27 net239; original net551 retained, combined790. RF04 waiver still pending at latest read; no waiver inferred.",
+      "startedAt": "2026-10-30T12:04:51.782Z",
+      "completedAt": "2026-10-30T12:38:15.644Z"
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -190,11 +198,23 @@
       "author": "worker-c2da129d",
       "content": "@architect-e4b7eee0 @governor-693b7073 Filed confirmed retry defect as task-b645a2563d5d4c2e886c4ff06b3f2ce7 (PLANNING, HIGH); no second bug needed. Source prerequisites already landed, so it deliberately has no dependsOn RF04 while gating disposition is unresolved, avoiding a dependency cycle. I cannot claim the broad no-old-child-survives DoD for repeated restart with four confirmed red regressions. Step5 remains open; no production changes beyond QA checkpoint613902b. Plan is to park RF04 on this bug pending your disposition/fix rather than silently expanding beyond QA-required scope or burning another reopen. If you explicitly classify retry-state as non-gating follow-up, adjust the dependency direction/contract accordingly. Lease released; no owned Gradle process remains, targeted shared diff and five scratch cmps clean.",
       "timestamp": "2026-10-30T12:12:37.007Z"
+    },
+    {
+      "id": "comment-4cec0ea3ed93446d8e9f8f2be11ad116",
+      "author": "governor-693b7073",
+      "content": "@worker-c2da129d Governor (12:18Z). My 12:13Z endorsement of parking this row on b645a256 is superseded: the planner has ruled.\n- architect-e4b7eee0 (msg-27655a01, 12:13:24Z): fix the FR1-FR4 retry gap IN PLAN under step 5 (\"fix any finding, then re-run step 4's gate fresh\"). File no separate bug and do no replan. It completes reject #1's DoD1 item, so it counts as QA-required growth under the pending waiver.\n- Approved design, only MoeDaemonSupervisor.kt and MoeDaemonSupervisorTest.kt:\n  - one private @Volatile in-memory unresolved-OldTree field, written only under windowsRestartInFlight;\n  - set before the first walk;\n  - cleared only on a confirmed-gone null return;\n  - nothing persisted;\n  - the next Windows restart folds the retained tree into its fresh capture.\n  Read the full limits in that message.\n- I archived task-b645a256 as duplicate scope. That released this row's blockedOnTaskIds park, so it's WORKING again.\n- In complete_task, report 7e996666's per-file numstat and the reopen delta separately, and re-read the waiver's status at call time.",
+      "timestamp": "2026-10-30T12:14:06.238Z"
+    },
+    {
+      "id": "comment-5e6484f0527342bda9660f168574641d",
+      "author": "worker-c2da129d",
+      "content": "Final step5 fix follows planner msg-27655a01 and governor comment4cec0ea3: only supervisor/test source changed. unresolvedWindowsTree retains captured roots/descendants/runs/watch-only parents and original ProcessHandle-keyed death cutoffs through every refusal; next restart folds fresh capture into it, and ensureDaemonRunning is gated by a plain volatile read. No new persisted state or signal authority. W14 corrected; W23-W30 cover repeated refusals, successful clearing, starts gated, watch-only/run retention, cutoff preservation and fresh same-pid own handles.\nFresh RED70/6 expected assertion failures/0 errors; GREEN and final exact command `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exits0: 27 classes/448 tests, failures/errors/skips0, supervisor73/policy49; all XML fresh after Windows start2026-10-30T12:34:15.3845988Z. 26 scratch-only mutants assertion-killed, restored/cmp; scoped diff --check and five source hashes clean. Lease released12:34:53Z. Evidence /mnt/d/moe-scratch/rf04-worker-c2da129d/retry-final-*; discarded selector/compile/missing-test-assertion attempts explicitly documented in Serena handoff. Windows evidence only; N1/N2/R1-R4 pin unchanged non-Windows behavior.\nOriginal7e996666 per-file +add/-del: MoeDaemonSupervisor.kt196/19, MoeProjectService.kt7/6, MoeToolWindowPanel.kt3/1, MoeDaemonSupervisorTest.kt372/3, RuntimeSelectionPolicyTest.kt3/1; total581/30 net551. Aggregate reopen vs7e: supervisor35/23 and tests231/4 =>266/27 net239; combined task net790. This session148/19 net129. No rewrite/re-land. Effective rails still show only RF01 waiver; latest proposal read by governor at12:23:14Z had both RF04 proposals PENDING, and a fresh read was requested in msg-a144c31b. No human size approval inferred; QA parks on human size decision if pending, per comment-a5889d8c.",
+      "timestamp": "2026-10-30T12:38:15.631Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:39.223Z",
-  "updatedAt": "2026-10-30T12:12:58.812Z",
+  "updatedAt": "2026-10-30T12:39:51.977Z",
   "dependsOn": [
     "task-ec64165c85f246088a7224cf70b04670",
     "task-f3485ac9d4384664870d88db876ddd54",
@@ -211,7 +231,7 @@
     "firstClaimAt": "2026-10-30T07:10:49.087Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 9,
+    "executedStepCount": 10,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -227,7 +247,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [
     {
@@ -299,34 +320,23 @@
   "planApprovedAt": "2026-10-30T07:25:15.248Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T10:52:24.653Z",
-  "reviewStartedAt": "2026-10-30T11:23:47.284Z",
+  "reviewStartedAt": "2026-10-30T12:39:51.975Z",
   "verification": {
     "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
     "exitCode": 0,
-    "outputTail": "> Task :compileTestKotlin\n> Task :compileTestJava NO-SOURCE\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :test\n\nBUILD SUCCESSFUL in 25s\n11 actionable tasks: 7 executed, 4 up-to-date\n[JUnit XML, Windows run started 2026-10-30T11:22:16Z: 26 classes / 427 tests / 0 failures / 0 errors / 0 skipped, none stale; MoeDaemonSupervisorTest 57, RuntimeSelectionPolicyTest 49]",
-    "reportedAt": "2026-10-30T11:23:47.284Z",
+    "outputTail": "> Task :compileTestKotlin\n> Task :compileTestJava NO-SOURCE\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :test\n\nBUILD SUCCESSFUL in 24s\n11 actionable tasks: 3 executed, 8 up-to-date\n\n[Fresh Windows JUnit XML after 2026-10-30T12:34:15.3845988Z: 27 classes / 448 tests / 0 failures / 0 errors / 0 skipped; no stale XML. MoeDaemonSupervisorTest 73, RuntimeSelectionPolicyTest 49. Five source hashes unchanged through gate; scoped git diff --check exit 0. Evidence /mnt/d/moe-scratch/rf04-worker-c2da129d/retry-final-gate.log and retry-final-gate.json. jetbrains-gradle lease released.]",
+    "reportedAt": "2026-10-30T12:39:51.975Z",
     "source": "agent-reported"
   },
   "filesModified": [
-    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
-    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
-    ".moe/tasks/task-c61311dc98424120be5775ce91c50ed0.json",
-    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
-    ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
-    ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
-    ".moe/tasks/task-414eae5aa1f349f49852bf01f4e617db.json",
-    ".moe/tasks/task-6cf120a38b344e72b7bab8b9faf806f1.json",
-    ".moe/tasks/task-7db14e2df19949a8bfdb150e0f29ffcb.json",
-    ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
-    ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
-    ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
-    ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
-    ".moe/tasks/task-e27456ad67b64bc292080ea3a8b92f26.json"
+    ".serena/memories/task-task-de91373a5ed84530b29fc4cfbcee974a-handoff.md",
+    ".serena/memories/gotcha-windows-restart-incomplete-process-tree.md"
   ],
-  "completionSummary": "On Windows, Restart Daemon now leaves no old supervisor that can respawn its _run. The evidence is Windows-only: the gate is cmd.exe gradlew.bat run from WSL.\nHow MoeDaemonSupervisor.stopWindowsRestart works:\n1. Today's guards run first. Under PROTECTED, an unverified daemon is refused NOT_STARTED_HERE and a failed lookup STOP_FAILED, both before any stop.\n2. It runs RF03's installed-CLI stop before any signal.\n3. It terminates the old supervisor roots: the IDE's own spawn, and the genuine parent when PROTECTED or when that parent is the own spawn. Only then does it terminate their descendants, top-down, and the _run.\n4. It confirms, within one shared ExitBound, that nothing survives, using a walk taken after every known process was dead. Otherwise it refuses with a fixed text.\nNever signaled: the IDE and its ancestors, a LEGACY foreign parent (only watched) and pid reusers. A null daemon.json still stops the IDE's own tree. A reentrant restart gets a fixed RESTART_IN_PROGRESS refusal, and ensureDaemonRunning returns false while a restart is in flight.\nLinux and macOS are unchanged: windowsRestart=false runs today's path. restartDaemon calls the supervisor even when info is null, and the panel's WSL toggle now runs it off the EDT.\nDoD1 → MoeDaemonSupervisorTest W1-W14. DoD2 → N1, N2 and RuntimeSelectionPolicyTest R1-R4, which pins windowsRestart=false. All use injected TreeHandle process fakes.\nEvidence: RED W1-W10 on assertions; 25 mutants, all assertion-killed by their named rows; full fresh gate exit 0 with 427/427 tests.\nKnown limits:\n- A user-driven connect during the wait of up to ~35 s can schedule a reconnect; a spawn from it stays gated by the flag and the start cooldown.\n- A LEGACY foreign supervisor whose stop failed is refused by design.\n- A pid reuser's child that starts within milliseconds of a node's death could pass the start filter.\n- Compare-delete of daemon.json was not adopted.\nFiles: MoeDaemonSupervisor.kt, MoeProjectService.kt, MoeToolWindowPan",
+  "completionSummary": "QA rework completes DoD1: discovery/identity failures refuse; Windows retries retain captured OldTree authority and original death cutoffs until bounded confirmation. ensureDaemonRunning is gated by a plain read; no persistence/new signal authority. W14 corrected; W23-W30 cover both-profile retries/clearing, gate, retained run/watch-only parent, cutoff and reused-pid own trees. DoD1: W1-W30. DoD2: N1/N2 and R1-R4; off-Windows body unchanged.\nFresh exact Windows gate: 448/448 tests, 27 classes, supervisor73/policy49, zero failures/errors/skips/stale XML, start12:34:15.3845988Z. RED70/6 expected assertions; 26 scratch mutants assertion-killed, restored/cmp. Scoped diff check/source hashes clean; lease released. Evidence: /mnt/d/moe-scratch/rf04-worker-c2da129d/retry-final-*. Handoff/gotcha saved. Peer bytes preserved; no Git/.moe writes; wrapper owns landing.\nOriginal7e996666 per-file +add/-del: MoeDaemonSupervisor.kt196/19; MoeProjectService.kt7/6; MoeToolWindowPanel.kt3/1; MoeDaemonSupervisorTest.kt372/3; RuntimeSelectionPolicyTest.kt3/1. Total +581/-30 net551. Aggregate reopen: supervisor+35/-23; tests+231/-4 =>+266/-27 net239. Combined task net790; this session+148/-19 net129. No rewrite/re-land.\nWaiver pending: BOTH prop-da2a6c91 and prop-4fe44aac PENDING at2026-10-30T12:35:02Z per governor fresh read, resolvedAt/resolvedBy null. No approved RF04 rail. Governor will hold REVIEW on human decision, not size-reject. Windows evidence only; no native Linux/macOS/UI or isolation certification.",
   "commits": [
     {
       "sha": "7e996666aef13bd3ea42f48e2b2ca8771d7cc757",
@@ -402,6 +412,22 @@
       "treeId": "ba358e85d08e7be0a91e6fc02e9c6b9987d36c24",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "db58a4476ab39e393503e8ff434a259556c5210e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T12:01:07Z",
+      "paths": [
+        ".moe/tasks/task-b645a2563d5d4c2e886c4ff06b3f2ce7.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T12:13:15.517Z",
+      "treeId": "7d46b3740cbc8a6a3c9ca7d5ad5e0d90bad342a6",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -415,16 +441,14 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-c2da129d@2026-10-30T11:38:26Z",
-    "at": "2026-10-30T11:50:13.649Z"
+    "sessionId": "worker-c2da129d@2026-10-30T12:01:07Z",
+    "at": "2026-10-30T12:13:15.517Z"
   },
-  "blockedReason": "Final adversarial review confirms a safety gap beyond the QA-required discovery fix: after first restart(null) kills own supervisor but refuses for a surviving/unknown child, second restart(null) returns null while that child is alive (LEGACY and PROTECTED). Scratch FR1-FR4: four assertion failures, zero errors, 12:04:55Z; patch and retry-red.{log,json,xml} at /mnt/d/moe-scratch/rf04-worker-c2da129d/. Filed task-b645a2563d5d4c2e886c4ff06b3f2ce7 with no reverse dependency. Need architect-approved scope disposition or retained-capture retry fix before asserting broad DoD1; pending RF04 waiver only permits QA-required growth. QA fixes remain landed in613902b, step4 complete: fresh exact Windows gate440/440, all16 required/rework mutants assertion-killed. Step5 not complete; no completion claim. Handoff/gotcha saved; shared source unchanged, scratch restored/cmp, no owned process running, Gradle lease released and resource list empty. Architect/governor notified in comments562bca86/71517f6a.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T12:12:58.812Z",
-  "blockedOnTaskIds": [
-    "task-b645a2563d5d4c2e886c4ff06b3f2ce7"
-  ],
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedOnTaskIds": null,
   "reviewCompletedAt": "2026-10-30T11:38:18.762Z",
   "rejectionDetails": {
     "failedDodItems": [

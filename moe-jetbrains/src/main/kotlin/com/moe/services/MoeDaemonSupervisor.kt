@@ -57,6 +57,8 @@ class MoeDaemonSupervisor(
     private val replacementInFlight = AtomicBoolean()
     // Held while a Windows restart stops the old tree: a daemon spawned meanwhile would be orphaned by the next spawn.
     private val windowsRestartInFlight = AtomicBoolean()
+    // A refused restart retains its captured authority until a later restart confirms the entire tree gone.
+    @Volatile private var unresolvedWindowsTree: OldTree? = null
     private var pendingReplacement: ReplacementTarget? = null
 
     private data class ReplacementTarget(val target: ProcessHandle, val parent: ProcessHandle?, val refusal: String) {
@@ -102,7 +104,7 @@ class MoeDaemonSupervisor(
     }
 
     fun ensureDaemonRunning(): Boolean {
-        if (windowsRestartInFlight.get()) return false
+        if (windowsRestartInFlight.get() || unresolvedWindowsTree != null) return false
         if (profile() != RuntimeProfile.PROTECTED) return ensureDaemonRunningImpl()
         // Cover the fall-through spawn too: stop may remove metadata before the old processes exit.
         if (!replacementInFlight.compareAndSet(false, true)) return false
@@ -368,8 +370,9 @@ class MoeDaemonSupervisor(
         val parent = run?.let(::genuineParent)?.takeUnless(::isIdeOrAncestor)
         // A foreign parent is only watched: daemon.json is repository content, and LEGACY never verified it.
         val roots = listOfNotNull(own, parent?.takeIf { isProtected || sameProcess(it, own) }).distinctBy { it.pid() }
-        if (run == null && roots.isEmpty()) return null
-        val old = OldTree(run, roots, parent?.takeIf { p -> roots.none { it.pid() == p.pid() } })
+        if (run == null && roots.isEmpty() && unresolvedWindowsTree == null) return null
+        val old = OldTree(run, roots, parent?.takeIf { p -> roots.none { it.pid() == p.pid() } }, unresolvedWindowsTree)
+        unresolvedWindowsTree = old
         old.walk()
         if (!installedStop()) {
             if (isProtected && info != null && run != null) return restartRefusal(info.pid, STOP_FAILED)
@@ -377,48 +380,56 @@ class MoeDaemonSupervisor(
         }
         val bound = ExitBound()
         // Roots first and dead before their children are signaled, so none can respawn a `_run`.
-        roots.forEach(::terminate)
-        bound.await { roots.none(::running) }
+        old.roots.forEach(::terminate)
+        bound.await { old.roots.none(::running) }
         // Done only when a walk made after every known process died finds no new one: a dead process spawns nothing.
         bound.await {
             old.terminateDescendants()
             val settled = old.survivor() == null
             !old.walk() && settled
         }
-        val survivor = old.survivor() ?: return null
+        val survivor = old.survivor()
+        if (survivor == null) {
+            unresolvedWindowsTree = null
+            return null
+        }
         log.warn("Restart Daemon: pid ${survivor.pid()} is still running after the stop")
         return survivorRefusal(survivor.pid())
     }
 
-    /** What one Windows restart may signal (roots, their descendants, run) and what must exit by itself (watched). */
-    private inner class OldTree(val run: ProcessHandle?, val roots: List<ProcessHandle>, val watched: ProcessHandle?) {
-        private val tree = LinkedHashMap<Long, ProcessHandle>()
-        private val deadSince = HashMap<Long, Instant>()
+    /** Captured signal/watch authority, including unresolved prior attempts; never re-resolved from a pid. */
+    private inner class OldTree(run: ProcessHandle?, roots: List<ProcessHandle>, watched: ProcessHandle?, retained: OldTree?) {
+        val roots: List<ProcessHandle> = (retained?.roots.orEmpty() + roots).distinct()
+        private val runs: List<ProcessHandle> = (retained?.runs.orEmpty() + listOfNotNull(run)).distinct()
+        private val watched: List<ProcessHandle> = (retained?.watched.orEmpty() + listOfNotNull(watched)).distinct()
+        private val tree: MutableSet<ProcessHandle> = LinkedHashSet<ProcessHandle>().apply { retained?.tree?.let(::addAll) }
+        // ProcessHandle identity keeps a newly captured own process separate from a dead same-pid root.
+        private val deadSince: MutableMap<ProcessHandle, Instant> = HashMap<ProcessHandle, Instant>().apply { retained?.deadSince?.let(::putAll) }
 
         // Breadth-first, each process before its children; true when it found a new one. A dead process keeps listing
         // its orphans (a `_run` respawned after the capture), but a child started after it was seen dead is a pid reuser's.
         fun walk(): Boolean {
             val known = tree.size
-            val seen = roots.mapTo(HashSet()) { it.pid() }
-            val queue = ArrayDeque(roots)
+            val queue = ArrayDeque((roots + tree).distinct())
+            val seen = queue.toHashSet()
             while (queue.isNotEmpty()) {
                 val next = queue.removeFirst()
-                val limit = if (running(next)) null else deadSince.getOrPut(next.pid()) { Instant.now() }
+                val limit = if (running(next)) null else deadSince.getOrPut(next) { Instant.now() }
                 children(next)
-                    .filter { seen.add(it.pid()) }
+                    .filter { seen.add(it) }
                     .filter {
                         // Unknown identity grants neither signal authority nor proof that the tree stopped.
                         val start = checkNotNull(startOf(it)) { "Cannot read the start of pid ${it.pid()}" }
                         limit == null || !start.isAfter(limit)
                     }
-                    .forEach { tree.putIfAbsent(it.pid(), it); queue += it }
+                    .forEach { tree.add(it); queue += it }
             }
             return tree.size > known
         }
 
-        fun terminateDescendants() = (tree.values + listOfNotNull(run)).forEach(::terminate)
+        fun terminateDescendants() = (tree + runs).forEach(::terminate)
 
-        fun survivor(): ProcessHandle? = (listOfNotNull(run) + roots + tree.values + listOfNotNull(watched)).firstOrNull(::running)
+        fun survivor(): ProcessHandle? = (runs + roots + tree + watched).firstOrNull(::running)
     }
 
     // The supervisor this IDE spawned, while it lives; a Process without a handle has none.
