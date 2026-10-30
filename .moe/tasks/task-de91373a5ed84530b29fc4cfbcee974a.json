@@ -87,11 +87,17 @@
       "author": "architect-4ae016fb",
       "content": "Sequencing note from architect-4ae016fb (2026-10-30), who planned task-6fc0096b (HIGH). RF04 now also dependsOn task-6fc0096b.\n\nWhy: both tasks edit MoeDaemonSupervisor.kt, MoeDaemonSupervisorTest.kt and MoeProjectService.kt, and both were waiting only on RF03 and task-90664db1, so they would have run at the same time.\n\nWhat task-6fc0096b lands in the files RF04 edits. Re-read the landed bytes before your step 1, as your plan already says, and use the landed names if they differ.\n\n1. stopDaemonForRestart(info) gets a new first line.\n   - When daemon.json was written on the other side of the Windows/WSL boundary (the companion isOtherSideOfWsl(info.projectPath, windows), which is the daemon's isForeignDaemonInfo rule), it returns a fixed refusal in both profiles.\n   - That happens before any isProcessAlive, processLookup or destroy, because the pid lives in another pid namespace.\n   - Keep that check FIRST when you change the parameter to DaemonInfo? and add the windowsRestart branch: `if (info != null && <other side>) return <that refusal>` must come before `if (windowsRestart()) return stopWindowsRestart(info)`.\n   - stopWindowsRestart must never receive an other-side info.\n2. readDaemonInfo no longer deletes anything.\n   - A daemon.json naming another project now reads as null.\n   - ensureDaemonRunningImpl removes it before spawning through deleteDaemonInfoIfUnchanged(info), a compare-delete.\n   - restartDaemon's own post-stop delete is untouched; it stays yours.\n3. In MoeProjectService:\n   - connect() and connectWithRetry() use daemonSupervisor.isReachable(info): a pid that is alive and an open port, or only the open port for an other-side info.\n   - handleForeignDaemon uses deleteDaemonInfoIfUnchanged.\n   - restartDaemon is unchanged.\n\nYour W rows use native projectPaths, so the new guard never fires for them, and N1, N2 and R1-R4 are unaffected.",
       "timestamp": "2026-10-30T10:17:42.015Z"
+    },
+    {
+      "id": "comment-c1ab20fdfad0455abe218215b6c14d55",
+      "author": "worker-c2da129d",
+      "content": "task-6fc0096b implementation ready for REVIEW; wrapper landing still pending. Keep isOtherSideOfWsl(info.projectPath, isWindows()) refusal FIRST in stopDaemonForRestart: both profiles return the fixed neutral refusal before any pid probe or lookup. Everything below it remains byte-identical. readDaemonInfo is now bounded/read-only, and deleteDaemonInfoIfUnchanged(expected) shares the bounded parser and compares all four DaemonInfo fields (including projectPath). connect/handleForeignDaemon now use that helper; rereadDaemonInfo was removed. Restart's post-stop File.delete is intentionally left for RF04. Windows 411/411 tests incl R1-R4 green; cross-namespace restart/replacement/pending-retry rows added.",
+      "timestamp": "2026-10-30T10:39:20.434Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:39.223Z",
-  "updatedAt": "2026-10-30T10:17:42.016Z",
+  "updatedAt": "2026-10-30T10:39:20.434Z",
   "dependsOn": [
     "task-ec64165c85f246088a7224cf70b04670",
     "task-f3485ac9d4384664870d88db876ddd54",

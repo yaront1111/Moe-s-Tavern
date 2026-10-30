@@ -59,31 +59,42 @@ class MoeDaemonSupervisor(
         fun alive(): Boolean = target.isAlive || parent?.isAlive == true
     }
 
-    fun readDaemonInfo(): DaemonInfo? {
-        val base = basePath.ifBlank { return null }
-        val file = File(base, ".moe/daemon.json")
-        if (!file.exists()) return null
+    private fun parseDaemonInfo(file: File): DaemonInfo? {
         return try {
+            if (!file.exists()) return null
             val bytes = file.inputStream().use { it.readNBytes(MAX_DAEMON_JSON_BYTES + 1) }
             if (bytes.size > MAX_DAEMON_JSON_BYTES) {
                 log.warn("Ignoring .moe/daemon.json: larger than ${MAX_DAEMON_JSON_BYTES / 1024} KiB")
                 return null
             }
-            val info = gson.fromJson(String(bytes, Charsets.UTF_8), DaemonInfo::class.java)
-            if (info.projectPath.isNotEmpty()) {
-                val daemonPath = File(info.projectPath).canonicalPath
-                val expectedPath = File(base).canonicalPath
-                if (daemonPath != expectedPath) {
-                    log.warn("Stale daemon.json: expected project $expectedPath, found $daemonPath")
-                    file.delete()
-                    return null
-                }
-            }
-            info
+            gson.fromJson(String(bytes, Charsets.UTF_8), DaemonInfo::class.java)
         } catch (ex: Exception) {
             log.debug("Failed to read daemon.json: ${ex.message}")
             null
         }
+    }
+
+    fun readDaemonInfo(): DaemonInfo? = try {
+        val base = basePath.ifBlank { return null }
+        val info = parseDaemonInfo(File(base, ".moe/daemon.json"))
+        if (info != null && info.projectPath.isNotEmpty() && !isSameProject(info.projectPath, base)) {
+            log.warn("Ignoring .moe/daemon.json: it names ${info.projectPath}, not $base")
+            null
+        } else info
+    } catch (ex: Exception) {
+        log.debug("Failed to read daemon.json: ${ex.message}")
+        null
+    }
+
+    fun deleteDaemonInfoIfUnchanged(expected: DaemonInfo): Boolean = try {
+        val base = basePath.ifBlank { return false }
+        val file = File(base, ".moe/daemon.json")
+        if (parseDaemonInfo(file) != expected) false else file.delete().also {
+            if (!it) log.warn("Failed to remove unchanged daemon.json")
+        }
+    } catch (ex: Exception) {
+        log.warn("Failed to remove unchanged daemon.json", ex)
+        false
     }
 
     fun ensureDaemonRunning(): Boolean {
@@ -110,19 +121,21 @@ class MoeDaemonSupervisor(
             return false
         }
 
-        val info = readDaemonInfo()
-        if (info != null && isProcessAlive(info.pid) && isPortOpen(info.port)) {
+        val info = parseDaemonInfo(File(basePath, ".moe/daemon.json"))
+        val sameProject = try {
+            info?.let { it.projectPath.isEmpty() || isSameProject(it.projectPath, basePath) }
+        } catch (ex: Exception) {
+            log.debug("Failed to classify daemon.json: ${ex.message}")
+            null
+        }
+        if (info != null && sameProject == true && isReachable(info)) {
+            if (isOtherSideOfWsl(info.projectPath, isWindows())) return false
             if (!replacedUnverified(info)) return false
         }
 
         // Clean up stale daemon.json so connectWithRetry reads fresh data from the new daemon
-        if (info != null) {
-            try {
-                File(basePath, ".moe/daemon.json").delete()
-                log.info("Removed stale daemon.json (PID ${info.pid} not running)")
-            } catch (ex: Exception) {
-                log.debug("Failed to remove stale daemon.json: ${ex.message}")
-            }
+        if (info != null && sameProject != null && deleteDaemonInfoIfUnchanged(info)) {
+            log.info("Removed stale daemon.json (PID ${info.pid} not reachable or another project)")
         }
 
         if (daemonSpawnAttempts >= maxDaemonSpawnAttempts) {
@@ -244,15 +257,12 @@ class MoeDaemonSupervisor(
         }
     }
 
-    // Do not use readDaemonInfo here: it deletes mismatched project metadata, and null also means unreadable.
+    // readDaemonInfo's null also means unreadable or another project, not proof of clearance.
     private fun replacementMetadataCleared(): Boolean = try {
-        val path = File(basePath, ".moe/daemon.json").toPath()
-        if (Files.notExists(path)) true else {
-            val bytes = Files.newInputStream(path).use { it.readNBytes(MAX_DAEMON_JSON_BYTES + 1) }
-            if (bytes.size > MAX_DAEMON_JSON_BYTES) false else {
-                val info = gson.fromJson(String(bytes, Charsets.UTF_8), DaemonInfo::class.java)
-                info != null && info.pid > 0 && !isProcessAlive(info.pid)
-            }
+        val file = File(basePath, ".moe/daemon.json")
+        if (Files.notExists(file.toPath())) true else {
+            val info = parseDaemonInfo(file)
+            info != null && !isOtherSideOfWsl(info.projectPath, isWindows()) && info.pid > 0 && !isProcessAlive(info.pid)
         }
     } catch (_: Exception) {
         false
@@ -281,6 +291,11 @@ class MoeDaemonSupervisor(
      * LEGACY keeps the historical best-effort signal.
      */
     fun stopDaemonForRestart(info: DaemonInfo): String? {
+        if (isOtherSideOfWsl(info.projectPath, isWindows())) {
+            return "Restart Daemon did not stop pid ${info.pid}, which .moe/daemon.json names on the other side of the Windows/WSL boundary: " +
+                "this IDE can neither see nor signal processes there. Check what that process is and stop it there yourself if it is a Moe daemon, " +
+                "then use Restart Daemon."
+        }
         // An absent pid reads as 0, and kill(2) takes 0 and -1 as process groups: neither names a daemon.
         if (info.pid <= 0 || !isProcessAlive(info.pid)) return null
         val isProtected = profile() == RuntimeProfile.PROTECTED
@@ -673,6 +688,13 @@ class MoeDaemonSupervisor(
 
     fun isPortOpen(port: Int): Boolean = portProbe(port, PORT_CHECK_TIMEOUT_MS)
 
+    fun isReachable(info: DaemonInfo): Boolean = try {
+        (isOtherSideOfWsl(info.projectPath, isWindows()) || isProcessAlive(info.pid)) && isPortOpen(info.port)
+    } catch (ex: Exception) {
+        log.debug("Failed to check daemon reachability: ${ex.message}")
+        false
+    }
+
     /**
      * Kill the daemon process we spawned if it's still running.
      * This is called on dispose or if startup fails.
@@ -716,6 +738,13 @@ class MoeDaemonSupervisor(
     }
 
     companion object {
+        internal fun isOtherSideOfWsl(projectPath: String, windows: Boolean): Boolean =
+            (if (windows) Regex("""^/(?![\\/])""") else Regex("""^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])"""))
+                .containsMatchIn(projectPath)
+
+        internal fun isSameProject(path: String, base: String): Boolean =
+            DaemonIdentityProbe.comparableProjectPath(path) == DaemonIdentityProbe.comparableProjectPath(base) ||
+                File(path).canonicalPath == File(base).canonicalPath
         private const val STOP_TIMEOUT_MS = 20_000L
         private const val EXIT_TIMEOUT_MS = 15_000L
         private const val POLL_MS = 250L

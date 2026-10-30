@@ -51,6 +51,49 @@ class MoeProjectForeignDaemonTest {
     }
 
     @Test
+    fun `a daemon json changed in one identity field since it was read is kept byte for byte`() {
+        val changes: List<(DaemonInfo) -> DaemonInfo> = listOf(
+            { it.copy(pid = 5252) }, { it.copy(port = it.port + 1) },
+            { it.copy(startedAt = "S2") }, { it.copy(projectPath = OTHER) }
+        )
+        for (change in changes) withFixture { f ->
+            f.healthReply(200, f.health(OTHER))
+            val read = f.writeDaemonJson(startedAt = "S1")
+            val replacement = Gson().toJson(change(read))
+            f.daemonJson.writeText(replacement)
+
+            f.doConnect(read)
+
+            assertEquals("the one-field replacement must survive", replacement, f.daemonJson.takeIf { it.exists() }?.readText())
+            assertNull(f.service.field("wsClient"))
+            f.assertNoWebSocketRequest()
+        }
+    }
+
+    @Test
+    fun `connect and readiness retry reach health without probing an other-side pid`() {
+        for (retry in listOf(false, true)) withFixture { f ->
+            val read = f.writeDaemonJson("S1")
+            f.daemonJson.writeText(Gson().toJson(read.copy(projectPath = wslSpelling(f.basePath))))
+            val probed = mutableListOf<Int>()
+            val supervisor = MoeDaemonSupervisor(f.basePath, "Test", portProbe = { _, _ -> true },
+                processAliveProbe = { probed += it; false }, processStarter = { error("must not spawn") })
+            MoeProjectService::class.java.getDeclaredField("daemonSupervisor").apply { isAccessible = true }.set(f.service, supervisor)
+            f.healthReply(200, f.health(OTHER))
+
+            if (retry) MoeProjectService::class.java.getDeclaredMethod("connectWithRetry",
+                Int::class.javaPrimitiveType, Long::class.javaPrimitiveType, Int::class.javaPrimitiveType
+            ).apply { isAccessible = true }.invoke(f.service, 10, 60_000L, 1) else f.service.connect()
+
+            assertTrue("no foreign pid probe on retry=$retry", probed.isEmpty())
+            assertTrue("the health probe judged the daemon", f.statuses.any { OTHER in it })
+            assertFalse(f.daemonJson.exists())
+            assertNull(f.service.field("wsClient"))
+            f.assertNoWebSocketRequest()
+        }
+    }
+
+    @Test
     fun `a replacement naming another project is kept byte for byte`() = withFixture { f ->
         assertReplacementKept(f, OTHER)
     }

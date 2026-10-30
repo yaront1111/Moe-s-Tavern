@@ -6,6 +6,7 @@ import com.moe.util.ProtectedStateStore
 import com.moe.util.RuntimeProfile
 import com.moe.util.RuntimeSelectionPolicy
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -49,15 +50,95 @@ class MoeDaemonSupervisorTest {
     }
 
     @Test
-    fun `readDaemonInfo deletes a daemon file for another project`() {
+    fun `readDaemonInfo ignores but keeps a daemon file for another project`() {
         val root = temporaryFolder.newFolder("stale")
         val daemonFile = writeDaemonInfo(
             root,
             DaemonInfo(9876, 42, "now", temporaryFolder.newFolder("other").canonicalPath)
         )
 
-        assertNull(supervisor(root).readDaemonInfo())
-        assertFalse(daemonFile.exists())
+        val before = daemonFile.readBytes()
+        repeat(2) {
+            assertNull(supervisor(root).readDaemonInfo())
+            assertTrue("reading must not delete another project's metadata", daemonFile.exists())
+            assertArrayEquals(before, daemonFile.readBytes())
+        }
+    }
+
+    @Test
+    fun `readDaemonInfo reads this project in every spelling`() {
+        val root = temporaryFolder.newFolder("spellings")
+        val base = root.canonicalPath
+        val forward = base.replace('\\', '/')
+        val spellings = if (forward.matches(Regex("^[A-Za-z]:/.*"))) {
+            listOf(base, forward, base.lowercase(), "$base\\", otherSideSpelling(base))
+        } else listOf(base, "$base/", "$base/./", "//wsl$/Ubuntu$base", otherSideSpelling(base))
+        for (path in spellings + "$forward/child/..") {
+            assertEquals(path, DaemonIdentityProbe.comparableProjectPath(base), DaemonIdentityProbe.comparableProjectPath(path))
+            val expected = DaemonInfo(9876, 42, "now", path)
+            val file = writeDaemonInfo(root, expected)
+            val before = file.readBytes()
+            assertEquals(path, expected, supervisor(root).readDaemonInfo())
+            assertArrayEquals(path, before, file.readBytes())
+        }
+    }
+
+    @Test
+    fun `isSameProject compares cross OS literals before canonical paths`() {
+        val pairs = listOf("/mnt/d/proj" to "D:\\proj", "D:/proj/" to "D:\\proj",
+            "d:\\PROJ" to "D:\\proj", "D:\\proj" to "/mnt/d/proj", "\\\\wsl$\\Ubuntu\\home\\me\\p" to "/home/me/p")
+        pairs.forEach { (path, base) -> assertTrue(path, MoeDaemonSupervisor.isSameProject(path, base)) }
+        assertTrue("relative paths need canonical fallback", MoeDaemonSupervisor.isSameProject(".", File(".").canonicalPath))
+        listOf("D:\\other", "/mnt/d/other").forEach { assertFalse(MoeDaemonSupervisor.isSameProject(it, "D:\\proj")) }
+    }
+
+    @Test
+    fun `ensureDaemonRunning removes another project's daemon file before spawning`() {
+        val root = initializedRoot("other-project")
+        val file = writeDaemonInfo(root, DaemonInfo(9876, 42, "now", temporaryFolder.newFolder().canonicalPath))
+        var starts = 0
+        val service = supervisor(root, portProbe = { _, _ -> true }, processAliveProbe = { true },
+            processStarter = { starts++; FakeProcess() })
+        assertTrue(service.ensureDaemonRunning())
+        assertEquals(1, starts)
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun `deleteDaemonInfoIfUnchanged keeps every one-field replacement`() {
+        val root = initializedRoot("compare-delete")
+        val expected = DaemonInfo(9876, 42, "now", root.canonicalPath)
+        val replacements = listOf(expected.copy(pid = 43), expected.copy(port = 9877),
+            expected.copy(startedAt = "later"), expected.copy(projectPath = "OTHER"))
+        for (replacement in replacements) {
+            val file = writeDaemonInfo(root, replacement)
+            val before = file.readBytes()
+            assertFalse(replacement.toString(), supervisor(root).deleteDaemonInfoIfUnchanged(expected))
+            assertArrayEquals(before, file.readBytes())
+        }
+        val file = writeDaemonInfo(root, expected)
+        assertTrue(supervisor(root).deleteDaemonInfoIfUnchanged(expected))
+        assertFalse(file.exists())
+        assertFalse(supervisor(root).deleteDaemonInfoIfUnchanged(expected))
+    }
+
+    @Test
+    fun `metadata reads and compare-delete keep unparseable files`() {
+        val root = initializedRoot("invalid-metadata")
+        val expected = DaemonInfo(9876, 42, "now", root.canonicalPath)
+        for (json in listOf("", "null", "{broken", "{}", "{\"port\":9876,\"pid\":42}",
+            Gson().toJson(expected.copy(projectPath = "\u0000")),
+            Gson().toJson(expected).padEnd(MoeDaemonSupervisor.MAX_DAEMON_JSON_BYTES + 1, ' '))) {
+            val file = File(root, ".moe/daemon.json").apply { writeText(json) }
+            val before = file.readBytes()
+            assertNull(supervisor(root).readDaemonInfo())
+            assertFalse(supervisor(root).deleteDaemonInfoIfUnchanged(expected))
+            assertArrayEquals(before, file.readBytes())
+        }
+        assertFalse(MoeDaemonSupervisor("", "Test").deleteDaemonInfoIfUnchanged(expected))
+        val emptyPath = expected.copy(projectPath = "")
+        writeDaemonInfo(root, emptyPath)
+        assertEquals(emptyPath, supervisor(root).readDaemonInfo())
     }
 
     @Test
@@ -91,6 +172,103 @@ class MoeDaemonSupervisorTest {
         val supervisor = supervisor(root, processAliveProbe = { throw IllegalStateException("probe") })
 
         assertFalse(supervisor.isProcessAlive(42))
+    }
+
+    @Test
+    fun `isOtherSideOfWsl follows the daemon namespace rule on both hosts`() {
+        val posix = listOf("/mnt/d/x", "/home/u/x")
+        val windows = listOf("//server/share/x", "\\\\server\\share", "D:\\x", "D:/x")
+        for (host in listOf(false, true)) {
+            for (path in posix + windows + listOf("x", ".", "")) {
+                val expected = if (host) path in posix else path in windows
+                assertEquals("$host: $path", expected, MoeDaemonSupervisor.isOtherSideOfWsl(path, host))
+            }
+        }
+    }
+
+    @Test
+    fun `isReachable uses only the port for other-side pids`() {
+        val root = temporaryFolder.newFolder("reachability")
+        val local = DaemonInfo(9876, 42, "now", root.canonicalPath)
+        val remote = local.copy(pid = 43, projectPath = otherSideSpelling(root.canonicalPath))
+        for (alive in listOf(false, true)) for (open in listOf(false, true)) {
+            val probed = mutableListOf<Int>()
+            val service = supervisor(root, processAliveProbe = { probed += it; alive }, portProbe = { _, _ -> open })
+            assertEquals(alive && open, service.isReachable(local))
+            assertEquals(open, service.isReachable(remote))
+            assertEquals(listOf(42), probed)
+        }
+        assertFalse(supervisor(root, portProbe = { _, _ -> error("probe failed") }).isReachable(remote))
+    }
+
+    @Test
+    fun `ensureDaemonRunning leaves an open other-side daemon of this project alone`() {
+        for (open in listOf(true, false)) {
+            val root = initializedRoot("other-side-$open")
+            val file = writeDaemonInfo(root, DaemonInfo(9876, 42, "now", otherSideSpelling(root.canonicalPath)))
+            val before = file.readBytes()
+            var starts = 0
+            val probed = mutableListOf<Int>()
+            val service = supervisor(root, processAliveProbe = { probed += it; false }, portProbe = { _, _ -> open },
+                processStarter = { starts++; FakeProcess() })
+            assertEquals(!open, service.ensureDaemonRunning())
+            assertEquals(if (open) 0 else 1, starts)
+            assertTrue(probed.isEmpty())
+            if (open) assertArrayEquals(before, file.readBytes()) else assertFalse(file.exists())
+        }
+    }
+
+    @Test
+    fun `protected replacement never captures or prompts for an other-side daemon`() = ReplacementFixture().use { f ->
+        writeDaemonInfo(f.root, f.info.copy(projectPath = otherSideSpelling(f.root.canonicalPath)))
+        f.targetAlive = false
+        val before = f.file.readBytes()
+        assertFalse(f.service.ensureDaemonRunning())
+        assertTrue(f.asked.isEmpty())
+        assertTrue(f.commands.isEmpty())
+        assertTrue(f.probedPids.isEmpty())
+        assertTrue(f.lookedUpPids.isEmpty())
+        assertArrayEquals(before, f.file.readBytes())
+    }
+
+    @Test
+    fun `pending replacement never probes a rewritten other-side pid`() = ReplacementFixture().use { f ->
+        val replacement = f.info.copy(pid = 5252, projectPath = otherSideSpelling(f.root.canonicalPath))
+        f.stop = { f.targetAlive = false; f.parentAlive = false; writeDaemonInfo(f.root, replacement); 0 }
+        assertFalse(f.service.ensureDaemonRunning())
+        val before = f.file.readBytes()
+        assertFalse(f.service.ensureDaemonRunning())
+        assertFalse(f.probedPids.contains(5252))
+        assertEquals(1, f.commands.size)
+        assertArrayEquals(before, f.file.readBytes())
+    }
+
+    @Test
+    fun `restart refuses other-side metadata without touching any process under either profile`() {
+        val root = temporaryFolder.newFolder("other-side-restart")
+        val remote = DaemonInfo(9876, 42, "now", otherSideSpelling(root.canonicalPath))
+        for (profile in RuntimeProfile.values()) {
+            val probes = mutableListOf<Int>()
+            val lookups = mutableListOf<Long>()
+            var destroys = 0
+            val handle = Proxy.newProxyInstance(ProcessHandle::class.java.classLoader, arrayOf(ProcessHandle::class.java)) { _, method, _ ->
+                if (method.name == "destroy") { destroys++; true } else error("unexpected ${method.name}")
+            } as ProcessHandle
+            val service = MoeDaemonSupervisor(root.canonicalPath, "Test", profile = { profile },
+                processAliveProbe = { probes += it; true }, processLookup = { lookups += it; handle })
+            assertEquals("Restart Daemon did not stop pid 42, which .moe/daemon.json names on the other side of the Windows/WSL boundary: " +
+                "this IDE can neither see nor signal processes there. Check what that process is and stop it there yourself if it is a Moe daemon, " +
+                "then use Restart Daemon.", service.stopDaemonForRestart(remote))
+            assertTrue(probes.isEmpty())
+            assertTrue(lookups.isEmpty())
+            assertEquals(0, destroys)
+            if (profile == RuntimeProfile.LEGACY) {
+                assertNull(service.stopDaemonForRestart(remote.copy(projectPath = root.canonicalPath)))
+                assertEquals(listOf(42), probes)
+                assertEquals(listOf(42L), lookups)
+                assertEquals(1, destroys)
+            }
+        }
     }
 
     @Test
@@ -521,6 +699,8 @@ class MoeDaemonSupervisorTest {
         var edt = false
         var polls = 0
         val asked = mutableListOf<Pair<String, Int>>()
+        val probedPids = mutableListOf<Int>()
+        val lookedUpPids = mutableListOf<Long>()
         val commands = mutableListOf<ProcessBuilder>()
         val statuses = mutableListOf<String>()
         var confirm: () -> Boolean = { true }
@@ -534,10 +714,10 @@ class MoeDaemonSupervisorTest {
         }
         val service by lazy {
             MoeDaemonSupervisor(root.path, "Test Project", onStatus = { _, text -> statuses += text },
-                portProbe = { _, _ -> true }, processAliveProbe = { it != 4242 || targetAlive },
+                portProbe = { _, _ -> true }, processAliveProbe = { probedPids += it; it != 4242 || targetAlive },
                 processStarter = { commands += it; FakeProcess(ProcessHandle.current()) },
                 wslAgentsEnabled = { wsl }, profile = { profile }, installedRoot = { installed }, nodeExecutable = { nodePath },
-                processLookup = { target }, replaceConfirmer = { name, pid -> asked += name to pid; confirm() },
+                processLookup = { lookedUpPids += it; target }, replaceConfirmer = { name, pid -> asked += name to pid; confirm() },
                 runStop = { commands += it; stop() }, onDispatchThread = { edt }, sleep = { polls++ }, exitTimeoutMs = 500)
         }
         fun assertRefused(label: String, stops: Int = 0) {
@@ -562,13 +742,19 @@ class MoeDaemonSupervisorTest {
         processAliveProbe: (Int) -> Boolean = { false },
         processStarter: (ProcessBuilder) -> Process = { FakeProcess() }
     ): MoeDaemonSupervisor = MoeDaemonSupervisor(
-        root.absolutePath,
+        root.canonicalPath,
         "Test Project",
         onStatus,
         portProbe,
         processAliveProbe,
         processStarter
     )
+
+    private fun otherSideSpelling(base: String): String {
+        val path = base.replace('\\', '/')
+        return if (path.matches(Regex("^[A-Za-z]:/.*"))) "/mnt/${path[0].lowercaseChar()}${path.substring(2)}"
+        else "\\\\wsl.localhost\\Ubuntu${path.replace('/', '\\')}"
+    }
 
     private fun writeDaemonInfo(root: File, info: DaemonInfo): File {
         val moeDir = File(root, ".moe").apply { mkdirs() }

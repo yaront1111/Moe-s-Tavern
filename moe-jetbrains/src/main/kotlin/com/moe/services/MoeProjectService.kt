@@ -1,6 +1,5 @@
 package com.moe.services
 
-import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.Disposable
@@ -156,15 +155,10 @@ class MoeProjectService @JvmOverloads constructor(
             scheduleReconnect()
             return
         }
-        if (!daemonSupervisor.isProcessAlive(daemonInfo.pid) || !daemonSupervisor.isPortOpen(daemonInfo.port)) {
+        if (!daemonSupervisor.isReachable(daemonInfo)) {
             // Clean up stale daemon.json so next reconnect can spawn a fresh daemon
-            val base = project.basePath
-            if (base != null) {
-                try {
-                    File(base, ".moe/daemon.json").delete()
-                    log.info("Removed stale daemon.json in connect() (PID ${daemonInfo.pid} not reachable)")
-                } catch (_: Exception) {}
-            }
+            val deleted = daemonSupervisor.deleteDaemonInfoIfUnchanged(daemonInfo)
+            log.info("Removed stale daemon.json in connect() (PID ${daemonInfo.pid} not reachable): $deleted")
             connecting = false
             publishStatus(false, "Daemon not running, restarting...")
             scheduleReconnect()
@@ -183,7 +177,7 @@ class MoeProjectService @JvmOverloads constructor(
         }
 
         val daemonInfo = daemonSupervisor.readDaemonInfo()
-        if (daemonInfo != null && daemonSupervisor.isProcessAlive(daemonInfo.pid) && daemonSupervisor.isPortOpen(daemonInfo.port)) {
+        if (daemonInfo != null && daemonSupervisor.isReachable(daemonInfo)) {
             // Daemon is ready, proceed with connection
             connecting = false
             retryFuture = null
@@ -294,17 +288,8 @@ class MoeProjectService @JvmOverloads constructor(
     /** Like connect()'s dead-PID branch: drop the stale daemon.json, and the reconnect spawns ours. */
     private fun handleForeignDaemon(daemonInfo: DaemonInfo, foreign: DaemonIdentity.Foreign, basePath: String) {
         log.warn("Daemon on port ${daemonInfo.port} (PID ${daemonInfo.pid}) serves ${foreign.projectPath}, not $basePath")
-        val file = File(basePath, ".moe/daemon.json")
-        val current = rereadDaemonInfo(file)
-        if (current != null && current.pid == daemonInfo.pid && current.port == daemonInfo.port &&
-            current.startedAt == daemonInfo.startedAt
-        ) {
-            try {
-                val deleted = file.delete()
-                log.info("Removed stale daemon.json naming that daemon: $deleted")
-            } catch (ex: Exception) {
-                log.warn("Failed to remove stale daemon.json", ex)
-            }
+        if (daemonSupervisor.deleteDaemonInfoIfUnchanged(daemonInfo)) {
+            log.info("Removed stale daemon.json naming that daemon")
         } else {
             log.info("Kept daemon.json: it no longer names that daemon")
         }
@@ -316,19 +301,6 @@ class MoeProjectService @JvmOverloads constructor(
                 "this project's daemon will start on the next free port."
         )
         scheduleReconnect()
-    }
-
-    /**
-     * daemon.json as it is now, read without side effects; null when absent, oversize or malformed.
-     * Not the supervisor's readDaemonInfo: it deletes a file naming another project before any pid,
-     * port or startedAt check, so it would drop a daemon.json another daemon has just rewritten.
-     */
-    private fun rereadDaemonInfo(file: File): DaemonInfo? = try {
-        val bytes = file.inputStream().use { it.readNBytes(MoeDaemonSupervisor.MAX_DAEMON_JSON_BYTES + 1) }
-        if (bytes.size > MoeDaemonSupervisor.MAX_DAEMON_JSON_BYTES) null
-        else Gson().fromJson(String(bytes, Charsets.UTF_8), DaemonInfo::class.java)
-    } catch (_: Exception) {
-        null
     }
 
     private fun openClient(daemonInfo: DaemonInfo) {
