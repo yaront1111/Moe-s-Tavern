@@ -1,0 +1,34 @@
+{
+  "id": "task-19cbba2272ee4a1c9f0a9c933f339f59",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-10G] Wrappers: sparse frozen-gate workspaces exclude .moe",
+  "description": "Objective: provide the .moe-free frozen-gate interface required by revised WT-S §2.2 L6 without changing shared-checkout gates. SPIDR Interface prerequisite extracted from WT-10 after its QA-driven contract expansion.\nDeliverable: an explicit optional worktree-mode arm on existing run_frozen_gate (argument `worktree`; default shared) / Invoke-MoeFrozenGate (-WorktreeMode switch; absent preserves shared), plus gate_integrity_wt / Test-MoeGateIntegrityWorktree. Use worktree add --detach --no-checkout at the frozen commit, sparse-checkout set --no-cone '/*' '!/.moe/', then read-tree -mu HEAD, never core.sparseCheckout=false in this arm. Retain HEAD/write-tree/diff-files checks; clear skip-worktree/assume-unchanged only for paths outside .moe. A .moe directory/file/link before or after the gate is MOE_WORKTREE_GATE_INTEGRITY and failure. Existing child supervision, evidence recording and owned cleanup remain in use. Add mirrored regression cases in scripts/tests/postflight.sh and postflight.ps1. Four edited files: the wrappers and these harnesses; no held-out worktree-landing test edits.\nNOT in scope: land lease, round limits, migration flags, publication protocol, daemon/proxy changes, resource settings or documentation sweep. WT-10 consumes this callable interface after it lands.\nVerification from repo root: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh; on native Windows additionally node scripts/tests/postflight-safe.mjs powershell. Exact same source revision on both engines, no unavailable-engine pass. Shared-mode cases remain unchanged.",
+  "definitionOfDone": [
+    "The worktree-mode gate command sees the exact frozen HEAD/tree and MOE_PROJECT_PATH pointing to its disposable root, with .moe absent despite tracked .moe records; both postflight harnesses prove it.",
+    "A gate that creates .moe/x, a file named .moe, or a dangling .moe link fails with MOE_WORKTREE_GATE_INTEGRITY; cleanup touches only owned scratch paths and source/control sentinels remain unchanged.",
+    "Tracked source mutations, including index flag hiding outside .moe, still fail integrity; excluded .moe index entries remain skip-worktree and do not materialize.",
+    "Existing shared-mode frozen-gate behavior and error handling pass unchanged; default calls still select shared behavior.",
+    "The named verification exits 0, native Windows PS5.1 postflight passes on the same revision, and both wrappers carry the same introduced MOE_WORKTREE_ codes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-0921d6d76a6b40a685077245b19ac639"
+  ],
+  "priority": "HIGH",
+  "order": 16.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:34:38.394Z",
+  "updatedAt": "2026-10-30T13:34:38.394Z"
+}

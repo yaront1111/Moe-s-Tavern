@@ -77,7 +77,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -97,21 +97,30 @@
       "author": "architect-e4b7eee0",
       "content": "Note from architect-e4b7eee0, 2026-10-30, for whoever plans this row. CQ-R11e2's approved plan (task-1e7f5a2d, rev 1) extracts materializeSnapshot's mount-check sandwich into one internal helper in snapshot-transfer.mjs: `transfer(name, provider, options, delivered)`. It runs assertNoMounts, supervise(options), throws TRANSFER_FRAME_INVALID unless delivered(), then runs assertNoMounts again. installDependencies should reuse that helper together with hostFrames(tree). That is the \"one internal helper shared with materializeSnapshot\" this description asks for, so this row adds no second copy. The same plan also adds `import tarfile, lzma, zlib` to guest-supervisor.py and a 'toolchain' entry to main()'s argv tuple. Merge into those landed bytes.",
       "timestamp": "2026-10-29T23:01:14.041Z"
+    },
+    {
+      "id": "comment-cbbe679e5b8e4327bf9cc966aa1771d6",
+      "author": "governor-693b7073",
+      "content": "Governor note for QA, 13:31Z. This row's post-reject fix bytes, scripts/local-runner/snapshot-transfer.mjs (+10 lines) and scripts/tests/local-runner.test.mjs (+10 lines), were swept into the manual commit f6da2d7f \"D\" at 13:27:12Z. That was not a wrapper landing.\n- The retry completion 91eaa6ae contains only .moe/tasks JSON.\n- Review the fix with `git show f6da2d7f -- scripts/local-runner/snapshot-transfer.mjs scripts/tests/local-runner.test.mjs` on top of b364044c.\n- A missing source diff in 91eaa6ae is expected and not evidence of an empty fix.",
+      "timestamp": "2026-10-30T13:29:41.715Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:53:09.580Z",
-  "updatedAt": "2026-10-30T13:28:17.981Z",
+  "updatedAt": "2026-10-30T13:34:28.830Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T23:01:14.250Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T13:34:28.830Z",
+    "wallClockMs": 52394580
   },
   "contextFetchedBy": [
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-ba3f4f35"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -163,7 +172,9 @@
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-supervisor.py",
-    "scripts/local-runner/snapshot-transfer.mjs"
+    "scripts/local-runner/snapshot-transfer.mjs",
+    ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
+    ".moe/tasks/task-cf7f470818b34486b4e74bacc1b92c7a.json"
   ],
   "completionSummary": "QA reopen 1 (DoD2) repaired at the installDependencies API boundary only.\n- snapshot-transfer.mjs (+8/-2): the transfer() call is wrapped. A known TRANSFER_* code (a string own key of MESSAGES) is re-issued through transferError, keeping its fixed message and only the key 'code'. Any other error becomes the fixed TRANSFER_MOUNTS_UNKNOWN. Only the pre/post assertNoMounts calls throw non-TRANSFER errors there (PROVIDER_*/LIFECYCLE_*); supervise/feed/the acceptor already reject via transferError. The shared transfer(), assertNoMounts and materializeSnapshot are unchanged, so R11e2's ruled passthrough and T1-T7 hold.\n- local-runner.test.mjs TD2 (+10): new rows for info ENOENT (0 spawns), info stdout 'bad json' (0 spawns) and post-stream mountinfo ENOENT (1 spawn). Each asserts TRANSFER_MOUNTS_UNKNOWN, a sanitized message and own keys exactly ['code']. RED before the fix (actual PROVIDER_NOT_FOUND), GREEN after; focused TD+T1-T7 10/10.\n- guest-supervisor.py is unchanged.\nFresh full plan gate: exit 0; 271 tests, 270 pass, 0 fail, 1 existing opt-in macOS smoke skip; MD1-MD3/TD1-TD3 ran; log /tmp/r11e4-reopen1.log. Scoped diff --check is clean, no __pycache__.\nLanding note: human commit f6da2d7f (\"D\", 71 files) swept these exact repair hunks onto moe/work-2026-10-24 mid-session. The tree is clean vs HEAD for all three scoped paths, so the wrapper may land nothing new. Review b364044c..f6da2d7f scoped to snapshot-transfer.mjs and local-runner.test.mjs.\nAdversarial review found nothing to fix. Theoretical only: a throwing `code` getter on a trusted provider's error object.\nNo agent Git writes, no .moe edits, peer dirty paths untouched, no verified-local/isolation claim; executionReady:false.",
   "commits": [
@@ -188,16 +199,32 @@
       "treeId": "dc0c8222543dd6e593381272d1efad0757ddc746",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "91eaa6ae283935a369bfa868ab7f4542dbb30239",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T13:22:37Z",
+      "paths": [
+        ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
+        ".moe/tasks/task-cf7f470818b34486b4e74bacc1b92c7a.json"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T13:28:39.292Z",
+      "treeId": "17cc94d30ec18cff507b19c1f385d70e0812e8b1",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "completion",
-    "sessionId": "worker-c2da129d@2026-10-30T13:12:18Z",
-    "at": "2026-10-30T13:19:27.712Z"
+    "sessionId": "worker-fe18a9a9@2026-10-30T13:22:37Z",
+    "at": "2026-10-30T13:28:39.292Z"
   },
-  "reviewCompletedAt": "2026-10-30T13:22:33.274Z",
+  "reviewCompletedAt": "2026-10-30T13:34:28.830Z",
   "rejectionDetails": {
     "failedDodItems": [
       "installDependencies streams only the sealed tree, checks mounts before and after, and accepts only the matching materialized frame. Every failure is a fixed TRANSFER_* code. Shown by tests with a fake provider."
@@ -228,5 +255,12 @@
         }
       ]
     }
-  ]
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/snapshot-transfer.mjs"
+  ],
+  "completedAt": "2026-10-30T13:34:28.830Z",
+  "reviewSummary": "Verified DoD 1-4 on archive of recorded completion 91eaa6ae283935a369bfa868ab7f4542dbb30239 (tree 17cc94d30ec18cff507b19c1f385d70e0812e8b1), not dirty shared bytes. git show reviewed b364044c and repair f6da2d7f plus retry 91eaa6ae; branch --contains confirms moe/work-2026-10-24. f6da2d7f is an ancestor of the board-only retry, with identical scoped source. Source/test diff +204/-15 (219 changed, 189 net); scoped diff --check passed.\nExact task.verification rerun: env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs => exit 0; 271 tests, 270 passed, 1 existing optional macOS skip. Log /tmp/qa-r11e4-91eaa6ae.log. MD/TD and unchanged M/T/TC/TT passed. Verified root defaults, injected-owner permission tests (0755 dirs/0644 builder files/0600 manifest), digest/cleanup/existing-target refusals, one matching frame, both mount checks and frozen executionReady:false. Provider failures now normalize only at installDependencies to sanitized TRANSFER_MOUNTS_UNKNOWN. Scratch mutation restoring pre-repair module makes current TD2 fail on missing provider (exit 1).\nExtra clean-PATH command: node --test scripts/tests/local-runner-{bridge,agents,check,snapshot}.test.mjs => exit 0, 154 passed/2 existing opt-in skips; log /tmp/qa-r11e4-related-rerun.log. First extra run lacked archive CI/lock/build fixtures; restored committed fixtures and compiled exact daemon sources with node node_modules/typescript/bin/tsc (exit 0), then reran green. No test weakening or complexity findings. Real macOS, pinned Codex and root mount-namespace certification remain unverified; no isolation claim. No source edits or Git writes. Handoff will be written then archived.",
+  "requiredCheckAtDone": null
 }

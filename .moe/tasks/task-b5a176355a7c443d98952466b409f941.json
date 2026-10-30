@@ -1,0 +1,30 @@
+{
+  "id": "task-b5a176355a7c443d98952466b409f941",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-10P] Proxy: preserve bounded blocking replies after one-shot stdin EOF",
+  "description": "Objective: make wrapper-issued wait_for_resource usable through the actual one-shot moe-proxy transport before WT-10 relies on it. Verified source defect: scripts/moe-agent.sh moe_rpc and PS Invoke-MoeRpc pipe one request then close stdin; packages/moe-proxy/src/index.ts gracefulShutdown uses a flat 2000ms drain, so queued blocking requests are cancelled long before their own timeout. Existing memory mem:gotcha-moe-proxy-oneshot-kills-blocking-longpolls confirms real-daemon reproduction.\nDeliverable: bounded EOF-drain handling for known blocking wait_for_resource/wait_for_task/chat_wait requests using their recorded request deadlines. Keep explicit SIGINT/SIGTERM shutdown promptly bounded, ordinary-request/empty EOF behavior unchanged, no indefinite reconnect/wait, and deterministic error responses when the request cannot finish. Regression coverage in packages/moe-proxy/src/index.test.ts with the real spawned proxy and fake WS server; inspect existing pendingRequestTimes/getRequestTimeout and shutdown tests before planning. Expected edited files: src/index.ts and src/index.test.ts; avoid wrapper-specific stdin-holding workarounds.\nNOT in scope: caller identity, task state, lease semantics, changing daemon tool contracts or installing/restarting the live fleet. WT-10 must use a proxy built from this fix; packaged rollout is owned by epic hardening.\nVerification from repo root: (cd packages/moe-proxy && npm test) && bash scripts/tests/parity-check.sh. Regression tests must spawn compiled current source, not stale dist.",
+  "definitionOfDone": [
+    "A real proxy receiving a known blocking tools/call followed by stdin EOF returns a delayed valid daemon response after more than 2 seconds instead of Proxy shutting down before response received; the test fails on current source.",
+    "A blocked request with no daemon response exits within its recorded finite deadline and emits a truthful error; unavailable/disconnected daemon and queued-unsent requests do not hang indefinitely.",
+    "SIGINT/SIGTERM remain promptly bounded even while an EOF-drain is pending, and all timeout/connection/process cleanup executes without duplicate responses or leaked children.",
+    "Ordinary requests and no-pending-request EOF retain existing shutdown behavior, demonstrated by unchanged existing tests.",
+    "The exact verification command exits 0 and the current proxy build is the binary under test."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
+  "priority": "HIGH",
+  "order": 16.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:34:38.414Z",
+  "updatedAt": "2026-10-30T13:34:38.414Z"
+}

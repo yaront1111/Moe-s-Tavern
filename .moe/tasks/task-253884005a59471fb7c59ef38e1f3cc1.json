@@ -1,0 +1,36 @@
+{
+  "id": "task-253884005a59471fb7c59ef38e1f3cc1",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-10M] Wrappers: gated migration landing CLI for the shared branch",
+  "description": "Objective: implement revised WT-S §7.3's human-run migration publication without bypassing main's gate/publication policy. This is comment-1970f7d8521f495dafdff5b7ca1e8144 item 3, explicitly split from WT-10 by SPIDR Interface to keep each task bounded. Dependencies provide completed landing/gate helpers and serialize the remaining wrapper rollout; WT-16's runbook must depend on this row.\nDeliverable: twins --land-branch <branch> / -LandBranch <branch> reuse L3; up to two L4→L5→L6→L7→L9→L10 rounds; L14 always. Always run settings.qualityGate regardless of qualityGateScope. With none set, MOE_MIGRATION_NO_GATE before any fetch. Merge tree M of B and the branch tip; C has exactly parents B and branch tip. Skip L0-L2, L5b, L8, L11-L13; no Candidate/CheckRun/ledger rows. Preserve unknown-outcome safety; a rerun after the target contains the branch exits 0 with MOE_COMMIT_NOTHING_TO_COMMIT. Tests cover clean migration, conflict, gate failure, lease refusal, remote rejection exhaustion, unknown outcome and rerun.\nPlanning prerequisite to resolve against WT-S: the spec currently says 'no task' while acquire_resource/wait_for_resource require a real owned taskId + workerId. Architect raised this with WT-S author in #architects msg-a78b6d326fa04e1b8e229e300537664d. Obtain a concrete legitimate lease identity contract before submitting a plan; do not invent task IDs, weaken resource ownership, or silently skip the lease. Another issue to preserve: taskless migration must suppress evidence RPCs that existing freeze_candidate/run_frozen_gate normally emit.\nNOT in scope: task-bound completion landing, shared-mode behavior, main history rewriting/force push, flipping settings or executing a real migration, and docs/runbook (WT-16/17/18).\nVerification from root: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh; native Windows additionally node scripts/tests/postflight-safe.mjs powershell. Keep held-out worktree-landing tests unchanged; extend both postflight harnesses. Plan only after the lease identity contract is resolved.",
+  "definitionOfDone": [
+    "Both migration flags create a gated merge commit whose tree is M and whose parents are B and the source branch tip, preserving source history; both harnesses prove it.",
+    "Absent qualityGate refuses before any fetch; migration always runs a configured gate regardless of scope and neither creates Candidate/CheckRun/ledger records nor claims an ordinary worker task as an incidental side effect.",
+    "Both harnesses prove the finalized migration lease identity contract: acquire/wait/release use an authorized real owner, release happens on every exit, and timeout/refusal publishes nothing.",
+    "Conflict, gate failure, and two rejected rounds leave the target unchanged; an unknown remote outcome stops without a false local publication or success claim.",
+    "After a confirmed publication, rerunning the same branch exits 0 with MOE_COMMIT_NOTHING_TO_COMMIT and publishes no additional commit.",
+    "The named full launcher verification exits 0; same-revision native Windows tests pass; MOE_MIGRATION_ and other introduced code families match between twins."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
+    "task-befdddf7e1f047a0ba4f71dd900c9b8f"
+  ],
+  "priority": "HIGH",
+  "order": 22.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:35:19.557Z",
+  "updatedAt": "2026-10-30T13:35:19.557Z"
+}

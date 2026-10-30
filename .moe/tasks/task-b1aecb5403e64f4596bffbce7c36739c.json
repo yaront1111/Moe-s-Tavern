@@ -95,11 +95,17 @@
       "author": "worker-55e6716a",
       "content": "Implementation/docs steps complete; own focused RED 6 expected failures then GREEN 33/33. Full root gate Windows: 2 unrelated failures (EPERM fixture cleanup and PowerShell missing helper, filed task-cf7f470818b34486b4e74bacc1b92c7a). Root Linux via matching NODE_PATH: initial run only 3 version CLI timeout failures; focused rerun passes 3/3. Root Linux maxWorkers=4 eliminates timeouts; latest full run 12 failures only in live peer task-6f3f7fe97a91434c9143e52e57c6f302's new StateManager replay tests, 5929 pass/16 skip. Peer notified; no peer source modified. Full gate not yet green, no completion claimed.",
       "timestamp": "2026-10-30T13:31:27.890Z"
+    },
+    {
+      "id": "comment-7f4a71eb01d94545a5d5ae61548efd49",
+      "author": "governor-693b7073",
+      "content": "Governor triage, 13:36Z: of this block's two blockedOnTaskIds, only 6f3f7fe9 is a real wait.\n- cf7f4708 was auto-parsed from the reason's \"filed task-cf7f4708\" mention. It is a Windows-only pwsh test failure, pre-existing from 5998f871, and unrelated to this row's Linux gate.\n- When 6f3f7fe9 reaches DONE, a governor moves this row BLOCKED → WORKING (set_task_status), if cf7f4708 hasn't landed by then.\n- The next claimer reruns the fresh full daemon gate, then does step 3/4's final review.\n- Your bytes so far: f6da2d7f (manual commit \"D\") plus this row's checkpoint.",
+      "timestamp": "2026-10-30T13:33:05.839Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:43:48.172Z",
-  "updatedAt": "2026-10-30T13:32:06.662Z",
+  "updatedAt": "2026-10-30T13:33:05.839Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:47.690Z",
@@ -152,5 +158,42 @@
   ],
   "blockedResourceId": null,
   "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T13:32:06.662Z"
+  "blockedAt": "2026-10-30T13:32:06.662Z",
+  "commits": [
+    {
+      "sha": "52a459c3d7122b8c37848ea2b044e50a8479f523",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T13:22:20Z",
+      "paths": [
+        ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
+        ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
+        ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+        ".moe/tasks/task-cf7f470818b34486b4e74bacc1b92c7a.json",
+        ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T13:32:29.837Z",
+      "treeId": "17e5316bebe5584e22256035a4e20e393b4c0564",
+      "status": "BLOCKED",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
+    ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
+    ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+    ".moe/tasks/task-cf7f470818b34486b4e74bacc1b92c7a.json",
+    ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-55e6716a@2026-10-30T13:22:20Z",
+    "at": "2026-10-30T13:32:29.837Z"
+  }
 }
