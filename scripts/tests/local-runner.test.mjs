@@ -2773,8 +2773,26 @@ if (typeof answer === 'string') process.stdout.write(answer); else process.exitC
 import { CERTIFY_CHECKS, certifyCore, runIsolationCertify, validateCertificationReport } from '../local-runner/certify.mjs';
 
 const REAL_SUPERVISOR_SHA256 = createHash('sha256').update(readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url))).digest('hex');
-const CERTIFY_IDS = ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'guest-network', 'teardown'];
-const BRIDGE_NOT_RUN = [['bridge-framing', 'not-run'], ['bridge-eof', 'not-run'], ['guest-network', 'not-run']];
+const CERTIFY_IDS = ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'guest-network', 'check-containment', 'teardown'];
+const BRIDGE_NOT_RUN = [['bridge-framing', 'not-run'], ['bridge-eof', 'not-run'], ['guest-network', 'not-run'], ['check-containment', 'not-run']];
+// CQ-R13f1 check-containment: deps.containment's fake runCheckJob records each call and resolves runCheckJob's frozen result,
+// call i's defaults merged with runs[i]. The integrity call (1) drives given.session, the real runCheckSession over the harness
+// router, as runCheckJob would; {session: false} skips it and {reject: code} rejects with that code.
+const CHANGE_ARGV = ['sudo', '-n', 'truncate', '-s', '0', '/var/lib/moe/workspace/moe-certify/protected.txt'];
+const isChange = args => args[0] === 'exec' && args[4] === 'sudo' && args[6] === 'truncate';
+function containmentRig(runs = []) {
+  const calls = [];
+  const runCheckJob = async (input, given) => {
+    const at = calls.push({ input, given }) - 1;
+    const { session = at === 1, reject, ...result } = { workspace: ['intact', 'unverified', 'changed'][at], ...runs[at] };
+    if (reject) throw Object.assign(new Error('/private/path'), { code: reject });
+    const observed = session ? await given.session({ name: nameAt(7 + at), check: input.check, provider: input.provider, budgetMs: input.budgetMs, timeoutMs: 1_000 }) : {};
+    return Object.freeze({ outcome: 'passed', exitCode: 0, signal: null, outputTail: '', ...observed, environment: null, instance: nameAt(7 + at), vm: 'deleted',
+      failure: null, executionReady: false, ...result });
+  };
+  return { calls, containment: { runCheckJob } };
+}
+
 const STARTED = '2026-01-02T03:04:05.000Z';
 const NO_IMAGE = { sourceSha256: null, providerImageHash: null };
 // CQ-R13e guest-network: the harness answers its two exec probes, the default route and the agent identity's connect probe.
@@ -2784,11 +2802,13 @@ const networkProbe = args => (args[0] !== 'exec' ? null : args[4] === 'ip' ? 'ga
 
 /** smokeHarness whose guest holds the REAL supervisor (R07 checks its hash), with an injected doctor and clock; `run` wraps the provider,
  * `bridge` configures the CQ-R13e1 spawn router (bridgeRouter) and `network` overrides NETWORK_ANSWERS, each recorded in `probes`. */
-function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run, random = sequence(), bridge, network = {}, ...fakeOptions } = {}) {
+function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run, random = sequence(), bridge, network = {}, containment, change, ...fakeOptions } = {}) {
   const workDir = scratch(t);
+  const [rig, changes] = [containmentRig(containment), []];
   const fake = fakeVm({ ...fakeOptions, answers: healthy({ supervisorHash: { code: 0, stdout: `${REAL_SUPERVISOR_SHA256}  /opt/moe/bin/moe-supervisor\n` }, ...guest }) });
   const [download, deletes, probes] = [fakeFetch(), [], []];
   const run = wrap((executable, args, options) => {
+    if (isChange(args)) { changes.push([[...args], options]); return (change ?? answering(''))(args); }
     const probe = networkProbe(args);
     if (probe) { probes.push([probe, [...args], options]); return (network[probe] ?? NETWORK_ANSWERS[probe])(args); }
     if (args[0] !== 'delete') return fake.run(executable, args, options);
@@ -2799,8 +2819,8 @@ function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run,
   });
   const router = bridgeRouter(bridge);
   const deps = { provider: { run, spawn: router.spawn }, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {}, random,
-    doctor: async () => ({ providerReady: true, version: '1.17.0' }), now: () => new Date(STARTED) };
-  return { workDir, fake, download, deletes, probes, deps, router, certify: (platform = onWindows()) => certifyCore({ platform, workDir, deps }) };
+    doctor: async () => ({ providerReady: true, version: '1.17.0' }), now: () => new Date(STARTED), containment: rig.containment };
+  return { workDir, fake, download, deletes, probes, changes, rig, deps, router, certify: (platform = onWindows()) => certifyCore({ platform, workDir, deps }) };
 }
 const checksOf = (...rows) => rows.map(([id, result, code = null]) => ({ id, result, code }));
 const certification = changes => ({
@@ -2852,7 +2872,7 @@ test('CF3 a provision refusal or a codeless throw fails only its own check; tear
   assert.deepEqual([await thrower.certify(), thrower.deletes], [certification({ checks: threw }), [['delete', '--purge', GUEST]]]);
   const stuck = certifyHarness(t, { deleteFails: true });
   const undeleted = checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'], ['bridge-framing', 'passed'], ['bridge-eof', 'passed'],
-    ['guest-network', 'passed'], ['teardown', 'failed', 'CERTIFY_TEARDOWN_FAILED']);
+    ['guest-network', 'passed'], ['check-containment', 'passed'], ['teardown', 'failed', 'CERTIFY_TEARDOWN_FAILED']);
   assert.deepEqual([await stuck.certify(), stuck.deletes], [certification({ checks: undeleted }), [['delete', '--purge', GUEST]]]);
 });
 
@@ -2981,7 +3001,8 @@ const cbOut = bytes => ({ kind: 'output', stream: 'stdout', data: Buffer.from(by
 const payloadFrames = bytes => Array.from({ length: Math.ceil(bytes.length / 65_521) }, (_, at) => cbOut(bytes.subarray(at * 65_521, (at + 1) * 65_521)));
 const framingSends = (bytes, code = 0, head = []) => ({ scripts: { 'certify-framing': proc => { proc.send(...head, CB_HELLO, ...payloadFrames(bytes), cbExit(code)); proc.exit(0); } } });
 const BRIDGE_SCRIPTS = { ...framingSends(EXPECTED_PAYLOAD).scripts, 'certify-eof': proc => proc.send(CB_HELLO, cbOut('ready\n')),
-  'certify-network': proc => { proc.send(CB_HELLO, cbOut('closed\n'), cbExit(0)); proc.exit(0); } };
+  'certify-network': proc => { proc.send(CB_HELLO, cbOut('closed\n'), cbExit(0)); proc.exit(0); },
+  'certify-integrity': proc => { proc.send(CB_HELLO); setImmediate(() => { proc.send(cbExit(0)); proc.exit(80); }); } };
 
 /** A check session: it decodes its one stdin frame and runs scripts[frame.id]; stdin closing runs onEof (the supervisor's host-EOF
  * exit 74 by default); kill() closes asynchronously with the signal, as Node does. */
@@ -3023,7 +3044,7 @@ test('CB1 the payload, generated snapshot, bounds and bridge registry are fixed 
   assert.notEqual(certifySnapshot(), certifySnapshot());
   assert.deepEqual([BRIDGE_BOUNDS, Object.isFrozen(BRIDGE_BOUNDS)], [{ sessionMs: 120_000, exitMs: 30_000, transferMs: 120_000 }, true]);
   assert.deepEqual([BRIDGE_CHECKS.map(check => check.id), Object.isFrozen(BRIDGE_CHECKS) && BRIDGE_CHECKS.every(Object.isFrozen)], [['bridge-framing', 'bridge-eof', 'guest-network'], true]);
-  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id), ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'guest-network', 'teardown']);
+  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id), ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'guest-network', 'check-containment', 'teardown']);
 });
 
 test('CB2 bridge-framing materializes the generated snapshot, then streams the 2 MiB payload back through a fixed argv and frame', async () => {
@@ -3125,7 +3146,7 @@ test('CB6 certifyCore validates deps.bounds before any provider call; a bridge f
     }
   }
   const failedBridge = code => certification({ checks: checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'],
-    ['bridge-framing', 'failed', code], ['bridge-eof', 'not-run'], ['guest-network', 'not-run'], ['teardown', 'passed']) });
+    ['bridge-framing', 'failed', code], ['bridge-eof', 'not-run'], ['guest-network', 'not-run'], ['check-containment', 'not-run'], ['teardown', 'passed']) });
   const mismatch = certifyHarness(t, { bridge: { materialize: proc => proc.reply({ kind: 'materialized', digest: 'f'.repeat(64) }) } });
   assert.deepEqual([await mismatch.certify(), mismatch.deletes, mismatch.router.calls.length], [failedBridge('TRANSFER_DIGEST_MISMATCH'), [['delete', '--purge', GUEST]], 1]);
   // A silent session ends only through the overridden 50 ms budget.
@@ -3160,7 +3181,7 @@ const refusesConnect = port => new Promise(resolve => {
 // A real connect, as a slirp-like gateway-to-loopback map would make; it settles once the listener has destroyed the socket.
 const connects = port => new Promise(resolve => net.connect({ host: '127.0.0.1', port }).on('error', () => {}).once('close', resolve));
 const networkFailed = code => certification({ checks: checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'],
-  ['bridge-framing', 'passed'], ['bridge-eof', 'passed'], ['guest-network', 'failed', code], ['teardown', 'passed']) });
+  ['bridge-framing', 'passed'], ['bridge-eof', 'passed'], ['guest-network', 'failed', code], ['check-containment', 'not-run'], ['teardown', 'passed']) });
 
 test('GN1 the connect probe is one fixed literal; the gateway, check-identity and agent-identity probes have exact argv, in that order', async t => {
   assert.deepEqual([CONNECT_PROBE, /['\x00-\x1f\x7f]/.test(CONNECT_PROBE)], [PROBE_LITERAL, false]);
@@ -3246,10 +3267,11 @@ test('GN4 a confirmed connect is REACHABLE, anything short of two exact closed a
 });
 
 test('GN5 guest-network runs after bridge-eof and before teardown; a bridge-eof failure leaves it not-run with no probe', async t => {
-  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(-4), ['bridge-framing', 'bridge-eof', 'guest-network', 'teardown']);
+  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(-5), ['bridge-framing', 'bridge-eof', 'guest-network', 'check-containment', 'teardown']);
   const h = certifyHarness(t, { bridge: { onEof: proc => proc.exit(0) } });
   assert.deepEqual([await h.certify(), h.deletes, h.probes], [certification({ checks: checksOf(['provision', 'passed'], ['readiness', 'passed'],
-    ['no-mounts', 'passed'], ['bridge-framing', 'passed'], ['bridge-eof', 'failed', 'CERTIFY_BRIDGE_EOF_EXIT'], ['guest-network', 'not-run'], ['teardown', 'passed']) }),
+    ['no-mounts', 'passed'], ['bridge-framing', 'passed'], ['bridge-eof', 'failed', 'CERTIFY_BRIDGE_EOF_EXIT'], ['guest-network', 'not-run'], ['check-containment', 'not-run'],
+    ['teardown', 'passed']) }),
   [['delete', '--purge', GUEST]], []]);
 });
 
