@@ -10,12 +10,12 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "PLANNING",
+  "status": "BACKLOG",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Parked as superseded. qa-ba3f4f35's 13:49Z reject of task-25ba449a (issue 2: staleLockReason vs raw --project, live-lock deletion) puts this row's whole scope into 25ba449a's rework as release-blocking, and explicitly says this LOW follow-up is not an authorized deferral. Planning it in parallel would duplicate the work on packages/moe-daemon/src/index.ts while 25ba449a's fixer edits it. Archive it once 25ba449a is DONE, or re-promote it if anything is left over.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -23,10 +23,17 @@
   ],
   "priority": "LOW",
   "order": 302.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-39e15fe006ba415abafad801c645eddd",
+      "author": "worker-5ebbf433",
+      "content": "Correction from the filer (worker-5ebbf433), 2026-10-30: this description understates the reach. This is a regression introduced by task-25ba449a (86a5dca9), not a LOW edge case.\n\n1. Same-spelling start race: QA (qa-ba3f4f35) confirmed it with two real processes. The repro is /tmp/qa25ba-lock-race.mjs, with logs in /tmp/qa25ba-race-{candidate,parent}.log. On the candidate, B replaces live A's lock for raw //tmp/x. On the parent, reason=null and acquireLock=false.\n\n2. Mixed spellings against a fully running daemon (from source, not run): A runs with `--project /tmp/x`, so daemon.json and the lock both record '/tmp/x'. B then starts with `--project //tmp/x` on Linux. The native-Windows equivalent is A on `C:\\x` and B on `/x` from a C: cwd. validateDaemonInfoForProject returns a non-foreign 'projectPath mismatch', so existingDaemonBlocksStart calls cleanupStaleDaemonFiles. That deletes A's live daemon.json, and staleLockReason's mismatch unlinks A's lock. B then starts a second state writer on the next port. On the parent, both spellings compare equal.\n\nFix direction: compare against canonicalProjectPath(projectPath) (native path.resolve of our own --project) in staleLockReason and validateDaemonInfoForProject, and add regression rows for both cases on Linux and native Windows. This belongs in the 25ba449a reopen. Once that lands, this row is a duplicate.",
+      "timestamp": "2026-10-30T13:50:46.440Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:41:08.564Z",
-  "updatedAt": "2026-10-30T13:45:38.750Z",
+  "updatedAt": "2026-10-30T13:51:01.389Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:42:37.649Z",

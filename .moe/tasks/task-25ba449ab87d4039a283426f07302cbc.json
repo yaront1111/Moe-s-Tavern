@@ -58,7 +58,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -74,11 +74,17 @@
       "author": "qa-952969be",
       "content": "QA input from the task-e7f4026a reopen-1 review (qa-952969be, 2026-10-30), for the shared path rule. This is non-blocking. I ran a 46-row table through the REAL ps1 Get-MoeDaemonIdentity on PS5.1 and PS7 against a fake /health, and through the sh probe's python comparable() on Linux and Windows python. Every realistic same-project spelling and every distinct-project row agrees across engines. The exotic divergences all come from Unicode case-folding:\n(1) 'D:/qa/\\u00c5' vs 'D:/qa/\\u212b' (Angstrom sign), and 'D:/qa/K' vs 'D:/qa/\\u212a' (Kelvin sign): python and PS7 say same; PS5.1 says foreign. NTFS's upcase table treats these as distinct names, so lowercasing over-folds.\n(2) ps1's case-insensitive -match/-notmatch on [A-Za-z] accepts a Kelvin-sign 'drive' ('\\u212a:/x'): PS says foreign or same where sh/proxy say unknown.\nNeither yields a realistic wrong adoption, but a defined shared rule (upcase vs lowercase, ASCII-only drive class) would settle both. Table and runner: /tmp/qa952-e7f4.xiPE0L/probe/{windows-table.txt,linux-table.txt,runner.mjs,rows.mjs}.",
       "timestamp": "2026-10-30T12:02:22.377Z"
+    },
+    {
+      "id": "comment-5224dca6bfad4f5fb8c435a5fb3a6d8c",
+      "author": "governor-693b7073",
+      "content": "@architect-bd1eb82d You planned this row. It needs your narrow scope amendment to proceed.\n- QA reject #1 (13:49Z, qa-ba3f4f35) found two P1 lifecycle regressions:\n  - existingDaemonBlocksStart deletes a healthy daemon.json and lock under native aliases (//tmp/x vs /tmp/x; C:\\x vs /x);\n  - staleLockReason unlinks a live lock and admits a second writer.\n- The approved executionContract and step-2 forbid touching staleLockReason, probeDaemonHealth, validateDaemonInfoForProject and the deleters. worker-262588d0 has reproduced the regressions and is parking the row until you amend (msg-9a2bb5cc).\n- Options: amend_plan_step to admit those lifecycle consumers plus Linux and native-Windows preservation/contention tests, keeping the OS-independent transport contract and the foreign-PID safeguards. Or request_replan if it outgrows a narrow amendment.\n- c83d7847, the LOW follow-up, is parked in BACKLOG as superseded by this reopen.\n- Lane note: 724e31fa dependsOn this row (packages/moe-proxy/src/utils.ts). 724e31fa sits about 3 lane slots out, so there's slack, but not unlimited.",
+      "timestamp": "2026-10-30T13:52:41.305Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:27:29.451Z",
-  "updatedAt": "2026-10-30T13:49:44.718Z",
+  "updatedAt": "2026-10-30T13:52:43.762Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:46.958Z",
@@ -92,7 +98,10 @@
     "rejectCount": 1,
     "reopenCount": 1
   },
-  "contextFetchedBy": [],
+  "contextFetchedBy": [
+    "worker-262588d0",
+    "qa-ba3f4f35"
+  ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
@@ -309,5 +318,9 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedReason": "Approved-scope conflict after QA rejection: executionContract invariants/approvedScope and step-2 explicitly prohibit changes to staleLockReason, probeDaemonHealth, validateDaemonInfoForProject and every lifecycle deleter, but the required safety fix must reconcile their native filesystem identity with the new transport key. Fresh Linux temp-project repro against the QA candidate (source byte-identical to current index.ts): existingDaemonBlocksStart('//tmp/...') returns false, performs 0 health probes, deletes healthy daemon.json and live daemon.lock; parent returns true, probes once, preserves both. Logs /tmp/worker262588-25ba-live-{candidate,parent}.log. QA also proved native-Windows metadata loss and two-process live-lock replacement on both OSes. Need narrow architect amendment/replan authorizing lifecycle-consumer fix plus permanent Linux/Windows metadata-preservation and real-contention regressions; preserve cross-OS comparison contract and foreign-PID protections, audit stop/status. No source edits or shared builds; no passing gate claimed. Handoff and gotcha memories updated. This is not waiting on a dependency or an authorized follow-up deferral.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-30T13:52:43.762Z"
 }

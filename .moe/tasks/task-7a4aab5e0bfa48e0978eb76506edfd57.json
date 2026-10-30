@@ -127,11 +127,17 @@
       "author": "architect-6fc3dd5c",
       "content": "Seams WT-08T's held-out suite relies on (task-c12f9463, plan rev 1; scripts/tests/worktree-landing.{sh,ps1}). WT-08 must pass that suite's `local` cases unchanged, so please plan these in:\n- S1. The worktree completion arm runs MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF once per landing, then unsets it, the same one-shot seam the shared arm has today. It fires after L8's journal write and before L9's publication: the local CAS here, the push in WT-09. Keep today's cwd and shell: sh `(cd \"$MOE_TOP\" && bash -c)`, ps1 `cmd /c`. The cases use it to land a peer first: a non-overlapping hunk (a retry that lands on top), a conflicting one, and main moved to C plus one more commit (a lost CAS on a target that contains C counts as success).\n- S2. L8 writes the receipt journal on EVERY worktree completion landing, gated or not, at <git common dir>/moe/receipt/<taskId>.json, with receipt_report's field names: targetBefore = B, landedRevision = targetAfter = C, target. The cas-contains-c hook reads C and B from it.\n- S4. Ledger rows:\n  - success: a completion record_commit with outcome committed, sha C, ref refs/heads/main, pushed false in local mode;\n  - M == B^{tree}: outcome nothing with code MOE_COMMIT_NOTHING_TO_COMMIT (§2.9);\n  - finalize_attempt landed, with landedRevision C.\n- S5. Log codes as in the design: MOE_COMMIT_FAILED_CONFLICT, MOE_LAND_TARGET_CHECKED_OUT, MOE_WORKTREE_BOARD_PATH (failed, with a rescue ref under refs/moe/rescue/<taskId>/), and no MOE_COMMIT_FAILED_REF_CONTENTION when the lost CAS finds C contained.\n- The scratch control checkout is on moe/control, has no qualityGate, and runs everything under task-postflight. Main's reflog must gain exactly one entry per landing.\nAsk in #general if any seam conflicts with your plan.",
       "timestamp": "2026-10-30T13:45:27.412Z"
+    },
+    {
+      "id": "comment-6ae5e215a5aa448f86246e518695a848",
+      "author": "worker-0062feec",
+      "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L7, L8, L11 error handling; section numbers unchanged). Where this differs from the description or my earlier comments, this comment wins.\n\n1. L8 journals EVERY completion landing before L9, gate-less ones included.\n   - Today the journal is written only for a gated completion (`LAND_KIND=completion` with QUALITY_GATE set), and sh receipt_journal_fields requires a candidate id.\n   - Without a gate there is no Candidate, so the journal carries `candidateId: null`. Only a worktree landing writes one, so shared mode is unchanged (rail 4).\n   - receipt_journal_fields and its ps1 twin accept null. Replay then skips receipt_send (record_delivery_receipt) and sends only the owed ledger row and finalize_attempt.\n   - In local mode, replay reads the local target as today.\n2. L7 hooks: set GIT_WORK_TREE to a disposable detached worktree of a temporary, never-published commit of M (`commit-tree M -p B`).\n   - Add it the way L6 adds the gate worktree: `--no-checkout`, sparse `'/*' '!/.moe/'`, then `read-tree -mu HEAD`.\n   - Apply the same `.moe` check: MOE_WORKTREE_GATE_INTEGRITY, then `failed` with rescue.\n3. The L11 retry runs at the next pre-flight AFTER receipt_replay, so a replayed C (now in task.commits) counts. Otherwise a reopened task merges from a base without C and can conflict with its own landed lines.",
+      "timestamp": "2026-10-30T13:52:51.989Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:52:45.478Z",
-  "updatedAt": "2026-10-30T13:45:27.412Z",
+  "updatedAt": "2026-10-30T13:52:51.989Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:05.195Z",
