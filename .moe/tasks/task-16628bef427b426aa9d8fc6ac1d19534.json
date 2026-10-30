@@ -75,7 +75,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -91,7 +91,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T19:25:18.471Z",
-  "updatedAt": "2026-10-29T23:48:55.893Z",
+  "updatedAt": "2026-10-30T00:38:50.617Z",
   "contextFetchedBy": [
     "qa-952969be",
     "architect-32ff5555",
@@ -106,7 +106,9 @@
     "firstClaimAt": "2026-10-29T22:57:22.171Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T00:38:50.617Z",
+    "wallClockMs": 6088446
   },
   "tier": "heavy",
   "effort": "xhigh",
@@ -255,5 +257,9 @@
     "reportedAt": "2026-10-29T23:48:21.922Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Fix for the architectureRules lexer desync. A line hidden by a lexing ambiguity now surfaces as 'ambiguous-syntax' uncertainty, so the result is 'inconclusive' (or 'failed' alongside a real violation), never a silent 'passed'.\n\nRuntime: architectureRules.ts, +121/-9.\n- ImportUncertainty.reason gains 'ambiguous-syntax'.\n- The Lexer records the multi-line template and comment regions and the first risk point:\n  - every `/`, or an Annex-B `<!--`/`-->`, when the rest of its line holds a backtick, a `/*`, or (inside a substitution) a brace;\n  - a JSX-like `<`, ungated.\n- The hazard check uses a per-line cache, so it stays linear.\n- extractImports re-lexes each line of the regions after that point, through the private recognize() moved from extractImports. It flags, once per line in ascending order, any line that imports a relative path or calls import()/require() on a non-literal.\n- Exports and result shapes are unchanged. The module is still pure.\n\nTests: new architectureRules.desync.test.ts, 44 tests (D1-D7 plus 2 brace rows). The landed architectureRules.test.ts is byte-identical, 133/133.\n\nDeviation, found in step-5 review: the plan's hazard set covered only `}` inside a substitution. A swallowed or exposed `{` also shifts the substitution's brace depth, so a `}` on a LATER line closes it early or late. vm runs the hidden require in both directions. The fix records `{` as well, and the two new HIDDEN rows go red without it.\n\nEvidence:\n- Mutants M1-M11 plus M4a/M4b: all killed. M5 timed out D6a.\n- Token-invariance probe (200k random inputs, run in step 2 before the review fix): identical tokens. The fix only adds `{` to the hazard scan, which sets firstRisk and never touches tokens.\n- Both test files type-check under a scratch tsconfig.\n- Edge inputs (empty, a BOM, a hashbang, a 1 MB line, constructs at EOF) never throw, and every line stays in range.\n- Gate exit 0: 5250 passed, 16 pre-existing skips.\n\nAccepted residuals:\n- A same-line misread still hides that line's "
+  "completionSummary": "Fix for the architectureRules lexer desync. A line hidden by a lexing ambiguity now surfaces as 'ambiguous-syntax' uncertainty, so the result is 'inconclusive' (or 'failed' alongside a real violation), never a silent 'passed'.\n\nRuntime: architectureRules.ts, +121/-9.\n- ImportUncertainty.reason gains 'ambiguous-syntax'.\n- The Lexer records the multi-line template and comment regions and the first risk point:\n  - every `/`, or an Annex-B `<!--`/`-->`, when the rest of its line holds a backtick, a `/*`, or (inside a substitution) a brace;\n  - a JSX-like `<`, ungated.\n- The hazard check uses a per-line cache, so it stays linear.\n- extractImports re-lexes each line of the regions after that point, through the private recognize() moved from extractImports. It flags, once per line in ascending order, any line that imports a relative path or calls import()/require() on a non-literal.\n- Exports and result shapes are unchanged. The module is still pure.\n\nTests: new architectureRules.desync.test.ts, 44 tests (D1-D7 plus 2 brace rows). The landed architectureRules.test.ts is byte-identical, 133/133.\n\nDeviation, found in step-5 review: the plan's hazard set covered only `}` inside a substitution. A swallowed or exposed `{` also shifts the substitution's brace depth, so a `}` on a LATER line closes it early or late. vm runs the hidden require in both directions. The fix records `{` as well, and the two new HIDDEN rows go red without it.\n\nEvidence:\n- Mutants M1-M11 plus M4a/M4b: all killed. M5 timed out D6a.\n- Token-invariance probe (200k random inputs, run in step 2 before the review fix): identical tokens. The fix only adds `{` to the hazard scan, which sets firstRisk and never touches tokens.\n- Both test files type-check under a scratch tsconfig.\n- Edge inputs (empty, a BOM, a hashbang, a 1 MB line, constructs at EOF) never throw, and every line stays in range.\n- Gate exit 0: 5250 passed, 16 pre-existing skips.\n\nAccepted residuals:\n- A same-line misread still hides that line's ",
+  "completedAt": "2026-10-30T00:38:50.617Z",
+  "reviewCompletedAt": "2026-10-30T00:38:50.617Z",
+  "reviewSummary": "APPROVED. Commits 38397f3 (checkpoint) and e47aec7 (completion, pushed) are on moe/work-2026-10-24. Owned diff: architectureRules.ts +121/-9 and new desync.test.ts +135, 247 net LOC.\n\nGate: fresh archive of HEAD 04ec043, owned files cmp-equal to e47aec7, native node_modules, env -i, node 24.21. `cd packages/moe-daemon && npm test && npx tsc --noEmit` exited 0: 188 files, 5257 passed, 16 skipped (the pre-existing set). The landed architectureRules.test.ts passed 133/133 and is byte-identical; desync passed 44/44.\n\nDoD: D1-D7 are pinned by exact tests. In node vm the hidden require runs for T1-T3, both brace rows, `<!--` in a substitution and `*/ -->`, and the scan flags each one on the correct line.\n\nInvariants: a differential fuzz of the pre-task code against the new code on 200k inputs showed identical imports and existing uncertainty, 0 throws, 0 out-of-range lines, and unique ascending flags. No forbidden tokens, no node: imports, no module-level mutable state. The step-5 `{` hazard stays within the approved cache and has red-before-fix tests.\n\nNotes for V10 (task-db328cda), non-blocking:\n1) The plan-accepted string-continuation residual is real: `class A extends /'/.constructor {} // \\` NL require runs in vm, and the scan gives [].\n2) `(<` NL `p>` is valid TSX (esbuild) but sets no R3 risk, because the approved spec allows only spaces and tabs. That is evasion-class.\n3) False inconclusive on this repo: 2 of 414 JS/TS files, both code-gen templates in daemon scripts.\n\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }

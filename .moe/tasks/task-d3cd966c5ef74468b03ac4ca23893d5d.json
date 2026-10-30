@@ -52,7 +52,17 @@
       "stepId": "step-6",
       "description": "Regression gate. Run once, after steps 2-5; it is the complete_task evidence. From /mnt/d/projexts/moes, run the three checkRefs as ONE invocation: `( <checkRef 1> ) && ( <checkRef 2> ) && ( <checkRef 3> )`. Submit that exact string, its exit code and the output tail.\n- checkRef 1 is DoD 1's `npm test`: the full daemon suite on a Linux-native snapshot of HEAD's packages/moe-daemon. The shared tree's node_modules is Windows-native, so vitest cannot start there under WSL. This task changes no daemon file; the suite shows task-a2a55bc6's field and tests are green at HEAD.\n- checkRefs 2 and 3 build a /mnt/d/moe-scratch snapshot of HEAD's scripts/ plus this task's four script files, so peers' dirty bytes in other scripts/ files cannot mix in. Windows needs a drive-letter cwd, hence /mnt/d.\n  - checkRef 2 runs postflight-owner-scope.test.mjs (the fake's default reply is unchanged), the frozen modes teardown-finalizing, finalizing-acked-continues and teardown-protected on sh (the guard's teardown and rescue paths on the legacy scan), the full owner-guard suite on sh, and parity-check.\n  - checkRef 3 runs the same frozen modes and the full owner-guard suite on ps1. The WSLENV addition is what lets MOE_FROZEN_TEST_ONLY reach powershell.exe; without it, postflight.ps1 runs its whole ~12-minute suite.\n  - The owner-guard suite has 16 cases. It runs with exactly the arguments postflight.sh:906 and postflight.ps1:886 pass it, which makes it DoD 2's 'cases pass in postflight.sh and postflight.ps1'.\nExpect about 5 minutes in total. The ps3 checkRef's shape was dry-run on pure HEAD on 2026-10-30. On a failure:\n- read the case log (MOE_KEEP_OWNER_GUARD_FIXTURE=1 keeps the fixture);\n- fix the code and rerun the whole command;\n- never weaken an assertion or skip a case.",
       "status": "PENDING",
-      "affectedFiles": []
+      "affectedFiles": [],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Regression gate. Run it once, after steps 2-5; it is the complete_task evidence. From /mnt/d/projexts/moes, run the three commands below as ONE invocation, `( <cmd 1> ) && ( <cmd 2> ) && ( <cmd 3> )`, and submit that exact string, its exit code and the output tail.\n\ncmd 1 SUPERSEDES the executionContract's checkRef 1. That checkRef ran `git archive HEAD packages/moe-daemon`, and the daemon's doc-contract and fixture tests read docs/, scripts/ and .gitignore at the repo root, so in that snapshot 12 files fail. Archive the whole repo instead:\n`D=$(mktemp -d /tmp/moe-d3cd-daemon-XXXX) && git archive HEAD | tar -x -C $D && P=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" && (cd $D/packages/moe-daemon && env -i HOME=$HOME PATH=$P npm ci --no-audit --no-fund >/dev/null && env -i HOME=$HOME PATH=$P npm test); rc=$?; rm -rf $D; echo DAEMON_EXIT=$rc; [ $rc -eq 0 ]`\n- This is DoD 1's `npm test`. It needs a Linux-native snapshot because the shared tree's node_modules is Windows-native, so vitest cannot start there under WSL.\n- This task changes no daemon file; the run proves task-a2a55bc6's field and tests are green at HEAD.\n- Measured with the field prototyped on 2026-10-30: 188 files, 5260 passed, 16 skipped, about 30 s plus npm ci.\n\ncmd 2 = checkRef 2 and cmd 3 = checkRef 3, exactly as written in the executionContract. Both build a /mnt/d/moe-scratch snapshot of HEAD's scripts/ plus this task's four script files, so peers' dirty bytes in other scripts/ files cannot mix in. Windows needs a drive-letter cwd, hence /mnt/d.\n- cmd 2 runs on sh:\n  - postflight-owner-scope.test.mjs, proving the fake's default reply is unchanged;\n  - the frozen modes teardown-finalizing, finalizing-acked-continues and teardown-protected, covering the guard's teardown and rescue paths on the legacy scan;\n  - the full owner-guard suite;\n  - parity-check.\n- cmd 3 runs the same frozen modes and the full owner-guard suite on ps1. The WSLENV addition is what lets MOE_FROZEN_TEST_ONLY reach powershell.exe; without it, postflight.ps1 runs its whole ~12-minute suite. cmd 3's shape was dry-run on pure HEAD on 2026-10-30.\n- The owner-guard suite has 16 cases. It runs with exactly the arguments postflight.sh:906 and postflight.ps1:886 pass it, which makes it DoD 2's 'cases pass in postflight.sh and postflight.ps1'.\n\nExpect about 5 minutes in total. On a failure:\n- read the case log (MOE_KEEP_OWNER_GUARD_FIXTURE=1 keeps the fixture);\n- fix the code and rerun the whole command;\n- never weaken an assertion or skip a case.\nIf a test fails, error handling and the fix belong in this task's files only.",
+          "reason": "The executionContract's checkRef 1 archives only packages/moe-daemon. The daemon's doc-contract and fixture tests read files from the repo root (docs/, scripts/, .gitignore), so in that snapshot 12 files fail, measured 2026-10-30. Archiving the whole repo passes: 188 files, 5260 tests. This amendment replaces checkRef 1 and fixes a typo (\"ps3\" meant checkRef 3).",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-30T00:38:20.713Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-7",
@@ -61,7 +71,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
+  "planRevision": 2,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -78,11 +88,17 @@
       "author": "architect-4ae016fb",
       "content": "Split (architect, 2026-10-30). DoD 1's daemon half (the get_commit_scope field finalizingAttempt plus its getCommitScope.test.ts tests) is task-a2a55bc6059048e78174e551c32a6e73, which has no merge gate and lands first. This task keeps both wrappers, the fake proxy, the owner-guard cases and docs/MCP_SERVER.md. Those files sit in the pending main merge (3f6817f1) or are being edited by in-flight wrapper tasks.\n\ndependsOn: task-a2a55bc6, plus the wrapper editors c2a900aa, bc8410af, ad0dc2e7, 5dc76be6 and 3d0be568 (3d0be568 also edits postflight-owner-guard.cjs).\n\nField contract: `finalizingAttempt: {attemptId, workerId, generation} | null`. It names the attempt finalizingAttemptsByTask selects, whoever holds it, including the caller.\n\nWrapper rule:\n- null → no finalizing hold.\n- A well-formed value naming another worker → MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE with the existing detail text.\n- The caller's own attempt → lands.\n- An absent field (older daemon), a malformed value or the disk fallback → the existing .moe/attempts scan, unchanged.",
       "timestamp": "2026-10-30T00:30:21.744Z"
+    },
+    {
+      "id": "comment-507e13022755491aab0e143402b12c0a",
+      "author": "architect-4ae016fb",
+      "content": "Plan correction (architect, step-6 amend-1), for the worker and QA.\n\nThe executionContract's checkRef 1 is superseded. It archived only `packages/moe-daemon`, but the daemon's doc-contract and fixture tests read docs/, scripts/ and .gitignore at the repo root, so 12 files fail in that snapshot. The amended step 6 archives the whole repo (`git archive HEAD | tar -x -C $D`). In that snapshot, with the field prototyped, 188 files and 5260 tests pass.\n\nThe completion evidence is `( <step-6 cmd 1> ) && ( <checkRef 2> ) && ( <checkRef 3> )`. checkRefs 2 and 3 are unchanged.",
+      "timestamp": "2026-10-30T00:38:27.352Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:07:30.476Z",
-  "updatedAt": "2026-10-30T00:34:11.429Z",
+  "updatedAt": "2026-10-30T00:38:27.352Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T19:06:04.530Z",
