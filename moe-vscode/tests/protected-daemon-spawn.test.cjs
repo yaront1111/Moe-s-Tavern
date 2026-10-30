@@ -213,6 +213,56 @@ test('Windows alias project bases prove nothing outside them and start no daemon
     assert.deepEqual([f.spawns, f.errors], [[], Array(3).fill(refusal(reason))]);
 });
 
+/** Runs fn with a free drive letter subst'ed to target (undefined when none is free); removes only that drive. */
+function withSubst(t, target, fn) {
+    const { spawnSync } = require('node:child_process'), subst = path.join(process.env.SystemRoot, 'System32', 'subst.exe');
+    for (const letter of 'ZYXWVUTSRQPONMLKJIHGFED') {
+        const drive = `${letter}:`;
+        if (fs.existsSync(`${drive}\\`) || spawnSync(subst, [drive, target]).status !== 0) { continue; }
+        let done = false;
+        try { fn(drive); done = true; } finally {
+            const removed = spawnSync(subst, [drive, '/D']).status;
+            if (done) { assert.equal(removed, 0, `subst ${drive} /D`); }
+        }
+        return;
+    }
+    t.diagnostic(`no free drive letter to subst ${target}; its entries are left out`);
+    fn(undefined);
+}
+
+test('Windows missing PATH leaves are judged by their nearest existing ancestor', { skip: process.platform !== 'win32' && 'Windows only' }, t => {
+    const { execFileSync, spawnSync } = require('node:child_process');
+    let mapped, share;
+    const f = fixture(t, true, { ...fs, realpathSync: { native: q => q === mapped ? share : real(q) } });
+    const api = f.api, p = f.project, out = f.outside, root = path.dirname(p), SystemRoot = process.env.SystemRoot;
+    // An existing folder whose real path is the project's admin share, as a mapped network drive's is (no network).
+    share = `\\\\localhost\\${p[0]}$${p.slice(2)}`; mapped = path.join(out, 'mapped'); fs.mkdirSync(mapped);
+    const sub = path.join(p, 'sub'), later = path.join(p, 'later'); fs.mkdirSync(sub);
+    const link = (name, target) => { const at = path.join(out, name); fs.symlinkSync(target, at, 'junction'); return at; };
+    const [toProject, toSub, toHome] = [['to-project', p], ['to-sub', sub], ['to-home', f.home]].map(([n, to]) => link(n, to));
+    const sym = path.join(out, 'sym');
+    try { fs.symlinkSync(sub, sym, 'dir'); } catch (err) { if (err.code !== 'EPERM') { throw err; } fs.symlinkSync(sub, sym, 'junction'); }
+    fs.mkdirSync(later); const dangling = link('dangling', later); fs.rmdirSync(later);
+    const short = execFileSync(path.join(SystemRoot, 'System32', 'cmd.exe'), ['/d', '/s', '/c', `"for %I in ("${root}") do @echo %~sI"`],
+        { windowsVerbatimArguments: true, encoding: 'utf8' }).trim();
+    if (short === root) { t.diagnostic(`8.3 names are off for ${root}; its entries are left out`); }
+    const shortLeaf = name => short === root ? [] : [path.join(short, name, 'later')];
+    withSubst(t, sub, s => withSubst(t, out, u => {
+        const inside = [path.join(toProject, 'later'), path.join(toSub, 'later', 'bin'), path.join(sym, 'later'), dangling,
+            path.join(dangling, 'bin'), ...shortLeaf('project'), ...(s ? [`${s}\\later`] : []), path.join(mapped, 'later')];
+        const outside = [path.join(out, 'later'), path.join(toHome, 'later'), ...shortLeaf('outside'), ...(u ? [`${u}\\later`] : [])];
+        for (const entry of inside) { assert.equal(api.isOutsideProject(entry, p), false, entry); }
+        for (const entry of outside) { assert.equal(api.isOutsideProject(entry, p), true, entry); }
+        const env = api.protectedDaemonEnvironment({ PATH: [...inside, ...outside].join(';'), SystemRoot }, p, f.node, true, undefined);
+        assert.equal(env.PATH, [path.dirname(f.node), ...outside].join(';'), 'protected PATH keeps exactly the outside entries');
+        // After filtering, a project folder created below the junction leaf runs through the raw entry only.
+        fs.copyFileSync(path.join(SystemRoot, 'System32', 'whoami.exe'), write(path.join(sub, 'later', 'bin', 'moe-dd545-leaf.exe')));
+        const run = env => spawnSync('moe-dd545-leaf', { cwd: out, env });
+        assert.equal(run({ PATH: path.join(toSub, 'later', 'bin'), SystemRoot }).status, 0, 'control: the raw junction leaf runs the project executable');
+        assert.equal(run(env).error?.code, 'ENOENT', 'the filtered PATH cannot reach it');
+    }));
+});
+
 for (const code of ['ENOENT', 'EACCES']) {
     test(`protected async ${code} resets the guard and does not poll readiness`, async t => {
         const f = fixture(t); f.failure = Object.assign(new Error(code), { code });

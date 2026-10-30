@@ -381,8 +381,30 @@ function pathForms(p: string): string[] {
     try { forms.push(fs.realpathSync.native(p)); } catch (err) {
         // Missing PATH directories are harmless; permission/invalid-path errors must fail closed.
         if (errorCode(err) !== 'ENOENT') { throw err; }
+        // A folder created there later is searched where its nearest existing ancestor really is (a link, 8.3 name, subst or mapped drive).
+        if (process.platform === 'win32' && !isWindowsAlias(forms[0])) { forms.push(missingRealPath(forms[0])); }
     }
     return forms;
+}
+
+/** The nearest existing ancestor's real path plus the missing tail; throws for a level that exists but does not resolve, or no existing ancestor. */
+function missingRealPath(resolved: string): string {
+    const tail: string[] = [];
+    for (let dir = resolved; ;) {
+        let exists = true;
+        try { fs.lstatSync(dir); } catch (err) {
+            if (errorCode(err) !== 'ENOENT') { throw err; }
+            exists = false;
+        }
+        if (exists) { throw new Error('an existing path does not resolve'); }
+        const parent = path.dirname(dir);
+        if (parent === dir) { throw new Error('no existing ancestor'); }
+        tail.unshift(path.basename(dir));
+        dir = parent;
+        try { return path.join(fs.realpathSync.native(dir), ...tail); } catch (err) {
+            if (errorCode(err) !== 'ENOENT') { throw err; }
+        }
+    }
 }
 
 const unquoted = (entry: string): string => entry.trim().replace(/^"(.*)"$/, '$1');

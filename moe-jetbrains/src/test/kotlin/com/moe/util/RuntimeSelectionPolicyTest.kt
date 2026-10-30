@@ -904,6 +904,54 @@ class RuntimeSelectionPolicyTest {
     }
 
     @Test
+    fun `N15 on Windows a missing PATH leaf answers as its nearest existing ancestor`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val work = temporaryFolder.newFolder("work")
+        val project = File(work, "proj")
+        val sub = File(project, "sub").apply { mkdirs() }
+        val (outside, home, mapped) = listOf("outside", "home", "mapped").map { File(work, it).apply { mkdirs() } }
+        val (toSub, link, dangling, toHome) = listOf("to-sub", "link", "dangling", "to-home").map { File(outside, it) }
+        val later = File(project, "later").apply { mkdirs() }
+        assumeTrue("a junction to the project's sub folder", junction(toSub.toPath(), sub.toPath()))
+        assumeTrue("a link to the project", symlink(link.toPath(), project.toPath()))
+        assumeTrue("a junction into the project, left dangling", junction(dangling.toPath(), later.toPath()) && later.delete())
+        assumeTrue("a junction to an outside folder", junction(toHome.toPath(), home.toPath()))
+        // cmd's %~sI gives the 8.3 spelling, and needs no quoting while the path has no space.
+        val short = if (' ' in work.path) null else try {
+            val process = ProcessBuilder("cmd", "/d", "/c", "for", "%I", "in", "(${work.path})", "do", "@echo", "%~sI")
+                .redirectErrorStream(true).start()
+            String(process.inputStream.readBytes()).trim().takeIf { process.waitFor() == 0 && it != work.path }
+        } catch (_: Exception) {
+            null
+        }
+        if (short == null) println("N15 leaves its 8.3 entries out: $work has a space or no short spelling")
+        val shortDirs = { name: String -> listOfNotNull(short?.let { "$it\\$name" }) }
+        val leaf = { dir: String -> if (dir.endsWith("\\")) "${dir}later" else "$dir\\later" }
+        val outsideOf = { entry: String -> RuntimeSelectionPolicy.isOutsideProject(entry, project.path) }
+        // A mapped network drive without a network: an existing outside folder whose real path is the project's admin share.
+        val shared = Paths.get(share("localhost", project))
+        val resolve = { p: String -> if (p == mapped.path) shared else runCatching { Paths.get(p).toRealPath() }.getOrNull() }
+        val viaShare = "${leaf(mapped.path)} through its share"
+        withSubst(sub) { s -> withSubst(outside) { t ->
+            val inside = listOf("$toSub\\later\\bin", leaf(link.path), dangling.path, "$dangling\\bin") +
+                shortDirs("proj").map(leaf) + leaf("$s\\")
+            val kept = listOf(leaf(outside.path), leaf(toHome.path)) + shortDirs("outside").map(leaf) + leaf("$t\\")
+            assertEquals("each entry's answer", inside.associateWith { false } + kept.associateWith { true } + (viaShare to false),
+                (inside + kept).associateWith(outsideOf) +
+                    (viaShare to RuntimeSelectionPolicy.isOutsideProject(leaf(mapped.path), project.path, resolve = resolve)))
+            // Every missing leaf answers exactly as the existing folder it would be created in.
+            val ancestors = listOf(toSub.path, link.path, dangling.path, "$s\\", outside.path, toHome.path, "$t\\") +
+                shortDirs("proj") + shortDirs("outside")
+            assertEquals("each leaf answers as its ancestor", ancestors.associateWith(outsideOf), ancestors.associateWith { outsideOf(leaf(it)) })
+            val env = mutableMapOf("PATH" to (inside + kept).joinToString(File.pathSeparator))
+            supervisorFor(project, { null }, { null }).protectedDaemonEnvironment(env, project.path)
+            assertEquals("protected PATH keeps exactly the outside entries", mapOf("PATH" to kept.joinToString(File.pathSeparator)), env)
+        } }
+        assertTrue("the mapped stand-in's leaf by the default lookup", outsideOf(leaf(mapped.path)))
+        assertTrue("LEGACY", RuntimeSelectionPolicy.isOutsideProject("$toSub\\later\\bin", project.path, RuntimeProfile.LEGACY))
+    }
+
+    @Test
     fun `V1 a recorded supervisor verifies its daemon, which stays verified after the supervisor exits`() {
         val dir = temporaryFolder.newFolder("a").path
         val live = mutableMapOf(100L to ProcessFacts(100, T0, 1), 200L to ProcessFacts(200, T1, 100))

@@ -420,11 +420,25 @@ object RuntimeSelectionPolicy {
                 (profile == RuntimeProfile.LEGACY || isPlainLocalPath(form)) &&
                     comparablePath(form, foldCase).let { c -> projects.none { isWithin(c, it) } }
             } &&
-            (!strict(profile) || outsideByIdentity(real ?: candidate.normalize(), project?.let(::physicalProject)))
+            (!strict(profile) || outsideByIdentity(real ?: candidate.normalize(), project?.let(::physicalProject))) &&
+            (!strict(profile) || real != null || ancestorOutside(candidate.normalize(), basePath, foldCase, resolve))
     } catch (_: Exception) {
         false
     } catch (_: IOError) {
         false
+    }
+
+    /**
+     * For a [path] that did not resolve: a folder created there later lands where its nearest existing ancestor really is
+     * (behind a link, an 8.3 name, a subst or a mapped drive), so that ancestor answers for it, through every check above.
+     * A [path] that exists without resolving (a dangling link, a failed lookup), or one with no existing ancestor (a removed
+     * drive), proves nothing. Each call is on a strictly shorter path, so the recursion ends.
+     */
+    private fun ancestorOutside(path: Path, basePath: String, foldCase: Boolean, resolve: (String) -> Path?): Boolean {
+        if (!Files.notExists(path, LinkOption.NOFOLLOW_LINKS)) return false
+        var ancestor = path.parent
+        while (ancestor != null && Files.notExists(ancestor, LinkOption.NOFOLLOW_LINKS)) ancestor = ancestor.parent
+        return ancestor != null && isOutsideProject(ancestor.toString(), basePath, RuntimeProfile.PROTECTED, foldCase, resolve)
     }
 
     // Every check errs toward rejection: the root comparison is exact, the project one folded.
