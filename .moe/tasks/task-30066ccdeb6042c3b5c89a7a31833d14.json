@@ -85,17 +85,22 @@
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of the doc and the slices, the one review pass. Load the adversarial-self-review skill. Check:\n(1) Every item (1)-(7) is DECIDED. There is no TBD, no 'either', and no deferral without an owner slice. Each decision cites the code paths it replaces.\n(2) Every assumed interface a slice builds on is named exactly once, with one spelling across the sections.\n(3) The epic rails hold: main moves only by CAS after the gate; no force-push or history rewrite; sh/ps1 parity; the daemon stays the only writer of .moe runtime and no worktree holds .moe; shared mode is unchanged until the final task.\n(4) The §4 and §6 interplay is consistent: the control-checkout advance cannot fail on a .moe/tasks path the daemon keeps dirty.\n(5) Every slice keeps to 5 files or fewer and 3-7 checkable DoD items, the sh/ps1 twins sit together, the dependsOn graph has no cycle, and the final task depends on all the others.\n(6) Failure paths have owners: a worktree creation failure, a CAS loss, a push rejection, a rebase conflict, a crash mid-landing, an orphan worktree, a Windows junction during removal.\n(7) Would a planner of each slice need to guess anything? If so, tighten the doc or the slice description. Use moe.add_comment on a slice whose description needs a correction you cannot make directly.\nIf you edit the doc, rerun the step-5 command.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "docs/plans/2026-10-30-per-task-worktrees.md"
       ],
-      "startedAt": "2026-10-30T13:13:34.265Z"
+      "modifiedFiles": [
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ],
+      "note": "Adversarial self-review done. Each finding was grep-verified against the code at HEAD (edfd7f9a) before fixing. Section numbers are unchanged. The doc is now 382 lines; task-wide it is +382/-0 from a1f971f5^, under the 600 waiver and the 400 cap.\n\nDoc fixes:\n- Rail 1, ungated landings: under the default qualityGateScope epicFinal, mid-epic landings ran ungated (the `qualityGate deferred` check). L6 now gates every worktree completion while a qualityGate is set and ignores the scope. The runbook sets a gate, and the WT-16 doctor fails without one.\n- Rail 4, control follow: the loop-top follow now runs only while HEAD is moe/control. The switch and alerts run only after a worktree-mode claim or at L13 (§6.2/§6.5). A §7.5 sentence covers the IDE exclusion.\n- Rail 1, rollback: rollback now unsets consolidationBranch, because ensure_safe_branch treats 'main' as the main-direct opt-in. It then runs `git switch -c moe/work-<date> main`, because the peel would otherwise reuse moe/control.\n- L8: the journal now covers every completion, with a `candidateId: null` variant.\n- L9 / §2.6: push results are classified as `[rejected]`, `[remote rejected]`, or else reconcile. reconcile_push re-pushes the same C while the tip is still B; C is ruled out only when the tip moved past B without it. Replay never re-lands: it settles the journaled C.\n- Migration: no lease, no hooks, gate worktree arm, no records.\n- L7: the hook work tree is a sparse temp-commit worktree with the `.moe` check.\n- L11: the retry runs after replay.\n- §8: the §2.6 seam is split between WT-07, WT-09 and WT-11. MOE_CONTROL_ADVANCED is now defined.\n- Extra, found in this pass: every claim opens an attempt, so §7.2/§3.6 give architect and QA claims a non-W workspace.\n- Extra: .worktrees/ already holds 2 non-Moe dirs, and the using-git-worktrees skill uses that folder. The sweep, the UNREGISTERED alert and MOE_WRAPPER_IN_WORKTREE now match only .worktrees/task-*.\n\nComments posted (second round):\n- WT-08T 82178003\n- WT-08 6ae5e215\n- WT-09 b5e44191\n- WT-10 22c8f880\n- WT-11 0a216f7e\n- WT-13 e6073e9d\n- WT-14 3263c743\n- WT-16 5957b3a6\n- WT-01 13abdc64\n- WT-03 eb8fb7ac\n- WT-17 002d020d\n- WT-18 ce2c4ee6\n\nVerification: step-5 command rerun fresh, exit 0 (lint 39/30/35, PASS parity-check.sh, DOC-OK).\n\nIncident: manual commit f6da2d7f \"D\" swept the previous revision of this doc into HEAD, together with peers' WIP. The governor acknowledged it in comment c350a788. This step's edits are a delta on top of it.",
+      "startedAt": "2026-10-30T13:13:34.265Z",
+      "completedAt": "2026-10-30T13:53:57.928Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-0062feec",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -116,16 +121,22 @@
       "author": "architect-4ae016fb",
       "content": "@worker-0062feec WT-S size waiver filed: prop-10384054 (pending human approval). Its ceiling: docs/plans/2026-10-30-per-task-worktrees.md stays the only non-board file this row changes, and its task-wide diff (a1f971f5^ to your final completion) stays ≤600 lines; it's 457 today. Fix F1-F3 in place per msg-a8c8caba; don't cut the doc to get under 400, and don't add scope beyond the fixes. Keep all 20 slice ids; put the contract corrections in add_comment on WT-08T/WT-09, WT-04/WT-10 and WT-16/WT-19.",
       "timestamp": "2026-10-30T12:29:03.163Z"
+    },
+    {
+      "id": "comment-c350a788799d49c08b35c49281299a4d",
+      "author": "governor-693b7073",
+      "content": "@worker-0062feec Governor note, 13:31Z. Your in-progress design doc, docs/plans/2026-10-30-per-task-worktrees.md (434 lines changed), was swept into the manual commit f6da2d7f \"D\" at 13:27:12Z, which was not a wrapper landing.\n- It is now in HEAD and pushed.\n- Keep working normally. Later edits land with your completion.\n- QA: review the doc across f6da2d7f plus the task's own commits.",
+      "timestamp": "2026-10-30T13:29:50.090Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:46:56.403Z",
-  "updatedAt": "2026-10-30T13:13:34.265Z",
+  "updatedAt": "2026-10-30T13:58:35.988Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T11:02:54.551Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 11,
+    "executedStepCount": 12,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -143,7 +154,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [
     {
@@ -269,22 +281,7 @@
     }
   ],
   "filesModified": [
-    "docs/plans/2026-10-30-per-task-worktrees.md",
-    ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
-    ".moe/tasks/task-1b2e6fe3ba1343c8ab02271510131155.json",
-    ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
-    ".moe/tasks/task-30066ccdeb6042c3b5c89a7a31833d14.json",
-    ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
-    ".moe/tasks/task-4b0609d1e037417aa2c68e15d039b2d9.json",
-    ".moe/tasks/task-6cf120a38b344e72b7bab8b9faf806f1.json",
-    ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
-    ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
-    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
-    ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json",
-    ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json",
-    ".moe/tasks/task-e27456ad67b64bc292080ea3a8b92f26.json",
-    ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json",
-    ".moe/tasks/task-fad5ef971b0941b590621aa40702ad4b.json"
+    "docs/plans/2026-10-30-per-task-worktrees.md"
   ],
   "touchedFiles": [
     "docs/plans/2026-10-30-per-task-worktrees.md"
@@ -296,15 +293,15 @@
     "sessionId": "worker-0062feec@2026-10-30T11:27:40Z",
     "at": "2026-10-30T12:04:54.331Z"
   },
-  "reviewStartedAt": "2026-10-30T12:04:35.077Z",
+  "reviewStartedAt": "2026-10-30T13:58:35.986Z",
   "verification": {
     "command": "npm run lint && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh) && for n in 1 2 3 4 5 6 7 8; do grep -q \"^## $n\\. \" docs/plans/2026-10-30-per-task-worktrees.md || { echo \"missing section $n\"; exit 1; }; done && echo DOC-OK",
     "exitCode": 0,
     "outputTail": "npm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 35 lines (max 40)\nPASS parity-check.sh\nDOC-OK",
-    "reportedAt": "2026-10-30T12:04:35.077Z",
+    "reportedAt": "2026-10-30T13:58:35.986Z",
     "source": "agent-reported"
   },
-  "completionSummary": "docs/plans/2026-10-30-per-task-worktrees.md now decides items (1)-(7). §1-§7 each have a Decision, Rejected alternatives, Code paths replaced (sh/ps1 function names and daemon tools), Assumed interfaces and Error handling; §0 maps the current state.\n\nDecisions:\n- W = <top>/.worktrees/<taskId> on moe/task/<taskId>, with sparse '!/.moe/'.\n- Landing L0-L14: a merge-tree squash onto the target, the existing frozen gate on the merged tree, push first with no force, then a local update-ref CAS. The land lease is taken only when a gate runs.\n- The unlanded route uses finalize_attempt 'unlanded' and Task.landingRetry, with LANDING-CONFLICT/RETRY resume in W.\n- Worktree attribution: DENY only, through the denied_wt variant.\n- Board history moves to refs/moe/board; main never changes .moe.\n- Per-W tooling: the cwd, configs, a Serena root with a linked memories folder, and per-W npm ci.\n- The control checkout ff-follows the target on moe/control.\n- Migration: settings.worktreeMode, default off and pinned per attempt, plus a stop-the-world flip/rollback runbook.\n\n§8 slices the epic into 20 BACKLOG tasks, WT-01..WT-19 plus WT-08T, at orders 2-21. Every id is written back into §8.\n- Each slice touches at most 5 files and carries 3-7 DoD items and a four-part description.\n- The sh/ps1 twins move together; WT-04..WT-14 are chained because they all edit moe-agent.{sh,ps1}.\n- WT-08T holds out the tests for the landing core.\n- WT-19 is the integration-and-hardening task at the highest order. It flips the default, adds the new code families to parity-check and sweeps the file-only dependsOn edges using the governor's audit list plus a re-derivation rule.\n\nThe self-review fixed stale slice numbers in §7 and tightened four failure paths: the crash-resume owner, QA removal with dirt, sweep RPC failure, and the lease id length. It also commented the rail-2 parity command onto 7 slices that lacked it.\n\nNo production code changed; this row edited only the doc.",
+  "completionSummary": "Deliverable: docs/plans/2026-10-30-per-task-worktrees.md (382 lines). Task-wide `git diff --numstat a1f971f5^` = +382/-0 (<400; rail 5 allows <=600). No production code.\nQA reject 1: P1 race -> fail-closed publication: L4 fetch-only, B=refs/remotes/origin/<target>, the non-forced push is the only publication, L10 mirrors ff-only, reconcile_push settles unknown outcomes (s2.2/2.3/2.6). P1 gate/.moe -> .moe-free sparse gate worktree (L6); s1.6 fails closed. P1 migration -> gated `--land-branch`/`-LandBranch`, CAS + non-forced push, no human merge (s7.3, WT-10). P2 size -> +382/-0.\nStep-6 self-review fixes: L6 gates every worktree completion while a qualityGate is set, scope ignored; doctor fails 'on' without a gate (rail 1). L8 journals every completion; gate-less uses WT-08's candidate-less variant. L9: [rejected] ends the round, [remote rejected] -> unlanded `remote`, else reconcile_push; replay settles the journaled C, never re-lands. L7 hooks in a sparse detached worktree; L11 retry after replay. Migration: no lease, hooks or records. Rollback unsets consolidationBranch, then `git switch -c moe/work-<date> main` (s7.4). Control seats: worktree iff HEAD==refs/heads/moe/control; follow/alerts only there (rail 4; s3.6/6.2/7.2). Scoped to .worktrees/task-* (s1.1/1.9/6.1). Aligned with the WT-01/WT-07/WT-08 planner decisions.\nRow comments: round 2 on WT-01/03/08T/08/09/10/11/13/14/16/17/18; corrections WT-01 ca0d75f8 (retracts 13abdc64), WT-13 1e3e602a, WT-08 94c25742, WT-09 09cc50e6, WT-08T fbfe90b3. Open: WT-16's planner adds WT-10 to dependsOn.\nHistory: manual commit f6da2d7f \"D\" swept in the round-1 doc (governor comment c350a788); this completion holds the step-6 delta (+45/-42). Review the whole task with `git diff a1f971f5^ <completion> -- docs/plans/2026-10-30-per-task-worktrees.md`.\nVerification fresh at HEAD 78f8df03: lint 39/30/35, PASS parity-check.sh, DOC-OK, exit 0.",
   "reviewCompletedAt": "2026-10-30T12:11:26.851Z",
   "rejectionDetails": {
     "failedDodItems": [
