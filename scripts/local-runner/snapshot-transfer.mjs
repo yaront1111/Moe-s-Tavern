@@ -3,8 +3,12 @@
 // maps no host directory (the exec.cpp note in guest-readiness.mjs), so the only host bytes that reach the guest are
 // the frames written here, and no mount or transfer subcommand is ever run. Mounts are checked before and after.
 // This is local transfer logic, not isolation certification: executionReady is false and verified-local stays
-// unavailable.
+// unavailable. installAgents (CQ-R10d3) streams the cache-verified agent CLIs the same way, into the 'agents' mode.
 import { spawn as spawnProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
+import { AGENT_CLIS, fetchAgentBinary } from './agent-cache.mjs';
 import { GUEST_LAYOUT } from './guest-bootstrap.mjs';
 import { createFrameDecoder, encodeFrame, MAX_GUEST_FRAME_BYTES } from './guest-bridge.mjs';
 import { mountFailure, readGuestInfo, runGuestProbe } from './guest-readiness.mjs';
@@ -13,7 +17,7 @@ import { validateImport } from './source-snapshot.mjs';
 
 // Raw bytes per data frame: base64 makes 1,398,104 characters, inside MAX_HOST_FRAME_BYTES with its JSON envelope.
 export const SNAPSHOT_CHUNK_BYTES = 1_048_576;
-const MODES = ['materialize', 'export', 'verify'];
+const MODES = ['materialize', 'export', 'verify', 'agents'];
 const MAX_TIMEOUT_MS = 600_000;
 const CONTROL = /[\x00-\x1f\x7f]/;
 // Fixed text only: a message never carries a path, guest text or snapshot byte.
@@ -91,7 +95,8 @@ function streamOptions({ name, mode, provider = {}, timeoutMs = 120_000, input =
   const { executable = 'multipass', spawn = spawnProcess } = isRecord(provider) ? provider : { spawn: null };
   if (typeof executable !== 'string' || executable.trim() === '' || CONTROL.test(executable) || typeof spawn !== 'function'
     || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS
-    || typeof input !== 'object' || typeof input?.[Symbol.iterator] !== 'function' || typeof onFrame !== 'function') {
+    || typeof input !== 'object' || input === null || (typeof input[Symbol.asyncIterator] !== 'function' && typeof input[Symbol.iterator] !== 'function')
+    || typeof onFrame !== 'function') {
     throw transferError('TRANSFER_INPUT_INVALID');
   }
   return { argv, executable, spawn, timeoutMs, input, onFrame };
@@ -153,7 +158,7 @@ function supervise({ argv, executable, spawn, timeoutMs, input, onFrame }) {
 
 // At most one frame waits in the stdin queue: a write that fills it waits for 'drain', or 'close' once torn down.
 async function feed(stdin, input, state) {
-  for (const frame of input) {
+  for await (const frame of input) {
     if (state.settled || stdin.destroyed) return;
     if (!Buffer.isBuffer(frame)) throw transferError('TRANSFER_INPUT_INVALID');
     if (!stdin.write(frame)) {
@@ -166,6 +171,14 @@ async function feed(stdin, input, state) {
   if (state.settled || stdin.destroyed) return;
   stdin.end();
   state.fed = true;
+}
+
+// One supervisor session between two no-mount checks; delivered() says whether the guest sent the one frame expected.
+async function transfer(name, provider, options, delivered) {
+  await assertNoMounts(name, provider);
+  await supervise(options);
+  if (!delivered()) throw transferError('TRANSFER_FRAME_INVALID');
+  await assertNoMounts(name, provider);
 }
 
 /**
@@ -184,10 +197,7 @@ export async function materializeSnapshot({ name, snapshot, provider = {}, timeo
     materialized = true;
   };
   const options = streamOptions({ name, mode: 'materialize', provider, timeoutMs, input: hostFrames(manifest), onFrame });
-  await assertNoMounts(name, provider);
-  await supervise(options);
-  if (!materialized) throw transferError('TRANSFER_FRAME_INVALID');
-  await assertNoMounts(name, provider);
+  await transfer(name, provider, options, () => materialized);
   const bytes = manifest.entries.reduce((sum, entry) => sum + entry.size, 0);
   return Object.freeze({ instance: name, digest: manifest.digest, files: manifest.entries.length, bytes, executionReady: false });
 }
@@ -207,9 +217,53 @@ export async function verifyWorkspace({ name, provider = {}, timeoutMs } = {}) {
     changed = frame.changed;
   };
   const options = streamOptions({ name, mode: 'verify', provider, timeoutMs, input: [], onFrame });
-  await assertNoMounts(name, provider);
-  await supervise(options);
-  if (changed === null) throw transferError('TRANSFER_FRAME_INVALID');
-  await assertNoMounts(name, provider);
+  await transfer(name, provider, options, () => changed !== null);
   return changed === 0 ? 'intact' : 'changed';
+}
+
+// Host frames for the pinned binaries ({cli, file, sha256, size}): per binary its agent header, then its file's bytes as
+// base64 data frames read by position through one no-follow descriptor and re-hashed as they go, then end. A short or
+// drifted file throws before that binary's last data frame is yielded, so the guest never completes a binary this host did
+// not just re-verify. A fresh Buffer per chunk and one frame in flight.
+async function* agentFrames(binaries) {
+  for (const { cli, file, sha256, size } of binaries) {
+    yield encodeFrame({ kind: 'agent', cli, size, sha256 });
+    let handle;
+    try { handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)); } catch { throw transferError('TRANSFER_INPUT_INVALID'); }
+    try {
+      if (!(await handle.stat()).isFile()) throw transferError('TRANSFER_INPUT_INVALID');
+      const hash = createHash('sha256');
+      for (let at = 0; at < size; at += SNAPSHOT_CHUNK_BYTES) {
+        const chunk = Buffer.alloc(Math.min(SNAPSHOT_CHUNK_BYTES, size - at));
+        if ((await handle.read(chunk, 0, chunk.length, at)).bytesRead !== chunk.length) throw transferError('TRANSFER_INPUT_INVALID');
+        hash.update(chunk);
+        if (at + chunk.length === size && hash.digest('hex') !== sha256) throw transferError('TRANSFER_INPUT_INVALID');
+        yield encodeFrame({ kind: 'data', data: chunk.toString('base64') });
+      }
+    } finally { await handle.close().catch(() => {}); }
+  }
+  yield encodeFrame({ kind: 'end' });
+}
+
+/**
+ * Copies both pinned agent CLIs (AGENT_CLIS) into the owned guest through the supervisor's 'agents' mode (CQ-R10d3a).
+ * Copy-only: every byte comes from fetchAgentBinary's verified cache file (pins only from the installed manifest; a caller
+ * supplies arch and cacheDir, seams are test-only) and is re-hashed while it streams, and the guest shows no mount before
+ * and after. Accepts one {kind: 'installed', count} frame with count equal to the binaries sent. Not an isolation claim.
+ */
+export async function installAgents(options, seams) {
+  const { name, arch, cacheDir, provider = {}, timeoutMs = MAX_TIMEOUT_MS } = isRecord(options) ? options : {};
+  const binaries = [];
+  let installed = false;
+  const onFrame = frame => {
+    if (installed || frame.kind !== 'installed' || Object.keys(frame).sort().join() !== 'count,kind' || frame.count !== binaries.length) {
+      throw transferError('TRANSFER_FRAME_INVALID');
+    }
+    installed = true;
+  };
+  // Checked first: a bad name, provider or timeout is refused before any cache read, download or provider call.
+  const stream = streamOptions({ name, mode: 'agents', provider, timeoutMs, input: agentFrames(binaries), onFrame });
+  for (const cli of AGENT_CLIS) binaries.push({ cli, ...await fetchAgentBinary({ cli, arch, cacheDir }, { fetch: seams?.fetch, manifest: seams?.manifest }) });
+  await transfer(name, provider, stream, () => installed);
+  return Object.freeze({ instance: name, agents: binaries.length, bytes: binaries.reduce((sum, { size }) => sum + size, 0), executionReady: false });
 }

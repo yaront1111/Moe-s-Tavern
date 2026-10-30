@@ -10,7 +10,9 @@
 //   2 and 3, so a denial is exactly 1, success exactly 0 and anything else unknown.
 // - cloud-init cmd/status.py: exit 1 is error, 2 degraded, 0 otherwise (including running and not started).
 // Probe argv are fixed constants; no caller data reaches a guest command.
+// checkAgents (CQ-R10d3) is the post-install agent hash check: its probe is in GUEST_PROBES but bootstrap never runs it.
 import { setTimeout as delay } from 'node:timers/promises';
+import { AGENT_CLIS, loadAgentManifest } from './agent-cache.mjs';
 import { loadCertifiedProvider } from './doctor.mjs';
 import { bootstrapError, GUEST_LAYOUT, GUEST_RESOURCES, IMAGE_ARCHES, JOB_IDENTITIES } from './guest-bootstrap.mjs';
 import { invoker, lifecycleError, QUERY_TIMEOUT_MS, STATES } from './lifecycle.mjs';
@@ -20,6 +22,7 @@ const CONTROL = /[\x00-\x1f\x7f]/;
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const WAITING = new Set(['Starting', 'Restarting']);
 const { supervisor, credential, shim, shimTools } = GUEST_LAYOUT;
+const AGENT_FILES = AGENT_CLIS.map(cli => `/opt/moe/agents/${cli}`); // the supervisor's JOBS executables
 const LAYOUT_PATHS = [...GUEST_LAYOUT.supervisorDirs, supervisor, GUEST_LAYOUT.credentialDir, credential, shim, shimTools];
 const EXACT_MODES = new Map([[supervisor, '500:-r-x------'], [credential, '400:-r--------'], [shim, '555:-r-xr-xr-x'], [shimTools, '444:-r--r--r--']]);
 // A root-owned directory with no group or other write bit, as %A spells it.
@@ -107,6 +110,8 @@ const CHECKS = [
 export const GUEST_PROBES = Object.freeze(Object.fromEntries([
   ['cloudInit', ['cloud-init', 'status', '--format', 'json']],
   ...CHECKS,
+  // Not a bootstrap check: the agents are installed after bootstrap, so a check there would always find them missing.
+  ['agentHashes', ['sudo', '-n', 'sha256sum', ...AGENT_FILES]],
 ].map(([id, argv]) => [id, Object.freeze(argv)])));
 
 function validDetail(detail) {
@@ -257,4 +262,30 @@ export async function waitForGuestReady({
     image: { source, provider: info && { imageHash: info.providerImageHash, imageRelease: info.imageRelease } },
     supervisorSha256, failures,
   };
+}
+
+/**
+ * After installAgents, never at bootstrap: one fixed sha256sum probe over /opt/moe/agents/<cli>, compared with the
+ * installed manifest's pin (the member's, for an archive). Per cli, in AGENT_CLIS order, no line for its file is
+ * AGENT_MISSING and a line that is not exactly `<pin>  <file>` is AGENT_HASH_MISMATCH; a probe or provider failure is its
+ * code, and a non-zero exit never reads ready. Inputs are checked before any provider call. Guest-reported evidence, not
+ * isolation: executionReady is always false.
+ */
+export async function checkAgents({ name, arch, provider = {} } = {}) {
+  if (!IMAGE_ARCHES.includes(arch)) throw bootstrapError('BOOTSTRAP_INPUT_INVALID');
+  invoker(name, provider);
+  const { binaries } = await loadAgentManifest();
+  const failures = new Set();
+  try {
+    const { code, stdout } = await runGuestProbe(name, 'agentHashes', provider);
+    const lines = outputLines(stdout);
+    for (const [at, cli] of AGENT_CLIS.entries()) {
+      const pin = binaries[cli][arch];
+      const line = lines.find(entry => entry.endsWith(`  ${AGENT_FILES[at]}`));
+      if (line === undefined) failures.add('AGENT_MISSING');
+      else if (line !== `${pin.archive ? pin.memberSha256 : pin.sha256}  ${AGENT_FILES[at]}`) failures.add('AGENT_HASH_MISMATCH');
+    }
+    if (failures.size === 0 && code !== 0) failures.add('PROBE_UNKNOWN');
+  } catch (error) { failures.add(reported(error)); }
+  return { instance: name, agentsReady: failures.size === 0, executionReady: false, failures: [...failures] };
 }

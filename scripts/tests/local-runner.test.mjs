@@ -942,7 +942,8 @@ for (const id of IDENTITIES) {
     [`keys:${id}`]: ['sudo', '-n', 'test', '-e', `/home/${id}/.ssh/authorized_keys`],
   });
 }
-const BOUNDARY = Object.keys(EXPECTED_PROBES).filter(id => id !== 'cloudInit');
+EXPECTED_PROBES.agentHashes = ['sudo', '-n', 'sha256sum', '/opt/moe/agents/claude', '/opt/moe/agents/codex']; // CQ-R10d3 checkAgents' probe
+const BOUNDARY = Object.keys(EXPECTED_PROBES).filter(id => id !== 'cloudInit' && id !== 'agentHashes'); // checkAgents runs after install, never at bootstrap
 const PROBE_IDS = new Map(Object.entries(EXPECTED_PROBES).map(([id, argv]) => [JSON.stringify(argv), id]));
 const execArgs = id => ['exec', '--no-map-working-directory', GUEST, '--', ...EXPECTED_PROBES[id]];
 
@@ -1204,7 +1205,7 @@ test('readGuestInfo runs bounded info on the owned name and parses the v1.17.0 d
 test('runGuestProbe executes only the frozen fixed-argv table without host-directory mapping', async () => {
   assert.deepEqual(Object.keys(GUEST_PROBES), Object.keys(EXPECTED_PROBES));
   assert.deepEqual(GUEST_PROBES, EXPECTED_PROBES);
-  assert.equal(Object.keys(GUEST_PROBES).length, 6 + 15 * IDENTITIES.length);
+  assert.equal(Object.keys(GUEST_PROBES).length, 7 + 15 * IDENTITIES.length);
   assert.equal(Object.isFrozen(GUEST_PROBES), true);
   for (const argv of Object.values(GUEST_PROBES)) {
     assert.equal(Object.isFrozen(argv), true);
@@ -4412,4 +4413,137 @@ test('AI5 an agents path that is a symlink or a file, or a failed fsync or renam
     const failed = agentsIn(seededAgents(t), frames, `def fail(*args, **kwargs):\n    raise OSError(5, 'injected')\nos.${call} = fail`);
     assert.deepEqual([failed.status, failed.stdout.length, agentsState(failed.agents)], [74, 0, OLD_AGENTS], `${call} ${failed.stderr}`);
   }
+});
+
+// CQ-R10d3 host agent install and readiness: installAgents over a scratch cache of stand-in binaries (rows AH, since AI is R10d3a's).
+import { loadAgentManifest } from '../local-runner/agent-cache.mjs';
+import { installAgents } from '../local-runner/snapshot-transfer.mjs';
+
+const CODEX = Buffer.from('#!/bin/sh\ncodex\n');
+const INSTALLED = { kind: 'installed', count: 2 };
+// A cacheDir of <sha256>.bin stand-ins (claude is BIG, codex a short script), the installed manifest with its x64 pins
+// re-pinned to them, and a fetch seam that records and refuses, so a verified cache hit never downloads.
+async function agentCache(t) {
+  const manifest = structuredClone(await loadAgentManifest());
+  const cacheDir = scratch(t);
+  Object.assign(manifest.binaries.claude.x64, { sha256: sha(BIG), size: BIG.length });
+  Object.assign(manifest.binaries.codex.x64, { memberSha256: sha(CODEX), memberSize: CODEX.length });
+  const file = bytes => path.join(cacheDir, `${sha(bytes)}.bin`);
+  for (const bytes of [BIG, CODEX]) writeFileSync(file(bytes), bytes);
+  const fetches = [];
+  return { cacheDir, fetches, file, seams: { manifest, fetch: async url => { fetches.push(url); throw failWith({ code: 'ECONNREFUSED' }); } } };
+}
+const agentInstall = (cache, p, change = {}) => installAgents({ name: GUEST, arch: 'x64', cacheDir: cache.cacheDir, provider: p.provider, ...change }, cache.seams);
+const installer = respond => transferProvider(undefined, proc => proc.reply(respond ?? INSTALLED));
+
+test('AH1 a clean install streams both cache-verified binaries between two mount checks and resolves the frozen result', async t => {
+  const cache = await agentCache(t);
+  const p = installer();
+  const result = await agentInstall(cache, p);
+  assert.deepEqual(result, { instance: GUEST, agents: 2, bytes: BIG.length + CODEX.length, executionReady: false });
+  assert.equal(Object.isFrozen(result), true);
+  assert.deepEqual([p.proc.before, p.guest.ids(), p.guest.unexpected, cache.fetches], [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], [], []]);
+  assert.deepEqual([p.proc.calls, p.proc.kills], [[['multipass', snapshotArgv(GUEST, 'agents'), PIPES]], []]);
+  assert.deepEqual(p.proc.frames(), [binaryOf('claude', BIG), binaryOf('codex', CODEX), [AGENTS_END]].flat());
+  assert.ok(p.proc.peak <= encodeFrame(dataFrames(BIG)[0]).length + p.proc.stdin.writableHighWaterMark, String(p.proc.peak));
+});
+
+test('AH2 every refusal is a fixed code, input errors touch neither provider nor cache, and a cache file that drifts after verification is never completed', async t => {
+  const cache = await agentCache(t);
+  const listing = readdirSync(cache.cacheDir).sort();
+  for (const [label, change, code] of [
+    ['null options', null, 'TRANSFER_INPUT_INVALID'], ['primary', { name: 'primary' }, 'TRANSFER_INPUT_INVALID'],
+    ['timeout', { timeoutMs: 600_001 }, 'TRANSFER_INPUT_INVALID'], ['spawn', { provider: { spawn: 'spawn' } }, 'TRANSFER_INPUT_INVALID'],
+    ['arch', { arch: 'mips' }, 'AGENT_BINARY_INPUT_INVALID'], ['relative cacheDir', { cacheDir: 'cache' }, 'AGENT_BINARY_INPUT_INVALID'],
+    ['a bad name and a bad arch: the stream options come first', { name: 'primary', arch: 'mips' }, 'TRANSFER_INPUT_INVALID'],
+  ]) {
+    const p = installer();
+    await assert.rejects(change === null ? installAgents(null, cache.seams) : agentInstall(cache, p, change), transferRefused(code), label);
+    assert.deepEqual([p.guest.ids(), p.proc.calls, readdirSync(cache.cacheDir).sort(), cache.fetches], [[], [], listing, []], label);
+  }
+  const empty = installer();
+  await assert.rejects(agentInstall({ ...cache, cacheDir: scratch(t) }, empty), transferRefused('AGENT_BINARY_DOWNLOAD_FAILED'));
+  assert.deepEqual([empty.guest.ids(), empty.proc.calls, cache.fetches.length], [[], [], 1]);
+  // The mount checks: a mount before the stream means no spawn, and one that appears during it refuses the result.
+  const before = transferProvider({ info: guestDetail({ mounts: HOST_MOUNT }) }, proc => proc.reply(INSTALLED));
+  await assert.rejects(agentInstall(cache, before), transferRefused('TRANSFER_MOUNTS_PRESENT'));
+  assert.deepEqual([before.guest.ids(), before.proc.calls], [['info', 'mountinfo'], []]);
+  const during = transferProvider({ info: [guestDetail(), guestDetail({ mounts: HOST_MOUNT })] }, proc => proc.reply(INSTALLED));
+  await assert.rejects(agentInstall(cache, during), transferRefused('TRANSFER_MOUNTS_PRESENT'));
+  assert.equal(during.proc.calls.length, 1);
+  for (const [label, reply, code] of [
+    ['no frame', [], 'TRANSFER_FRAME_INVALID'], ['another kind', { ...INSTALLED, kind: 'verified' }, 'TRANSFER_FRAME_INVALID'],
+    ['count 1', { ...INSTALLED, count: 1 }, 'TRANSFER_FRAME_INVALID'], ['an extra key', { ...INSTALLED, extra: 1 }, 'TRANSFER_FRAME_INVALID'],
+    ['two frames', [INSTALLED, INSTALLED], 'TRANSFER_FRAME_INVALID'],
+  ]) await assert.rejects(agentInstall(cache, installer(reply)), transferRefused(code), label);
+  const failed = transferProvider(undefined, proc => proc.reply(INSTALLED, 65));
+  await assert.rejects(agentInstall(cache, failed), transferRefused('TRANSFER_EXIT_FAILED'));
+  // The spawn hook runs after fetchAgentBinary verified the file: the host re-hash stops the stream at codex's header.
+  const linked = path.join(scratch(t), 'copy');
+  const atCodex = [binaryOf('claude', BIG), agentOf('codex', CODEX)].flat();
+  for (const [label, bytes, drift, sent] of [
+    ['rewritten in place', CODEX, file => writeFileSync(file, Buffer.alloc(CODEX.length, 1)), atCodex],
+    ['truncated', CODEX, file => truncateSync(file, 3), atCodex],
+    // A short read of claude's second chunk stops the stream there, not after its last data frame.
+    ['claude truncated mid-binary', BIG, file => truncateSync(file, SNAPSHOT_CHUNK_BYTES + 5), [agentOf('claude', BIG), dataFrames(BIG)[0]]],
+    ...(process.platform === 'win32' ? [] : [['replaced by a link to the same bytes', CODEX, file => { rmSync(file); writeFileSync(linked, CODEX); symlinkSync(linked, file); }, atCodex]]),
+  ]) {
+    for (const original of [BIG, CODEX]) { rmSync(cache.file(original), { force: true }); writeFileSync(cache.file(original), original); }
+    const p = installer();
+    const provider = { ...p.provider, spawn: (...args) => { drift(cache.file(bytes)); return p.provider.spawn(...args); } };
+    await assert.rejects(agentInstall(cache, p, { provider }), transferRefused('TRANSFER_INPUT_INVALID'), label);
+    assert.deepEqual([p.proc.kills, p.proc.frames()], [['SIGKILL'], sent], label);
+  }
+  assert.deepEqual(cache.fetches.length, 1);
+});
+
+test('AH3 end to end, installAgents installs both stand-ins as 0555 through the real supervisor', { skip: NOT_POSIX, timeout: 60_000 }, async t => {
+  const cache = await agentCache(t);
+  const agents = path.join(scratch(t), 'agents');
+  const guest = fakeGuest();
+  const children = [];
+  t.after(() => children.forEach(child => child.exitCode === null && child.signalCode === null && child.kill('SIGKILL')));
+  const spawn = (executable, argv, options) => {
+    const code = `${PY_LOAD}sys.exit(m.install_agents(0, 1, sys.argv[2], (os.getuid(), os.getgid())))`;
+    children.push(spawnChild('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, agents], options));
+    return children.at(-1);
+  };
+  const result = await agentInstall(cache, { provider: { run: guest.run, spawn } }, { timeoutMs: 30_000 });
+  assert.deepEqual(result, { instance: GUEST, agents: 2, bytes: BIG.length + CODEX.length, executionReady: false });
+  assert.deepEqual([readdirSync(agents).sort(), guest.ids(), guest.unexpected, cache.fetches], [['claude', 'codex'], ['info', 'mountinfo', 'info', 'mountinfo'], [], []]);
+  assert.deepEqual(agentsState(agents), [['claude', BIG, 0o555], ['codex', CODEX, 0o555]]);
+});
+
+// checkAgents (after installAgents, never at bootstrap): one fixed sha256sum probe compared with the installed manifest's pins.
+import { checkAgents } from '../local-runner/guest-readiness.mjs';
+
+test('RA checkAgents reports AGENT_MISSING for an absent binary and AGENT_HASH_MISMATCH for a changed one, from the installed pins only', async () => {
+  const { binaries } = await loadAgentManifest();
+  const pinned = { claude: binaries.claude.x64.sha256, codex: binaries.codex.x64.memberSha256 };
+  const line = (cli, digest = pinned[cli]) => `${digest}  /opt/moe/agents/${cli}\n`;
+  const both = line('claude') + line('codex');
+  const other = 'ef'.repeat(32);
+  const check = async (answer, arch = 'x64') => {
+    const fake = fakeGuest({ answers: { agentHashes: answer } });
+    const report = await checkAgents({ name: GUEST, arch, provider: { run: fake.run } });
+    assert.deepEqual([fake.ids(), fake.unexpected], [['agentHashes'], []]);
+    return report;
+  };
+  for (const [label, answer, failures, arch] of [
+    ['both pinned', { code: 0, stdout: both }, []], ['only claude', { code: 1, stdout: line('claude') }, ['AGENT_MISSING']],
+    ['claude changed', { code: 0, stdout: line('claude', other) + line('codex') }, ['AGENT_HASH_MISMATCH']],
+    ['an uppercase digest', { code: 0, stdout: line('claude', pinned.claude.toUpperCase()) + line('codex') }, ['AGENT_HASH_MISMATCH']],
+    ['a digest the pin is only a prefix of', { code: 0, stdout: line('claude', `${pinned.claude}ab`) + line('codex') }, ['AGENT_HASH_MISMATCH']],
+    ['codex shows its archive sha256, not the member', { code: 0, stdout: line('claude') + line('codex', binaries.codex.x64.sha256) }, ['AGENT_HASH_MISMATCH']],
+    ['x64 lines checked as arm64', { code: 0, stdout: both }, ['AGENT_HASH_MISMATCH'], 'arm64'],
+    ['empty stdout', { code: 1, stdout: '' }, ['AGENT_MISSING']],
+    ['claude changed and codex missing', { code: 1, stdout: line('claude', other) }, ['AGENT_HASH_MISMATCH', 'AGENT_MISSING']],
+    ['a non-zero exit with both lines pinned', { code: 1, stdout: both }, ['PROBE_UNKNOWN']],
+    ['the probe failing', { error: failWith({ code: 'ENOENT' }) }, ['PROVIDER_NOT_FOUND']],
+  ]) assert.deepEqual(await check(answer, arch), { instance: GUEST, agentsReady: failures.length === 0, executionReady: false, failures }, label);
+  let calls = 0;
+  const counting = { run: async () => { calls++; return { stdout: '', stderr: '' }; } };
+  await assert.rejects(checkAgents({ name: GUEST, arch: 'mips', provider: counting }), error => assertSanitized(error, 'BOOTSTRAP_INPUT_INVALID'));
+  await assert.rejects(checkAgents({ name: 'primary', arch: 'x64', provider: counting }), error => assertSanitized(error, 'LIFECYCLE_INPUT_INVALID'));
+  assert.equal(calls, 0);
 });

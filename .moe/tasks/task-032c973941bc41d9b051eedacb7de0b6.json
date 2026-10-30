@@ -13,9 +13,44 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST: create moe-vscode/tests/protected-daemon-spawn.test.cjs (node:test, run by `npm test`).\n\nHarness, following tests/daemon-start.test.cjs and RF06's tests/protected-runtime.test.cjs:\n- Transpile src/services/MoeDaemonClient.ts into a vm context with:\n  - real fs and path;\n  - process = { ...process, env: <per-test env>, platform: process.platform };\n  - a fake child_process.spawn that records [command, args, options] and returns an EventEmitter that emits 'spawn' on setImmediate, with unref() a no-op;\n  - a fake vscode: window.showErrorMessage records messages, createOutputChannel collects log lines, and workspace.getConfiguration().get() returns its default argument.\n- Build `new MoeDaemonClient(extDir)` and stub waitForDaemonInfo as async no-op.\n- For protected cases, replace resolveGlobalConfigDaemonPath and resolveDaemonRuntime with functions that throw 'consulted'.\n- Use fresh mkdtemp dirs and a fresh module load per test, so session pins never leak.\n- Results from the vm realm (spawn args and options, protectedDaemonCommand objects) must be compared through JSON or spread: cross-realm deepStrictEqual fails (mem gotcha-vscode-vm-test-harnesses).\n\nCases:\n\nD1. Setup: a verified-local project; extDir/bundled/daemon/index.js; a fake node file `node` (`node.exe` on win32) in an outside temp dir set as MOE_NODE_COMMAND; env with NODE_OPTIONS, NODE_PATH and PATH = [relative 'rel/bin', '<project>/bin', '<outsideDir>']. Call startDaemon('init', project). Expect exactly one spawn:\n- command === realpath(node);\n- args equal [realpath(daemon), 'start', '--project', project]. Under protected it is always 'start', with no --name, as in JetBrains;\n- options.cwd === dirname(realpath(daemon));\n- options.env has no NODE_OPTIONS and no NODE_PATH;\n- options.env PATH entries are exactly [dirname(realpath(node)), '<outsideDir>'], followed only by bootstrap dirs that exist (none in the test, since HOME is an empty temp dir);\n- no error is shown.\n\nD2. bundled/daemon/index.js missing: no spawn. Errors deep-equal ['Protected execution profile: installed daemon/index.js not found. Project and PATH copies of the Moe daemon are not used.']. The global-config and resolveDaemonRuntime stubs are never called.\n\nD3. With MOE_NODE_COMMAND='node' the refusal reason is 'node executable is not an absolute path'. With MOE_NODE_COMMAND=<file inside the project> it is 'node executable resolves inside the project'. No spawn in either case.\n\nD4. No MOE_NODE_COMMAND, HOME an empty temp dir, PATH = ['<project>/bin' holding a node file, 'relbin', '<outside1>' without node, '<outside2>' holding a node file]: the spawn command === realpath(outside2 node). The project and relative entries are never searched.\n\nD5. protectedNodeCandidate units, using windows=true, which is portable on Linux because the candidates are env-driven:\n- with empty PATH and ProgramFiles set to a temp dir holding nodejs/node.exe, it returns that file;\n- with nothing found it returns undefined, and protectedDaemonCommand(project, root, undefined) gives { refused: 'node executable not found' }.\n\nD6. protectedDaemonEnvironment units:\n- windows=true with keys 'Path', 'PATH', 'node_options', 'Node_Path': exactly one PATH spelling is kept (the sorted-first one, as JetBrains applyDaemonPath keeps it), both node keys are removed case-insensitively, and project/relative entries are dropped;\n- windows=false: NODE_OPTIONS and NODE_PATH are removed and PATH is filtered.\n\nD7. Legacy: a project with no .moe/project.json calls startDaemon('start') through today's path (the resolveDaemonRuntime stub is used). The spawn options object has exactly the keys detached, stdio, windowsHide and env, with no cwd.\n\nRun `node --test tests/protected-daemon-spawn.test.cjs`: it must fail only on the missing behaviour.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "In moe-vscode/src/services/MoeDaemonClient.ts, extend RF06's exported 'Protected runtime selection' section. Add no new local import: five vm harnesses transpile this file alone. Mirror JetBrains MoeDaemonSupervisor and RuntimeSelectionPolicy.\n\n(a) `export function installedExecutable(p: string | undefined, basePath, foldCase = defaultFoldCase)`. Rejections, in order:\n- blank: 'node executable not found';\n- !path.isAbsolute: 'node executable is not an absolute path';\n- unresolvable project: 'the project directory cannot be resolved';\n- realpath ENOENT: 'node executable not found'; any other error: 'node executable cannot be resolved';\n- not a regular file: 'node executable is not a regular file';\n- inside the real project (folded): 'node executable resolves inside the project'.\nOtherwise it returns { accepted: real }. Share RF06's installedArtifact checks through one private helper rather than copying them (JetBrains select with no root).\n\n(b) `export function isOutsideProject(p, basePath, foldCase)`. True only when p is absolute and neither path.normalize(p) nor its realpath, if it resolves, isWithin path.resolve(basePath) or the real project. Comparisons use comparablePath and are folded. Any error gives false.\n\n(c) `export function protectedPathEntries(value, basePath, delimiter = path.delimiter)` keeps, as written, the entries whose unquoted form (trimmed, surrounding double quotes removed) isOutsideProject. `export function nodeOnProtectedPath(value, basePath, windows)` returns the first kept entry's path.join(unquoted, windows ? 'node.exe' : 'node') that statSync says isFile. It searches in-process, never by a bare name.\n\n(d) `export function protectedNodeCandidate(env, home, windows, basePath): string | undefined`, mirroring the JetBrains resolveNodeExecutable order:\n- MOE_NODE_COMMAND, trimmed and with surrounding quotes stripped;\n- on non-Windows with a home, home/.local/share/moe/node/current/bin/node when it is a file and X_OK;\n- nodeOnProtectedPath(the PATH value, with the key matched case-insensitively on Windows);\n- on Windows, the first existing of ProgramFiles/nodejs/node.exe, ProgramFiles(x86)/nodejs/node.exe, LOCALAPPDATA/Programs/nodejs/node.exe, LOCALAPPDATA/nvm/current/node.exe and APPDATA/nvm/node.exe;\n- on non-Windows, the first existing of /opt/homebrew/bin/node, /usr/local/bin/node, home/.nvm/current/bin/node, the name-max dir under home/.nvm/versions/node/*/bin/node, and /usr/bin/node;\n- otherwise undefined.\nThe first candidate found is the one validated. A rejected candidate is refused; the search does not move on to the next one.\n\n(e) `export function protectedDaemonCommand(basePath, root, node)`. It checks the daemon via installedArtifact(root, 'daemon/index.js', basePath) first, then installedExecutable(node, basePath), and returns { refused: reason } on the first rejection. Otherwise it returns { ready: { node: realNode, args: [realDaemon, 'start', '--project', basePath], cwd: path.dirname(realDaemon) } }.\n\n(f) `export function protectedDaemonEnvironment(env, basePath, nodePath, windows, home)` returns a copy:\n- NODE_OPTIONS and NODE_PATH are removed (case-insensitively on Windows);\n- one PATH spelling is kept (on Windows, the sorted-first key equal to PATH ignoring case; the others are removed);\n- its value is protectedPathEntries([dirname(nodePath), ...current entries, ...on non-Windows the existing ~/.local/share/moe/node/current/bin and ~/.local/share/moe/npm/bin].filter(non-blank) deduped, basePath).\n\n(g) startDaemon: right after the startInProgress guard, `if (runtimeProfile(projectPath) === 'protected')` routes to a private startProtectedDaemon(projectPath). That method:\n- computes protectedDaemonCommand(projectPath, installedRoot(this.extensionPath), protectedNodeCandidate(process.env, HOME || USERPROFILE, win32, projectPath));\n- on refused, logs and calls showErrorMessage with `Protected execution profile: ${reason}. Project and PATH copies of the Moe daemon are not used.` and returns, spawning nothing;\n- otherwise spawns with { detached: true, stdio: 'ignore', windowsHide: true, cwd, env }, inside the same startInProgress, error/spawn/unref, waitForDaemonInfo and catch handling as the legacy path.\nresolveGlobalConfigDaemonPath and resolveDaemonRuntime are never called under protected. If a private spawn helper is shared, the legacy call keeps exactly its current options keys and messages.\n\nError handling: every fs failure inside the selection functions becomes a rejection or undefined and nothing throws. Spawn errors keep the legacy catch: a log line plus the ENOENT-aware message. Legacy code paths and bytes are unchanged. Step 1's tests must now pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate. Run it once, fresh, from the repo checkout: `cd moe-vscode && npm test && npm run compile`. Record the node:test pass and fail counts and tsc's exit status.\n- typescript and ws are pure JS, so the checked-in node_modules run under WSL Linux. compile writes only to the gitignored dist/.\n- The existing harnesses (daemon-start, daemon-json-cap, approval-paths, plan-approval-client, settings-wire) and RF06's protected-runtime.test.cjs must pass unchanged. That is the legacy-unchanged evidence for DoD 3.\n- CI's 3-OS matrix exercises the real win32 PATH spelling.\n\nFresh output of this exact command is the complete_task verification evidence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff only (load the adversarial-self-review skill). Check that:\n\n(a) Under protected, no code path spawns a bare 'node' or a project or global-config daemon. Grep the protected branch for resolveDaemonRuntime and resolveGlobalConfigDaemonPath.\n(b) The first found node candidate is validated, and a rejection refuses with no silent fallback.\n(c) The env is a COPY: process.env is never mutated.\n(d) Windows PATH and NODE_* keys are handled case-insensitively, with exactly one PATH spelling left.\n(e) cwd is the installed daemon dir, never the workspace.\n(f) The legacy spawn options and messages are byte-identical, as D7 and the existing harnesses show.\n(g) No absolute path in a UI message; paths go to log() only.\n(h) No new local import in MoeDaemonClient.ts.\n\nReport in the completion summary:\n- the net LOC (target about 250, under 400);\n- the VS Code running-daemon provenance gap (no activationRefusal parity), recorded on RF07 task-f3f364a6.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -31,10 +66,84 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:22:02.365Z",
-  "updatedAt": "2026-10-30T07:22:05.161Z",
+  "updatedAt": "2026-10-30T07:26:51.665Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:22:05.161Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:23:47.806Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:26:51.644Z",
+  "executionContract": {
+    "intendedBehavior": "Under the protected execution profile, the VS Code extension starts the Moe daemon only from the runtime installed with the extension: the real bundled/daemon/index.js, run by a real node executable outside the project, with 'start' and cwd = the installed daemon dir. The env drops NODE_OPTIONS and NODE_PATH, and PATH keeps only absolute entries outside the project. Any rejection starts nothing and shows 'Protected execution profile: <reason>. Project and PATH copies of the Moe daemon are not used.' The legacy profile is unchanged.",
+    "acceptanceCriteria": [
+      "D1: the protected spawn has the exact command, args, cwd and env contents",
+      "D2: a missing installed daemon gives the exact refusal, no spawn, and never consults the global-config daemon or resolveDaemonRuntime",
+      "D3 and D4: the node rules (absolute, real, outside the project, in-process PATH lookup) are enforced, and the first candidate found is validated",
+      "D5 and D6: candidate order, and Windows case-insensitive env handling with a single PATH spelling",
+      "D7 and the existing harnesses: the legacy spawn is unchanged",
+      "`cd moe-vscode && npm test && npm run compile` exits 0"
+    ],
+    "invariants": [
+      "Under protected, nothing is spawned unless both the daemon and node are accepted",
+      "process.env is never mutated",
+      "Refusal messages carry reasons only; absolute paths go to the log"
+    ],
+    "compatibility": [
+      "The legacy profile keeps resolveBundledDaemonPath || resolveGlobalConfigDaemonPath, resolveDaemonRuntime, 'init' with --name, and the exact spawn options {detached, stdio, windowsHide, env}",
+      "No new local runtime import in MoeDaemonClient.ts: five existing vm harnesses transpile it alone",
+      "Mirrors JetBrains protectedDaemonCommand, protectedDaemonEnvironment and applyDaemonPath semantics, apart from --host, since VS Code has no WSL agent toggle"
+    ],
+    "approvedScope": [
+      "MoeDaemonClient.ts exports: installedExecutable, isOutsideProject, protectedPathEntries, nodeOnProtectedPath, protectedNodeCandidate, protectedDaemonCommand, protectedDaemonEnvironment",
+      "MoeDaemonClient.startDaemon: the protected branch through a private startProtectedDaemon",
+      "New test file moe-vscode/tests/protected-daemon-spawn.test.cjs"
+    ],
+    "reuse": [
+      "RF06's runtimeProfile, installedArtifact, comparablePath, isWithin and installedRoot",
+      "The legacy startDaemon spawn/error/unref/wait/catch handling (shared through a private helper only if the legacy options stay identical)",
+      "The vm harness pattern of tests/daemon-start.test.cjs"
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains MoeDaemonSupervisor.kt: protectedDaemonCommand, protectedCommandOrRefuse, protectedDaemonEnvironment, nodeOnProtectedPath, protectedPathEntries, applyDaemonPath, daemonPath, resolveNodeExecutable",
+      "moe-jetbrains RuntimeSelectionPolicy.kt: installedExecutable, isOutsideProject, select",
+      "moe-vscode MoeDaemonClient.ts: startDaemon, resolveDaemonRuntime, resolveBundledDaemonPath, resolveGlobalConfigDaemonPath, waitForDaemonInfo, startInProgress, log()",
+      "RF06 (task-98ffe33f) lands runtimeProfile, comparablePath, isWithin, defaultFoldCase, installedRoot and installedArtifact as exports in MoeDaemonClient.ts"
+    ],
+    "checkRefs": [
+      "cd moe-vscode && npm test && npm run compile"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "This row was split from RF06 to stay under the 400-LOC review cap. The policy lives in MoeDaemonClient.ts (RF06's decision), because five vm harnesses transpile that file alone with a closed require shim. A separate module or extension.ts injection was rejected: the import breaks the harnesses, and an unwired client would fail open. --host 0.0.0.0 is omitted because VS Code has no WSL agent toggle. Running-daemon provenance is out of scope (no portable process start-time API in Node) and is recorded on RF07.",
+    "codebaseInsights": "Legacy startDaemon picks bundled, then the global-config daemon, and node from resolveDaemonRuntime (MOE_NODE_COMMAND, else the managed node on non-Windows, else a bare 'node'). It spawns detached with stdio ignore. ensureDaemonRunning passes 'init' when .moe is missing. Under protected, .moe/project.json exists or a session pin holds, and JetBrains always uses 'start'. JetBrains daemonPath prepends node's dir and appends the bootstrap dirs, then protectedDaemonEnvironment filters PATH to absolute non-project entries.",
+    "risks": "- Windows env-key casing: a spread copy of process.env is case-sensitive. JetBrains hit a duplicate PATH/Path spelling that broke git, so keep exactly one spelling.\n- The macOS tmpdir realpath differs from its path, so tests must compare realpaths.\n- The non-Windows fixed candidates (/usr/bin/node and others) exist on CI hosts. Tests that need a 'nothing found' answer must use windows=true units (D5), not the real filesystem.\n- RF06 must have landed: this task depends on it, and both edit the same file.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/daemon-start.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:26:51.665Z",
+  "approvedPlanRevision": 1
 }
