@@ -405,7 +405,12 @@ class MoeDaemonSupervisor(
                 val next = queue.removeFirst()
                 val limit = if (running(next)) null else deadSince.getOrPut(next.pid()) { Instant.now() }
                 children(next)
-                    .filter { seen.add(it.pid()) && startOf(it)?.let { start -> limit == null || !start.isAfter(limit) } == true }
+                    .filter { seen.add(it.pid()) }
+                    .filter {
+                        // Unknown identity grants neither signal authority nor proof that the tree stopped.
+                        val start = checkNotNull(startOf(it)) { "Cannot read the start of pid ${it.pid()}" }
+                        limit == null || !start.isAfter(limit)
+                    }
                     .forEach { tree.putIfAbsent(it.pid(), it); queue += it }
             }
             return tree.size > known
@@ -454,12 +459,8 @@ class MoeDaemonSupervisor(
         null
     }
 
-    private fun children(handle: ProcessHandle): List<ProcessHandle> = try {
-        handle.children().toList()
-    } catch (ex: Exception) {
-        log.debug("Cannot list the children of pid ${handle.pid()}: ${ex.message}")
-        emptyList()
-    }
+    // Discovery errors are not an empty tree: let stopWindowsRestart return its fixed refusal.
+    private fun children(handle: ProcessHandle): List<ProcessHandle> = handle.children().use { it.toList() }
 
     // An isAlive that throws counts as alive: the restart then refuses rather than start a second daemon.
     private fun running(handle: ProcessHandle): Boolean = try {

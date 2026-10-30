@@ -1,7 +1,9 @@
 package com.moe.services
 
 import com.google.gson.Gson
+import com.intellij.openapi.project.Project as IdeaProject
 import com.moe.model.DaemonInfo
+import com.moe.model.MoeState
 import com.moe.util.ProtectedStateStore
 import com.moe.util.RuntimeProfile
 import com.moe.util.RuntimeSelectionPolicy
@@ -944,6 +946,85 @@ class MoeDaemonSupervisorTest {
             assertTrue(f.stops.isEmpty())
         }
 
+    @Test
+    fun `W15 legacy refuses failed child enumeration`() = incompleteTree(RuntimeProfile.LEGACY, "children")
+
+    @Test
+    fun `W16 protected refuses failed child enumeration`() = incompleteTree(RuntimeProfile.PROTECTED, "children")
+
+    @Test
+    fun `W17 legacy refuses a child with missing identity`() = incompleteTree(RuntimeProfile.LEGACY, "missing")
+
+    @Test
+    fun `W18 protected refuses a child with missing identity`() = incompleteTree(RuntimeProfile.PROTECTED, "missing")
+
+    @Test
+    fun `W19 throwing identity reads cannot hide a live child`() {
+        for (profile in RuntimeProfile.values()) for (mode in listOf("info", "start")) incompleteTree(profile, mode)
+    }
+
+    @Test
+    fun `W20 a lazy enumeration failure cannot hide a live child`() {
+        for (profile in RuntimeProfile.values()) incompleteTree(profile, "stream")
+    }
+
+    @Test
+    fun `W21 incomplete discovery after the stop also refuses`() {
+        for (profile in RuntimeProfile.values()) for (mode in listOf("children", "stream", "missing", "info", "start")) {
+            incompleteTree(profile, mode, afterStop = true)
+        }
+    }
+
+    private fun incompleteTree(profile: RuntimeProfile, mode: String, afterStop: Boolean = false) = WinRestart(profile).use { f ->
+        val child = f.incompleteTree(mode, afterStop)
+        assertEquals("$profile $mode afterStop=$afterStop", INCOMPLETE, f.restart(null))
+        assertTrue("the undiscovered child is still alive", child.alive)
+        assertEquals("no authority to signal an unidentified child", 0, child.kills)
+        assertEquals(0, f.starts)
+        assertEquals("no uncertainty poll is needed", 0, f.polls)
+        assertEquals(if (afterStop) listOf("stop", "kill:$S") else emptyList<String>(), f.signals())
+    }
+
+    @Test
+    fun `W22 an incomplete tree refusal preserves metadata and prevents service reconnect`() {
+        for (profile in RuntimeProfile.values()) for (mode in listOf("children", "missing")) {
+            for (metadata in listOf(false, true)) WinRestart(profile).use { f ->
+                val child = f.incompleteTree(mode)
+                val file = File(f.root, ".moe/daemon.json")
+                if (metadata) writeDaemonInfo(f.root, DaemonInfo(1, 4242, "now", f.root.canonicalPath))
+                val before = file.takeIf { it.exists() }?.readText()
+                val project = Proxy.newProxyInstance(IdeaProject::class.java.classLoader, arrayOf(IdeaProject::class.java)) { _, method, _ ->
+                    when (method.name) { "getName" -> "Restart Test"; "getBasePath" -> f.root.path; "isDisposed" -> false; else -> null }
+                } as IdeaProject
+                val service = MoeProjectService(project) { it() }
+                val statuses = mutableListOf<Pair<Boolean, String>>()
+                service.addListener(object : MoeStateListener {
+                    override fun onState(state: MoeState) {}
+                    override fun onStatus(connected: Boolean, message: String) { statuses += connected to message }
+                })
+                fun field(name: String) = MoeProjectService::class.java.getDeclaredField(name).apply { isAccessible = true }
+                val attempts = MoeDaemonSupervisor::class.java.getDeclaredField("daemonSpawnAttempts").apply { isAccessible = true }
+                field("daemonSupervisor").set(service, f.service)
+                attempts.setInt(f.service, Int.MAX_VALUE)
+                try {
+                    service.restartDaemon()
+                    assertEquals(before, file.takeIf { it.exists() }?.readText())
+                    assertEquals(listOf(false to "Disconnected", false to INCOMPLETE), statuses)
+                    assertEquals(Int.MAX_VALUE, attempts.getInt(f.service))
+                    assertEquals(true, field("isManualDisconnect").get(service))
+                    assertNull(field("reconnectFuture").get(service))
+                    assertNull(field("wsClient").get(service))
+                    assertEquals(0, f.starts)
+                    assertEquals(0, child.kills)
+                    assertTrue(child.alive)
+                } finally {
+                    f.service.releaseSpawnedProcessReference()
+                    service.dispose()
+                }
+            }
+        }
+    }
+
     /** Restart Daemon over [TreeHandle] fakes: every installed stop, signal and tree read lands in [events]. */
     private inner class WinRestart(val profile: RuntimeProfile = RuntimeProfile.LEGACY, windows: Boolean = true) : AutoCloseable {
         val root = temporaryFolder.newFolder().also { File(it, ".moe").mkdirs() }
@@ -968,7 +1049,7 @@ class MoeDaemonSupervisorTest {
             RuntimeSelectionPolicy.store = { store }
         }
         val service by lazy {
-            MoeDaemonSupervisor(root.path, "Test Project", onStatus = { _, text -> statuses += text },
+            MoeDaemonSupervisor(root.path, "Test Project", onStatus = { _, text -> statuses += text }, portProbe = { _, _ -> false },
                 processAliveProbe = { handles[it.toLong()]?.alive == true }, processStarter = { starts++; error("must not start") },
                 profile = { profile }, installedRoot = { installed }, nodeExecutable = { nodePath },
                 processLookup = { lookup(it) }, runStop = { stops += it.command().toList(); events += "stop"; stop() },
@@ -979,8 +1060,36 @@ class MoeDaemonSupervisorTest {
                 handles[pid] = h
                 parent?.let { h.parentHandle = it; it.kids += h }
             }
-        fun own(supervisor: TreeHandle) = MoeDaemonSupervisor::class.java.getDeclaredField("spawnedDaemonProcess")
+        fun own(supervisor: ProcessHandle) = MoeDaemonSupervisor::class.java.getDeclaredField("spawnedDaemonProcess")
             .apply { isAccessible = true }.set(service, FakeProcess(supervisor))
+        fun incompleteTree(mode: String, afterStop: Boolean = false): TreeHandle {
+            val s = proc(S)
+            val child = TreeHandle(R, if (mode == "missing") null else T0.plusSeconds(1), events)
+            val unreadable = object : ProcessHandle by child {
+                override fun info(): ProcessHandle.Info {
+                    if (mode == "info") throw SecurityException("denied info")
+                    return object : ProcessHandle.Info by child.info() {
+                        override fun startInstant(): Optional<Instant> {
+                            if (mode == "start") throw SecurityException("denied startInstant")
+                            return child.info().startInstant()
+                        }
+                    }
+                }
+            }
+            var stopped = false
+            own(object : ProcessHandle by s {
+                override fun children(): Stream<ProcessHandle> {
+                    if (!afterStop || stopped) when (mode) {
+                        "children" -> throw SecurityException("denied children")
+                        "stream" -> return Stream.generate { throw SecurityException("denied stream traversal") }
+                    }
+                    return s.children()
+                }
+            })
+            if (!afterStop) s.kids += unreadable
+            stop = { stopped = true; if (afterStop) s.kids += unreadable; 0 }
+            return child
+        }
         fun verified() {
             if (profile == RuntimeProfile.PROTECTED) RuntimeSelectionPolicy.recordProtectedSpawn(root.path, ProcessHandle.current(), daemon)
         }

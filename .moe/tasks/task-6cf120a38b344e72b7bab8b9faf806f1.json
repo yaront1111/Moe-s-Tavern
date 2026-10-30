@@ -1,0 +1,33 @@
+{
+  "id": "task-6cf120a38b344e72b7bab8b9faf806f1",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-01] Daemon: settings.worktreeMode and the attempt workspace contract",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §7.1, §7.2, §1.1, §1.8 and §2.7 (target rule).\n\nObjective: give the daemon the worktree-mode contract every wrapper slice builds on. The mode is pinned per attempt at claim time, so no task switches mode mid-flight.\n\nDeliverable:\n- ProjectSettings.worktreeMode: 'off' | 'on' in types/schema.ts, validated in state/validators.ts (anything else is rejected like any bad setting).\n- An exported resolveWorktreeMode(settings) in state/validators.ts. It is the ONE place the default lives; the default is 'off' (WT-19 flips it).\n- ExecutionAttempt.workspaceMode: 'shared' | 'worktree'.\n- claimNextTask.ts sets workspaceMode from resolveWorktreeMode. In worktree mode it sets workspace = <projectPath>/.worktrees/<taskId> (today it is always state.projectPath), and the claim response carries workspace: { mode, path, branch, target }.\n  - Worktree: branch = moe/task/<taskId>; target = settings.consolidationBranch when it is a literal name (no *, ? or [), else 'main'.\n  - Shared: { mode: 'shared', path: projectPath }, with branch and target null.\n\nNOT in scope: get_context exposure and complete_task branch policy (WT-02); finalize_attempt (WT-03); any wrapper change; flipping the default (WT-19); docs (WT-17).\n\nVerification: cd packages/moe-daemon && npm run build && npx vitest run src/state/validators.test.ts src/tools/claimNextTask.test.ts src/tools/claimNextTask.contract.test.ts",
+  "definitionOfDone": [
+    "state/validators.test.ts: worktreeMode accepts 'off' and 'on' and rejects any other value; resolveWorktreeMode returns 'off' for absent settings.",
+    "claimNextTask.test.ts: with worktreeMode 'on' the attempt records workspaceMode 'worktree' and workspace <projectPath>/.worktrees/<taskId>, and the claim response carries workspace {mode:'worktree', path, branch:'moe/task/<taskId>', target}.",
+    "claimNextTask.test.ts: with the setting absent or 'off' the attempt records workspaceMode 'shared' and workspace = projectPath, as today.",
+    "A test covers the target rule: literal consolidationBranch is used as is, a glob pattern or an unset value yields 'main'.",
+    "The verification command in the description exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14"
+  ],
+  "priority": "HIGH",
+  "order": 2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:47:27.963Z",
+  "updatedAt": "2026-10-30T11:47:27.963Z"
+}

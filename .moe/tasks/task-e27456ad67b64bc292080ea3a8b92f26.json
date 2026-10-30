@@ -1,0 +1,33 @@
+{
+  "id": "task-e27456ad67b64bc292080ea3a8b92f26",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-02] Daemon: worktree branch policy in complete_task, workspace in get_context",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §2.8 and §7.2.\n\nObjective: make the two remaining daemon reads and checks honour the attempt's pinned workspace mode (WT-01, task-6cf120a38b344e72b7bab8b9faf806f1). A resumed session's wrapper reads the mode from get_context, and a worktree completion is checked against its own task branch.\n\nDeliverable:\n- tools/getContext.ts returns workspace: { mode, path, branch, target } from the task's open attempt. The shape is identical to WT-01's claim response. A task with no open attempt gets no field.\n- tools/completeTask.ts checkBranchPolicy: when the owning attempt is workspaceMode 'worktree', currentBranch must equal moe/task/<taskId>; anything else fails with BRANCH-POLICY-FAIL naming that branch. A missing currentBranch keeps today's warning path. Shared-mode attempts keep today's consolidationBranch pattern check byte-for-byte.\n\nNOT in scope: the claim side (WT-01); finalize_attempt (WT-03); wrappers; docs (WT-17).\n\nVerification: cd packages/moe-daemon && npm run build && npx vitest run src/tools/getContext.test.ts src/tools/completeTask.test.ts",
+  "definitionOfDone": [
+    "getContext.test.ts: a task whose open attempt is worktree mode returns workspace {mode:'worktree', path, branch, target} equal to the claim's; a shared attempt returns mode 'shared'; no open attempt returns no workspace field.",
+    "completeTask.test.ts: a worktree attempt with currentBranch moe/task/<taskId> completes; any other branch is refused with BRANCH-POLICY-FAIL naming moe/task/<taskId>.",
+    "completeTask.test.ts: existing shared-mode branch-policy cases pass unchanged (no edits to their assertions).",
+    "The verification command in the description exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-6cf120a38b344e72b7bab8b9faf806f1"
+  ],
+  "priority": "HIGH",
+  "order": 3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:47:54.623Z",
+  "updatedAt": "2026-10-30T11:47:54.623Z"
+}

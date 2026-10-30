@@ -1,0 +1,35 @@
+{
+  "id": "task-c4cccb84948c472d93263c9de60fed1d",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-05] Wrappers: launch every CLI inside the task worktree with per-worktree configs",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §5.1 and §5.2 (configs, agents copy, grok trust; the links are WT-06).\n\nObjective: in worktree mode the agent CLI edits W, never the control checkout, while still reaching the daemon through the control checkout.\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins:\n- cwd = W for claude, codex (exec -C W), gemini and grok (--cwd W). In ps1 that means Push-Location W for EVERY CLI, including the claude launch that today runs in the launcher's cwd.\n- MOE_PROJECT_PATH stays the control checkout. Export MOE_WORKTREE_PATH, MOE_TASK_BRANCH and MOE_LAND_TARGET from the claim's workspace. The proxy path stays the one resolved from the wrapper's own location.\n- Run the existing per-CLI config writers with W as the config root: W/.mcp.json (sh) or the ps1 temp --mcp-config (an interactive sh seat passes --mcp-config W/.mcp.json); W/.codex/config.toml; W/.gemini/settings.json; W/.grok/config.toml plus the grok trust grant for W.\n- Copy <control>/.moe/agents/*.md into W/.claude/agents/.\n- A config write failure prints MOE_WORKTREE_CREATE_FAILED, calls report_blocked and launches no CLI.\n- Cases in scripts/tests/postflight.sh and postflight.ps1. Depends on WT-04 (task-c20464ff64ca49fca4371dd9b5194364).\n\nNOT in scope: Serena root, the skills and memories links, the deps notice (WT-06); landing (WT-07 onward); shared-mode launches, which must stay byte-identical; docs (WT-18).\n\nVerification: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh (and on a Windows seat: node scripts/tests/postflight-safe.mjs powershell)",
+  "definitionOfDone": [
+    "postflight case (both harnesses, fake CLI that records its cwd and env): in worktree mode the CLI's cwd is W, MOE_PROJECT_PATH is the control checkout, and MOE_WORKTREE_PATH / MOE_TASK_BRANCH / MOE_LAND_TARGET match the claim's workspace.",
+    "postflight case: the per-CLI config lands in W (W/.mcp.json or the ps1 temp config, W/.codex/config.toml, W/.gemini/settings.json, W/.grok/config.toml) and the control checkout's copies are not rewritten.",
+    "postflight case: W/.claude/agents/*.md equals <control>/.moe/agents/*.md; a forced config-write failure prints MOE_WORKTREE_CREATE_FAILED and launches no CLI.",
+    "postflight: every existing shared-mode launch case passes unchanged.",
+    "Both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes (grep -oE diff over moe-agent.sh vs moe-agent.ps1 is empty).",
+    "The verification command exits 0; postflight.ps1 passes via node scripts/tests/postflight-safe.mjs powershell."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-c20464ff64ca49fca4371dd9b5194364"
+  ],
+  "priority": "HIGH",
+  "order": 6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:50:02.706Z",
+  "updatedAt": "2026-10-30T11:50:02.706Z"
+}

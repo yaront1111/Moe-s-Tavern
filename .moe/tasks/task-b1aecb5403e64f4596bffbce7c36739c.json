@@ -1,0 +1,28 @@
+{
+  "id": "task-b1aecb5403e64f4596bffbce7c36739c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: propose_rail records the task's assignee as the proposer, not the caller, so a governor's or QA's proposal shows up as the worker's",
+  "description": "Observed on 2026-10-30 at 11:41Z. governor-693b7073 called moe.propose_rail on task-de91373a, which worker-c2da129d had been assigned at 11:40:59Z. The stored proposal, prop-4fe44aac98c545819e94ed8e3f581e0b, records workerId \"worker-c2da129d\". The worker's own proposal, prop-da2a6c91, records the same id. In the IDE it therefore looks as if the worker filed the same waiver twice.\n\nCause: packages/moe-daemon/src/tools/proposeRail.ts:67 sets `workerId: task.assignedWorkerId || 'unknown'`. The tool's inputSchema has no workerId property (additionalProperties: false), so the caller's identity is never read. The proxy auto-injects workerId for the tools whose schema declares it, as moe.set_task_dependencies does.\n\nFix: add the optional `workerId` input (\"Caller worker ID (auto-injected by proxy)\") and record the caller as the proposer. Fall back to the assignee, then 'unknown', only when no caller id is supplied. Update the moe.propose_rail section of docs/MCP_SERVER.md, and docs/SCHEMA.md if it describes Proposal.workerId.\n\nOut of scope: proposal approval paths, the IDE rendering, and existing stored proposals.",
+  "definitionOfDone": [
+    "moe.propose_rail called with a workerId that differs from the task's assignee stores that caller's id as the proposal's workerId. Shown by a test in packages/moe-daemon/src/tools/proposeRail.test.ts.",
+    "A call without workerId still records the task's assignee (or 'unknown'), unchanged. Shown by a test.",
+    "The moe.propose_rail section of docs/MCP_SERVER.md documents the workerId input, and `cd packages/moe-daemon && npm test` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 292.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:43:48.172Z",
+  "updatedAt": "2026-10-30T11:43:48.172Z"
+}

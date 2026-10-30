@@ -1,0 +1,36 @@
+{
+  "id": "task-c20464ff64ca49fca4371dd9b5194364",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-04] Wrappers: provision the task worktree at worker pre-flight",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §1.1-§1.6, the §6.5 worker stop and the §7.2 guards.\n\nObjective: a worker seat whose claim says worktree mode gets its own locked, sparse git worktree W on moe/task/<taskId>, or stops loudly. It never falls back to the shared checkout. Shared mode is unchanged (epic rail 4).\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins, worker seats only:\n- Read `workspace` from the claim response (fresh claim) or get_context (resume), per WT-01/WT-02 (task-e27456ad67b64bc292080ea3a8b92f26). An absent field (older daemon) means shared mode.\n- In worktree mode, run the guards before any W work. Each failure calls report_blocked with its code and stops the seat:\n  - git >= 2.38: MOE_WORKTREE_UNSUPPORTED_GIT\n  - project is the git top level: MOE_WORKTREE_PROJECT_NOT_TOP\n  - control checkout HEAD is refs/heads/moe/control: MOE_CONTROL_NOT_FOLLOWING\n  - task bytes on a shared branch that the target lacks: MOE_WORKTREE_MODE_MISMATCH\n  - Windows path budget: MOE_WORKTREE_PATH_TOO_LONG\n- Create W with `git worktree add --lock --reason \"moe <taskId>\" --no-checkout -b moe/task/<taskId> W refs/heads/<target>` (cut from the LOCAL target; WT-09 adds the fetch), then `sparse-checkout set --no-cone '/*' '!/.moe/'`, then `read-tree -mu HEAD`.\n- Reuse W when `git worktree list --porcelain` shows it (D:\\ vs /mnt/d normalized), running `worktree repair` on a cross-OS reuse. Re-add W on an existing branch without -b. Warn MOE_WORKTREE_MOE_PRESENT if W/.moe exists.\n- Any git failure: MOE_WORKTREE_CREATE_FAILED. Remove only a half-made W with no commits beyond the target, report_blocked, no CLI launch.\n- In shared mode, an existing moe/task/<taskId> that is not fully landed means MOE_WORKTREE_MODE_MISMATCH and report_blocked. Add the 'fully landed' helper sh task_branch_landed / ps1 Test-MoeTaskBranchLanded (merge-tree of target and branch equals the target's tree, §1.7); WT-14 reuses it.\n- Cases in scripts/tests/postflight.sh and postflight.ps1.\n\nNOT in scope:\n- CLI cwd, env and configs (WT-05)\n- links and Serena (WT-06)\n- any landing (WT-07 onward)\n- the control follow and auto-switch (WT-13)\n- removal and sweep (WT-14)\n- docs (WT-18)\n\nChained after task-5998f871e03d4ed5ab21f214073d85b2, which edits the same wrappers.\n\nVerification: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh (and on a Windows seat: node scripts/tests/postflight-safe.mjs powershell)",
+  "definitionOfDone": [
+    "postflight case (both harnesses): a worktree-mode worker claim creates a locked worktree at .worktrees/<taskId> on moe/task/<taskId>, W/.moe does not exist, and the control checkout's HEAD, index and files are unchanged.",
+    "postflight case: a second session of the same task reuses W (no new worktree add, its dirt intact); with the branch present but W missing, W is re-added on that branch without -b.",
+    "postflight cases: each guard (git < 2.38 via a stub, project not top level, control not on moe/control, mode mismatch) prints its code, calls report_blocked and launches no CLI.",
+    "postflight case: shared mode with an unlanded moe/task/<taskId> prints MOE_WORKTREE_MODE_MISMATCH; shared mode without one behaves exactly as before (existing cases unchanged).",
+    "Both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes: diff of `grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*'` over moe-agent.sh and moe-agent.ps1 (sort -u) is empty.",
+    "node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh exits 0; postflight.ps1 passes via node scripts/tests/postflight-safe.mjs powershell."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-e27456ad67b64bc292080ea3a8b92f26",
+    "task-5998f871e03d4ed5ab21f214073d85b2"
+  ],
+  "priority": "HIGH",
+  "order": 5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:49:26.469Z",
+  "updatedAt": "2026-10-30T11:49:26.469Z"
+}
