@@ -8,6 +8,9 @@ import { test } from 'node:test';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const required = ['certified-provider.json', 'multipass.mjs', 'doctor.mjs', 'cli.mjs', 'vm-control.mjs'];
+// CQ-R10d2's pinned agent cache must ship too. Nothing wires it yet, so onboarding.mjs does not check it and
+// it stays out of `required`, which the onboarding refusal row walks.
+const shipped = [...required, 'agent-binaries.json', 'agent-cache.mjs'];
 const excluded = ['sentinel.test.mjs', 'nested/sentinel.spec.mjs', 'nested/tests/data.json',
   'nested/__tests__/data.json', 'nested/fixtures/data.json', 'nested/__fixtures__/data.json'];
 const excludedPatterns = ['**/*.test.*', '**/*.spec.*', '**/tests/**', '**/__tests__/**', '**/fixtures/**', '**/__fixtures__/**'];
@@ -58,11 +61,13 @@ function requireBundle(fixture) {
 test('actual VS Code bundler copies importable provider modules and pinned manifest', async t => {
   const work = fixture(t);
   requireBundle(work);
-  for (const name of required) {
+  for (const name of shipped) {
     const output = path.join(work.output, 'scripts/local-runner', name);
     assert.ok(existsSync(output), `Missing copied provider asset ${name}`);
     assert.deepEqual(readFileSync(output), readFileSync(path.join(root, 'scripts/local-runner', name)));
   }
+  const agents = await import(pathToFileURL(path.join(work.output, 'scripts/local-runner/agent-cache.mjs')).href);
+  assert.deepEqual(await agents.loadAgentManifest(), JSON.parse(readFileSync(path.join(root, 'scripts/local-runner/agent-binaries.json'), 'utf8')));
   const doctor = await import(pathToFileURL(path.join(work.output, 'scripts/local-runner/doctor.mjs')).href);
   assert.equal((await doctor.loadCertifiedProvider()).images.x64.sha256, '04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94');
   const result = await doctor.runDoctor({ host: { platform: 'linux', arch: 'x64' }, run: async (_exe, args) => ({

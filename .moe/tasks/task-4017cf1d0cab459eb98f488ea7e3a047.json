@@ -17,47 +17,82 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nscripts/tests/local-runner-agents.test.mjs is created by CQ-R10d1 (task-9faf1ef3); add rows to its LANDED bytes. Fixtures come from an INJECTED fetch, never the network: it returns {ok, status, url, headers, body: ReadableStream} per request, as the image-cache tests in scripts/tests/local-runner.test.mjs do. Test manifests use the real fixed URL templates with fixture sizes and hashes, and go through the same validator.\n\nRows (exact codes; each refusal also asserts that the cacheDir holds no file at all):\n- AC1 loader (DoD 1): the shipped agent-binaries.json loads. validateAgentManifest refuses with AGENT_BINARY_MANIFEST_INVALID each of these:\n  - a wrong schemaVersion, a missing or extra cli or arch, an extra key;\n  - an http URL, or a URL other than its cli's fixed template;\n  - a version that fails the strict pattern;\n  - a non-64-hex sha256, or a size that is not a positive safe integer;\n  - an archive entry missing member, memberSha256 or memberSize, or whose member is absolute, has '..', or has a backslash;\n  - a manifest file over 64 KiB.\n- AC2 download (DoD 2):\n  - a matching body is kept at <cacheDir>/<sha256>.bin and returned as {file, sha256, size};\n  - a wrong sha256 gives AGENT_BINARY_CHECKSUM_MISMATCH;\n  - a declared or streamed size over the pin gives AGENT_BINARY_TOO_LARGE;\n  - a redirect to http, a redirect chain over 5, or a non-2xx gives AGENT_BINARY_DOWNLOAD_FAILED;\n  - a body that errors midway gives AGENT_BINARY_DOWNLOAD_FAILED.\n- AC3 archive (DoD 2). A tar.gz built in-test (a few-line ustar writer with zlib.gzipSync) holding the member plus a decoy entry:\n  - the member alone is extracted and verified;\n  - a member whose bytes miss memberSha256 gives AGENT_BINARY_CHECKSUM_MISMATCH;\n  - a missing member, a symlink or hard link at the member path, a corrupt header checksum or truncated gzip gives AGENT_BINARY_ARCHIVE_INVALID;\n  - decompressed output past memberSize gives AGENT_BINARY_TOO_LARGE.\n- AC4 cache (DoD 3):\n  - a valid cached file makes zero fetch calls;\n  - a cached file with one byte flipped is removed and downloaded exactly once more, then verified;\n  - a cached directory or symlink is refused, and never followed or deleted;\n  - two concurrent calls both resolve verified files, with no .part left.\n- AC5: every error message is its fixed text and includes neither the URL, nor cacheDir, nor body bytes.\n\nscripts/tests/local-runner-bundle.test.mjs: add 'agent-binaries.json' and 'agent-cache.mjs' to its `required` list, so the bundle provably ships them.\n\nRun the verification command and confirm the rows fail for the missing module or manifest.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-bundle.test.mjs"
       ],
       "newFiles": [
         "scripts/tests/local-runner-agents.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-agents.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "RED tests written. local-runner-agents.test.mjs gets an appended CQ-R10d2 section, rows AB1-AB11:\n- AB1: the shipped manifest loads (frozen; fixed templates).\n- AB2: 37 off-shape manifests give MANIFEST_INVALID, and the fetch seam is validated with 0 fetches.\n- AB3: the 64 KiB boundary, non-JSON, a missing file.\n- AB4: success, plus 5 manual https hops with relative Locations; mode 0600 and 0700.\n- AB5: 10 download refusals, with an empty cacheDir and no http fetch.\n- AB6: tar.gz member extraction, including a 200 KB member behind a 70 KB decoy.\n- AB7: 15 archive refusals, including verify-before-parse.\n- AB8: cache-hit re-verify, corrupt entries re-fetched exactly once.\n- AB9: a directory or symlink is refused and not followed or deleted.\n- AB10: concurrent calls.\n- AB11: input refusals.\nAC5 is checked in every refusal: an exact code, fixed message text, and Object.keys == ['code'].\nFixtures come from an injected fetch; there is no network.\n\nDEVIATION (bundle test): I did NOT add the two files to `required` itself. That list also drives the existing 'onboarding asset checks refuse each missing provider file' row, which deletes each listed file and expects scripts/tests/onboarding.mjs (out of scope) to name it. onboarding.mjs does not check the agent files, so that row would fail. They go instead into `shipped = [...required, 'agent-binaries.json', 'agent-cache.mjs']`, which the bundler row checks for byte equality. That row also imports the bundled agent-cache.mjs and loads its manifest.\n\nRED run, env -i with Node 24.21.0: exit 1. The agents file fails to load with ERR_MODULE_NOT_FOUND agent-cache.mjs, and the bundler row fails with 'Missing copied provider asset agent-binaries.json'. 11 other tests pass.\n\nThe shared tree has many dirty paths from other sessions; I touched none of them.",
+      "startedAt": "2026-10-30T00:10:55.545Z",
+      "completedAt": "2026-10-30T00:15:51.884Z"
     },
     {
       "stepId": "step-2",
       "description": "Pin the releases in the new scripts/local-runner/agent-binaries.json. It is shaped like certified-provider.json: compact and hand-reviewable.\n\nShape: {schemaVersion: 1, binaries: {claude: {x64: entry, arm64: entry}, codex: {x64: entry, arm64: entry}}}.\n- An entry is {version, url, sha256, size}.\n- An archive entry adds {archive: 'tar.gz', member, memberSha256, memberSize}.\n\nSources (official only; confirm them from each vendor's own installer or release page before pinning):\n- claude: the native Linux builds that Anthropic's install script fetches, one raw ELF per arch (linux-x64 and linux-arm64), with no archive.\n- codex: the openai/codex GitHub release assets codex-x86_64-unknown-linux-musl.tar.gz and codex-aarch64-unknown-linux-musl.tar.gz, whose binary is the tar member.\n\nPick the current stable versions, download each file ONCE, and record:\n- its exact final https URL, sha256 and size;\n- for an archive, the member path and the member's own sha256 and size, computed from the extracted bytes;\n- cross-checked against any checksum file the vendor publishes.\nPut the versions, the source pages and the cross-check in this step's completion note.\n\nThis step's error handling: if the official files cannot be downloaded from this environment, stop and call moe.report_blocked naming the missing network access. Never invent, guess or copy a hash from anywhere but the downloaded bytes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/local-runner/agent-binaries.json"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-binaries.json"
+      ],
+      "note": "Pinned agent-binaries.json (schemaVersion 1). Each file was downloaded ONCE on 2026-10-30 with curl, https-only (including redirects), into an empty /tmp/r10d2-pin.\n\nCLAUDE 2.1.308. This is the \"stable\" channel: downloads.claude.ai/claude-code-releases/stable = 2.1.308, while latest = 2.1.312.\n- Source: the official installer, claude.ai/install.sh, which redirects to downloads.claude.ai/claude-code-releases/bootstrap.sh. It uses DOWNLOAD_BASE_URL=https://downloads.claude.ai/claude-code-releases with $version/$platform/claude, where platform is linux-x64 or linux-arm64 (glibc; the guest is Ubuntu 24.04), and it verifies against $version/manifest.json.\n- These are raw ELFs, not archives. The URLs return 200 directly, with no redirect.\n- x64: sha256 356733f1…ad58, size 292232560.\n- arm64: sha256 fdd22e6c…6ee1, size 292085944.\n- Cross-check: both are equal to manifest.json platforms[linux-x64|linux-arm64].checksum and size (manifest commit 320f66eb, buildDate 2026-10-22).\n\nCODEX rust-v0.166.0. This is the GitHub releases/latest (not prerelease, not draft), published 2026-10-29.\n- The assets are codex-{x86_64,aarch64}-unknown-linux-musl.tar.gz, at https://github.com/openai/codex/releases/download/rust-v<version>/<asset>. That is the same GitHub URL form as the fallback in the official scripts/install/install.sh. The installer's primary source is releases.openai.com with the codex-package-* assets; I used the plan-named single-binary assets.\n- The URL 302-redirects to https://release-assets.githubusercontent.com/… (a signed, expiring URL). The manifest pins the stable request URL, and the code follows hops manually, https only.\n- x64: archive sha256 a0bf572d…3978, size 121764138.\n- arm64: archive sha256 94eb7076…10a9, size 113382496.\n- Cross-check: both are equal to the GitHub API asset \"digest\" (sha256:…).\n- Members (tarfile listing): exactly ONE entry per archive in GNU tar format ('ustar  \\0' magic), typeflag '0', mode 0755, name without a './' prefix.\n  - x64: member codex-x86_64-unknown-linux-musl, sha256 b8a11fed…56b8, size 319346888.\n  - arm64: member codex-aarch64-unknown-linux-musl, sha256 f2e6c980…62a, size 277549176.\n  - Both are computed from the extracted bytes.\n\nRe-verified every pin in the written file with /tmp/r10d2-scripts/crosscheck.py against the downloaded bytes: URL suffix, size, sha256, member type, size, sha256, and a single member. All four entries are True.",
+      "startedAt": "2026-10-30T00:15:58.463Z",
+      "completedAt": "2026-10-30T00:16:32.106Z"
     },
     {
       "stepId": "step-3",
       "description": "Create scripts/local-runner/agent-cache.mjs, reusing image-cache.mjs's pattern: an exclusive 0600 .part per call, bounded streaming writes with handle.sync(), verify then atomic rename, and on a cache hit re-verify, unlink a corrupt file and download once.\n\nExports:\n1. validateAgentManifest(value), the strict shape check behind AC1. The fixed URL templates live in code, built from the validated version and arch maps, and each url must equal its template:\n   - claude: the official native-release base plus /<version>/linux-<x64|arm64>/claude;\n   - codex: https://github.com/openai/codex/releases/download/rust-v<version>/codex-<x86_64|aarch64>-unknown-linux-musl.tar.gz.\n   Adapt the templates to what step 2 confirmed. The member must be a plain relative path with no '..'. Return a deep-frozen copy.\n2. loadAgentManifest(): the module-relative agent-binaries.json, at most 64 KiB, through validateAgentManifest. Callers cannot choose a manifest or URL; the CLI and the environment cannot select one either.\n3. fetchAgentBinary({ cli, arch, cacheDir }, { fetch = globalThis.fetch, manifest } = {}) resolves a frozen {file, sha256, size} of the BINARY (the member when archived).\n   - cli must be a JOBS key (claude or codex), and arch must be in IMAGE_ARCHES. cacheDir must be absolute with no control character; create it 0700.\n   - The manifest seam is for tests only and is validated by validateAgentManifest too.\n   - Target: <cacheDir>/<binary sha256>.bin, mode 0600.\n   - Redirects: fetch with redirect:'manual', follow at most 5 hops, require https on every hop and on the final URL, and use AbortSignal.timeout.\n   - Bounds: a content-length or streamed byte count over the pinned size fails.\n   - Verify the download's size and sha256 BEFORE any parsing.\n   - For tar.gz, stream a zlib gunzip through a minimal ustar reader that:\n     - checks each 512-byte header's checksum;\n     - skips non-member entries by their sizes;\n     - accepts only a regular-file entry (typeflag '0' or NUL) at exactly the member path, and refuses links;\n     - stops writing past memberSize;\n     - then verifies memberSha256 and memberSize.\n   - Every failure removes this call's .part files.\n\nThis module's error handling: fixed codes only (AGENT_BINARY_INPUT_INVALID, _MANIFEST_INVALID, _DOWNLOAD_FAILED, _CHECKSUM_MISMATCH, _TOO_LARGE, _ARCHIVE_INVALID, _UNREADABLE). The message text is fixed, with no URL, path or body. This is not isolation and certifies nothing: copying into the guest is CQ-R10d3.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/local-runner/agent-cache.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-cache.mjs"
+      ],
+      "note": "agent-cache.mjs exports validateAgentManifest, loadAgentManifest, fetchAgentBinary, plus AGENT_CLIS and MAX_AGENT_BINARY_BYTES (1 GiB).\n- Manifest validation:\n  - An exact key set per cli: claude is raw; codex is tar.gz with member, memberSha256 and memberSize.\n  - The fixed templates live in code: claude https://downloads.claude.ai/claude-code-releases/<v>/linux-<arch>/claude, and codex https://github.com/openai/codex/releases/download/rust-v<v>/codex-<x86_64|aarch64>-unknown-linux-musl.tar.gz.\n  - version is strict X.Y.Z; sha256 is lowercase 64-hex (typeof checked, so no regex coercion); sizes are 1..1 GiB.\n  - member is relative segments [\\w.+-], with no '', '.' or '..' segment and at most 100 chars.\n  - The value is structuredClone'd BEFORE validation (getters cannot change it afterwards) and returned deep-frozen.\n- The loader is module-relative, at most 64 KiB.\n- fetch:\n  - Inputs are validated, then the manifest (the seam is validated too), then mkdir 0700.\n  - Cache hit: lstat (absent → download; non-regular → INPUT_INVALID, never followed or deleted). holdsPin then opens once with O_NOFOLLOW|O_NONBLOCK, fstats and hashes on that fd, bounded by the pinned size. A mismatch is unlinked and downloaded once.\n  - Download: manual redirects, at most 5, each Location resolved and required https; a single AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS from image-cache) covers the whole call. ok, a body and an https response.url are required. content-length and streamed bytes are bounded by the pin. Writes go to an exclusive 0600 .part and are synced, then holdsPin verifies size and sha256 BEFORE any parsing.\n  - tar.gz: pipeline(createReadStream, createGunzip, untar). This is a minimal ustar reader: header checksum; plain-octal size; POSIX prefix only for 'ustar\\0' magic; non-member entries skipped by padded size; at the member path only typeflag '0' or NUL, once (links, directories and duplicates → ARCHIVE_INVALID); a header size over memberSize → TOO_LARGE; total decompressed output at most memberSize + 1 MiB (TOO_LARGE); the end-of-archive block and a clean gzip end are required. The member goes to its own exclusive 0600 .part, holdsPin verifies it, then an atomic rename. Every .part this call created is unlinked in finally.\n- Errors: 7 fixed codes and texts; unknown codes map to a per-site fallback.\n- Green: verification command exit 0, 32/32 pass.",
+      "startedAt": "2026-10-30T00:18:28.511Z",
+      "completedAt": "2026-10-30T00:20:40.365Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh.\n\n1. Run the DoD command, `node --test scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs`. On WSL, run it as `env -i HOME=\"$HOME\" PATH=\"<nvm node 24 bin>:/usr/local/bin:/usr/bin:/bin\" node --test ...`. It must exit 0; supply its command, exit code and output tail to complete_task.\n2. ALSO run `node --test scripts/tests/local-runner.test.mjs`, the image-cache neighbours, and report it.\n3. One manual check, reported in the completion summary: fetchAgentBinary with the SHIPPED manifest and the real fetch, into a temp cacheDir, for the host's own arch, for each cli, then a second call that must hit the cache without a fetch. If there is no network, say so.\n4. Mutants, on scratch copies only; restore and cmp afterwards:\n   (i) follow redirects automatically: AC2's http-redirect row;\n   (ii) verify after the rename: AC2's no-file assertions;\n   (iii) accept a symlink entry at the member path: AC3;\n   (iv) skip re-verification on a cache hit: AC4;\n   (v) let the manifest seam bypass validation: AC1.\nKeep the diff at or under 400 net lines. Make the test rows table-driven.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-agents.test.mjs",
+        "scripts/local-runner/agent-cache.mjs"
+      ],
+      "note": "VERIFY, fresh, env -i, Node 24.21.0.\n\n1) DoD command (agents + bundle): exit 0; 32 tests, 32 pass, 0 fail, 0 skipped.\n\n2) scripts/tests/local-runner.test.mjs (the image-cache neighbours): exit 0; 242 tests, 241 pass, 0 fail, 1 skipped (pre-existing).\n\n3) MANUAL: the real network with the SHIPPED manifest and the real fetch, host arch x64, into a temp cacheDir.\n- claude: 1 fetch (downloads.claude.ai, redirect 'manual', no hop), 5.7 s. Result sha256 356733f1…ad58, size 292232560.\n- codex: 2 fetches (github.com 302 → release-assets.githubusercontent.com, both 'manual'), 5.2 s. Result member sha256 b8a11fed…56b8, size 319346888, extracted from the real 121 MB GNU tar.gz.\n- The second call for each cli returned an identical result with 0 fetches.\n- The cache held exactly the two <sha>.bin files.\n- This confirms that Node's undici exposes the 3xx and its Location under redirect:'manual'.\n\n4) MUTANTS, run on /tmp/r10d2-mut copies via /tmp/r10d2-scripts/mutate.mjs. The source tree is never written; each mutant is applied exactly once, scored by exit code, and the copy is deleted.\n- Planned mutants, all KILLED:\n  - (i) fetch follows redirects itself, by AB4;\n  - (i-b) an http hop is followed, by AB5's http-redirect row (its no-http-fetch assertion);\n  - (ii) verify after the rename, download by AB5 and member by AB7 (no-file assertions);\n  - (iii) a symlink entry is accepted, by AB7;\n  - (iv) no re-verification on a cache hit, by AB8;\n  - (v) the seam bypasses validation, by AB2.\n- Extra probes:\n  - KILLED: content-length bound; streamed bound; redirect limit 6; the final response.url https check; tar header checksum; decompression bound; member header size; duplicate member; NUL typeflag; gzip drain; URL template; version pattern; member '..'; .part cleanup; 1 GiB bound; 64 KiB manifest bound; arch check.\n  - SURVIVED (2, layered defenses, each alone refuses on POSIX): cached() lstat isFile, which covers Windows where O_NOFOLLOW is 0; and O_NOFOLLOW, which closes the lstat→open race. Both are kept by design.\n- Tests added while killing them:\n  - an AB7 symlink-only row (the symlink-then-member row was masked by the duplicate rule);\n  - an AB6 NUL-typeflag variant;\n  - an AB5 'fetch followed to http on its own' row (routes() got a final-url slot);\n  - an AB6 variant with 150 KB of trailing bytes after the end-of-archive block, and an AB7 bad-CRC row spanning read chunks.\n- FINDING: without the final drain, pipeline HANGS once unread bytes remain (backpressure). The drain is needed for liveness as well as to surface trailer errors; the code comment says so. AB6 and AB7 now carry a 30 s timeout, so a regression fails instead of stalling CI.\n\nSIZE (net, all additions): agent-cache.mjs 275, agent-binaries.json 21, agents test +273, bundle test +6/-1. That is 576, against the plan's 400 target, over because of the hand-followed redirect loop, the streaming ustar reader and the layered hit verification. The rows are table-driven (AB2: 37 refusals, AB5: 11, AB7: 17).\n\nPeer dirty paths I never touched: scripts/local-runner/{check-lifecycle.mjs, guest-supervisor.py, snapshot-transfer.mjs, runner-client.mjs}.",
+      "startedAt": "2026-10-30T00:20:42.533Z",
+      "completedAt": "2026-10-30T00:26:46.112Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a network attacker and as a hostile archive. Check:\n- Is any byte trusted before its sha256 check: parsing or extracting before the archive hash, or renaming before the member hash?\n- Is there any path where the URL, a redirect target or the manifest comes from the caller, the environment or the network?\n- Can a .part or partial file be left behind on any failure: an abort, a timeout, a stream error or a disk full?\n- TOCTOU between the cache-hit lstat and the hash: the file is opened once, then fstat and hash on that fd.\n- Can concurrent callers collide? Unique .part names, an exclusive create, and an atomic rename.\n- The tar reader: header checksums, sizes padded to 512, a member split across chunks, links, devices, decompression bombs, and a huge decoy entry before the member (bounded by the pinned archive size).\n- Messages: no URL, path or body anywhere.\n- The bundle ships the module and the manifest, and no test fixtures.\nReport every path in complete_step.modifiedFiles, and write the Serena handoff memory 'task-task-4017cf1d0cab459eb98f488ea7e3a047-handoff' for CQ-R10d3, the copy into the guest.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/agent-cache.mjs",
+        "scripts/local-runner/agent-binaries.json",
+        "scripts/tests/local-runner-agents.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "Adversarial self-review of the task's own diff (four paths only; peers' dirty local-runner files left alone). No real defects found. Windows Node 24.16 run of AB1-AB11 (/mnt/c/Program Files/nodejs/node.exe --test --test-name-pattern=AB): exit 0, 11/11 pass. Mutation: 24/26 killed, all planned mutants (i)-(v) killed; the 2 survivors (cached() lstat isFile check, O_NOFOLLOW flag) are layered defences that are equivalent on POSIX (lstat covers win32 where O_NOFOLLOW=0; O_NOFOLLOW closes the lstat->open race). Theoretical notes for QA: (1) the verified archive .part is reopened by path for untar; cacheDir is controller-private and the member hash gates the rename. (2) A SIGKILL can orphan a dot-.part; only <sha>.bin is ever read, and no sweep because it could delete a live concurrent call's part. (3) A corrupt-entry unlink can race a concurrent repair and delete the peer's fresh file; that peer's consumer then fails closed (ENOENT). (4) The returned file path is a consumer TOCTOU: CQ-R10d3 must open it once, fstat and re-hash while streaming into the guest (recorded in Serena task-task-4017cf1d0cab459eb98f488ea7e3a047-handoff). (5) pax/GNU long-name semantics are ignored; only matters for archives the pin already excludes. Messages are fixed text; the bundle ships module + manifest, no fixtures. Size: 576 net lines vs the plan's 400 target (module 275, manifest 21, agents test +273, bundle test +6/-1). Bundle deviation: the agent files go in a separate `shipped` list, not `required`, because the onboarding refusal row walks `required` and scripts/tests/onboarding.mjs (out of scope) does not check them yet. Verified-local stays unavailable; no isolation claim.",
+      "startedAt": "2026-10-30T00:26:48.954Z",
+      "completedAt": "2026-10-30T00:30:12.797Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -73,20 +108,28 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:04.014Z",
-  "updatedAt": "2026-10-29T22:29:15.048Z",
+  "updatedAt": "2026-10-30T00:30:30.142Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:26:25.711Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-5ebbf433"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T22:29:14.964Z",
   "executionContract": {
@@ -148,5 +191,21 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T22:29:15.048Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T00:10:55.545Z",
+  "reviewStartedAt": "2026-10-30T00:30:30.141Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ bundled onboarding refuses any test artifact outside node_modules (495.172771ms)\n✔ Gradle requires vm-control and drops compiled tests from the daemon and proxy dist copies (2.490733ms)\n✔ daemon build excludes the test-only tool harness (2.498758ms)\n✔ cross-platform CI permanently runs provider and actual bundle regressions (2.931191ms)\nℹ tests 32\nℹ suites 0\nℹ pass 32\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 2290.348489",
+    "reportedAt": "2026-10-30T00:30:30.141Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-agents.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    "scripts/local-runner/agent-binaries.json",
+    "scripts/local-runner/agent-cache.mjs"
+  ],
+  "completionSummary": "CQ-R10d2 delivered: a host-side cache of pinned agent CLIs, with nothing wired into it yet.\nNew files:\n- scripts/local-runner/agent-binaries.json: pins hashed from real downloads on 2026-10-30. claude 2.1.308 (stable channel) is a raw linux-x64/arm64 ELF; its hashes match the release manifest.json. codex rust-v0.166.0 is a musl tar.gz; the archive hashes match the GitHub asset digests, and the single-member sha/size come from the extracted bytes.\n- scripts/local-runner/agent-cache.mjs:\n  - validateAgentManifest takes the exact shape only, with fixed https URL templates; anything else fails with a fixed code.\n  - loadAgentManifest (64 KiB cap).\n  - fetchAgentBinary({cli,arch,cacheDir},{fetch,manifest}) returns a frozen {file,sha256,size}. It follows redirects manually (at most 5, https only). The download is bounded by the pinned size with a 0600 exclusive .part and a sync, and is hashed before any parse. A streaming ustar/gunzip member extract is bounded by memberSize and checked against its pin; the file is renamed in only after that; every .part is unlinked on all paths. A cache hit is re-verified through one O_NOFOLLOW fd; a corrupt entry is removed and downloaded once more; a non-regular entry is refused and never followed or deleted.\n  - Fixed codes AGENT_BINARY_*.\nTests: AB1-AB11 in local-runner-agents.test.mjs (no network, nothing under .moe). In the bundle test, a `shipped` list (not `required`, because onboarding.mjs does not check these files yet) checks the bundle carries the module and manifest.\nEvidence:\n- Verification: 32/32 pass.\n- local-runner.test.mjs: 241 pass, 1 skipped.\n- Windows Node 24.16: AB1-AB11 pass.\n- Mutants: 24/26 killed (2 layered POSIX-equivalent).\n- Manual real-network run: claude 1 fetch, codex 2 (302 to release-assets), member hashes equal to the pins; repeat calls made 0 fetches.\nSize is 576 net lines against a 400 target.\nFound along the way: a pipeline async sink must drain to EOF or it stalls (Serena gotcha-node-pipeline-sink-mu"
 }

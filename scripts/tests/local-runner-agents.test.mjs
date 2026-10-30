@@ -304,3 +304,276 @@ test('SH9 buildUserData installs the repo shim and tools.json, and refuses a mis
     if (at === 0) assert.throws(() => copy.buildUserData({ ...input, supervisor: Buffer.alloc(0) }), { code: 'BOOTSTRAP_INPUT_INVALID' });
   }
 });
+
+// CQ-R10d2: the host's pinned agent CLI cache (rows AB1-AB11). Bodies come from an injected fetch over fixture routes,
+// never the network; test manifests keep the shipped fixed URLs and swap in fixture sizes and hashes.
+import { existsSync, lstatSync, mkdirSync, readdirSync, statSync, symlinkSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
+import { fetchAgentBinary, loadAgentManifest, validateAgentManifest } from '../local-runner/agent-cache.mjs';
+
+const SHIPPED = JSON.parse(readFileSync(join(RUNNER, 'agent-binaries.json'), 'utf8'));
+const MEMBER = SHIPPED.binaries.codex.x64.member;
+const CDN = 'https://cdn.fixture.test';
+const AGENT_MESSAGES = {
+  AGENT_BINARY_INPUT_INVALID: 'The agent binary request was invalid.',
+  AGENT_BINARY_MANIFEST_INVALID: 'The installed agent binary manifest is invalid or unavailable.',
+  AGENT_BINARY_DOWNLOAD_FAILED: 'The pinned agent binary could not be downloaded.',
+  AGENT_BINARY_CHECKSUM_MISMATCH: 'The agent binary did not match its pinned checksum.',
+  AGENT_BINARY_TOO_LARGE: 'The agent binary exceeded its pinned size.',
+  AGENT_BINARY_ARCHIVE_INVALID: 'The agent binary archive was malformed.',
+  AGENT_BINARY_UNREADABLE: 'The cached agent binary could not be read.',
+};
+const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+const [CLAUDE_BYTES, CODEX_BYTES] = ['claude', 'codex'].map(cli => Buffer.from(`#!fixture ${cli} binary\n`.repeat(64)));
+// Incompressible and deterministic, so gunzip output chunks split the member and its neighbours irregularly.
+const noise = size => Buffer.concat(Array.from({ length: Math.ceil(size / 32) }, (_, at) => createHash('sha256').update(String(at)).digest())).subarray(0, size);
+// AC5: a refusal carries only its fixed code and text, never a URL, a path or body bytes.
+const refused = code => error => assert.deepEqual([error.code, error.message, Object.keys(error)], [code, AGENT_MESSAGES[code], ['code']]) ?? true;
+const urlOf = (cli, arch) => SHIPPED.binaries[cli][arch].url;
+const binOf = (cacheDir, bytes) => ({ file: join(cacheDir, `${sha(bytes)}.bin`), sha256: sha(bytes), size: bytes.length });
+
+// The shipped manifest with one entry's pins replaced; its URL stays the real fixed template.
+function pinned(cli, arch, pins) {
+  const manifest = structuredClone(SHIPPED);
+  Object.assign(manifest.binaries[cli][arch], pins);
+  return manifest;
+}
+const claudeAt = arch => pinned('claude', arch, { sha256: sha(CLAUDE_BYTES), size: CLAUDE_BYTES.length });
+const codexAt = (archive, member = CODEX_BYTES) => pinned('codex', 'x64', { sha256: sha(archive), size: archive.length, memberSha256: sha(member), memberSize: member.length });
+
+// A minimal ustar writer for fixture archives; entries are [name, bytes, typeflag, linkname].
+function tar(entries) {
+  return Buffer.concat([...entries.flatMap(([name, bytes = Buffer.alloc(0), type = '0', link = '']) => {
+    const header = Buffer.alloc(512);
+    for (const [at, text] of [[0, name], [100, '0000644'], [124, bytes.length.toString(8).padStart(11, '0')], [148, ' '.repeat(8)],
+      [156, type], [157, link], [257, 'ustar\x0000']]) header.write(text, at, 'latin1');
+    header.write(`${header.reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, '0')}\0`, 148, 'latin1');
+    return [header, bytes, Buffer.alloc(-bytes.length & 511)];
+  }), Buffer.alloc(1024)]);
+}
+const DECOY = ['README.md', Buffer.from('decoy entry\n')];
+const ARCHIVE = gzipSync(tar([DECOY, [MEMBER, CODEX_BYTES]]));
+
+// An injected fetch over fixture routes: url -> [status, body chunks (an Error chunk fails the stream) or a thrown Error,
+// headers, the response's final url (as if the fetch had followed redirects itself)].
+function routes(table) {
+  const calls = [];
+  const fetch = async (url, init) => {
+    calls.push([url, init.redirect, init.signal instanceof AbortSignal]);
+    const [status = 404, chunks = [], headers = {}, final = url] = table[url] ?? [];
+    if (chunks instanceof Error) throw chunks;
+    const queue = [...chunks];
+    const body = new ReadableStream({ pull(controller) {
+      const next = queue.shift();
+      if (next === undefined) controller.close(); else if (next instanceof Error) controller.error(next); else controller.enqueue(new Uint8Array(next));
+    } }, { highWaterMark: 0 });
+    return { ok: status >= 200 && status < 300, status, url: final, headers: new Headers(headers), body };
+  };
+  return { fetch, calls };
+}
+// url -> CDN/hop/1 -> ... -> CDN/hop/count, which serves chunks; every Location after the first is relative.
+function redirected(url, count, chunks) {
+  const stops = [url, ...Array.from({ length: count }, (_, at) => `${CDN}/hop/${at + 1}`)];
+  return Object.fromEntries(stops.map((stop, at) => [stop, at === count ? [200, chunks] : [302, [], { location: at ? `/hop/${at + 1}` : stops[1] }]]));
+}
+function request(cli, arch, manifest, table, cacheDir = join(scratch(), 'agent cache')) {
+  const server = routes(table);
+  return { server, cacheDir, result: fetchAgentBinary({ cli, arch, cacheDir }, { fetch: server.fetch, manifest }) };
+}
+
+test('AB1 the shipped manifest loads deep-frozen, with every cli and arch at its fixed https template', async () => {
+  const manifest = await loadAgentManifest();
+  assert.deepEqual([manifest, Object.isFrozen(manifest.binaries.codex.arm64)], [SHIPPED, true]);
+  for (const [arch, triple] of [['x64', 'x86_64'], ['arm64', 'aarch64']]) {
+    const [claude, codex] = [manifest.binaries.claude[arch], manifest.binaries.codex[arch]];
+    assert.equal(claude.url, `https://downloads.claude.ai/claude-code-releases/${claude.version}/linux-${arch}/claude`);
+    assert.equal(codex.url, `https://github.com/openai/codex/releases/download/rust-v${codex.version}/codex-${triple}-unknown-linux-musl.tar.gz`);
+    assert.deepEqual([codex.archive, codex.member, 'archive' in claude], ['tar.gz', `codex-${triple}-unknown-linux-musl`, false]);
+  }
+});
+
+test('AB2 validateAgentManifest refuses every off-shape manifest, also through the fetch seam', async () => {
+  const version = (cli, bad) => m => { const entry = m.binaries[cli].x64; entry.url = entry.url.replace(entry.version, bad); entry.version = bad; };
+  const set = (cli, key, value) => m => { m.binaries[cli].x64[key] = value; };
+  for (const [label, change] of [
+    ['not an object', () => []], ['schemaVersion 2', m => { m.schemaVersion = 2; }], ['an extra top-level key', m => { m.mirror = CDN; }],
+    ['a missing cli', m => { delete m.binaries.codex; }], ['an extra cli', m => { m.binaries.grok = m.binaries.codex; }],
+    ['a missing arch', m => { delete m.binaries.claude.arm64; }], ['an extra arch', m => { m.binaries.claude.ia32 = m.binaries.claude.x64; }],
+    ['an extra entry key', set('claude', 'mirror', CDN)], ['archive keys on a raw cli', m => { Object.assign(m.binaries.claude.x64, { archive: 'tar.gz', member: 'claude', memberSha256: 'a'.repeat(64), memberSize: 1 }); }],
+    ['an http url', set('claude', 'url', urlOf('claude', 'x64').replace('https:', 'http:'))],
+    ['another host', set('codex', 'url', urlOf('codex', 'x64').replace('github.com', 'github.com.fixture.test'))],
+    ["another arch's url", set('codex', 'url', urlOf('codex', 'arm64'))],
+    ['a dot-segment version', version('claude', '1.0.0/..')], ['a prerelease version', version('codex', '0.166.0-alpha.1')],
+    ['an uppercase sha256', set('claude', 'sha256', SHIPPED.binaries.claude.x64.sha256.toUpperCase())], ['a short sha256', set('claude', 'sha256', 'a'.repeat(63))],
+    ['a zero size', set('claude', 'size', 0)], ['a fractional size', set('claude', 'size', 1.5)], ['a string size', set('claude', 'size', '1')],
+    ['a size over 1 GiB', set('claude', 'size', 2 ** 30 + 1)], ['a zip archive', set('codex', 'archive', 'zip')],
+    ...['member', 'memberSha256', 'memberSize'].map(key => [`an archive entry without ${key}`, m => { delete m.binaries.codex.x64[key]; }]),
+    ['a non-hex memberSha256', set('codex', 'memberSha256', 'g'.repeat(64))], ['a zero memberSize', set('codex', 'memberSize', 0)],
+    ...['/codex', '../codex', 'bin/../codex', 'bin\\codex', './codex', 'bin//codex', ''].map(member => [`member ${JSON.stringify(member)}`, set('codex', 'member', member)]),
+  ]) {
+    const manifest = structuredClone(SHIPPED);
+    assert.throws(() => validateAgentManifest(change(manifest) ?? manifest), refused('AGENT_BINARY_MANIFEST_INVALID'), label);
+  }
+  const seam = request('claude', 'x64', pinned('claude', 'x64', { url: urlOf('claude', 'x64').replace('https:', 'http:') }), {});
+  await assert.rejects(seam.result, refused('AGENT_BINARY_MANIFEST_INVALID'));
+  assert.deepEqual(seam.server.calls, []);
+});
+
+test('AB3 loadAgentManifest reads only its module-relative file, at most 64 KiB of valid JSON', async () => {
+  const dir = join(scratch(), 'local-runner');
+  cpSync(RUNNER, dir, { recursive: true });
+  const copy = await import(pathToFileURL(join(dir, 'agent-cache.mjs')).href);
+  const text = JSON.stringify(SHIPPED);
+  for (const [label, bytes, loads] of [['exactly 64 KiB', text.padEnd(65_536), true], ['64 KiB + 1', text.padEnd(65_537)], ['not JSON', 'pinned: no'], ['missing']]) {
+    if (bytes === undefined) rmSync(join(dir, 'agent-binaries.json')); else writeFileSync(join(dir, 'agent-binaries.json'), bytes);
+    if (loads) assert.deepEqual(await copy.loadAgentManifest(), SHIPPED, label);
+    else await assert.rejects(copy.loadAgentManifest(), refused('AGENT_BINARY_MANIFEST_INVALID'), label);
+  }
+});
+
+test('AB4 a body matching its pins is kept at <cacheDir>/<sha256>.bin, after at most 5 https-only manual redirects', async () => {
+  for (const [arch, hops, chunks] of [['x64', 0, [CLAUDE_BYTES]], ['arm64', 5, [CLAUDE_BYTES.subarray(0, 7), CLAUDE_BYTES.subarray(7)]]]) {
+    const table = redirected(urlOf('claude', arch), hops, chunks);
+    const { server, cacheDir, result } = request('claude', arch, claudeAt(arch), table);
+    const bin = binOf(cacheDir, CLAUDE_BYTES);
+    assert.deepEqual([await result, Object.isFrozen(await result)], [bin, true]);
+    assert.deepEqual(server.calls, Object.keys(table).map(url => [url, 'manual', true]));
+    assert.deepEqual([readdirSync(cacheDir), readFileSync(bin.file)], [[`${bin.sha256}.bin`], CLAUDE_BYTES]);
+    if (process.platform !== 'win32') assert.deepEqual([statSync(bin.file).mode & 0o777, statSync(cacheDir).mode & 0o777], [0o600, 0o700]);
+  }
+});
+
+test('AB5 a mismatched, oversized, redirected-to-http or interrupted download fails closed and leaves no file', async () => {
+  const url = urlOf('claude', 'x64');
+  const http = url.replace('https:', 'http:');
+  const flipped = Buffer.from(CLAUDE_BYTES);
+  flipped[9] ^= 1;
+  for (const [label, table, code] of [
+    ['bytes missing the sha256', { [url]: [200, [flipped]] }, 'AGENT_BINARY_CHECKSUM_MISMATCH'],
+    ['a short body', { [url]: [200, [CLAUDE_BYTES.subarray(1)]] }, 'AGENT_BINARY_CHECKSUM_MISMATCH'],
+    ['a declared length over the pin', { [url]: [200, [CLAUDE_BYTES], { 'content-length': String(CLAUDE_BYTES.length + 1) }] }, 'AGENT_BINARY_TOO_LARGE'],
+    ['a streamed body over the pin', { [url]: [200, [CLAUDE_BYTES, Buffer.from('x')]] }, 'AGENT_BINARY_TOO_LARGE'],
+    ['a redirect to http', { [url]: [301, [], { location: http }], [http]: [200, [CLAUDE_BYTES]] }, 'AGENT_BINARY_DOWNLOAD_FAILED'],
+    ['a fetch that followed to http on its own', { [url]: [200, [CLAUDE_BYTES], {}, http] }, 'AGENT_BINARY_DOWNLOAD_FAILED'],
+    ['a redirect chain over 5', redirected(url, 6, [CLAUDE_BYTES]), 'AGENT_BINARY_DOWNLOAD_FAILED'],
+    ['a redirect without a Location', { [url]: [302, []] }, 'AGENT_BINARY_DOWNLOAD_FAILED'],
+    ['a non-2xx status', {}, 'AGENT_BINARY_DOWNLOAD_FAILED'],
+    ['a rejected request', { [url]: [200, Object.assign(new Error(`${url} secret`), { code: 'ECONNRESET' })] }, 'AGENT_BINARY_DOWNLOAD_FAILED'],
+    ['a body that errors midway', { [url]: [200, [CLAUDE_BYTES.subarray(0, 9), new Error(`${url} secret`)]] }, 'AGENT_BINARY_DOWNLOAD_FAILED'],
+  ]) {
+    const { server, cacheDir, result } = request('claude', 'x64', claudeAt('x64'), table);
+    await assert.rejects(result, refused(code), label);
+    assert.deepEqual(readdirSync(cacheDir), [], label);
+    assert.deepEqual(server.calls.filter(([target]) => !target.startsWith('https://')), [], label);
+  }
+});
+
+// The timeouts turn a stalled pipeline (bytes left unread after the end-of-archive block) into a failure.
+test('AB6 only the pinned regular member of a verified tar.gz is extracted, verified and kept', { timeout: 30_000 }, async () => {
+  // The third archive has 150 KB past its end-of-archive block, spanning read chunks: drained, never parsed.
+  for (const [decoy, member, type, trailer = Buffer.alloc(0)] of [[DECOY, CODEX_BYTES, '0'], [['vendor/notes.bin', noise(70_001)], noise(200_003), '\0'],
+    [DECOY, CODEX_BYTES, '0', noise(150_000)]]) {
+    const archive = gzipSync(Buffer.concat([tar([decoy, [MEMBER, member, type]]), trailer]));
+    const { server, cacheDir, result } = request('codex', 'x64', codexAt(archive, member), redirected(urlOf('codex', 'x64'), 1, [archive.subarray(0, 100), archive.subarray(100)]));
+    const bin = binOf(cacheDir, member);
+    assert.deepEqual([await result, server.calls.length], [bin, 2]);
+    assert.deepEqual([readdirSync(cacheDir), readFileSync(bin.file).equals(member)], [[`${bin.sha256}.bin`], true]);
+    if (process.platform !== 'win32') assert.equal(statSync(bin.file).mode & 0o777, 0o600);
+  }
+});
+
+test('AB7 a bad archive or member fails closed and leaves no file', { timeout: 30_000 }, async () => {
+  const at = (bytes, type, link) => [MEMBER, bytes, type, link];
+  const raw = tar([DECOY, at(CODEX_BYTES)]);
+  const corrupt = Buffer.from(raw);
+  corrupt[136] ^= 1; // an mtime byte: the first header's checksum no longer adds up
+  const [flipped, gz] = [Buffer.from(CODEX_BYTES), gzipSync(raw)];
+  const badCrc = gzipSync(Buffer.concat([raw, noise(150_000)]));
+  flipped[9] ^= 1;
+  badCrc[badCrc.length - 8] ^= 1; // the tar decodes in full; gunzip's trailer check fails chunks after the end-of-archive block
+  for (const [label, archive, code, pins = {}] of [
+    ['archive bytes missing their sha256, before any parsing', Buffer.from('not gzip'), 'AGENT_BINARY_CHECKSUM_MISMATCH', { sha256: sha(ARCHIVE) }],
+    ['member bytes missing memberSha256', gzipSync(tar([at(flipped)])), 'AGENT_BINARY_CHECKSUM_MISMATCH'],
+    ['a short member', gzipSync(tar([at(CODEX_BYTES.subarray(1))])), 'AGENT_BINARY_CHECKSUM_MISMATCH'],
+    ['a member over memberSize', gzipSync(tar([at(Buffer.concat([CODEX_BYTES, Buffer.from('x')]))])), 'AGENT_BINARY_TOO_LARGE'],
+    ['a decoy past the decompression bound', gzipSync(tar([['pad', Buffer.alloc(2 ** 20 + 1)], at(CODEX_BYTES)])), 'AGENT_BINARY_TOO_LARGE'],
+    ['no member', gzipSync(tar([DECOY])), 'AGENT_BINARY_ARCHIVE_INVALID'],
+    ['the member under another path', gzipSync(tar([[`./${MEMBER}`, CODEX_BYTES]])), 'AGENT_BINARY_ARCHIVE_INVALID'],
+    ['a symlink at the member path', gzipSync(tar([at(undefined, '2', '/usr/bin/evil')])), 'AGENT_BINARY_ARCHIVE_INVALID'],
+    ['a symlink, then a regular file, at the member path', gzipSync(tar([at(undefined, '2', '/usr/bin/evil'), at(CODEX_BYTES)])), 'AGENT_BINARY_ARCHIVE_INVALID'],
+    ['a hard link at the member path', gzipSync(tar([at(undefined, '1', DECOY[0])])), 'AGENT_BINARY_ARCHIVE_INVALID'],
+    ['a directory at the member path', gzipSync(tar([at(undefined, '5')])), 'AGENT_BINARY_ARCHIVE_INVALID'],
+    ['a duplicate member', gzipSync(tar([at(CODEX_BYTES), at(CODEX_BYTES)])), 'AGENT_BINARY_ARCHIVE_INVALID'],
+    ['a corrupt header checksum', gzipSync(corrupt), 'AGENT_BINARY_ARCHIVE_INVALID'],
+    ['a truncated gzip', gz.subarray(0, gz.length - 12), 'AGENT_BINARY_ARCHIVE_INVALID'],
+    ['a gzip with a bad CRC', badCrc, 'AGENT_BINARY_ARCHIVE_INVALID'],
+    ['a tar cut inside the member', gzipSync(raw.subarray(0, 1536)), 'AGENT_BINARY_ARCHIVE_INVALID'],
+    ['a plain tar', raw, 'AGENT_BINARY_ARCHIVE_INVALID'],
+  ]) {
+    const { cacheDir, result } = request('codex', 'x64', pinned('codex', 'x64', { ...codexAt(archive).binaries.codex.x64, ...pins }), { [urlOf('codex', 'x64')]: [200, [archive]] });
+    await assert.rejects(result, refused(code), label);
+    assert.deepEqual(readdirSync(cacheDir), [], label);
+  }
+});
+
+test('AB8 a cache hit is re-verified without a fetch; a corrupt entry is removed and fetched exactly once', async () => {
+  const cacheDir = join(scratch(), 'agent cache');
+  const [bin, url] = [binOf(cacheDir, CLAUDE_BYTES), urlOf('claude', 'x64')];
+  const get = (body = CLAUDE_BYTES) => request('claude', 'x64', claudeAt('x64'), { [url]: [200, [body]] }, cacheDir);
+  mkdirSync(cacheDir);
+  writeFileSync(bin.file, CLAUDE_BYTES);
+  const hit = get();
+  assert.deepEqual([await hit.result, hit.server.calls.length], [bin, 0]);
+  const flipped = Buffer.from(CLAUDE_BYTES);
+  flipped[9] ^= 1;
+  for (const corrupt of [flipped, CLAUDE_BYTES.subarray(1), Buffer.concat([CLAUDE_BYTES, Buffer.from('x')])]) {
+    writeFileSync(bin.file, corrupt);
+    const repair = get();
+    assert.deepEqual([await repair.result, repair.server.calls.length, readFileSync(bin.file), readdirSync(cacheDir)], [bin, 1, CLAUDE_BYTES, [`${bin.sha256}.bin`]]);
+  }
+  writeFileSync(bin.file, flipped);
+  const tampered = get(flipped);
+  await assert.rejects(tampered.result, refused('AGENT_BINARY_CHECKSUM_MISMATCH'));
+  assert.deepEqual([tampered.server.calls.length, readdirSync(cacheDir)], [1, []]);
+  // An archived cli is keyed by its member: a cached member hits without fetching the archive.
+  writeFileSync(binOf(cacheDir, CODEX_BYTES).file, CODEX_BYTES);
+  const member = request('codex', 'x64', codexAt(ARCHIVE), {}, cacheDir);
+  assert.deepEqual([await member.result, member.server.calls.length], [binOf(cacheDir, CODEX_BYTES), 0]);
+});
+
+test('AB9 a cached directory or symlink is refused, never followed or deleted, and nothing is fetched', async () => {
+  const cacheDir = join(scratch(), 'agent cache');
+  const { file } = binOf(cacheDir, CLAUDE_BYTES);
+  mkdirSync(file, { recursive: true });
+  const dir = request('claude', 'x64', claudeAt('x64'), {}, cacheDir);
+  await assert.rejects(dir.result, refused('AGENT_BINARY_INPUT_INVALID'));
+  assert.deepEqual([dir.server.calls.length, statSync(file).isDirectory()], [0, true]);
+  if (process.platform === 'win32') return;
+  rmSync(file, { recursive: true });
+  const outside = join(cacheDir, '..', 'outside.bin');
+  writeFileSync(outside, CLAUDE_BYTES);
+  symlinkSync(outside, file);
+  const link = request('claude', 'x64', claudeAt('x64'), {}, cacheDir);
+  await assert.rejects(link.result, refused('AGENT_BINARY_INPUT_INVALID'));
+  assert.deepEqual([link.server.calls.length, lstatSync(file).isSymbolicLink(), readFileSync(outside)], [0, true, CLAUDE_BYTES]);
+});
+
+test('AB10 concurrent calls both resolve the verified file and leave no .part', async () => {
+  const cacheDir = join(scratch(), 'agent cache');
+  const table = { [urlOf('claude', 'x64')]: [200, [CLAUDE_BYTES.subarray(0, 50), CLAUDE_BYTES.subarray(50)]] };
+  const calls = [1, 2].map(() => request('claude', 'x64', claudeAt('x64'), table, cacheDir));
+  const bin = binOf(cacheDir, CLAUDE_BYTES);
+  assert.deepEqual(await Promise.all(calls.map(call => call.result)), [bin, bin]);
+  assert.deepEqual([readdirSync(cacheDir), readFileSync(bin.file), calls.map(call => call.server.calls.length)], [[`${bin.sha256}.bin`], CLAUDE_BYTES, [1, 1]]);
+});
+
+test('AB11 invalid requests are refused before any fetch or cache write', async () => {
+  const cacheDir = join(scratch(), 'agent cache');
+  const server = routes({});
+  const valid = { cli: 'claude', arch: 'x64', cacheDir };
+  for (const [input, options] of [
+    [{ ...valid, cli: 'grok' }, {}], [{ ...valid, cli: 'constructor' }, {}], [{ ...valid, arch: 'ia32' }, {}], [{ ...valid, cacheDir: 'relative cache' }, {}],
+    [{ ...valid, cacheDir: `${cacheDir}\n` }, {}], [undefined, {}], [valid, { fetch: urlOf('claude', 'x64') }],
+  ]) await assert.rejects(fetchAgentBinary(input, { fetch: server.fetch, ...options }), refused('AGENT_BINARY_INPUT_INVALID'), JSON.stringify([input, options]));
+  assert.deepEqual([server.calls, existsSync(cacheDir)], [[], false]);
+});
