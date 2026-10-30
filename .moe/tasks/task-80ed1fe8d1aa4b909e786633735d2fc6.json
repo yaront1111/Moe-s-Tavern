@@ -13,35 +13,58 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST. Load test-driven-development.\n\nPrerequisites. dependsOn gates the claim, not the bytes. Confirm these are DONE:\n- RF06 (task-98ffe33f) and RF06b (task-032c9739), which rewrote MoeDaemonClient.ts and exported its policy helpers;\n- task-90664db1, the JetBrains identity check.\n\nThen read:\n- the landed MoeDaemonClient.ts;\n- task-90664db1's DaemonIdentity code and its handoff;\n- task-86093c3e's packages/moe-proxy/src/daemonIdentity.ts;\n- mem:decision-daemon-identity-probe.\n\nMirror their classification exactly:\n- Only HTTP 200 or 503 with a JSON object body counts.\n- projectPath must be a non-empty ABSOLUTE path (drive, UNC or POSIX).\n- A relative projectPath is unknown, because the daemon reports its raw --project.\n- A 503 carrying an absolute, different projectPath is foreign.\n\nCreate moe-vscode/tests/daemon-identity.test.cjs. Transpile MoeDaemonClient.ts into a vm the way tests/daemon-start.test.cjs does (mem:gotcha-vscode-vm-test-harness):\n- node builtins and ws come through the real require;\n- MoeDaemonClient.ts must keep NO local relative import, or five harnesses break;\n- vm-realm objects fail deepStrictEqual, so compare fields or JSON.\n\nA. Path rule rows for the exported comparableProjectPath and pathsMatch:\n- D:\\x\\y, d:/x/y/, D:\\x\\.\\y and /mnt/d/x/y all match each other.\n- /home/a and /home/b do not match.\n\nB. probeDaemonIdentity(host, port, projectPath, {timeoutMs}), against a real http.createServer on 127.0.0.1:0. It must NEVER reject.\n- same: the spelling rows.\n- foreign: an absolute, different path, returned verbatim. A 503 with an absolute, different path is foreign too.\n- unknown, one row each:\n  - a relative path ('.');\n  - connection refused (a server you closed);\n  - timeout: a server that never answers, timeoutMs 150, resolving within about 1 s;\n  - a non-JSON body;\n  - a JSON array body;\n  - no projectPath;\n  - projectPath 42, '' or null;\n  - a body over 64 KiB;\n  - status 426 and status 500.\n\nC. removeDaemonJsonIfUnchanged(file, {pid, port, startedAt}):\n- it removes the file when all three match;\n- it keeps the file when any one differs, and when the file is missing or unparseable;\n- it never throws.\n\nD. connect() on a real MoeDaemonClient in the vm.\nSetup:\n- Stub vscode.workspace with getConfiguration and workspaceFolders pointing at a temp project.\n- Stub vscode.window with show*Message capture.\n- Stub child_process.spawn to record args.\n- The fake daemon is an http server answering /health, with a WebSocketServer({server}) counting 'connection' events.\n- The temp .moe/daemon.json names its port, a pid and a startedAt.\n- Replace waitForDaemonInfo as daemon-start does.\nRows:\n- D1 foreign. The fake WSS sees 0 connections. daemon.json is removed. The spawn args contain 'start', '--project' and the temp project. A shown message names the foreign project.\n- D2 same. At least 1 /ws connection, daemon.json kept, no spawn. Disconnect and close every server.\n- D3 foreign with moe.daemon.port configured. No connection, an error message names both projects, daemon.json is untouched, and there is no spawn.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/daemon-identity.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/daemon-identity.test.cjs"
+      ],
+      "note": "Read full task comment and landed dependency evidence (RF06, RF06b, JetBrains, corrected path contract), archived JetBrains handoff and proxy/IDE sources. Added 34 tests incl corrected POSIX-case/UNC/WSL contract, real HTTP deadline/socket cleanup, guarded deletion and real /ws integration. RED: node --test tests/daemon-identity.test.cjs exits 1; D foreign/configured/second-foreign/replaced each assertion-fail because baseline opens 1 forbidden /ws. Helper rows await new exports. Existing shared dirty paths (scripts/docs/board etc.) untouched. No local relative runtime imports will be added; existing closed vm shims require lazy node:http/node:url loading inside probe.",
+      "startedAt": "2026-10-30T17:04:30.741Z",
+      "completedAt": "2026-10-30T17:05:47.428Z"
     },
     {
       "stepId": "step-2",
       "description": "IMPLEMENT in moe-vscode/src/services/MoeDaemonClient.ts. Use node builtins only, with no new local import.\n\n1. Path rule.\n- Export comparableProjectPath, mirroring packages/moe-proxy/src/utils.ts:\n  - a drive path goes through path.win32.normalize, then '/' separators, no trailing slash, lowercase;\n  - /mnt/<d> maps to <d>: after normalizing. Use path.posix.normalize of the raw string on win32, and path.resolve elsewhere.\n- If RF06 already landed an identical rule, reuse it instead of adding a second one.\n- pathsMatch delegates to it. Its three existing call sites then accept every spelling of this project: the daemon.json checks in getDaemonInfo and ensureDaemonRunning, and the STATE_SNAPSHOT rootPath check. That also stops a Windows daemon from being deleted and duplicated by a Remote-WSL window.\n- Export isAbsoluteAnyOs (drive, UNC or POSIX), mirroring the proxy.\n\n2. Probe. Export probeDaemonIdentity(host, port, projectPath, {timeoutMs = 1500}). It returns {kind:'same'}, {kind:'foreign', projectPath} or {kind:'unknown'}.\n- Make one node:http GET of /health.\n- Use one overall timer plus the request timeout.\n- Count body bytes and stop at 64 KiB.\n- Settle once, through a done guard.\n- Clear the timer and destroy the socket on every path.\n- Never reject.\n\n3. Export removeDaemonJsonIfUnchanged(file, {pid, port, startedAt}).\n- Re-read the file through readDaemonJsonText and unlink it only when all three fields still match.\n- Log, and never throw, on any error.\n\n4. getDaemonInfo also returns pid, startedAt and a fromConfig flag, keeping host and port as today. Check every caller still compiles.\n\n5. connect(): probe after getDaemonInfo and before setConnectionState('connecting') and new WebSocket.\n- Foreign, from daemon.json:\n  - log the event;\n  - show a warning: 'Moe: the daemon on <host>:<port> serves <served>, not this workspace (<project>). Starting this project's daemon on the next free port.';\n  - call removeDaemonJsonIfUnchanged;\n  - await startDaemon('start', projectPath);\n  - re-read getDaemonInfo once and probe once more. A second foreign or missing answer throws, so the callers' existing error and reconnect handling applies. Never loop.\n- Foreign, from a configured moe.daemon.port: show an error naming both projects and throw. Delete nothing and start nothing.\n- Unknown or same: proceed exactly as today.\n\nError handling:\n- The probe never throws.\n- A refusal opens no WebSocket and leaves no ping interval.\n- connectInProgress is still reset in finally.\n- The STATE_SNAPSHOT mismatch check stays as the second line of defense.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-identity.test.cjs"
+      ],
+      "note": "Implemented the corrected proxy path contract, absolute-path classifier, capped 1.5s overall/request deadline probe with socket cleanup, nonthrowing guarded deletion, metadata provenance and pre-/ws recovery/configured-port refusal. Lazy typed builtin requires avoid changing closed vm harness imports. One bounded respawn/reprobe, unknown preserves legacy. Inspection found recovery's getDaemonInfo reread could delete a concurrent foreign-project replacement after guarded removal kept it (JetBrains gotcha); added red regression and read-only retry getDaemonInfo(false). Added successful recovery/concurrent connect test. Fresh narrow run: 35 pass/0 fail (initial replacement repro 1 assertion-fail). No changes outside the two planned files.",
+      "startedAt": "2026-10-30T17:05:47.450Z",
+      "completedAt": "2026-10-30T17:07:42.759Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants, on a scratch copy of MoeDaemonClient.ts. Restore it and cmp after each one. A kill counts only on assertion failures.\n- M1: connect() ignores the probe. D1 fails, because the WSS sees a connection.\n- M2: the rule drops /mnt folding. The A and B spelling rows fail.\n- M3: a relative served path is judged. The B relative row fails.\n- M4: removal is unconditional. The C keep-rows fail.\n\n2. GATE (DoD 3). Run fresh; it must exit 0, and its output goes to complete_task:\ncd moe-vscode && npm test && npm run compile\n- Run it on Linux node.\n- Also run it on Windows node through cmd.exe, because CI's 3-OS matrix runs these tests and win32 path.resolve differs:\n  cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && npm test\"\n- Report the counts for both runs.\n\n3. Check `git status --short -- moe-vscode`. This task's paths are the two plan files. Every other dirty path was there before and is untouched.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh required Linux command `cd moe-vscode && npm test && npm run compile` exited 0: 324 tests/321 passed/0 failed/3 pre-existing Windows-only skips, tsc 7.0.2 passed. Initial compile attempt exposed missing ignored @typescript/typescript-linux-x64; installed exact lockfile 7.0.2 tarball into that previously absent ignored dependency directory only (no shim, manifest, lockfile or source edits). Windows exact planned npm test exited 0: 324 tests/320 passed/0 failed/4 pre-existing platform/privilege skips; all 35 new tests executed. M1-M4 scratch mutants each assertion-killed; copy restored and cmp matched after each (/tmp/80ed-mutants-2gudnqx7). git diff --check clean; status under moe-vscode shows exactly the two plan files. No tracked/new source changes in this verification step.",
+      "startedAt": "2026-10-30T17:07:42.786Z",
+      "completedAt": "2026-10-30T17:09:09.285Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review.\n\n- Can any connect path still open /ws to a foreign daemon? Check:\n  - reconnect;\n  - the configured port;\n  - the auto-start path;\n  - two concurrent connect() calls;\n  - a daemon that changes between the probe and the upgrade.\n- Can a spelling difference, or a relative path in daemon.json or in /health, delete a live same-project daemon.json or start a duplicate daemon? Check:\n  - the Remote-WSL extension host (/mnt/d) against a Windows daemon (D:\\);\n  - Windows against a WSL daemon.\n- Is every read bounded, every timer cleared and every socket destroyed? Can the probe or the second attempt loop?\n- Does the warning reveal anything beyond the two paths and host:port?\n- Do the rules agree with the proxy (task-86093c3e) and JetBrains (task-90664db1) on every row?\n- Rails:\n  - regression tests are present;\n  - error handling: the probe never throws and unknown keeps today's behavior;\n  - no MCP contract change;\n  - existing daemon.json files still parse;\n  - no forbidden pattern.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-identity.test.cjs"
+      ],
+      "note": "Adversarial pass read both owned diffs; checked concurrent connect, recovery/reconnect/configured-port routes, unknown/relative/malformed/oversize input, cross-OS path parity, response/socket/timer cleanup and replacement metadata. No client/ping on foreign; connect guard resets in finally; recovery bounded to one attempt. Replaced lazy requires with typed dynamic builtin imports to avoid new no-require-imports violations, and removed two redundant assertions to keep D callback <=50 lines. Re-ran final-byte mutants M1-M4: all assertion-killed, cmp restored scratch after each. Final exact Linux gate exit 0: 324 tests/321 pass/3 existing skips/0 fail; tsc passes. Windows planned npm test exit 0: 324/320 pass/4 existing skips/0 fail, all 35 new rows run. diff --check and forbidden-pattern scan clean; net334 LOC across only two plan files. Accepted design limits: probe->upgrade and compare->unlink TOCTOU (atomic protocol deferred by decision); metadata relative-path handling and snapshot defense retain legacy policy. Reproduced pre-existing disconnect/dispose vs pending connect on untouched HEAD and filed task-dcde1ed47ee54a23af192f4467271fc9; not fixed inline. Shared peer dirt untouched.",
+      "startedAt": "2026-10-30T17:09:09.306Z",
+      "completedAt": "2026-10-30T17:13:07.065Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -67,7 +90,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:55:18.945Z",
-  "updatedAt": "2026-10-30T14:26:43.573Z",
+  "updatedAt": "2026-10-30T17:13:50.212Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:59:34.287Z",
@@ -76,17 +99,24 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T08:00:30.842Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-55e6716a"
+    "worker-55e6716a",
+    "worker-262588d0"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T08:03:40.312Z",
   "planningNotes": {
@@ -107,5 +137,19 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T08:03:40.340Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T17:04:30.741Z",
+  "reviewStartedAt": "2026-10-30T17:13:50.210Z",
+  "verification": {
+    "command": "cd moe-vscode && npm test && npm run compile",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 324\nℹ suites 0\nℹ pass 321\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 16519.357087\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./\n(exit 0)",
+    "reportedAt": "2026-10-30T17:13:50.210Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/daemon-identity.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts"
+  ],
+  "completionSummary": "VS Code now probes the live daemon before /ws, refuses foreign configured endpoints without side effects, and recovers stale metadata with guarded deletion and one spawn/reprobe. Corrected proxy path contract preserves POSIX case and folds drive/WSL/UNC aliases. Unknown replies preserve legacy behavior. Retry metadata read is non-destructive, including concurrent foreign-project replacement. Only the two planned files; net334 LOC. Added35 real HTTP/WS + vm regression rows, all execute on Linux/Windows; four final-byte mutants assertion-killed. Fresh Linux gate:324 tests,321 pass,3 existing skips,0 fail, tsc passes. Windows npm test:324 tests,320 pass,4 existing skips,0 fail. Exact lockfile7.0.2 Linux optional compiler binary installed to previously absent ignored node_modules path only; no manifest/shim changes. Adversarial review/diff check complete. Accepted probe/upgrade and compare/unlink races remain protocol-level limits. Pre-existing disconnect/startup race reproduced on untouched HEAD and filed task-dcde1ed47ee54a23af192f4467271fc9, not fixed inline. Handoff/gotchas saved; shared peer dirt untouched; wrapper owns landing."
 }

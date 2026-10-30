@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as net from 'net';
+import type * as http from 'http';
 import { spawn } from 'child_process';
 import WebSocket from 'ws';
 import type {
@@ -97,12 +98,43 @@ function allowlistedErrorContext(context: unknown): DaemonErrorContext | undefin
     return Object.keys(picked).length > 0 ? picked : undefined;
 }
 
-function pathsMatch(a: string, b: string): boolean {
-    const na = path.resolve(a);
-    const nb = path.resolve(b);
-    return process.platform === 'win32'
-        ? na.toLowerCase() === nb.toLowerCase()
-        : na === nb;
+// Comparison-only twin of moe-proxy/src/utils.ts: absolute POSIX paths keep case on every OS.
+const WINDOWS_FORM = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/;
+const WSL_SHARE = /^\/\/(?:wsl\$|wsl\.localhost)\/[^/]+(\/.*)?$/i;
+const MNT_DRIVE = /^\/mnt\/([A-Za-z])(?:\/(.*))?$/;
+
+export function comparableProjectPath(projectPath: string): string {
+    const raw = projectPath.trim();
+    const abs = WINDOWS_FORM.test(raw) || raw.startsWith('/') ? raw : path.resolve(raw);
+    if (!WINDOWS_FORM.test(abs)) return posixKey(abs);
+    const s = abs.replace(/\\/g, '/');
+    const share = WSL_SHARE.exec(s);
+    if (share) return posixKey(share[1] ?? '/');
+    const unc = s.startsWith('//');
+    return ((unc ? '//' : '') + collapse(s, unc ? 2 : 1)).toLowerCase();
+}
+
+function posixKey(p: string): string {
+    const key = '/' + collapse(p, 0);
+    const mnt = MNT_DRIVE.exec(key);
+    return mnt ? `${mnt[1]}:${mnt[2] ? `/${mnt[2]}` : ''}`.toLowerCase() : key;
+}
+
+function collapse(p: string, keep: number): string {
+    const kept: string[] = [];
+    for (const segment of p.split('/').filter(s => s !== '' && s !== '.')) {
+        if (segment !== '..') kept.push(segment);
+        else if (kept.length > keep) kept.pop();
+    }
+    return kept.join('/');
+}
+
+export function pathsMatch(a: string, b: string): boolean {
+    return comparableProjectPath(a) === comparableProjectPath(b);
+}
+
+export function isAbsoluteAnyOs(value: string): boolean {
+    return /^(?:[a-zA-Z]:[\\/]|\\{2}[^\\/]|\/)/.test(value);
 }
 
 // daemon.json is repository content: the cap matches the daemon, proxy, Claude-plugin and JetBrains readers.
@@ -111,6 +143,76 @@ const MAX_DAEMON_JSON_BYTES = 64 * 1024;
 /** Read daemon.json through one descriptor, at most cap + 1 bytes; a larger file throws like an unparseable one. */
 export function readDaemonJsonText(filePath: string): string {
     return readCappedText(filePath, MAX_DAEMON_JSON_BYTES, 'daemon.json is larger than 64 KiB');
+}
+
+type DaemonIdentity = { kind: 'same' } | { kind: 'foreign'; projectPath: string } | { kind: 'unknown' };
+interface DaemonEndpoint {
+    host: string;
+    port: number;
+    fromConfig: boolean;
+    pid?: number;
+    startedAt?: string;
+}
+
+function classifyIdentity(status: number | undefined, body: string, projectPath: string): DaemonIdentity {
+    try {
+        if (status !== 200 && status !== 503) return { kind: 'unknown' };
+        const parsed: unknown = JSON.parse(body);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { kind: 'unknown' };
+        const served = (parsed as Record<string, unknown>).projectPath;
+        if (typeof served !== 'string' || !isAbsoluteAnyOs(served)) return { kind: 'unknown' };
+        return pathsMatch(served, projectPath) ? { kind: 'same' } : { kind: 'foreign', projectPath: served };
+    } catch { return { kind: 'unknown' }; }
+}
+
+/** Bounded overall deadline (including trickled headers/body); unknown preserves legacy adoption. */
+export function probeDaemonIdentity(host: string, port: number, projectPath: string,
+    { timeoutMs = 1500 }: { timeoutMs?: number } = {}): Promise<DaemonIdentity> {
+    // Lazy builtins preserve existing single-file vm harness dependency maps.
+    return Promise.all([import('http'), import('url')]).then(([http, { URL }]) => new Promise<DaemonIdentity>(resolve => {
+        let done = false;
+        let req: http.ClientRequest | undefined;
+        const timer = setTimeout(() => finish({ kind: 'unknown' }), timeoutMs);
+        function finish(identity: DaemonIdentity): void {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            req?.destroy();
+            resolve(identity);
+        }
+        try {
+            // Parse exactly the URL WebSocket dials; do not forward userinfo or follow redirects.
+            const url = new URL(`ws://${host}:${port}/ws`);
+            const hostname = url.hostname.replace(/^\[|\]$/g, '');
+            req = http.request({ hostname, port: url.port || 80, path: '/health', method: 'GET', timeout: timeoutMs }, res => {
+                const chunks: Buffer[] = [];
+                let total = 0;
+                res.on('data', (chunk: Buffer) => {
+                    if (done) return;
+                    total += chunk.length;
+                    if (total > MAX_DAEMON_JSON_BYTES) { finish({ kind: 'unknown' }); return; }
+                    chunks.push(chunk);
+                });
+                res.on('end', () => finish(classifyIdentity(res.statusCode, Buffer.concat(chunks).toString('utf8'), projectPath)));
+                res.on('error', () => finish({ kind: 'unknown' }));
+                res.on('aborted', () => finish({ kind: 'unknown' }));
+            });
+            req.on('timeout', () => finish({ kind: 'unknown' }));
+            req.on('error', () => finish({ kind: 'unknown' }));
+            req.end();
+        } catch { finish({ kind: 'unknown' }); }
+    })).catch(() => ({ kind: 'unknown' }));
+}
+
+/** Best-effort compare/delete; rereading must not run the destructive project-path checks. */
+export function removeDaemonJsonIfUnchanged(file: string, expected: Pick<DaemonEndpoint, 'pid' | 'port' | 'startedAt'>): void {
+    try {
+        const current = JSON.parse(readDaemonJsonText(file)) as Record<string, unknown> | null;
+        if (current && current.pid === expected.pid && current.port === expected.port && current.startedAt === expected.startedAt) {
+            fs.unlinkSync(file);
+            log('Removed stale daemon.json naming the foreign daemon');
+        }
+    } catch (error) { log(`Kept daemon.json: ${String(error)}`); }
 }
 
 function readCappedText(filePath: string, cap: number, tooLarge: string): string {
@@ -480,7 +582,7 @@ export class MoeDaemonClient implements vscode.Disposable {
             this.daemonShuttingDown = false;
 
             await this.ensureDaemonRunning();
-            const daemonInfo = await this.getDaemonInfo();
+            const daemonInfo = await this.getVerifiedDaemonInfo();
             if (!daemonInfo) {
                 throw new Error('Daemon not running. Start daemon first.');
             }
@@ -837,7 +939,30 @@ export class MoeDaemonClient implements vscode.Disposable {
         this.sendMessage('REJECT_PROPOSAL', { proposalId });
     }
 
-    private async getDaemonInfo(): Promise<{ host: string; port: number } | undefined> {
+    private async getVerifiedDaemonInfo(): Promise<DaemonEndpoint | undefined> {
+        const info = await this.getDaemonInfo();
+        const project = this.getWorkspacePath();
+        if (!info || !project) return undefined;
+        const identity = await probeDaemonIdentity(info.host, info.port, project);
+        if (identity.kind !== 'foreign') return info;
+        const message = `Moe: the daemon on ${info.host}:${info.port} serves ${identity.projectPath}, not this workspace (${project}).`;
+        log(message);
+        if (info.fromConfig) {
+            vscode.window.showErrorMessage(message);
+            throw new Error(message);
+        }
+        vscode.window.showWarningMessage(`${message} Starting this project's daemon on the next free port.`);
+        removeDaemonJsonIfUnchanged(path.join(project, '.moe', 'daemon.json'), info);
+        await this.startDaemon('start', project);
+        // A concurrent replacement must survive, including metadata naming another project.
+        const replacement = await this.getDaemonInfo(false);
+        if (!replacement || (await probeDaemonIdentity(replacement.host, replacement.port, project)).kind === 'foreign') {
+            throw new Error('Moe could not find this workspace\'s daemon after refusing a foreign daemon.');
+        }
+        return replacement;
+    }
+
+    private async getDaemonInfo(removeStale = true): Promise<DaemonEndpoint | undefined> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
             return undefined;
@@ -848,7 +973,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         const configHost = config.get<string>('daemon.host', '127.0.0.1');
 
         if (configPort > 0) {
-            return { host: configHost, port: configPort };
+            return { host: configHost, port: configPort, fromConfig: true };
         }
 
         // Try to read from .moe/daemon.json
@@ -862,7 +987,7 @@ export class MoeDaemonClient implements vscode.Disposable {
                 log(
                     `Stale daemon.json: expected project ${projectPath}, found ${daemonInfo.projectPath}`
                 );
-                try { fs.unlinkSync(daemonJsonPath); } catch { /* ignore */ }
+                if (removeStale) { try { fs.unlinkSync(daemonJsonPath); } catch { /* ignore */ } }
                 return undefined;
             }
             const port = Number(daemonInfo.port);
@@ -870,7 +995,7 @@ export class MoeDaemonClient implements vscode.Disposable {
                 log(`Invalid daemon port in daemon.json: ${String(daemonInfo.port)}`);
                 return undefined;
             }
-            return { host: configHost, port };
+            return { host: configHost, port, pid: daemonInfo.pid, startedAt: daemonInfo.startedAt, fromConfig: false };
         } catch {
             return undefined;
         }
