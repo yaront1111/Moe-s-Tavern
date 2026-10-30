@@ -2773,12 +2773,14 @@ if (typeof answer === 'string') process.stdout.write(answer); else process.exitC
 import { CERTIFY_CHECKS, certifyCore, runIsolationCertify, validateCertificationReport } from '../local-runner/certify.mjs';
 
 const REAL_SUPERVISOR_SHA256 = createHash('sha256').update(readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url))).digest('hex');
-const CERTIFY_IDS = ['provision', 'readiness', 'no-mounts', 'teardown'];
+const CERTIFY_IDS = ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'teardown'];
+const BRIDGE_NOT_RUN = [['bridge-framing', 'not-run'], ['bridge-eof', 'not-run']];
 const STARTED = '2026-01-02T03:04:05.000Z';
 const NO_IMAGE = { sourceSha256: null, providerImageHash: null };
 
-/** smokeHarness whose guest holds the REAL supervisor (R07 checks its hash), with an injected doctor and clock; `run` wraps the provider. */
-function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run, random = sequence(), ...fakeOptions } = {}) {
+/** smokeHarness whose guest holds the REAL supervisor (R07 checks its hash), with an injected doctor and clock; `run` wraps the provider
+ * and `bridge` configures the CQ-R13e1 spawn router (bridgeRouter). */
+function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run, random = sequence(), bridge, ...fakeOptions } = {}) {
   const workDir = scratch(t);
   const fake = fakeVm({ ...fakeOptions, answers: healthy({ supervisorHash: { code: 0, stdout: `${REAL_SUPERVISOR_SHA256}  /opt/moe/bin/moe-supervisor\n` }, ...guest }) });
   const [download, deletes] = [fakeFetch(), []];
@@ -2789,9 +2791,10 @@ function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run,
     fake.present.delete(args[2]);
     return Promise.resolve({ stdout: '', stderr: '' });
   });
-  const deps = { provider: { run }, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {}, random,
+  const router = bridgeRouter(bridge);
+  const deps = { provider: { run, spawn: router.spawn }, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {}, random,
     doctor: async () => ({ providerReady: true, version: '1.17.0' }), now: () => new Date(STARTED) };
-  return { workDir, fake, download, deletes, deps, certify: (platform = onWindows()) => certifyCore({ platform, workDir, deps }) };
+  return { workDir, fake, download, deletes, deps, router, certify: (platform = onWindows()) => certifyCore({ platform, workDir, deps }) };
 }
 const checksOf = (...rows) => rows.map(([id, result, code = null]) => ({ id, result, code }));
 const certification = changes => ({
@@ -2815,13 +2818,13 @@ test('CF2 a degraded cloud-init boot fails readiness with its own code; later bo
   const foreign = createLedger(path.join(h.workDir, 'ledger'), { random: () => Buffer.alloc(10, 0xab) });
   const other = await seed(foreign, 'owned');
   h.fake.present.set(other.instance, 'Running');
-  const checks = checksOf(['provision', 'passed'], ['readiness', 'failed', 'BOOTSTRAP_FAILED'], ['no-mounts', 'not-run'], ['teardown', 'passed']);
+  const checks = checksOf(['provision', 'passed'], ['readiness', 'failed', 'BOOTSTRAP_FAILED'], ['no-mounts', 'not-run'], ...BRIDGE_NOT_RUN, ['teardown', 'passed']);
   assert.deepEqual([await h.certify(), h.deletes], [certification({ checks }), [['delete', '--purge', GUEST]]]);
   assert.deepEqual([(await foreign.read(GUEST)).phase, (await foreign.read(other.instance)).phase, h.fake.present.get(other.instance)], ['deleted', 'owned', 'Running']);
 });
 
 test('CF3 a provision refusal or a codeless throw fails only its own check; teardown always runs and certifyCore resolves', async t => {
-  const notRun = [['readiness', 'not-run'], ['no-mounts', 'not-run']];
+  const notRun = [['readiness', 'not-run'], ['no-mounts', 'not-run'], ...BRIDGE_NOT_RUN];
   const conflict = certifyHarness(t, { primaryName: nameAt(9) });
   assert.deepEqual(await conflict.certify(), certification({ image: NO_IMAGE, checks: checksOf(['provision', 'failed', 'PRIMARY_NAME_CONFLICT'], ...notRun, ['teardown', 'passed']) }));
   assert.deepEqual([conflict.deletes, conflict.fake.launches.length, existsSync(path.join(conflict.workDir, 'ledger'))], [[], 0, false]);
@@ -2839,10 +2842,11 @@ test('CF3 a provision refusal or a codeless throw fails only its own check; tear
     else if (armed && args[0] === 'info') { armed = false; return Promise.resolve({ get stdout() { throw new Error('/private/path secret-diagnostic'); } }); }
     return base(executable, args, options);
   } });
-  const threw = checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'failed', 'CERTIFY_CHECK_FAILED'], ['teardown', 'passed']);
+  const threw = checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'failed', 'CERTIFY_CHECK_FAILED'], ...BRIDGE_NOT_RUN, ['teardown', 'passed']);
   assert.deepEqual([await thrower.certify(), thrower.deletes], [certification({ checks: threw }), [['delete', '--purge', GUEST]]]);
   const stuck = certifyHarness(t, { deleteFails: true });
-  const undeleted = checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'], ['teardown', 'failed', 'CERTIFY_TEARDOWN_FAILED']);
+  const undeleted = checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'], ['bridge-framing', 'passed'], ['bridge-eof', 'passed'],
+    ['teardown', 'failed', 'CERTIFY_TEARDOWN_FAILED']);
   assert.deepEqual([await stuck.certify(), stuck.deletes], [certification({ checks: undeleted }), [['delete', '--purge', GUEST]]]);
 });
 
@@ -2861,7 +2865,7 @@ test('CF5 validateCertificationReport returns a frozen copy of exactly the curre
   const input = JSON.parse(JSON.stringify(native()));
   const copy = validateCertificationReport(input);
   assert.deepEqual([copy, copy === input, deepFrozen(copy), Object.isFrozen(input)], [native(), false, true, false]);
-  const failedRun = checksOf(['provision', 'failed', 'PRIMARY_NAME_CONFLICT'], ['readiness', 'not-run'], ['no-mounts', 'not-run'], ['teardown', 'passed']);
+  const failedRun = checksOf(['provision', 'failed', 'PRIMARY_NAME_CONFLICT'], ['readiness', 'not-run'], ['no-mounts', 'not-run'], ...BRIDGE_NOT_RUN, ['teardown', 'passed']);
   for (const report of [certification(), certification({ transport: 'native', checks: failedRun, arch: null, image: NO_IMAGE, supervisorSha256: null,
     provider: { name: 'multipass', version: null } })]) assert.deepEqual(validateCertificationReport(structuredClone(report)), report);
   const mutate = change => { const value = structuredClone(native()); change(value); return value; };
@@ -2882,12 +2886,12 @@ test('CF5 validateCertificationReport returns a frozen copy of exactly the curre
     supervisorHash: mutate(v => { v.supervisorSha256 = 7; }), checksObject: mutate(v => { v.checks = { ...v.checks }; }), certifiedNoArch: mutate(v => { v.arch = null; }),
     missingCheck: mutate(v => { v.checks.pop(); }), extraCheck: mutate(v => { v.checks.push({ id: 'canary', result: 'passed', code: null }); }),
     reversed: mutate(v => { v.checks.reverse(); }), swapped: mutate(v => { [v.checks[0], v.checks[1]] = [v.checks[1], v.checks[0]]; }),
-    renamed: mutate(v => { v.checks[2].id = 'no_mounts'; }), result: failing(3, { id: 'teardown', result: 'skipped', code: null }),
-    lowerCode: failing(3, { id: 'teardown', result: 'failed', code: 'lower_case' }), numberCode: failing(3, { id: 'teardown', result: 'failed', code: 7 }),
-    passedWithCode: mutate(v => { v.checks[0].code = 'CERTIFY_CHECK_FAILED'; }), failedWithoutCode: failing(3, { id: 'teardown', result: 'failed', code: null }),
-    notRunFirst: failing(1, { id: 'readiness', result: 'not-run', code: null }), teardownNotRun: failing(3, { id: 'teardown', result: 'not-run', code: null }),
+    renamed: mutate(v => { v.checks[2].id = 'no_mounts'; }), result: failing(5, { id: 'teardown', result: 'skipped', code: null }),
+    lowerCode: failing(5, { id: 'teardown', result: 'failed', code: 'lower_case' }), numberCode: failing(5, { id: 'teardown', result: 'failed', code: 7 }),
+    passedWithCode: mutate(v => { v.checks[0].code = 'CERTIFY_CHECK_FAILED'; }), failedWithoutCode: failing(5, { id: 'teardown', result: 'failed', code: null }),
+    notRunFirst: failing(1, { id: 'readiness', result: 'not-run', code: null }), teardownNotRun: failing(5, { id: 'teardown', result: 'not-run', code: null }),
     notRunWithCode: failing(1, { id: 'readiness', result: 'not-run', code: 'X' }),
-    ranAfterFailure: certification({ transport: 'native', checks: checksOf(['provision', 'failed', 'X'], ['readiness', 'passed'], ['no-mounts', 'not-run'], ['teardown', 'passed']) }),
+    ranAfterFailure: certification({ transport: 'native', checks: checksOf(['provision', 'failed', 'X'], ['readiness', 'passed'], ['no-mounts', 'not-run'], ...BRIDGE_NOT_RUN, ['teardown', 'passed']) }),
     nativeUncertified: mutate(v => { v.certified = false; }), injectedCertified: mutate(v => { v.transport = 'injected'; }),
     failedCertified: mutate(v => { v.checks[2] = { id: 'no-mounts', result: 'failed', code: 'TRANSFER_MOUNTS_PRESENT' }; }),
     certifiedText: mutate(v => { v.certified = 'true'; }), executionReady: mutate(v => { v.executionReady = true; }),
@@ -2957,6 +2961,151 @@ test('CF8 CLI certify prints the report and exits 0 only when certified', async 
     const invalid = { code: 'CLI_INPUT_INVALID', providerReady: false, executionReady: false, message: USAGE };
     assert.deepEqual(await cli(args, async () => assert.fail('no certify on invalid input')), [2, [invalid]], JSON.stringify(args));
   }
+});
+
+// CQ-R13e1 bridge certify checks: the real runCheckSession and materializeSnapshot over one spawn router that answers the
+// materialize argv with fakeSpawn and the check argv with checkFake (local-runner-check.test.mjs's checkProvider is not importable).
+import { BRIDGE_BOUNDS, BRIDGE_CHECKS, CERTIFY_PAYLOAD, certifySnapshot, watchedSession } from '../local-runner/certify-bridge.mjs';
+
+const EXPECTED_PAYLOAD = Buffer.concat(Array.from({ length: 65_536 }, (_, i) => createHash('sha256').update(`moe-certify-payload-v1:${i}`).digest()));
+const [CB_HELLO, CB_FRAMING, CB_EOF] = [{ kind: 'hello', protocol: 1 }, 'cat moe-certify/payload.bin', 'echo ready; exec sleep 600'];
+const cbExit = code => ({ kind: 'observation', type: 'exit', code, signal: null });
+const cbOut = bytes => ({ kind: 'output', stream: 'stdout', data: Buffer.from(bytes).toString('base64') });
+// stdout frames of an odd size, so they never line up with the supervisor's 65536-byte reads or the payload's 32-byte digests.
+const payloadFrames = bytes => Array.from({ length: Math.ceil(bytes.length / 65_521) }, (_, at) => cbOut(bytes.subarray(at * 65_521, (at + 1) * 65_521)));
+const framingSends = (bytes, code = 0, head = []) => ({ scripts: { 'certify-framing': proc => { proc.send(...head, CB_HELLO, ...payloadFrames(bytes), cbExit(code)); proc.exit(0); } } });
+const BRIDGE_SCRIPTS = { ...framingSends(EXPECTED_PAYLOAD).scripts, 'certify-eof': proc => proc.send(CB_HELLO, cbOut('ready\n')) };
+
+/** A check session: it decodes its one stdin frame and runs scripts[frame.id]; stdin closing runs onEof (the supervisor's host-EOF
+ * exit 74 by default); kill() closes asynchronously with the signal, as Node does. */
+function checkFake(scripts, onEof = proc => proc.exit(74)) {
+  const proc = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kills: [], written: [] });
+  proc.stdin = new Writable({ write(chunk, encoding, done) {
+    if (proc.written.push(chunk) === 1) [proc.frame] = createFrameDecoder(MAX_HOST_FRAME_BYTES).push(chunk);
+    setImmediate(() => scripts[proc.frame.id]?.(proc));
+    done();
+  } });
+  proc.stdin.once('close', () => onEof(proc));
+  proc.send = (...frames) => proc.stdout.write(Buffer.concat(frames.map(frame => (Buffer.isBuffer(frame) ? frame : encodeFrame(frame)))));
+  proc.exit = (code, signal = null) => { if (!proc.stdout.writableEnded) proc.stdout.once('close', () => proc.emit('close', code, signal)).end(); };
+  proc.kill = signal => { proc.kills.push(signal); setImmediate(() => proc.emit('close', null, signal)); return true; };
+  return proc;
+}
+/** One provider spawn: the materialize argv gets fakeSpawn(materialize), any other argv a checkFake. Every call is recorded. */
+function bridgeRouter({ materialize, scripts, onEof } = {}) {
+  const calls = [];
+  const spawn = (...args) => {
+    const proc = args[1].at(-1) === 'materialize' ? fakeSpawn(materialize) : checkFake({ ...BRIDGE_SCRIPTS, ...scripts }, onEof);
+    calls.push({ args, proc });
+    return proc.spawn?.(...args) ?? proc;
+  };
+  return { calls, spawn };
+}
+function bridgeContext(options, bounds) {
+  const [guest, router] = [fakeGuest(), bridgeRouter(options)];
+  return { guest, router, context: { name: GUEST, provider: { run: guest.run, spawn: router.spawn }, bounds: { sessionMs: 2_000, exitMs: 200, transferMs: 5_000, ...bounds } } };
+}
+const [framingCheck, eofCheck] = BRIDGE_CHECKS;
+const checkOf = (id, command) => ({ kind: 'check', version: 1, id, command, protected: [] });
+const refused = code => ({ result: 'failed', code });
+
+test('CB1 the payload, generated snapshot, bounds and bridge registry are fixed literals', () => {
+  assert.deepEqual([CERTIFY_PAYLOAD.length, CERTIFY_PAYLOAD.equals(EXPECTED_PAYLOAD)], [2_097_152, true]);
+  assert.deepEqual(workspaceEntries(certifySnapshot()).entries.map(({ path, executable, data }) => [path, executable, Buffer.from(data)]),
+    [['moe-certify/payload.bin', false, EXPECTED_PAYLOAD], ['moe-certify/run.sh', true, Buffer.from('#!/bin/sh\nexit 0\n')]]);
+  assert.notEqual(certifySnapshot(), certifySnapshot());
+  assert.deepEqual([BRIDGE_BOUNDS, Object.isFrozen(BRIDGE_BOUNDS)], [{ sessionMs: 120_000, exitMs: 30_000, transferMs: 120_000 }, true]);
+  assert.deepEqual([BRIDGE_CHECKS.map(check => check.id), Object.isFrozen(BRIDGE_CHECKS) && BRIDGE_CHECKS.every(Object.isFrozen)], [['bridge-framing', 'bridge-eof'], true]);
+  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id), ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'teardown']);
+});
+
+test('CB2 bridge-framing materializes the generated snapshot, then streams the 2 MiB payload back through a fixed argv and frame', async () => {
+  const { guest, router, context } = bridgeContext();
+  const result = await framingCheck.run(context);
+  assert.deepEqual([result, Object.isFrozen(result)], [{ result: 'passed', code: null }, true]);
+  assert.deepEqual(router.calls.map(({ args }) => args), [['multipass', snapshotArgv(GUEST, 'materialize'), PIPES], ['multipass', checkArgv(GUEST), PIPES]]);
+  assert.equal(router.calls[0].proc.frames()[0].digest, workspaceEntries(certifySnapshot()).digest);
+  assert.deepEqual([router.calls[1].proc.frame, router.calls[1].proc.written.length, guest.ids()], [checkOf('certify-framing', CB_FRAMING), 1, ['info', 'mountinfo', 'info', 'mountinfo']]);
+});
+
+test('CB3 bridge-framing fails with one fixed code per rule: digest, session outcome, then exact bytes', async () => {
+  const digest = bridgeContext({ materialize: proc => proc.reply({ kind: 'materialized', digest: 'f'.repeat(64) }) });
+  await assert.rejects(framingCheck.run(digest.context), transferRefused('TRANSFER_DIGEST_MISMATCH'));
+  assert.equal(digest.router.calls.length, 1);
+  const flipped = Buffer.from(EXPECTED_PAYLOAD);
+  flipped[1_048_577] ^= 1;
+  for (const [label, options, code] of [['job exit 1', framingSends(EXPECTED_PAYLOAD, 1), 'SESSION_FAILED'],
+    ['output before hello', framingSends(EXPECTED_PAYLOAD, 0, [cbOut('x')]), 'SESSION_FAILED'], ['a flipped byte', framingSends(flipped), 'MISMATCH'],
+    ['one byte short', framingSends(EXPECTED_PAYLOAD.subarray(0, -1)), 'MISMATCH'], ['one byte over', framingSends(Buffer.concat([EXPECTED_PAYLOAD, Buffer.from('x')])), 'MISMATCH']]) {
+    assert.deepEqual(await framingCheck.run(bridgeContext(options).context), refused(`CERTIFY_BRIDGE_FRAMING_${code}`), label);
+  }
+  // The bad frame comes in its own chunk: a decoder throw drops the frames of the chunk it is in.
+  // A caller that edits the exported payload changes what is materialized and echoed, never the digest compared against.
+  CERTIFY_PAYLOAD[7] ^= 1;
+  try {
+    assert.deepEqual(await framingCheck.run(bridgeContext(framingSends(Buffer.from(CERTIFY_PAYLOAD))).context), refused('CERTIFY_BRIDGE_FRAMING_MISMATCH'));
+  } finally { CERTIFY_PAYLOAD[7] ^= 1; }
+  const { context } = bridgeContext({ scripts: { garbage: proc => { proc.send(CB_HELLO, cbOut('ok')); setImmediate(() => { proc.send(Buffer.from([0, 0, 0, 1, 0x7b])); proc.exit(0); }); } } });
+  assert.deepEqual({ ...await watchedSession(context, 'garbage', 'true', { limit: 1 }) },
+    { outcome: 'infra-failure', exitCode: null, exit: { code: 0, signal: null }, stdout: Buffer.from('o'), overflow: true, broken: true });
+  const controller = new AbortController(); // a non-integer limit keeps nothing: every stdout byte is overflow
+  const loose = await watchedSession(bridgeContext().context, 'certify-eof', CB_EOF, { signal: controller.signal, limit: Number.NaN, onStdout: () => controller.abort() });
+  assert.deepEqual([loose.stdout, loose.overflow, loose.exit], [Buffer.alloc(0), true, { code: 74, signal: null }]);
+});
+
+test('CB4 bridge-eof passes when closing stdin after exactly "ready\\n" ends the session with the provider\'s own exit 74', async () => {
+  for (const frames of [[cbOut('ready\n')], [cbOut('rea'), cbOut('dy\n')]]) {
+    const log = [];
+    const { router, context } = bridgeContext({ scripts: { 'certify-eof': proc => setTimeout(() => { log.push('ready'); proc.send(CB_HELLO, ...frames); }, 20) },
+      onEof: proc => { log.push('eof'); proc.exit(74); } });
+    assert.deepEqual(await eofCheck.run(context), { result: 'passed', code: null });
+    assert.deepEqual([router.calls.map(({ args }) => args), router.calls[0].proc.frame, log, router.calls[0].proc.kills],
+      [[['multipass', checkArgv(GUEST), PIPES]], checkOf('certify-eof', CB_EOF), ['ready', 'eof'], []]);
+  }
+});
+
+test('CB5 bridge-eof fails NOT_STARTED, EXIT or TIMEOUT, and a local kill is never the provider\'s exit', async () => {
+  const eofRow = (options, bounds) => eofCheck.run(bridgeContext(options, bounds).context);
+  for (const send of [proc => proc.send(CB_HELLO), proc => proc.send(CB_HELLO, cbOut('ready\nmore'))]) {
+    assert.deepEqual(await eofRow({ scripts: { 'certify-eof': send } }, { sessionMs: 100 }), refused('CERTIFY_BRIDGE_EOF_NOT_STARTED'));
+  }
+  for (const [code, signal] of [[0, null], [75, null], [null, 'SIGTERM']]) {
+    assert.deepEqual(await eofRow({ onEof: proc => proc.exit(code, signal) }), refused('CERTIFY_BRIDGE_EOF_EXIT'), String(code));
+  }
+  assert.deepEqual(await eofRow({ onEof: () => {} }, { exitMs: 100 }), refused('CERTIFY_BRIDGE_EOF_TIMEOUT'));
+  const { router, context } = bridgeContext({ onEof: () => {} }, { exitMs: 100 });
+  // This provider reports its close inside kill(): even so, the local kill is never the provider's own exit.
+  const { spawn } = context.provider;
+  context.provider.spawn = (...args) => Object.assign(spawn(...args), { kill(signal) { this.kills.push(signal); this.emit('close', null, signal); return true; } });
+  const controller = new AbortController();
+  const session = await watchedSession(context, 'certify-eof', CB_EOF, { signal: controller.signal, limit: 64, onStdout: () => controller.abort() });
+  assert.deepEqual([{ ...session }, Object.isFrozen(session), router.calls[0].proc.kills],
+    [{ outcome: 'infra-failure', exitCode: null, exit: null, stdout: Buffer.from('ready\n'), overflow: false, broken: false }, true, ['SIGKILL']]);
+});
+
+// The timeout fails a run that ignores the overrides: BRIDGE_BOUNDS would hold the silent session for two minutes.
+test('CB6 certifyCore validates deps.bounds before any provider call; a bridge failure leaves bridge-eof not-run and teardown passed', { timeout: 60_000 }, async t => {
+  const getter = Object.defineProperty({}, 'exitMs', { enumerable: true, get: () => 5 });
+  for (const bounds of [{ sessionMs: 0 }, { exitMs: 30_001 }, { transferMs: 1.5 }, { sessionMs: '1' }, { other: 1 }, { [Symbol('x')]: 1 }, [], null, getter]) {
+    const h = certifyHarness(t);
+    await assert.rejects(certifyCore({ platform: onWindows(), workDir: h.workDir, deps: { ...h.deps, bounds } }), error => assertSanitized(error, 'CERTIFY_INPUT_INVALID'));
+    assert.deepEqual([h.fake.commands(), h.router.calls, readdirSync(h.workDir)], [[], [], []]);
+  }
+  for (const [key, max] of Object.entries(BRIDGE_BOUNDS)) {
+    for (const value of [1, max]) {
+      const h = certifyHarness(t);
+      const report = await certifyCore({ platform: onWindows(), workDir: h.workDir, deps: { ...h.deps, bounds: Object.assign(Object.create(null), { [key]: value }) } });
+      assert.deepEqual([report.checks.map(check => check.id), report.checks.at(-1)], [CERTIFY_IDS, { id: 'teardown', result: 'passed', code: null }], `${key} ${value}`);
+    }
+  }
+  const failedBridge = code => certification({ checks: checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'],
+    ['bridge-framing', 'failed', code], ['bridge-eof', 'not-run'], ['teardown', 'passed']) });
+  const mismatch = certifyHarness(t, { bridge: { materialize: proc => proc.reply({ kind: 'materialized', digest: 'f'.repeat(64) }) } });
+  assert.deepEqual([await mismatch.certify(), mismatch.deletes, mismatch.router.calls.length], [failedBridge('TRANSFER_DIGEST_MISMATCH'), [['delete', '--purge', GUEST]], 1]);
+  // A silent session ends only through the overridden 50 ms budget.
+  const silent = certifyHarness(t, { bridge: { scripts: { 'certify-framing': () => {} } } });
+  assert.deepEqual(await certifyCore({ platform: onWindows(), workDir: silent.workDir, deps: { ...silent.deps, bounds: { sessionMs: 50 } } }),
+    failedBridge('CERTIFY_BRIDGE_FRAMING_SESSION_FAILED'));
 });
 
 // CQ-R09c copy-only snapshot materialization

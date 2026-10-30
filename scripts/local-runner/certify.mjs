@@ -3,10 +3,12 @@
 // then always deletes the run's VM by its exact owned name. It launches a real VM (and may download the ~600 MB image), so it
 // is operator-invoked on real hardware, never CI; CQ-R13 validates the attached reports. The injectable core always reports
 // 'injected' and the native entry takes exactly { workDir }, so mocks never certify. Certification is not activation:
-// executionReady stays false and verified-local stays unavailable. Reports carry fixed codes and hashes only.
+// executionReady stays false and verified-local stays unavailable. Reports carry fixed codes and hashes only. CQ-R13e1 adds
+// the bridge checks (certify-bridge.mjs) after 'no-mounts', with BRIDGE_BOUNDS, or certifyCore's validated overrides, on c.bounds.
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, open, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { BRIDGE_BOUNDS, BRIDGE_CHECKS } from './certify-bridge.mjs';
 import { platformFor } from './cli.mjs';
 import { runDoctor } from './doctor.mjs';
 import { IMAGE_ARCHES } from './guest-bootstrap.mjs';
@@ -50,6 +52,7 @@ const BODY = [
   ['readiness', async ({ outcome: { bootstrapReady, failures } }) => (bootstrapReady === true && Array.isArray(failures) && failures.length === 0 ? passed
     : failed(stable(failures?.[0], 'CERTIFY_NOT_READY')))],
   ['no-mounts', async ({ name, provider }) => { await assertNoMounts(name, provider); return passed; }],
+  ...BRIDGE_CHECKS.map(({ id, run }) => [id, run]),
 ];
 // Always runs, whatever happened before; by exact owned name, so a foreign record in the same ledger is never touched.
 const TEARDOWN = ['teardown', async ({ ledger, name, owner, provider }) => {
@@ -93,12 +96,12 @@ async function writeReport(workDir, report, random = randomBytes) {
   }
 }
 
-async function certify(platform, workDir, deps, native) {
+async function certify(platform, workDir, deps, native, bounds) {
   const startedAt = isoNow(deps.now);
   const ledger = createLedger(path.join(workDir, 'ledger'), { random: deps.random });
   const owner = { taskId: 'task-certify', attemptId: `attempt-${randomBytes(16).toString('hex')}`, generation: 1 }; // synthetic, per run
   const provider = { ...deps.provider, executable: deps.provider?.executable ?? platform.executable };
-  const c = { workDir, deps, ledger, owner, provider, name: null, outcome: null, arch: platform.arch ?? null, supervisorSha256: null };
+  const c = { workDir, deps, ledger, owner, provider, bounds, name: null, outcome: null, arch: platform.arch ?? null, supervisorSha256: null };
   // Records the arch this run's prerequisites detected (macOS reads its hardware).
   c.observed = { ...platform, prerequisites: async options => { const pre = await platform.prerequisites(options); c.arch = pre?.arch ?? c.arch; return pre; } };
   // Provisioning gets this wrapper: it captures this run's own reservation to delete, even after a throw.
@@ -120,12 +123,23 @@ async function certify(platform, workDir, deps, native) {
   return report;
 }
 
-/** Injected transports (tests): {provider, fetch, digest, sleep, random, doctor, now}. Its evidence can never certify. */
+// deps.bounds: absent, or a plain record of own data properties named in BRIDGE_BOUNDS, each a safe integer from 1 to its
+// constant, read once into a frozen copy. Anything else, a getter or a throwing proxy trap included, refuses.
+function boundsOf(bounds) {
+  if (bounds === undefined) return BRIDGE_BOUNDS;
+  try {
+    const entries = isRecord(bounds) ? Reflect.ownKeys(bounds).map(key => [key, Object.hasOwn(BRIDGE_BOUNDS, key) ? Object.getOwnPropertyDescriptor(bounds, key).value : NaN]) : null;
+    if (entries?.every(([key, value]) => Number.isSafeInteger(value) && value >= 1 && value <= BRIDGE_BOUNDS[key])) return Object.freeze({ ...BRIDGE_BOUNDS, ...Object.fromEntries(entries) });
+  } catch { /* refused below */ }
+  throw certifyError('CERTIFY_INPUT_INVALID');
+}
+
+/** Injected transports (tests): {provider, fetch, digest, sleep, random, doctor, now, bounds}. Its evidence can never certify. */
 export async function certifyCore(input) {
   const { platform, workDir, deps = {} } = isRecord(input) ? input : {};
   if (!validWorkDir(workDir) || !isRecord(platform) || !PLATFORM_IDS.includes(platform.id) || typeof platform.prerequisites !== 'function'
     || !isRecord(deps)) throw certifyError('CERTIFY_INPUT_INVALID');
-  return certify(platform, workDir, deps, false);
+  return certify(platform, workDir, deps, false, boundsOf(deps.bounds));
 }
 
 /** The operator's native run on this host's own platform module; options are exactly { workDir }. */
@@ -135,7 +149,7 @@ export async function runIsolationCertify(options) {
   if (!validWorkDir(workDir)) throw certifyError('CERTIFY_INPUT_INVALID');
   const platform = platformFor(process.platform);
   if (!platform) throw certifyError('CERTIFY_UNSUPPORTED_HOST');
-  return certify(platform, workDir, {}, true);
+  return certify(platform, workDir, {}, true, BRIDGE_BOUNDS);
 }
 
 // A plain-record copy with exactly `keys`, each read once; anything else refuses.
