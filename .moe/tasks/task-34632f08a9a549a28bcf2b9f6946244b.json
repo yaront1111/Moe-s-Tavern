@@ -145,7 +145,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:50.895Z",
-  "updatedAt": "2026-10-30T05:23:12.883Z",
+  "updatedAt": "2026-10-30T05:23:43.441Z",
   "dependsOn": [
     "task-d75f71d7664848fd859a3f877e74ba43",
     "task-f9abfd2d170246549e01fa1bcbff4238",
@@ -218,6 +218,30 @@
       "treeId": "d491e4e048f738115da392b84582620d4e9e872c",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "01ce4781b1efb3d37c92f64815ddab5805fd87e9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T05:04:06Z",
+      "paths": [
+        ".moe/tasks/task-34632f08a9a549a28bcf2b9f6946244b.json",
+        "docs/roles/architect.md",
+        "docs/roles/architect.reference.md",
+        "docs/roles/worker.md",
+        "docs/roles/worker.reference.md",
+        "docs/skills/explore-before-assume/SKILL.md",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts",
+        "packages/moe-daemon/src/util/targetedContextGuidance.test.ts",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T05:23:43.440Z",
+      "treeId": "27127f4e778c3acacf2aebf021c63c5668482fce",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -229,14 +253,15 @@
     "docs/skills/explore-before-assume/SKILL.md",
     "packages/moe-daemon/src/generated/initFiles.ts",
     "packages/moe-daemon/src/generated/skillFiles.ts",
-    "scripts/tests/prompt-cache-launcher.test.mjs"
+    "scripts/tests/prompt-cache-launcher.test.mjs",
+    ".moe/tasks/task-34632f08a9a549a28bcf2b9f6946244b.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-e4b7eee0@2026-10-29T14:13:28Z",
-    "at": "2026-10-29T15:06:59.261Z"
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-30T05:04:06Z",
+    "at": "2026-10-30T05:23:43.440Z"
   },
   "workStartedAt": "2026-10-30T05:04:41.715Z",
   "reviewStartedAt": "2026-10-30T05:23:12.881Z",
@@ -247,5 +272,10 @@
     "reportedAt": "2026-10-30T05:23:12.881Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-C10 targeted context guidance. Docs and tests only; the launcher sources are untouched. About +264/-25 non-board lines.\n\nDocs:\n- worker.md, new line before the memory paragraph: reuse what Moe supplied; expand only for what the manifest marks truncated, omitted or missing, for a listed limitation, for a stale or changed reference, or for a slice that cannot support the change. 'A supplied slice is a navigation aid, never a reason to skip a read the change needs.' Re-fetch get_context only on request, on a status or plan-revision change, or when you no longer hold the context.\n- worker.md line 23 and architect.md line 30: load a recommended skill once per session, reloading only after it leaves context.\n- architect.md line 12: the same reuse rule, as appends only.\n- C06 adaptation, one sentence in worker.md and architect.md: a seat presenting basePacketId+contextEpoch advances contextEpoch after every compaction.\n- Reference docs: the unconditional list_memories is now inventory-first, and the skill rows say 'once per session'.\n- explore-before-assume: new '## Reuse what was already verified' section, citing `no-repository-source`.\n- Line counts: architect 39, worker 30, qa unchanged.\n\nBundles: initFiles.ts and skillFiles.ts regenerated via Windows Git Bash. The diff is exactly the 4 role-doc entries plus one new shipped sha each, and the skill entry. A rerun gives zero diff.\n\nTests:\n- targetedContextGuidance.test.ts, G1-G6: bundle keys, forbidden broad-reread phrases absent, sentinels present, stable-prefix hygiene. Red on the unedited docs (4 failed).\n- prompt-cache-launcher.test.mjs, T1-T7 per engine, using the real launcher slices and role docs. The stable prefix is identical across packets A and B, carries the exact role doc and the new rule, and holds no packet id, nonce or tag. The packet is intact in the dynamic part, which keeps the transport directives and never duplicates the role doc.\n\nResults:\n- Snapshot of HEAD a46ce43 plus the owned files: 5 daemon "
+  "completionSummary": "CQ-C10 targeted context guidance. Docs and tests only; the launcher sources are untouched. About +264/-25 non-board lines.\n\nDocs:\n- worker.md, new line before the memory paragraph: reuse what Moe supplied; expand only for what the manifest marks truncated, omitted or missing, for a listed limitation, for a stale or changed reference, or for a slice that cannot support the change. 'A supplied slice is a navigation aid, never a reason to skip a read the change needs.' Re-fetch get_context only on request, on a status or plan-revision change, or when you no longer hold the context.\n- worker.md line 23 and architect.md line 30: load a recommended skill once per session, reloading only after it leaves context.\n- architect.md line 12: the same reuse rule, as appends only.\n- C06 adaptation, one sentence in worker.md and architect.md: a seat presenting basePacketId+contextEpoch advances contextEpoch after every compaction.\n- Reference docs: the unconditional list_memories is now inventory-first, and the skill rows say 'once per session'.\n- explore-before-assume: new '## Reuse what was already verified' section, citing `no-repository-source`.\n- Line counts: architect 39, worker 30, qa unchanged.\n\nBundles: initFiles.ts and skillFiles.ts regenerated via Windows Git Bash. The diff is exactly the 4 role-doc entries plus one new shipped sha each, and the skill entry. A rerun gives zero diff.\n\nTests:\n- targetedContextGuidance.test.ts, G1-G6: bundle keys, forbidden broad-reread phrases absent, sentinels present, stable-prefix hygiene. Red on the unedited docs (4 failed).\n- prompt-cache-launcher.test.mjs, T1-T7 per engine, using the real launcher slices and role docs. The stable prefix is identical across packets A and B, carries the exact role doc and the new rule, and holds no packet id, nonce or tag. The packet is intact in the dynamic part, which keeps the transport directives and never duplicates the role doc.\n\nResults:\n- Snapshot of HEAD a46ce43 plus the owned files: 5 daemon ",
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/targetedContextGuidance.test.ts",
+    "docs/roles/worker.md",
+    "docs/roles/architect.md"
+  ]
 }
