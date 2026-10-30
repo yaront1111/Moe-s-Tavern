@@ -3286,6 +3286,141 @@ test('TT4 a cache file growing after stat cannot cause an unbounded read', async
   assert.ok(readBytes <= toolchain.size + 1, `read ${readBytes} bytes for a ${toolchain.size}-byte pin`);
 });
 
+// CQ-R11e4: copy the sealed offline npm cache without mounts or a guest network request.
+import * as dependencyTransfer from '../local-runner/snapshot-transfer.mjs';
+const treeOf = () => validateImport([
+  fileOf(`_cacache/content-v2/sha512/ab/cd/${'e'.repeat(124)}`, 'cached package'),
+  fileOf('moe-dependencies.json', '{"version":1,"dirs":["."]}'),
+]);
+const dependencyLayout = dir => ({ lib: path.join(dir, 'lib'), workspace: path.join(dir, 'lib', 'dependencies'),
+  manifest: path.join(dir, 'lib', 'dependencies.manifest.json') });
+function dependenciesIn(dir, input, setup = '') {
+  const paths = dependencyLayout(dir);
+  const code = `${PY_LOAD}${setup}\nsys.exit(m.dependencies(0, 1, sys.argv[2], sys.argv[3], (os.getuid(), os.getgid())))`;
+  return Object.assign(spawnSync('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, paths.workspace, paths.manifest],
+    { input, maxBuffer: 64 << 20, timeout: 60_000 }), paths);
+}
+function assertDependencies(paths, tree) {
+  assert.deepEqual(readdirSync(paths.lib).sort(), ['dependencies', 'dependencies.manifest.json']);
+  const names = readdirSync(paths.workspace, { recursive: true });
+  assert.deepEqual(names.filter(name => statSync(path.join(paths.workspace, name)).isFile()).sort(), tree.entries.map(e => e.path).sort());
+  for (const name of ['', ...names]) {
+    const file = path.join(paths.workspace, name), info = statSync(file);
+    assert.deepEqual([modeOf(file), info.uid, info.gid], [info.isDirectory() ? 0o755 : 0o644, process.getuid(), process.getgid()], name);
+  }
+  for (const entry of tree.entries) assert.deepEqual(readFileSync(path.join(paths.workspace, entry.path)), Buffer.from(entry.data));
+  assert.deepEqual([modeOf(paths.manifest), statSync(paths.manifest).uid, statSync(paths.manifest).gid], [0o600, process.getuid(), process.getgid()]);
+  assert.deepEqual(JSON.parse(readFileSync(paths.manifest)), { version: 1, digest: tree.digest,
+    files: Object.fromEntries(tree.entries.map(e => [e.path, [e.executable, e.size, e.sha256]])) });
+}
+
+test('MD1 dependencies CLI is exact, root-only and routes to the fixed root-owned layout', { skip: NOT_POSIX }, () => {
+  for (const args of [['dependencies', 'x'], ['DEPENDENCIES']]) {
+    const run = spawnSync('python3', ['-I', '-B', PY_SUPERVISOR, ...args]);
+    assert.deepEqual([run.status, run.stdout.length], [64, 0], String(run.stderr));
+  }
+  for (const uid of [1000, 0]) {
+    const code = `${PY_LOAD}m.dependencies = lambda *a, **k: sys.stderr.write(repr((a, k))) and 42\nsys.exit(m.main(['dependencies'], geteuid=lambda: ${uid}))`;
+    const run = spawnSync('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR]);
+    assert.deepEqual([run.status, String(run.stderr), run.stdout.length], uid ? [77, '', 0] : [42, '((0, 1), {})', 0]);
+  }
+  const code = `${PY_LOAD}m.materialize = lambda *a, **k: sys.stderr.write(repr((a, k))) and 42\nsys.exit(m.dependencies(0, 1))`;
+  const run = spawnSync('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR]);
+  assert.deepEqual([run.status, String(run.stderr), run.stdout.length],
+    [42, "((0, 1, '/var/lib/moe/dependencies', '/var/lib/moe/dependencies.manifest.json', (0, 0)), {'mode': 493})", 0]);
+});
+
+test('MD2 dependencies installs exact bytes with readable non-writable modes and a private manifest', { skip: NOT_POSIX }, t => {
+  const tree = treeOf(), run = dependenciesIn(scratch(t), framesOf([...hostFrames(tree)]));
+  assert.equal(run.status, 0, String(run.stderr));
+  assert.deepEqual(createFrameDecoder().push(run.stdout), [{ kind: 'materialized', digest: tree.digest }]);
+  assertDependencies(run, tree);
+});
+
+test('MD3 dependencies refuses existing targets or bad streams without replacing or leaving bytes', { skip: NOT_POSIX }, t => {
+  const tree = treeOf(), frames = [...hostFrames(tree)], outside = scratch(t);
+  for (const plant of [p => mkdirSync(p.workspace), p => writeFileSync(p.manifest, 'kept'),
+    p => symlinkSync(outside, p.workspace), p => symlinkSync(outside, p.manifest)]) {
+    const dir = scratch(t), paths = dependencyLayout(dir);
+    mkdirSync(paths.lib);
+    plant(paths);
+    const before = readdirSync(paths.lib).map(name => [name, lstatSync(path.join(paths.lib, name)).mtimeMs]);
+    const run = dependenciesIn(dir, framesOf(frames));
+    assert.deepEqual([run.status, run.stdout.length, readdirSync(paths.lib).map(name => [name, lstatSync(path.join(paths.lib, name)).mtimeMs])], [73, 0, before], String(run.stderr));
+    assert.deepEqual(readdirSync(outside), []);
+  }
+  const head = createFrameDecoder(MAX_HOST_FRAME_BYTES).push(frames[0])[0];
+  for (const input of [framesOf([{ ...head, digest: '0'.repeat(64) }, ...frames.slice(1)]),
+    framesOf(frames).subarray(0, -1), framesOf([...frames, { kind: 'end' }])]) {
+    const run = dependenciesIn(scratch(t), input);
+    assert.deepEqual([run.status, run.stdout.length, existsSync(run.workspace), existsSync(run.manifest),
+      existsSync(run.lib) ? readdirSync(run.lib) : []], [65, 0, false, false, []], String(run.stderr));
+  }
+});
+
+test('TD1 installDependencies streams exactly the sealed tree between two mount checks', async () => {
+  const tree = treeOf(), p = transferProvider();
+  const result = await dependencyTransfer.installDependencies({ name: GUEST, tree, provider: p.provider });
+  assert.deepEqual(result, { instance: GUEST, digest: tree.digest, files: tree.entries.length,
+    bytes: tree.entries.reduce((n, e) => n + e.size, 0), executionReady: false });
+  assert.equal(Object.isFrozen(result), true);
+  assert.deepEqual([p.proc.before, p.guest.ids(), p.guest.unexpected], [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], []]);
+  assert.deepEqual([p.proc.calls, p.proc.kills], [[['multipass', snapshotArgv(GUEST, 'dependencies'), PIPES]], []]);
+  assert.deepEqual(Buffer.concat(p.proc.written), framesOf([...hostFrames(tree)]));
+});
+
+test('TD2 installDependencies rejects invalid input before I/O and refuses untrusted guest results', async () => {
+  const tree = treeOf(), done = { kind: 'materialized', digest: tree.digest }, entry = tree.entries[0];
+  for (const options of [null, [], 0, '', undefined]) {
+    await assert.rejects(dependencyTransfer.installDependencies(options), transferRefused('TRANSFER_INPUT_INVALID'));
+  }
+  for (const invalid of [null, [], {}, { ...tree, entries: null }, { ...tree, digest: 'no' },
+    ...[{ size: entry.size + 1 }, { path: 3 }, { executable: 0 }, { size: -1 }, { size: 0.5 }, { data: [] }, null]
+      .map(change => ({ ...tree, entries: [change === null ? null : { ...entry, ...change }] }))]) {
+    const p = transferProvider();
+    await assert.rejects(dependencyTransfer.installDependencies({ name: GUEST, tree: invalid, provider: p.provider }), transferRefused('TRANSFER_INPUT_INVALID'));
+    assert.deepEqual([p.guest.calls, p.proc.calls], [[], []]);
+  }
+  for (const change of [{ name: 'primary' }, { timeoutMs: 0 }, { provider: { spawn: 3 } }]) {
+    const p = transferProvider();
+    await assert.rejects(dependencyTransfer.installDependencies({ name: GUEST, tree, provider: p.provider, ...change }), transferRefused('TRANSFER_INPUT_INVALID'));
+    assert.deepEqual([p.guest.calls, p.proc.calls], [[], []]);
+  }
+  for (const [frames, code, exit = 0] of [[[], 'TRANSFER_FRAME_INVALID'], [[done, done], 'TRANSFER_FRAME_INVALID'],
+    [{ ...done, extra: true }, 'TRANSFER_FRAME_INVALID'], [{ ...done, kind: 'other' }, 'TRANSFER_FRAME_INVALID'],
+    [{ ...done, digest: 'b'.repeat(64) }, 'TRANSFER_DIGEST_MISMATCH'], [done, 'TRANSFER_EXIT_FAILED', 65]]) {
+    const p = transferProvider(undefined, proc => proc.reply(frames, exit));
+    await assert.rejects(dependencyTransfer.installDependencies({ name: GUEST, tree, provider: p.provider }), transferRefused(code));
+  }
+  for (const info of [guestDetail({ mounts: HOST_MOUNT }), [guestDetail(), guestDetail({ mounts: HOST_MOUNT })]]) {
+    const p = transferProvider({ info });
+    await assert.rejects(dependencyTransfer.installDependencies({ name: GUEST, tree, provider: p.provider }), transferRefused('TRANSFER_MOUNTS_PRESENT'));
+    assert.equal(p.proc.calls.length, Array.isArray(info) ? 1 : 0);
+  }
+});
+
+test('TD3 installDependencies installs through the real supervisor and refuses a second copy', { skip: NOT_POSIX, timeout: 60_000 }, async t => {
+  const tree = treeOf(), paths = dependencyLayout(scratch(t)), guest = fakeGuest(), launches = [];
+  t.after(() => launches.forEach(child => child.exitCode === null && child.signalCode === null && child.kill('SIGKILL')));
+  const spawn = (executable, argv, options) => {
+    assert.deepEqual([executable, argv, options], ['multipass', snapshotArgv(GUEST, 'dependencies'), PIPES]);
+    const code = `${PY_LOAD}sys.exit(m.${argv.at(-1)}(0, 1, sys.argv[2], sys.argv[3], (os.getuid(), os.getgid())))`;
+    const child = spawnChild('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, paths.workspace, paths.manifest], options);
+    launches.push(child);
+    return child;
+  };
+  const install = () => dependencyTransfer.installDependencies({ name: GUEST, tree, provider: { run: guest.run, spawn } });
+  tree.entries[0].data[0] ^= 1; // sealed records cannot freeze their buffer: the guest must hash actual bytes
+  await assert.rejects(install(), transferRefused('TRANSFER_EXIT_FAILED'));
+  assert.deepEqual([launches[0].exitCode, readdirSync(paths.lib)], [65, []]);
+  tree.entries[0].data[0] ^= 1;
+  assert.equal((await install()).digest, tree.digest);
+  assertDependencies(paths, tree);
+  await assert.rejects(install(), transferRefused('TRANSFER_EXIT_FAILED'));
+  assert.equal(launches[2].exitCode, 73);
+  assertDependencies(paths, tree);
+});
+
 // CQ-R09 export rows: export() walks a workspace that materialize() built, changed as the agent would.
 import { chmodSync, renameSync, truncateSync } from 'node:fs';
 

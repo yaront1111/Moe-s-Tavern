@@ -31,6 +31,9 @@
 # Mode 'toolchain' (CQ-R11e2): a pinned tarball from host frames into root-owned TOOLCHAIN, then {kind: 'installed',
 # sha256} and 0; 65 malformed stream/archive or unsafe tree, 71 no tarfile.data_filter, 73 existing install, 74 I/O
 # failure, 77 not root, 64 any other argv. Refusals leave no new install or staging tree.
+# Mode 'dependencies' (CQ-R11e4): one snapshot into root-owned DEPENDENCIES (0755 directories, 0644 files) and a
+# private manifest, then {kind: 'materialized', digest} and 0; 65 malformed/mismatched stream, 73 existing tree or
+# manifest, 74 I/O failure, 77 not root, 64 any other argv. Stream refusals leave no new tree, manifest or staging.
 import base64
 import contextlib
 import hashlib
@@ -594,8 +597,8 @@ def write_manifest(path, digest, rows):
 # Builds the tree in a root-only staging directory beside workspace and checks it against the header. It then writes the
 # root-only manifest and renames the tree into place for owner (default: the AGENT_IDENTITY account), so no workspace
 # ever exists without its manifest. A handled failure leaves neither and writes no frame. A crash can leave only the
-# 0700 staging tree, and after the manifest that manifest too, so a retry exits 73.
-def materialize(in_fd, out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, owner=None):
+# 0700 staging tree, and after the manifest that manifest too, so a retry exits 73. mode sets the final root permissions.
+def materialize(in_fd, out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, owner=None, mode=0o700):
     if owner is None:
         try:
             entry = pwd.getpwnam(AGENT_IDENTITY)
@@ -608,10 +611,10 @@ def materialize(in_fd, out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST,
     try:
         parent = os.path.dirname(workspace)
         os.makedirs(parent, 0o755, exist_ok=True)
-        staging = tempfile.mkdtemp(prefix='.workspace-', dir=parent)  # 0700
+        staging = tempfile.mkdtemp(prefix='.' + os.path.basename(workspace) + '-', dir=parent)  # 0700
         root = os.open(staging, WALK)
         digest, rows = receive(snapshot_frames(in_fd), root, owner)
-        own(root, owner, 0o700)
+        own(root, owner, mode)
         write_manifest(manifest, digest, rows)
         try:
             os.rename(staging, workspace)
@@ -630,6 +633,14 @@ def materialize(in_fd, out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST,
             os.close(root)
         if staging is not None:
             shutil.rmtree(staging, ignore_errors=True)
+
+
+DEPENDENCIES = '/var/lib/moe/dependencies'
+DEPENDENCIES_MANIFEST = '/var/lib/moe/dependencies.manifest.json'
+
+
+def dependencies(in_fd, out_fd, tree=DEPENDENCIES, manifest=DEPENDENCIES_MANIFEST, owner=(0, 0)):
+    return materialize(in_fd, out_fd, tree, manifest, owner, mode=0o755)
 
 
 # CQ-R09 export. The host derives every size and hash from the bytes it receives (validateImport), so no frame carries
@@ -1330,10 +1341,12 @@ def install_toolchain(in_fd, out_fd, toolchain=TOOLCHAIN):
 # the environment. No refusal writes to stdout.
 def main(argv, geteuid=os.geteuid, **seams):
     # bridgeArgv and snapshotArgv pass exactly these, CQ-R11c's checkArgv passes ['check'] and CQ-R10d3 ['agents'].
-    if argv not in (['bridge'], ['check'], ['materialize'], ['export'], ['verify'], ['agents'], ['toolchain']):
+    if argv not in (['bridge'], ['check'], ['materialize'], ['export'], ['verify'], ['agents'], ['toolchain'], ['dependencies']):
         return os.EX_USAGE
     if geteuid() != 0:
         return os.EX_NOPERM
+    if argv == ['dependencies']:
+        return dependencies(0, 1)
     if argv == ['toolchain']:
         return install_toolchain(0, 1)
     if argv == ['materialize']:

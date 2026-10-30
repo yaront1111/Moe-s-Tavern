@@ -11,9 +11,60 @@
     "Existing finalizeAttempt cases pass unchanged; the verification command exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Schema types (packages/moe-daemon/src/types/schema.ts). First confirm WT-01 landed (`git log --oneline --grep 'Moe-Task: task-6cf120a38b344e72b7bab8b9faf806f1'`). It adds `ExecutionAttempt.workspaceMode?: ExecutionWorkspaceMode` ('shared'|'worktree'; absent means shared) and an optional `workspaceMode` param on `openAttempt` (contract msg-591400ac). Use those as landed; do not redefine them. Then add, next to the Task interface, following the `PLAN_CRITIQUE_CATEGORIES` const+type pattern:\n- `export const UNLANDED_REASONS = ['conflict', 'contention', 'gate', 'diverged', 'remote'] as const; export type UnlandedReason = typeof UNLANDED_REASONS[number];`. 'remote' is the revised design's fetch or push-transport failure (§2.2 L4, §2.3; spike comment-34a87119). The task text predates it.\n- `export interface LandingRetry { reason: UnlandedReason; paths: string[]; rescueRef: string; targetTip: string | null; count: number; at: string }`, with a one-line doc per field. count = consecutive unlanded finalizes since the last landed/nothing-to-commit one, 1-based. targetTip = the 40-hex target tip B the landing tried, or null when the runner did not report it.\n- On Task: `landingRetry?: LandingRetry | null`, with a doc comment. Written only by moe.finalize_attempt: set by outcome 'unlanded' (worktree attempts), nulled by 'landed' and 'nothing-to-commit', absent on every task that never had an unlanded worktree landing.\nNo other schema change.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "finalize_attempt input contract, plus its refusal tests (tools/finalizeAttempt.ts, tools/finalizeAttempt.test.ts).\n\nIn finalizeAttempt.ts:\n- OUTCOMES gains 'unlanded'; fix the 'four real endings' doc comment.\n- FinalizeArgs gains unlandedReason, conflictPaths, rescueRef and targetTip (unknown). FinalizeParams gains `unlanded: { reason; paths; rescueRef; targetTip } | null`.\n- validate(), only when outcome === 'unlanded':\n  (a) landedRevision must be absent or null, else invalidInput('landedRevision', 'must be null when outcome is \"unlanded\": nothing reached the target').\n  (b) unlandedReason: requireNonBlank, then it must be in UNLANDED_REASONS, else invalidInput('unlandedReason', 'must be one of …').\n  (c) rescueRef: requireNonBlank and ≤255 chars. It must start with `refs/moe/rescue/${taskId}/` (startsWith, no regex built from the id), and the remainder must match /^[A-Za-z0-9][A-Za-z0-9._-]*$/ (the sh `<utc-ts>` or the ps1 `<utc-ts>-<n>`). Else invalidInput('rescueRef', …).\n  (d) targetTip: absent or null gives null; otherwise requireNonBlank plus REVISION_RE, else invalidInput('targetTip', 'must be 40 hex characters').\n  (e) conflictPaths: absent or null gives []. A non-array gives invalidInput('conflictPaths', 'must be an array of strings'). Otherwise `new PathSet().addAll(raw).values().slice(0, 500)` (PathSet from util/attributionTiers.ts normalizes, dedupes and drops absolute, traversal and non-string entries, the same leniency as record_commit's readPathList). One bad path must never keep the landing hold.\n  For every other outcome these four fields are ignored, not validated: an extra field must never refuse the exit-path call that lifts the hold. landedRevision keeps today's rules there.\n- Handler: right after the ATTEMPT_ID_TASK_MISMATCH check and BEFORE the closed-attempt replay, refuse 'unlanded' when `attempt.workspaceMode !== 'worktree'` with invalidInput('outcome', '\"unlanded\" is only valid for a worktree attempt; attempt <id> is <mode ?? shared>'). Absent counts as shared.\n- Error handling: every refusal above is a MoeError (INVALID_INPUT or MISSING_REQUIRED, code -32602) thrown before setAttemptPhase or any task write, so the caller can correct and retry against an untouched, still-finalizing attempt.\n- inputSchema: the outcome enum comes from OUTCOMES. New properties: unlandedReason {type:'string', enum: UNLANDED_REASONS}, conflictPaths {type:'array', items:{type:'string'}}, rescueRef {type:'string'}, targetTip {type:'string'}, each described as read only when outcome is \"unlanded\". landedRevision's description adds 'must be omitted or null for \"unlanded\"'. additionalProperties stays false. Add one sentence to the tool description about 'unlanded'.\n\nTests: a new describe 'moe.finalize_attempt — unlanded worktree landings' with its own beforeEach (task-1 REVIEW, unassigned, reopenCount 1, two COMPLETED plan steps) and helper worktreeAttempt() = openAttempt({taskId, workerId:'worker-1', runnerId:'runner-pilot', workspace:<testDir>/.worktrees/task-1, workspaceMode:'worktree'}) plus setAttemptPhase('finalizing'). Its payload helper uses reason 'conflict', conflictPaths ['src/a.ts','docs/b.md'], rescueRef 'refs/moe/rescue/task-1/20261030T120000Z' and targetTip 'c3'.repeat(20).\n- it.each refusals, each asserting code -32602, the attempt still 'finalizing' and task-1.json bytes identical before and after: unlandedReason 'bogus' (codeName INVALID_INPUT, DoD 4); unlandedReason missing; rescueRef missing; 'refs/heads/main'; 'refs/moe/rescue/task-2/x'; targetTip 'HEAD'; conflictPaths 'src/a.ts' (not an array); landedRevision = LANDED.\n- DoD 4, shared attempts: it.each over an attempt opened without workspaceMode (a legacy record) and one opened with workspaceMode 'shared'. Each gives INVALID_INPUT with the same no-change checks.\n- The advertised schema: the outcome enum contains 'unlanded', and unlandedReason.enum equals UNLANDED_REASONS.\nAdd new tests only. Never edit an existing assertion.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Unlanded routing and landingRetry lifecycle, plus their tests (tools/finalizeAttempt.ts, tools/finalizeAttempt.test.ts). After the unchanged setAttemptPhase(closed) and announceAttemptClosed (the attempt closes first, then the task moves, as the task says), apply the task effect from a fresh state.getTask. Make ONE state.updateTask call, with actor = params.workerId ?? attempt.workerId.\n- 'unlanded': prior = task.landingRetry?.count when it is a positive safe integer, else 0 (a garbage stored value never throws). Set count = prior + 1, now = one ISO stamp, and landingRetry = {reason, paths, rescueRef, targetTip, count, at: now}. Build one TaskComment {id: generateId('comment'), author:'moe-daemon', timestamp: now, content} that names the reason, the count, the attempt id and generation, the paths (the first 20, then '(+N more)'; '(none reported)' when empty), the rescue ref, the target tip (or 'unknown') and where the task went. Then:\n  * status REVIEW, reason !== 'diverged' and count < 3: {status:'WORKING', assignedWorkerId:null, landingRetry, comments:[...task.comments, comment]} (default TASK_UPDATED). reopenCount, implementationPlan and stepsCompleted are untouched: the next worker resolves the conflict in W and calls complete_task directly, and that call needs every step COMPLETED (completeTask.ts assertAllStepsCompleted).\n  * status REVIEW and (reason 'diverged' or count >= 3): {status:'BLOCKED', assignedWorkerId:null, blockedReason:'<landing unlanded (reason) N time(s) in a row; rescue ref; reconcile, then move the task to WORKING>', blockedResourceId:null, blockedOnTaskIds:null, blockedFromStatus:'WORKING', blockedAt: now, landingRetry, comments}, with event 'TASK_BLOCKED' (the reportBlocked.ts flip field set). blockedFromStatus is WORKING, not REVIEW: unblock_worker {resolveBlocks:true} or set_task_status then restores a landing retry, and never hands QA a task with nothing landed.\n  * any other status (a governor, a human or a replan moved the row while the runner was landing): leave status untouched and write only {landingRetry, comments}. Never move a row the daemon did not find in REVIEW.\n- 'landed' or 'nothing-to-commit': if task.landingRetry != null, write {landingRetry: null}. Per §2.9 both mean nothing is left unlanded: nothing-to-commit means the target already holds the net change, and a stale count would otherwise block a later retry early. With no landingRetry there is no write, so every shared-mode finalize stays byte-identical.\n- 'rescued' / 'failed': no task write.\n- response(attempt, params, task) adds taskStatus (the current status) and landingRetry (the current value or null). The closed replay builds it the same way, so a repeat still writes nothing.\n- Error handling: attempt-then-task is not a transaction. If the task write throws, the error propagates to the caller after the hold is already lifted, with nothing published; the row stays in REVIEW, where QA sees the failed landing record, and the replay path never re-routes. State this in a code comment, in the style of completeTask.ts's 'fail safe' note.\n\nTests (same describe):\n- DoD 1: conflict gives result.phase 'closed' and result.taskStatus 'WORKING'. The stored task is WORKING, assignedWorkerId null, reopenCount 1, both steps still COMPLETED, and landingRetry toEqual {reason:'conflict', paths:['src/a.ts','docs/b.md'], rescueRef, targetTip, count:1, at:<parses as a date>}. task-1.json on disk holds the same landingRetry. Exactly one new comment, by 'moe-daemon', contains 'conflict', both paths and the rescue ref.\n- it.each over contention, gate and remote: WORKING, count 1 (spike comment-34a87119 asks for a 'remote' case).\n- DoD 2: 'diverged' gives BLOCKED, blockedFromStatus 'WORKING', a blockedReason containing 'diverged', blockedAt set, assignedWorkerId null, count 1. Third consecutive: three real calls with reasons conflict, contention and gate. Between them, updateTask task-1 {status:'REVIEW'} and open a fresh worktreeAttempt (generations 2 and 3). After #2 the task is WORKING with count 2; after #3 it is BLOCKED with count 3 and reason 'gate'.\n- DoD 3, it.each over 'landed' (with LANDED) and 'nothing-to-commit': after an unlanded call, go back to REVIEW with a fresh attempt, then finalize. landingRetry is null in memory and on disk, the status stays REVIEW, and the next unlanded call starts again at count 1.\n- Replay: Promise.all of the same unlanded call twice, then a third sequential call. All responses are equal, count is 1, the comment count rose by exactly 1, and task-1.json bytes are unchanged by the repeats.\n- A task not in REVIEW (moved to PLANNING before the call) stays PLANNING, and landingRetry plus one comment are recorded.\n- paths: duplicates, '/etc/passwd' and '../x' are dropped, and 600 entries are capped at 500.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "get_context exposure (tools/getContext.ts, test in tools/finalizeAttempt.test.ts). get_context lists task fields one by one (there is no spread of the task), so without this line WT-11's pre-flight and the resumed worker cannot see landingRetry. In the task projection, directly after `landing: buildLanding(commits),`, add `...(task.landingRetry ? { landingRetry: task.landingRetry } : {}),` with a one-line comment: set by finalize_attempt 'unlanded'; read by the next worker's pre-flight. When the field is absent or null, nothing is added, so every existing payload and its packet id stays byte-identical. Do not role-trim it. Touch nothing else in getContext.ts: WT-02 (a dependency of this task) owns its workspace field.\nTest in finalizeAttempt.test.ts, calling `getContextTool(h.state).handler({ taskId: 'task-1' }, h.state)`:\n- before any unlanded call, `'landingRetry' in result.task` is false;\n- after a conflict unlanded, result.task.landingRetry toEqual the stored record;\n- after a later 'landed', the key is absent again.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, run once from the repo root. This is the exact command, and its fresh output is complete_task's verification evidence:\nS=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh) && cd packages/moe-daemon && npm run build && npx vitest run src/tools/finalizeAttempt.test.ts src/tools/getContext\n- The parity part is rail 2, run on a HEAD snapshot so a peer's mid-edit wrapper bytes cannot fail this task (spike comment-5f4ab9ad).\n- `npm run build` type-checks every consumer of the Task type.\n- The vitest filters cover DoD 1-5 and the whole get_context family, which is the blast radius of the projection line.\n- Full regression is WT-19's.\nOn a WSL seat the shared checkout's node_modules is a Windows install, so vitest cannot start there. Run the daemon half in a Linux snapshot per Serena gotcha-linux-vitest-reuse-native-node-modules: archive HEAD, copy this task's 4 files over it and cmp them, link a native node_modules, then run the same `npm run build && npx vitest run …` from the snapshot's packages/moe-daemon. Record the exact command you ran.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review, the final step. Load adversarial-self-review and read the whole diff as an attacker:\n1. A repeated or concurrent finalize (the handler runs in state.runExclusive) never re-routes, re-comments or double-counts.\n2. A shared-mode or legacy finalize writes zero task bytes.\n3. Error handling: every refusal happens before setAttemptPhase, and a task-write failure leaves the row in REVIEW, not half-routed.\n4. A garbage stored landingRetry.count cannot throw.\n5. The count threshold is >= 3 and only 'diverged' blocks at once.\n6. The BLOCKED field set matches reportBlocked.ts, so unblock_worker {resolveBlocks:true} and set_task_status restore WORKING.\n7. A huge conflictPaths list is capped and the comment preview stays bounded.\n8. `git diff` of finalizeAttempt.test.ts shows only added lines, so the existing finalize and qa_approve-hold cases pass unchanged (DoD 5).\nIf the review changes any byte, re-run step 5's command and submit that output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,19 +74,129 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
-    "task-6cf120a38b344e72b7bab8b9faf806f1"
+    "task-6cf120a38b344e72b7bab8b9faf806f1",
+    "task-e27456ad67b64bc292080ea3a8b92f26",
+    "task-724e31fadd3e4f5cb137abe9e4147f11"
   ],
   "priority": "HIGH",
-  "order": 4,
+  "order": 9,
   "comments": [
     {
       "id": "comment-5f4ab9ad7d0d4cdc89a24d87763bce0d",
       "author": "worker-0062feec",
       "content": "Spike self-review correction (epic rail 2: parity-check must pass on every task). Append this to this task's verification command, run from the repo root: `&& S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)`. Running it on a HEAD snapshot keeps a peer's mid-edit wrapper bytes from failing a task that never touches the wrappers.",
       "timestamp": "2026-10-30T12:03:29.465Z"
+    },
+    {
+      "id": "comment-34a8711939214064a3e3c13221cfc1e6",
+      "author": "worker-0062feec",
+      "content": "Contract correction from the WT-S revision after QA reject 1. Where this comment and the row's description differ, the revised docs/plans/2026-10-30-per-task-worktrees.md and this comment win. Section numbers are unchanged. Plan against revised §2.5:\n- `unlandedReason` gains a fifth value: 'conflict' | 'contention' | 'gate' | 'diverged' | 'remote'. `remote` means one of two things: the target's remote could not be fetched before any push, or the last landing round ended on a push transport failure that the reconcile proved did not land.\n- `remote` routes like conflict, gate and contention: REVIEW → WORKING unassigned, then BLOCKED from the third consecutive unlanded finalize on. Only `diverged` blocks at once. Add a vitest case for `remote`.\n- `unlanded` is only ever sent when nothing was published. An unknown push outcome sends no finalize at all, and the attempt stays `finalizing` (§2.6). Do not add an outcome for it.",
+      "timestamp": "2026-10-30T13:01:42.139Z"
+    },
+    {
+      "id": "comment-2eaf1ba9396a4a5a92dd51ec71add311",
+      "author": "architect-899a90d6",
+      "content": "Architect note for the worker and QA. These deviations from the task text are deliberate and part of the approved plan:\n1. tools/getContext.ts gets one conditional line, task.landingRetry. The text says landingRetry \"rides on the task object\", but get_context (the getContext.ts task projection) and claim_next_task list task fields one by one. Without the line, WT-11's pre-flight and the worker could not see it. The test lives in finalizeAttempt.test.ts.\n2. unlandedReason also accepts 'remote'. The revised design (§2.2 L4, §2.3, Assumed interfaces; governor msg-836020d5, F1) routes fetch and transport failures as unlanded 'remote'. It goes to WORKING, like contention.\n3. A new optional param, targetTip (40 hex, else null), fills landingRetry.targetTip. The daemon never reads git, so the wrapper must report B.\n4. 'nothing-to-commit' clears landingRetry, as 'landed' does. Per §2.9 it means the target already holds the task's net change, and a stale count would otherwise block a later retry too early.\n5. dependsOn gains WT-02 (task-e27456ad, shares tools/getContext.ts) and task-724e31fa (shares types/schema.ts). Both are file-only edges needed in shared-checkout mode; WT-19's sweep may drop them.",
+      "timestamp": "2026-10-30T13:15:17.080Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:48:04.472Z",
-  "updatedAt": "2026-10-30T12:03:29.465Z"
+  "updatedAt": "2026-10-30T13:19:14.872Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T12:55:55.760Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T12:56:53.988Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-899a90d6"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:19:14.852Z",
+  "executionContract": {
+    "intendedBehavior": "moe.finalize_attempt accepts outcome 'unlanded' for a finalizing attempt whose workspaceMode is 'worktree' (design §2.5). It means the runner's landing published nothing and parked the bytes on the task branch plus rescueRef. The call closes the attempt exactly as today, then routes the task once, in one updateTask write:\n- a REVIEW row goes to WORKING, unassigned, with reopenCount, plan steps and stepsCompleted untouched;\n- it goes to BLOCKED instead (blockedFromStatus WORKING) when unlandedReason is 'diverged' or this is the 3rd consecutive unlanded finalize;\n- a row no longer in REVIEW keeps its status.\nEvery unlanded call sets Task.landingRetry = {reason, paths, rescueRef, targetTip, count, at}, with count = previous + 1, and appends one 'moe-daemon' task comment naming the reason and paths. 'landed' and 'nothing-to-commit' null an existing landingRetry. get_context's task carries landingRetry when it is set. A shared or legacy attempt, an unknown reason and malformed unlanded params are refused before any write.",
+    "acceptanceCriteria": [
+      "'unlanded' with reason conflict on a REVIEW worktree task leaves it WORKING, unassigned, reopenCount and COMPLETED steps unchanged, landingRetry {reason:'conflict', paths, rescueRef, targetTip, count:1, at} set (in memory and on disk) and exactly one task comment posted.",
+      "Reasons contention, gate and remote route like conflict (WORKING, count 1).",
+      "Reason 'diverged', and the 3rd consecutive unlanded finalize, move the task to BLOCKED with blockedFromStatus WORKING; the 2nd consecutive still goes to WORKING.",
+      "A later 'landed' or 'nothing-to-commit' finalize clears landingRetry, and the next unlanded starts again at count 1.",
+      "'unlanded' on a shared or legacy attempt, with an unknown or missing unlandedReason, a bad or foreign rescueRef, a non-40-hex targetTip, a non-array conflictPaths or a non-null landedRevision is refused (code -32602; an unknown reason is INVALID_INPUT) and changes nothing.",
+      "A repeated or concurrent unlanded call routes once: one comment, count 1, no further task bytes.",
+      "get_context's task includes landingRetry exactly when it is set.",
+      "Existing finalizeAttempt and qa_approve-hold cases pass unchanged; the verification command exits 0."
+    ],
+    "invariants": [
+      "Every refusal happens before setAttemptPhase: a refused call leaves the attempt finalizing and the task file byte-identical.",
+      "A call on an already-closed attempt answers from current state and writes nothing.",
+      "Shared-mode and legacy finalizes write no task bytes; only finalize_attempt writes landingRetry.",
+      "The attempt record's key set is unchanged.",
+      "get_context output is byte-identical for a task without landingRetry.",
+      "Only 'diverged' blocks at once; every other reason blocks from count 3."
+    ],
+    "compatibility": [
+      "Outcomes landed, nothing-to-commit, rescued and failed keep their validation; their responses only gain taskStatus and landingRetry.",
+      "The param names are a contract with WT-11 (comment-477c551b): unlandedReason, conflictPaths, rescueRef, targetTip; they are ignored on non-unlanded outcomes.",
+      "Task JSON gains one optional field; the Gson and TS clients ignore unknown fields."
+    ],
+    "approvedScope": [
+      "types/schema.ts: UNLANDED_REASONS, UnlandedReason, LandingRetry, Task.landingRetry.",
+      "tools/finalizeAttempt.ts: the 'unlanded' outcome, its validation and inputSchema, the worktree-mode guard, the routing, the landingRetry clear on landed/nothing-to-commit, and the response's taskStatus/landingRetry.",
+      "tools/getContext.ts: one conditional task.landingRetry projection line.",
+      "tools/finalizeAttempt.test.ts: new tests only."
+    ],
+    "reuse": [
+      "PathSet (util/attributionTiers.ts) for conflictPaths, as record_commit does.",
+      "REVISION_RE (state/candidateStore.ts) for targetTip.",
+      "generateId('comment') + state.updateTask for the comment, as delivery/repairActivation.ts does.",
+      "reportBlocked.ts's BLOCKED field set; updateTask's worker cascade for unassignment."
+    ],
+    "sourceAssumptions": [
+      "tools/finalizeAttempt.ts: OUTCOMES, validate, response, and the handler, whose closed replay precedes assertAttemptCurrent.",
+      "state/attemptStore.ts: openAttempt (optional workspaceMode from WT-01, msg-591400ac), setAttemptPhase, announceAttemptClosed.",
+      "types/schema.ts: Task, ExecutionAttempt.workspaceMode? (WT-01), and the PLAN_CRITIQUE_CATEGORIES const+type pattern.",
+      "state/taskStore.ts updateTask: clears the assignee on a status change unless set, trims comments, cascades the prior owner; assertProgressionReady checks forward progressions only.",
+      "tools/reportBlocked.ts: the BLOCKED flip field set and the 'TASK_BLOCKED' event.",
+      "util/attributionTiers.ts PathSet, used leniently by recordCommit.ts readPathList (MAX_PATHS 500).",
+      "delivery/repairActivation.ts comment(): daemon comments use author 'moe-daemon'.",
+      "tools/getContext.ts: the task projection lists fields explicitly; `landing: buildLanding(commits),` is the anchor."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh) && cd packages/moe-daemon && npm run build && npx vitest run src/tools/finalizeAttempt.test.ts src/tools/getContext"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- (1) Leave get_context alone, as the task text says. Rejected: getContext.ts and claimNextTask.ts project task fields one by one, so landingRetry would be invisible to WT-11's pre-flight and to the resumed worker. One conditional line fixes it, so no follow-up row.\n- (2) blockedFromStatus 'REVIEW' (the literal prior status). Rejected: an unblock would send QA a task with nothing landed.\n- (3) Refuse unlanded-only fields on other outcomes. Rejected: an extra field on a 'landed' call would keep the landing hold, which stalls the seat and the task, for no safety gain. They are ignored instead. A landedRevision on 'unlanded' IS refused, because it contradicts the move the daemon is about to make.\n- (4) Only 'landed' clears landingRetry. Extended to 'nothing-to-commit' (§2.9: the target already holds the net change); otherwise a stale count blocks a later retry early.\n- (5) A #governors post on the BLOCKED route. Skipped: the board row, the task comment and the stale-block sweep already surface it.\n- (6) Adding landingRetry to WebSocketServer's UPDATE_TASK_DENYLIST, and keeping a landingRetry row in WORKING inside nextStatusForRelease. Deferred to WT-19 (comment-631323b2), keeping this slice at 4 files.\n- (7) Reset plan steps like qa_reject does. Rejected: the resumed worker calls complete_task directly (design §2.5), and that requires every step COMPLETED.",
+    "codebaseInsights": "- The handler runs inside state.runExclusive. The closed-attempt replay must stay BEFORE assertAttemptCurrent (existing comment); the new worktree-mode guard goes before the replay.\n- state.updateTask clears assignedWorkerId on any status change unless it is set explicitly, cascades the prior owner's pointer, trims comments, and closes open attempts when the assignee drops.\n- REVIEW to WORKING and REVIEW to BLOCKED are not forward progressions, so assertProgressionReady never fires.\n- Daemon-authored comments use author 'moe-daemon' (delivery/repairActivation.ts comment()).\n- PathSet (util/attributionTiers.ts) is record_commit's lenient path reader (MAX_PATHS 500). REVISION_RE comes from state/candidateStore.ts.\n- WT-01 contract (msg-591400ac): ExecutionAttempt.workspaceMode? is optional, and absent means shared. openAttempt gains an optional workspaceMode param.\n- missingRequired and invalidInput both map to code -32602 (codeNames MISSING_REQUIRED and INVALID_INPUT).\n- The shared checkout's node_modules is a Windows install, so vitest from WSL fails with a rolldown native binding error. Use a Linux snapshot (Serena gotcha-linux-vitest-reuse-native-node-modules).",
+    "risks": "- The existing test 'records no landing fields on the attempt' asserts the attempt's exact key set. Add no attempt fields.\n- The existing repeat test compares whole responses, so taskStatus and landingRetry must come from current state on both calls.\n- Param names are a contract with WT-11 (comment-477c551b): unlandedReason, conflictPaths, rescueRef, targetTip. The response adds taskStatus and landingRetry.\n- The third consecutive call must block at count >= 3, while the second still goes to WORKING. The tests assert both.\n- A non-REVIEW row is recorded but never moved.\n- Docs are WT-17's (comment-b70b6bb2). Do not edit docs/.\n- dependsOn now includes WT-02 (shares getContext.ts) and task-724e31fa (shares schema.ts). Rebase onto their landed bytes. Keep WT-02's workspace field intact.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+      "packages/moe-daemon/src/tools/finalizeAttempt.test.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/util/attributionTiers.ts",
+      "packages/moe-daemon/src/delivery/repairActivation.ts",
+      "docs/plans/2026-10-30-per-task-worktrees.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:19:14.872Z",
+  "approvedPlanRevision": 1
 }

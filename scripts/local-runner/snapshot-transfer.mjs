@@ -20,7 +20,7 @@ import { validateImport } from './source-snapshot.mjs';
 // Raw bytes per data frame: base64 makes 1,398,104 characters, inside MAX_HOST_FRAME_BYTES with its JSON envelope.
 export const SNAPSHOT_CHUNK_BYTES = 1_048_576;
 export const MAX_TOOLCHAIN_BYTES = 134_217_728;
-const MODES = ['materialize', 'export', 'verify', 'agents', 'toolchain'];
+const MODES = ['materialize', 'export', 'verify', 'agents', 'toolchain', 'dependencies'];
 const MAX_TIMEOUT_MS = 600_000;
 const CONTROL = /[\x00-\x1f\x7f]/;
 // Fixed text only: a message never carries a path, guest text or snapshot byte.
@@ -185,6 +185,18 @@ async function transfer(name, provider, options, delivered) {
   await assertNoMounts(name, provider);
 }
 
+function materializedFrame(digest) {
+  let materialized = false;
+  const onFrame = frame => {
+    if (materialized || frame.kind !== 'materialized' || Object.keys(frame).sort().join() !== 'digest,kind') {
+      throw transferError('TRANSFER_FRAME_INVALID');
+    }
+    if (frame.digest !== digest) throw transferError('TRANSFER_DIGEST_MISMATCH');
+    materialized = true;
+  };
+  return { onFrame, delivered: () => materialized };
+}
+
 /**
  * Copies one SourceSnapshot into the owned guest's workspace through the supervisor's 'materialize' mode. Refuses
  * unless the guest shows no mount before and after, and accepts only one {kind:'materialized', digest} frame whose
@@ -192,18 +204,31 @@ async function transfer(name, provider, options, delivered) {
  */
 export async function materializeSnapshot({ name, snapshot, provider = {}, timeoutMs } = {}) {
   const manifest = workspaceEntries(snapshot);
-  let materialized = false;
-  const onFrame = frame => {
-    if (materialized || frame.kind !== 'materialized' || Object.keys(frame).sort().join() !== 'digest,kind') {
-      throw transferError('TRANSFER_FRAME_INVALID');
-    }
-    if (frame.digest !== manifest.digest) throw transferError('TRANSFER_DIGEST_MISMATCH');
-    materialized = true;
-  };
+  const { onFrame, delivered } = materializedFrame(manifest.digest);
   const options = streamOptions({ name, mode: 'materialize', provider, timeoutMs, input: hostFrames(manifest), onFrame });
-  await transfer(name, provider, options, () => materialized);
+  await transfer(name, provider, options, delivered);
   const bytes = manifest.entries.reduce((sum, entry) => sum + entry.size, 0);
   return Object.freeze({ instance: name, digest: manifest.digest, files: manifest.entries.length, bytes, executionReady: false });
+}
+
+/** Copies a validateImport-sealed offline dependency tree into the root-owned guest cache between two no-mount
+ * checks. The guest re-derives its digest: bytes mutated after sealing are refused (65), never installed. */
+export async function installDependencies(input = {}) {
+  const { name, tree, provider = {}, timeoutMs = 300_000 } = isRecord(input) ? input : {};
+  let bytes = 0;
+  try {
+    if (!isRecord(tree) || !Array.isArray(tree.entries) || typeof tree.digest !== 'string' || !/^[0-9a-f]{64}$/.test(tree.digest)) throw new Error();
+    for (const entry of tree.entries) {
+      if (!isRecord(entry) || typeof entry.path !== 'string' || typeof entry.executable !== 'boolean'
+        || !Number.isSafeInteger(entry.size) || entry.size < 0 || !(entry.data instanceof Uint8Array)
+        || entry.data.byteLength !== entry.size) throw new Error();
+      bytes += entry.size;
+    }
+  } catch { throw transferError('TRANSFER_INPUT_INVALID'); }
+  const { onFrame, delivered } = materializedFrame(tree.digest);
+  const options = streamOptions({ name, mode: 'dependencies', provider, timeoutMs, input: hostFrames(tree), onFrame });
+  await transfer(name, provider, options, delivered);
+  return Object.freeze({ instance: name, digest: tree.digest, files: tree.entries.length, bytes, executionReady: false });
 }
 
 /**
