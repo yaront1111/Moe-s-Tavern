@@ -24,12 +24,11 @@
         "scripts/tests/local-runner-bundle.test.mjs"
       ],
       "modifiedFiles": [
-        "scripts/tests/local-runner.test.mjs",
-        "scripts/tests/local-runner-bundle.test.mjs"
+        "scripts/tests/local-runner.test.mjs"
       ],
-      "note": "Tests first. Added CB1-CB6 to local-runner.test.mjs, in a CQ-R13e1 section after CF8: checkFake (a local check-session fake: it decodes its one stdin frame, runs per-id scripts, exits 74 on stdin close by default, and kill closes async), a bridgeRouter spawn (materialize argv → the T rows' fakeSpawn; check argv → checkFake), and bridgeContext with small bounds. The payload fixtures use an independently recomputed EXPECTED_PAYLOAD in 65521-byte stdout frames. The plan's 700001-byte pieces would exceed MAX_GUEST_FRAME_BYTES (262144) after base64.\n\nExtended R13d's certifyHarness: provider gains spawn: router.spawn, and the new `bridge` option and `router` are returned. CERTIFY_IDS is now the 6 ids. CF2, CF3 and CF5 rows gain BRIDGE_NOT_RUN or passed bridge rows. CF5's teardown-index mutations moved from 3 to 5, so they still target the teardown row.\n\nBundle `shipped` gains certify-bridge.mjs.\n\nRED, under env -i with nvm Node 24: local-runner.test.mjs fails to load with ERR_MODULE_NOT_FOUND for certify-bridge.mjs. The bundle row fails with 'Missing copied provider asset certify-bridge.mjs'. The other 12 bundle tests pass. CB1/CB6 and the CF rows also need step 3's certify.mjs splice.\n\nPre-existing dirty paths from other sessions are untouched (.moe/tasks/*, scripts/moe-agent.*, scripts/CLAUDE.md, postflight-fake-proxy.js and others).",
-      "startedAt": "2026-10-30T16:31:02.167Z",
-      "completedAt": "2026-10-30T16:36:08.240Z"
+      "note": "QA-repair RED: added CB5 budget and stdin-error subtests reproducing stdin-closed -> ready -> provider-close(74,null), with no local kill. Under the approved env -i Node 24 prefix, node --test --test-name-pattern='^CB[45]' scripts/tests/local-runner.test.mjs exited 1: existing CB4/control and CB5 exit/kill mappings pass; both new subtests falsely return passed instead of NOT_STARTED. Root cause confirmed: runCheckSession.stop synchronously destroys stdin, but the independent tee still notifies onStdout during draining. Existing CF/CB literals and shipped registration already landed, no rewrites needed. Shared checkout has peer/pre-existing dirty paths outside this task; untouched.",
+      "startedAt": "2026-10-30T16:57:43.046Z",
+      "completedAt": "2026-10-30T16:59:04.096Z"
     },
     {
       "stepId": "step-2",
@@ -40,12 +39,11 @@
         "scripts/local-runner/certify-bridge.mjs"
       ],
       "modifiedFiles": [
-        "scripts/local-runner/certify-bridge.mjs",
-        "scripts/tests/local-runner.test.mjs"
+        "scripts/local-runner/certify-bridge.mjs"
       ],
-      "note": "Created scripts/local-runner/certify-bridge.mjs (100 lines). It exports BRIDGE_BOUNDS, CERTIFY_PAYLOAD (plus a private PAYLOAD_SHA256), certifySnapshot, watchedSession and BRIDGE_CHECKS, per the plan.\n\nwatchedSession resolves the frozen { outcome, exitCode, exit, stdout, overflow, broken }. R13e's exitCode contract (the architect comment) is passed straight through from runCheckSession. Inside the wrapped spawn it:\n- wraps child.kill to record a local kill;\n- registers its own 'close' recorder;\n- tees stdout through its own decoder and parseGuestFrame, keeping stdout output only, bounded by limit (overflow), with onStdout after each frame;\n- treats any throw as broken; the handler never throws.\n\nTwo defensive `?.` reads (context.provider ?? {}, context.bounds?.x) make a malformed context reject only with runCheckSession's fixed CHECK_SESSION_INPUT_INVALID, never a codeless TypeError.\n\ncertifySnapshot passes CERTIFY_PAYLOAD directly: validateImport already copies each file's bytes (readEntry: new Uint8Array(data)), so a Buffer.from copy would be redundant. Comparisons use the private digest, so mutating the export can only fail a check.\n\nTest fix: CB3's broken-frame row now sends the bad frame in its own chunk. createFrameDecoder.push throws mid-chunk and drops that chunk's earlier frames, so one combined write lost the 'ok' frame. That is test-fixture timing, not a runtime defect.\n\nCB2-CB5 green (4/4). CB1's last assertion and CB6 stay red until step 3 splices certify.mjs.",
-      "startedAt": "2026-10-30T16:36:10.525Z",
-      "completedAt": "2026-10-30T16:37:51.849Z"
+      "note": "QA-repair GREEN: retained runCheckSession as the sole teardown owner. watchedSession now notifies onStdout only while the Node stdin stream is writable, which becomes false synchronously on timeout/error/abort destruction; buffered stdout and outcome/exitCode/own-close/local-kill reporting remain unchanged. The EOF ready flag can therefore only be set before teardown and its synchronous abort causes closure. Public result shape and fixed codes preserved. CB1-CB5 under approved env -i Node 24: exit 0, 8/8 tests pass, including both formerly false-positive races and unchanged normal/split readiness and local-kill controls. No scope expansion.",
+      "startedAt": "2026-10-30T16:59:04.117Z",
+      "completedAt": "2026-10-30T16:59:38.596Z"
     },
     {
       "stepId": "step-3",
@@ -55,34 +53,27 @@
       "newFiles": [
         "scripts/local-runner/certify.mjs"
       ],
-      "modifiedFiles": [
-        "scripts/local-runner/certify.mjs"
-      ],
-      "note": "Edited R13d's landed certify.mjs (+20/-6):\n- It imports BRIDGE_BOUNDS and BRIDGE_CHECKS.\n- BODY gains ...BRIDGE_CHECKS after 'no-mounts', so CERTIFY_CHECKS is [provision, readiness, no-mounts, bridge-framing, bridge-eof, teardown], with teardown still last.\n- boundsOf(deps.bounds) runs inside certifyCore before certify(), so before any provider call:\n  - undefined becomes BRIDGE_BOUNDS;\n  - otherwise it accepts only a plain record whose Reflect.ownKeys are BRIDGE_BOUNDS names, each read through getOwnPropertyDescriptor(...).value so a getter is never invoked and is refused, each a safe integer from 1 to its constant;\n  - the result is a frozen merged copy;\n  - a throwing proxy trap is caught;\n  - anything else is CERTIFY_INPUT_INVALID with R13d's fixed message.\n- c.bounds carries it to every check.\n- runIsolationCertify passes BRIDGE_BOUNDS explicitly; its options are still exactly { workDir }.\n- Header and certifyCore doc comments are updated.\n\nCB1-CB6 and CF1-CF8 are green: 14/14.",
-      "startedAt": "2026-10-30T16:37:52.818Z",
-      "completedAt": "2026-10-30T16:39:17.706Z"
+      "note": "Revalidated the already-landed step-3 integration rather than rewriting it: BODY splices framing/eof after no-mounts and before teardown, boundsOf validates own data properties before provider work, native entry uses BRIDGE_BOUNDS, and bundle shipped includes the module. No further code changes required for the QA repair. Under the approved env -i Node 24 prefix, node --test --test-name-pattern='^(CB6|CF)' scripts/tests/local-runner.test.mjs exited 0: 9/9 pass, including injection refusal, stable report, teardown and bounds coverage.",
+      "startedAt": "2026-10-30T16:59:45.949Z",
+      "completedAt": "2026-10-30T16:59:56.999Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh.\n\n1. The DoD command, on WSL: `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs`. It must exit 0. complete_task gets { command: 'node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs', exitCode, outputTail }, and the summary names the env -i form.\n2. Neighbour check, under the same env: `node --test scripts/tests/local-runner-check.test.mjs` (the check-session consumer).\n3. `git diff --check` over the four files is clean, and `git status --short` shows only them changed by this task.\n4. Size: `git diff --numstat HEAD` over the four files (count certify-bridge.mjs whole) must total 400 changed lines or fewer. If it is over, file moe.propose_rail for an epic size exception before complete_task, naming this task and the per-file numstat (mem:gotcha-cq-plan-size-vs-qa-cap). Never trim a DoD test to fit.\n\nThe native certify run is operator-only; no agent here has Multipass. A failure is fixed in code, never by weakening an assertion.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "Fresh verification:\n\n1. The DoD command ran under `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs` and exited 0. 321 tests: 320 pass, 0 fail, 1 skip (the pre-existing macOS native smoke).\n2. Neighbour check: local-runner-check.test.mjs, under the same env, ran 51 tests: 50 pass, 0 fail, 1 skip.\n3. git diff --check is clean over the three edited files and the new certify-bridge.mjs. git status shows only my four paths changed by this task: certify.mjs (M), certify-bridge.mjs (??), local-runner.test.mjs (M) and local-runner-bundle.test.mjs (M). The rest are pre-existing or other sessions' paths and were left alone.\n4. Size is 295 changed lines, under 400, so no rail is needed:\n   - certify-bridge.mjs: 96 (new);\n   - certify.mjs: +20/-6;\n   - local-runner.test.mjs: +152/-15;\n   - local-runner-bundle.test.mjs: +3/-3.\n\nExtra real-path smoke: on this WSL host with no Multipass, `node scripts/local-runner/cli.mjs certify --work-dir <tmp>` ran under env -i. It loads cli → certify → certify-bridge through the lazy and circular import. It wrote the six-row native report (provision CERTIFY_PROVISION_UNAVAILABLE; readiness, no-mounts, bridge-framing and bridge-eof not-run; teardown passed; certified false; mode 600) and exited 2. The tmp dir was removed.",
-      "startedAt": "2026-10-30T16:39:18.662Z",
-      "completedAt": "2026-10-30T16:40:41.512Z"
+      "note": "Fresh required verification (approved env -i HOME + Linux-only Node v24.21.0 PATH): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs exited 0, 324 tests / 323 pass / 1 operator-only skip / 0 fail. Neighbor node --test scripts/tests/local-runner-check.test.mjs exited 0, 51 tests / 50 pass / 1 skip / 0 fail. Full logs /tmp/moe-b29d-worker-c2da129d/{required,neighbor}.log. git diff --check over four approved files clean. Repair: +5/-3 bridge, +19 tests =27 changed lines; total task against original completion parent c97f4aab^ =329 changed (99 bridge; 20/6 certify; 3/3 bundle; 183/15 tests), below 400. Only bridge/tests newly changed by this session; peer/pre-existing dirty paths retained. Native certification remains operator-only and unrun.",
+      "startedAt": "2026-10-30T17:00:08.219Z",
+      "completedAt": "2026-10-30T17:01:30.255Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a guest that wants a bridge check to pass without the property being true.\n\n1. Mutants. Apply each to a scratch copy, never to the shared files. Each must turn its row red:\n   (a) framing compares length only: CB3, the flipped byte;\n   (b) framing ignores overflow and compares only the first 2 MiB: CB3, plus one byte;\n   (c) framing skips the outcome check: CB3, code-failure;\n   (d) eof takes exit from 'close' even after a local kill: CB5 hung (it would become EXIT, not TIMEOUT);\n   (e) eof triggers on startsWith('ready'): CB5, 'ready\\nmore';\n   (f) watchedSession's close listener is registered after runCheckSession's, or the record is missing: CB4 (it would become TIMEOUT);\n   (g) bounds accept 0 or the constant + 1: CB6;\n   (h) the bridge checks are spliced after teardown: CB1/CB6 id list.\n   Afterwards restore, cmp, and rerun green.\n2. Leaks: no guest byte reaches a code, the report or an argv. stdout is compared, never stored in a result; the tee's memory is bounded by limit; every timer is runCheckSession's; and the AbortController is per call.\n3. Concurrency: two certify runs share only the immutable payload digest. The router fake and the watched spawn hold per-call state only.\n4. The CF rows still prove injected evidence never certifies, and teardown runs after a bridge failure.\n\nRecord the findings and fixes in the step note.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "modifiedFiles": [
-        "scripts/local-runner/certify-bridge.mjs",
-        "scripts/tests/local-runner.test.mjs"
-      ],
-      "note": "Adversarial self-review. Mutants ran on a git-archive HEAD copy in /tmp with my four files overlaid; the shared tree was never mutated, scratch files were cmp-identical after every restore, and the scratch was removed.\n\nFirst pass: 13/17 killed. The four survivors led to three fixes, and one is equivalent:\n- (d) exit-after-kill survived, because two redundant guards masked each other (the close listener's `if (!killed)` and the result's `killed ? null : exit`). runCheckSession settles synchronously after kill(), so an async fake close never mattered. Fix: dropped the listener guard and added a provider that emits close INSIDE kill() to CB5's direct row. Now killed.\n- (i) comparing against the mutable export survived. Added a CB3 row that flips a byte in the exported CERTIFY_PAYLOAD and restores it in finally; the private digest then gives MISMATCH. Now killed.\n- (l) validated-but-ignored bounds survived: the same outcome arrives after the 120 s budget. CB6 now has { timeout: 60_000 }, so ignoring the override fails it. Now killed.\n- (k) dropping `signal === null` is EQUIVALENT: Node's close carries a code or a signal, never both, so code 74 implies a null signal. Kept as spec'd defence.\n\nFinal pass:\n- 15/16 killed: a, b, c, d, e, f-missing, g1, g2, h, i, j, l, m, n and o. Only k survives, as above.\n- (f) listener-order, probed via queueMicrotask registration, is EQUIVALENT: runCheckSession's promise continuation is a microtask that runs only after the 'close' emit finishes.\n- New tee probes (p) limit not normalized and (q) no overflow flag are both killed.\n\nLeak review found a real issue and fixed it. After overflow the tee pushed zero-length subarray views, each pinning its frame's whole buffer, so a flooding guest could grow host memory past `limit`. The tee now pushes copies, only while there is room. A non-integer limit means zero room: everything is overflow, fail-closed, with a new CB3 row.\n\nOther review points:\n- No guest byte reaches a code, argv or report: stdout is only compared.\n- There are no timers of my own, and the AbortController is per call.\n- Concurrency: module state is only the immutable digest, plus the export, whose mutation can only fail a check.\n- The CF rows still prove injected never certifies; CB6 proves teardown passes after a bridge failure.\n\nFinal fresh DoD run: exit 0, 321 tests (320 pass, 0 fail, 1 skip). diff --check is clean. Size is 308 changed lines: bridge 97, certify +20/-6, tests +164/-15 and +3/-3.",
-      "startedAt": "2026-10-30T16:40:42.560Z",
-      "completedAt": "2026-10-30T16:50:51.355Z"
+      "note": "Adversarial review complete. In scratch /tmp/moe-b29d-mutants-nuzc7u5e, all 11 behavioral mutants were killed with assertion failures: planned digest/overflow/outcome, local-kill, readiness-prefix, missing close record, zero/over-max bounds, registry order, plus deleted readiness guard and timeout-only substitute. Restored/cmp-identical source then CB 9/9 green. QA's independent eof reproduction now exits 0: normal passes; budget/error late-ready both NOT_STARTED. Inspected all exit/cleanup/input/concurrency paths: stdin.writable clears synchronously on destroy (runtime-probed), no await separates readiness from abort, state stays per session, bounded tee/results and local-kill null exit unchanged, no guest bytes escape into argv/report/codes. Existing CF tests preserve injection refusal and teardown. Mutation harness initially hit the pre-existing CB3-only fixture TDZ, not a valid kill: filed task-6bc91f38c840496c894434404760f3a3 with dependency to serialize that separate fix; used '^CB' for real assertion-backed mutations. Fresh full suites remain 323 pass/1 skip plus neighbor 50 pass/1 skip; diff check clean. Handoff and gotchas written to Serena. Native VM certification remains operator-only, unrun.",
+      "startedAt": "2026-10-30T17:02:36.555Z",
+      "completedAt": "2026-10-30T17:05:31.301Z"
     }
   ],
   "planRevision": 1,
@@ -90,8 +81,8 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD 2 fails: bridge-eof can certify EOF propagation when ready first arrives AFTER stdin is already closed. Reviewed completion c97f4aab25b8c01af72c6ea161dcfd775749e540 via git show; git branch --contains confirms moe/work-2026-10-24. Scope: 308 source/test changed lines (+284/-24); 394 including board state. Exact-commit archive rerun: `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs` exited 0 (320 pass, 1 skip). Same env, `node --test scripts/tests/local-runner-check.test.mjs` exited 0 (50 pass, 1 skip). Commit diff --check clean. No source edits. Native Multipass certification remains operator-only, not a rejection reason.\n\nRepro: provider accepts the check frame but stays silent, bounds {sessionMs:30,exitMs:100}. On stdin 'close', it emits valid hello + stdout('ready\\n'), ends stdout and emits close(74,null). Observed order ['stdin-closed','ready','provider-close-74']; actual {result:'passed',code:null}, expected CERTIFY_BRIDGE_EOF_NOT_STARTED (no ready before budget). A second case emits stdin error before any output and likewise produces a false pass. Control ['ready','stdin-closed','provider-close-74'] passes correctly. The tee continues invoking onStdout during runCheckSession teardown; eof sets ready on drained bytes and accepts code 74 without proving readiness triggered closure. Merely rejecting outcome 'timeout' misses the stdin-error variant. Require readiness while stdin is still open and preserve enough shutdown provenance to reject late readiness; keep fixed mappings and the local-kill null-exit rule.\n\nRepro retained: /tmp/moe-qa-b29d-EngG88/qa-eof-probe.mjs. Run `node qa-eof-probe.mjs` there under the same env -i Node 24 prefix: exit 1. Logs: /tmp/tmp.4IAwIPCZb7/qa-eof-probe.log, qa-required.log and qa-neighbor.log.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -109,19 +100,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:31:31.600Z",
-  "updatedAt": "2026-10-30T16:51:24.682Z",
+  "updatedAt": "2026-10-30T17:05:57.873Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:31:55.503Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-4ae016fb",
-    "worker-093a65d0"
+    "worker-c2da129d",
+    "qa-ba3f4f35"
   ],
-  "tier": "standard",
-  "effort": "xhigh",
+  "tier": "heavy",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
@@ -131,7 +124,13 @@
     "step-4",
     "step-5"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "'bridge-eof' passes only when, after the job printed 'ready', closing the host's stdin ends the session with the provider's own exit 74 within exitMs. Another exit, no exit (a local kill) and a missing 'ready' each fail with their own fixed code. Shown by fake-provider tests.",
+      "rejectedAt": "2026-10-30T16:56:33.401Z",
+      "rejectedBy": "qa-ba3f4f35"
+    }
+  ],
   "planSubmittedAt": "2026-10-30T06:38:22.650Z",
   "executionContract": {
     "intendedBehavior": "A new certify-bridge.mjs adds two certify checks after 'no-mounts' and before 'teardown'.\n- 'bridge-framing' materializes a generated snapshot, verified by R09c's digest, and requires a passed check session to stream the 2 MiB payload back byte-exact, with no overflow and no broken frame.\n- 'bridge-eof' requires that, once the job printed exactly 'ready\\n', closing the host's stdin ends the session with the provider's own exit 74 within exitMs.\nEvery failure is a fixed code. certify.mjs splices the checks into BODY and carries BRIDGE_BOUNDS, or validated deps.bounds overrides, on context.bounds.",
@@ -194,19 +193,92 @@
   "planApprovedAt": "2026-10-30T06:38:22.675Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T16:31:02.167Z",
-  "reviewStartedAt": "2026-10-30T16:51:24.680Z",
+  "reviewStartedAt": "2026-10-30T17:05:57.871Z",
   "verification": {
     "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs",
     "exitCode": 0,
-    "outputTail": "✔ AH1 a clean install streams both cache-verified binaries between two mount checks and resolves the frozen result\n✔ AH2 every refusal is a fixed code, input errors touch neither provider nor cache, and a cache file that drifts after verification is never completed\n✔ AH3 end to end, installAgents installs both stand-ins as 0555 through the real supervisor\n✔ RA checkAgents reports AGENT_MISSING for an absent binary and AGENT_HASH_MISMATCH for a changed one, from the installed pins only (29.97327ms)\nℹ tests 321\nℹ suites 0\nℹ pass 320\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 42129.12008",
-    "reportedAt": "2026-10-30T16:51:24.680Z",
+    "outputTail": "✔ RA checkAgents reports AGENT_MISSING for an absent binary and AGENT_HASH_MISMATCH for a changed one, from the installed pins only (34.207061ms)\nℹ tests 324\nℹ suites 0\nℹ pass 323\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 42444.493741\n",
+    "reportedAt": "2026-10-30T17:05:57.871Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
-    "scripts/tests/local-runner-bundle.test.mjs",
-    "scripts/local-runner/certify-bridge.mjs",
-    "scripts/local-runner/certify.mjs"
+    "scripts/local-runner/certify-bridge.mjs"
   ],
-  "completionSummary": "CQ-R13e1: bridge certify checks.\n\nNew scripts/local-runner/certify-bridge.mjs (97 lines):\n- BRIDGE_BOUNDS {120000, 30000, 120000};\n- CERTIFY_PAYLOAD (2 MiB of sha256(`moe-certify-payload-v1:i`); checks compare against a private digest, never the mutable export);\n- certifySnapshot() (payload.bin plus an executable run.sh);\n- watchedSession, which resolves frozen {outcome, exitCode, exit, stdout, overflow, broken}. It wraps provider.spawn, records the child's own close, sets exit null after a local kill, and tees stdout through its own decoder, keeping copies bounded by limit (a non-integer limit keeps none);\n- BRIDGE_CHECKS.\n\nThe two checks:\n- bridge-framing: R09c materialize. TRANSFER_* codes propagate. A passed session must then return the payload byte-exact, else SESSION_FAILED or MISMATCH.\n- bridge-eof: after exactly 'ready\\n', an abort closes stdin. Only the provider's own exit 74 with a null signal passes. Otherwise NOT_STARTED, EXIT, or TIMEOUT (the local kill).\n\ncertify.mjs (+20/-6):\n- the checks are spliced after no-mounts, so the order is provision, readiness, no-mounts, bridge-framing, bridge-eof, teardown;\n- certifyCore validates deps.bounds before any provider call (a plain record, data properties only, safe integers from 1 to the constant; else CERTIFY_INPUT_INVALID);\n- context.bounds carries the result;\n- the native entry always uses BRIDGE_BOUNDS.\n\nTests:\n- CB1-CB6 added, with a check-session fake and a spawn router;\n- CF rows extended to 6 ids;\n- bundle `shipped` gains certify-bridge.mjs.\n\nVerification (command above, run under env -i with nvm Node 24): exit 0, 321 tests (320 pass, 1 skip). Neighbour local-runner-check.test.mjs: 50 pass, 1 skip. diff --check is clean. Size is 308 changed lines, under 400.\n\nSelf-review mutation probes on a scratch copy: 15/16 killed, plus 2 tee probes. Survivor (k), dropping the eof signal===null check, is equivalent because Node's close carries a code or a signal, never both. Close-listener order is also equivalent ("
+  "completionSummary": "Fixed QA DoD 2 false-positive EOF certification: watchedSession invokes onStdout only while stdin is writable, so readiness first seen after timeout/error destruction cannot trigger certification. Bounded stdout, public result shape, fixed codes and local-kill null exit unchanged. Added deterministic budget/stdin-error late-readiness CB5 subtests, both red before and green after; normal/split readiness and existing exit/kill controls retained. Existing registry/bounds/bundle integration revalidated unchanged. Fresh approved env -i Node 24 required suite: 324 tests, 323 pass, 1 skip; neighbor: 51 tests, 50 pass, 1 skip. Independent QA repro now passes. Eleven scratch mutants killed with assertion evidence; restored copies cmp-identical and CB 9/9 green. git diff --check clean. Repair 27 changed lines, whole task 329 against c97f4aab^, within 400. Separate narrow-CB3 fixture TDZ filed as task-6bc91f38c840496c894434404760f3a3. Logs /tmp/moe-b29d-worker-c2da129d; Serena handoff/gotchas updated. Peer dirty paths preserved; no Git writes. Native certification operator-only/unrun; executionReady false, verified-local unavailable.",
+  "commits": [
+    {
+      "sha": "c97f4aab25b8c01af72c6ea161dcfd775749e540",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T16:28:08Z",
+      "paths": [
+        ".moe/tasks/task-b29d022e7d9e4698b40517340f48e31c.json",
+        "scripts/local-runner/certify-bridge.mjs",
+        "scripts/local-runner/certify.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T16:51:48.049Z",
+      "treeId": "0ccee20d5387abab50d381b7e80975e86ee152a5",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/certify-bridge.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-093a65d0@2026-10-30T16:28:08Z",
+    "at": "2026-10-30T16:51:48.049Z"
+  },
+  "reviewCompletedAt": "2026-10-30T16:56:33.401Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "'bridge-eof' passes only when, after the job printed 'ready', closing the host's stdin ends the session with the provider's own exit 74 within exitMs. Another exit, no exit (a local kill) and a missing 'ready' each fail with their own fixed code. Shown by fake-provider tests."
+    ],
+    "issues": [
+      {
+        "type": "security",
+        "file": "scripts/local-runner/certify-bridge.mjs",
+        "line": 90,
+        "description": "EOF falsely passes when ready first arrives after timeout/error teardown closed stdin. The tee still invokes onStdout, and eof() ignores shutdown provenance before accepting close(74,null). Require ready while stdin is open and readiness-triggered closure; late ready must not certify. Rejecting only outcome 'timeout' misses stdin errors. See reason for reproducible event order."
+      },
+      {
+        "type": "test_failure",
+        "file": "scripts/tests/local-runner.test.mjs",
+        "line": 3071,
+        "description": "CB5 lacks readiness-after-teardown races. Add providers that stay silent until (1) budget expiry or (2) stdin error closes stdin, then emit hello + ready and close(74,null). Both currently pass incorrectly; assert fixed failure results and stdin-close-before-ready order. Retain the normal readiness-before-close pass and local-kill TIMEOUT cases."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 2 fails: bridge-eof can certify EOF propagation when ready first arrives AFTER stdin is already closed. Reviewed completion c97f4aab25b8c01af72c6ea161dcfd775749e540 via git show; git branch --contains confirms moe/work-2026-10-24. Scope: 308 source/test changed lines (+284/-24); 394 including board state. Exact-commit archive rerun: `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs` exited 0 (320 pass, 1 skip). Same env, `node --test scripts/tests/local-runner-check.test.mjs` exited 0 (50 pass, 1 skip). Commit diff --check clean. No source edits. Native Multipass certification remains operator-only, not a rejection reason.\n\nRepro: provider accepts the check frame but stays silent, bounds {sessionMs:30,exitMs:100}. On stdin 'close', it emits valid hello + stdout('ready\\n'), ends stdout and emits close(74,null). Observed order ['stdin-closed','ready','provider-close-74']; actual {result:'passed',code:null}, expected CERTIFY_BRIDGE_EOF_NOT_STARTED (no ready before budget). A second case emits stdin error before any output and likewise produces a false pass. Control ['ready','stdin-closed','provider-close-74'] passes correctly. The tee continues invoking onStdout during runCheckSession teardown; eof sets ready on drained bytes and accepts code 74 without proving readiness triggered closure. Merely rejecting outcome 'timeout' misses the stdin-error variant. Require readiness while stdin is still open and preserve enough shutdown provenance to reject late readiness; keep fixed mappings and the local-kill null-exit rule.\n\nRepro retained: /tmp/moe-qa-b29d-EngG88/qa-eof-probe.mjs. Run `node qa-eof-probe.mjs` there under the same env -i Node 24 prefix: exit 1. Logs: /tmp/tmp.4IAwIPCZb7/qa-eof-probe.log, qa-required.log and qa-neighbor.log.",
+      "rejectedAt": "2026-10-30T16:56:33.401Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "'bridge-eof' passes only when, after the job printed 'ready', closing the host's stdin ends the session with the provider's own exit 74 within exitMs. Another exit, no exit (a local kill) and a missing 'ready' each fail with their own fixed code. Shown by fake-provider tests."
+      ],
+      "issues": [
+        {
+          "type": "security",
+          "file": "scripts/local-runner/certify-bridge.mjs",
+          "line": 90,
+          "description": "EOF falsely passes when ready first arrives after timeout/error teardown closed stdin. The tee still invokes onStdout, and eof() ignores shutdown provenance before accepting close(74,null). Require ready while stdin is open and readiness-triggered closure; late ready must not certify. Rejecting only outcome 'timeout' misses stdin errors. See reason for reproducible event order."
+        },
+        {
+          "type": "test_failure",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "line": 3071,
+          "description": "CB5 lacks readiness-after-teardown races. Add providers that stay silent until (1) budget expiry or (2) stdin error closes stdin, then emit hello + ready and close(74,null). Both currently pass incorrectly; assert fixed failure results and stdin-close-before-ready order. Retain the normal readiness-before-close pass and local-kill TIMEOUT cases."
+        }
+      ]
+    }
+  ]
 }

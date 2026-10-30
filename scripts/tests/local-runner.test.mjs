@@ -3083,6 +3083,25 @@ test('CB5 bridge-eof fails NOT_STARTED, EXIT or TIMEOUT, and a local kill is nev
     [{ outcome: 'infra-failure', exitCode: null, exit: null, stdout: Buffer.from('ready\n'), overflow: false, broken: false }, true, ['SIGKILL']]);
 });
 
+test('CB5 readiness first observed during teardown cannot certify host EOF', { timeout: 5_000 }, async t => {
+  for (const cause of ['budget', 'stdin-error']) await t.test(cause, async () => {
+    const order = [];
+    const { router, context } = bridgeContext({ scripts: { 'certify-eof': proc => {
+      proc.once('close', (code, signal) => order.push(['provider-close', code, signal]));
+      if (cause === 'stdin-error') proc.stdin.emit('error', new Error('EPIPE'));
+    } }, onEof: proc => {
+      order.push(['stdin-closed', proc.stdin.destroyed]);
+      order.push(['ready']);
+      proc.send(CB_HELLO, cbOut('ready\n'));
+      proc.exit(74);
+    } }, { sessionMs: cause === 'budget' ? 30 : 2_000, exitMs: 100 });
+    const result = await eofCheck.run(context);
+    assert.deepEqual(order, [['stdin-closed', true], ['ready'], ['provider-close', 74, null]]);
+    assert.deepEqual(router.calls[0].proc.kills, []);
+    assert.deepEqual(result, refused('CERTIFY_BRIDGE_EOF_NOT_STARTED'));
+  });
+});
+
 // The timeout fails a run that ignores the overrides: BRIDGE_BOUNDS would hold the silent session for two minutes.
 test('CB6 certifyCore validates deps.bounds before any provider call; a bridge failure leaves bridge-eof not-run and teardown passed', { timeout: 60_000 }, async t => {
   const getter = Object.defineProperty({}, 'exitMs', { enumerable: true, get: () => 5 });

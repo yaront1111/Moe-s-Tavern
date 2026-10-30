@@ -34,8 +34,8 @@ export function certifySnapshot() {
  * One runCheckSession on context.name with the fixed frame { id, command, protected: [] }, under context.bounds. Its
  * spawn wraps context.provider.spawn, so certify also watches the child: `exit` is the child's own 'close' {code, signal},
  * or null after runCheckSession's local kill, which is never evidence. `stdout` is the reassembled stdout output, at most
- * `limit` bytes (`overflow` marks more), passed to onStdout after each frame; `broken` marks a frame the tee could not
- * parse, or an onStdout throw. Resolves a frozen { outcome, exitCode, exit, stdout, overflow, broken }.
+ * `limit` bytes (`overflow` marks more), passed to onStdout after each frame while stdin is writable; `broken` marks a
+ * frame the tee could not parse, or an onStdout throw. Resolves a frozen { outcome, exitCode, exit, stdout, overflow, broken }.
  */
 export async function watchedSession(context, id, command, { signal, limit = 0, onStdout } = {}) {
   const { executable, spawn } = context.provider ?? {};
@@ -46,11 +46,13 @@ export async function watchedSession(context, id, command, { signal, limit = 0, 
     const kill = child.kill.bind(child);
     child.kill = (...killArgs) => { seen.killed = true; return kill(...killArgs); };
     child.on('close', (code, closeSignal) => { seen.exit = Object.freeze({ code, signal: closeSignal }); });
+    // stop() destroys stdin synchronously; drained output after that cannot trigger readiness or prove who caused EOF.
+    const notify = out => { if (child.stdin?.writable) onStdout?.(out); };
     const decoder = createFrameDecoder();
     child.stdout.on('data', chunk => {
       if (seen.broken) return;
       try {
-        for (const raw of decoder.push(chunk)) tee(seen, parseGuestFrame(raw), limit, onStdout);
+        for (const raw of decoder.push(chunk)) tee(seen, parseGuestFrame(raw), limit, notify);
       } catch { seen.broken = true; }
     });
     return child;
