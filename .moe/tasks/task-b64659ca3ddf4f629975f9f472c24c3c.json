@@ -8,9 +8,45 @@
     "No change to openProjectGit behaviour unless the code itself is shown to be wrong"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Gate, then the one-assertion fix in packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts.\n\nGate: from /mnt/d/projexts/moes, `git status --porcelain -- packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts` must print nothing. The file was clean on 2026-10-30. If it is dirty, call moe.get_commit_scope { taskId: 'task-b64659ca3ddf4f629975f9f472c24c3c' }:\n- if peers declare the path, report_blocked on those task ids;\n- otherwise report_blocked with no ids, naming the path.\nNever revert or commit other sessions' bytes.\n\nRoot cause, reproduced on native Windows from WSL on 2026-10-30: 'Expected: \"C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-cfg-TBk0kA\" / Received: \"C:/Users/Yaron/AppData/Local/Temp/moe-cfg-TBk0kA\"'. Git for Windows prints forward slashes, while the fixture's fs.realpathSync gives backslashes.\nThe code under test is right. openProjectGit (src/util/cachedPlanPaths.ts:128-131) already compares pathKey(realpath(top)) with pathKey(root). Per the DoD, do NOT touch cachedPlanPaths.ts.\n\nIn the first `it` ('resolves a plain repository and runs Git through the returned runner'), replace\n`expect((await git('rev-parse --show-toplevel', ['rev-parse', '--show-toplevel'])).trim()).toBe(root);`\nwith\n```ts\n    const top = (await git('rev-parse --show-toplevel', ['rev-parse', '--show-toplevel'])).trim();\n    // Git for Windows prints C:/..., realpathSync C:\\...: compare the directory each names.\n    expect(fs.realpathSync.native(top)).toBe(fs.realpathSync.native(root));\n```\nWhy native on both sides: the OS canonical form expands 8.3 short names (for example a CI runner's C:\\Users\\RUNNER~1\\...) and true case, not only the separators. On Linux it is plain realpath(3), so the assertion is unchanged there.\nThe test still fails if the runner ran Git anywhere but the project root. An empty or missing `top` throws ENOENT, so error handling stays fail-loud.\nChange nothing else: the other five tests and the fixture stay byte-identical.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts"
+      ],
+      "note": "Gate clean. One assertion replaced with realpathSync.native on both sides.",
+      "startedAt": "2026-10-30T00:44:14.824Z",
+      "completedAt": "2026-10-30T00:44:19.188Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Regression gate on Linux AND native Windows. Run it once; it is the complete_task evidence. From /mnt/d/projexts/moes, run exactly this, and submit the command, its exit code and the output tail:\n`F=src/util/cachedPlanPaths.git.test.ts && L=$(mktemp -d /tmp/moe-b646-XXXX) && git archive HEAD | tar -x -C $L && cp packages/moe-daemon/$F $L/packages/moe-daemon/$F && P=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" && (cd $L/packages/moe-daemon && env -i HOME=$HOME PATH=$P npm ci --no-audit --no-fund >/dev/null && env -i HOME=$HOME PATH=$P npx vitest run $F) && W=$(mktemp -d /mnt/c/Users/Yaron/AppData/Local/Temp/moe-b646-win.XXXXXX) && tar -C $L -cf - --exclude=packages/moe-daemon/node_modules packages/moe-daemon | tar -C $W -xf - && (cd /mnt/c/Windows/System32 && ./cmd.exe /c robocopy \"D:\\projexts\\moes\\packages\\moe-daemon\\node_modules\" \"$(wslpath -w $W)\\packages\\moe-daemon\\node_modules\" /E /XD .vite /NFL /NDL /NJH /NJS /NP /R:0 /W:0 >/dev/null; [ $? -lt 8 ]) && (cd $W/packages/moe-daemon && \"/mnt/c/Program Files/nodejs/node.exe\" node_modules/vitest/vitest.mjs run $F); rc=$?; rm -rf $L ${W:-/nonexistent}; echo VERIFY_EXIT=$rc; [ $rc -eq 0 ]`\n\nWhat it does:\n- Linux leg: a whole-repo snapshot with only this file overlaid (whole repo, because daemon tests may read root files), then npm ci under env -i, then the file.\n- Windows leg: the same sources copied to a Windows temp dir, with the shared tree's Windows-native node_modules robocopied in (read-only on the source; codes 0-7 mean success), then the file under Windows node with Git for Windows (mem:pattern-qa-windows-native-vitest-from-wsl).\n- Never run vitest inside the shared tree: it writes node_modules/.vite.\n\nMeasured on 2026-10-30 with exactly this command and the step-1 edit: Linux 6/6 and Windows 6/6, VERIFY_EXIT=0, about 10 s.\nRed proof: before step 1, the same command fails on the Windows leg (1 failed | 5 passed). Record that in the step note.\nIf the Windows leg cannot start (no Windows node or no robocopy), report_blocked with no ids instead of skipping it. DoD 1 requires native Windows.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Linux 6/6, Windows 6/6, VERIFY_EXIT=0. Did not re-run the pre-fix red proof; the plan recorded it as 1 failed | 5 passed on Windows.",
+      "startedAt": "2026-10-30T00:44:19.798Z",
+      "completedAt": "2026-10-30T00:44:35.629Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Final adversarial self-review of this task's diff (load adversarial-self-review). Check each of these:\n(1) Only the one assertion changed. The other five tests, the fixture and cachedPlanPaths.ts are byte-identical (`git diff --stat` shows one file).\n(2) The new assertion still fails when Git runs outside the project root, and fails loudly (ENOENT) on empty output. It never passes vacuously.\n(3) Both sides use realpathSync.native. Mixing in the JS realpathSync would re-open the 8.3 short-name or case mismatch on Windows CI.\n(4) No temp directories remain under /tmp/moe-b646-* or C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-b646-win.*.\n(5) Nothing under .moe/ was edited by hand.\nFix anything found, rerun step 2's command, and submit the fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts"
+      ],
+      "note": "Diff is one file, +3/-1. Both sides use realpathSync.native. An empty or missing path throws ENOENT, so the assertion cannot pass vacuously. No leftover temp dirs. Nothing under .moe/ was edited.",
+      "startedAt": "2026-10-30T00:44:36.339Z",
+      "completedAt": "2026-10-30T00:44:40.828Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,10 +59,86 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:38:35.601Z",
-  "updatedAt": "2026-10-29T22:55:15.385Z",
+  "updatedAt": "2026-10-30T00:44:43.354Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T22:55:15.385Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T00:41:09.478Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-5ebbf433"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6-luna",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T00:43:50.297Z",
+  "executionContract": {
+    "intendedBehavior": "cachedPlanPaths.git.test.ts 'resolves a plain repository and runs Git through the returned runner' compares the directory Git's toplevel names with the fixture root, by OS-canonical realpath on both sides. It passes on native Windows (Git prints C:/...) and on Linux. openProjectGit is unchanged.",
+    "acceptanceCriteria": [
+      "The file passes 6/6 on Linux and 6/6 on native Windows; before the fix the Windows leg fails 1 of 6."
+    ],
+    "invariants": [
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts is not modified (DoD 2: the code already compares pathKey(realpath(top)) to pathKey(root)).",
+      "The other five tests in the file and the fixture are byte-identical.",
+      "The assertion still fails when the runner runs Git outside the project root."
+    ],
+    "approvedScope": [
+      "One `it` body in packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts"
+    ],
+    "reuse": [
+      "fs.realpathSync.native (built-in OS canonicalization) instead of hand-rolled separator or case normalization."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts:128-131 openProjectGit compares pathKey(await realpath(top)) !== pathKey(root).",
+      "Reproduced on native Windows from WSL on 2026-10-30: Received 'C:/Users/...' vs Expected 'C:\\\\Users\\\\...'."
+    ],
+    "checkRefs": [
+      "F=src/util/cachedPlanPaths.git.test.ts && L=$(mktemp -d /tmp/moe-b646-XXXX) && git archive HEAD | tar -x -C $L && cp packages/moe-daemon/$F $L/packages/moe-daemon/$F && P=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" && (cd $L/packages/moe-daemon && env -i HOME=$HOME PATH=$P npm ci --no-audit --no-fund >/dev/null && env -i HOME=$HOME PATH=$P npx vitest run $F) && W=$(mktemp -d /mnt/c/Users/Yaron/AppData/Local/Temp/moe-b646-win.XXXXXX) && tar -C $L -cf - --exclude=packages/moe-daemon/node_modules packages/moe-daemon | tar -C $W -xf - && (cd /mnt/c/Windows/System32 && ./cmd.exe /c robocopy \"D:\\projexts\\moes\\packages\\moe-daemon\\node_modules\" \"$(wslpath -w $W)\\packages\\moe-daemon\\node_modules\" /E /XD .vite /NFL /NDL /NJH /NJS /NP /R:0 /W:0 >/dev/null; [ $? -lt 8 ]) && (cd $W/packages/moe-daemon && \"/mnt/c/Program Files/nodejs/node.exe\" node_modules/vitest/vitest.mjs run $F); rc=$?; rm -rf $L ${W:-/nonexistent}; echo VERIFY_EXIT=$rc; [ $rc -eq 0 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Several alternatives were rejected:\n- path.resolve on both sides fixes the separators but not 8.3 short names or case.\n- pathKey(path.resolve()) mirrors the production check but still misses 8.3 names.\n- Changing the fixture to use realpathSync.native would alter the root the other five tests pass to git config.\n- Changing openProjectGit would violate DoD 2: the code is right.",
+    "codebaseInsights": "Reproduced with the robocopy recipe (mem:pattern-qa-windows-native-vitest-from-wsl). The shared tree's Windows node_modules has vitest 5.0.3, equal to HEAD's lock (2026-10-30). The other five tests in the file already pass on Windows.",
+    "risks": "If the governor's main merge lands first, the shared tree's Windows node_modules follows that merge's lock after its npm ci; the Windows leg still runs the same file. CRLF: keep the file's existing line endings (repo core.autocrlf=false).",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts",
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T00:43:50.389Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T00:44:14.824Z",
+  "reviewStartedAt": "2026-10-30T00:44:43.352Z",
+  "verification": {
+    "command": "F=src/util/cachedPlanPaths.git.test.ts && (Linux snapshot leg, then native Windows leg via robocopy'd node_modules; exact command from plan step-2)",
+    "exitCode": 0,
+    "outputTail": "Linux: Test Files 1 passed (1), Tests 6 passed (6). Windows (C:/Users/Yaron/AppData/Local/Temp/moe-b646-win.e1ReRQ): Test Files 1 passed (1), Tests 6 passed (6). VERIFY_EXIT=0",
+    "reportedAt": "2026-10-30T00:44:43.352Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts"
+  ],
+  "completionSummary": "cachedPlanPaths.git.test.ts first test now compares fs.realpathSync.native(top) with fs.realpathSync.native(root), so Git for Windows' C:/ output matches the fixture's C:\\ root. Only that test changed; cachedPlanPaths.ts is untouched. Linux 6/6 and native Windows 6/6."
 }

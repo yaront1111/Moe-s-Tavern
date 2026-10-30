@@ -115,7 +115,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:24:24.874Z",
-  "updatedAt": "2026-10-30T00:44:15.410Z",
+  "updatedAt": "2026-10-30T00:44:41.627Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:26:08.269Z",
     "plannedStepCount": 5,
@@ -217,7 +217,8 @@
     ".github/workflows/ci.yml",
     ".moe/tasks/task-18b365e5f7ac43d49c1f34c3aebd4461.json",
     ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json",
-    ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json"
+    ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json",
+    ".moe/tasks/task-a2a55bc6059048e78174e551c32a6e73.json"
   ],
   "completionSummary": "Added scripts/local-runner/runner-client.mjs (stdlib only): openRunnerChannel({projectPath, timeoutMs, signal, WebSocket}) returns {call(tool, args, {signal, timeoutMs}), close()}, plus RUNNER_KEY_HEADER and runnerKeyFile. It dials only the loopback daemon named by <project>/.moe/daemon.json, with guest-session.mjs's no-follow, regular-file, 16 KiB-cap, own-project and 127.0.0.1/::1-only discipline. The key is read once, must match the daemon's 43-char base64url form with no newline, goes straight into the upgrade header, and is never stored, returned or logged. The channel counts as open only after a ping round trip, because the daemon closes a bad-key socket with 1008 after the upgrade completes. Every failure is a fixed RUNNER_* code in a fixed message with no path, key byte or upstream text. A tool error carries only rpcCode and a validated codeName. Timeout, abort, close and disconnect settle each pending call exactly once and remove its timer and abort listener. scripts/tests/local-runner-channel.test.mjs (27 cases) covers daemon.json refusals, key refusals, key location and hash, loopback URL and header, inputs, scripted-socket call rows, and a real built daemon (C4-C9: result, tool error, wrong key, parked chat_wait timeout, daemon stop, key never leaked, with a positive control). Appended the test to the CI local-runner step (ci.yml +1/-1). No daemon change, no .moe edits, verified-local untouched. Size: client 120 + test 280 = 400 lines. Of 23 mutants, 22 are killed by named cases (all six plan mutants included); the one survivor, isFile() removed, is equivalent because a directory, FIFO or device already fails closed on EISDIR, size or the key/JSON parse. Self-review fixed two real gaps (an unserialisable argument leaked a timer and listener and threw a raw error; a hostile codeName passed through). Accepted risks are in the step note and handoff memory: the key goes to whatever listens on the loopback port named by daemon.json, there is no inbound payloa",
   "commits": [
@@ -240,6 +241,22 @@
       "treeId": "0ccc049e3482dc842193d614e3e5ca32a598b275",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "2b845f10ec96b91dcabae7b2bd889f479a480872",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T00:40:34Z",
+      "paths": [
+        ".moe/tasks/task-18b365e5f7ac43d49c1f34c3aebd4461.json",
+        ".moe/tasks/task-a2a55bc6059048e78174e551c32a6e73.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T00:44:41.627Z",
+      "treeId": "9d33299efe263b029f423bef154e94658062de78",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -250,9 +267,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-093a65d0@2026-10-30T00:04:27Z",
-    "at": "2026-10-30T00:35:26.582Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T00:40:34Z",
+    "at": "2026-10-30T00:44:41.627Z"
   },
   "completedAt": "2026-10-30T00:44:15.410Z",
   "reviewCompletedAt": "2026-10-30T00:44:15.410Z",

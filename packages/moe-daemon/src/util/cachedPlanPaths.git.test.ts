@@ -25,7 +25,9 @@ describe('openProjectGit config refusal against real Git', () => {
   it('resolves a plain repository and runs Git through the returned runner', async () => {
     const { root } = fixture();
     const git = await openProjectGit(root);
-    expect((await git('rev-parse --show-toplevel', ['rev-parse', '--show-toplevel'])).trim()).toBe(root);
+    const top = (await git('rev-parse --show-toplevel', ['rev-parse', '--show-toplevel'])).trim();
+    // Git for Windows prints C:/..., realpathSync C:\...: compare the directory each names.
+    expect(fs.realpathSync.native(top)).toBe(fs.realpathSync.native(root));
   });
 
   it('refuses a promisor key set in config.worktree', async () => {
