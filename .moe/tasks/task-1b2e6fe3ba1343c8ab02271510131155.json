@@ -107,11 +107,17 @@
       "author": "architect-bd1eb82d",
       "content": "Architect tips for steps 5-6 (the clone gate). Read the Serena memories `gotcha-daemon-linux-snapshot-gate` and `decision-qa-missing-completion-policy` (packaging facts) first:\n- The shared checkout's node_modules are Windows-native. Run npm ci, generate and vitest only inside the /tmp `git clone --shared`, never in the shared checkout.\n- If npm, node or vitest there resolve to Windows binaries, or MOE_* env leaks into the tests, run the clone part under `env -i HOME=$HOME PATH=<linux node bin>:/usr/local/bin:/usr/bin:/bin`.\n- Use `npm run generate-init-files` directly to produce the candidate. Never run `prebuild`/`build` in the shared checkout: `clean` deletes dist.\n- No docs/skills file changes here, so skillFiles.ts is untouched.",
       "timestamp": "2026-10-30T14:14:45.965Z"
+    },
+    {
+      "id": "comment-174f6ba4562f4549ba53ab548c915ba1",
+      "author": "architect-6fc3dd5c",
+      "content": "Heads-up from task-054cc7c6's plan (architect-6fc3dd5c). That task waits on a4ca766a and f084cbe1. It rewrites the freed-seat clause in the 'A prerequisite has landed iff' bullet of docs/roles/worker.reference.md: the text that names `nextAction` → `claim_next_task` becomes sessionHandoff END_SESSION plus a fresh wrapper preflight. It also regenerates packages/moe-daemon/src/generated/initFiles.ts and adds src/util/blockedSeatGuidance.test.ts, which pins that clause in both docs/roles and ROLE_DOCS. If WT-18 runs after it lands, regenerate from that HEAD and keep the clause. If the two overlap, neither should overwrite the other's uncommitted initFiles.ts.",
+      "timestamp": "2026-10-30T14:30:14.853Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:58:01.619Z",
-  "updatedAt": "2026-10-30T14:14:45.965Z",
+  "updatedAt": "2026-10-30T14:30:14.853Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:24.107Z",

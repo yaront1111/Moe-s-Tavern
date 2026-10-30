@@ -2,7 +2,7 @@
 // State validators + sanitizers
 // =============================================================================
 //
-// Extracted verbatim from StateManager. Two families with DELIBERATELY different
+// Extracted from StateManager. Two mutation families with DELIBERATELY different
 // contracts, and the split is load-bearing:
 //   - validate*  — throw `invalidInput(...)` on bad input. Callers rely on the
 //                  throw happening BEFORE anything reaches disk.
@@ -10,6 +10,7 @@
 //                  sliced, because they run on every write path (updateTask
 //                  calls sanitizeImplementationPlan on every single update) and
 //                  a throw here would break state mutation entirely.
+// resolve* helpers form a third family: read pinned workspace identity/settings.
 //
 // `validateSettingsUpdate`, `validateEpicUpdates` and `sanitizeImplementationPlan`
 // are hardcoded field ALLOWLISTS. A field added to a schema type but not to the
@@ -17,7 +18,9 @@
 // value still looks correct — the hardest failure in this codebase to spot.
 
 import type {
+  AttemptWorkspace,
   Epic,
+  ExecutionAttempt,
   ImplementationStep,
   Project,
   ProjectSettings,
@@ -30,6 +33,7 @@ import type {
   TaskCommit,
   Team,
   TeamRole,
+  WorktreeMode,
 } from '../types/schema.js';
 import { invalidInput } from '../util/errors.js';
 import { assertExecutionProfileReady, EXECUTION_PROFILES, resolveExecutionProfile } from '../delivery/executionProfile.js';
@@ -283,6 +287,28 @@ export function validatePatternSetting(value: unknown, fieldName: string): strin
   return pattern;
 }
 
+// Worktree contract: epic-dce3a64f §7.1/§2.7. Mode/path are pinned; target is live.
+const WORKTREE_MODES: readonly WorktreeMode[] = ['off', 'on'];
+
+export function resolveWorktreeMode(settings?: { worktreeMode?: unknown } | null): WorktreeMode {
+  const mode = settings?.worktreeMode;
+  return mode === undefined ? 'off' : validateEnumValue(mode, 'worktreeMode', WORKTREE_MODES);
+}
+
+export function resolveWorktreeTarget(settings?: { consolidationBranch?: unknown } | null): string {
+  const branch = settings?.consolidationBranch;
+  return typeof branch === 'string' && branch.trim() && !/[*?\[]/.test(branch) ? branch.trim() : 'main';
+}
+
+export function resolveAttemptWorkspace(
+  attempt: Pick<ExecutionAttempt, 'taskId' | 'workspace' | 'workspaceMode'>,
+  settings?: { consolidationBranch?: unknown } | null,
+): AttemptWorkspace {
+  return attempt.workspaceMode === 'worktree'
+    ? { mode: 'worktree', path: attempt.workspace, branch: `moe/task/${attempt.taskId}`, target: resolveWorktreeTarget(settings) }
+    : { mode: 'shared', path: attempt.workspace, branch: null, target: null };
+}
+
 export function validateSettingsUpdate(project: Project, settings: Partial<ProjectSettings>): ProjectSettings {
   if (!project) {
     throw new Error('Project not loaded');
@@ -313,6 +339,7 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
     'qualityGate',
     'qualityGateScope',
     'consolidationBranch',
+    'worktreeMode',
     'appendOnlyFiles',
     'refusalCascadeAutoBacklog',
     'resources',
@@ -415,6 +442,9 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
   }
   if (input.qualityGateScope !== undefined) {
     next.qualityGateScope = validateEnumValue(input.qualityGateScope, 'qualityGateScope', ['epicFinal', 'everyTask'] as const);
+  }
+  if (input.worktreeMode !== undefined) {
+    next.worktreeMode = validateEnumValue(input.worktreeMode, 'worktreeMode', WORKTREE_MODES);
   }
   if (input.consolidationBranch !== undefined) {
     // Literal branch name or a `*` glob checked at complete_task. Empty

@@ -185,6 +185,17 @@ export interface ExecutionPolicySnapshotV2 {
  */
 export type DeliveryPolicy = 'legacy' | 'local-branch' | 'remote-push' | 'merged-pull-request' | 'manual-artifact';
 
+export type WorktreeMode = 'off' | 'on';
+export type ExecutionWorkspaceMode = 'shared' | 'worktree';
+
+/** Claim/context workspace: branch and target are null for shared attempts. */
+export interface AttemptWorkspace {
+  mode: ExecutionWorkspaceMode;
+  path: string;
+  branch: string | null;
+  target: string | null;
+}
+
 export interface ProjectSettings {
   /** Absent = legacy. Observe never weakens deliveryPolicy; verified-local is not yet runnable. */
   executionProfile?: ExecutionProfile;
@@ -250,6 +261,13 @@ export interface ProjectSettings {
    * #governors, so wrapper rollout stays graceful.
    */
   consolidationBranch?: string;
+  /**
+   * 'on' runs each new WORKING claim in <projectPath>/.worktrees/<taskId>
+   * on moe/task/<taskId>. Read once at claim time, pinned on the attempt's
+   * workspaceMode. Absent means 'off' only in resolveWorktreeMode (WT-19
+   * flips that default); any other value is refused.
+   */
+  worktreeMode?: WorktreeMode;
   /**
    * Master switch for the agent wrapper's git activity. When true (default)
    * the wrapper lands the task's attributed paths on every session exit: a
@@ -1299,6 +1317,11 @@ export interface ExecutionAttempt {
   generation: number;
   /** Checkout/worktree the attempt runs against. */
   workspace: string;
+  /**
+   * Set once by the claim; 'worktree' means workspace is the task's worktree.
+   * Absent on older records, which read as 'shared': no migration/version bump.
+   */
+  workspaceMode?: ExecutionWorkspaceMode;
   phase: ExecutionAttemptPhase;
   startedAt: string;
   /** When `phase` last changed. */

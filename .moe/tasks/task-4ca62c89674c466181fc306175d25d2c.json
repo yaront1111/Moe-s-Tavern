@@ -1,0 +1,35 @@
+{
+  "id": "task-4ca62c89674c466181fc306175d25d2c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: an empty daemon.lock (acquireLock's O_EXCL create-to-write window) is judged 'malformed lock' and replaced, so two simultaneous starts can both take the lock",
+  "description": "acquireLock (packages/moe-daemon/src/index.ts) creates daemon.lock with O_EXCL and writes its JSON in a second syscall. A contender that reads the still-empty file in between gets staleLockReason 'malformed lock', unlinks it and wins its retry, so on POSIX both processes start a daemon over one .moe/. Scratch-probe repro: an empty lock gives staleLockReason='malformed lock' and the contender's acquireLock=true. This is pre-existing and the window is narrow. task-25ba449a's plan forbids lock-policy changes, so it is filed here. One fix is to treat a young empty lock as live, for example by checking mtime against a short grace period.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's 13:00Z delegation. 25ba449a's worker filed this as a pre-existing adjacent daemon-lock bug, the empty daemon.lock O_EXCL window. It joins the packages/moe-daemon/src/index.ts lane after 25ba449a, in the order f0abb6d6 → eea78d1d → 4ca62c89.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-25ba449ab87d4039a283426f07302cbc",
+    "task-eea78d1d1dc54ae1a01a61e0e211cfa0"
+  ],
+  "priority": "LOW",
+  "order": 307.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T14:29:48.062Z",
+  "updatedAt": "2026-10-30T14:30:43.240Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T14:30:43.240Z",
+    "seq": 1
+  }
+}

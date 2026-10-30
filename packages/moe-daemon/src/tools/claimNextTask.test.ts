@@ -19,6 +19,133 @@ import type { Project, Epic, Worker, Task, TeamRole, HandoffNote } from '../type
 vi.mock('../util/diskState.js', () => ({ computeDiskStateSignature: vi.fn() }));
 const mockedSignature = vi.mocked(computeDiskStateSignature);
 
+describe('moe.claim_next_task — worktree workspace', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => { h.init(); h.setupMoeFolder(); h.createEpic(); });
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  async function setup(status: Task['status'] = 'WORKING', worktreeMode?: 'on' | 'off') {
+    h.createTask({ id: 'task-1', status });
+    await h.state.load();
+    if (worktreeMode !== undefined) await h.state.updateSettings({ worktreeMode });
+  }
+
+  async function claim(args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    return await claimNextTaskTool(h.state).handler(
+      { statuses: ['WORKING'], workerId: 'worker-1', ...args }, h.state) as Record<string, unknown>;
+  }
+
+  function attemptText(id: unknown): string {
+    return fs.readFileSync(path.join(h.moePath, 'attempts', `${String(id)}.json`), 'utf8');
+  }
+
+  function sharedWorkspace() {
+    return { mode: 'shared', path: h.state.projectPath, branch: null, target: null };
+  }
+
+  function expectRecorded(result: Record<string, unknown>, mode: 'shared' | 'worktree', workspace: string) {
+    const attempt = listAttempts(h.state, 'task-1').find(a => a.id === result.attemptId);
+    expect(attempt).toMatchObject({ workspaceMode: mode, workspace });
+    expect(JSON.parse(attemptText(result.attemptId))).toEqual(attempt);
+  }
+
+  it('persists the WORKING worktree and returns its workspace contract', async () => {
+    await setup('WORKING', 'on');
+    const result = await claim();
+    const workspace = path.join(h.state.projectPath, '.worktrees', 'task-1');
+    expectRecorded(result, 'worktree', workspace);
+    expect(result.workspace).toEqual({ mode: 'worktree', path: workspace, branch: 'moe/task/task-1', target: 'main' });
+    const project = JSON.parse(fs.readFileSync(path.join(h.moePath, 'project.json'), 'utf8')) as Project;
+    expect(project.settings.worktreeMode).toEqual('on');
+  });
+
+  it.each([undefined, 'off'] as const)('keeps mode %j shared', async (mode) => {
+    await setup('WORKING', mode);
+    const result = await claim();
+    expectRecorded(result, 'shared', h.state.projectPath);
+    expect(result.workspace).toEqual(sharedWorkspace());
+  });
+
+  it.each([['moe/work-2026-10-24', 'moe/work-2026-10-24'], ['moe/work-*', 'main']])(
+    'wires consolidation target %s to %s', async (consolidationBranch, target) => {
+      await setup('WORKING', 'on');
+      await h.state.updateSettings({ consolidationBranch });
+      expect((await claim()).workspace).toEqual({ mode: 'worktree',
+        path: path.join(h.state.projectPath, '.worktrees', 'task-1'), branch: 'moe/task/task-1', target });
+    });
+
+  it.each(['PLANNING', 'REVIEW'] as const)('keeps %s shared even with enabled or corrupt settings', async (status) => {
+    await setup(status, 'on');
+    const first = await claim({ statuses: [status] });
+    expectRecorded(first, 'shared', h.state.projectPath);
+    expect(first.workspace).toEqual(sharedWorkspace());
+    await releaseTaskTool(h.state).handler({ taskId: 'task-1', workerId: 'worker-1' }, h.state);
+    (h.state.project!.settings as Record<string, unknown>).worktreeMode = 'yes';
+    const second = await claim({ statuses: [status] });
+    expectRecorded(second, 'shared', h.state.projectPath);
+    expect(second.workspace).toEqual(sharedWorkspace());
+  });
+
+  it('pins a resumed workspace while the successor reads the changed setting', async () => {
+    await setup('WORKING', 'on');
+    const first = await claim();
+    expectRecorded(first, 'worktree', path.join(h.state.projectPath, '.worktrees', 'task-1'));
+    const bytes = attemptText(first.attemptId);
+    await h.state.updateSettings({ worktreeMode: 'off' });
+    const resumed = await claim({ taskId: 'task-1' });
+    expect(resumed.attemptId).toEqual(first.attemptId);
+    expect(resumed.workspace).toEqual(first.workspace);
+    expect(attemptText(first.attemptId)).toEqual(bytes);
+    await releaseTaskTool(h.state).handler({ taskId: 'task-1', workerId: 'worker-1' }, h.state);
+    const successor = await claim();
+    expect(successor.generation).toEqual(2);
+    expectRecorded(successor, 'shared', h.state.projectPath);
+    expect(successor.workspace).toEqual(sharedWorkspace());
+  });
+
+  it('hands back a WORKING claim on malformed mode without creating a worker or attempt', async () => {
+    await setup();
+    (h.state.project!.settings as Record<string, unknown>).worktreeMode = 'yes';
+    await expect(claim()).rejects.toMatchObject({ codeName: 'INVALID_INPUT', message: expect.stringContaining('worktreeMode') });
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toEqual(null);
+    expect(listAttempts(h.state)).toEqual([]);
+    expect(h.state.getWorker('worker-1')).toEqual(null);
+    expect(fs.existsSync(path.join(h.moePath, 'attempts'))).toEqual(false);
+  });
+
+  it.each([undefined, 'worktree'] as const)('preserves stored mode %j through repair and phase changes', async (workspaceMode) => {
+    await setup();
+    const params = { taskId: 'task-1', workerId: 'worker-1', runnerId: 'worker-1', workspace: h.state.projectPath,
+      ...(workspaceMode === undefined ? {} : { workspaceMode }) };
+    const first = await openAttempt(h.state, params);
+    const bytes = attemptText(first.id);
+    expect(await openAttempt(h.state, { ...params, id: first.id, workspaceMode: 'shared', workspace: '/other' })).toEqual(first);
+    expect(attemptText(first.id)).toEqual(bytes);
+    const changed = await setAttemptPhase(h.state, first.id, 'finalizing');
+    expect(changed).toEqual({ ...first, phase: 'finalizing', lastPhaseAt: changed.lastPhaseAt });
+    expect(JSON.parse(attemptText(first.id))).toEqual(changed);
+  });
+
+  it('ignores injected workspace arguments and does not advertise them', async () => {
+    await setup();
+    const result = await claim({ workspaceMode: 'worktree', workspace: '/elsewhere' });
+    expectRecorded(result, 'shared', h.state.projectPath);
+    expect(result.workspace).toEqual(sharedWorkspace());
+    const properties = claimNextTaskTool(h.state).inputSchema.properties;
+    expect(properties).not.toHaveProperty('workspaceMode');
+    expect(properties).not.toHaveProperty('workspace');
+  });
+
+  it('refuses an invalid internal workspaceMode without persisting an attempt', async () => {
+    await setup();
+    await expect(openAttempt(h.state, { taskId: 'task-1', workerId: 'worker-1', runnerId: 'worker-1',
+      workspace: h.state.projectPath, workspaceMode: 'bogus' as never }))
+      .rejects.toMatchObject({ codeName: 'INVALID_INPUT', message: expect.stringContaining('workspaceMode') });
+    expect(listAttempts(h.state)).toEqual([]);
+    expect(fs.existsSync(path.join(h.moePath, 'attempts'))).toEqual(false);
+  });
+});
+
 describe('moe.claim_next_task — role-aware routing', () => {
   let testDir: string;
   let moePath: string;
@@ -969,10 +1096,10 @@ describe('moe.claim_next_task — execution attempts', () => {
       id: result.attemptId,
       taskId: 'task-1',
       workerId: 'worker-1',
-      // The claim knows only the worker and the project: a distinct runner and a
-      // per-attempt workspace arrive with the reattachment work.
+      // The default keeps the shared project checkout; runnerId stays the worker.
       runnerId: 'worker-1',
       workspace: h.state.projectPath,
+      workspaceMode: 'shared',
       generation: 1,
       phase: 'running',
     });
@@ -1030,6 +1157,7 @@ describe('moe.claim_next_task — execution attempts', () => {
     expect(refused.hasNext).toBe(false);
     expect((refused.alreadyAssigned as { taskId: string }).taskId).toBe('task-1');
     expect(refused).not.toHaveProperty('attemptId');
+    expect(refused).not.toHaveProperty('workspace');
     expect(attemptsOf('task-1')).toEqual([[1, 'worker-1', 'running']]);
     expect(attemptsOf('task-2')).toEqual([]);
   });
@@ -1192,6 +1320,7 @@ describe('moe.claim_next_task — execution attempts', () => {
     expect(result.hasNext).toBe(true);
     expect(h.state.getTask('task-1')!.assignedWorkerId).toBeNull();
     expect(result).not.toHaveProperty('attemptId');
+    expect(result).not.toHaveProperty('workspace');
     expect(attemptsOf('task-1')).toEqual([]);
   });
 });
@@ -1424,6 +1553,7 @@ describe('moe.claim_next_task — runner process identity', () => {
       runnerId: 'worker-1',
       generation: 1,
       workspace: h.state.projectPath,
+      workspaceMode: 'shared',
       phase: 'running',
       startedAt: record.startedAt,
       lastPhaseAt: record.lastPhaseAt,

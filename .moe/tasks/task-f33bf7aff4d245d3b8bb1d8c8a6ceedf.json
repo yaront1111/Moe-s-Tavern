@@ -1,0 +1,26 @@
+{
+  "id": "task-f33bf7aff4d245d3b8bb1d8c8a6ceedf",
+  "epicId": "epic-be924fb8",
+  "title": "bug: doctor and moe-proxy project-path checks disagree with the daemon lifecycle's own-path rule",
+  "description": "doctor.ts:176 path.resolve()s the projectPath that /health reports and compares the two case-sensitively. A daemon spawned with d:\\x (VS Code lowercases the drive) therefore false-fails `doctor --project D:\\x` with 'port reused by another daemon', and /mnt/<d> versus drive spellings fail the same way. moe-proxy (utils.ts readDaemonInfoResult, daemonIdentity.ts classify) compares its own MOE_PROJECT_PATH unresolved, so a native alias (//x on Linux, /x on Windows) refuses its own daemon. That refusal is a non-destructive exit, and launchers and the cwd always pass canonical paths. The fix is to compare isSameProjectPath(recorded or reported value as written, path.resolve(own)), the rule task-25ba449a applies in index.ts.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 308.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T14:29:51.358Z",
+  "updatedAt": "2026-10-30T14:29:51.358Z"
+}

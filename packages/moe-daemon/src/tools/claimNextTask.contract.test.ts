@@ -67,9 +67,10 @@ describe('moe.claim_next_task', () => {
 
     expect(result.hasNext).toBe(true);
     // attemptId + generation are the claimed attempt's fencing identity: two
-    // scalars beside `task` (task-b6c48bf0), not a context payload.
+    // scalars beside `task` (task-b6c48bf0), not a context payload. The workspace
+    // describes where that attempt runs (WT-01).
     expect(Object.keys(result).sort()).toEqual(
-      ['attemptId', 'chatHint', 'generation', 'hasNext', 'nextAction', 'task'].sort()
+      ['attemptId', 'chatHint', 'generation', 'hasNext', 'nextAction', 'task', 'workspace'].sort()
     );
     expect(Object.keys(result.task).sort()).toEqual([
       'assignedWorkerId',
@@ -680,7 +681,7 @@ describe('moe.claim_next_task attempt policy snapshot', () => {
     const result = await claim('worker-a', injected);
 
     expect(readAttempt(result.attemptId).executionPolicySnapshot).toEqual(OBSERVE_LOCAL_AT_2);
-    expect(Object.keys(result).sort()).toEqual(['attemptId', 'chatHint', 'generation', 'hasNext', 'nextAction', 'task'].sort());
+    expect(Object.keys(result).sort()).toEqual(['attemptId', 'chatHint', 'generation', 'hasNext', 'nextAction', 'task', 'workspace'].sort());
     expect(result.task).not.toHaveProperty('executionPolicySnapshot');
     const schema = claimNextTaskTool(h.state).inputSchema as { properties: Record<string, unknown> };
     expect(Object.keys(schema.properties)).not.toContain('executionPolicySnapshot');

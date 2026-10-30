@@ -1,10 +1,13 @@
+import path from 'path';
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { ExecutionAttempt, ExecutionPolicySnapshot, Task, TaskPriority } from '../types/schema.js';
+import type { ExecutionAttempt, ExecutionPolicySnapshot, ExecutionWorkspaceMode, Task, TaskPriority } from '../types/schema.js';
 import { MoeError, missingRequired, notAllowed, invalidState, notFound, invalidInput } from '../util/errors.js';
 import { WORKER_TYPE_SCHEMA, normalizeWorkerType, refreshWorkerType } from './joinTeam.js';
 import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
 import { planSubmissionSnapshot } from '../state/taskStore.js';
+import { resolveAttemptWorkspace, resolveWorktreeMode } from '../state/validators.js';
+import { validateEntityId } from '../util/sanitize.js';
 import { logger } from '../util/logger.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import {
@@ -134,9 +137,9 @@ export function deriveAttemptPolicySnapshot(state: StateManager, task: Task): Ex
  * Any other failure propagates; the caller treats it as fatal to the claim.
  *
  * The resume is adopted BEFORE anything is derived, so it keeps its original
- * snapshot (or none, for a historical attempt) even when the task or settings
- * are malformed now. Every other arm opens with deriveAttemptPolicySnapshot's
- * identity; a derivation failure propagates like any other.
+ * snapshot (or none, for a historical attempt), workspaceMode and workspace even
+ * when the task or settings are malformed now. Every other arm opens with
+ * deriveAttemptPolicySnapshot's identity; a derivation failure propagates like any other.
  */
 async function openClaimAttempt(
   state: StateManager,
@@ -149,16 +152,21 @@ async function openClaimAttempt(
   if (resumed && resumingOwnSeat && resumed.workerId === workerId) return resumed;
   const task = state.getTask(taskId);
   if (!task) throw notFound('Task', taskId);
+  const workspaceMode: ExecutionWorkspaceMode = task.status === 'WORKING'
+    && resolveWorktreeMode(state.project?.settings) === 'on' ? 'worktree' : 'shared';
+  const workspace = workspaceMode === 'worktree'
+    ? path.join(state.projectPath, '.worktrees', validateEntityId(taskId, 'taskId')) : state.projectPath;
   const params = {
     taskId,
     workerId,
-    // The claim knows the worker and the project. runnerId stays the worker id
-    // (reattach never compares it) and no per-attempt workspace is invented.
+    // runnerId stays the worker id (reattach never compares it); mode/path are
+    // daemon-derived once, so resuming an attempt never switches its checkout.
     runnerId: workerId,
-    workspace: state.projectPath,
+    workspace,
+    workspaceMode,
     // The runner's process identity, recorded exactly as it was sent so that
-    // moe.reattach_attempt can match it after a restart. No identity, no keys:
-    // the record is then byte for byte what it was before identities existed.
+    // moe.reattach_attempt can match it after a restart. Without identity, the
+    // processStartedAt and host keys remain absent.
     ...identity,
     // Derived from daemon state only; claim arguments never reach openAttempt.
     executionPolicySnapshot: deriveAttemptPolicySnapshot(state, task),
@@ -874,7 +882,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // the attempt is a record of its own. Callers present these two values
         // to fenced tools (assertAttemptCurrent); absent when no worker is named.
         ...(claimedAttempt
-          ? { attemptId: claimedAttempt.id, generation: claimedAttempt.generation }
+          ? {
+              attemptId: claimedAttempt.id,
+              generation: claimedAttempt.generation,
+              workspace: resolveAttemptWorkspace(claimedAttempt, state.project?.settings),
+            }
           : {}),
         // Model/effort the wrapper launches this task's CLI with (settings.routing).
         ...(launch ? { launch } : {}),

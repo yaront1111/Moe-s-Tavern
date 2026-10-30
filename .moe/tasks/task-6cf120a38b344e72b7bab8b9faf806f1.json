@@ -15,39 +15,63 @@
     {
       "stepId": "step-1",
       "description": "Settings contract: types, validation and the three resolvers, with their unit tests (DoD 1, DoD 4).\n\nBefore editing: types/schema.ts is also declared by a dormant peer; see planningNotes.risks (contested paths).\n\ntypes/schema.ts:\n- Add `export type WorktreeMode = 'off' | 'on';` and `export type ExecutionWorkspaceMode = 'shared' | 'worktree';`.\n- Add `export interface AttemptWorkspace { mode: ExecutionWorkspaceMode; path: string; branch: string | null; target: string | null }`. It is the `workspace` object claim_next_task returns now and get_context returns in WT-02; branch and target are null in shared mode.\n- ProjectSettings: add `worktreeMode?: WorktreeMode;` next to consolidationBranch. Doc comment: 'on' runs each new WORKING claim's attempt in its own git worktree (<projectPath>/.worktrees/<taskId> on moe/task/<taskId>). An absent key means 'off'; resolveWorktreeMode is the only place that default lives, and WT-19 flips it. The setting is read once per attempt at claim time and pinned on ExecutionAttempt.workspaceMode. Any other value is refused.\n- ExecutionAttempt: add `workspaceMode?: ExecutionWorkspaceMode;` right after `workspace`. Doc comment: set once by the claim; 'worktree' means `workspace` is the task's worktree. The field is absent on records opened before it existed, and those read as 'shared'. It is optional on purpose: no migration and no schemaVersion bump, like the other additive attempt fields.\n\nstate/validators.ts:\n- Add 'worktreeMode' to validateSettingsUpdate's rejectUnknownFields allowlist. The file header warns that a field missing from the allowlist is silently dropped.\n- Validate it with `if (input.worktreeMode !== undefined) next.worktreeMode = validateEnumValue(input.worktreeMode, 'worktreeMode', WORKTREE_MODES);` using a module const `WORKTREE_MODES: readonly WorktreeMode[] = ['off', 'on']`. Store the value as supplied; an omitted key stays omitted.\n- `export function resolveWorktreeMode(settings?: { worktreeMode?: unknown } | null): WorktreeMode`:\n  - undefined settings or an undefined key → 'off';\n  - 'off' or 'on' → itself;\n  - any other stored value, null included → throw invalidInput('worktreeMode', 'must be one of: off, on'). Reusing validateEnumValue gives exactly this message.\n  This is the resolveExecutionProfile convention: a malformed stored setting is refused, never read as the default.\n- `export function resolveWorktreeTarget(settings?: { consolidationBranch?: unknown } | null): string`. It returns the trimmed consolidationBranch when that is a non-empty string containing no '*', '?' or '[' (design §2.7), else 'main'. It never throws: a non-string from a hand-edited project.json reads as unset, the same type guard completeTask.checkBranchPolicy uses.\n- `export function resolveAttemptWorkspace(attempt: Pick<ExecutionAttempt, 'taskId' | 'workspace' | 'workspaceMode'>, settings?: { consolidationBranch?: unknown } | null): AttemptWorkspace`:\n  - attempt.workspaceMode === 'worktree' → { mode: 'worktree', path: attempt.workspace, branch: `moe/task/${attempt.taskId}`, target: resolveWorktreeTarget(settings) };\n  - anything else (absent on older records, or unrecognised) → { mode: 'shared', path: attempt.workspace, branch: null, target: null }.\n  The mode and path come from the attempt, because they are pinned; the target comes from live settings. It never throws, because the claim calls it after its writes.\n- Keep the const and the three functions in one small block with a short comment that cites epic-dce3a64f §7.1/§2.7. Add one sentence to the file header naming these resolve* helpers as a third family beside validate*/sanitize*.\n\nError handling in this step:\n- A bad worktreeMode on update throws INVALID_INPUT from validateSettingsUpdate before updateSettings persists anything.\n- A malformed stored value throws INVALID_INPUT from resolveWorktreeMode.\n- resolveWorktreeTarget and resolveAttemptWorkspace are total: garbage input yields 'main' or shared, never an exception.\n\nstate/validators.test.ts: add a new describe('worktree mode'), reusing the file's project() helper. Use toEqual on whole values; no truthiness checks.\n- validateSettingsUpdate:\n  - accepts 'off' and 'on' (next.worktreeMode equals the input);\n  - an unrelated update leaves the key absent;\n  - rejects each of 'yes', 'ON', ' on', '', true, 1, null and {} with a message containing 'worktreeMode' and 'must be one of: off, on' (DoD 1).\n- resolveWorktreeMode:\n  - undefined, null and {} → 'off' (absent settings, DoD 1);\n  - { worktreeMode: 'off' } → 'off' and { worktreeMode: 'on' } → 'on';\n  - stored 'yes', null and 1 → throw, with error code INVALID_INPUT and the message naming worktreeMode.\n- resolveWorktreeTarget (DoD 4):\n  - 'main' → 'main'; 'moe/work-2026-10-24' → itself; '  release/v2  ' → 'release/v2';\n  - 'moe/work-*', 'rel?ase' and 'feat[0-9]' → 'main';\n  - '', '   ', a missing key, undefined settings and 42 → 'main'.\n- resolveAttemptWorkspace:\n  - a worktree attempt → the full object, with branch 'moe/task/<taskId>' and the resolved target;\n  - a shared attempt and an attempt with no workspaceMode → shared, with null branch and target;\n  - an unrecognised workspaceMode → shared.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts",
         "packages/moe-daemon/src/state/validators.ts",
         "packages/moe-daemon/src/state/validators.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/state/validators.test.ts"
+      ],
+      "note": "Added the three exported workspace types, optional settings/attempt fields, allowlisted setting validation, and the three resolver exports. Both contested peers confirmed WORKING-unassigned; all seven scope paths were initially clean; unrelated dirty paths left untouched. Native Linux snapshot with matching-lock hardlinked dependencies: validators RED 35 failed/35 passed, GREEN 70 passed. Corrected new test expectations to existing MoeError numeric code/message format, retaining exact INVALID_INPUT and worktreeMode checks. Full named gate remains step 3.",
+      "startedAt": "2026-10-30T14:21:26.388Z",
+      "completedAt": "2026-10-30T14:23:18.158Z"
     },
     {
       "stepId": "step-2",
       "description": "Pin the mode on the attempt at claim time and return `workspace`, with the claim tests (DoD 2, DoD 3, DoD 4 wiring).\n\nBefore editing: tools/claimNextTask.ts is also declared by a dormant peer; see planningNotes.risks.\n\nstate/attemptStore.ts:\n- OpenAttemptParams gains an optional `workspaceMode?: ExecutionWorkspaceMode`. It is internal, derived by the claim path, never an MCP argument.\n- Validate it like the other params: when supplied it must be 'shared' or 'worktree', else throw invalidInput('workspaceMode', ...) before anything is allocated or written.\n- openAttempt builds its record from an explicit field list, so without this edit the field is silently dropped. Write it immediately after `workspace` with a conditional spread. Omitted means no key, the legacy shape, so attemptStore.test.ts LEGACY_KEYS stays green. A repair (existing id) still adopts nothing.\n\ntools/claimNextTask.ts, openClaimAttempt:\n- Only the fresh and successor arms derive anything. The own-seat resume returns the adopted attempt before any derivation and keeps its mode; that early return IS the pin. Extend the comment that says the resume keeps its original snapshot to also cover workspaceMode/workspace.\n- `const workspaceMode: ExecutionWorkspaceMode = task.status === 'WORKING' && resolveWorktreeMode(state.project?.settings) === 'on' ? 'worktree' : 'shared';`\n  - Only a WORKING claim runs in a worktree (design §1.3). PLANNING (architect) and REVIEW (QA) attempts stay 'shared' at projectPath even when the setting is on.\n  - The status test goes first, so a malformed setting refuses only WORKING claims.\n- `workspace` = workspaceMode === 'worktree' ? path.join(state.projectPath, '.worktrees', validateEntityId(taskId, 'taskId')) : state.projectPath.\n  - Import `path from 'path'`, validateEntityId from '../util/sanitize.js', and resolveWorktreeMode/resolveAttemptWorkspace from '../state/validators.js'. That import adds no cycle.\n  - The id check stops a hand-edited task id from building a path outside .worktrees/.\n- Pass workspaceMode in the openAttempt params, and replace the stale \"no per-attempt workspace is invented\" comment.\n- Response: beside attemptId/generation, add `workspace: resolveAttemptWorkspace(claimedAttempt, state.project?.settings)`.\n  - It is present whenever attemptId is (both modes) and absent when no worker is named.\n  - The hasNext:false and alreadyAssigned replies stay unchanged; the wrapper's resume path reads the workspace from get_context (WT-02).\n\nError handling in this step:\n- A malformed stored worktreeMode, or a task id that fails validateEntityId, throws INVALID_INPUT while the openAttempt params are built.\n- The caller's existing catch (handBackUnrecordedClaim) then clears the assignment, so the WORKING claim fails with nothing assigned, no attempt and no worker record. This is the same path a deriveAttemptPolicySnapshot failure takes today.\n- openAttempt refuses an unrecognised workspaceMode before writing.\n- The response builder cannot throw.\n\nclaimNextTask.test.ts: add a new describe('moe.claim_next_task — worktree workspace').\n- Use ToolTestHarness, and after h.state.load() call `await h.state.updateSettings({...})`. That goes through validateSettingsUpdate, so a missing allowlist entry fails here too.\n- Build every expected worktree path with path.join(h.state.projectPath, '.worktrees', <id>), never a '/' literal, so the tests pass on Windows.\n- Cases:\n  1. (DoD 2) 'on' plus a WORKING claim. The attempt in memory (listAttempts) AND on disk (.moe/attempts/<id>.json) has workspaceMode 'worktree' and workspace = the joined path. result.workspace toEqual { mode: 'worktree', path, branch: 'moe/task/task-1', target: 'main' }.\n  2. (DoD 3) The setting absent, and set to 'off': the attempt has workspaceMode 'shared' and workspace h.state.projectPath. result.workspace toEqual { mode: 'shared', path: h.state.projectPath, branch: null, target: null }.\n  3. (DoD 4 wiring) 'on' with consolidationBranch 'moe/work-2026-10-24' → target 'moe/work-2026-10-24'; with 'moe/work-*' → 'main'.\n  4. 'on' plus a PLANNING claim (statuses ['PLANNING']) and a REVIEW claim (['REVIEW']) both record 'shared' at projectPath and return mode 'shared'.\n  5. Pin: claim under 'on' (worktree), then set 'off'. The own-seat re-claim by taskId returns the same attemptId, an identical workspace object and unchanged attempt-file bytes. Then release (releaseTaskTool) and claim again: generation 2 records 'shared'.\n  6. Error handling: set `(h.state.project!.settings as Record<string, unknown>).worktreeMode = 'yes'`. The WORKING claim rejects with INVALID_INPUT naming worktreeMode, the task is unassigned and listAttempts is empty.\n  7. Injection: a claim carrying workspaceMode 'worktree' and workspace '/elsewhere' as args, under the default setting, still records 'shared' at projectPath. The tool's inputSchema properties contain neither key.\n  8. openAttempt with workspaceMode 'bogus' rejects with INVALID_INPUT and writes no attempt file.\n- In the existing 'opens no attempt on the alreadyAssigned refusal' test, add `expect(refused).not.toHaveProperty('workspace')`.\n\nThree existing assertions pin today's shapes. A prototype run confirmed that these 5 tests fail, and no others:\n- claimNextTask.test.ts, 'writes a claim that sends no identity byte for byte as before': insert `workspaceMode: 'shared'` right after `workspace` in the expected JSON.\n- claimNextTask.test.ts, 'opens one running generation-1 attempt…': add workspaceMode 'shared' to its toMatchObject and fix its comment about the workspace.\n- claimNextTask.contract.test.ts: add 'workspace' to both Object.keys(result) lists ('keeps claim response lean…' and the C5 it.each), and extend the comment above the first list to say the workspace is where the attempt runs (WT-01).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/attemptStore.ts",
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "packages/moe-daemon/src/tools/claimNextTask.test.ts",
         "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts",
+        "packages/moe-daemon/src/state/validators.ts"
+      ],
+      "note": "Pinned daemon-derived workspaceMode/workspace for fresh/successor claims; adopted attempts bypass derivation. Added workspace response only with attempt identity. Covered persisted bytes, default/off, literal/glob target, PLANNING/REVIEW including malformed settings, resume/new generation, failure compensation, ignored injection, invalid open mode, repair/phase preservation and absent-workspace refusals. Rechecked contested claim peer idle before editing. RED: 17 failures/111 passes (after correcting test syntax); GREEN: claim+contract+attemptStore 200/200. Fixed new no-write tests to assert the attempts directory is absent, rather than assuming an empty existing directory. Also clarified validators header (step-1 file) and identity comment; no behavior scope expansion.",
+      "startedAt": "2026-10-30T14:23:18.186Z",
+      "completedAt": "2026-10-30T14:26:53.283Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification, run once. Run this from the repo root; its fresh output is the complete_task evidence:\n\ncd packages/moe-daemon && npm run build && npx vitest run src/state/validators.test.ts src/tools/claimNextTask.test.ts src/tools/claimNextTask.contract.test.ts && npm test && cd ../.. && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)\n\nWhat the command covers:\n- the description's DoD command, verbatim (DoD 5);\n- the full daemon suite, because this task changes a shared type, the persisted attempt record and a wire response. Baseline on HEAD, 2026-10-30, in a native-Linux snapshot: 208 files, 5915 passed / 16 skipped, about 38 s;\n- epic rail 2's parity check on a HEAD snapshot of scripts/, as the WT-S comment asks.\n\nWSL: the shared checkout's node_modules is the Windows install, and vitest dies at startup on the rolldown native binding.\n- Run the daemon part in a snapshot of HEAD with this task's 7 files copied over (cmp each against the working tree) and a native Linux node_modules hardlinked in, per mem:gotcha-linux-vitest-reuse-native-node-modules. On 2026-10-30, /tmp/e7f4-qa.dCXneN/packages/moe-daemon/node_modules matched HEAD's lockfile; re-check the lockfile md5 before reusing it.\n- Never npm install, and never run `npm run build`, in the shared checkout: prebuild regenerates the tracked src/generated files.\n- In the snapshot, the parity part may run from the snapshot root, whose scripts/ is HEAD's.\n- Say in outputTail how you ran it.\n\nFix any failure inside the step 1-2 files only; never weaken an assertion. A failure in a file this task did not touch that also fails on a clean HEAD snapshot is pre-existing: report it, don't fix it.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh named gate passed (exit 0): npm run build; focused validators/claim/contract 200 tests; full daemon 208 files, 6012 passed / 19 skipped; PASS parity-check.sh. Per WSL plan, daemon ran in /tmp/moe-wt01-gate.pwrg14 from HEAD 921f81a6 with exactly the seven task files overlaid and cmp-verified; native Linux dependencies hardlinked from the matching-lock snapshot (normalized lock md5 2dfc3ca92ead64edff6f913b89b1fe91). Parity used git archive HEAD scripts via read-only GIT_DIR to the control checkout. No shared build/install/generated edits. Log /tmp/wt01-gate.log; current HEAD daemon tree still equals gate baseline.",
+      "startedAt": "2026-10-30T14:26:53.305Z",
+      "completedAt": "2026-10-30T14:28:38.880Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this task's own diff, as the final step. Load the adversarial-self-review skill. Check each item:\n1. 'worktreeMode' is in validateSettingsUpdate's allowlist, and updateSettings round-trips it.\n2. No resume, repair or reattach path re-derives the mode: only the fresh and successor arms of openClaimAttempt read settings, and an adopted attempt's workspace/workspaceMode bytes never change.\n3. WORKING-only: with the setting on, PLANNING and REVIEW claims record 'shared'.\n4. Error handling: resolveWorktreeTarget and resolveAttemptWorkspace never throw on garbage (null settings, number, array, object). The response is built after the claim's writes, so a throw there would misreport a claim that already happened.\n5. A malformed setting refuses only WORKING claims, and the hand-back leaves no assignment, no attempt and no new worker record.\n6. The worktree path uses path.join and validateEntityId, and the tests build expected paths with path.join, so they pass on Windows.\n7. Rail 4: in shared mode the attempt workspace is still state.projectPath. The only shared-mode changes are the new workspaceMode:'shared' key and the response's workspace object.\n8. No caller argument reaches workspaceMode or workspace.\n9. Everything still runs inside runExclusive, with no new subprocess or IO under the mutex beyond the existing attempt write.\n10. Every doc comment you added matches the code.\n\nIf this review changes any byte, re-run step 3's command and submit that last fresh output as the complete_task evidence. In complete_task's summary, list every exported name you added.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review complete; no code changes after green gate. Checked all 10 plan items and skill checklist: allowlist+disk settings round-trip; own-seat resume before derivation; repair/phase changes preserve mode/path and legacy absence; PLANNING/REVIEW status-first bypass even malformed settings; resolvers tolerate JSON-like garbage settings; WORKING failure clears assignment before worker creation; safe task-id/path.join; shared default unchanged except additive keys; injected workspace ignored; derivation and response remain under runExclusive with no new subprocess/IO. Comments match behavior; getters/proxies are not persisted JSON inputs. All seven shared files still cmp-identical to tested snapshot, diff --check clean. Source build, focused 200/200, full 6012 passed/19 skipped and parity green. Existing oversized files retained per approved scope; new helpers remain short.",
+      "startedAt": "2026-10-30T14:28:38.911Z",
+      "completedAt": "2026-10-30T14:29:25.112Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -82,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:47:27.963Z",
-  "updatedAt": "2026-10-30T14:13:40.406Z",
+  "updatedAt": "2026-10-30T14:30:40.022Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:54.125Z",
@@ -91,12 +115,14 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T12:56:05.587Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 7
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
     "architect-6fc3dd5c",
-    "architect-bc59d28a"
+    "architect-bc59d28a",
+    "worker-262588d0"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -105,7 +131,12 @@
   "planSizeWarnings": [
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:20:45.305Z",
   "executionContract": {
@@ -183,5 +214,24 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-6fc3dd5c@2026-10-30T12:56:22Z",
     "at": "2026-10-30T14:13:40.406Z"
-  }
+  },
+  "workStartedAt": "2026-10-30T14:21:26.388Z",
+  "reviewStartedAt": "2026-10-30T14:30:40.019Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm run build && npx vitest run src/state/validators.test.ts src/tools/claimNextTask.test.ts src/tools/claimNextTask.contract.test.ts && npm test && cd ../.. && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)",
+    "exitCode": 0,
+    "outputTail": "Approved WSL adaptation: daemon portion ran in /tmp/moe-wt01-gate.pwrg14, archived from HEAD 921f81a6f92b0ce87402ba0af8b0c2c9afebf142 with all seven task files overlaid and cmp-verified. Dependencies hardlinked from lock-matching native Linux tree (md5 2dfc3ca92ead64edff6f913b89b1fe91); no shared npm install/build. Only git archive used GIT_DIR=/mnt/d/projexts/moes/.git for fresh committed scripts; tests did not inherit it. Snapshot prebuild emitted expected no-Git-history role-doc hash warnings, then generated and compiled successfully. Log /tmp/wt01-gate.log; exit /tmp/wt01-gate-exit = 0.\nFocused: Test Files 3 passed; Tests 200 passed (200); Duration 5.65s.\nFull daemon: Test Files 208 passed (208); Tests 6012 passed | 19 skipped (6031); Duration 44.20s.\nPASS parity-check.sh\nAll seven files still cmp-identical after self-review; git diff --check clean. Current HEAD daemon tree matches verified baseline.",
+    "reportedAt": "2026-10-30T14:30:40.019Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/state/validators.test.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts"
+  ],
+  "completionSummary": "Implemented WT-01 in the seven approved source/test files (+269/-17). New exports: WorktreeMode, ExecutionWorkspaceMode, AttemptWorkspace, resolveWorktreeMode, resolveWorktreeTarget, resolveAttemptWorkspace. Validated worktreeMode defaults off; fresh WORKING attempts pin daemon-derived mode/path, shared claims retain projectPath, and claims return the workspace object. Resume/repair preserve stored identity; legacy records retain absent mode; malformed WORKING settings hand back safely. Target resolves live literal consolidationBranch or main. Added 49 tests covering settings, persistence, modes, targets, pinning, invalid inputs, caller injection and repair compatibility. Fresh build, focused 200/200, full daemon 6012 passed/19 skipped, and wrapper parity passed. Final adversarial review and cmp checks clean; no changes after gate. Handoff and byte-pin gotcha recorded in Serena. No wrapper/get_context/default-flip scope changes; wrapper owns landing."
 }

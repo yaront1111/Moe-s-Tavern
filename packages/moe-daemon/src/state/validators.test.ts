@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { MAX_COMMITS_PER_TASK, MAX_EPIC_RAIL_CHARS, sanitizeImplementationPlan, sanitizeStepAmendments, trimCommits, validateEpicUpdates, validateSettingsUpdate, validateStringArrayValue } from './validators.js';
 import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import type { Project, TaskCommit } from '../types/schema.js';
+import { resolveAttemptWorkspace, resolveWorktreeMode, resolveWorktreeTarget } from './validators.js';
+import { MoeErrorCode } from '../util/errors.js';
 
 function project(settingsOverrides: Record<string, unknown> = {}): Project {
   return {
@@ -24,6 +26,54 @@ function project(settingsOverrides: Record<string, unknown> = {}): Project {
     updatedAt: new Date().toISOString(),
   };
 }
+
+describe('worktree mode', () => {
+  it.each(['off', 'on'] as const)('accepts %s unchanged', (worktreeMode) => {
+    expect(validateSettingsUpdate(project(), { worktreeMode })).toEqual({ ...project().settings, worktreeMode });
+    expect(resolveWorktreeMode({ worktreeMode })).toEqual(worktreeMode);
+  });
+
+  it('leaves an omitted setting absent on unrelated updates', () => {
+    expect(validateSettingsUpdate(project(), { autoCommit: false })).toEqual({ ...project().settings, autoCommit: false });
+  });
+
+  it.each(['yes', 'ON', ' on', '', true, 1, null, {}])('rejects invalid mode %j', (worktreeMode) => {
+    expect(() => validateSettingsUpdate(project(), { worktreeMode } as never))
+      .toThrow(/worktreeMode.*must be one of: off, on/);
+    expect(() => resolveWorktreeMode({ worktreeMode }))
+      .toThrow(expect.objectContaining({ code: MoeErrorCode.INVALID_INPUT, message: expect.stringContaining('worktreeMode') }));
+  });
+
+  it.each([undefined, null, {}])('defaults absent settings %j to off', (settings) => {
+    expect(resolveWorktreeMode(settings)).toEqual('off');
+  });
+
+  it.each([
+    ['main', 'main'], ['moe/work-2026-10-24', 'moe/work-2026-10-24'], ['  release/v2  ', 'release/v2'],
+    ['moe/work-*', 'main'], ['rel?ase', 'main'], ['feat[0-9]', 'main'], ['', 'main'], ['   ', 'main'],
+    [undefined, 'main'], [42, 'main'], [null, 'main'], [[], 'main'], [{}, 'main'],
+  ])('resolves target %j to %s', (consolidationBranch, expected) => {
+    expect(resolveWorktreeTarget({ consolidationBranch })).toEqual(expected);
+  });
+
+  it.each([undefined, null, 42, [], {}])('tolerates malformed or absent settings %j', (settings) => {
+    expect(resolveWorktreeTarget(settings as never)).toEqual('main');
+    expect(resolveAttemptWorkspace({ taskId: 'task-1', workspace: '/work', workspaceMode: 'worktree' }, settings as never))
+      .toEqual({ mode: 'worktree', path: '/work', branch: 'moe/task/task-1', target: 'main' });
+  });
+
+  it('uses pinned worktree identity and the live target', () => {
+    expect(resolveAttemptWorkspace({ taskId: 'task-1', workspace: '/work', workspaceMode: 'worktree' },
+      { consolidationBranch: '  release/v2  ' }))
+      .toEqual({ mode: 'worktree', path: '/work', branch: 'moe/task/task-1', target: 'release/v2' });
+  });
+
+  it.each(['shared', undefined, 'bogus'])('reads mode %j as shared', (workspaceMode) => {
+    const attempt = { taskId: 'task-1', workspace: '/control', ...(workspaceMode === undefined ? {} : { workspaceMode }) };
+    expect(resolveAttemptWorkspace(attempt as never, { consolidationBranch: 'release/v2' }))
+      .toEqual({ mode: 'shared', path: '/control', branch: null, target: null });
+  });
+});
 
 describe('validateSettingsUpdate — wrapper landing settings', () => {
   it('accepts the boolean landing switches and stores them as supplied', () => {

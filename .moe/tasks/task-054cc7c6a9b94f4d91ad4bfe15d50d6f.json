@@ -7,14 +7,45 @@
     "Worker reference describes freed-seat sessionHandoff END_SESSION, not an executable next-task claim; retained resource-hold guidance remains accurate."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. TESTS FIRST (red). Load test-driven-development. Create packages/moe-daemon/src/util/blockedSeatGuidance.test.ts modeled on qaCommitPolicy.test.ts 'workers explicitly own the isolated-clone ledger exception': copy its here/docsRoot/hasDocs/lf/readDoc helpers and import ROLE_DOCS from '../generated/initFiles.js'. One describe, one it. Subjects, each labelled: lf(ROLE_DOCS['worker.reference.md']), plus readDoc('roles','worker.reference.md') when hasDocs. For each subject: (a) error handling for a missing input: throw or fail if the text is undefined or empty, so nothing passes vacuously (the reason targetedContextGuidance.test.ts has generated()). (b) not.toContain the stale fragment '`nextAction` → `claim_next_task`'. Copy its bytes from the current doc; the arrow is U+2192. (c) toContain 'sessionHandoff', 'END_SESSION' and 'fresh wrapper preflight'. (d) toContain 'Resource blocks (`resourceId`) keep the seat parked', which pins DoD clause 2 (the resource-hold guidance is kept). Add a two-line header comment saying why: the reference told a freed seat to claim inside its own session, but the runtime ends that session. No task ids in the file. RED proof goes OUTSIDE the checkout. Build the clone now; steps 2 and 3 reuse it: C=$(mktemp -d /tmp/moe-054c.XXXXXX) && git clone -q --shared /mnt/d/projexts/moes \"$C/repo\". For Linux-native node_modules follow mem:gotcha-linux-vitest-reuse-native-node-modules: hard-link a lock-matching tree, else `npm ci` in \"$C/repo/packages/moe-daemon\". Reach scratch only through `git -C \"$C/repo\"` or `cd \"$C/repo\" || exit 1`, never a bare cd: a failed bare cd once produced a pushed stray commit. Copy the new test into the clone. From \"$C/repo/packages/moe-daemon\" run `npx vitest run src/util/blockedSeatGuidance.test.ts`. It must FAIL on both subjects (the stale fragment is present and END_SESSION is absent). Quote the failure lines in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/util/blockedSeatGuidance.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Fix the clause, then regenerate the vendored copy.\na. docs/roles/worker.reference.md, in the Practical rules bullet that starts 'A prerequisite has landed iff'. Re-read it first: a4ca766a's QA round may have reworded it. Use the Edit tool. Replace ONLY the clause 'and a non-resource block you report on your own task frees your seat (worker → IDLE, `nextAction` → `claim_next_task`) so you take other work instead of idling on the wall.' End the previous sentence at 'DONE/ARCHIVED.' and insert this text. You may tighten the wording, but keep the three step-1 sentinels: 'A non-resource block you report on your own task frees your seat (worker → IDLE, `seatFreed: true`) and answers with no `nextAction`: it carries `sessionHandoff { action: \"END_SESSION\" }` plus a `blockResolution` saying how the block clears. End the turn so the wrapper checkpoints the task it launched you on; never call `moe.claim_next_task` or `moe.wait_for_task` in that session (a new turn is not a new preflight). Your next task comes from a fresh wrapper preflight: a one-shot seat is relaunched, and an interactive TUI hands control back to its operator.' Every other sentence of the bullet stays byte-identical. That includes the `dependenciesSatisfied:true` / `nextAction` → `get_context` sentence, which is accurate, and 'Resource blocks (`resourceId`) keep the seat parked — the grant path returns the task to you by design.' Leave docs/roles/worker.md alone: it has a 40-line lint cap and its line 18 already says END THE TURN. Leave the Shared resources section alone too; it was checked against the runtime during planning.\nb. Copy the doc into the clone. Run `npm run build` in \"$C/repo/packages/moe-daemon\". Its prebuild regenerates src/generated/initFiles.ts from docs/roles/*.md plus git history; that is why this is a history clone, never a git archive. `git -C \"$C/repo\" status --porcelain` must list only the doc, the new test and src/generated/initFiles.ts. If skillFiles.ts changes too, do NOT copy it back; note it. The expected initFiles.ts diff is the ROLE_DOCS 'worker.md' and 'worker.reference.md' entries plus their shipped-body sha lists. worker.md moves too, because c5f1e8ea (a4ca766a) never regenerated. f084cbe1's landed pins/ output is already in HEAD.\nc. Error handling before the copy-back. `git -C \"$C/repo\" rev-parse HEAD` must equal the shared checkout's HEAD; if it does not, re-clone and rebuild. `git -C /mnt/d/projexts/moes diff --quiet HEAD -- packages/moe-daemon/src/generated/initFiles.ts` must pass. If it fails, a peer has uncommitted bytes there: never overwrite them. Call moe.report_blocked with blockedOnTaskIds set to that peer's task. If the build itself fails, stop and report its first error; never hand-edit initFiles.ts. Then cp the regenerated initFiles.ts into the shared checkout. Rerun the step-1 vitest command in the clone: it must pass on both subjects. Never npm install, ci or build in the shared checkout: its node_modules are Windows builds, and clean deletes dist.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. VERIFY ONCE, in the /tmp clone, after the final copies. From \"$C/repo\" run exactly `(cd packages/moe-daemon && npm run build && npm test) && npm run docs:lint`. That is the full daemon test suite plus the role-doc linter. The full suite is needed because the generated ROLE_DOCS module feeds writeInitFiles and every role-doc guard. It must exit 0. The build regenerates initFiles.ts again. Afterwards, cmp each owned path between \"$C/repo\" and /mnt/d/projexts/moes: docs/roles/worker.reference.md, packages/moe-daemon/src/util/blockedSeatGuidance.test.ts and packages/moe-daemon/src/generated/initFiles.ts. All three must be identical. That proves the committed copy is exactly the generator's output. If HEAD moved and cmp differs, redo step 2b-c on a fresh clone and rerun. For complete_task verification, submit that command, its exitCode and its outputTail. In the summary, name the clone path, the node version and the cmp results. QA re-runs the same command in its own history clone, never in the shared checkout.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. ADVERSARIAL SELF-REVIEW, once, last. Load adversarial-self-review; the scope is this diff.\n(a) Run `grep -n 'claim_next_task\\|wait_for_task' docs/roles/worker.reference.md`. Only the new 'never call' sentence may match. Nothing may tell a freed seat to claim or wait inside its session.\n(b) Check every claim in the new clause against packages/moe-daemon/src/tools/reportBlocked.ts. freeSeat means nextAction is undefined. sessionHandoff { action: 'END_SESSION', taskId, workerId } appears only when the seat then holds no current task (seatWorker && !currentTaskId), which is true when the seat freed is your own. The reply carries seatFreed, workerStatus IDLE and blockResolution. Check the kept resource sentences too. In acquireResource.ts, a busy acquire answers nextAction moe.report_blocked with the resourceId. In resourceStore.ts, the grant flips the task back to blockedFromStatus and the seat is kept.\n(c) Mutant: in the clone only, put the stale clause back into the doc. The guard test must fail. Then restore it and cmp.\n(d) Run `git diff --check` on the three owned paths. Leave peers' dirty paths untouched; never revert, stash or commit them. List all three owned paths in complete_step.modifiedFiles.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote under the human's 13:00Z delegation. This is a small role-doc fix found during a4ca766a's review. It is ordered after a4ca766a, because both edit docs/roles/worker.reference.md and a4ca766a is still in REVIEW and may get a fix round. Edit docs/roles/, never .moe/roles/.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -22,5 +53,89 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T14:11:17.146Z",
-  "updatedAt": "2026-10-30T14:11:17.146Z"
+  "updatedAt": "2026-10-30T14:30:06.602Z",
+  "dependsOn": [
+    "task-a4ca766a67184630842d4a6d12338cf8",
+    "task-f084cbe16ee446ffb2b0dee283273f7f"
+  ],
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T14:18:17.246Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:18:50.689Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-6fc3dd5c"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:30:06.563Z",
+  "executionContract": {
+    "intendedBehavior": "docs/roles/worker.reference.md tells a worker whose own non-resource moe.report_blocked freed its seat to obey sessionHandoff END_SESSION. The worker ends the turn so the wrapper checkpoints the task, never calls moe.claim_next_task or moe.wait_for_task in that session, and takes its next task only from a fresh wrapper preflight. The reference no longer names an executable `nextAction` → `claim_next_task`. The resource-hold guidance stays and still matches the runtime. src/generated/initFiles.ts (ROLE_DOCS) is regenerated to match; it is the copy Docker and tarball builds ship. A doc-guard test pins both copies.",
+    "acceptanceCriteria": [
+      "Neither docs/roles/worker.reference.md nor ROLE_DOCS['worker.reference.md'] contains '`nextAction` → `claim_next_task`'; both contain 'sessionHandoff', 'END_SESSION' and 'fresh wrapper preflight'.",
+      "Both still contain 'Resource blocks (`resourceId`) keep the seat parked', and the Shared resources section is byte-identical.",
+      "packages/moe-daemon/src/util/blockedSeatGuidance.test.ts fails on the pre-fix docs (the RED output is quoted in the step-1 note) and passes after the fix.",
+      "src/generated/initFiles.ts is byte-identical (cmp) to `npm run build` output in a git-history clone of HEAD plus this task's doc edit.",
+      "`(cd packages/moe-daemon && npm run build && npm test) && npm run docs:lint` exits 0 in that clone."
+    ],
+    "invariants": [
+      "No runtime change: packages/moe-daemon/src/tools/reportBlocked.ts and every MCP tool contract are untouched.",
+      "docs/roles/worker.md is untouched (40-line cap; its line 18 already says END THE TURN).",
+      "skillFiles.ts is not copied back, even if the clone regenerates it.",
+      "No npm install, ci or build runs in the shared checkout. Peers' dirty paths are never reverted, stashed or committed, and a peer's uncommitted initFiles.ts bytes are never overwritten."
+    ],
+    "compatibility": [
+      "The generated module's exports, keys and marker-sha upgrade path for .moe/roles are unchanged; only the doc text changes."
+    ],
+    "approvedScope": [
+      "docs/roles/worker.reference.md: only the freed-seat clause of the Practical rules bullet that starts 'A prerequisite has landed iff'",
+      "packages/moe-daemon/src/generated/initFiles.ts: generator output only (ROLE_DOCS entries and shipped-body sha lists), never hand-edited",
+      "New doc-guard test packages/moe-daemon/src/util/blockedSeatGuidance.test.ts"
+    ],
+    "reuse": [
+      "The qaCommitPolicy.test.ts helper and assertion pattern is copied, not imported; test files export nothing.",
+      "The existing generator, run via npm run build in the clone, produces initFiles.ts; nothing is hand-edited."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/reportBlocked.ts: when freeSeat is true, nextAction is undefined. sessionHandoff {action:'END_SESSION', taskId, workerId, reason} is set when freeSeat && seatWorker && !currentTaskId. The reply also carries seatFreed, workerStatus and blockResolution.",
+      "packages/moe-daemon/src/tools/reportBlocked.test.ts 'ends a freed-seat session instead of directing an in-CLI cross-task claim' already pins that runtime contract.",
+      "acquireResource.ts: a queued acquire answers nextAction moe.report_blocked with the resourceId. resourceStore.ts: a grant flips the task back to blockedFromStatus and keeps the seat. waitForResource.ts: MAX_TIMEOUT_MS is 10 minutes.",
+      "packages/moe-daemon/scripts/generate-init-files.ts reads docs/roles/*.md, and git log/show for the shipped-body shas. Without docs/roles (the Dockerfile copies only packages/moe-daemon) it skips regeneration, and the committed initFiles.ts ships as is.",
+      "qaCommitPolicy.test.ts and targetedContextGuidance.test.ts are the existing doc-guard pattern: assert on ROLE_DOCS, plus docs/roles when it is present."
+    ],
+    "checkRefs": [
+      "(cd packages/moe-daemon && npm run build && npm test) && npm run docs:lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Edit the doc only, with no regeneration. Rejected: the Dockerfile builds from packages/moe-daemon alone, where generate-init-files finds no docs/roles and ships the committed initFiles.ts. The stale text would keep reaching daemon-initialized projects (mem:convention-role-doc-edits-regenerate-initfiles). (2) Also reword docs/roles/worker.md line 30 ('your seat is freed to claim other work meanwhile'). Rejected: it is outside the DoD, worker.md is a stable-prefix doc under a 40-line cap, and its line 18 already forbids in-session claims. (3) Regenerate concurrently with f084cbe1. Rejected: both regenerate initFiles.ts and both become claimable once a4ca766a is DONE. dependsOn now includes f084cbe1, so this regeneration runs on top of its landed output. (4) A runtime change. Not needed: reportBlocked.ts already returns END_SESSION and its test already pins it.",
+    "codebaseInsights": "reportBlocked.ts builds sessionHandoff only for a freed seat that holds no other task, and returns no nextAction in that case. The moe-account-switch mod ends an interactive TUI on a top-level END_SESSION for its worker id. The generator stamps a marker sha on each doc and lists every shipped body sha from git history, which is why the clone must have history. c5f1e8ea (a4ca766a) edited worker.md and worker.reference.md without regenerating, so the regenerated diff moves both entries; that is expected. Doc-guard tests live in src/util and assert on ROLE_DOCS plus docs/roles when it is present.",
+    "risks": "(a) WT-18 (task-1b2e6fe3) also plans edits to worker.reference.md and initFiles.ts, and is gated on WT-14/15/16. If it is live when you start, the contested-path rule may hold initFiles.ts, because cp is not a wrapper-observed edit. Check the session-ended line, and never overwrite its uncommitted bytes. (b) a4ca766a's QA round may reword the bullet again: re-read before editing. (c) HEAD may move between the clone and the copy-back: re-clone; the step-3 cmp catches it. (d) The shared checkout's node_modules are Windows builds, so everything runs in the /tmp clone. (e) Use only `git -C` or `cd ... || exit 1` for scratch work.",
+    "keyFiles": [
+      "docs/roles/worker.reference.md",
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+      "packages/moe-daemon/src/util/qaCommitPolicy.test.ts",
+      "packages/moe-daemon/src/util/targetedContextGuidance.test.ts",
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "packages/moe-daemon/src/generated/initFiles.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:30:06.602Z",
+  "approvedPlanRevision": 1
 }

@@ -49,6 +49,7 @@ import type {
   ExecutionAttempt,
   ExecutionAttemptPhase,
   ExecutionPolicySnapshot,
+  ExecutionWorkspaceMode,
   ServedContextReceipt,
   StepCompletionEvidence,
   Task,
@@ -56,7 +57,7 @@ import type {
 // The leaf, and the only policy import allowed here: delivery/policy.ts and
 // state/taskStore.ts both import this store, so either would close a cycle.
 import { readExecutionPolicySnapshot } from '../delivery/executionProfile.js';
-import { validateStringValue } from './validators.js';
+import { validateEnumValue, validateStringValue } from './validators.js';
 import { MoeError, MoeErrorCode, invalidInput, notAllowed } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { logger } from '../util/logger.js';
@@ -177,6 +178,8 @@ export interface OpenAttemptParams {
   workerId: string;
   runnerId: string;
   workspace: string;
+  /** Internal claim-derived identity; omitted preserves the legacy record shape. */
+  workspaceMode?: ExecutionWorkspaceMode;
   /**
    * Optional. Supply the id a crashed open used to make this call a repair
    * instead of a duplicate; omit it for a fresh attempt.
@@ -255,6 +258,8 @@ export async function openAttempt(
   const workerId = requireNonBlank('workerId', params.workerId);
   const runnerId = requireNonBlank('runnerId', params.runnerId);
   const workspace = requireNonBlank('workspace', params.workspace);
+  const workspaceMode = params.workspaceMode === undefined ? undefined
+    : validateEnumValue(params.workspaceMode, 'workspaceMode', ['shared', 'worktree'] as const);
   const id = params.id === undefined ? generateId('attempt') : requireNonBlank('id', params.id);
 
   const repaired = repairExisting(state, id, taskId);
@@ -272,6 +277,7 @@ export async function openAttempt(
     runnerId,
     generation: nextGeneration(state, taskId),
     workspace,
+    ...(workspaceMode !== undefined ? { workspaceMode } : {}),
     phase: 'running',
     startedAt: now,
     lastPhaseAt: now,
