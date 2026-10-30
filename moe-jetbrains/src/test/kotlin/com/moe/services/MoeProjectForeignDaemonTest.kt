@@ -51,6 +51,33 @@ class MoeProjectForeignDaemonTest {
     }
 
     @Test
+    fun `a replacement naming another project is kept byte for byte`() = withFixture { f ->
+        assertReplacementKept(f, OTHER)
+    }
+
+    @Test
+    fun `a replacement naming this project in its WSL spelling is kept byte for byte`() = withFixture { f ->
+        val wsl = wslSpelling(f.basePath)
+        assertEquals(DaemonIdentityProbe.comparableProjectPath(f.basePath), DaemonIdentityProbe.comparableProjectPath(wsl))
+        assertReplacementKept(f, wsl)
+    }
+
+    @Test
+    fun `an oversize daemon json is neither parsed nor removed`() = withFixture { f ->
+        f.healthReply(200, f.health(OTHER))
+        val read = f.writeDaemonJson(startedAt = "S1")
+        // Still the daemon that was read, but past the cap the supervisor's reader also refuses.
+        val padded = f.daemonJson.readText() + " ".repeat(MoeDaemonSupervisor.MAX_DAEMON_JSON_BYTES)
+        f.daemonJson.writeText(padded)
+
+        f.doConnect(read)
+
+        assertEquals("an oversize daemon.json must survive untouched", padded, f.daemonJson.takeIf { it.exists() }?.readText())
+        assertNull(f.service.field("wsClient"))
+        f.assertNoWebSocketRequest()
+    }
+
+    @Test
     fun `this project in another spelling connects as today`() = withFixture { f ->
         f.healthReply(200, f.health(f.basePath.replace('\\', '/') + "/"))
         val info = f.writeDaemonJson(startedAt = "S1")
@@ -78,6 +105,20 @@ class MoeProjectForeignDaemonTest {
 
         f.awaitWebSocketRequest()
         assertTrue(f.daemonJson.exists())
+    }
+
+    /** Another daemon rewrote daemon.json (new pid, startedAt and [projectPath]) after connect() read it. */
+    private fun assertReplacementKept(f: Fixture, projectPath: String) {
+        f.healthReply(200, f.health(OTHER))
+        val read = f.writeDaemonJson(startedAt = "S1")
+        val replacement = Gson().toJson(read.copy(pid = 5252, startedAt = "S2", projectPath = projectPath))
+        f.daemonJson.writeText(replacement)
+
+        f.doConnect(read)
+
+        assertEquals("the replacement must survive byte for byte", replacement, f.daemonJson.takeIf { it.exists() }?.readText())
+        assertNull(f.service.field("wsClient"))
+        f.assertNoWebSocketRequest()
     }
 
     private fun withFixture(test: (Fixture) -> Unit) {
@@ -177,6 +218,12 @@ class MoeProjectForeignDaemonTest {
 
         private fun MoeProjectService.field(name: String): Any? =
             MoeProjectService::class.java.getDeclaredField(name).apply { isAccessible = true }.get(this)
+
+        /** [path] as the other side of the Windows/WSL boundary spells it: D:\x is /mnt/d/x, /x is //wsl$/Ubuntu/x. */
+        private fun wslSpelling(path: String): String {
+            val drive = Regex("^([A-Za-z]):[\\\\/](.*)$").matchEntire(path) ?: return "//wsl$/Ubuntu$path"
+            return "/mnt/${drive.groupValues[1].lowercase()}/${drive.groupValues[2].replace('\\', '/')}"
+        }
 
         private fun fakeProject(basePath: String): IdeaProject = Proxy.newProxyInstance(
             IdeaProject::class.java.classLoader,

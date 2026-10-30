@@ -7,11 +7,10 @@ import com.google.gson.Strictness
 import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
 import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import java.io.StringReader
-import java.net.HttpURLConnection
+import java.net.InetSocketAddress
 import java.net.Proxy
-import java.net.URI
+import java.net.Socket
 import java.util.concurrent.TimeUnit
 
 /**
@@ -35,40 +34,37 @@ object DaemonIdentityProbe {
     /** Same cap as daemon.json and the proxy's probe. */
     const val MAX_HEALTH_BODY_BYTES = 64 * 1024
 
+    /** The body cap plus room for the status line and headers. */
+    private const val MAX_REPLY_BYTES = MAX_HEALTH_BODY_BYTES + 8 * 1024
+
     private val gson = Gson()
+    private val STATUS_LINE = Regex("^HTTP/1\\.[01] (\\d{3})(?: .*)?$")
     private val DRIVE_ROOT = Regex("^([A-Za-z]):/(.*)$")
     private val MNT_DRIVE = Regex("^/mnt/([A-Za-z])(?:/(.*))?$")
     private val WSL_SHARE = Regex("^//(?:wsl\\$|wsl\\.localhost)/[^/]+(/.*)?$", RegexOption.IGNORE_CASE)
     private val ABSOLUTE = Regex("^(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\/]|/)")
 
     /**
-     * GETs http://127.0.0.1:[port]/health. Never throws; bounded by the connect timeout, a total
-     * read deadline of [connectTimeoutMs] + [readTimeoutMs] (a trickling body), and the byte cap.
+     * GETs http://127.0.0.1:[port]/health. Never throws. The whole exchange (connect, status line,
+     * headers and body) ends by [connectTimeoutMs] + [readTimeoutMs], with no silence over
+     * [readTimeoutMs] and at most the reply cap read, and the socket is closed on every path.
      * Blocking: never call it on the EDT.
      */
     fun probe(port: Int, projectPath: String, connectTimeoutMs: Int = 500, readTimeoutMs: Int = 1000): DaemonIdentity {
         if (port !in 1..65535) return DaemonIdentity.Unknown
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(connectTimeoutMs.toLong() + readTimeoutMs)
-        var connection: HttpURLConnection? = null
         return try {
-            // NO_PROXY: the IDE's HTTP proxy settings must never route a loopback probe.
-            connection = URI("http", null, "127.0.0.1", port, "/health", null, null).toURL()
-                .openConnection(Proxy.NO_PROXY) as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.instanceFollowRedirects = false
-            connection.connectTimeout = connectTimeoutMs
-            connection.readTimeout = readTimeoutMs
-            val status = connection.responseCode
-            val stream = when (status) {
-                200 -> connection.inputStream
-                503 -> connection.errorStream
-                else -> null
+            // NO_PROXY: no IDE proxy selector may route a loopback probe. A raw socket follows no redirect.
+            Socket(Proxy.NO_PROXY).use { socket ->
+                socket.connect(InetSocketAddress("127.0.0.1", port), connectTimeoutMs.coerceAtLeast(1))
+                // HTTP/1.0: the daemon (Node) then neither chunks the body nor keeps the connection, so EOF ends it.
+                socket.getOutputStream().write(
+                    "GET /health HTTP/1.0\r\nHost: 127.0.0.1:$port\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII)
+                )
+                readReply(socket, deadline, readTimeoutMs)?.let { parseReply(it, projectPath) } ?: DaemonIdentity.Unknown
             }
-            classify(status, stream?.use { readCapped(it, deadline) }, projectPath)
         } catch (_: Exception) {
             DaemonIdentity.Unknown
-        } finally {
-            connection?.disconnect()
         }
     }
 
@@ -124,17 +120,34 @@ object DaemonIdentityProbe {
         return segments.joinToString("/")
     }
 
-    /** At most MAX + 1 bytes before [deadline]; null past the cap or the deadline. */
-    private fun readCapped(input: InputStream, deadline: Long): String? {
+    /**
+     * The raw reply up to EOF; null past [deadline] or the cap. A read timeout alone restarts on every
+     * byte, so trickled headers could hold the caller forever: each read waits at most the time left.
+     */
+    private fun readReply(socket: Socket, deadline: Long, readTimeoutMs: Int): ByteArray? {
+        val input = socket.getInputStream()
         val out = ByteArrayOutputStream()
         val buffer = ByteArray(8 * 1024)
-        while (out.size() <= MAX_HEALTH_BODY_BYTES) {
-            if (System.nanoTime() > deadline) return null
-            val n = input.read(buffer, 0, minOf(buffer.size, MAX_HEALTH_BODY_BYTES + 1 - out.size()))
-            if (n < 0) return out.toString(Charsets.UTF_8)
+        while (out.size() <= MAX_REPLY_BYTES) {
+            val leftMs = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+            if (leftMs <= 0) return null
+            socket.soTimeout = minOf(readTimeoutMs.toLong(), leftMs).toInt().coerceAtLeast(1)
+            val n = input.read(buffer, 0, minOf(buffer.size, MAX_REPLY_BYTES + 1 - out.size()))
+            if (n < 0) return out.toByteArray()
             out.write(buffer, 0, n)
         }
         return null
+    }
+
+    /** A status line and headers ending in a blank line, then a body within its cap; else Unknown. */
+    private fun parseReply(reply: ByteArray, projectPath: String): DaemonIdentity {
+        val text = String(reply, Charsets.ISO_8859_1) // one char per byte, so offsets are byte offsets
+        val headEnd = text.indexOf("\r\n\r\n")
+        val status = STATUS_LINE.matchEntire(text.substringBefore("\r\n"))?.groupValues?.get(1)?.toInt()
+        if (headEnd < 0 || status == null) return DaemonIdentity.Unknown
+        val body = reply.copyOfRange(headEnd + 4, reply.size)
+        if (body.size > MAX_HEALTH_BODY_BYTES) return DaemonIdentity.Unknown
+        return classify(status, String(body, Charsets.UTF_8), projectPath)
     }
 
     /** Strict, like the daemon's and the proxy's JSON.parse: JsonParser.parseString would be lenient. */

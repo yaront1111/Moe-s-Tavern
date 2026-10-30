@@ -8,7 +8,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
+import java.io.OutputStream
+import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.ProxySelector
+import java.net.ServerSocket
+import java.net.SocketAddress
+import java.net.URI
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -16,11 +25,13 @@ import java.util.concurrent.TimeUnit
 class DaemonIdentityTest {
     private val servers = mutableListOf<HttpServer>()
     private val executors = mutableListOf<ExecutorService>()
+    private val rawServers = mutableListOf<ServerSocket>()
 
     @After
     fun tearDown() {
         servers.forEach { it.stop(0) }
         executors.forEach { it.shutdownNow() }
+        rawServers.forEach { it.close() }
     }
 
     @Test
@@ -115,9 +126,8 @@ class DaemonIdentityTest {
 
     @Test
     fun `an unreachable or invalid port is Unknown`() {
-        val stopped = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        val port = stopped.address.port
-        stopped.stop(0)
+        // A released port refuses at once; a never-started HttpServer still listens after stop(0) (JDK 21).
+        val port = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { it.localPort }
         assertEquals(DaemonIdentity.Unknown, DaemonIdentityProbe.probe(port, OWN))
         assertEquals(DaemonIdentity.Unknown, DaemonIdentityProbe.probe(0, OWN))
         assertEquals(DaemonIdentity.Unknown, DaemonIdentityProbe.probe(-1, OWN))
@@ -147,6 +157,58 @@ class DaemonIdentityTest {
         }
         val elapsedMs = timed { assertEquals(DaemonIdentity.Unknown, probeFast(port)) }
         assertTrue("probe took ${elapsedMs}ms", elapsedMs < 2_000)
+    }
+
+    @Test
+    fun `trickling headers are cut off by the whole-request deadline and the socket is closed`() {
+        // A status line, then a header byte every 100 ms for 10 s: each byte restarts a per-read timeout.
+        val (port, responder) = rawServer { out ->
+            out.write("HTTP/1.1 200 OK\r\nX-Slow: ".toByteArray())
+            repeat(100) {
+                out.write('x'.code)
+                Thread.sleep(100)
+            }
+        }
+        val elapsedMs = timed { assertEquals(DaemonIdentity.Unknown, probeFast(port)) }
+        assertTrue("probe took ${elapsedMs}ms", elapsedMs < 2_000)
+        responder.join(3_000)
+        assertFalse("the probe must close its socket, not abandon a blocked read", responder.isAlive)
+    }
+
+    @Test
+    fun `the last read waits only the time left before the deadline`() {
+        // A header byte 1.8 s into a 2.2 s budget: a full 2 s read timeout after it would end at 3.8 s.
+        val (port, _) = rawServer { out ->
+            out.write("HTTP/1.1 200 OK\r\n".toByteArray())
+            Thread.sleep(1_800)
+            out.write('X'.code)
+            Thread.sleep(5_000)
+        }
+        val elapsedMs = timed {
+            assertEquals(DaemonIdentity.Unknown, DaemonIdentityProbe.probe(port, OWN, connectTimeoutMs = 200, readTimeoutMs = 2_000))
+        }
+        assertTrue("probe took ${elapsedMs}ms", elapsedMs < 3_000)
+    }
+
+    @Test
+    fun `the probe never consults the IDE proxy selector`() {
+        val port = serve(200, health("D:/other"))
+        val asked = CopyOnWriteArrayList<URI>()
+        val saved = ProxySelector.getDefault()
+        ProxySelector.setDefault(object : ProxySelector() {
+            override fun select(uri: URI): List<Proxy> {
+                asked += uri
+                return listOf(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", 9)))
+            }
+
+            override fun connectFailed(uri: URI, sa: SocketAddress, ioe: IOException) {}
+        })
+        try {
+            assertEquals(DaemonIdentity.Foreign("D:/other"), DaemonIdentityProbe.probe(port, OWN))
+        } finally {
+            ProxySelector.setDefault(saved)
+        }
+        assertEquals(emptyList<URI>(), asked)
     }
 
     @Test
@@ -226,6 +288,20 @@ class DaemonIdentityTest {
         servers += server
         executors += executor
         return server.address.port
+    }
+
+    /** A raw loopback server whose one connection runs [script]; a write the probe hung up on ends it. */
+    private fun rawServer(script: (OutputStream) -> Unit): Pair<Int, Thread> {
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        rawServers += server
+        val responder = Thread {
+            try {
+                server.accept().use { script(it.getOutputStream()) }
+            } catch (_: Exception) {
+                // The probe hung up first: that is the point of these rows.
+            }
+        }.apply { isDaemon = true; start() }
+        return server.localPort to responder
     }
 
     private fun respond(exchange: HttpExchange, status: Int, body: String) {

@@ -14,51 +14,85 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red) for the helper. Load test-driven-development.\n\nNew file moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt (JUnit 4, headless, like its neighbours). It runs against a real com.sun.net.httpserver.HttpServer bound to 127.0.0.1:0, stopped in @After.\n\nCLASSIFICATION RULE, identical to the proxy sibling task-86093c3e (amend-1) and the planner note comment-927340a6:\n- Only HTTP 200 (healthy) or 503 (unhealthy) with a JSON-object body counts.\n- projectPath must be a non-empty ABSOLUTE path: a drive letter, UNC (\\\\\\\\ or //) or POSIX (/). A relative path is Unknown, because the daemon reports its raw --project argument (packages/moe-daemon/src/index.ts ~:61).\n- Then compare comparable forms: Same if equal, otherwise Foreign(servedPath). Everything else is Unknown.\n\nRows for DaemonIdentityProbe.probe(port, ownPath):\n- Same, with own 'D:/proj' against the replies 'D:\\\\proj', 'd:/proj', 'D:/proj/' and '/mnt/d/proj'. All four are Same.\n- Same: own '//wsl$/Ubuntu/home/u/p' against reply '/home/u/p', and '\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\u\\\\p' against '/home/u/p'. A WSL-hosted daemon serving this project must never be Foreign.\n- Foreign:\n  - reply 'D:/other' -> Foreign('D:/other');\n  - 503 {status:'unhealthy', projectPath:'D:/other'} -> Foreign;\n  - 503 with this project -> Same.\n- Unknown:\n  - relative replies '.' and 'sub/p';\n  - no projectPath;\n  - projectPath 42 or '';\n  - non-JSON;\n  - a JSON array;\n  - a body over 64 KiB;\n  - statuses 426 and 500;\n  - unreachable (a port from a stopped server);\n  - timeout: a handler that sleeps past a 200 ms read timeout. The row must finish under 2 s.\n- The probe never throws.\n\nAlso pure rows for comparableProjectPath and isAbsoluteAnyOs on the same spellings, plus '..' and '.' segments. Run `gradlew test --tests com.moe.services.DaemonIdentityTest` and confirm it is red, because the helper does not exist yet.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
+      ],
+      "note": "Reopen 1 (QA reject #1, issue 2: header trickle). Added two helper rows to DaemonIdentityTest.kt (+55):\n- `trickling headers are cut off by the whole-request deadline and the socket is closed`: a raw ServerSocket sends `HTTP/1.1 200 OK\\r\\nX-Slow: `, then one header byte every 100 ms for 10 s. probeFast (200/200) must return Unknown in under 2 s, and the responder thread must exit within 3 s, which proves the probe closed its socket and did not abandon a blocked read.\n- `the probe never consults the IDE proxy selector`: installs a recording ProxySelector that routes everything to a dead SOCKS proxy. The probe must still classify Foreign, with zero select() calls. This keeps NO_PROXY tested once the transport changes.\nRED under the jetbrains-gradle lease: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.DaemonIdentityTest --rerun\"` exited 1 (18 tests, 1 failed). The failure is the trickle row: `probe took 10087ms`. The old HttpURLConnection probe reads headers before any deadline check. The XML timestamp 09:48:54Z is after the Windows-clock start 09:48:51.6Z. The proxy row passes on the old code (preservation); a step-5 mutant must kill it. The shared tree was otherwise clean; RF03's d6c6d6e0 landed meanwhile and touched only the supervisor files.",
+      "startedAt": "2026-10-30T09:40:33.972Z",
+      "completedAt": "2026-10-30T09:49:32.619Z"
     },
     {
       "stepId": "step-2",
       "description": "New file moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt: a pure helper with no platform services.\n\n- `sealed interface DaemonIdentity { object Same; data class Foreign(val projectPath: String); object Unknown }`.\n- `object DaemonIdentityProbe` holds:\n  - const MAX_HEALTH_BODY_BYTES = 64 * 1024;\n  - `fun probe(port: Int, projectPath: String, connectTimeoutMs: Int = 500, readTimeoutMs: Int = 1000): DaemonIdentity`;\n  - internal pure `classify(status: Int, body: String?, projectPath: String)`;\n  - `comparableProjectPath(path: String): String`;\n  - `isAbsoluteAnyOs(path: String): Boolean`.\n\nprobe:\n- Open `URL(\"http://127.0.0.1:$port/health\").openConnection(java.net.Proxy.NO_PROXY) as HttpURLConnection`. Use NO_PROXY so the IDE's HTTP proxy settings can never route a loopback probe.\n- requestMethod GET, instanceFollowRedirects false, both timeouts set.\n- Read inputStream for 200, or errorStream for 503, reading at most MAX+1 bytes; over the cap is Unknown.\n- Parse with Gson (`JsonParser.parseString`) and require a JsonObject.\n- Catch every Exception into Unknown, and call disconnect() in a finally.\n\ncomparableProjectPath, string-level and OS-independent, mirroring the proxy's comparableProjectPath (packages/moe-proxy/src/utils.ts ~:31):\n- trim and turn backslashes into '/';\n- map `//wsl$/<distro>/rest` and `//wsl.localhost/<distro>/rest` (case-insensitive) to `/rest`;\n- collapse '.', '..', duplicate slashes and a trailing slash, keeping a leading '//' for other UNC paths;\n- map `/mnt/<d>/rest` to `<d>:/rest`;\n- lowercase drive-letter and UNC forms, and keep POSIX case.\n\nThe Same/Foreign rule must err toward Same or Unknown: a false Foreign deletes daemon.json and spawns a duplicate daemon. A header comment says this, and names the proxy twin.\n\nRun DaemonIdentityTest until it is green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt"
+      ],
+      "note": "QA issue 2 fixed in DaemonIdentity.kt. HttpURLConnection's responseCode reads status and headers under an inactivity-only timeout, so on JDK 17 (no HttpClient.shutdownNow) probe() now does an HTTP/1.0 GET over `Socket(Proxy.NO_PROXY).use { }` on the calling thread:\n- connect to 127.0.0.1:<port> within connectTimeoutMs (at least 1);\n- write `GET /health HTTP/1.0`, `Host: 127.0.0.1:<port>`, `Connection: close`;\n- new private readReply: before each read, soTimeout = min(readTimeoutMs, time left to the deadline), at least 1 (never 0, which means infinite). It returns null at the deadline or past MAX_REPLY_BYTES (the 64 KiB body cap plus 8 KiB for the head), and EOF ends the reply;\n- new private parseReply: the status line must match `HTTP/1.[01] ddd`, the head must end in CRLFCRLF, and the body must be within the 64 KiB cap, then the unchanged classify runs. Anything else is Unknown.\nSo connect, status, headers and body all end by connect + read. No thread is created, and `use` closes the socket on every path. A raw socket follows no redirect, and NO_PROXY bypasses every ProxySelector. classify, comparableProjectPath and isAbsoluteAnyOs are unchanged.\nProtocol check against the LIVE moes daemon (Node), with the same request bytes: `HTTP/1.1 200 OK`, `Connection: close`, no Content-Length or chunking, and EOF 2 ms after a 364-byte body. With an HTTP/1.1 request, writeHead-then-end would chunk.\nTest fix in DaemonIdentityTest: the 'unreachable' row now takes its port from a released ServerSocket. On JDK 21, a never-started HttpServer still LISTENS after stop(0), measured with a one-file java.exe check. The old row therefore connected and waited out the 1 s read timeout, the same 1.003 s on the old code in QA's XML, and never tested a refused connect. It now takes 11 ms.\nGREEN, same focused command: exit 0, 18 tests, 0 failures/errors/skips, XML 09:53:30.6Z after the Windows start 09:53:28.3Z. The header trickle took 0.518 s, against 10087 ms before.",
+      "startedAt": "2026-10-30T09:49:35.185Z",
+      "completedAt": "2026-10-30T09:53:52.136Z"
     },
     {
       "stepId": "step-3",
       "description": "TESTS FIRST (red) for the connect branch. New file moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt.\n\nCopy MoeProjectConnectionTest's fixture approach: MoeProjectService(fakeProject, invokeLater = { it() }), and doConnect invoked by reflection with a DaemonInfo. Two differences:\n- the fake project's getBasePath returns a temp dir holding .moe/daemon.json {port, pid, startedAt, projectPath: tempDir}. Without .moe/project.json the profile is LEGACY, so activationRefusal is null.\n- one com.sun.net.httpserver.HttpServer on 127.0.0.1:0 serves GET /health with a configurable status and body. It also counts requests on the /ws context: any WebSocket client creation there shows up as an HTTP request.\n\nCapture statuses with service.addListener(object : MoeStateListener { onState {} ; onStatus { add(message) } }). Always call service.dispose() in finally, which cancels the scheduled reconnect, and delete the temp dir.\n\nRows (the probe runs inline, because the test thread is not the EDT):\n- F1, foreign. /health answers {projectPath: <absolute other path>}, and doConnect gets the same pid, port and startedAt as the file.\n  - Within 2 s: zero /ws requests, field wsClient == null, .moe/daemon.json deleted, a captured status containing the other path, and field reconnectFuture != null.\n- F2, foreign with a changed file. The file on disk has startedAt 'S2', and doConnect gets 'S1'. The file is KEPT, and there are still zero /ws requests.\n- S1, same. /health names the temp dir with another spelling (backslashes, or a trailing slash). Within 5 s there is at least one /ws request, and daemon.json is untouched.\n- U1, unknown (500, or no projectPath): proceeds exactly as today, with at least one /ws request.\n\nThe existing MoeProjectConnectionTest must stay green unedited: its fake project has a null basePath, so the probe is skipped.\n\nRun the file and confirm it is red.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "note": "QA issue 1 (DoD 1/F2): added two changed-identity rows to MoeProjectForeignDaemonTest.kt (+32), sharing a private assertReplacementKept helper. connect() read pid 4242/S1. Another daemon then rewrote daemon.json as pid 5252/S2 with projectPath P, and /health of the read port names another project. Each row asserts the EXACT replacement bytes survive, wsClient is null, and there are zero /ws requests.\n- `a replacement naming another project is kept byte for byte`: P = D:/moe-other-project, QA's repro.\n- `a replacement naming this project in its WSL spelling is kept byte for byte`: P = wslSpelling(basePath), which is /mnt/<d>/rest for a drive path and //wsl$/Ubuntu+path for POSIX. It first asserts comparableProjectPath(P) == comparableProjectPath(basePath).\nRED under the lease: `gradlew.bat test --tests com.moe.services.MoeProjectForeignDaemonTest --tests com.moe.services.MoeProjectConnectionTest --rerun` exited 1 with 12 tests and 2 failed, exactly the new rows. Both say `expected:<{\"port\":…,\"pid\":5252,\"startedAt\":\"S2\",\"projectPath\":\"D:/moe-other-project\"}> but was:<null>`, and the WSL row's P was /mnt/c/Users/Yaron/AppData/Local/Temp/moe-foreign-daemon…. handleForeignDaemon's daemonSupervisor.readDaemonInfo() deleted each file on a canonicalPath mismatch, before the pid/port/startedAt guard. The XML is from 09:54:26Z, after the Windows start at 09:54:23.6Z. The other 5 foreign rows (F1 refusal, F2, S1, U1, U2) pass with the step-2 socket probe, an end-to-end check that it classifies JDK HttpServer replies. The unedited MoeProjectConnectionTest passed 5/5.",
+      "startedAt": "2026-10-30T09:53:54.465Z",
+      "completedAt": "2026-10-30T09:54:40.767Z"
     },
     {
       "stepId": "step-4",
       "description": "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt, doConnect (~:247):\n\n1. Keep the guard and activationRefusal exactly as they are. Then set `connecting = true`, as today.\n2. Move the existing client creation, from the wsLock client swap through newClient.connect() and its catch, unchanged into `private fun openClient(daemonInfo: DaemonInfo)`.\n3. Add `private fun probeThenOpen(daemonInfo: DaemonInfo)`:\n   - The identity is Unknown when project.basePath is null or blank, else DaemonIdentityProbe.probe(daemonInfo.port, basePath).\n   - If `disposed.get()` is set, set connecting = false and return.\n   - Foreign: call handleForeignDaemon.\n   - Otherwise: call openClient(daemonInfo).\n4. Never probe on the EDT. If `SwingUtilities.isEventDispatchThread()`, run `scheduler.execute { probeThenOpen(daemonInfo) }`, catching RejectedExecutionException into connecting = false. Otherwise call probeThenOpen inline. projectOpened can call connect() on the EDT.\n5. handleForeignDaemon(daemonInfo, foreign, basePath):\n   - Re-read the file with daemonSupervisor.readDaemonInfo(). Delete <basePath>/.moe/daemon.json ONLY when it still has the same pid, port and startedAt as daemonInfo. Log the result either way, and catch IO errors.\n   - log.warn the event.\n   - Set connecting = false BEFORE the next two calls, because scheduleReconnect returns early while connecting.\n   - publishStatus(false, \"Daemon on port <port> serves another project (<foreign.projectPath>); this project's daemon will start on the next free port.\")\n   - scheduleReconnect(). This mirrors connect()'s dead-PID branch: the next connect() finds no daemon.json, and ensureDaemonRunning spawns this project's daemon.\n\nMoeDaemonSupervisor.kt is NOT edited: RF01, task-0c72d59a, RF03 and RF04 are serialized on it. Use only its existing readDaemonInfo.\n\nError handling:\n- the probe never throws;\n- a delete failure is logged and the reconnect still runs;\n- unknown always proceeds as today.\n\nRun both new test files until they are green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "note": "QA issue 1 fixed in MoeProjectService.kt (+17/-2). handleForeignDaemon no longer calls daemonSupervisor.readDaemonInfo(), which deletes a file naming another project (canonicalPath mismatch) before any identity check. It rereads through a new private rereadDaemonInfo(file):\n- `file.inputStream().use { readNBytes(MoeDaemonSupervisor.MAX_DAEMON_JSON_BYTES + 1) }`, with null past the 64 KiB cap;\n- the supervisor's own Gson parse into DaemonInfo;\n- any exception gives null.\nIt has no side effects. The guard is unchanged: delete only while pid, port AND startedAt all equal what was read. The delete targets the same File object, and a delete failure is still logged with the reconnect still running.\nPLAN DEVIATION, QA-mandated: step-4's text said to re-read with daemonSupervisor.readDaemonInfo(). That reader is the defect QA rejected (\"Use a bounded, side-effect-free reread … Keep supervisor unchanged\"). MoeDaemonSupervisor.kt is untouched; only its existing internal MAX_DAEMON_JSON_BYTES constant is read. The pre-existing reader behavior stays with task-6fc0096b.\ndoConnect, probeThenOpen, openClient and the EDT offload are unchanged. The shared file's hash equalled my pre-edit snapshot (2c66cffe…) at copy time, so no peer bytes were overwritten.\nGREEN under the lease: `gradlew.bat test --tests …MoeProjectForeignDaemonTest --tests …MoeProjectConnectionTest --tests …DaemonIdentityTest --rerun` exited 0. DaemonIdentityTest 18/18, MoeProjectForeignDaemonTest 7/7 (both replacement rows keep exact bytes; F1 still deletes the unchanged file), and the unedited MoeProjectConnectionTest 5/5, 0 errors and 0 skips. XML 09:55:21-25Z is after the Windows start 09:55:18.8Z.",
+      "startedAt": "2026-10-30T09:54:48.410Z",
+      "completedAt": "2026-10-30T09:55:39.260Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE, fresh, then ADVERSARIAL SELF-REVIEW.\n\nTake the shared resource 'jetbrains-gradle' with moe.acquire_resource first. If it is busy, call moe.report_blocked with resourceId 'jetbrains-gradle'. Release it after the run. Then run, from WSL:\n\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n\nIt must exit 0. Its command, exit code and output tail are complete_task's evidence. Before citing it, confirm that DaemonIdentityTest, MoeProjectForeignDaemonTest and the unedited MoeProjectConnectionTest ran.\n\nMutants, on scratch copies, each turning the named rows red:\n(i) compare raw strings: the Same spelling rows;\n(ii) delete daemon.json unconditionally: F2;\n(iii) treat Unknown as Foreign: U1 and the Unknown rows;\n(iv) drop the connecting = false before scheduleReconnect: F1's reconnectFuture assertion.\n\nThen load adversarial-self-review and check:\n- a false Foreign: Windows vs WSL vs \\\\\\\\wsl$ spellings, case, trailing slash, a relative path;\n- the probe on the EDT;\n- a second client from a concurrent connect;\n- a disposal during the probe;\n- the IDE proxy (NO_PROXY);\n- a slow or trickling /health (both timeouts plus the byte cap);\n- the compare-then-delete window. It is best-effort: a new daemon writes a new startedAt.\n\nA read-only `git status --short` must show only the four owned paths, and MoeDaemonSupervisor.kt untouched. Never revert, stash, `git add -A` or commit peer or pre-existing paths. Write the Serena handoff 'task-task-90664db1e08a45f7b63c1e0f44eeee09-handoff' for task-e7f4026a (the final verification row) and CQ-RF04 (task-de91373a, which edits MoeProjectService.kt next).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "note": "Adversarial self-review + mutants + full gate, all under the jetbrains-gradle lease (now released).\nReview findings:\n- The socket is closed on every path by use{}, and the reread has no side effects.\n- A partial, malformed or oversize daemon.json rereads as null, so the file is kept.\n- The compare-then-delete TOCTOU stays best-effort, as accepted in round 1. The pre-existing connect/doConnect `connecting` race is unchanged and out of scope.\n- Two untested lines were pinned with new rows: \"the last read waits only the time left before the deadline\" (2.2 s, against 3.8 s when uncapped), and \"an oversize daemon json is neither parsed nor removed\". The header-trickle row now uses a shared rawServer() helper.\n\nTen mutants were applied one at a time to the shared tree under the lease. Each was restored afterwards and cmp-verified against the drafts. Logs: D:/moe-scratch/task-90664db1/worker-e60b90bd/mut-*.log and mutants-*.out.\n- Killed:\n  - m1, raw compare: 3 DaemonIdentityTest rows plus \"another spelling connects\".\n  - m2, unconditional delete: the rewritten-kept row, both replacement rows and the oversize row.\n  - m3, Unknown treated as Foreign: the HTTP 500 row and the missing-projectPath row.\n  - m4, `connecting` kept: the reconnectFuture assertion.\n  - m5, reread via daemonSupervisor.readDaemonInfo() (the QA defect): both byte-for-byte replacement rows.\n  - m6, uncapped read timeout: the last-read row, at 3803 ms.\n  - m7, socket not closed: the trickle row's responder-alive assertion.\n  - m8, Socket() without NO_PROXY: the proxy-selector row.\n  - m9, uncapped reread: the oversize row.\n- Survived: m6b, dropping `if (leftMs <= 0) return null`. It is near-equivalent: the per-read cap to the time left, with its 1 ms floor, still ends any sender slower than 1 byte/ms at the deadline, and the 72 KiB reply cap bounds faster ones. A sub-ms trickle row (busy-spin plus TCP_NODELAY) was tried. The mutant still ended at 0.86 s because Windows cannot hold sub-ms gaps, so I removed the row rather than ship a test that pins nothing.\n\nFull gate, exact command, fresh: exit 0, BUILD SUCCESSFUL in 17s, 26 suites, 398 tests, 0 failures, 0 errors, 0 skips. All XML timestamps are after the Windows-clock start 2026-10-30T10:12:36.522Z.\n\ngit status: only the 4 owned paths are dirty under moe-jetbrains, MoeDaemonSupervisor.kt has no diff, and diff --check is clean.\n\nSerena: wrote the handoff, wrote gotcha-jdk-httpserver-stop-still-listens, and marked gotcha-jetbrains-http-header-deadline and gotcha-jetbrains-read-daemon-info-deletes resolved for this caller.",
+      "startedAt": "2026-10-30T09:55:42.888Z",
+      "completedAt": "2026-10-30T10:14:32.597Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-e60b90bd",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -89,12 +123,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:54:54.318Z",
-  "updatedAt": "2026-10-30T09:27:33.563Z",
+  "updatedAt": "2026-10-30T10:15:06.322Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:58:59.861Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5,
+    "executedStepCount": 10,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -106,7 +140,13 @@
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [
     {
       "item": "Under the LEGACY profile, a daemon at the recorded port whose /health projectPath is another project gets no WebSocket client and no seat traffic. A stale daemon.json is removed only while it still names the pid, port and startedAt that were read, and the published status names the other project. Proven by gradle tests.",
@@ -208,15 +248,28 @@
       "treeId": "12e3e0bbb586568d81fb4b5305ad15352b07ed68",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "969f12fdd5202c17cd3e412a41919981547c69cf",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T09:26:09Z",
+      "paths": [
+        ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T09:35:41.898Z",
+      "treeId": "5a2eb1df4bad44f95754d0c4af4fe1ff6c060dc0",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
-    ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
-    ".moe/tasks/task-e493ed19006d4be4a96e3ca2f80a5ab4.json"
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
   ],
   "touchedFiles": [
     "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
@@ -226,19 +279,19 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-262588d0@2026-10-30T09:00:37Z",
-    "at": "2026-10-30T09:07:30.085Z"
+    "kind": "checkpoint",
+    "sessionId": "worker-e60b90bd@2026-10-30T09:26:09Z",
+    "at": "2026-10-30T09:35:41.898Z"
   },
-  "reviewStartedAt": "2026-10-30T09:07:14.487Z",
+  "reviewStartedAt": "2026-10-30T10:15:06.320Z",
   "verification": {
     "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
     "exitCode": 0,
-    "outputTail": "> Task :compileKotlin UP-TO-DATE\n> Task :compileTestKotlin UP-TO-DATE\n> Task :testClasses UP-TO-DATE\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 9s\n11 actionable tasks: 2 executed, 9 up-to-date\nFresh XML checked against Windows-clock start: 26 suites, 382 tests, 0 failures, 0 errors, 0 skipped. DaemonIdentityTest=16; MoeProjectForeignDaemonTest=5; MoeProjectConnectionTest=5. Evidence: D:/moe-scratch/task-90664db1/resume-262588d0/gate.log and suite-summary.json.",
-    "reportedAt": "2026-10-30T09:07:14.487Z",
+    "outputTail": "> Task :compileKotlin\n> Task :compileJava NO-SOURCE\n> Task :classes UP-TO-DATE\n> Task :jar\n> Task :composedJar\n> Task :prepareTestSandbox\n> Task :prepareTest\n> Task :compileTestKotlin\n> Task :compileTestJava NO-SOURCE\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :test\n\nBUILD SUCCESSFUL in 17s\n11 actionable tasks: 7 executed, 4 up-to-date\n[fresh XML, Windows-clock start 2026-10-30T10:12:36.522Z, every suite timestamp after it] 26 suites / 398 tests / 0 failures / 0 errors / 0 skipped; DaemonIdentityTest 19, MoeProjectForeignDaemonTest 8, MoeProjectConnectionTest 5 (unchanged). Run on the shared tree under the jetbrains-gradle lease; evidence D:/moe-scratch/task-90664db1/worker-e60b90bd/{gate.log,gate-start.txt}.",
+    "reportedAt": "2026-10-30T10:15:06.320Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Delivered the checkpointed JetBrains /health identity probe and connection refusal branch, with portable Windows/WSL comparison and backward-compatible Unknown behavior. Four owned files remain byte-identical to 52d45cb6; no resumed source edits. Fresh exact Gradle gate: 382 tests, 0 failures/errors/skips; helper 16, foreign-daemon integration 5, unedited connection suite 5. Six scratch mutants killed by expected assertions; source restored/hash-verified. Adversarial review complete; shared resource released and Serena handoff written. MoeDaemonSupervisor.kt unchanged. Pre-existing supervisor readDaemonInfo deletion side effects are tracked separately in task-6fc0096b9fff4c45904cfbce7833ad2d, not fixed inline. Existing +651 size waiver retained.",
+  "completionSummary": "Reopen-1 QA fixes; the 4 owned files only; MoeDaemonSupervisor.kt unchanged.\n(1) F2: handleForeignDaemon no longer calls readDaemonInfo(), which deleted a rewritten daemon.json on a projectPath mismatch before the guard. A private rereadDaemonInfo(file) reads at most MAX_DAEMON_JSON_BYTES+1 bytes; oversize, malformed or absent gives null; it never deletes. The file is deleted only when pid, port and startedAt all still match. Deviation: plan step 4 named readDaemonInfo(), the rejected defect; I followed QA's side-effect-free reread.\n(2) Deadline: probe() is an HTTP/1.0 GET over Socket(Proxy.NO_PROXY).use{} on the caller's thread. One deadline (connect + read) caps the status line, headers and body; each read waits min(readTimeout, time left), with a 1 ms floor. The reply cap is 64 KiB body + 8 KiB head. No threads; the socket closes on every path; Unknown on expiry; a raw socket follows no redirect.\nNew rows (red on the old code or a mutant):\n- header trickle: Unknown in <2 s, and the responder must end (socket closed);\n- the last read waits only the time left (2.2 s; uncapped 3.8 s);\n- the IDE ProxySelector is never consulted;\n- replacements naming another project, or this project's WSL spelling, are kept byte for byte;\n- an oversize daemon.json is neither parsed nor removed.\nThe unreachable-port row now uses a released ServerSocket port, because on JDK 21 a never-started HttpServer still listens after stop(0).\nEvidence (D:/moe-scratch/task-90664db1/worker-e60b90bd):\n- RED: red1.log, red3.log. GREEN: green4.log, green5.log.\n- 10 mutants, 9 killed: raw compare, unconditional delete, Unknown treated as Foreign, connecting kept, readDaemonInfo reread, uncapped read timeout, socket left open, no NO_PROXY, uncapped reread.\n- Survivor: dropping the `leftMs<=0` return. It is near-equivalent, since the 1 ms floor still stops at the deadline. A sub-ms row couldn't kill it on Windows (0.86 s) and was removed.\n- Full gate fresh: 26 suites / 398 tests / 0 failures.\nOut of scop",
   "reviewCompletedAt": "2026-10-30T09:26:09.148Z",
   "rejectionDetails": {
     "failedDodItems": [
