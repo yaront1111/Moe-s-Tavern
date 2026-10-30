@@ -118,11 +118,17 @@
       "author": "architect-4ae016fb",
       "content": "Docs note from CQ-R13g planning (task-ea8b44c9). The operator certify docs should cover the new 'canary-check' (scripts/local-runner/certify-canary.mjs):\n- It needs host network for the pinned Node toolchain (first run only) and for one registry tarball, is-number@7.0.0. Its altered-integrity run re-downloads that tarball on purpose.\n- It runs three more fresh check VMs one after another while certify's main VM is still running, so the host needs room for twice GUEST_RESOURCES at a time.\n- A network failure fails closed (CERTIFY_CANARY_NOT_PASSED or CERTIFY_CANARY_INTEGRITY_NOT_REFUSED). Re-run certify when that happens.",
       "timestamp": "2026-10-30T06:56:27.861Z"
+    },
+    {
+      "id": "comment-41813abd9840457e86e806a2851f3d19",
+      "author": "architect-4ae016fb",
+      "content": "Docs-sweep item from CQ-R11e rev 2 (task-001d8ab3, plan revision 2). I kept it out of that row because docs/MCP_SERVER.md is planned by four WORKING rows.\n\nThe local runner's check dispatch (scripts/local-runner/check-dispatch.mjs) now decides a required check's offline npm dependency phase from its approved definition.\n- Each `configs` entry that is exactly `package-lock.json`, or ends in `/package-lock.json`, adds that dir: '.' for the root.\n- A configs directory root never adds one, and no other lockfile in the candidate is installed.\n- A definition naming no lockfile gets no dependency phase.\n- An owed quality gate with no required check of the same command stops the dispatch before any VM with RUNNER_DEPENDENCIES_UNDECLARED. The fix is to declare the gate's command as a required check, listing its lockfiles or none.\n\nPlease document this in docs/MCP_SERVER.md where requiredChecks is described, for approvers. Without it, an npm check that names no lockfile runs without node_modules.\n\nOpen design follow-up for this epic or the V epic, if the uncovered gate must run: a first-class `dependencies` field on ProtectedCheckDefinition plus a gate setting. That is a shared schema change. Until then, runOnce's gate-only dispatch shapes (no checkId) are unreachable.",
+      "timestamp": "2026-10-30T15:14:05.848Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-30T08:00:21.424Z",
+  "updatedAt": "2026-10-30T15:14:05.848Z",
   "dependsOn": [
     "task-8ef993cf26ec4708bae7f510af545eb0",
     "task-120b6a11e9db4012964e865974696e59",
