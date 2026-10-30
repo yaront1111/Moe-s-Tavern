@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -86,16 +86,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:03:04.980Z",
-  "updatedAt": "2026-10-30T15:54:10.606Z",
+  "updatedAt": "2026-10-30T15:58:11.155Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:04:10.299Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T15:58:11.154Z",
+    "wallClockMs": 35640855
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-0062feec"
+    "worker-0062feec",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -209,5 +212,9 @@
     "kind": "completion",
     "sessionId": "worker-0062feec@2026-10-30T15:49:45Z",
     "at": "2026-10-30T15:54:10.606Z"
-  }
+  },
+  "completedAt": "2026-10-30T15:58:11.154Z",
+  "reviewCompletedAt": "2026-10-30T15:58:11.154Z",
+  "reviewSummary": "Reviewed completion commit b68014ab (on moe/work-2026-10-24, in task.commits): cli.mjs +24/-12, local-runner.test.mjs +66/-3, ~+75 net, under 400. The 3 deleted test lines are import/USAGE/loop-head, extended not weakened.\n\nRe-ran verification myself: `env -i HOME PATH=nvm-node-24 node --test scripts/tests/local-runner.test.mjs` exit 0, 294 tests, 293 pass, 0 fail, 1 skip. vm-control test 12/12 (hostPrerequisites({}) still works).\n\nSix mutation probes in a scratch copy (removed after; shared tree untouched), each killed by the R13a/CLI rows: hostPrerequisites drops cacheDir; repeated flag accepted; relative --cache-dir accepted; doctor accepts --cache-dir; FLAGS lookup via `in` instead of Object.hasOwn; provision.mjs forces platform.executable over an explicit provider.executable. Unmutated copy stayed green.\n\nDoD: (1) pass-through row covers --cache-dir alone or with --executable in either order; the rejection loop covers relative, empty, blank, control-char, repeated, dangling and doctor/native-smoke misuse as CLI_INPUT_INVALID with zero prerequisite calls. (2) Seamed Linux end-to-end row: exit 0 / LINUX_READY with /home/u/moe-images; without the flag exit 2 with cache item null; hidden dir exit 2 with item false; with --executable all doctor calls use it and SNAP_MULTIPASS is never called. (3) provisionGuest row: every non-snap call uses the explicit provider.executable. (4) Verification output reproduced.\n\nRails: no platform rule changes, no .moe edits, doctor/native-smoke argv unchanged, no verified-local or isolation claim. Parser is defensive (Object.hasOwn, odd-length check, refusal before any call); hostPrerequisites maps only the same four fields.",
+  "requiredCheckAtDone": null
 }
