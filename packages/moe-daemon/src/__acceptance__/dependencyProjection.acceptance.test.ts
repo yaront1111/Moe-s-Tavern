@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { IncomingMessage } from 'node:http';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import { McpAdapter } from '../server/McpAdapter.js';
+import { authenticateRunner, ensureRunnerKey, RUNNER_KEY_HEADER } from '../server/runnerChannel.js';
 import { createMcpCaller, McpCallError, type McpCaller } from './mcpCall.js';
 import * as executionProfile from '../delivery/executionProfile.js';
 import { dependencyShortfall, isDependencySatisfied, runDependencyUnblock } from '../state/dependencyUnblock.js';
@@ -30,7 +34,6 @@ const P = 'task-p';
 const GATE = 'npm run gate';
 const ENV = `moe-local-vm-v1:${'a'.repeat(64)}`;
 const TREE = 'a'.repeat(40);
-const RUNNER = { runnerId: 'runner-0123456789abcdef' };
 const IDENTITY = { processStartedAt: '4242@2026-10-30T00:00:00.0000000Z', host: 'box-1' };
 const STRICT: ExecutionPolicySnapshot = { version: 2, profile: 'verified-local', planRevision: 1, deliveryPolicy: 'legacy' };
 const LEGACY: ExecutionPolicySnapshot = { ...STRICT, profile: 'legacy' };
@@ -56,13 +59,18 @@ beforeEach(async () => {
   h.init(); h.setupMoeFolder(); h.createEpic(); h.createEpic({ id: 'epic-2' }); seq = 0;
   await h.state.load();
   h.state.project!.settings = { ...h.state.project!.settings, approvalMode: 'TURBO', deliveryPolicy: 'legacy', qualityGate: GATE,
-    qualityGateScope: 'everyTask', checkEnvironments: [ENV] } as never;
+    qualityGateScope: 'everyTask', checkEnvironments: [ENV] };
   const adapter = new McpAdapter(h.state);
   call = createMcpCaller(h.state, adapter).call;
-  // The /runner channel's authenticated identity, as WebSocketServer forwards it.
-  runner = createMcpCaller(h.state, { handle: (request: never) => adapter.handle(request, { runner: RUNNER }) } as unknown as McpAdapter).call;
+  // Reuse the harness's runner options with an identity authenticated over a temporary host key.
+  vi.stubEnv('MOE_RUNNER_KEY_DIR', path.join(h.testDir, 'runner-keys'));
+  const key = fs.readFileSync(await ensureRunnerKey(h.state.projectPath), 'utf8');
+  const identity = authenticateRunner({ socket: { remoteAddress: '127.0.0.1' },
+    headersDistinct: { [RUNNER_KEY_HEADER]: [key] } } as unknown as IncomingMessage, h.state.projectPath);
+  if (!identity) throw new Error('Temporary runner authentication failed');
+  runner = createMcpCaller(h.state, adapter, { runner: identity }).call;
 });
-afterEach(async () => { vi.restoreAllMocks(); await h.state.flushActivityLog(); h.state.clearEmitter(); h.cleanup(); });
+afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); await h.state.flushActivityLog(); h.state.clearEmitter(); h.cleanup(); });
 
 /** A runner-observed, authenticated pass of the gate on `candidateId`, at P's approved revision. */
 async function pass(candidateId: string): Promise<void> {
@@ -166,14 +174,14 @@ describe('CQ-V12b: every readiness projection equals the shared predicate', () =
         patch(id, { dependsOn: [P] });
       } else {
         const set = (await call('moe.set_task_dependencies', { taskId: id, workerId: 'architect-1', dependsOn: [P] })) as { dependsOnUnmet: number };
-        expectMet(set.dependsOnUnmet === 0, 'set_task_dependencies');
+        expect(set.dependsOnUnmet, `${kind} set_task_dependencies`).toBe(met ? 0 : 1);
       }
       const context = (await call('moe.get_context', { taskId: id })) as { task: { dependsOnUnmet: string[] } };
       expect(context.task.dependsOnUnmet, `${kind} get_context`).toStrictEqual(met ? [] : [P]);
       const listed = (await call('moe.list_tasks', {})) as { tasks: Array<{ id: string; dependsOnUnmet?: number }> };
-      expectMet(listed.tasks.find((t) => t.id === id)?.dependsOnUnmet === 0, 'list_tasks');
+      expect(listed.tasks.find((t) => t.id === id)?.dependsOnUnmet, `${kind} list_tasks`).toBe(met ? 0 : 1);
       const found = (await call('moe.search_tasks', { query: id })) as { tasks: Array<{ id: string; dependsOnUnmet?: number }> };
-      expectMet(found.tasks.find((t) => t.id === id)?.dependsOnUnmet === 0, 'search_tasks');
+      expect(found.tasks.find((t) => t.id === id)?.dependsOnUnmet, `${kind} search_tasks`).toBe(met ? 0 : 1);
 
       const second = consumerId(kind, 2);
       const blocked = (await call('moe.report_blocked', { taskId: second, reason: 'waits on the prerequisite', blockedOnTaskIds: [P] })) as

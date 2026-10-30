@@ -61,19 +61,28 @@
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then cmp. Each must fail a named row:\n   - unmetDependsOn ignoring its consumer: the strict get_context, list_tasks, search_tasks and set_task_dependencies rows;\n   - unmetBlockedOnTaskIds ignoring it: the strict report_blocked row and DoD 2's P3;\n   - claimNextTask's dependencyShortfall without the consumer: the strict claim rows;\n   - ARCHIVED read as satisfied for a strict consumer: the ARCHIVED-without-receipt row;\n   - checkFor dropping outcome: O1;\n   - checkFor emitting `outcome: undefined`: O2, through toStrictEqual.\n2. The GATE runs fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate):\n   - take `git archive HEAD` of the whole repo, with V09 and V11 in HEAD;\n   - overlay ONLY this task's files;\n   - run `npm ci` after checking the lockfile against the tree;\n   - use env -i with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH;\n   - `cd packages/moe-daemon && npm test` and `npx tsc --noEmit` must both exit 0. The latestCheckRun wire shape is shared, so the full suite is the scope;\n   - cmp the overlay against the worktree.\n3. Size: this task's numstat over packages/ must be at most 400 net (QA cap; tests count).\n4. A red run outside this task is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n5. Supply the npm test command, its exit code and the output tail to complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts"
+      ],
+      "note": "Fresh whole-HEAD archive 5e885d02 + three owned overlays at /tmp/moe-v12b-verify.2ZpXX9, native npm ci, env -i with Node24.21.0/Linux-only PATH. npm test exit0: 213 files, 6155 passed/20 skipped (36.68s). tsc --noEmit and test-inclusive tsc.v12b config both exit0. Owned files/lock cmp byte-identical; diff --check clean; net packages +296 (<400). Six planned mutants compiled and assertion-failed: unmetDependsOn 3; unmetBlockedOnTaskIds 5 incl P3 (report_blocked calls predicate directly so this mutant is caught by auto-unblock); explicit-claim shortfall3; ARCHIVED bypass1; drop outcome6; undefined outcome22 including O2. Restored each byte-identically. Verification findings fixed only in owned acceptance test: exact 0/1 counts replace zero-ness (list/search omitted-unmet-count mutants survived old13 tests, each fails6 now); runner fixture reuses landed createMcpCaller third options parameter, authenticates temp host key, removes fake adapter/literal runner identity and settings as-never. Final file276 lines,13 cases green. Audit again confirms all predicate callers forward consumer; no dependency production edits. Other sessions' .moe, deliveryBypass.acceptance.test.ts and local-runner.test.mjs dirty bytes untouched/excluded. No Git writes.",
+      "startedAt": "2026-10-30T18:46:30.665Z",
+      "completedAt": "2026-10-30T18:50:07.321Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Read the diff as an agent trying to release a strict consumer early:\n- a projection site that answers from status alone, or that caches an answer across a prerequisite change;\n- a strict consumer released by a legacy-DONE, missing, ARCHIVED-without-proof or unjudgeable prerequisite;\n- the auto-unblock firing before qa_approve succeeded, or on set_task_status DONE alone;\n- the oracle: the hard-coded column, not only isDependencySatisfied, decides every row;\n- dispatch path: grep the acceptance file for 'Tool(' and '.handler(', and expect no hits;\n- the wire shape: latestCheckRun gains only an optional outcome, and legacy rows are byte-identical;\n- rails: no new activity event types, no client UI, no .moe edits, no Git writes, no forbidden tokens, and verified-local untouched.\n\nThen write the Serena memory 'task-task-6339299aa3b743d1948ffbd880a5c34a-handoff' for V12 (task-b621ddc9). Cover:\n- the matrix and its tokens;\n- the audited call sites;\n- any site fixed;\n- the latestCheckRun.outcome wire addition, for the SCHEMA.md and MCP_SERVER.md sweep;\n- that the JetBrains DeliveryPresentation.kt follow-up is outside this epic.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review of complete owned diff (checkpoint8f951bf4 + current delta), not peers: no further edit needed. Runtime remains pure synchronous serving projection: enum membership rejects null/number/unknown strings without coercion; absent outcome key preserved; readEvidence retains failure guard; no mutation/cache/TOCTOU boundary introduced. Hard-coded matrix independently pins shared oracle, strict legacy/missing/archived/unjudgeable withholding, and real MCP QA-before-unblock sequencing; dispatch grep has no Tool(/.handler( calls or test-module imports. Authentication now derives runner via temp key, uses real harness/registry, and restores env. All predicate sites already consumer-aware (V09), no status-only parallel readiness. No production verified-local enablement, new events, UI, direct .moe edits or Git writes. Gated bytes still cmp identical. Verification remains fresh: npm test6155 passed/20 skipped in213 files exit0, prod and owned-test tsc exit0;8 mutants killed. Source net296; handoff + gotcha-dependency-projection-counts saved. V12 owns SCHEMA/MCP_SERVER optional-outcome docs; JetBrains rendering outside epic.",
+      "startedAt": "2026-10-30T18:50:34.583Z",
+      "completedAt": "2026-10-30T18:51:29.828Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-0062feec",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -92,16 +101,17 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:14:13.471Z",
-  "updatedAt": "2026-10-30T18:44:15.515Z",
+  "updatedAt": "2026-10-30T18:51:50.337Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T19:05:26.061Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-0062feec"
+    "worker-0062feec",
+    "worker-6e57c4f8"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -110,7 +120,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T19:10:15.344Z",
@@ -174,5 +186,53 @@
   },
   "planApprovedAt": "2026-10-29T19:10:15.428Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-10-30T18:36:48.441Z"
+  "workStartedAt": "2026-10-30T18:36:48.441Z",
+  "commits": [
+    {
+      "sha": "8f951bf469fd1d1b80a214ed1dc1b878821cc428",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T18:32:50Z",
+      "paths": [
+        ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+        ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+        ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json",
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.ts"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T18:44:54.132Z",
+      "treeId": "c39f27034c63179704dd9f95cbb8f6132336fc71",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/state/deliveryProjection.ts",
+    "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+    "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+    "packages/moe-daemon/src/state/dependencyUnblock.ts"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+    "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-0062feec@2026-10-30T18:32:50Z",
+    "at": "2026-10-30T18:44:54.132Z"
+  },
+  "reviewStartedAt": "2026-10-30T18:51:50.335Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh whole-repo archive of 5e885d02389aadf08ce4ebae79520aff14c23703 plus only three task-owned overlays; native npm ci, env -i HOME/NO_COLOR/Linux Node24.21.0 PATH, /tmp/moe-v12b-verify.2ZpXX9/repo. Owned overlays and lockfile cmp identical afterward.\n Test Files  213 passed (213)\n      Tests  6155 passed | 20 skipped (6175)\n   Start at  20:48:36\n   Duration  36.68s (tests 93%, import 4%, transform 3%)\nExit 0. Also npx tsc --noEmit exit0 and test-inclusive npx tsc -p tsconfig.v12b-tests.json exit0.",
+    "reportedAt": "2026-10-30T18:51:50.335Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-V12b: MCP dependency projection agreement matrix (8 prerequisite states x legacy/verified-local consumers), real qa_approve/auto-unblock sequencing, and optional latestCheckRun.outcome. Outcome emitted only for CHECK_OUTCOMES members; absent/invalid rows keep exact legacy shape. Audited every readiness call, including resource eligibility and timeout alerts: V09 already forwards consumer everywhere, so no dependency production patch needed. Existing source checkpoint8f951bf4 contains initial implementation; this session hardened set/list/search count assertions and uses createMcpCaller runner options with authenticateRunner over temporary host key rather than literal identity. New acceptance file276 lines/13 tests; source net296 LOC. Six planned mutants compile and fail assertions; two extra omitted-count mutants survive old assertions then fail new ones. Full daemon gate6155 passed/20 skipped,213 files; production and owned-test typechecks pass. Adversarial review complete; gated bytes unchanged. Legacy missing-id input contract preserved (set refuses, report ignores). Strict means execution profile, not live deliveryPolicy. verified-local remains disabled; no isolation claim. Handoff and gotcha memory saved. V12 owns SCHEMA/MCP_SERVER outcome docs; JetBrains rendering out of epic. No Git writes; wrapper owns landing."
 }
