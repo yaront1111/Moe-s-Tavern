@@ -8,10 +8,12 @@
 // CQ-R13f1 and CQ-R13f add the certify-containment.mjs checks after them: 'writer-containment', 'check-containment' (its runs
 // read c.platform, c.cacheDir and c.supervisor) and 'controller-replacement', which replaces this VM's supervisor, so it is last on it.
 // CQ-R13h adds 'cancellation' and 'recovery' (certify-lifecycle.mjs) last before 'teardown', with LIFECYCLE_BOUNDS in BOUNDS.
+// CQ-R13g adds 'canary-check' (certify-canary.mjs) after them; it needs host network for the toolchain and one registry tarball.
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, open, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { BRIDGE_BOUNDS, BRIDGE_CHECKS } from './certify-bridge.mjs';
+import { CANARY_CHECKS } from './certify-canary.mjs';
 import { CONTAINMENT_CHECKS } from './certify-containment.mjs';
 import { LIFECYCLE_BOUNDS, LIFECYCLE_CHECKS } from './certify-lifecycle.mjs';
 import { platformFor } from './cli.mjs';
@@ -58,7 +60,7 @@ const BODY = [
   ['readiness', async ({ outcome: { bootstrapReady, failures } }) => (bootstrapReady === true && Array.isArray(failures) && failures.length === 0 ? passed
     : failed(stable(failures?.[0], 'CERTIFY_NOT_READY')))],
   ['no-mounts', async ({ name, provider }) => { await assertNoMounts(name, provider); return passed; }],
-  ...[...BRIDGE_CHECKS, ...CONTAINMENT_CHECKS, ...LIFECYCLE_CHECKS].map(({ id, run }) => [id, run]),
+  ...[...BRIDGE_CHECKS, ...CONTAINMENT_CHECKS, ...LIFECYCLE_CHECKS, ...CANARY_CHECKS].map(({ id, run }) => [id, run]),
 ];
 // Always runs, whatever happened before; by exact owned name, so a foreign record in the same ledger is never touched.
 const TEARDOWN = ['teardown', async ({ ledger, name, owner, provider }) => {
@@ -143,7 +145,7 @@ function boundsOf(bounds) {
 }
 
 /** Injected transports (tests): {provider, fetch, digest, sleep, random, doctor, now, bounds, containment, checkSteps, spawn, writer,
- * replacement}. Its evidence can never certify. */
+ * replacement, canary}. Its evidence can never certify. */
 export async function certifyCore(input) {
   const { platform, workDir, deps = {} } = isRecord(input) ? input : {};
   if (!validWorkDir(workDir) || !isRecord(platform) || !PLATFORM_IDS.includes(platform.id) || typeof platform.prerequisites !== 'function'

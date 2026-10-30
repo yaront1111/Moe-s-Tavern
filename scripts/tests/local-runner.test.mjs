@@ -2774,10 +2774,10 @@ import { CERTIFY_CHECKS, certifyCore, runIsolationCertify, validateCertification
 
 const REAL_SUPERVISOR_SHA256 = createHash('sha256').update(readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url))).digest('hex');
 const CERTIFY_IDS = ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'guest-network', 'writer-containment', 'check-containment',
-  'controller-replacement', 'cancellation', 'recovery', 'teardown'];
+  'controller-replacement', 'cancellation', 'recovery', 'canary-check', 'teardown'];
 const CERTIFY_DELETES = [nameAt(2), nameAt(4), GUEST].map(name => ['delete', '--purge', name]); // cancellation, recovery child, then teardown
 const BRIDGE_NOT_RUN = ['bridge-framing', 'bridge-eof', 'guest-network', 'writer-containment', 'check-containment', 'controller-replacement', 'cancellation',
-  'recovery'].map(id => [id, 'not-run']);
+  'recovery', 'canary-check'].map(id => [id, 'not-run']);
 // CQ-R13f1 check-containment: deps.containment's fake runCheckJob records each call and resolves runCheckJob's frozen result,
 // call i's defaults merged with runs[i]. The integrity call (1) drives given.session, the real runCheckSession over the harness
 // router, as runCheckJob would; {session: false} skips it and {reject: code} rejects with that code.
@@ -2833,6 +2833,37 @@ async function provisions({ ledgerDir, owner: who }, proc, { fake, random }) {
   await ledger.update(record, { phase: 'owned' });
 }
 const TOOLCHAIN_STUB = Object.freeze({ file: '/cache/node-v24.tar.xz', sha256: 'e'.repeat(64), size: 1, version: 'v24.0.0' });
+// CQ-R13g canary-check: canaryRig's fake runCheckJob records each call, drives the given steps in order as runCheckJob would (each must
+// hand the base fake its own argument and return the base's own result), then resolves runCheckJob's frozen result: call i's script
+// merged with runs[i]. A script's `env` overrides canaryEnv's inputs, `environment` replaces it and `reject` rejects with that code.
+// Declared above CF1, whose harness builds a default rig: a row selected alone must find it initialized.
+const CANARY_GUEST = Object.freeze({ provisioned: true, instance: 'moe-canary', bootstrapReady: true, failures: [],
+  image: { source: { arch: 'x64', url: 'https://images.invalid/canary.img', sha256: 'a'.repeat(64) }, provider: { imageHash: 'b'.repeat(64) } } });
+const CANARY_CACHE = Object.freeze({ tree: { entries: [], digest: 'c'.repeat(64) }, digest: 'c'.repeat(64), packages: 1, bytes: 3730 });
+const canaryEnv = async (input, over = {}) => checkEnvironment({ sourceImageSha256: 'a'.repeat(64), providerImageHash: 'b'.repeat(64),
+  supervisorSha256: createHash('sha256').update(input.supervisor).digest('hex'), resources: GUEST_RESOURCES,
+  toolchainSha256: (await loadToolchainManifest()).node.x64.sha256, dependencyDigest: 'c'.repeat(64), ...over });
+const CANARY_SESSION = ['provision', 'dependencies', 'session'];
+const CANARY_RUNS = [{ steps: CANARY_SESSION, outcome: 'passed', exitCode: 0, workspace: 'intact', failure: null },
+  { steps: CANARY_SESSION, outcome: 'code-failure', exitCode: 1, workspace: 'unverified', failure: null },
+  { steps: ['provision', 'dependencies'], outcome: 'infra-failure', exitCode: null, workspace: 'unverified', failure: 'DEPENDENCY_CHECKSUM_MISMATCH', environment: null }];
+function canaryRig(runs = [], { guest = CANARY_GUEST, cache = CANARY_CACHE } = {}) {
+  const calls = [];
+  const results = { provision: guest, dependencies: cache, session: Object.freeze({ outcome: 'passed', exitCode: 0, signal: null, outputTail: '' }) };
+  const steps = Object.fromEntries(Object.keys(results).map(name => [name, async arg => { calls.at(-1).got.push(arg); return results[name]; }]));
+  const runCheckJob = async (input, given) => {
+    const at = calls.push({ input, given, got: [] }) - 1;
+    const { steps: names, env, reject, ...script } = { vm: 'deleted', ...CANARY_RUNS[at], ...runs[at] };
+    if (reject) throw Object.assign(new Error('/private/path'), { code: reject });
+    for (const name of names) {
+      const arg = { step: name };
+      assert.equal(await given[name](arg), results[name], name);
+      assert.equal(calls[at].got.at(-1), arg, name);
+    }
+    return Object.freeze({ signal: null, outputTail: '', environment: await canaryEnv(input, env), instance: `moe-canary-${at}`, executionReady: false, ...script });
+  };
+  return { calls, canary: { runCheckJob, steps } };
+}
 
 /** smokeHarness whose guest holds the REAL supervisor (R07 checks its hash), with an injected doctor and clock; `run` wraps the provider,
  * `bridge` configures the CQ-R13e1 spawn router (bridgeRouter) and `network` overrides NETWORK_ANSWERS, each recorded in `probes`.
@@ -2883,7 +2914,7 @@ function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run,
     doctor: async () => ({ providerReady: true, version: '1.17.0' }), now: () => new Date(STARTED), containment: rig.containment, spawn,
     writer: { toolchain: async input => { ops.push(['toolchain', input]); return (writer.toolchain ?? (async () => TOOLCHAIN_STUB))(input); },
       installToolchain: async input => { ops.push(['install', input]); return writer.installToolchain?.(input); } },
-    bounds: { cancelBudgetMs: 5_000, launchMs: 1_000, pollMs: 1, reapMs: 1_000 }, checkSteps: { toolchain: async () => TOOLCHAIN_STUB,
+    canary: canaryRig().canary, bounds: { cancelBudgetMs: 5_000, launchMs: 1_000, pollMs: 1, reapMs: 1_000 }, checkSteps: { toolchain: async () => TOOLCHAIN_STUB,
       installToolchain: async () => {}, provision: input => provisionGuest({ ...input, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {} }), ...checkSteps } };
   return { workDir, fake, download, deletes, probes, changes, rig, deps, router, children, ops, hashed,
     certify: (platform = onWindows()) => certifyCore({ platform, workDir, deps }) };
@@ -2939,7 +2970,7 @@ test('CF3 a provision refusal or a codeless throw fails only its own check; tear
   const stuck = certifyHarness(t, { deleteFails: true });
   const undeleted = checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'], ['bridge-framing', 'passed'], ['bridge-eof', 'passed'],
     ['guest-network', 'passed'], ['writer-containment', 'passed'], ['check-containment', 'passed'], ['controller-replacement', 'passed'],
-    ['cancellation', 'failed', 'CERTIFY_CANCEL_VM_NOT_DELETED'], ['recovery', 'not-run'],
+    ['cancellation', 'failed', 'CERTIFY_CANCEL_VM_NOT_DELETED'], ['recovery', 'not-run'], ['canary-check', 'not-run'],
     ['teardown', 'failed', 'CERTIFY_TEARDOWN_FAILED']);
   assert.deepEqual([await stuck.certify(), stuck.deletes], [certification({ checks: undeleted }), [nameAt(2), GUEST].map(name => ['delete', '--purge', name])]);
 });
@@ -3714,7 +3745,7 @@ test('LC6 the real recovery child exits 64 with no output on any bad stdin, befo
 });
 
 test('LC7 cancellation and recovery run after controller-replacement, before teardown; each lifecycle bound outside 1..its constant refuses before any call', async t => {
-  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(-4), ['controller-replacement', 'cancellation', 'recovery', 'teardown']);
+  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(-5), ['controller-replacement', 'cancellation', 'recovery', 'canary-check', 'teardown']);
   for (const bounds of [{ cancelBudgetMs: 0 }, { cancelBudgetMs: 300_001 }, { launchMs: 900_001 }, { pollMs: 1_001 }, { pollMs: 0.5 }, { reapMs: 30_001 }, { reapMs: '1' }]) {
     const h = certifyHarness(t);
     await assert.rejects(certifyCore({ platform: onWindows(), workDir: h.workDir, deps: { ...h.deps, bounds } }), error => assertSanitized(error, 'CERTIFY_INPUT_INVALID'));
@@ -3724,6 +3755,111 @@ test('LC7 cancellation and recovery run after controller-replacement, before tea
     const h = certifyHarness(t);
     assert.deepEqual(await certifyCore({ platform: onWindows(), workDir: h.workDir, deps: { ...h.deps, bounds: { [key]: max } } }), certification(), key);
   }
+});
+
+// CQ-R13g canary-check, driven through canaryRig's fake runCheckJob; the native run (real VMs, host network) is operator-only.
+import { CANARY_BUDGET_MS, CANARY_CHECKS, CANARY_PACKAGE, canarySnapshot } from '../local-runner/certify-canary.mjs';
+import { admitLockfiles } from '../local-runner/dependency-cache.mjs';
+import { loadToolchainManifest } from '../local-runner/toolchain-cache.mjs';
+
+const CANARY_URL = 'https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz';
+const CANARY_INTEGRITY = 'sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==';
+const CANARY_TEST = "'use strict';\nconst assert = require('node:assert');\nconst isNumber = require('is-number');\nassert.strictEqual(isNumber(42), true);\n";
+const canaryFiles = snapshot => Object.fromEntries(workspaceEntries(snapshot).entries.map(({ path, executable, data }) => [path, [executable, Buffer.from(data).toString('utf8')]]));
+// certify's context for the canary; platform and ledger record every property read, which the canary itself must never make.
+function canaryContext(t, { canary }) {
+  const touched = [];
+  const stub = label => new Proxy({}, { get: (_, key) => { touched.push([label, String(key)]); return undefined; } });
+  return { name: 'moe-main', platform: stub('platform'), ledger: stub('ledger'), cacheDir: scratch(t), supervisor: Buffer.from('supervisor'), provider: {}, deps: { canary }, touched };
+}
+const canaryFailed = code => ({ result: 'failed', code });
+
+test('CY1 the canary project is generated in memory: package.json, a v3 lockfile pinning is-number by its literal URL and sha512, and one test', t => {
+  assert.deepEqual(CANARY_PACKAGE, { name: 'is-number', version: '7.0.0', resolved: CANARY_URL, integrity: CANARY_INTEGRITY });
+  const [pass, fail, altered] = ['pass', 'fail', 'altered'].map(variant => canaryFiles(canarySnapshot(variant)));
+  const dependencies = { 'is-number': '7.0.0' };
+  assert.deepEqual([Object.keys(pass), Object.values(pass).map(([executable]) => executable), pass['canary.test.js'][1]],
+    [['canary.test.js', 'package-lock.json', 'package.json'], [false, false, false], CANARY_TEST]);
+  assert.deepEqual(JSON.parse(pass['package.json'][1]), { name: 'moe-certify-canary', version: '1.0.0', private: true, scripts: { test: 'node canary.test.js' }, dependencies });
+  const lock = JSON.parse(pass['package-lock.json'][1]);
+  assert.deepEqual([lock.lockfileVersion, Object.keys(lock.packages), lock.packages[''].dependencies, lock.packages['node_modules/is-number']],
+    [3, ['', 'node_modules/is-number'], dependencies, { version: '7.0.0', resolved: CANARY_URL, integrity: CANARY_INTEGRITY }]);
+  const admitted = text => admitLockfiles({ lockfiles: [{ dir: '.', bytes: Buffer.from(text) }], cpu: 'x64' }).packages.map(({ url, integrity }) => [url, integrity]);
+  assert.deepEqual(admitted(pass['package-lock.json'][1]), [[CANARY_URL, CANARY_INTEGRITY]]);
+  // 'fail' differs only in its assertion; 'altered' only in a well-formed integrity that admission accepts and only the re-hash can refuse.
+  assert.deepEqual(fail, { ...pass, 'canary.test.js': [false, CANARY_TEST.replace('isNumber(42), true', 'isNumber(42), false')] });
+  const changed = JSON.parse(altered['package-lock.json'][1]).packages['node_modules/is-number'].integrity;
+  assert.deepEqual(altered, { ...pass, 'package-lock.json': [false, pass['package-lock.json'][1].replace(CANARY_INTEGRITY, changed)] });
+  assert.deepEqual([/^sha512-[A-Za-z0-9+/]{86}==$/.test(changed), changed === CANARY_INTEGRITY, admitted(altered['package-lock.json'][1])], [true, false, [[CANARY_URL, changed]]]);
+  // Each test file runs under plain node against a stand-in is-number: 'pass' exits 0 and 'fail' 1.
+  const dir = scratch(t);
+  mkdirSync(path.join(dir, 'node_modules', 'is-number'), { recursive: true });
+  writeFileSync(path.join(dir, 'node_modules', 'is-number', 'index.js'), "module.exports = n => typeof n === 'number';\n");
+  for (const [files, status] of [[pass, 0], [fail, 1]]) {
+    writeFileSync(path.join(dir, 'canary.test.js'), files['canary.test.js'][1]);
+    assert.equal(spawnSync(process.execPath, ['canary.test.js'], { cwd: dir, stdio: 'ignore', timeout: 10_000 }).status, status);
+  }
+});
+
+test('CY2 canary-check passes after three fresh check runs, each with its own owner, credential and generated snapshot, and only context inputs', async t => {
+  const rig = canaryRig();
+  const c = canaryContext(t, rig);
+  assert.deepEqual([await CANARY_CHECKS[0].run(c), rig.calls.length, CANARY_CHECKS.map(({ id }) => id), Object.isFrozen(CANARY_CHECKS)],
+    [{ result: 'passed', code: null }, 3, ['canary-check'], true]);
+  for (const [at, { input, given }] of rig.calls.entries()) {
+    assert.deepEqual(Object.keys(input).sort(), ['budgetMs', 'cacheDir', 'check', 'credential', 'dependencies', 'ledger', 'onReady', 'owner', 'platform', 'provider',
+      'snapshot', 'supervisor']);
+    for (const key of ['platform', 'ledger', 'cacheDir', 'supervisor', 'provider']) assert.equal(input[key], c[key], key);
+    assert.deepEqual([input.check, input.dependencies, input.budgetMs, await input.onReady(), Object.keys(given).sort(), Object.values(given).map(fn => typeof fn)],
+      [{ id: 'certify-canary', command: 'npm test', protected: [] }, ['.'], CANARY_BUDGET_MS, undefined, ['dependencies', 'provision', 'session'], Array(3).fill('function')]);
+    assert.deepEqual(canaryFiles(input.snapshot), canaryFiles(canarySnapshot(['pass', 'fail', 'altered'][at])));
+    assert.deepEqual([validOwner(input.owner), input.owner.taskId, input.owner.generation, Buffer.isBuffer(input.credential), input.credential.length],
+      [true, 'task-certify', 1, true, 32]);
+  }
+  assert.deepEqual([new Set(rig.calls.map(({ input }) => input.owner.attemptId)).size, new Set(rig.calls.map(({ input }) => input.credential.toString('hex'))).size,
+    CANARY_BUDGET_MS, c.touched], [3, 3, 600_000, []]);
+  // The real runCheckJob admits that input and reaches provisioning; a refusal there reserves nothing, so no VM is ever deleted.
+  const provisioned = [];
+  const real = { ...c, ledger: { read() {}, reserve() {}, update() {}, recordImage() {} },
+    deps: { canary: { steps: { provision: async input => provisioned.push(input) && { provisioned: false } } } } };
+  assert.deepEqual([await CANARY_CHECKS[0].run(real), provisioned.length, provisioned[0].cacheDir], [canaryFailed('CERTIFY_CANARY_VM_NOT_DELETED'), 1, c.cacheDir]);
+  // Each wrapper hands a base step's rejection back unchanged, so runCheckJob still maps its own code.
+  const [boom, caught] = [failWith({ code: 'DEPENDENCY_CHECKSUM_MISMATCH' }), []];
+  const rejecting = { runCheckJob: async (input, given) => { for (const name of CANARY_SESSION) caught.push(await given[name]({}).catch(error => error)); return { vm: 'deleted' }; },
+    steps: Object.fromEntries(CANARY_SESSION.map(name => [name, async () => { throw boom; }])) };
+  assert.deepEqual([await CANARY_CHECKS[0].run({ ...c, deps: { canary: rejecting } }), caught.length, caught.every(error => error === boom)],
+    [canaryFailed('CERTIFY_CANARY_NOT_PASSED'), 3, true]);
+});
+
+test('CY3 canary-check fails with one fixed code at the first run that does not hold, and starts no later run', async t => {
+  const sparc = { ...CANARY_GUEST, image: { ...CANARY_GUEST.image, source: { ...CANARY_GUEST.image.source, arch: 'sparc' } } };
+  const [VM, PASS, INTACT, ENV] = ['VM_NOT_DELETED', 'NOT_PASSED', 'WORKSPACE_NOT_INTACT', 'ENVIRONMENT_MISMATCH'].map(code => `CERTIFY_CANARY_${code}`);
+  const [DETECT, REFUSE] = ['CERTIFY_CANARY_FAILURE_NOT_DETECTED', 'CERTIFY_CANARY_INTEGRITY_NOT_REFUSED'];
+  for (const [runs, code, count, options] of [[[{ vm: 'delete-failed', outcome: 'inconclusive' }], VM, 1],
+    [[{ outcome: 'infra-failure', failure: 'TOOLCHAIN_DOWNLOAD_FAILED' }], PASS, 1], [[{ outcome: 'code-failure' }], PASS, 1],
+    [[{ workspace: 'changed' }], INTACT, 1], [[{ workspace: 'unverified' }], INTACT, 1],
+    [[{ env: { toolchainSha256: '0'.repeat(64) } }], ENV, 1], [[{ env: { dependencyDigest: null } }], ENV, 1],
+    [[{ steps: ['provision', 'session'], environment: null }], ENV, 1], [[], ENV, 1, { guest: sparc }],
+    [[{ env: { dependencyDigest: null } }], ENV, 1, { cache: { ...CANARY_CACHE, digest: null } }], // a run with no dependency digest never matches
+    [[{}, { outcome: 'passed' }], DETECT, 2], [[{}, { outcome: 'infra-failure' }], DETECT, 2], [[{}, { vm: 'delete-failed' }], VM, 2],
+    [[{}, {}, { failure: 'DEPENDENCY_DOWNLOAD_FAILED' }], REFUSE, 3], [[{}, {}, { steps: CANARY_SESSION }], REFUSE, 3],
+    [[{}, {}, { outcome: 'code-failure', failure: null }], REFUSE, 3], [[{}, {}, { outcome: 'passed', failure: null }], REFUSE, 3],
+    [[{}, {}, { vm: 'delete-failed' }], VM, 3]]) {
+    const rig = canaryRig(runs, options);
+    assert.deepEqual([await CANARY_CHECKS[0].run(canaryContext(t, rig)), rig.calls.length], [canaryFailed(code), count], `${code} ${JSON.stringify(runs)}`);
+  }
+  const rig = canaryRig([{ reject: 'CHECK_JOB_INPUT_INVALID' }]);
+  await assert.rejects(CANARY_CHECKS[0].run(canaryContext(t, rig)), error => error.code === 'CHECK_JOB_INPUT_INVALID');
+  assert.equal(rig.calls.length, 1);
+});
+
+test('CY4 canary-check runs after recovery, before teardown; a failed canary fails only its own row and teardown still deletes certify\'s VM', async t => {
+  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(-3), ['recovery', 'canary-check', 'teardown']);
+  const h = certifyHarness(t);
+  const rig = canaryRig([{ outcome: 'infra-failure', exitCode: null, failure: 'TOOLCHAIN_DOWNLOAD_FAILED', environment: null, workspace: 'unverified' }]);
+  h.deps.canary = rig.canary;
+  assert.deepEqual([await h.certify(), rig.calls.length, h.deletes], [failedAt('canary-check', 'CERTIFY_CANARY_NOT_PASSED'), 1, CERTIFY_DELETES]);
+  assert.equal(rig.calls[0].input.supervisor.equals(readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url))), true);
 });
 
 // CQ-R09c copy-only snapshot materialization
