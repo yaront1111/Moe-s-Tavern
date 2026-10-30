@@ -3,6 +3,8 @@
 // through the runCheck seam (R11's runCheckJob: one fresh VM, deleted before it settles). Evidence goes out only through the
 // injected /runner `call` (V04b1): a dispatch once the VM is ready in a listed environment, then an observation, 'passed' only
 // with the post-run workspace 'intact'; retries reuse their ids (CQ-V03b). No isolation is claimed; verified-local stays off.
+// Dependencies come only from lockfiles named in the approved definition's configs. An uncovered owed gate stops every
+// check before a VM with RUNNER_DEPENDENCIES_UNDECLARED: it has no approved dependency choice.
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -15,6 +17,7 @@ const TRANSPORT = ['RUNNER_DISCONNECTED', 'RUNNER_CALL_TIMEOUT'], ATTEMPTS = 3;
 const FLAGS = ['--project', '--task', '--commit'], CONTROL = /[\x00-\x1f\x7f]/;
 const CALL_TIMEOUT_MS = 15_000, CHECK_BUDGET_MS = 3_600_000; // three calls fit runCheckJob's 60 s onReady bound
 const MAX_RERUNS = 10; // CQ-V05's maxInfraRetries: the daemon's repair decision is the budget, this only bounds it locally
+const LOCKFILE = 'package-lock.json';
 const CODE_RE = /^RUNNER_[A-Z0-9_]{1,60}$/, NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const fixed = (value, pattern) => typeof value === 'string' && pattern.test(value);
 const newId = prefix => `${prefix}-${randomBytes(16).toString('hex')}`;
@@ -24,13 +27,21 @@ const stopOf = (error, extra = {}) => ({ code: fixed(error?.code, CODE_RE) ? err
   ...(fixed(error?.codeName, NAME_RE) ? { codeName: error.codeName } : {}), ...extra });
 const approvedRevision = served => Number.isSafeInteger(served?.planRevision) && served.planRevision === served.approvedPlanRevision;
 
+// A named lockfile is approved with the check (definitionDigest) and pinned by requiredCheckSnapshot. Evidence from a
+// candidate changing it never counts until re-approval. Directory roots never infer a lockfile, even when one exists.
+function lockfileDirs(configs = []) {
+  return configs.flatMap(file => file === LOCKFILE ? ['.'] : file.endsWith(`/${LOCKFILE}`) ? [file.slice(0, -LOCKFILE.length - 1)] : []);
+}
+
 /** A get_context read's owed checks, as policy.ts owedChecks: each bound approved definition {checkId, trimmed command, protected
- * entries under its configs/scripts/assertionRoots}, then the owed gate; none off the approved revision. V04 admission backstops drift. */
+ * entries under its configs/scripts/assertionRoots, dependencies from configs}, then the owed gate (no dependency choice);
+ * none off the approved revision. V04 admission backstops drift. */
 export function owedChecks(context) {
   const { task, project, servedContext } = context ?? {};
   if (!approvedRevision(servedContext)) return [];
   const snapshot = task?.requiredCheckSnapshot;
   const owed = (snapshot ? task.executionContract?.requiredChecks ?? [] : []).map(def => ({ checkId: def.id, command: def.command.trim(),
+    dependencies: lockfileDirs(def.configs),
     protected: snapshot.entries.filter(({ path }) => under(path, [...def.configs ?? [], ...def.scripts ?? [], ...def.assertionRoots ?? []]))
       .map(({ path, oid }) => ({ path, oid })) }));
   const { qualityGate, qualityGateScope, autoCommit } = project?.settings ?? {};
@@ -59,7 +70,7 @@ async function runOnce(job, check) {
     dispatch = args;
   };
   const frame = Object.freeze({ id: check.checkId ?? 'quality-gate', command: check.command, protected: check.protected });
-  try { result = await job.runCheck({ snapshot: job.snapshot, check: frame, owner: job.owner, onReady, signal: job.signal }); } catch {
+  try { result = await job.runCheck({ snapshot: job.snapshot, check: frame, dependencies: check.dependencies, owner: job.owner, onReady, signal: job.signal }); } catch {
     return { stopped: stop ?? { code: 'RUNNER_CHECK_FAILED', ...(dispatch ? { dispatchId: dispatch.id } : {}) } };
   }
   if (stop || !dispatch || result === null || typeof result !== 'object') {
@@ -79,7 +90,8 @@ async function runOnce(job, check) {
 }
 
 /** Dispatches and observes every check `taskId` owes on its current candidate, which `snapshot` must be exactly. Resolves a frozen
- * {taskId, candidateId, results: [{checkId?, command, dispatchId, outcome}] (one per run), stopped?}; no VM starts after a stop. */
+ * {taskId, candidateId, results: [{checkId?, command, dispatchId, outcome}] (one per run), stopped?}; no VM starts after a stop.
+ * RUNNER_DEPENDENCIES_UNDECLARED stops the whole set before any VM when an owed gate has no approved dependency choice. */
 export async function dispatchFocusedChecks({ taskId, snapshot, call, runCheck, signal } = {}) {
   if (typeof call !== 'function' || typeof runCheck !== 'function') throw Object.assign(new Error('Invalid input.'), { code: 'RUNNER_INPUT_INVALID' });
   const results = [];
@@ -98,6 +110,8 @@ export async function dispatchFocusedChecks({ taskId, snapshot, call, runCheck, 
   let owed;
   try { owed = owedChecks(context); } catch { return done({ code: 'RUNNER_CONTEXT_INVALID' }); }
   if (owed.length === 0) return done({ code: 'RUNNER_NOTHING_OWED' });
+  // Declare the gate's command as a required check, naming its lockfiles or none, so it has an approved dependency choice.
+  if (owed.some(check => !Array.isArray(check.dependencies))) return done({ code: 'RUNNER_DEPENDENCIES_UNDECLARED' });
   const listed = context.project?.settings?.checkEnvironments;
   const job = { call, runCheck, snapshot, signal, environments: Array.isArray(listed) ? listed : [],
     binding: { taskId, candidateId, planRevision: served.planRevision }, owner: { taskId, attemptId: served.attemptId, generation: served.generation } };
@@ -125,14 +139,14 @@ function argumentsFor(argv) {
 
 // R11's runCheckJob behind the runCheck seam, or null when the landed orchestrator lacks a seam this needs: onReady before
 // the job (runCheckJob) and the post-run workspace report (R11f's verifyWorkspace). One fresh credential per job.
-async function landedRunCheck(projectPath) {
+export async function landedRunCheck(projectPath, steps = {}) {
   const [{ runCheckJob }, { verifyWorkspace }] = await Promise.all([import('./check-lifecycle.mjs'), import('./snapshot-transfer.mjs')]);
   if (typeof runCheckJob !== 'function' || typeof verifyWorkspace !== 'function') return null;
   const [{ platformFor }, { createLedger }, { ownedLedgerDir }] = await Promise.all([import('./cli.mjs'), import('./lifecycle.mjs'), import('./vm-control.mjs')]);
   const stateDir = ownedLedgerDir(projectPath);
   const [platform, ledger, supervisor] = [platformFor(process.platform), createLedger(stateDir), await readFile(new URL('./guest-supervisor.py', import.meta.url))];
-  return ({ snapshot, check, owner, onReady, signal }) => runCheckJob({ platform, ledger, owner, cacheDir: path.join(path.dirname(stateDir), 'images'),
-    supervisor, credential: randomBytes(32), snapshot, check, budgetMs: CHECK_BUDGET_MS, onReady, signal, timeoutMs: 60_000 });
+  return ({ snapshot, check, dependencies, owner, onReady, signal }) => runCheckJob({ platform, ledger, owner, cacheDir: path.join(path.dirname(stateDir), 'images'),
+    supervisor, credential: randomBytes(32), snapshot, check, dependencies, budgetMs: CHECK_BUDGET_MS, onReady, signal, timeoutMs: 60_000 }, steps);
 }
 
 // The /runner channel, reopened for the next call once it drops, so a same-id retry after RUNNER_DISCONNECTED can land.

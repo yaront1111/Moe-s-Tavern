@@ -1,9 +1,16 @@
 // CQ-V04b check-dispatch.mjs, against scripted fakes: the /runner `call`, and a `runCheck` logging VM create/delete around onReady.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { dispatchFocusedChecks, owedChecks, runDispatchCli } from '../local-runner/check-dispatch.mjs';
+import { dispatchFocusedChecks, landedRunCheck, owedChecks, runDispatchCli } from '../local-runner/check-dispatch.mjs';
+import { checkEnvironment } from '../local-runner/check-evidence.mjs';
+import { GUEST_RESOURCES } from '../local-runner/guest-bootstrap.mjs';
+import { validateImport } from '../local-runner/source-snapshot.mjs';
 
 const [TASK, TREE, ENV] = ['task-0123456789abcdef0123456789abcdef', 'a'.repeat(40), `check-env-${'e'.repeat(64)}`];
 const SECRET = 'SENTINELKEYsentinelkeySENTINELKEYsentinelk';
@@ -11,13 +18,14 @@ const ENTRIES = [['scripts/check.sh', 1], ['test/a.test.mjs', 2], ['test/b/c.mjs
   .map(([path, n]) => ({ path, oid: String(n).repeat(40) }));
 const UNIT = { id: 'unit', command: ' npm test ', scripts: ['scripts/check.sh'], assertionRoots: ['test'] };
 const LINT = { id: 'lint', command: 'npm run lint', configs: ['vitest.config.ts'] };
+const GATE_DEF = { id: 'gate', command: 'npm run gate' };
 const UNIT_FRAME = { id: 'unit', command: 'npm test', protected: ENTRIES.slice(0, 3) };
-const GATE_FRAME = { id: 'quality-gate', command: 'npm run gate', protected: [] };
+const GATE_FRAME = { id: 'gate', command: 'npm run gate', protected: [] };
 const fail = (code, codeName) => Object.assign(new Error(`Runner channel failed: ${code}. ${SECRET}`), { code, ...(codeName ? { codeName } : {}) });
 const times = (n, make) => Array.from({ length: n }, make);
 const [SNAP, DIRTY] = [{ tree: TREE, overlay: { entries: [] } }, { tree: TREE, overlay: { entries: [{ kind: 'file', path: 'peer-dirt' }] } }];
 
-function context({ defs = [UNIT], bound = true, gate = 'npm run gate', scope = 'everyTask', final = false, autoCommit, envs = [ENV],
+function context({ defs = [UNIT, GATE_DEF], bound = true, gate = 'npm run gate', scope = 'everyTask', final = false, autoCommit, envs = [ENV],
   plan = [2, 2], candidate = { id: 'cand-1', treeSha: TREE } } = {}) {
   return {
     project: { settings: { qualityGate: gate, qualityGateScope: scope, autoCommit, checkEnvironments: envs } },
@@ -62,11 +70,16 @@ const assertPaired = h => {
 
 test('O: owedChecks mirrors the daemon rule from get_context', () => {
   assert.deepEqual(owedChecks(context({ defs: [UNIT, LINT], gate: '' })), [
-    { checkId: 'unit', command: 'npm test', protected: ENTRIES.slice(0, 3) }, { checkId: 'lint', command: 'npm run lint', protected: [ENTRIES[4]] }]);
+    { checkId: 'unit', command: 'npm test', protected: ENTRIES.slice(0, 3), dependencies: [] },
+    { checkId: 'lint', command: 'npm run lint', protected: [ENTRIES[4]], dependencies: [] }]);
   const gateOnly = [{ command: 'npm run gate', protected: [] }];
   assert.deepEqual(owedChecks(context({ bound: false, gate: ' npm run gate ' })), gateOnly);
   assert.deepEqual(owedChecks(context({ bound: false, scope: 'epicFinal', final: true })), gateOnly);
-  assert.deepEqual(owedChecks(context({ gate: 'npm test' })), [{ checkId: 'unit', command: 'npm test', protected: ENTRIES.slice(0, 3) }]);
+  assert.deepEqual(owedChecks(context({ defs: [UNIT], gate: 'npm test' })), [
+    { checkId: 'unit', command: 'npm test', protected: ENTRIES.slice(0, 3), dependencies: [] }]);
+  const configs = ['package-lock.json', 'pkg/package-lock.json', 'pkg', 'vitest.config.ts', 'xpackage-lock.json', 'a/package-lock.json.bak'];
+  assert.deepEqual(owedChecks(context({ defs: [{ ...LINT, configs }], gate: '' })), [
+    { checkId: 'lint', command: 'npm run lint', protected: [ENTRIES[4]], dependencies: ['.', 'pkg'] }]);
   for (const ctx of [context({ bound: false, scope: 'epicFinal' }), context({ bound: false, autoCommit: false }), context({ bound: false, gate: '   ' }),
     context({ plan: [3, 2] }), context({ plan: [2, null] })]) assert.deepEqual(owedChecks(ctx), []);
 });
@@ -74,9 +87,18 @@ test('O: owedChecks mirrors the daemon rule from get_context', () => {
 test('B: no candidate, a foreign snapshot tree or an unapproved revision dispatches nothing', async () => {
   const foreign = [{ ...SNAP, tree: 'b'.repeat(40) }, DIRTY, { tree: TREE }]; // another tree; checkout dirt on top; no overlay record
   for (const [ctx, code, snapshot] of [[context({ candidate: null }), 'RUNNER_NO_CANDIDATE'], ...foreign.map(s => [context(), 'RUNNER_SNAPSHOT_MISMATCH', s]),
-    [context({ plan: [3, 2] }), 'RUNNER_PLAN_NOT_APPROVED'], [context({ bound: false, gate: '' }), 'RUNNER_NOTHING_OWED']]) {
+    [context({ plan: [3, 2] }), 'RUNNER_PLAN_NOT_APPROVED'], [context({ bound: false, gate: '' }), 'RUNNER_NOTHING_OWED'],
+    [context({ bound: false }), 'RUNNER_DEPENDENCIES_UNDECLARED'], [context({ defs: [UNIT] }), 'RUNNER_DEPENDENCIES_UNDECLARED']]) {
     const h = harness(ctx);
     assert.deepEqual(await run(h, snapshot ? { snapshot } : {}), { taskId: TASK, candidateId: ctx.currentCandidate?.id ?? null, results: [], stopped: { code } });
+    assert.deepEqual(h.trace(), ['get_context']);
+  }
+});
+
+test('C: malformed configs stop before any dispatch with a fixed context refusal', async () => {
+  for (const configs of [null, {}, 'package-lock.json', [42]]) {
+    const h = harness(context({ defs: [{ ...UNIT, configs }], gate: '' }));
+    assert.deepEqual((await run(h)).stopped, { code: 'RUNNER_CONTEXT_INVALID' });
     assert.deepEqual(h.trace(), ['get_context']);
   }
 });
@@ -95,10 +117,10 @@ test('H: each owed check is dispatched with its frozen frame, observed once, on 
     assert.deepEqual(o, { id: o.id, dispatchId: d.id, exitCode: 0, outcome: 'passed', outputTail: 'ok', environment: ENV });
   }
   assert.deepEqual(d1, { id: d1.id, taskId: TASK, candidateId: 'cand-1', planRevision: 2, command: 'npm test', checkId: 'unit', environment: ENV });
-  assert.deepEqual(d2, { id: d2.id, taskId: TASK, candidateId: 'cand-1', planRevision: 2, command: 'npm run gate', environment: ENV });
+  assert.deepEqual(d2, { id: d2.id, taskId: TASK, candidateId: 'cand-1', planRevision: 2, command: 'npm run gate', checkId: 'gate', environment: ENV });
   assert.notEqual(d1.id, d2.id);
   assert.deepEqual(summary, { taskId: TASK, candidateId: 'cand-1', results: [
-    { checkId: 'unit', command: 'npm test', dispatchId: d1.id, outcome: 'passed' }, { command: 'npm run gate', dispatchId: d2.id, outcome: 'passed' }] });
+    { checkId: 'unit', command: 'npm test', dispatchId: d1.id, outcome: 'passed' }, { checkId: 'gate', command: 'npm run gate', dispatchId: d2.id, outcome: 'passed' }] });
   assert.deepEqual([Object.isFrozen(summary), Object.isFrozen(summary.results[0])], [true, true]);
   assertPaired(h);
 });
@@ -134,7 +156,7 @@ test('I: a pass is published only with an intact workspace; other outcomes pass 
 });
 
 test('R: a lost dispatch or observation is retried with the same id; three transport failures stop the run', async () => {
-  const h = harness(context({ gate: '' }), { tools: { 'moe.record_check_dispatch': [fail('RUNNER_CALL_TIMEOUT'), { success: true, duplicate: true }],
+  const h = harness(context({ defs: [UNIT], gate: '' }), { tools: { 'moe.record_check_dispatch': [fail('RUNNER_CALL_TIMEOUT'), { success: true, duplicate: true }],
     'moe.record_check_observation': [fail('RUNNER_DISCONNECTED'), {}] } });
   assert.equal((await run(h)).stopped, undefined);
   for (const tool of ['moe.record_check_dispatch', 'moe.record_check_observation']) assert.deepEqual(h.of(tool), times(2, () => h.of(tool)[0]));
@@ -210,4 +232,56 @@ test('K: the CLI prints one line of fixed codes and never an error message or th
   const entry = spawnSync(process.execPath, [fileURLToPath(new URL('../local-runner/check-dispatch.mjs', import.meta.url)), '--project', 'relative'],
     { encoding: 'utf8', env: { PATH: process.env.PATH } });
   assert.deepEqual([entry.status, entry.stdout, entry.stderr], [2, '{"code":"RUNNER_CLI_INPUT_INVALID"}\n', '']);
+});
+
+test('D: the real dispatch adapter binds only approved lockfiles, with no dependency default', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'moe-dispatch-'));
+  const project = path.join(root, 'project'), previous = process.env.MOE_RUNNER_STATE_DIR;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.MOE_RUNNER_STATE_DIR; else process.env.MOE_RUNNER_STATE_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+  await mkdir(project);
+  process.env.MOE_RUNNER_STATE_DIR = path.join(root, 'state');
+  const [sha256, imageHash, supervisorSha256, toolchainSha256] = ['1', '2', '3', '4'].map(c => c.repeat(64));
+  const pairs = [['.', 'ROOT'], ['pkg', 'PKG']], digestOf = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const digest = digestOf(pairs), inputs = [], installed = [], lines = [];
+  const snapshot = { version: 1, tree: TREE, overlay: validateImport([]), base: validateImport([
+    ['package-lock.json', 'ROOT'], ['pkg/package-lock.json', 'PKG'], ['other/package-lock.json', 'OTHER']
+  ].map(([path, bytes]) => ({ kind: 'file', path, executable: false, data: Buffer.from(bytes) }))) };
+  const steps = {
+    provision: async ({ ledger, owner }) => {
+      const { instance } = await ledger.reserve(owner);
+      return { provisioned: true, instance, bootstrapReady: true, failures: [], supervisorSha256,
+        image: { source: { arch: 'arm64', sha256 }, provider: { imageHash } } };
+    },
+    toolchain: async () => ({ file: path.join(root, 'node.tar.xz'), sha256: toolchainSha256, size: 1, version: '24.22.2' }),
+    dependencies: async input => {
+      inputs.push({ lockfiles: input.lockfiles.map(({ dir, bytes }) => [dir, Buffer.from(bytes).toString()]), cpu: input.cpu });
+      const digest = digestOf(inputs.at(-1).lockfiles);
+      return { tree: { entries: [], digest }, digest };
+    },
+    installDependencies: async ({ tree }) => { installed.push(tree.digest); }, materialize: async () => {}, installToolchain: async () => {},
+    session: async () => ({ outcome: 'passed', exitCode: 0, signal: null, outputTail: 'ok' }), verify: async () => 'intact', remove: async () => 'deleted',
+  };
+  const envOf = dependencyDigest => checkEnvironment({ sourceImageSha256: sha256, providerImageHash: imageHash, supervisorSha256,
+    resources: GUEST_RESOURCES, toolchainSha256, dependencyDigest });
+  const LOCKED = { id: 'unit', command: 'npm test', configs: ['package-lock.json', 'pkg/package-lock.json', 'vitest.config.ts'] };
+  const PLAIN = { id: 'plain', command: 'python3 -m unittest' }, envs = [envOf(digest), envOf(null)];
+  const h = harness(context({ defs: [LOCKED, PLAIN], gate: '', envs }));
+  const exit = await runDispatchCli(['--project', project, '--task', TASK, '--commit', TREE], {
+    open: async () => ({ call: h.call, close() {} }), exportSnapshot: async () => snapshot,
+    loadRunCheck: dir => landedRunCheck(dir, steps), write: text => lines.push(text),
+  });
+  assert.deepEqual([exit, JSON.parse(lines[0]).results.map(r => r.outcome)], [0, ['passed', 'passed']], lines[0]);
+  assert.deepEqual(h.of('moe.record_check_observation').map(o => o.outcome), ['passed', 'passed']);
+  assert.deepEqual([inputs, installed], [[{ lockfiles: pairs, cpu: 'arm64' }], [digest]]);
+  assert.deepEqual(h.of('moe.record_check_dispatch').map(d => d.environment), envs);
+  let provisions = 0;
+  const runCheck = await landedRunCheck(project, { provision: async () => { provisions += 1; throw fail('PROVISION_SENTINEL'); } });
+  const input = { snapshot, check: { id: 'unit', command: 'npm test', protected: [] },
+    owner: { taskId: TASK, attemptId: 'attempt-1', generation: 3 }, onReady: async () => {} };
+  await assert.rejects(runCheck(input), { code: 'CHECK_JOB_INPUT_INVALID' });
+  assert.equal(provisions, 0);
+  assert.deepEqual([(await runCheck({ ...input, dependencies: [] })).failure, provisions], ['PROVISION_SENTINEL', 1]);
 });
