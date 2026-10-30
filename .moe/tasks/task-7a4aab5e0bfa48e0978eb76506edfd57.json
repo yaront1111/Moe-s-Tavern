@@ -1,0 +1,35 @@
+{
+  "id": "task-7a4aab5e0bfa48e0978eb76506edfd57",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-08] Wrappers: completion landing to the target, local path",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §2.2 (L4 without a remote, L5, L5b, L7, L8, L10, L11, L12), §2.3 (the no-gate retry bound), §2.7 and §2.9.\n\nObjective: a worktree-mode worker exiting at REVIEW lands the task's net change on the target (main) as one commit made by a merge-tree squash and a compare-and-swap. Non-overlapping hunks from different tasks in one file merge automatically, and a true conflict lands nothing.\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins (the worktree arm of run_landing / Invoke-MoeLanding):\n- The task-branch commit (reusing WT-07's L2).\n- Target resolution, and MOE_LAND_TARGET_CHECKED_OUT when the target is checked out in any worktree.\n- `git merge-tree --write-tree -z --name-only B T` (exit 1 is a conflict: land nothing; record failed with MOE_COMMIT_FAILED_CONFLICT for now, and WT-11 adds the route).\n- The .moe board guard MOE_WORKTREE_BOARD_PATH.\n- C = commit-tree M -p B, with the existing hooked-commit helper when commitHooks is set.\n- The receipt journal before publishing.\n- The local CAS `update-ref refs/heads/<target> C B`; a target that already contains C counts as success; at most 3 L4-L10 attempts, then MOE_COMMIT_FAILED_REF_CONTENTION.\n- The L11 sync commit T' = commit-tree tree(C) -p T -p C and `git -C W merge --ff-only T'` with hooks off (failure: MOE_WORKTREE_SYNC_FAILED, retried at the next pre-flight).\n- record_commit completion (ref refs/heads/<target>, paths = diff B..C), then finalize_attempt landed.\n- Idempotent re-landing (M equals B's tree: nothing).\n- peel_target_branch and ensure_safe_branch are NOT called in worktree mode.\n\nThe WT-08T files (task-c12f9463b68c44a18cc460a7e9460247) are held out: their `local` cases must pass with NO edit to scripts/tests/worktree-landing.{sh,ps1}. Depends on WT-07 (task-b319b263fada419d9d7de279682dc5f4).\n\nNOT in scope:\n- fetch and push to a remote (WT-09)\n- the gate and lease (WT-10)\n- finalize 'unlanded' and conflict resume (WT-11)\n- board snapshot (WT-12)\n- control follow (WT-13)\n- shared-mode landing, which stays unchanged\n- docs (WT-18)\n\nVerification: bash scripts/tests/worktree-landing.sh --only local && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh (and on a Windows seat: powershell -NoProfile -File scripts/tests/worktree-landing.ps1 --only local)",
+  "definitionOfDone": [
+    "bash scripts/tests/worktree-landing.sh --only local exits 0, and `git diff --quiet <WT-08T landed sha> -- scripts/tests/worktree-landing.sh scripts/tests/worktree-landing.ps1` shows the held-out files unchanged.",
+    "The ps1 twin's local cases pass on a Windows seat (powershell -NoProfile -File scripts/tests/worktree-landing.ps1 --only local).",
+    "In worktree mode neither peel_target_branch nor ensure_safe_branch (Ensure-MoeSafeBranch) runs; a grep of the worktree arm shows main is moved only by `update-ref refs/heads/<target> <new> <old>`.",
+    "node scripts/tests/postflight-safe.mjs bash passes with all existing shared-mode cases unchanged.",
+    "Both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes (grep -oE diff is empty); bash scripts/tests/parity-check.sh exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-b319b263fada419d9d7de279682dc5f4",
+    "task-c12f9463b68c44a18cc460a7e9460247"
+  ],
+  "priority": "HIGH",
+  "order": 10,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:52:45.478Z",
+  "updatedAt": "2026-10-30T11:52:45.478Z"
+}

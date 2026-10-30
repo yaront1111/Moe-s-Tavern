@@ -81,7 +81,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -125,7 +125,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:43:02.972Z",
-  "updatedAt": "2026-10-30T11:30:01.656Z",
+  "updatedAt": "2026-10-30T12:04:10.324Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:43:11.337Z",
@@ -137,11 +137,14 @@
     "plannedDistinctFileCount": 4,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T12:04:10.324Z",
+    "wallClockMs": 15510258
   },
   "contextFetchedBy": [
     "worker-262588d0",
-    "qa-ba3f4f35"
+    "qa-ba3f4f35",
+    "qa-952969be"
   ],
   "dependsOn": [
     "task-86093c3efd8645748f460db870073392",
@@ -279,7 +282,7 @@
     "sessionId": "worker-262588d0@2026-10-30T11:23:24Z",
     "at": "2026-10-30T11:30:01.656Z"
   },
-  "reviewCompletedAt": "2026-10-30T10:58:46.460Z",
+  "reviewCompletedAt": "2026-10-30T12:04:10.324Z",
   "rejectionDetails": {
     "failedDodItems": [
       "moe-agent.sh and moe-agent.ps1 never adopt a daemon whose live identity (/health projectPath) is another project. Pre-flight stops before registering, with a message naming both projects. The launcher tests cover a healthy-but-foreign daemon, and scripts/tests/parity-check.sh passes."
@@ -327,5 +330,8 @@
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
-  "blockedAt": null
+  "blockedAt": null,
+  "completedAt": "2026-10-30T12:04:10.324Z",
+  "reviewSummary": "Approve reopen-1. Bytes: completion 6a1b7953 + QA-fix checkpoint 9fa1fcb3 (4 owned files unchanged since, = HEAD 0f09e6b2); completion d319046c is board-only; all on moe/work-2026-10-24 + origin. Non-board cumulative +434/-42 net 392 (<400). Fix: ps1 ordinal final equality, case-sensitive /mnt (-cmatch), ordinal empty/dot/parent segments; drive/UNC lowercasing kept; 6 real-preflight rows per PS engine + mixed-case UNC row. Both reject issues resolved.\nRe-ran: exact task.verification exit 0 (Linux 55: 13 pass/0 fail/42 documented PS skips; parity-check.sh PASS). Pinned Windows copy: 55: 52 pass/0 fail/3 documented Git Bash skips (Git Bash 7, PS5.1 21/21, PS7 21/21, static 3); parity-check.ps1 PASS; bash -n, diff --check, BOM OK.\nOwn checks: 46-row path table through the real Get-MoeDaemonIdentity (PS5.1+PS7, fake /health) and the sh python rule (Linux+Windows): every realistic same-project spelling adopts, every distinct project refuses, incl. both reject cases. 4 own mutants (-eq, Ordinal->IgnoreCase, -cmatch->-match, culture segments) killed by AssertionError: 4/4/2/6 rows.\nDoD1 met (refusal precedes join/claim; exit-time deregister goes via the proxy, which refuses). DoD2: HEAD proxy, fresh npm ci daemon+proxy, npm test 6 files/263 pass (daemonIdentity 75); prereq task-86093c3e DONE (6c55aefa). DoD3: jetbrains-gradle lease, gradlew.bat test --rerun --tests DaemonIdentityTest --tests MoeProjectForeignDaemonTest: :test ran, fresh XML 19+10, 0 fail/err/skip, clean tree; lease released; prereq task-90664db1 DONE (ff5933d9).\nRails: regression tests present, no forbidden patterns, no MCP/state-format change, no weakened tests.\nResidual, non-blocking: exotic Unicode case-folds (U+212A/U+212B) and a Kelvin-sign 'drive' via -match diverge per engine; noted on task-25ba449a. Unknown fail-open and health->socket TOCTOU remain accepted limits.",
+  "requiredCheckAtDone": null
 }

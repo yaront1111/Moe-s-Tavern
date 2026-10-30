@@ -21,8 +21,15 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 291.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-4fb234ad2bb641daace0bdef9646a629",
+      "author": "qa-952969be",
+      "content": "QA input from the task-e7f4026a reopen-1 review (qa-952969be, 2026-10-30), for the shared path rule. This is non-blocking. I ran a 46-row table through the REAL ps1 Get-MoeDaemonIdentity on PS5.1 and PS7 against a fake /health, and through the sh probe's python comparable() on Linux and Windows python. Every realistic same-project spelling and every distinct-project row agrees across engines. The exotic divergences all come from Unicode case-folding:\n(1) 'D:/qa/\\u00c5' vs 'D:/qa/\\u212b' (Angstrom sign), and 'D:/qa/K' vs 'D:/qa/\\u212a' (Kelvin sign): python and PS7 say same; PS5.1 says foreign. NTFS's upcase table treats these as distinct names, so lowercasing over-folds.\n(2) ps1's case-insensitive -match/-notmatch on [A-Za-z] accepts a Kelvin-sign 'drive' ('\\u212a:/x'): PS says foreign or same where sh/proxy say unknown.\nNeither yields a realistic wrong adoption, but a defined shared rule (upcase vs lowercase, ASCII-only drive class) would settle both. Table and runner: /tmp/qa952-e7f4.xiPE0L/probe/{windows-table.txt,linux-table.txt,runner.mjs,rows.mjs}.",
+      "timestamp": "2026-10-30T12:02:22.377Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:27:29.451Z",
-  "updatedAt": "2026-10-30T11:27:29.451Z"
+  "updatedAt": "2026-10-30T12:02:22.377Z"
 }

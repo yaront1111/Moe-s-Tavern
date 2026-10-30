@@ -28,49 +28,79 @@
     {
       "stepId": "step-2",
       "description": "Decide sections 1-3 of the doc. Use exactly these headings: '## 1. Worktree location and lifecycle', '## 2. Landing to main', '## 3. Attribution inside a worktree'.\nEach section states:\n- the chosen design\n- the alternatives rejected, and why\n- the current code paths it replaces (cited from §0)\n- an 'Assumed interfaces' list naming every settings key, env var, MCP param, ref name, branch name and log code a slice will build against\n- an 'Error handling' list: what happens when each git or filesystem operation fails, failing closed\n\n§1 must decide:\n- Path and branch. My recommendation: <git toplevel>/.worktrees/<taskId>, which is already gitignored and denied, on branch moe/task/<taskId>, cut from local main after a fetch when a remote exists.\n- Which roles get a worktree. Recommendation: workers only. QA reviews the landed sha; the architect and governor stay in the control checkout.\n- Creation at the pre-flight of a WORKING claim, and reuse across that task's sessions (detected with `git worktree list --porcelain`).\n- Keeping .moe/ out of every worktree, to satisfy the rail, for example sparse-checkout '!/.moe/'.\n- Removal after DONE/ARCHIVED, once the branch has fully landed.\n- An orphan and crash sweep: who runs it, when, and its bounds. It never deletes unlanded commits without a rescue ref.\n- Windows: long paths, locked files, and the risk that `git worktree remove --force` recurses into a node_modules junction or symlink. Unlink links first.\n\n§2 must decide WHEN a task lands. My recommendation is the worker's completion exit, as today, so QA reviews a landed sha and NO-COMPLETION-COMMIT keeps its meaning. Weigh it explicitly against landing on qa_approve. Then decide:\n- The sequence: commit the worktree bytes to the task branch, rebase onto main, freeze a candidate and run the gate on the REBASED tree (reusing the frozen-gate machinery), CAS with `update-ref refs/heads/main <new> <old>`, push main without force, then fast-forward the task branch to the landed commit.\n- Contention: the retry count, with a re-rebase each time. Consider serializing landers with a shared-resource lease (moe.acquire_resource) to avoid re-running the gate under contention.\n- The conflict route: abort the rebase, park the bytes on refs/moe/rescue/<taskId>/<ts>, and give record_commit an outcome. Then decide which tool or status transition sends the task back, what the next session's prompt says, and who resolves the conflict.\n- Checkpoints: they go to the task branch only, and push per checkpointPush.\n- Behavior with no remote.\n- Retiring consolidationBranch, the peel rule and 'never commit on main' in worktree mode ONLY. Shared mode stays unchanged, per the rail.\n- What completeTask's BRANCH-POLICY-FAIL becomes.\n\n§3 must decide which attribution tiers survive in a private worktree. Recommendation: every dirty non-DENY byte is the task's own; baseline, PLANNED, MEASURED, PEER, CONTESTED and PREEXISTING are not used; the owner guard still covers non-assignee sessions; DENY stays, and it must cover the MCP configs the wrapper writes into the worktree; BOARD is decided in §4. Also decide whether the wrapper still calls get_commit_scope, and what record_commit records.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "docs/plans/2026-10-30-per-task-worktrees.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ],
+      "note": "Wrote §1 (path .worktrees/<taskId>, branch moe/task/<taskId>, worker-only, locked + sparse '!/.moe/', reuse/repair, attempt workspaceMode, removal by QA post-flight + rate-limited orphan sweep, the fully-landed test via merge-tree because squash landings are never ancestors, link manifest + junction-safe unlink), §2 (L0-L14: land at the worker completion exit, task-branch commit, optional gate lease git-land-<target>, sync_land_target, merge-tree squash, .moe board guard, the existing frozen gate on the merged tree, push-first non-force, local CAS, sync commit, the unlanded route via finalize_attempt 'unlanded' + Task.landingRetry, marker check, teardown, target and branch policy, completeTask worktree arm, crash idempotency) and §3 (all non-DENY W dirt is the task's own, tiers and baseline unused, DENY kept from the real denied() list plus .claude/skills, owner guard kept, ledger refs, stray-edit report). Re-verified: finalizeAttempt OUTCOMES, recordCommit OUTCOMES/KINDS, RESOURCE_ID_RE, releaseOnDeregister, consolidationBranch glob matching, freeze_candidate(old,tree), the gate worktree add, the DENY predicate, and the existing MOE_COMMIT_FAILED_GATE / REF_CONTENTION and PUSH FAILED codes. Only the doc was edited; the shared tree's other dirty paths belong to peers or predate this session.",
+      "startedAt": "2026-10-30T11:28:10.718Z",
+      "completedAt": "2026-10-30T11:36:51.228Z"
     },
     {
       "stepId": "step-3",
       "description": "Decide sections 4-7. Headings: '## 4. Board records', '## 5. Seat tooling per worktree', '## 6. Running the wrapper from committed main bytes', '## 7. Migration and rollback'. Each section has the same parts as in step 2: decision, rejected alternatives, code paths replaced, Assumed interfaces, Error handling.\n\n§4 Board records: weigh at least three options.\n- (a) The own .moe/tasks/<id>.json blob, read from the control checkout, rides in the landing commit through a temp index.\n- (b) Stop committing board records per task, and land periodic snapshots instead.\n- (c) Move board history off main, onto a dedicated ref written by plumbing, and stop tracking .moe/tasks on main.\nResolve the interplay with §6: the daemon dirties .moe/tasks/*.json in the control checkout all the time, so advancing that checkout's working tree (for example `git read-tree -m -u <old> <new>`) fails on any landed path that is also dirty locally.\n\n§5 Seat tooling:\n- The CLI cwd becomes the worktree for every CLI, including the ps1 claude launch, which today runs in the launcher's cwd.\n- MOE_PROJECT_PATH stays the control checkout, because moe-proxy finds daemon.json there and checks that the project path matches.\n- Per CLI, where the MCP and agent config goes inside the worktree, including grok's trusted folder and the .claude/agents mirror.\n- Serena: a root at the worktree makes LSP see the task's bytes, but memories live in the control checkout's gitignored .serena/memories. Decide how they stay shared.\n- node_modules and dist: a link to the control checkout versus `npm ci` per worktree. The frozen gate already sets a precedent: gate commands install their own dependencies.\n- Gradle: the jetbrains-gradle lease stays; build dirs are per worktree; WSL has no JDK, so Gradle runs from the Windows path.\n- Disk use and cleanup.\n\n§6 Running the wrapper from committed main bytes:\n- Seats launch the wrapper only from the control checkout, never from a task worktree.\n- After each CAS, how does the control checkout follow main? Name the mechanism and its failure handling.\n- The interplay with task-5998f871: if HEAD moves but the working tree does not, the wrapper reads as having 'uncommitted edits' and its reload is deferred forever.\n- Daemon dist rebuilds are out of scope.\n\n§7 Migration and rollback:\n- The flag. Recommendation: settings.worktreeMode off|on, default off until the final task flips it. Decide whether to add a per-seat override for trials.\n- The mode is pinned per task at claim (for example through attempt.workspace), so no task switches mode mid-flight.\n- Draining in-flight shared-mode tasks.\n- moe/work-2026-10-24 reaching main: who merges it, and that it is human-gated.\n- Rollback: switching the flag off, and what happens to open worktrees and unlanded branches.\n- Impact on the JetBrains and VS Code plugins.\n- Which docs the final task updates.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "docs/plans/2026-10-30-per-task-worktrees.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ],
+      "note": "Wrote §4 (board history on refs/moe/board via plumbing snapshots of tasks/epics/project.json from the control files, best-effort push, .moe/tasks frozen on main; (a), (b), untracking and no-history rejected; the §6 interplay removed because main never changes .moe), §5 (cwd W for every CLI including the ps1 claude launch, MOE_PROJECT_PATH stays control, new env MOE_WORKTREE_PATH/MOE_TASK_BRANCH/MOE_LAND_TARGET, configs written into W, agents copied, skills and Serena memories linked, project.yml copied with a renamed project, per-W npm ci on demand, Gradle lease unchanged), §6 (control checkout on moe/control fast-forward-following the target at L13, at the loop top before the hot reload, and in the QA pre-flight; the QA ancestry check blocks when the control is behind; MOE_WRAPPER_IN_WORKTREE guard) and §7 (settings.worktreeMode off|on, no per-seat override, attempt-pinned workspaceMode plus the claim/get_context workspace field, mismatch and git-version guards, stop-the-world flip and rollback runbooks with a human merge of moe/work-2026-10-24, plugin impact, the docs list for WT-16). Changed from the prior session's notes: node_modules is NOT linked (one npm install in W would write through into every seat's deps), so the link manifest only covers .serena/memories and .claude/skills. Verified: task-5998f871e03d4ed5ab21f214073d85b2 is WORKING and wrapper_reload_deferred is not in scripts yet; the proxy path comes from ROOT_DIR (the wrapper's location); settings are validated in state/validators.ts; worker.md:13 has the line to retire. Only the doc was edited.",
+      "startedAt": "2026-10-30T11:36:52.102Z",
+      "completedAt": "2026-10-30T11:42:07.591Z"
     },
     {
       "stepId": "step-4",
       "description": "Slice the epic (DoD 2). Load the moe-epic-breakdown skill first.\n\nResume-safe procedure:\n1. Call moe.list_tasks {epicId: 'epic-dce3a64f31a44d948f771137a2c0dbed'}, and never create a duplicate.\n2. Write '## 8. Slices' in the doc: one row per task, with its seam, files (at most 5), dependsOn and DoD gist.\n3. Create the tasks with moe.create_task in THIS epic, producers first, so their ids exist for dependsOn.\n4. Write each new id back into the §8 row right after creating it.\n\nEach task carries:\n- A four-element description: objective; deliverable; explicit NOT-in-scope; the exact verification command. Add 'plan against docs/plans/2026-10-30-per-task-worktrees.md §N'.\n- 3-7 mechanically checkable DoD items.\n- dependsOn [this row's id plus its producers]. A slice touching §6 also depends on task-5998f871.\n- order.\n\nRules:\n- Each task owns its tests.\n- Daemon contract slices (settings key, MCP params) come before the wrapper slices that use them.\n- sh and ps1 move together with their postflight.{sh,ps1} arms. Aim for 1-3 files, never more than 5. Split with SPIDR when a seam is bigger.\n- Slices editing moe-agent.{sh,ps1} must be chained with dependsOn, because shared mode is still the delivery path while the epic lands.\n- For behavior-heavy landing slices, consider the held-out test-authoring pair.\n- The LAST task (highest order) is the integration-and-hardening task. It:\n  - flips the default\n  - sweeps the dependsOn edges that exist only because tasks share a file. Find the governor's 2026-10-30 audit with moe.chat_read on '#governors' or moe.search_tasks, and if it is missing, define how to re-derive it.\n  - runs full regression: daemon, proxy, claude-plugin, postflight.{sh,ps1}, parity-check, and ./gradlew test under the jetbrains-gradle lease\n  - does the docs sweep: root CLAUDE.md, scripts/CLAUDE.md, docs/CONFIGURATION.md, docs/ARCHITECTURE.md, docs/MCP_SERVER.md\n  - makes the adversarial pass over the whole epic diff\n\nProvisional seams to adapt to your §1-§7 decisions (not binding):\n- the settings.worktreeMode contract (daemon)\n- attempt.workspace / claim / get_context exposure of the worktree path (daemon)\n- worktree create and reuse plus CLI cwd (wrappers)\n- per-worktree MCP, Serena and agents config (wrappers)\n- node_modules and dist provisioning\n- checkpoint landing to the task branch\n- completion landing: rebase, gate, CAS main, push, retry\n- the rebase-conflict route (wrapper plus daemon)\n- board records per §4\n- control-checkout advance per §6\n- worktree removal and orphan sweep\n- the QA seat in worktree mode\n- migration (draining in-flight work, the moe/work branch, the rollback doc)\n- the final integration-and-hardening task",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "docs/plans/2026-10-30-per-task-worktrees.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ],
+      "note": "Sliced the epic into 20 tasks (WT-01..WT-18 plus WT-08T, with WT-19 as the integration-and-hardening task at order 21). Every id is written back into the §8 table. Producers come first: the daemon contract slices WT-01..03 precede the wrapper chain WT-04..14, which is chained by dependsOn because each slice edits moe-agent.{sh,ps1}; WT-08T holds out the tests for WT-08. WT-04 and WT-13 depend on task-5998f871. WT-19's dependsOn hit the daemon cap of 20, so task-5998f871 was dropped there; it is still covered transitively via WT-04/WT-13, and §8 notes this. Advisory create_task warnings were ignored: 'and' in titles, and a false-positive meta/hardening match on WT-10, whose title contains 'quality gate'.",
+      "startedAt": "2026-10-30T11:42:08.540Z",
+      "completedAt": "2026-10-30T12:00:39.103Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification: the one command, run from the repo root. Its fresh output is the complete_task evidence.\n\nnpm run lint && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh) && for n in 1 2 3 4 5 6 7 8; do grep -q \"^## $n\\. \" docs/plans/2026-10-30-per-task-worktrees.md || { echo \"missing section $n\"; exit 1; }; done && echo DOC-OK\n\nparity-check runs on HEAD's scripts/ snapshot, so a peer's mid-edit wrapper bytes can't redden this docs-only row. The epic rail requires it on every task.\nThen confirm in the step note:\n- moe.list_tasks for the epic shows every §8 row, with ids that match the doc, dependsOn set and the final task at the highest order.\n- This session modified only the doc. Check `git status --porcelain` for your own paths; peers' dirty files are not yours.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ],
+      "note": "Ran the verification command fresh, and it exits 0: lint OK (architect 39, worker 30 and qa 35 lines), 'PASS parity-check.sh' on HEAD's scripts snapshot, then DOC-OK, so all eight '## N. ' sections are present. moe.list_tasks lists 21 rows: S plus the 20 slices. Each slice's id and order matches its §8 row (WT-01..WT-19, orders 2..21); every slice has dependsOn including S, and WT-19 is the highest at order 21. The only path in `git status --porcelain docs/plans/` is the doc. Other dirty paths are peers' or pre-existing: the staged root .md/.zip and the untracked scripts/mods/*/tsconfig.json, which I did not touch.",
+      "startedAt": "2026-10-30T12:00:40.038Z",
+      "completedAt": "2026-10-30T12:01:30.441Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of the doc and the slices, the one review pass. Load the adversarial-self-review skill. Check:\n(1) Every item (1)-(7) is DECIDED. There is no TBD, no 'either', and no deferral without an owner slice. Each decision cites the code paths it replaces.\n(2) Every assumed interface a slice builds on is named exactly once, with one spelling across the sections.\n(3) The epic rails hold: main moves only by CAS after the gate; no force-push or history rewrite; sh/ps1 parity; the daemon stays the only writer of .moe runtime and no worktree holds .moe; shared mode is unchanged until the final task.\n(4) The §4 and §6 interplay is consistent: the control-checkout advance cannot fail on a .moe/tasks path the daemon keeps dirty.\n(5) Every slice keeps to 5 files or fewer and 3-7 checkable DoD items, the sh/ps1 twins sit together, the dependsOn graph has no cycle, and the final task depends on all the others.\n(6) Failure paths have owners: a worktree creation failure, a CAS loss, a push rejection, a rebase conflict, a crash mid-landing, an orphan worktree, a Windows junction during removal.\n(7) Would a planner of each slice need to guess anything? If so, tighten the doc or the slice description. Use moe.add_comment on a slice whose description needs a correction you cannot make directly.\nIf you edit the doc, rerun the step-5 command.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "docs/plans/2026-10-30-per-task-worktrees.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ],
+      "note": "Adversarial self-review against checks (1)-(7).\n\nDoc fixes:\n- §7 slice numbers were stale. The runbook and doctor probes are WT-16, not WT-15. The docs are WT-17/WT-18, not a \"final WT-16\". The default may not flip before WT-19, not WT-16.\n- The §2.4 no-remote sentence is now scoped to completions.\n- §2.6 names the seat that resumes a crashed landing: the same seat, whose claim is refused with ATTEMPT_FINALIZING, whose context carries the taskId (verified in claimGuards.ts). receipt_replay runs first, then L4-L12 re-run in W; a seat that never returns falls to dead-worker reconcile.\n- §1.7: QA removal now also requires W to be free of non-DENY dirt; otherwise W is left for the sweep, which rescues first.\n- §1: a daemon RPC failure skips the sweep pass. It never counts as 'unknown task', which would have deleted live worktrees.\n- §2.2 L3: the lease id is cut to 64 characters to fit RESOURCE_ID_RE.\n- §8 notes parity-check for the slices that leave the wrappers alone.\n\nSlice corrections, via add_comment:\n- Rail 2 (parity-check on every task) was missing from the verification commands of WT-01, WT-02, WT-03, WT-15, WT-16, WT-17 and WT-18. Each now has a comment with the HEAD-snapshot parity command.\n- WT-19 has a comment on three points: use postflight-safe.mjs, drive the E2E run with postflight.sh's existing fake daemon/proxy/CLI, and the task-5998f871 edge is transitive.\n\nChecks that passed:\n- Checks 3, 4 and 6 hold: CAS-only main, no force, the .moe sparse exclusion plus the L5b guard, and every failure path has an owner.\n- Check 5: every slice touches at most 5 files with 3-7 DoD items; the dependsOn graph points only to lower orders (no cycle); WT-19 depends on all slices.\n- .idea/ is gitignored, so the stray-edit check sees no IDE noise.\n\nVerification was rerun after the edits and exits 0 (lint OK, PASS parity-check.sh, DOC-OK).",
+      "startedAt": "2026-10-30T12:01:31.395Z",
+      "completedAt": "2026-10-30T12:04:02.254Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-0062feec",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -82,12 +112,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:46:56.403Z",
-  "updatedAt": "2026-10-30T11:25:59.227Z",
+  "updatedAt": "2026-10-30T12:04:35.080Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T11:02:54.551Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 1
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
@@ -99,7 +129,12 @@
   "codexModel": "gpt-6-astra",
   "lowEffortEligible": true,
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T11:11:02.201Z",
@@ -163,5 +198,46 @@
   },
   "planApprovedAt": "2026-10-30T11:11:02.227Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-10-30T11:11:26.460Z"
+  "workStartedAt": "2026-10-30T11:11:26.460Z",
+  "commits": [
+    {
+      "sha": "a1f971f5bdb21966275828f3ea9219ac59fe4161",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T11:11:05Z",
+      "paths": [
+        ".moe/tasks/task-30066ccdeb6042c3b5c89a7a31833d14.json",
+        ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T11:27:06.882Z",
+      "treeId": "69b6dd132f26f9551caca1810f7dd532a3f5bc8a",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "docs/plans/2026-10-30-per-task-worktrees.md"
+  ],
+  "touchedFiles": [
+    "docs/plans/2026-10-30-per-task-worktrees.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-0062feec@2026-10-30T11:11:05Z",
+    "at": "2026-10-30T11:27:06.882Z"
+  },
+  "reviewStartedAt": "2026-10-30T12:04:35.077Z",
+  "verification": {
+    "command": "npm run lint && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh) && for n in 1 2 3 4 5 6 7 8; do grep -q \"^## $n\\. \" docs/plans/2026-10-30-per-task-worktrees.md || { echo \"missing section $n\"; exit 1; }; done && echo DOC-OK",
+    "exitCode": 0,
+    "outputTail": "npm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 35 lines (max 40)\nPASS parity-check.sh\nDOC-OK",
+    "reportedAt": "2026-10-30T12:04:35.077Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "docs/plans/2026-10-30-per-task-worktrees.md now decides items (1)-(7). §1-§7 each have a Decision, Rejected alternatives, Code paths replaced (sh/ps1 function names and daemon tools), Assumed interfaces and Error handling; §0 maps the current state.\n\nDecisions:\n- W = <top>/.worktrees/<taskId> on moe/task/<taskId>, with sparse '!/.moe/'.\n- Landing L0-L14: a merge-tree squash onto the target, the existing frozen gate on the merged tree, push first with no force, then a local update-ref CAS. The land lease is taken only when a gate runs.\n- The unlanded route uses finalize_attempt 'unlanded' and Task.landingRetry, with LANDING-CONFLICT/RETRY resume in W.\n- Worktree attribution: DENY only, through the denied_wt variant.\n- Board history moves to refs/moe/board; main never changes .moe.\n- Per-W tooling: the cwd, configs, a Serena root with a linked memories folder, and per-W npm ci.\n- The control checkout ff-follows the target on moe/control.\n- Migration: settings.worktreeMode, default off and pinned per attempt, plus a stop-the-world flip/rollback runbook.\n\n§8 slices the epic into 20 BACKLOG tasks, WT-01..WT-19 plus WT-08T, at orders 2-21. Every id is written back into §8.\n- Each slice touches at most 5 files and carries 3-7 DoD items and a four-part description.\n- The sh/ps1 twins move together; WT-04..WT-14 are chained because they all edit moe-agent.{sh,ps1}.\n- WT-08T holds out the tests for the landing core.\n- WT-19 is the integration-and-hardening task at the highest order. It flips the default, adds the new code families to parity-check and sweeps the file-only dependsOn edges using the governor's audit list plus a re-derivation rule.\n\nThe self-review fixed stale slice numbers in §7 and tightened four failure paths: the crash-resume owner, QA removal with dirt, sweep RPC failure, and the lease id length. It also commented the rail-2 parity command onto 7 slices that lacked it.\n\nNo production code changed; this row edited only the doc."
 }

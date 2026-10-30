@@ -1,0 +1,60 @@
+{
+  "id": "task-b1ca54f2716442be889a14623eb59983",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-19] Integration and hardening: flip worktreeMode on, close parity, sweep file-only edges",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §7 (migration) and §8 (file-only dependency sweep). This is the epic's ONE integration-and-hardening task. The epic touched shared types (types/schema.ts: worktreeMode, workspaceMode, landingRetry), the MCP wire (claim/get_context workspace, finalize_attempt unlanded) and both wrappers, so full regression runs here.\n\nObjective: turn worktree mode on by default only after the whole flow is proven end to end, and close the gaps no single slice could see.\n\nDeliverable:\n1. Flip the default in packages/moe-daemon/src/state/validators.ts: `resolveWorktreeMode` returns 'on' when settings.worktreeMode is unset. Add vitest cases in validators.test.ts for unset→on, 'off'→off and 'on'→on. Change docs/CONFIGURATION.md's default to on, with the §7.4 rollback note ('off' restores shared mode).\n2. Add the MOE_WORKTREE_, MOE_LAND_, MOE_CONTROL_ and MOE_BOARD_ families to the compared families in scripts/tests/parity-check.sh and parity-check.ps1.\n3. File-only dependency sweep with moe.set_task_dependencies. Start from the governor audit list in §8: V07←01f37ac6, V04c←V08b, RF04←90664db1, RF07←465ee875, RF07←80930ce6, R13←R11e, R13←2cf1c6be, 724e31fa←e7f4026a, 01f37ac6←e7f4026a. For every still-open task's edge A←B, apply the §8 re-derivation rule: keep it if A names anything B produces; drop it only when the sole overlap is a shared existing file. The completion summary lists each edge as kept or dropped, with a reason.\n4. Full regression (record pass counts):\n   - npm test in packages/moe-daemon, packages/moe-proxy and packages/moe-claude-plugin;\n   - bash scripts/tests/postflight.sh and pwsh scripts/tests/postflight.ps1;\n   - the worktree-landing.{sh,ps1} suites from WT-08T;\n   - parity-check.{sh,ps1};\n   - cd moe-jetbrains && ./gradlew test, run under a jetbrains-gradle lease (moe.acquire_resource);\n   - npm run lint.\n5. End-to-end check in a throwaway repo made by `git init` under mktemp, with worktreeMode on. Two tasks in parallel touch disjoint files and both land on main. A third conflicts, goes to unlanded, then lands after the resume. Assert main's history is linear with no force-push (reflog shows only fast-forward updates).\n6. Whole-epic adversarial pass (adversarial-self-review) over `git diff <epic base>..main` against the doc's §2-§6 contracts: drift between producer and consumer (daemon field names vs wrapper reads), sh/ps1 twin drift, codes documented in WT-17 but never emitted. Fix findings inside these files, or file them as bug: tasks in this epic.\n7. Post the flip runbook (TROUBLESHOOTING section from WT-16) to #general for the human. Say that this project's worker seats stop with MOE_CONTROL_NOT_FOLLOWING until the control checkout is switched to moe/control.\n\nNOT in scope: new features; re-editing docs other than CONFIGURATION.md (findings there become bug: tasks); changing shared-mode behavior.\n\nVerification: cd packages/moe-daemon && npx vitest run src/state/validators.test.ts && npm test && cd ../.. && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh && npm run lint",
+  "definitionOfDone": [
+    "resolveWorktreeMode defaults to 'on' (validators.test.ts covers unset/on/off) and docs/CONFIGURATION.md states default on plus the 'off' rollback.",
+    "parity-check.sh and parity-check.ps1 compare the MOE_WORKTREE_, MOE_LAND_, MOE_CONTROL_ and MOE_BOARD_ families, and both exit 0.",
+    "Every audited dependsOn edge, and every open edge re-derived by the §8 rule, is kept or dropped via moe.set_task_dependencies, with the list and reasons in the completion summary.",
+    "Full regression is green with recorded counts: daemon/proxy/claude-plugin npm test, postflight.{sh,ps1}, worktree-landing.{sh,ps1}, ./gradlew test (under the jetbrains-gradle lease) and npm run lint.",
+    "The throwaway-repo end-to-end run lands two parallel tasks plus one conflict-resumed task on main with fast-forward-only history.",
+    "The whole-epic adversarial findings are fixed or filed as bug: tasks, and the flip runbook is posted to #general naming MOE_CONTROL_NOT_FOLLOWING."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-6cf120a38b344e72b7bab8b9faf806f1",
+    "task-e27456ad67b64bc292080ea3a8b92f26",
+    "task-9a39bf6a2c4444b4b0799cd16dc2a9f1",
+    "task-c20464ff64ca49fca4371dd9b5194364",
+    "task-c4cccb84948c472d93263c9de60fed1d",
+    "task-042dc0ddb9b64c60a98a567b71723351",
+    "task-b319b263fada419d9d7de279682dc5f4",
+    "task-c12f9463b68c44a18cc460a7e9460247",
+    "task-7a4aab5e0bfa48e0978eb76506edfd57",
+    "task-0921d6d76a6b40a685077245b19ac639",
+    "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
+    "task-dd1ee586b90d4fc785434454b1423e76",
+    "task-06910296f63b4868849dc46cbb38a731",
+    "task-fbe8e3880ddf47dfa8546f220acea770",
+    "task-befdddf7e1f047a0ba4f71dd900c9b8f",
+    "task-fad5ef971b0941b590621aa40702ad4b",
+    "task-48f0b3aaa82c4b938d3a15f3710a66e5",
+    "task-cda65eb0efb244efa8a506969bac47f9",
+    "task-1b2e6fe3ba1343c8ab02271510131155"
+  ],
+  "priority": "HIGH",
+  "order": 21,
+  "comments": [
+    {
+      "id": "comment-ce50a0eeb15f48c0aa1d56d161a794fb",
+      "author": "worker-0062feec",
+      "content": "Spike self-review notes for the planner:\n(1) In the verification command, use `node scripts/tests/postflight-safe.mjs bash` (and `... powershell` on a Windows seat) in place of a bare `bash scripts/tests/postflight.sh`. That matches WT-04..WT-14 and gets the safe wrapper's timeout handling.\n(2) Deliverable 5, the end-to-end run, needs no real daemon. scripts/tests/postflight.sh already ships a shared fake daemon+proxy (its claim/finalize knobs live at the handlers) and a fake CLI ($TMP_DIR/fake-cli). Drive three worker launches against one `git init` scratch repo through that harness, the way the WT-08T worktree-landing suites do.\n(3) dependsOn was capped at 20, so task-5998f871 was dropped here. It is still covered transitively through WT-04 and WT-13.",
+      "timestamp": "2026-10-30T12:03:42.349Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T12:00:05.854Z",
+  "updatedAt": "2026-10-30T12:03:42.349Z"
+}

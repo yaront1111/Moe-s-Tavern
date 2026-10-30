@@ -1,0 +1,34 @@
+{
+  "id": "task-c12f9463b68c44a18cc460a7e9460247",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-08T] Tests: held-out acceptance cases for worktree completion landing",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §2.2, §2.3, §2.7 and §2.9.\n\nObjective: pin the landing-to-main behaviour in tests written BEFORE the implementation, so WT-08 and WT-09 must pass them unchanged. That removes any incentive to weaken them, and main's integrity is the epic's highest-stakes behaviour.\n\nDeliverable: two new files, scripts/tests/worktree-landing.sh and its twin scripts/tests/worktree-landing.ps1. They drive the real wrapper post-flight in worktree mode against scratch repos, reusing the existing harness pieces (scripts/tests/postflight-fake-proxy.js and the way postflight.{sh,ps1} stage a project). The fake proxy answers claim/get_context with a `workspace` (WT-01). Each case is tagged `local` or `remote`, and `--only local|remote` and `--list` are supported.\n\nCases (at least these):\n- local:\n  - two tasks editing non-overlapping hunks of one file both land on main, each as one commit whose only parent is the previous main tip;\n  - a true conflict lands nothing and main is unchanged;\n  - main's reflog holds only the landing's update-ref entries, with linear first-parent history;\n  - a local CAS where main already contains C counts as success;\n  - a re-landing after a crash between push and sync moves nothing;\n  - after a landing, moe/task/<id> fast-forwards to a commit containing C and W is clean;\n  - the target checked out in another worktree gives MOE_LAND_TARGET_CHECKED_OUT;\n  - a .moe path in the merged tree gives MOE_WORKTREE_BOARD_PATH.\n- remote (bare origin with receive.denyNonFastForwards=true):\n  - origin main gets C before local main moves, and no push uses a force flag;\n  - a remote advanced by another clone triggers a retry that lands on top;\n  - an unreachable remote prints MOE_PUSH_FAILED and local main still advances;\n  - diverged local and remote targets give MOE_LAND_TARGET_DIVERGED, and nothing moves.\nThe files are NOT registered in CI (WT-09 does that) and must be red against current code.\n\nNOT in scope: any change to scripts/moe-agent.{sh,ps1}; postflight.{sh,ps1}; CI wiring; gate and lease cases (WT-10 owns those); unlanded-route cases (WT-11).\n\nVerification: bash -n scripts/tests/worktree-landing.sh && bash scripts/tests/worktree-landing.sh --list && ! bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh",
+  "definitionOfDone": [
+    "scripts/tests/worktree-landing.sh and scripts/tests/worktree-landing.ps1 exist; `--list` prints at least 12 cases, each tagged local or remote, with the same case names in both files.",
+    "Every case named in the description is present and asserts on git state (refs, reflog, parents, file bytes), not only on log text.",
+    "Against current code `bash scripts/tests/worktree-landing.sh` exits non-zero with every case failing on its assertion (no harness crash); `--only local` and `--only remote` select the tagged subsets.",
+    "The ps1 twin parses (powershell -NoProfile -Command \"$null = [System.Management.Automation.Language.Parser]::ParseFile('scripts/tests/worktree-landing.ps1',[ref]$null,[ref]$e); if ($e) { exit 1 }\") and is red the same way on a Windows seat.",
+    "No file outside scripts/tests/worktree-landing.{sh,ps1} is modified; the verification command exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-c20464ff64ca49fca4371dd9b5194364"
+  ],
+  "priority": "HIGH",
+  "order": 9,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:52:07.306Z",
+  "updatedAt": "2026-10-30T11:52:07.306Z"
+}
