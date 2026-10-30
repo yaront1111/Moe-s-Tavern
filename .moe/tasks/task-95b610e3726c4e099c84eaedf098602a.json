@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -89,12 +89,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T16:52:32.011Z",
-  "updatedAt": "2026-10-30T05:06:34.358Z",
+  "updatedAt": "2026-10-30T05:09:41.192Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T16:53:46.748Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T05:09:41.192Z",
+    "wallClockMs": 44154444
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
@@ -143,7 +145,49 @@
   },
   "filesModified": [
     "docs/MCP_SERVER.md",
-    "docs/SCHEMA.md"
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-95b610e3726c4e099c84eaedf098602a.json",
+    ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json"
   ],
-  "completionSummary": "Docs only. MCP_SERVER.md: packetManifest/packetBudgetChars, basePacketId/contextEpoch/delta with every contextDelta reason, planReuse view, claim_next_task plan reuse, submit_plan reserved moe-recipe identity and recipeInstance. SCHEMA.md: planSourceBasis, planningEntry, planReuse, recipeInstance, RecipeDefinition + .moe/recipes.json, ContextDelta, PacketManifest. Every name was verified against the landed code; the docs state that no recipe kind or post-patch call site is activated. Gate: 192 files, 5408 passed / 16 skipped in a Linux snapshot of HEAD with the 2 docs overlaid; root lint OK."
+  "completionSummary": "Docs only. MCP_SERVER.md: packetManifest/packetBudgetChars, basePacketId/contextEpoch/delta with every contextDelta reason, planReuse view, claim_next_task plan reuse, submit_plan reserved moe-recipe identity and recipeInstance. SCHEMA.md: planSourceBasis, planningEntry, planReuse, recipeInstance, RecipeDefinition + .moe/recipes.json, ContextDelta, PacketManifest. Every name was verified against the landed code; the docs state that no recipe kind or post-patch call site is activated. Gate: 192 files, 5408 passed / 16 skipped in a Linux snapshot of HEAD with the 2 docs overlaid; root lint OK.",
+  "commits": [
+    {
+      "sha": "6ead6a0ffdea98d8a67561969ddf5115c3e5a10e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T05:04:07Z",
+      "paths": [
+        ".moe/tasks/task-95b610e3726c4e099c84eaedf098602a.json",
+        ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T05:06:57.132Z",
+      "treeId": "8f9ba8a9479d744b5d99c75abbdc331bbc084975",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-d3cd966c5ef74468b03ac4ca23893d5d"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-73c29a03@2026-10-30T05:04:07Z",
+    "at": "2026-10-30T05:06:57.132Z"
+  },
+  "completedAt": "2026-10-30T05:09:41.192Z",
+  "reviewCompletedAt": "2026-10-30T05:09:41.192Z",
+  "reviewSummary": "Reviewed completion commit 6ead6a0 (on moe/work-2026-10-24; clean tree for both docs). Docs-only: MCP_SERVER.md +26, SCHEMA.md +91, plus two board records. Gate re-run in a fresh Linux snapshot of HEAD (native npm ci, env -i, node v24.21.0): `cd packages/moe-daemon && npm test` exit 0, 192 files, 5408 passed / 16 skipped, matching the worker. Root `npm run lint` OK. The docs are byte-identical to HEAD.\n\nI checked each documented name and limit against the landed code:\n- packetManifest {version, provenance, sections, complete, limitations, budget}: mandatory sections, role-trim/compacted/capped reasons, expand/restructure, the 1000-250000 budget (default 100000, refused not clamped), 'no-repository-source' and 'plan-revision-unreadable' (contextPacket.ts, getContext.ts).\n- basePacketId/contextEpoch validation. All 10 refusal reasons in the doc's order, the 5 receipt statuses, diff-failed, the in-memory base store, and the clear-on-no-epoch rule (contextDelta.ts, getContext.ts:176-210).\n- planReuse: planReuseContext/planReuseView, REPLAN_FROM, the pending withhold in claimNextTask/waitForTask, resume-refused and assessment-failed (planReuse.ts, planReuseJob.ts).\n- RECIPE_ACTOR 'moe-recipe' with NOT_ALLOWED, recipeInstance keys, id regex, 32-key inputs, 1-50 recipes, allowedPaths 1-16, and the recipes.json configs append (submitPlan.ts, recipe.ts, docsLiteralReplace.ts, taskStore.ts).\n\nThe never-approval/readiness/evidence wording is kept. Nothing claims activation: no production import of docsLiteralReplace, and no assessPostpatch caller.\n\nNote, not a defect: the commit also carries 5 doc lines (get_commit_scope finalizingAttempt and Finalizing hold) that the wrapper held as contested for task-d3cd966c. Their code landed in e92eeac7 and they are accurate.",
+  "requiredCheckAtDone": null
 }

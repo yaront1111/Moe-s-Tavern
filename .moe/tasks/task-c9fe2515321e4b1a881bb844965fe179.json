@@ -131,7 +131,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:38:47.791Z",
-  "updatedAt": "2026-10-30T05:08:19.164Z",
+  "updatedAt": "2026-10-30T05:08:44.777Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:43:34.854Z",
     "plannedStepCount": 6,
@@ -232,7 +232,40 @@
   "filesModified": [
     "packages/moe-daemon/src/state/checkObservationStore.test.ts",
     "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/checkObservationStore.ts",
+    ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json"
+  ],
+  "completionSummary": "CQ-V03b: a recorded check dispatch and observation store. No tool or wiring yet; that is for CQ-V03/V04.\n\nFiles:\n- types/schema.ts (+31): CheckDispatch and CheckObservation.\n- New state/checkObservationStore.ts (202 LOC) exports:\n  - recordCheckDispatch: pinned to the task's CURRENT candidate and tree, the approved planRevision >= 1 equal to both planRevision and approvedPlanRevision, and the channel RunnerIdentity runnerId.\n  - recordCheckObservation: exactly one CheckRun per dispatch, bound only to the dispatch and runner, source runner-observed. It goes through the unchanged checkRunStore, then writes the marker.\n  - isAuthenticatedCheckRun: judges the STORED run (every key equal) plus the marker and dispatch binding. Never throws; fails closed.\n  - getCheckDispatch and getCheckObservation.\n- New checkObservationStore.test.ts: 42 tests.\n\nDoD:\n- Forgery via the real record_check_run handler (runner-observed + dispatchId) stays unauthenticated.\n- An exact binding is authenticated. Smuggled params are ignored.\n- Same-id replays return duplicate:true, and differing ones are refused (CHECK_DISPATCH_IMMUTABLE, CHECK_RUN_IMMUTABLE, CHECK_DISPATCH_ALREADY_OBSERVED).\n- Refused dispatches: superseded, wrong-task, wrong-revision and case-collision.\n- Restart reload works, and a failed write publishes nothing. A crash retry completes the marker.\n\nDEVIATION: StateManager.ts is not edited. stateModules.test.ts caps it at < 1500 lines and HEAD is at 1498, so the maps are module-owned (a WeakMap<StateManager>, lazily loaded from .moe/checks/{dispatches,observations}).\n\nSIZE: ~474 net LOC including tests, which is over the 400 guideline. A size-exception rail was requested in comment-8c289c60 with no reply yet; QA may ask for a re-slice.\n\nMutants: 15/15 killed.\n\nRails: checkRunStore.ts, recordCheckRun.ts, delivery/policy.ts and StateManager.ts have an empty diff. No forbidden patterns, no .moe edits, no git writes, verified-local untouched.\n\nHandoff: Serena memories task-task-c9f",
+  "commits": [
+    {
+      "sha": "1cf1b4718b859fcc10287a3f0e1fcc08fb8953ed",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T04:40:01Z",
+      "paths": [
+        ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json",
+        "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+        "packages/moe-daemon/src/state/checkObservationStore.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T05:08:44.777Z",
+      "treeId": "dc659992283ce893a55a19326fa945045a967dd1",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
     "packages/moe-daemon/src/state/checkObservationStore.ts"
   ],
-  "completionSummary": "CQ-V03b: a recorded check dispatch and observation store. No tool or wiring yet; that is for CQ-V03/V04.\n\nFiles:\n- types/schema.ts (+31): CheckDispatch and CheckObservation.\n- New state/checkObservationStore.ts (202 LOC) exports:\n  - recordCheckDispatch: pinned to the task's CURRENT candidate and tree, the approved planRevision >= 1 equal to both planRevision and approvedPlanRevision, and the channel RunnerIdentity runnerId.\n  - recordCheckObservation: exactly one CheckRun per dispatch, bound only to the dispatch and runner, source runner-observed. It goes through the unchanged checkRunStore, then writes the marker.\n  - isAuthenticatedCheckRun: judges the STORED run (every key equal) plus the marker and dispatch binding. Never throws; fails closed.\n  - getCheckDispatch and getCheckObservation.\n- New checkObservationStore.test.ts: 42 tests.\n\nDoD:\n- Forgery via the real record_check_run handler (runner-observed + dispatchId) stays unauthenticated.\n- An exact binding is authenticated. Smuggled params are ignored.\n- Same-id replays return duplicate:true, and differing ones are refused (CHECK_DISPATCH_IMMUTABLE, CHECK_RUN_IMMUTABLE, CHECK_DISPATCH_ALREADY_OBSERVED).\n- Refused dispatches: superseded, wrong-task, wrong-revision and case-collision.\n- Restart reload works, and a failed write publishes nothing. A crash retry completes the marker.\n\nDEVIATION: StateManager.ts is not edited. stateModules.test.ts caps it at < 1500 lines and HEAD is at 1498, so the maps are module-owned (a WeakMap<StateManager>, lazily loaded from .moe/checks/{dispatches,observations}).\n\nSIZE: ~474 net LOC including tests, which is over the 400 guideline. A size-exception rail was requested in comment-8c289c60 with no reply yet; QA may ask for a re-slice.\n\nMutants: 15/15 killed.\n\nRails: checkRunStore.ts, recordCheckRun.ts, delivery/policy.ts and StateManager.ts have an empty diff. No forbidden patterns, no .moe edits, no git writes, verified-local untouched.\n\nHandoff: Serena memories task-task-c9f"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-30T04:40:01Z",
+    "at": "2026-10-30T05:08:44.777Z"
+  }
 }
