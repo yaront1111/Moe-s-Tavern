@@ -56,7 +56,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -72,16 +72,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T17:54:47.878Z",
-  "updatedAt": "2026-10-30T18:22:19.029Z",
+  "updatedAt": "2026-10-30T18:24:24.529Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T17:54:52.806Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-30T18:24:24.529Z",
+    "wallClockMs": 1771723
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-0062feec"
+    "worker-0062feec",
+    "qa-952969be"
   ],
   "tier": "light",
   "effort": "high",
@@ -198,5 +201,9 @@
     "reportedAt": "2026-10-30T18:22:01.235Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Re-pinned the three PowerShell emitter-evidence literals in codexDescriptor.ts (PS_LAUNCH_INTERACTIVE, PS_LAUNCH_EXEC, the --help probe) from `& $Command @CommandArgs` to the Invoke-MoeGuardedCommand form at scripts/moe-agent.ps1 lines 7248, 7227 and 7206, all inside the codex branch. Diff is 3+/3- in that one file. Launchers, bash literals and the contract test are unchanged. Full daemon `npm test` in a Linux snapshot of HEAD with only this file overlaid: 211 files, 6116 passed, 20 skipped, GATE_EXIT=0, including providerDescriptor.contract.test.ts. The --help probe pin is not asserted by the vitest suite (EMITTER_PINNED_PREFIXES excludes failures.*); its proof is the gate's grep -F check, exactly once in the ps1 and present in the descriptor."
+  "completionSummary": "Re-pinned the three PowerShell emitter-evidence literals in codexDescriptor.ts (PS_LAUNCH_INTERACTIVE, PS_LAUNCH_EXEC, the --help probe) from `& $Command @CommandArgs` to the Invoke-MoeGuardedCommand form at scripts/moe-agent.ps1 lines 7248, 7227 and 7206, all inside the codex branch. Diff is 3+/3- in that one file. Launchers, bash literals and the contract test are unchanged. Full daemon `npm test` in a Linux snapshot of HEAD with only this file overlaid: 211 files, 6116 passed, 20 skipped, GATE_EXIT=0, including providerDescriptor.contract.test.ts. The --help probe pin is not asserted by the vitest suite (EMITTER_PINNED_PREFIXES excludes failures.*); its proof is the gate's grep -F check, exactly once in the ps1 and present in the descriptor.",
+  "completedAt": "2026-10-30T18:24:24.529Z",
+  "reviewCompletedAt": "2026-10-30T18:24:24.529Z",
+  "reviewSummary": "Verified completion commit ebf5ac9d (on moe/work-2026-10-24, pushed). Diff to code is 3+/3- in packages/moe-daemon/src/providers/codexDescriptor.ts only (plus the two .moe/tasks board JSONs the wrapper stages); net 0 LOC, so no size issue. `git diff ebf5ac9d^ ebf5ac9d -- scripts/moe-agent.ps1 scripts/moe-agent.sh` is empty (DoD 3: launchers unchanged). The bash literals and providerDescriptor.contract.test.ts are untouched. Re-ran, DoD 1: `git show HEAD:scripts/moe-agent.ps1 | grep -cF` gives exactly 1 for each of the three new literals, at ps1:7248 (interactive), :7227 (exec-headless) and :7206 (--help probe). All three sit inside the codex branch (`elseif ($cliType -eq \"codex\")` at 7055 to the gemini branch at 7257). `grep -nF '& $Command'` on codexDescriptor.ts finds nothing, so no stale pin remains. The HEAD descriptor is byte-identical to ebf5ac9d's and the working copy equals HEAD. Re-ran, DoD 2: git archive of HEAD 976b1f3e (whole repo) to a tmp snapshot, `env -i` with node v24.21.0, `npm ci` then `npm test` in packages/moe-daemon. Result: Test Files 211 passed (211), Tests 6116 passed | 20 skipped (6136), GATE_EXIT=0. providerDescriptor.contract.test.ts is inside that run and passes (the earlier 1-failed result is gone). The --help probe pin (failures.classes[0].detection.emitterEvidence.powershell) is not asserted by vitest, since EMITTER_PINNED_PREFIXES excludes failures.*; it is proven only by the grep -F check above, as the worker said. Not run: the scripts-suite failures (prompt-cache-launcher/usage-launcher tests), which are the separate row task-57bbd302 (already landed as 976b1f3e) and outside this row's scope.",
+  "requiredCheckAtDone": null
 }
