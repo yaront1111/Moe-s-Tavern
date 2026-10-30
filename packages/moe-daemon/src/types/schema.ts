@@ -856,6 +856,24 @@ export interface TaskExecutionContract {
   requiredChecks?: ProtectedCheckDefinition[];
 }
 
+export const UNLANDED_REASONS = ['conflict', 'contention', 'gate', 'diverged', 'remote'] as const;
+export type UnlandedReason = typeof UNLANDED_REASONS[number];
+
+export interface LandingRetry {
+  /** Why the worktree landing published nothing. */
+  reason: UnlandedReason;
+  /** Normalized project-relative conflict paths, when reported. */
+  paths: string[];
+  /** Task-scoped rescue ref holding the unpublished bytes. */
+  rescueRef: string;
+  /** The attempted 40-hex target tip B, or null when not reported. */
+  targetTip: string | null;
+  /** Consecutive unlanded finalizes since landed/nothing-to-commit, starting at 1. */
+  count: number;
+  /** ISO timestamp of this unlanded finalize. */
+  at: string;
+}
+
 export interface Task {
   id: string;
   epicId: string;
@@ -1036,6 +1054,8 @@ export interface Task {
   hasPendingQuestion?: boolean;
   contextFetchedBy?: string[];
   stepsCompleted?: string[];
+  /** finalize_attempt alone sets unlanded worktree retries; landed/nothing-to-commit null it. Absent until first retry. */
+  landingRetry?: LandingRetry | null;
   /**
    * Handoff notes accumulated when workers release the task. Newest-first.
    * Surfaced to the next claimer via `moe.get_handoff_history`.

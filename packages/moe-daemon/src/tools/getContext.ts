@@ -642,6 +642,8 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               commitCount: commits.length,
               lastCommitOutcome: task.lastCommitOutcome ?? null,
               landing: buildLanding(commits),
+              // Set by finalize_attempt 'unlanded'; read by the next worker's pre-flight.
+              ...(task.landingRetry ? { landingRetry: task.landingRetry } : {}),
               declaredPaths: collectAssertedPaths(task),
               inferredPaths: Array.isArray(task.inferredPaths) ? task.inferredPaths : [],
               unattributedPaths,
