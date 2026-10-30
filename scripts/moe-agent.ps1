@@ -5902,9 +5902,40 @@ function Send-MoeAccountSample {
 # The hash is captured ONCE, here, so one on-disk change triggers exactly one
 # restart: the reloaded pass captures the new hash and cannot thrash if the
 # file is touched again mid-flight.
+# Only load committed bytes: on 2026-10-30 three seats re-exec'd onto
+# task-e7f4026a's uncommitted, unreviewed +79/-8 wrapper edit.
 $script:MoeWrapperPath = $PSCommandPath
 $script:MoeWrapperLaunchHash = $null
 $script:MoeWrapperRefusedHash = $null
+$script:MoeWrapperDeferredHash = $null
+# Twin: wrapper_reload_deferred. Return true to defer, false to reload.
+function Test-MoeWrapperReloadDeferred([string]$Hash) {
+    $reason = ''
+    try {
+        $top = Split-Path -Parent $script:MoeWrapperPath
+        if (-not $top) { throw 'wrapper directory is empty' }
+        $leaf = Split-Path -Leaf $script:MoeWrapperPath
+        $gitCmd = 'ls-files'
+        $result = Invoke-MoeGit -Top $top -GitArgs @('ls-files', '--error-unmatch', '--', $leaf)
+        if ($result.Rc -eq 0) {
+            $gitCmd = 'diff'
+            $result = Invoke-MoeGit -Top $top -GitArgs @('diff', '--quiet', 'HEAD', '--', $leaf)
+            if ($result.Rc -eq 0) { return $false }
+        }
+        if ($result.Rc -ne 1) { $reason = "git $gitCmd exited $($result.Rc)" }
+    } catch {
+        $reason = "git check failed: $($_.Exception.Message)"
+    }
+    if ($Hash -ne $script:MoeWrapperDeferredHash) {
+        $script:MoeWrapperDeferredHash = $Hash
+        if (-not $reason) {
+            Write-Host '[INFO] MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits; staying on the current bytes until they are committed'
+        } else {
+            Write-Host "[WARN] MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed ($reason); staying on the current bytes" -ForegroundColor Yellow
+        }
+    }
+    return $true
+}
 # Set by the restart check below and read once, past the outer finally, by the
 # hand-over at the very bottom of this file.
 $script:MoeWrapperRelaunchRequested = $false
@@ -5954,7 +5985,7 @@ do {
         } catch {
             $moeCurrentHash = $null   # FAIL-OPEN: keep running the current bytes
         }
-        if ($moeCurrentHash -and $moeCurrentHash -ne $script:MoeWrapperLaunchHash -and $moeCurrentHash -ne $script:MoeWrapperRefusedHash) {
+        if ($moeCurrentHash -and $moeCurrentHash -ne $script:MoeWrapperLaunchHash -and $moeCurrentHash -ne $script:MoeWrapperRefusedHash -and -not (Test-MoeWrapperReloadDeferred $moeCurrentHash)) {
             # A seat launched from the shared checkout reloads every edit of
             # this file, and a half-applied edit used to cost it its
             # registration and then its process (the supervisor's `&` threw).

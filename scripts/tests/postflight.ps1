@@ -1183,6 +1183,24 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         Start-Sleep -Seconds 3
         $countAfterWait = if (Test-Path $heartbeatLogFile) { (Get-Content $heartbeatLogFile | Measure-Object -Line).Lines } else { 0 }
 
+        function Initialize-ReloadRepo {
+            $dir = Split-Path $reloadWrapper
+            foreach ($gitArgs in @(@('init', '-q'), @('config', 'user.name', 'Moe Test'),
+                @('config', 'user.email', 'moe@test.local'), @('config', 'commit.gpgsign', 'false'),
+                @('config', 'core.autocrlf', 'false'), @('add', '-A'), @('commit', '-qm', 'base'))) {
+                & git -C $dir @gitArgs 2>$null | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "HOT RELOAD FAILED: git $gitArgs exited $LASTEXITCODE" }
+            }
+        }
+        function Invoke-ReloadCommit([string]$Message) {
+            for ($i = 1; $i -le 3; $i++) {
+                & git -C (Split-Path $reloadWrapper) commit -qam $Message 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) { return }
+                Start-Sleep -Milliseconds 200
+            }
+            throw "HOT RELOAD FAILED: could not commit wrapper edit (git exited $LASTEXITCODE)"
+        }
+
         # --- Hot reload keeps ONE wrapper process. An edit to moe-agent.ps1
         # reloads every live seat at the top of its next iteration. df42861
         # handed over with `& <exe> <args>`: the seat kept its console, but the
@@ -1207,6 +1225,7 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
         $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
         $reloadOut = Join-Path $tempRoot 'wrapper-reload.out'
+        Initialize-ReloadRepo
         function Get-ReloadRows {
             $lines = @(); try { $lines = @(Get-Content -LiteralPath $reloadRpcLog -ErrorAction Stop) } catch {}
             foreach ($line in $lines) { try { $line | ConvertFrom-Json } catch {} }
@@ -1254,9 +1273,11 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
             $reloadEdited = $reloadText.Replace('restarting to load it"', 'restarting to load it (edit 1 loaded)"')
             if ($reloadEdited -eq $reloadText) { throw 'HOT RELOAD FAILED: the restart announcement is missing from the wrapper' }
             Set-ReloadWrapperText $reloadEdited
+            Invoke-ReloadCommit 'edit 1'
             Wait-ReloadSequence '^c+rc' 'claim after reload 1'
             $reloadCounts += @(Get-ReloadWrapperPids).Count
             Set-ReloadWrapperText ($reloadEdited + "# reload 2`n")
+            Invoke-ReloadCommit 'edit 2'
             Wait-ReloadSequence '^c+rc+rc' 'claim after reload 2'
             $reloadCounts += @(Get-ReloadWrapperPids).Count
         } finally {
@@ -1295,6 +1316,7 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
         $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
         $reloadOut = Join-Path $tempRoot 'wrapper-reload-refused.out'
+        Initialize-ReloadRepo
         function Add-ReloadWrapperText([string]$Text) {
             for ($i = 1; ; $i++) {
                 try { [IO.File]::AppendAllText($reloadWrapper, $Text, (New-Object System.Text.UTF8Encoding($false))); return }
@@ -1314,11 +1336,13 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
             $refusedClaims = ((Get-ReloadSequence) -replace '[^c]', '').Length
             # An open block at the end: ParseFile reports a missing closing '}'.
             Add-ReloadWrapperText "if (`$true) {`n"
+            Invoke-ReloadCommit 'unparseable edit'
             # Three more claims mean at least two loop tops hashed the refused bytes.
             Wait-ReloadSequence ('^c{' + ($refusedClaims + 3) + ',}$|[rx]') 'three claims after the refused edit'
             if ((Get-ReloadSequence) -match '[rx]') { throw "HOT RELOAD REFUSED FAILED: a refused edit must not deregister; RPC sequence '$(Get-ReloadSequence)'" }
             $refusedCount = @(Get-ReloadWrapperPids).Count
             Add-ReloadWrapperText "}`n"
+            Invoke-ReloadCommit 'parseable edit'
             Wait-ReloadSequence '^c+rc' 'claim after the parseable edit'
         } finally {
             Remove-Item Env:FAKE_CLAIM_MODE, Env:MOE_DISABLE_HEARTBEAT -ErrorAction SilentlyContinue
@@ -1340,6 +1364,68 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         if ($restarts -ne 1) { $reloadProblems += "expected one restart announcement, got $restarts" }
         if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD REFUSED FAILED: ' + ($reloadProblems -join ' | ')) }
         Write-Host '[hot reload refused] ok: refused once, one process, reloaded on the next parseable edit'
+
+        # --- Hot reload deferred / unverifiable (twins in postflight.sh).
+        foreach ($reloadMode in @('deferred', 'unverifiable')) {
+            Write-Host "[hot reload $reloadMode] changed bytes keep serving until verified committed"
+            $reloadRoot = Join-Path $tempRoot "reload-$reloadMode"
+            $reloadWrapper = Join-Path $reloadRoot 'scripts\moe-agent.ps1'
+            $reloadProject = Join-Path $reloadRoot 'project'
+            New-Item -ItemType Directory -Force -Path @((Split-Path $reloadWrapper), (Join-Path $reloadProject '.moe\messages')) | Out-Null
+            Copy-Item -LiteralPath $wrapper -Destination $reloadWrapper
+            Get-ChildItem -LiteralPath (Split-Path $wrapper) -Filter '*.mjs' | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination (Split-Path $reloadWrapper)
+            }
+            if ($reloadMode -eq 'deferred') { Initialize-ReloadRepo }
+            Set-Content -Path (Join-Path $reloadProject '.moe\project.json') -Value '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}' -Encoding UTF8
+            Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
+            $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
+            $reloadOut = Join-Path $tempRoot "wrapper-reload-$reloadMode.out"
+            $reloadEdits = if ($reloadMode -eq 'deferred') { 2 } else { 1 }
+            $reloadProc = $null
+            $env:FAKE_CLAIM_MODE = 'idle'
+            $env:MOE_DISABLE_HEARTBEAT = '1'
+            if ($reloadMode -eq 'unverifiable') { $env:GIT_CEILING_DIRECTORIES = $reloadRoot }
+            try {
+                $reloadArgs = @('-NoProfile', '-File', $reloadWrapper, '-Project', $reloadProject, '-WorkerId', "worker-reload-$reloadMode", '-Role', 'worker', '-NoStartDaemon', '-Command', $trueCmd, '-Loop', '-PollInterval', '1') |
+                    ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
+                $reloadProc = Start-Process -FilePath $psExe -ArgumentList $reloadArgs -RedirectStandardOutput $reloadOut -RedirectStandardError "$reloadOut.err" -PassThru -NoNewWindow
+                $null = $reloadProc.Handle
+                Wait-ReloadSequence '^c' 'first claim'
+                for ($edit = 1; $edit -le $reloadEdits; $edit++) {
+                    $reloadClaims = (Get-ReloadSequence).Length
+                    Add-ReloadWrapperText "# deferred edit $edit`n"
+                    Wait-ReloadSequence ('^c{' + ($reloadClaims + 3) + ',}$|[rx]') 'three claims after the deferred edit'
+                    if ((Get-ReloadSequence) -match '[rx]') { throw "HOT RELOAD FAILED: a deferred edit must not deregister; RPC sequence '$(Get-ReloadSequence)'" }
+                }
+                $deferredCount = @(Get-ReloadWrapperPids).Count
+                if ($reloadMode -eq 'deferred') {
+                    Invoke-ReloadCommit 'deferred edits'
+                    Wait-ReloadSequence '^c+rc{2,}$' 'claims after committing deferred bytes'
+                }
+            } finally {
+                Remove-Item Env:FAKE_CLAIM_MODE, Env:MOE_DISABLE_HEARTBEAT, Env:GIT_CEILING_DIRECTORIES -ErrorAction SilentlyContinue
+                if ($reloadProc -and -not $reloadProc.HasExited) { & taskkill /T /F /PID $reloadProc.Id 2>&1 | Out-Null; $reloadProc.WaitForExit(5000) | Out-Null }
+                foreach ($reloadPid in @(Get-ReloadWrapperPids)) { Stop-Process -Id $reloadPid -Force -ErrorAction SilentlyContinue }
+            }
+            $reloadSeq = Get-ReloadSequence
+            $reloadLog = [string](Get-Content -Raw -LiteralPath $reloadOut -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$reloadOut.err" -ErrorAction SilentlyContinue)
+            $reloadFlat = $reloadLog -replace '\r?\n', ''
+            $reloadProblems = @()
+            if ($deferredCount -ne 1) { $reloadProblems += "expected one wrapper process, counted $deferredCount" }
+            $deferrals = [regex]::Matches($reloadFlat, 'MOE_WRAPPER_RELOAD_DEFERRED').Count
+            $restarts = [regex]::Matches($reloadFlat, 'restarting to load it').Count
+            if ($deferrals -ne $reloadEdits) { $reloadProblems += "expected $reloadEdits deferrals, got $deferrals" }
+            if ($reloadMode -eq 'deferred') {
+                if ($reloadSeq -notmatch '^c+rc{2,}$' -or $restarts -ne 1) { $reloadProblems += "expected one restart after commit; sequence '$reloadSeq', announcements $restarts" }
+                if ([regex]::Matches($reloadFlat, 'MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits').Count -ne 2 -or $reloadFlat -match 'cannot confirm') { $reloadProblems += 'expected two uncommitted-edit reasons and no git failure' }
+            } else {
+                if ($reloadSeq -notmatch '^c+$' -or $restarts -ne 0) { $reloadProblems += "unverifiable bytes must not restart; sequence '$reloadSeq', announcements $restarts" }
+                if ($reloadFlat -notmatch 'MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed') { $reloadProblems += 'expected git failure reason' }
+            }
+            if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD FAILED: ' + ($reloadProblems -join ' | ')) }
+            Write-Host "[hot reload $reloadMode] ok: $reloadEdits deferrals, $restarts restarts, 1 wrapper process"
+        }
 
         # --- Quality gate (settings.qualityGate): the post-flight runs the
         # configured command before a COMPLETION commit. Failing gate => no

@@ -6468,9 +6468,31 @@ account_after_exit() {
 #
 # The hash is captured ONCE, here, so one on-disk change triggers exactly one
 # restart: the re-exec'd process captures the new hash and cannot thrash.
+# Only load committed bytes: on 2026-10-30 three seats re-exec'd onto
+# task-e7f4026a's uncommitted, unreviewed +79/-8 wrapper edit.
 MOE_WRAPPER_PATH="${BASH_SOURCE[0]:-$0}"
 MOE_WRAPPER_LAUNCH_HASH=""
 MOE_WRAPPER_REFUSED_HASH=""
+MOE_WRAPPER_DEFERRED_HASH=""
+# Twin: Test-MoeWrapperReloadDeferred. Return 0 to defer, 1 to reload.
+wrapper_reload_deferred() {
+    local rc=0 git_cmd=ls-files
+    git -C "$SCRIPT_DIR" ls-files --error-unmatch -- "${MOE_WRAPPER_PATH##*/}" >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        git_cmd=diff
+        git -C "$SCRIPT_DIR" diff --quiet HEAD -- "${MOE_WRAPPER_PATH##*/}" >/dev/null 2>&1 || rc=$?
+        [ "$rc" -ne 0 ] || return 1
+    fi
+    if [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_DEFERRED_HASH" ]; then
+        MOE_WRAPPER_DEFERRED_HASH="$MOE_WRAPPER_CURRENT_HASH"
+        if [ "$rc" -eq 1 ]; then
+            echo "[INFO] MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits; staying on the current bytes until they are committed"
+        else
+            echo "[WARN] MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed (git $git_cmd exited $rc); staying on the current bytes" >&2
+        fi
+    fi
+    return 0
+}
 if [ -f "$MOE_WRAPPER_PATH" ]; then
     # FAIL-OPEN: a wrapper that dies because it could not hash itself is a fleet
     # outage; a stale wrapper is merely the status quo this guard improves on.
@@ -6509,7 +6531,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     if [ -n "$MOE_WRAPPER_LAUNCH_HASH" ]; then
         MOE_WRAPPER_CURRENT_HASH="$(sha256sum "$MOE_WRAPPER_PATH" 2>/dev/null | cut -d' ' -f1 || true)"
         if [ -n "$MOE_WRAPPER_CURRENT_HASH" ] &&            [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_LAUNCH_HASH" ] &&
-            [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_REFUSED_HASH" ]; then
+            [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_REFUSED_HASH" ] && ! wrapper_reload_deferred; then
             # A seat launched from the shared checkout reloads every edit of
             # this file, and a half-applied edit used to cost it its
             # registration and then its process. So parse the new bytes

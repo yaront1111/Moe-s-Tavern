@@ -1377,6 +1377,23 @@ if [ "$count_after_wait" -ne "$count_at_exit" ]; then
   exit 1
 fi
 
+reload_git() {
+  git -C "$RELOAD_DIR/scripts" -c user.name='Moe Test' -c user.email=moe@test.local \
+    -c commit.gpgsign=false -c core.autocrlf=false "$@"
+}
+reload_repo() {
+  reload_git init -q && reload_git add -A && reload_git commit -qm base \
+    || { echo 'HOT RELOAD FAILED: could not initialize wrapper repo' >&2; exit 1; }
+}
+reload_commit() {
+  local attempt
+  for attempt in 1 2 3; do
+    reload_git commit -qam "$1" && return 0
+    sleep 0.2
+  done
+  reload_fail 'could not commit wrapper edit'
+}
+
 # --- Hot reload: the wrapper re-execs itself when its own bytes change on disk
 # (twin: the hot-reload arm in postflight.ps1). Two edits to a COPY -- a
 # repo-launched seat reloads on every edit of the real file -- must each yield
@@ -1394,6 +1411,7 @@ mkdir -p "$RELOAD_PROJECT/.moe/messages"
 # The whole scripts/ dir: the restart deregisters through the sibling moe-call.sh.
 cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
 chmod +x "$RELOAD_WRAPPER"
+reload_repo
 printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_PROJECT/.moe/project.json"
 : > "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl"
 # moe-call.sh refuses to deregister without daemon.json; the fake proxy never reads it.
@@ -1452,8 +1470,10 @@ reload_wait 0 '^c'
 "$NODE_FOR_TEST" -e 'const fs=require("fs"),f=process.argv[1],a="restarting to load it\"",t=fs.readFileSync(f,"utf8");
 if(t.split(a).length!==2)process.exit(3);fs.writeFileSync(f,t.replace(a,"restarting to load it (edit 1 loaded)\""));' "$RELOAD_WRAPPER" \
   || reload_fail "the restart announcement is missing from the wrapper"
+reload_commit 'edit 1'
 reload_wait 1 '^c+rcc'
 printf '# reload 2\n' >> "$RELOAD_WRAPPER"
+reload_commit 'edit 2'
 reload_wait 2 '^c+rc{2,}rcc'
 reload_final="$(reload_seq)"
 kill -KILL "$reload_pid" 2>/dev/null || true
@@ -1481,6 +1501,7 @@ RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
 mkdir -p "$RELOAD_PROJECT/.moe/messages"
 cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
 chmod +x "$RELOAD_WRAPPER"
+reload_repo
 printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_PROJECT/.moe/project.json"
 : > "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl"
 printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
@@ -1502,11 +1523,13 @@ reload_claims="$(reload_seq)"
 reload_claims="${reload_claims//[!c]/}"
 # An open `if` at the end: bash -n fails with "unexpected end of file".
 printf 'if true; then :\n' >> "$RELOAD_WRAPPER"
+reload_commit 'unparseable edit'
 # Three more claims mean at least two loop tops hashed the refused bytes; with
 # EDITS=0 a wrapper_restart fails at once, and a dead seat fails too.
 reload_wait 0 "^c{$((${#reload_claims} + 3)),}\$"
 # Closing it makes the tail parse; it would only run after the main loop ends.
 printf 'fi\n' >> "$RELOAD_WRAPPER"
+reload_commit 'parseable edit'
 reload_wait 1 '^c+rc'
 reload_final="$(reload_seq)"
 kill -KILL "$reload_pid" 2>/dev/null || true
@@ -1522,6 +1545,61 @@ grep -Eq 'MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does no
 reload_restarts="$(grep -c 'restarting to load it' "$TMP_DIR/wrapper-reload.out" || true)"
 [ "$reload_restarts" = 1 ] || reload_fail "expected one restart announcement, got $reload_restarts"
 echo "[hot reload refused] ok: refused once, stayed registered, reloaded on the next parseable edit"
+
+# --- Hot reload deferred / unverifiable (twins in postflight.ps1). The same
+# live-seat assertions cover dirty tracked bytes and a copy outside any repo.
+for reload_mode in deferred unverifiable; do
+  echo "[hot reload $reload_mode] changed bytes keep serving until verified committed"
+  RELOAD_DIR="$TMP_DIR/reload-$reload_mode"
+  RELOAD_PROJECT="$RELOAD_DIR/project"
+  RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
+  mkdir -p "$RELOAD_PROJECT/.moe/messages"
+  cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
+  chmod +x "$RELOAD_WRAPPER"
+  if [ "$reload_mode" = deferred ]; then reload_repo; fi
+  printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_PROJECT/.moe/project.json"
+  : > "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl"
+  printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
+  PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \
+    GIT_CEILING_DIRECTORIES="$RELOAD_DIR" "$RELOAD_WRAPPER" --project "$RELOAD_PROJECT" \
+    --worker-id "worker-reload-$reload_mode" --role worker --no-start-daemon --command /bin/true --loop --poll-interval 1 \
+    >"$TMP_DIR/wrapper-reload.out" 2>&1 &
+  reload_pid=$!
+  reload_live_before="$LIVE_PIDS"
+  LIVE_PIDS="$LIVE_PIDS $reload_pid"
+  reload_wait 0 '^c'
+  reload_edits=1
+  if [ "$reload_mode" = deferred ]; then reload_edits=2; fi
+  for ((reload_edit=1; reload_edit<=reload_edits; reload_edit++)); do
+    reload_claims="$(reload_seq)"
+    printf '# deferred edit %s\n' "$reload_edit" >> "$RELOAD_WRAPPER"
+    reload_wait 0 "^c{$((${#reload_claims} + 3)),}\$"
+  done
+  if [ "$reload_mode" = deferred ]; then
+    reload_commit 'deferred edits'
+    reload_wait 1 '^c+rc{2,}$'
+  fi
+  reload_final="$(reload_seq)"
+  kill -KILL "$reload_pid" 2>/dev/null || true
+  wait "$reload_pid" 2>/dev/null || true
+  LIVE_PIDS="$reload_live_before"
+  reload_deferrals="$(grep -c 'MOE_WRAPPER_RELOAD_DEFERRED' "$TMP_DIR/wrapper-reload.out" || true)"
+  reload_restarts="$(grep -c 'restarting to load it' "$TMP_DIR/wrapper-reload.out" || true)"
+  [ "$reload_deferrals" = "$reload_edits" ] || reload_fail "expected $reload_edits deferrals, got $reload_deferrals"
+  if [ "$reload_mode" = deferred ]; then
+    [[ $reload_final =~ ^c+rc{2,}$ ]] || reload_fail 'expected one restart after committing deferred bytes'
+    [ "$reload_restarts" = 1 ] || reload_fail 'expected one restart announcement'
+    [ "$(grep -c 'MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits' "$TMP_DIR/wrapper-reload.out" || true)" = 2 ] \
+      || reload_fail 'expected two uncommitted-edit reasons'
+    if grep -q 'cannot confirm' "$TMP_DIR/wrapper-reload.out"; then reload_fail 'unexpected git failure'; fi
+  else
+    [[ $reload_final =~ ^c+$ ]] || reload_fail 'unverifiable bytes must not deregister'
+    [ "$reload_restarts" = 0 ] || reload_fail 'unverifiable bytes must not restart'
+    grep -Fq 'MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed' "$TMP_DIR/wrapper-reload.out" \
+      || reload_fail 'expected git failure reason'
+  fi
+  echo "[hot reload $reload_mode] ok: $reload_edits deferrals, $reload_restarts restarts"
+done
 
 # --- Quality gate (settings.qualityGate): the post-flight runs the configured
 # command before auto-commit. Failing gate => no commit, PUSH-BLOCKED chat

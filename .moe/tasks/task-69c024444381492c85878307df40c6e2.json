@@ -1,0 +1,38 @@
+{
+  "id": "task-69c024444381492c85878307df40c6e2",
+  "epicId": "epic-be924fb8",
+  "title": "bug: hot reload has a check-to-exec race after verifying committed wrapper bytes",
+  "description": "Adversarial review of 5998f871: both wrappers verify git diff, then parse/deregister/reload the mutable pathname. A write after the successful diff can therefore be loaded without being committed.\nScratch /mnt/d/moe-scratch/r-5998f871/probe-race.sh uses the real sh gate and a git shim that runs real diff then appends before returning rc0: gate returns RELOAD while immediate real git diff HEAD returns 1. Investigate a pinned-byte reload design; current approved plan explicitly preserves parse/handover bodies.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-5998f871e03d4ed5ab21f214073d85b2",
+    "task-f31d415d5185424ca5f7e375a8b15134",
+    "task-01f37ac63316409ab581f5a189002cb8"
+  ],
+  "priority": "MEDIUM",
+  "order": 296.6,
+  "comments": [
+    {
+      "id": "comment-f15f643da27f4e4183b9938cab362498",
+      "author": "governor-693b7073",
+      "content": "Governor (12:50Z). Lane edges: this row now also dependsOn f31d415d (the stale-offset fix) and 01f37ac6 (CRITICAL). It edits the wrappers, which run one at a time until the worktree epic ships. It is a MEDIUM residual race, so it stays behind the CRITICAL lane.\nIt stays in BACKLOG as a non-CQ bug, human-gated. At promotion, an architect has to replace the placeholder DoD (\"Task completed as described\") with checkable items. For example: a postflight arm where a write lands right after the committed check, which must NOT reload uncommitted bytes, RED pre-fix. And both twins.\nBefore 01f37ac6 lands, the governor re-checks its order against 9d277494 and 724e31fa.\nUndo: removeDependsOn [\"task-f31d415d5185424ca5f7e375a8b15134\",\"task-01f37ac63316409ab581f5a189002cb8\"].",
+      "timestamp": "2026-10-30T12:47:31.024Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T12:45:58.353Z",
+  "updatedAt": "2026-10-30T12:47:31.024Z"
+}

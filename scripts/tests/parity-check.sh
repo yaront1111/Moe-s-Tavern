@@ -258,9 +258,9 @@ for lit in MOE_SESSION_ID MOE_ATTEMPT_ID MOE_ATTEMPT_GENERATION; do
 done
 
 # Hot reload: the restart announcement an operator sees, the deregister reason
-# both postflight hot-reload cases assert, and the refusal of changed bytes that
-# do not parse, spelled identically in both.
-for lit in 'wrapper source changed on disk; restarting to load it' wrapper_restart MOE_WRAPPER_RELOAD_REFUSED 'does not parse; staying on the current bytes until it changes again'; do
+# postflight hot-reload cases assert, parse refusal, and committed-byte deferral,
+# spelled identically in both.
+for lit in 'wrapper source changed on disk; restarting to load it' wrapper_restart MOE_WRAPPER_RELOAD_REFUSED 'does not parse; staying on the current bytes until it changes again' MOE_WRAPPER_RELOAD_DEFERRED 'wrapper has uncommitted edits; staying on the current bytes until they are committed' 'cannot confirm the wrapper bytes are committed ('; do
   require_both "hot reload" "$lit"
 done
 

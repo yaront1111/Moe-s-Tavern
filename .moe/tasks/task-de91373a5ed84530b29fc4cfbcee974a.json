@@ -80,12 +80,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "Reject completion 7e996666aef13bd3ea42f48e2b2ca8771d7cc757: DoD1 fails on incomplete process-tree discovery. Four independent QA regressions (both profiles) show stopDaemonForRestart(null) returning null while an old child remains alive. Full original candidate suite passes 427/427; exact task.verification.command on shared HEAD passes 432/432. Snapshot command with --tests com.moe.services.MoeDaemonSupervisorTest.QA* exits 1 with 4 assertion failures, 0 errors (11:36:47Z). Evidence and reproducible patch are in comment-1d03261bee4b49a29730707859e4d198 and /mnt/d/moe-scratch/qa-rf04-qa-ba3f4f35/qa-incomplete-tree.patch. Source remains identical to the recorded commit. Separately, net +551 LOC exceeds the unwaived 400-net approval cap. DoD2/3 checks passed; no native Linux/macOS runtime claim. Gradle lease released; shared source unchanged.",
+  "reopenReason": "Governor hold (12:40Z), the R11e2 playbook, waiting only on the human size waiver. Approve one of prop-da2a6c918c7344f6a51e3a96b37ea154 or prop-4fe44aac98c545819e94ed8e3f581e0b; both were PENDING at 12:35:02Z. No defect is open.\n- Completion 78c6671f landed.\n- The worker reports a fresh exact Windows gate of 448/448 with zero failures or skips, and all 26 mutants assertion-killed.\n- Numstats: original 7e996666 +581/-30 (net 551); reopen delta +266/-27 (net 239), classed by planner architect-e4b7eee0 (msg-27655a01, msg-3edfddf3) as QA-required DoD1 growth; combined net 790.\nHold reason: the row is at reopen 1 with DoD1 already failed once. A size-only reject would be a second DoD1 failure and flip the row to PLANNING.\nResume: once a waiver is approved, the governor sets REVIEW. QA then reviews substance in full, checking the rail's numbers against the split numstats.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -214,7 +214,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:39.223Z",
-  "updatedAt": "2026-10-30T12:39:51.977Z",
+  "updatedAt": "2026-10-30T12:40:20.071Z",
   "dependsOn": [
     "task-ec64165c85f246088a7224cf70b04670",
     "task-f3485ac9d4384664870d88db876ddd54",
@@ -334,7 +334,11 @@
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
     ".serena/memories/task-task-de91373a5ed84530b29fc4cfbcee974a-handoff.md",
-    ".serena/memories/gotcha-windows-restart-incomplete-process-tree.md"
+    ".serena/memories/gotcha-windows-restart-incomplete-process-tree.md",
+    ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
+    ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+    ".moe/tasks/task-b645a2563d5d4c2e886c4ff06b3f2ce7.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json"
   ],
   "completionSummary": "QA rework completes DoD1: discovery/identity failures refuse; Windows retries retain captured OldTree authority and original death cutoffs until bounded confirmation. ensureDaemonRunning is gated by a plain read; no persistence/new signal authority. W14 corrected; W23-W30 cover both-profile retries/clearing, gate, retained run/watch-only parent, cutoff and reused-pid own trees. DoD1: W1-W30. DoD2: N1/N2 and R1-R4; off-Windows body unchanged.\nFresh exact Windows gate: 448/448 tests, 27 classes, supervisor73/policy49, zero failures/errors/skips/stale XML, start12:34:15.3845988Z. RED70/6 expected assertions; 26 scratch mutants assertion-killed, restored/cmp. Scoped diff check/source hashes clean; lease released. Evidence: /mnt/d/moe-scratch/rf04-worker-c2da129d/retry-final-*. Handoff/gotcha saved. Peer bytes preserved; no Git/.moe writes; wrapper owns landing.\nOriginal7e996666 per-file +add/-del: MoeDaemonSupervisor.kt196/19; MoeProjectService.kt7/6; MoeToolWindowPanel.kt3/1; MoeDaemonSupervisorTest.kt372/3; RuntimeSelectionPolicyTest.kt3/1. Total +581/-30 net551. Aggregate reopen: supervisor+35/-23; tests+231/-4 =>+266/-27 net239. Combined task net790; this session+148/-19 net129. No rewrite/re-land.\nWaiver pending: BOTH prop-da2a6c91 and prop-4fe44aac PENDING at2026-10-30T12:35:02Z per governor fresh read, resolvedAt/resolvedBy null. No approved RF04 rail. Governor will hold REVIEW on human decision, not size-reject. Windows evidence only; no native Linux/macOS/UI or isolation certification.",
   "commits": [
@@ -428,6 +432,26 @@
       "treeId": "7d46b3740cbc8a6a3c9ca7d5ad5e0d90bad342a6",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "78c6671f5f552ba3ebc5b063eab21bd60b508f73",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T12:13:51Z",
+      "paths": [
+        ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
+        ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+        ".moe/tasks/task-b645a2563d5d4c2e886c4ff06b3f2ce7.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T12:40:11.422Z",
+      "treeId": "a8c5271c32bdf1f3bf8b179abf44180d42afb245",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -440,14 +464,14 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-c2da129d@2026-10-30T12:01:07Z",
-    "at": "2026-10-30T12:13:15.517Z"
+    "kind": "completion",
+    "sessionId": "worker-c2da129d@2026-10-30T12:13:51Z",
+    "at": "2026-10-30T12:40:11.422Z"
   },
-  "blockedReason": null,
+  "blockedReason": "Governor hold (12:40Z), the R11e2 playbook, waiting only on the human size waiver. Approve one of prop-da2a6c918c7344f6a51e3a96b37ea154 or prop-4fe44aac98c545819e94ed8e3f581e0b; both were PENDING at 12:35:02Z. No defect is open.\n- Completion 78c6671f landed.\n- The worker reports a fresh exact Windows gate of 448/448 with zero failures or skips, and all 26 mutants assertion-killed.\n- Numstats: original 7e996666 +581/-30 (net 551); reopen delta +266/-27 (net 239), classed by planner architect-e4b7eee0 (msg-27655a01, msg-3edfddf3) as QA-required DoD1 growth; combined net 790.\nHold reason: the row is at reopen 1 with DoD1 already failed once. A size-only reject would be a second DoD1 failure and flip the row to PLANNING.\nResume: once a waiver is approved, the governor sets REVIEW. QA then reviews substance in full, checking the rail's numbers against the split numstats.",
   "blockedResourceId": null,
-  "blockedFromStatus": null,
-  "blockedAt": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-30T12:40:20.071Z",
   "blockedOnTaskIds": null,
   "reviewCompletedAt": "2026-10-30T11:38:18.762Z",
   "rejectionDetails": {
