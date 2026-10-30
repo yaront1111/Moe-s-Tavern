@@ -111,7 +111,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -137,16 +137,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:16:07.737Z",
-  "updatedAt": "2026-10-30T07:18:38.308Z",
+  "updatedAt": "2026-10-30T07:29:21.424Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:18:44.976Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T07:29:21.424Z",
+    "wallClockMs": 47436448
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-093a65d0"
+    "worker-093a65d0",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -284,5 +287,9 @@
     "kind": "completion",
     "sessionId": "worker-093a65d0@2026-10-30T06:59:10Z",
     "at": "2026-10-30T07:18:38.308Z"
-  }
+  },
+  "completedAt": "2026-10-30T07:29:21.424Z",
+  "reviewCompletedAt": "2026-10-30T07:29:21.424Z",
+  "reviewSummary": "APPROVED. Reviewed completion 1b16fd8d (tree 95af28ae, on moe/work-2026-10-24, pushed). The owned files on disk equal the commit. Size: 401 added, 1 deleted, 400 net non-board LOC, at the cap and not over. ci.yml is only the planned +1/-1 append.\n\nRe-run:\n(1) `env -i ... node --test scripts/tests/local-runner-dispatch.test.mjs`: EXIT 0, 10/10.\n(2) The CI local-runner list (8 files) on the shared tree: EXIT 0, 442 pass, 0 fail, 2 pre-existing skips. On a git-archive export the only failures were V04b1's C4-C9, which need a built daemon dist.\n(3) Real-adapter smoke on a temp repo with a fake channel: the 2-entry dirty overlay was stripped, the tree matched, and runCheckJob's parse accepted the input. It failed closed with CHECK_PROVISION_UNAVAILABLE (no Multipass) and wrote no ledger.\n(4) Of my 12 mutants, 10 were killed: workspace downgrade, overlay check, CLI strip, env check, error.message, gate dedup, revision guard, retry id, continue-after-stop, abort.\n\nDoD, checked against landed source:\n- DoD 1: owedChecks matches policy.ts owedChecks/requiredCheckCommand and the requiredChecks `covers` rule. The revision guard matches checkObservationStore. Dispatch args match the recordCheckDispatch FIELDS. The observation env is the dispatch's. An unlisted env or a refusal stops before any further dispatch.\n- DoD 2: passed with a non-intact workspace becomes inconclusive.\n- DoD 3: runCheckJob's finally-delete, nothing started after a stop, abort on SIGINT/SIGTERM. Only codes are printed, and the key is never touched.\n- DoD 4: green.\n- Rails: no Git writes, no .moe edits, verified-local untouched.\n\nNon-blocking notes:\n(a) The allPassed every→some mutant survives: no mixed passed/failed CLI case. The code is correct.\n(b) Observation env taken from the result is an equivalent mutant.\n(c) K spawns with env {PATH} only. The windows-latest CI run was not verified here.",
+  "requiredCheckAtDone": null
 }
