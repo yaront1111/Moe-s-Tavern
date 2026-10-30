@@ -5,10 +5,12 @@
 // 'injected' and the native entry takes exactly { workDir }, so mocks never certify. Certification is not activation:
 // executionReady stays false and verified-local stays unavailable. Reports carry fixed codes and hashes only. CQ-R13e1 adds
 // the bridge checks (certify-bridge.mjs) after 'no-mounts', with BRIDGE_BOUNDS, or certifyCore's validated overrides, on c.bounds.
+// CQ-R13f1 adds 'check-containment' (certify-containment.mjs) after them; its runs read c.platform, c.cacheDir and c.supervisor.
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, open, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { BRIDGE_BOUNDS, BRIDGE_CHECKS } from './certify-bridge.mjs';
+import { CONTAINMENT_CHECKS } from './certify-containment.mjs';
 import { platformFor } from './cli.mjs';
 import { runDoctor } from './doctor.mjs';
 import { IMAGE_ARCHES } from './guest-bootstrap.mjs';
@@ -42,8 +44,8 @@ const BODY = [
   ['provision', async c => {
     let supervisor;
     try { supervisor = await readFile(new URL('./guest-supervisor.py', import.meta.url)); } catch { return failed('CERTIFY_SUPERVISOR_UNAVAILABLE'); }
-    c.supervisorSha256 = createHash('sha256').update(supervisor).digest('hex');
-    c.outcome = await provisionGuest({ platform: c.observed, ledger: c.capturing, owner: c.owner, cacheDir: path.join(c.workDir, 'images'), supervisor,
+    [c.supervisor, c.supervisorSha256] = [supervisor, createHash('sha256').update(supervisor).digest('hex')];
+    c.outcome = await provisionGuest({ platform: c.platform, ledger: c.capturing, owner: c.owner, cacheDir: c.cacheDir, supervisor,
       credential: randomBytes(32), provider: c.provider, fetch: c.deps.fetch, digest: c.deps.digest, sleep: c.deps.sleep });
     if (c.outcome?.provisioned !== true) return failed('CERTIFY_PROVISION_UNAVAILABLE');
     return c.outcome.instance === c.name ? passed : failed('CERTIFY_PROVISION_FAILED');
@@ -52,7 +54,7 @@ const BODY = [
   ['readiness', async ({ outcome: { bootstrapReady, failures } }) => (bootstrapReady === true && Array.isArray(failures) && failures.length === 0 ? passed
     : failed(stable(failures?.[0], 'CERTIFY_NOT_READY')))],
   ['no-mounts', async ({ name, provider }) => { await assertNoMounts(name, provider); return passed; }],
-  ...BRIDGE_CHECKS.map(({ id, run }) => [id, run]),
+  ...[...BRIDGE_CHECKS, ...CONTAINMENT_CHECKS].map(({ id, run }) => [id, run]),
 ];
 // Always runs, whatever happened before; by exact owned name, so a foreign record in the same ledger is never touched.
 const TEARDOWN = ['teardown', async ({ ledger, name, owner, provider }) => {
@@ -101,9 +103,10 @@ async function certify(platform, workDir, deps, native, bounds) {
   const ledger = createLedger(path.join(workDir, 'ledger'), { random: deps.random });
   const owner = { taskId: 'task-certify', attemptId: `attempt-${randomBytes(16).toString('hex')}`, generation: 1 }; // synthetic, per run
   const provider = { ...deps.provider, executable: deps.provider?.executable ?? platform.executable };
-  const c = { workDir, deps, ledger, owner, provider, bounds, name: null, outcome: null, arch: platform.arch ?? null, supervisorSha256: null };
-  // Records the arch this run's prerequisites detected (macOS reads its hardware).
-  c.observed = { ...platform, prerequisites: async options => { const pre = await platform.prerequisites(options); c.arch = pre?.arch ?? c.arch; return pre; } };
+  const c = { workDir, deps, ledger, owner, provider, bounds, cacheDir: path.join(workDir, 'images'), name: null, outcome: null, arch: platform.arch ?? null,
+    supervisor: null, supervisorSha256: null };
+  // Records the arch this run's prerequisites detected (macOS reads its hardware); the check-containment runs use it too.
+  c.platform = { ...platform, prerequisites: async options => { const pre = await platform.prerequisites(options); c.arch = pre?.arch ?? c.arch; return pre; } };
   // Provisioning gets this wrapper: it captures this run's own reservation to delete, even after a throw.
   c.capturing = { ...ledger, reserve: async who => { const record = await ledger.reserve(who); c.name = record?.instance ?? null; return record; } };
   const version = await providerVersion(deps.doctor, provider.executable);

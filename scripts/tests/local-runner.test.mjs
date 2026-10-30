@@ -3298,6 +3298,141 @@ test('GN6 a completed connect with a pending accept beats closed, unknown and pr
   }
 });
 
+// CQ-R13f1 check-containment: the generated snapshot, the probe's decision logic with every guest primitive stubbed, and the
+// check over deps.containment's fake runCheckJob (containmentRig) inside the whole certify flow.
+import { containmentSnapshot } from '../local-runner/certify-containment.mjs';
+
+const CC_ENTRY = { path: 'moe-certify/protected.txt', oid: 'c847a247be38418490fff92ebf0fa678d21f99da' }; // `git hash-object` of its bytes
+const CC_COMMANDS = ['python3 -I -B moe-certify/probe.py', 'printf x 2>/dev/null >moe-certify/protected.txt && exit 3; i=0; while [ -s moe-certify/protected.txt ] && '
+  + '[ "$i" -lt 60 ]; do sleep 1; i=$((i+1)); done; [ ! -s moe-certify/protected.txt ]', 'echo edited >>moe-certify/tracked.txt'];
+const CC_IDS = ['certify-probe', 'certify-integrity', 'certify-edit'];
+// check-containment failed with code: the checks before it passed, later body checks not-run, teardown passed.
+const ccFailed = code => certification({ checks: CERTIFY_IDS.map((id, at, ids) => {
+  const own = ids.indexOf('check-containment');
+  return { id, result: at === own ? 'failed' : at < own || id === 'teardown' ? 'passed' : 'not-run', code: at === own ? code : null };
+}) });
+// The probe with its guest primitives stubbed; s names each errno, null meaning the call succeeds.
+const PROBE_STUB = `import builtins, errno, json, resource, socket, sys, tempfile
+s = json.loads(sys.argv[1])
+def done(name):
+    if name: raise OSError(getattr(errno, name), name)
+class Stub:
+    def __init__(self, *args, **kwargs): pass
+    def __enter__(self): return self
+    def __exit__(self, *args): return False
+    def connect_ex(self, address): return getattr(errno, s['route']) if s['route'] else 0
+    def close(self): pass
+    def seek(self, offset): pass
+    def write(self, data): done(s['write'])
+def opened(path, mode='r'):
+    done(s['open'][f'{path}:{mode}'])
+    return Stub()
+def setrlimit(limit, value):
+    if not s['raisable']: raise ValueError('stub')
+socket.if_nameindex, socket.socket, builtins.open = lambda: list(enumerate(s['interfaces'], 1)), Stub, opened
+names = {getattr(resource, name): name for name in s['limits']}
+resource.getrlimit, resource.setrlimit, tempfile.TemporaryFile = lambda limit: tuple(s['limits'][names[limit]]), setrlimit, Stub
+exec(compile(sys.stdin.buffer.read(), 'probe.py', 'exec'), {'__name__': '__main__'})`;
+
+test('CC1 the generated snapshot holds the probe, the protected file and the tracked file; its probe pins CHECK_BOUNDARIES', () => {
+  const { entries } = workspaceEntries(containmentSnapshot());
+  assert.deepEqual(entries.map(({ path, executable }) => [path, executable]), [['moe-certify/probe.py', false], ['moe-certify/protected.txt', false], ['moe-certify/tracked.txt', false]]);
+  const [probe, held, tracked] = entries.map(({ data }) => Buffer.from(data));
+  assert.deepEqual([held.toString(), tracked.toString(), createHash('sha1').update(`blob ${held.length}\0`).update(held).digest('hex')],
+    ['moe-certify-protected-v1\n', 'moe-certify-tracked-v1\n', CC_ENTRY.oid]);
+  assert.deepEqual(probe.toString().split('\n').slice(0, 3), ['import errno, resource, socket, sys, tempfile',
+    'INTERFACES, CREDENTIAL, PROTECTED = ["lo"], "/etc/moe/supervisor.credential", "moe-certify/protected.txt"', 'NPROC, FSIZE = 2048, 1073741824']);
+  assert.notEqual(containmentSnapshot(), containmentSnapshot());
+  assert.match(readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url), 'utf8'), /^WORKSPACE = '\/var\/lib\/moe\/workspace'$/m);
+});
+
+test('CC2 the probe exits 0 only when every refusal holds, else 10-14 for the first that does not; the shell commands parse',
+  { skip: process.platform === 'win32' && 'python3 and sh are POSIX-only here' }, () => {
+  const probe = Buffer.from(workspaceEntries(containmentSnapshot()).entries[0].data);
+  const G = 1073741824;
+  const opens = { '/etc/moe/supervisor.credential:rb': 'EACCES', 'moe-certify/protected.txt:wb': 'EROFS' };
+  const held = { interfaces: ['lo'], route: 'ENETUNREACH', open: opens, limits: { RLIMIT_NPROC: [2048, 2048], RLIMIT_FSIZE: [G, G] }, raisable: false, write: 'EFBIG' };
+  for (const [change, code] of [[{}, 0], [{ interfaces: ['lo', 'eth0'] }, 10], [{ route: null }, 10], [{ route: 'ECONNREFUSED' }, 10],
+    [{ open: { ...opens, '/etc/moe/supervisor.credential:rb': null } }, 11], [{ open: { ...opens, '/etc/moe/supervisor.credential:rb': 'ENOENT' } }, 11],
+    [{ open: { ...opens, 'moe-certify/protected.txt:wb': 'EACCES' } }, 12], [{ open: { ...opens, 'moe-certify/protected.txt:wb': null } }, 12],
+    [{ limits: { ...held.limits, RLIMIT_NPROC: [2048, 4096] } }, 13], [{ limits: { ...held.limits, RLIMIT_FSIZE: [G - 1, G - 1] } }, 13],
+    [{ raisable: true }, 13], [{ write: null }, 14], [{ write: 'ENOSPC' }, 14]]) {
+    const run = spawnSync('python3', ['-I', '-B', '-c', PROBE_STUB, JSON.stringify({ ...held, ...change })], { input: probe, encoding: 'utf8' });
+    assert.equal(run.status, code, `${JSON.stringify(change)} ${run.stderr}`);
+  }
+  for (const command of CC_COMMANDS.slice(1)) assert.equal(spawnSync('sh', ['-n', '-c', command]).status, 0, command);
+});
+
+test('CC3 check-containment runs probe, integrity and edit, each on the one snapshot with its exact frame and the context\'s own inputs', async t => {
+  const [h, platform] = [certifyHarness(t), onWindows()];
+  h.deps.bounds = { sessionMs: 60_000 };
+  assert.deepEqual([await h.certify(platform), h.deletes], [certification(), [['delete', '--purge', GUEST]]]);
+  const inputs = h.rig.calls.map(({ input }) => input);
+  const main = await createLedger(path.join(h.workDir, 'ledger')).read(GUEST);
+  assert.deepEqual(inputs.map(input => [Object.keys(input), input.check, input.dependencies, input.budgetMs, input.owner.taskId, input.owner.generation, validOwner(input.owner)]),
+    CC_IDS.map((id, at) => [['platform', 'ledger', 'owner', 'cacheDir', 'supervisor', 'credential', 'snapshot', 'check', 'budgetMs', 'onReady', 'dependencies', 'provider'],
+      { id, command: CC_COMMANDS[at], protected: [CC_ENTRY] }, [], 60_000, 'task-certify', 1, true]));
+  assert.equal(new Set([main.attemptId, ...inputs.map(input => input.owner.attemptId)]).size, 4);
+  assert.equal(new Set(inputs.map(input => input.credential.toString('hex'))).size, 3);
+  assert.deepEqual(await Promise.all(inputs.map(async input => [input.credential.length, await input.onReady()])), [[32, undefined], [32, undefined], [32, undefined]]);
+  for (const key of ['platform', 'ledger', 'supervisor', 'provider', 'snapshot']) assert.equal(new Set(inputs.map(input => input[key])).size, 1, key);
+  const [{ platform: seen, cacheDir, supervisor, provider, snapshot }] = inputs;
+  assert.deepEqual([seen !== platform, seen.id, cacheDir, supervisor.equals(readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url))),
+    provider.run === h.deps.provider.run, provider.spawn === h.router.spawn], [true, 'win32', path.join(h.workDir, 'images'), true, true, true]);
+  assert.deepEqual(workspaceEntries(snapshot).entries.map(({ path, data }) => [path, Buffer.from(data)]),
+    workspaceEntries(containmentSnapshot()).entries.map(({ path, data }) => [path, Buffer.from(data)]));
+  assert.deepEqual(h.rig.calls.map(({ given }) => given && Object.keys(given)), [undefined, ['session'], undefined]);
+});
+
+test('CC4 the integrity run changes the protected file once, through one fixed root argv, only after its session\'s first stdout bytes', async t => {
+  const log = [];
+  const delayed = { scripts: { 'certify-integrity': proc => setTimeout(() => { log.push('stdout'); BRIDGE_SCRIPTS['certify-integrity'](proc); }, 20) } };
+  const h = certifyHarness(t, { bridge: delayed, change: async () => { log.push('change'); return { stdout: '', stderr: '' }; } });
+  assert.deepEqual([await h.certify(), log, h.changes], [certification(), ['stdout', 'change'],
+    [[['exec', '--no-map-working-directory', nameAt(8), '--', ...CHANGE_ARGV], lifecycleOptions(QUERY_TIMEOUT_MS)]]]);
+  const session = h.router.calls.find(({ proc }) => proc.frame?.id === 'certify-integrity');
+  assert.deepEqual([session.args[1], session.proc.frame], [checkArgv(nameAt(8)), { kind: 'check', version: 1, id: 'certify-integrity', command: CC_COMMANDS[1], protected: [CC_ENTRY] }]);
+  // No stdout, a failed change or a result that never ran its session: CHANGE_FAILED, and the edit run never starts.
+  for (const options of [{ bridge: { scripts: { 'certify-integrity': proc => proc.exit(74) } } }, { change: probeExit(1, '') },
+    { containment: [, { session: false, outcome: 'inconclusive' }] }]) {
+    const failing = certifyHarness(t, options);
+    assert.deepEqual([await failing.certify(), failing.rig.calls.length], [ccFailed('CERTIFY_CONTAINMENT_CHANGE_FAILED'), 2], JSON.stringify(options));
+    assert.equal(failing.changes.length, options.change ? 1 : 0);
+  }
+});
+
+test('CC5 any other run result fails with one fixed code and starts no later run; runCheckJob\'s own codes are kept', async t => {
+  const leak = { vm: 'delete-failed', failure: 'CHECK_VM_DELETE_FAILED' };
+  for (const [runs, code, calls] of [
+    [[leak], 'CERTIFY_CONTAINMENT_VM_NOT_DELETED', 1], [[{ vm: 'none' }], 'CERTIFY_CONTAINMENT_VM_NOT_DELETED', 1],
+    [[{ outcome: 'infra-failure', exitCode: null, failure: 'CHECK_PROVISION_UNAVAILABLE', vm: 'not-launched' }], 'CHECK_PROVISION_UNAVAILABLE', 1],
+    [[{ outcome: 'infra-failure', exitCode: null, failure: 'TOOLCHAIN_DOWNLOAD_FAILED' }], 'TOOLCHAIN_DOWNLOAD_FAILED', 1],
+    ...[10, 11, 12, 13, 14].map((exitCode, at) => [[{ outcome: 'code-failure', exitCode }],
+      ['CERTIFY_CONTAINMENT_NETWORK', 'CERTIFY_CONTAINMENT_CREDENTIAL', 'CERTIFY_CONTAINMENT_PROTECTED', 'CERTIFY_CONTAINMENT_RLIMIT', 'CERTIFY_CONTAINMENT_FSIZE'][at], 1]),
+    [[{ outcome: 'code-failure', exitCode: 1 }], 'CERTIFY_CONTAINMENT_PROBE_FAILED', 1], [[{ outcome: 'code-failure', exitCode: 15 }], 'CERTIFY_CONTAINMENT_PROBE_FAILED', 1],
+    [[{ workspace: 'changed' }], 'CERTIFY_CONTAINMENT_PROBE_FAILED', 1], [[{ outcome: 'inconclusive', workspace: 'unverified' }], 'CERTIFY_CONTAINMENT_PROBE_FAILED', 1],
+    [[{ outcome: 'timeout', exitCode: null, workspace: 'unverified' }], 'CERTIFY_CONTAINMENT_PROBE_FAILED', 1],
+    [[, { outcome: 'passed' }], 'CERTIFY_CONTAINMENT_INTEGRITY_FAILED', 2], [[, { exitCode: 3 }], 'CERTIFY_CONTAINMENT_INTEGRITY_FAILED', 2],
+    [[, { outcome: 'code-failure', exitCode: 1 }], 'CERTIFY_CONTAINMENT_INTEGRITY_FAILED', 2], [[, leak], 'CERTIFY_CONTAINMENT_VM_NOT_DELETED', 2],
+    [[, , { workspace: 'intact' }], 'CERTIFY_CONTAINMENT_EDIT_FAILED', 3], [[, , { outcome: 'code-failure', exitCode: 1, workspace: 'unverified' }], 'CERTIFY_CONTAINMENT_EDIT_FAILED', 3],
+    [[, , leak], 'CERTIFY_CONTAINMENT_VM_NOT_DELETED', 3],
+    [[{ reject: 'CHECK_JOB_INPUT_INVALID' }], 'CHECK_JOB_INPUT_INVALID', 1], [[, , { reject: 'CHECK_READY_TIMEOUT' }], 'CHECK_READY_TIMEOUT', 3],
+    [[{ reject: 'not stable' }], 'CERTIFY_CHECK_FAILED', 1]]) {
+    const h = certifyHarness(t, { containment: runs });
+    assert.deepEqual([await h.certify(), h.rig.calls.length, h.deletes], [ccFailed(code), calls, [['delete', '--purge', GUEST]]], JSON.stringify(runs));
+  }
+});
+
+test('CC6 the runs get certify\'s base ledger, never its capturing one, and a guest-network failure leaves check-containment not-run', async t => {
+  const h = certifyHarness(t);
+  const runCheckJob = h.deps.containment.runCheckJob;
+  h.deps.containment = { runCheckJob: async (input, given) => { await input.ledger.reserve(input.owner); return runCheckJob(input, given); } };
+  assert.deepEqual([await h.certify(), h.deletes], [certification(), [['delete', '--purge', GUEST]]]);
+  assert.equal((await createLedger(path.join(h.workDir, 'ledger')).read(GUEST)).phase, 'deleted');
+  const gone = certifyHarness(t, { network: { agent: probeExit(2, '') } });
+  assert.deepEqual([await gone.certify(), gone.rig.calls.length, gone.changes], [networkFailed('CERTIFY_GUEST_NETWORK_UNKNOWN'), 0, []]);
+});
+
 // CQ-R09c copy-only snapshot materialization
 import { validateImport } from '../local-runner/source-snapshot.mjs';
 import { EventEmitter } from 'node:events';
