@@ -18,10 +18,12 @@ import java.io.File
 import java.net.URI
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
+import javax.swing.SwingUtilities
 import kotlin.concurrent.withLock
 
 @Service(Service.Level.PROJECT)
@@ -253,7 +255,68 @@ class MoeProjectService @JvmOverloads constructor(
             return
         }
         connecting = true
+        val basePath = project.basePath
+        if (basePath.isNullOrBlank()) {
+            openClient(daemonInfo)
+        } else if (SwingUtilities.isEventDispatchThread()) {
+            // The /health probe blocks for up to its timeouts; projectOpened can connect on the EDT.
+            try {
+                scheduler.execute { probeThenOpen(daemonInfo, basePath) }
+            } catch (ex: RejectedExecutionException) {
+                connecting = false
+                log.debug("Daemon identity probe not scheduled: ${ex.message}")
+            }
+        } else {
+            probeThenOpen(daemonInfo, basePath)
+        }
+    }
 
+    /**
+     * daemon.json only proves which project wrote it: a reused PID and another project's daemon on
+     * its port pass connect()'s checks. Only a /health reply naming another project refuses; an
+     * unknown one proceeds as before.
+     */
+    private fun probeThenOpen(daemonInfo: DaemonInfo, basePath: String) {
+        val identity = DaemonIdentityProbe.probe(daemonInfo.port, basePath)
+        if (disposed.get() || isManualDisconnect) {
+            // Disposed or disconnected while probing: open nothing.
+            connecting = false
+            return
+        }
+        if (identity is DaemonIdentity.Foreign) {
+            handleForeignDaemon(daemonInfo, identity, basePath)
+        } else {
+            openClient(daemonInfo)
+        }
+    }
+
+    /** Like connect()'s dead-PID branch: drop the stale daemon.json, and the reconnect spawns ours. */
+    private fun handleForeignDaemon(daemonInfo: DaemonInfo, foreign: DaemonIdentity.Foreign, basePath: String) {
+        log.warn("Daemon on port ${daemonInfo.port} (PID ${daemonInfo.pid}) serves ${foreign.projectPath}, not $basePath")
+        val current = daemonSupervisor.readDaemonInfo()
+        if (current != null && current.pid == daemonInfo.pid && current.port == daemonInfo.port &&
+            current.startedAt == daemonInfo.startedAt
+        ) {
+            try {
+                val deleted = File(basePath, ".moe/daemon.json").delete()
+                log.info("Removed stale daemon.json naming that daemon: $deleted")
+            } catch (ex: Exception) {
+                log.warn("Failed to remove stale daemon.json", ex)
+            }
+        } else {
+            log.info("Kept daemon.json: it no longer names that daemon")
+        }
+        // scheduleReconnect returns early while connecting.
+        connecting = false
+        publishStatus(
+            false,
+            "Daemon on port ${daemonInfo.port} serves another project (${foreign.projectPath}); " +
+                "this project's daemon will start on the next free port."
+        )
+        scheduleReconnect()
+    }
+
+    private fun openClient(daemonInfo: DaemonInfo) {
         // Synchronize the client swap to prevent races with callbacks
         val newClient: WebSocketClient
         wsLock.withLock {
