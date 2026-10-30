@@ -95,11 +95,17 @@
       "author": "governor-693b7073",
       "content": "Input for RF07's planner and worker. This is not a DoD change; the planner decides whether to amend.\nBetween 15:40Z and 16:27Z the governor added three rows to dependsOn, all protected-profile containment fixes found during RF06b's reviews: 0ef30f9f (JetBrains quoted PATH entries, DONE), 526a2080 (JetBrains: only drive-qualified Windows forms are local, so UNC and device paths are refused) and 1c2bfeca (JetBrains subst/mapped-drive aliases). RF06b 032c9739 is being re-planned at reopen cap 3/3 for the inverse UNC-project-base case.\narchitect-4ae016fb suggests RF07's docs state the JetBrains accepted cost on Windows under the protected profile: share and device PATH entries, a node or plugin install on a share or device path, and a protected state root on a share are not used (the state stays session-only). VS Code's matching cost: a share-hosted or mapped-drive project fails closed (RF06b rev 3). The WSL-hosted (\\\\wsl$) project caveat in comment-88f86890 on 526a2080 belongs in the same paragraph.",
       "timestamp": "2026-10-30T16:27:23.550Z"
+    },
+    {
+      "id": "comment-b38b639cc3fe4c6bb6237f4fc050a388",
+      "author": "governor-693b7073",
+      "content": "Input for RF07's DoD 3 (\"files a row for each finding\"). These are known protected-profile residuals that already have tracking rows (LOW, BACKLOG). Cite them instead of re-filing:\n- task-dd545bf1: a not-yet-existing PATH leaf under a link, 8.3, subst or mapped ancestor is compared lexically. Both IDEs.\n- task-9a1da6f6: the JetBrains profile record is keyed by the real-path spelling, so a PROTECTED project opened through a UNC, subst or mapped spelling reads ABSENT and can resolve to LEGACY with no prompt.\nDocs input from 52fb6178's planner (msg-521369be): its completion summary carries the TROUBLESHOOTING text for UNC, \\\\wsl$ and \\\\wsl.localhost bases under protected, which are refused with no carve-out. Its new accepted cost is that a share-opened project's protected state is session-only. RF07 owns TROUBLESHOOTING.md.",
+      "timestamp": "2026-10-30T17:03:50.258Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:07:00.327Z",
-  "updatedAt": "2026-10-30T16:38:11.317Z",
+  "updatedAt": "2026-10-30T17:03:50.258Z",
   "dependsOn": [
     "task-b439d7fb2c3443789fe91971cad4ed04",
     "task-98ffe33f448746e6bc802db0b5624fd0",

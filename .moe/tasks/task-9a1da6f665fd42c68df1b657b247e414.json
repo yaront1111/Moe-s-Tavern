@@ -1,0 +1,31 @@
+{
+  "id": "task-9a1da6f665fd42c68df1b657b247e414",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: JetBrains protected profile record is keyed by the project's real-path spelling, so opening a PROTECTED project through an alias spelling (UNC, subst, mapped) reads ABSENT and can run LEGACY with no downgrade prompt",
+  "description": "This is a known residual of the protected-profile Windows alias work. It tracks a finding under RF07 (f3f364a6) DoD 3 (\"files a row for each finding\"), so the epic's adversarial review can cite it instead of rediscovering it.\n\nSource: code reading by architect-4ae016fb (msg-98faf485, 16:40Z, 2026-10-30), triaged by 52fb6178's planner architect-6fc3dd5c (msg-521369be, 17:03Z). Neither ran a probe.\n- RuntimeSelectionPolicy projectKey (about :169) keys RF02's stored profile record off the project's real path.\n- Open a project that has a stored PROTECTED record through an alias spelling: a UNC loopback share, or a subst or mapped drive (Java toRealPath keeps those letters). The record lookup then reads ABSENT.\n- If project.json no longer declares verified-local, profile() returns LEGACY with no downgrade prompt, so none of the protected refusals run.\n- It needs a human to open the project through the alias spelling.\n\nWhy there is no fix yet: there is no robust key without native file identity, and on Windows NIO's fileKey is null. It is the same class as 1c2bfeca's subst residual. 52fb6178 makes a share-opened project's protected state session-only (ProtectedStateStore.usableFor = false), but it does not key the record by identity.\n\nOptions for whoever plans this (the planner decides): key the record by a native identity (volume serial + file index through JNA/JNI, or a probe-backed helper). Or refuse to downgrade when any stored record matches the project by isSameFile. Or detect a non-plain-local base and refuse with a prompt instead of falling back to LEGACY. Probe natively first. It dependsOn 52fb6178, the last open row on RuntimeSelectionPolicy.kt.",
+  "definitionOfDone": [
+    "On a Windows host, a project whose PROTECTED record was stored under its local spelling, opened through a UNC loopback, subst or mapped-drive spelling, never silently resolves to LEGACY. It resolves to PROTECTED, or the user gets the downgrade prompt. Shown by JetBrains tests that need no network (fake or temporary subst where possible).",
+    "Plain local opens, POSIX hosts and the legacy profile behave as before. The existing RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest rows pass unchanged.",
+    "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" exits 0 from WSL, with the output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-52fb6178b3684db89d6e8a5a351c63ea"
+  ],
+  "priority": "LOW",
+  "order": 300.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T17:03:38.016Z",
+  "updatedAt": "2026-10-30T17:03:38.016Z"
+}

@@ -8,23 +8,151 @@
     "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && gradlew.bat test\" exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Production change, one file: moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt. The rule: under the protected switch on a Windows host, nothing is provably outside a project base that is not plainly local.\n\nFirst re-read the file as its two dependencies landed it. This row can only be claimed once both are DONE.\n- task-526a2080, reopen 1. QA rejected it for a LEGACY Restart Daemon regression. The reopen threads ONE PROTECTED-only switch through select, installedArtifact, installedExecutable and isOutsideProject, so LEGACY Restart's stop selection skips the plain-local rule. That stop selection is MoeDaemonSupervisor.stopCommandOrNull, protectedNode and stopBuilder. worker-0062feec proposed `plainLocal: Boolean = true`. Use the name and shape that actually landed.\n- task-1c2bfeca adds outsideByIdentity (a Files.isSameFile walk) to isOutsideProject and a branch to select.\nThe new base checks run exactly when that switch turns on the candidate plain-local checks, and never otherwise. With the switch off, every answer stays as it was.\n\n(a) Add `private const val BASE_NOT_PLAIN = \"the project directory is not a plain local Windows path\"`. VS Code RF06b rev 3 (task-032c9739) uses this exact string, so TROUBLESHOOTING needs only one entry.\n\n(b) isOutsideProject:\n- Run every string check before any lookup: candidate.isAbsolute, then the candidate's plain-local spelling (526a2080), then, NEW, isPlainLocalPath(basePath) on the raw base spelling. Only after that, build the project forms (Paths.get(basePath).toAbsolutePath().normalize() and realPathOrNull(basePath)) and call resolve(path).\n- At acdcd627 `projects`, including realPathOrNull(basePath), is built before the candidate check. Move it after, so a refused base or candidate is never looked up.\n- NEW: answer false when the base's real path is not plainly local. Example: a plain spelling that is a link to a share.\n- The raw check also covers the normalized form, because toAbsolutePath().normalize() keeps a drive-qualified spelling drive-qualified. A rooted `\\x` or drive-relative `C:x` spelling is refused before toAbsolutePath would resolve it against the IDE's cwd drive (the daemon would resolve it against its own).\n- 1c2bfeca's identity conjunct stays after these checks, so it now runs only for a plain base.\n- Error handling does not change. Keep both catches (Exception and IOError answer false).\n- KDoc: on a Windows host the project base must also be plainly local, both as written (checked before any lookup) and as its real path. Otherwise nothing is provably outside it.\n\n(c) select:\n- Before `realPathOrNull(basePath)`, add `if (<switch> && !isPlainLocalPath(basePath)) return rejected(BASE_NOT_PLAIN, basePath)`.\n- Right after the project resolves, add `if (<switch> && !isPlainLocalPath(project.toString())) return rejected(BASE_NOT_PLAIN, project)`.\n- Both come before resolve(), so no candidate is resolved for a refused base. A reachable share, an unreachable share, a \\\\wsl$ path and a rooted spelling all get the same reason. A plain base that cannot be resolved keeps 'the project directory cannot be resolved'.\n- Add one comment with the why. toRealPath keeps a share or device base, and nothing maps it back to a local folder. File identity can match a loopback share, but only by opening it, and a foreign redirector (\\\\wsl$ 9P, third-party SMB) need not report NTFS file ids. So the refusal comes from the spelling, like VS Code's 'refuse, never canonicalize'.\n- This covers node (installedExecutable) and daemon, wrapper and proxy (installedArtifact), and through them protectedDaemonCommand, TerminalAgentLauncher and ManagedVmPanel.\n\n(d) In usableStore's debug line, change 'the IDE state store is inside the project' to 'the IDE state store is not provably outside the project'. A share-opened project now ends up there, and since 526a2080 so does a store root on a share.\n\nDo not change MoeDaemonSupervisor, ProtectedStateStore, TerminalAgentLauncher, ManagedVmPanel, projectKey or profile(). There is no \\\\wsl$ carve-out: `\\\\wsl$\\<distro>\\mnt\\<drive>\\…` aliases a local drive, and links or mounts inside the distro can lead there too.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Tests, one file: moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt.\n- Change no existing row. That includes 526a2080's N5-N6 and S7-S8, its reopen's LEGACY stop rows, and 1c2bfeca's subst rows. Use the next free N and S numbers.\n- Both new methods start with `assumeTrue(\"Windows path forms\", RuntimeSelectionPolicy.windowsHost)`. They must RUN on the Windows verification host.\n- Write runtime paths as Kotlin literals with doubled backslashes.\n\nHelper nonLocalBases(project: File): List<String>, placed next to share() and nonLocalSpellings(). Let real = realFile(project).path (`X:\\rest`) and s = share(\"localhost\", project). Return listOfNotNull of:\n- s;\n- share(\"127.0.0.1\", project);\n- s.replace('\\\\', '/'), which is IntelliJ's system-independent basePath, `//localhost/X$/rest`;\n- `\\\\wsl$\\moe-no-such-distro\\proj`;\n- `\\\\wsl.localhost\\moe-no-such-distro\\proj`;\n- `\\\\localhost\\moe-no-such-share$\\proj`, a missing share;\n- real.substring(2), the rooted form `\\rest`;\n- real.substring(0, 2) + real.substring(3), the drive-relative form `X:rest`;\n- volumeSpelling(project), which is `\\\\.\\Volume{GUID}\\rest` (local, no network) or null.\nIts KDoc says the rule must never look any of these up.\n\nN row, isOutsideProject.\nSetup:\n- project = newFolder(\"project\"), with bin/ created;\n- outside = newFolder(\"outside\");\n- store = ProtectedStateStore(temporaryFolder.root.toPath().resolve(\"system/moe/protected-state\"));\n- untouched = { throw AssertionError(\"looked up $it\") }. It is an Error, so the catches cannot swallow it.\nAssertions:\n- For every base, and every path in [project.path, File(project,\"bin\").path, File(project,\"missing\").path, outside.path], assertFalse both with resolve = untouched (no candidate lookup) and with the default lookup. The outside folder is refused too, because nothing is provably outside such a base.\n- For every base, assertFalse(store.usableFor(base)). Add a comment that this is an accepted cost: that project's protected state stays session-only.\n- Controls through the drive path: isOutsideProject(bin, project.path) is false, outside.path is true, and store.usableFor(project.path) is true.\n\nS row, selection and spawn.\nSetup:\n- (project, root, node) = protectedFixture();\n- planted = File(project, \"node\"), containing \"planted\";\n- sandbox = installedLayout(File(project, \"build/idea-sandbox/plugins/moe-jetbrains\"));\n- volumeBase = volumeSpelling(project), guarded by assumeTrue(\"no volume GUID path on this host\", volumeBase != null), as S8 does;\n- reason = \"the project directory is not a plain local Windows path\".\nFor every base:\n- assertEquals(reason, assertRejected(…)) for installedExecutable(planted.path, base), installedExecutable(node.path, base), installedArtifact(sandbox, \"daemon/index.js\", base) and installedArtifact(root, \"daemon/index.js\", base). The in-project pair is DoD 1. The outside pair proves that the base check refuses, not identity.\n- Set env PATH to node.parentFile.path, project.path and File(project,\"bin\").path. Call supervisorFor(project, { null }, { null }).protectedDaemonEnvironment(env, base), then assertEquals(mapOf(\"PATH\" to \"\"), env).\nSpawn, through volumeBase (local, so no SMB). Let message = \"Protected execution profile: $reason. Project and PATH copies of the Moe daemon are not used.\" For supervisorFor(File(volumeBase), { root }, { node.path }, started = started, statuses = statuses):\n- ensureDaemonRunning() is false;\n- started is empty;\n- statuses == listOf(false to message);\n- selectionRefusal() == message;\n- stopCommandOrNull(volumeBase) is null.\nLEGACY keeps today's stop selection:\n- supervisorFor(File(volumeBase), { root }, { node.path }, profile = { RuntimeProfile.LEGACY }).stopCommandOrNull(volumeBase) equals listOf(realFile(node).path, realFile(File(root, \"daemon/index.js\")).path, \"stop\", \"--project\", volumeBase).\n- This relies on 526a2080's reopen routing, where the switch is off under LEGACY. If it landed another way, assert the same outcome through whatever landed.\nControl: installedExecutable(node.path, project.path) is Accepted(realFile(node)).\n\nRED, then GREEN, recorded in the step note, under the jetbrains-gradle lease:\n- Temporarily disable both base checks by forcing their condition to false.\n- Run cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun --tests com.moe.util.RuntimeSelectionPolicyTest\".\n- Both new rows must fail. N fails through the untouched lookup or a true outside answer; S fails through an accepted outside node.\n- Restore the checks and rerun: both rows pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Tests, one file: moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt.\n- Change no existing row. That includes 526a2080's N5-N6 and S7-S8, its reopen's LEGACY stop rows, and 1c2bfeca's subst rows. Use the next free N and S numbers.\n- Both new methods start with `assumeTrue(\"Windows path forms\", RuntimeSelectionPolicy.windowsHost)`. They must RUN on the Windows verification host.\n- Write runtime paths as Kotlin literals with doubled backslashes.\n\nHelper nonLocalBases(project: File): List<String>, placed next to share() and nonLocalSpellings(). Let real = realFile(project).path (`X:\\rest`) and s = share(\"localhost\", project). Return listOfNotNull of:\n- s;\n- share(\"127.0.0.1\", project);\n- s.replace('\\\\', '/'), which is IntelliJ's system-independent basePath, `//localhost/X$/rest`;\n- `\\\\wsl$\\moe-no-such-distro\\proj`;\n- `\\\\wsl.localhost\\moe-no-such-distro\\proj`;\n- `\\\\localhost\\moe-no-such-share$\\proj`, a missing share;\n- real.substring(2), the rooted form `\\rest`;\n- real.substring(0, 2) + real.substring(3), the drive-relative form `X:rest`;\n- volumeSpelling(project), which is `\\\\.\\Volume{GUID}\\rest` (local, no network) or null.\nIts KDoc says the rule must never look any of these up.\n\nN row, isOutsideProject.\nSetup:\n- project = newFolder(\"project\"), with bin/ created;\n- outside = newFolder(\"outside\");\n- store = ProtectedStateStore(temporaryFolder.root.toPath().resolve(\"system/moe/protected-state\"));\n- untouched = { throw AssertionError(\"looked up $it\") }. It is an Error, so the catches cannot swallow it.\nAssertions:\n- For every base, and every path in [project.path, File(project,\"bin\").path, File(project,\"missing\").path, outside.path], assertFalse both with resolve = untouched (no candidate lookup) and with the default lookup. The outside folder is refused too, because nothing is provably outside such a base.\n- For every base, assertFalse(store.usableFor(base)). Add a comment that this is an accepted cost: that project's protected state stays session-only.\n- Controls through the drive path: isOutsideProject(bin, project.path) is false, outside.path is true, and store.usableFor(project.path) is true.\n\nS row, selection and spawn.\nSetup:\n- (project, root, node) = protectedFixture();\n- planted = File(project, \"node\"), containing \"planted\";\n- sandbox = installedLayout(File(project, \"build/idea-sandbox/plugins/moe-jetbrains\"));\n- volumeBase = volumeSpelling(project), guarded by assumeTrue(\"no volume GUID path on this host\", volumeBase != null), as S8 does;\n- reason = \"the project directory is not a plain local Windows path\".\nFor every base:\n- assertEquals(reason, assertRejected(…)) for installedExecutable(planted.path, base), installedExecutable(node.path, base), installedArtifact(sandbox, \"daemon/index.js\", base) and installedArtifact(root, \"daemon/index.js\", base). The in-project pair is DoD 1. The outside pair proves that the base check refuses, not identity.\n- Set env PATH to node.parentFile.path, project.path and File(project,\"bin\").path. Call supervisorFor(project, { null }, { null }).protectedDaemonEnvironment(env, base), then assertEquals(mapOf(\"PATH\" to \"\"), env).\nSpawn, through volumeBase (local, so no SMB). Let message = \"Protected execution profile: $reason. Project and PATH copies of the Moe daemon are not used.\" For supervisorFor(File(volumeBase), { root }, { node.path }, started = started, statuses = statuses):\n- ensureDaemonRunning() is false;\n- started is empty;\n- statuses == listOf(false to message);\n- selectionRefusal() == message;\n- stopCommandOrNull(volumeBase) is null.\nLEGACY keeps today's stop selection:\n- supervisorFor(File(volumeBase), { root }, { node.path }, profile = { RuntimeProfile.LEGACY }).stopCommandOrNull(volumeBase) equals listOf(realFile(node).path, realFile(File(root, \"daemon/index.js\")).path, \"stop\", \"--project\", volumeBase).\n- This relies on 526a2080's reopen routing, where the switch is off under LEGACY. If it landed another way, assert the same outcome through whatever landed.\nReal-base branch: a plain base spelling whose real path is a share.\n- Make link = File(temporaryFolder.root, \"share-link\") with Files.createSymbolicLink(link.toPath(), Paths.get(share(\"localhost\", project))), inside try/catch.\n- Do NOT use the symlink() helper: its junction fallback cannot target UNC.\n- Run the block only when the link was created AND link.toPath().toRealPath() succeeds and is not drive-qualified. Then assert:\n  - isOutsideProject(outside.path, link.path) is false;\n  - installedExecutable(node.path, link.path) is refused with exactly reason.\n- Follow S4's `if (linked)` pattern; do not assumeTrue, which would skip the whole method.\n- This host has no SeCreateSymbolicLinkPrivilege, so the block will not run here. Say so in the step note, and check that branch's order of checks in the self-review.\nControl: installedExecutable(node.path, project.path) is Accepted(realFile(node)).\n\nRED, then GREEN, recorded in the step note, under the jetbrains-gradle lease:\n- Temporarily disable both base checks by forcing their condition to false.\n- Run cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun --tests com.moe.util.RuntimeSelectionPolicyTest\".\n- Both new rows must fail. N fails through the untouched lookup or a true outside answer; S fails through an accepted outside node.\n- Restore the checks and rerun: both rows pass.",
+          "reason": "Adds coverage guidance for the real-base branch (a plain base spelling that is a link to a share). This host cannot create such a link: there is no SeCreateSymbolicLinkPrivilege, and a junction cannot target UNC. So the row runs only where the link can be made, and the step note must say it did not run here. Nothing else changes.",
+          "amendedBy": "architect-6fc3dd5c",
+          "amendedAt": "2026-10-30T17:04:19.354Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once.\n- Take the `jetbrains-gradle` lease with moe.acquire_resource, and release it afterwards.\n- WSL has no JDK. From a /mnt/d cwd, run exactly: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n  This is DoD 2's gradlew.bat test, forced to run fresh.\n- It must exit 0, and :test must execute (not UP-TO-DATE).\n- In moe-jetbrains/build/test-results/test/TEST-*.xml, confirm:\n  - failures=0 and errors=0;\n  - this run stamped the RuntimeSelectionPolicyTest XML;\n  - both new rows ran, without <skipped/>.\n- Every existing row passes unchanged. In particular:\n  - S4, PS4 and D1-D6;\n  - 526a2080's N5, N6, S7, S8 and its reopen's LEGACY stop rows;\n  - 1c2bfeca's subst rows;\n  - all of MoeDaemonSupervisorTest.\n- Give complete_task the command, the exit code, the output tail and the test count.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this diff only (git diff on the two files). Check:\n- Order. Read the final code: in both isOutsideProject and select, no filesystem call happens before the raw base check. The N row's untouched lookup proves the candidate side.\n- LEGACY. The base checks run if and only if the switch turns on the candidate checks.\n  - Grep every caller of isOutsideProject, installedArtifact and installedExecutable. For each, state which switch it passes and what a non-plain base now yields. The callers are:\n    - protectedPathEntries, via nodeOnProtectedPath and protectedDaemonEnvironment, for both the start env and stopBuilder's env;\n    - ProtectedStateStore.usableFor;\n    - protectedDaemonCommand, via stopCommandOrNull and protectedCommandOrRefuse;\n    - activationRefusal;\n    - TerminalAgentLauncher;\n    - ManagedVmPanel.nodeCommand.\n  - 526a2080 was reopened exactly for missing the LEGACY Restart stop path. The S row's LEGACY assert covers it.\n- Error handling. The catches are unchanged, isOutsideProject never throws, and select returns Rejected instead of throwing.\n- POSIX does not change, because isPlainLocalPath is true there. Plain local bases do not change either: all existing rows pass.\n- Refusal reasons carry no path.\n- Concurrency. No shared state is added.\n- The diff touches exactly the two planned files, and peer dirty paths stay untouched.\n\nThe completion summary must state, for RF07 (task-f3f364a6), the accepted cost, a TROUBLESHOOTING note and a residual.\nAccepted cost, under protected on Windows. It applies to a project opened through:\n- a UNC share (including \\\\localhost\\C$);\n- a device path;\n- \\\\wsl$ or \\\\wsl.localhost;\n- a rooted or drive-relative spelling.\nSuch a project starts nothing, its protected PATH keeps nothing, and its protected state is session-only.\nTROUBLESHOOTING: tell a WSL-hosted project to clone to a local drive, or run the IDE inside the distro, or stay on the legacy profile.\nResidual, not fixed here: RF02's record is keyed by the spelling the project was opened through. A confirmed-protected project opened through an alias spelling (share, device path, subst or mapped drive) reads no record. After an IDE restart, its repository can then downgrade it without the prompt.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 2,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote under the human's 2026-10-30 13:00Z delegation. This is the JetBrains inverse-UNC-base gap that QA reproduced on the VS Code twin (UNC_PROJECT_LEAKS=2). It dependsOn 526a2080 and now also 1c2bfeca: same two files, RuntimeSelectionPolicy.kt and its test. 1c2bfeca's rev 1 proves containment by file identity (outsideByIdentity / isSameFile). First check whether that covers a UNC base. If it does, verify and close this row. If not, add the \"refuse a non-plain-local base\" rule (parity with VS Code's \"refuse, never canonicalize\") and decide \\\\wsl$ bases explicitly. RF07 now dependsOn this row.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
-    "task-526a208079b5467db13cb9dd10da442e"
+    "task-526a208079b5467db13cb9dd10da442e",
+    "task-1c2bfeca0ec34589b8cb498abc082549"
   ],
   "priority": "MEDIUM",
   "order": 298.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-f70e21b88a6146dcb3688570d055bd9b",
+      "author": "governor-693b7073",
+      "content": "@architect-6fc3dd5c Planning input from architect-4ae016fb (526a2080's planner, msg-98faf485, 16:40Z, by code reading, unprobed). It is not a DoD edit; this row's 2-item DoD stands, and the planner decides scope.\nConfirmed gap at acdcd627: isOutsideProject (RuntimeSelectionPolicy.kt:271) builds both base forms (normalize + toRealPath) and never runs isPlainLocalPath on them. select (:285) takes project = toRealPath(basePath) unchecked. Both lines predate acdcd627.\nProposed scope, parity with RF06b's \"refuse, never canonicalize\":\n(1) Under protected on a Windows host, select, installedArtifact and installedExecutable refuse with a named reason, before resolving any candidate, when either base form fails isPlainLocalPath. No spawn.\n(2) isOutsideProject returns false whenever either base form is not plainly local.\n(3) \\\\wsl$ and \\\\wsl.localhost bases are refused too, with no carve-out, since \\\\wsl$\\<distro>\\mnt\\<drive>\\… aliases a local drive. TROUBLESHOOTING.md says what a WSL-hosted project does instead.\n(4) Tests need no network. Legacy, POSIX and local-base rows are unchanged.\nExtra fact, a possible silent downgrade: projectKey (:169) keys RF02's profile record off the real path. Open a project that has a stored PROTECTED record through a UNC spelling, and the record reads ABSENT. If project.json no longer declares verified-local, profile() returns LEGACY with no downgrade prompt, so rule (1) never runs. It needs a human to open through a share. Decide whether this row covers it or files it.\nOrdering: this row dependsOn 526a2080 (in QA) and 1c2bfeca (planned around file identity, same file). Check what 1c2bfeca's outsideByIdentity already covers before you add code.",
+      "timestamp": "2026-10-30T16:40:52.078Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:28:38.098Z",
-  "updatedAt": "2026-10-30T16:28:38.098Z"
+  "updatedAt": "2026-10-30T17:04:19.354Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T16:38:16.784Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T16:38:30.014Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-6fc3dd5c"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T17:03:04.688Z",
+  "executionContract": {
+    "intendedBehavior": "Under the protected profile on a Windows host, a project base that is not a plain local drive path has nothing provably outside it. The protected profile is the PROTECTED-only plain-local switch that task-526a2080 threads through select and isOutsideProject. Such bases include:\n- a UNC share: \\\\localhost\\C$\\…, \\\\127.0.0.1\\C$\\… and IntelliJ's //host/share/… form;\n- a device path (\\\\.\\Volume{…}\\…);\n- \\\\wsl$ or \\\\wsl.localhost;\n- a rooted (\\x) or drive-relative (C:x) spelling;\n- a base whose real path is not plain local.\nFor such a base:\n- isOutsideProject answers false for every path, so the protected PATH keeps nothing and ProtectedStateStore.usableFor is false;\n- select refuses node, daemon, wrapper and proxy with 'the project directory is not a plain local Windows path', and nothing is spawned;\n- the raw spelling is checked before any filesystem call.\nWith the switch off (LEGACY Restart's stop selection), on POSIX hosts and for plain local bases, every answer is unchanged.",
+    "acceptanceCriteria": [
+      "On Windows, isOutsideProject(p, base) is false for every non-plain base spelling. This holds for the project, a folder inside it, a missing folder inside it and an unrelated outside folder. A resolver that throws proves that no candidate is looked up.",
+      "On Windows, installedExecutable and installedArtifact refuse an in-project node or root, and an outside one, with exactly 'the project directory is not a plain local Windows path', for every non-plain base. ensureDaemonRunning spawns nothing, selectionRefusal shows the message, and the protected PATH is empty.",
+      "Under LEGACY, stopCommandOrNull for a device-path base still returns the installed stop command. Under PROTECTED it returns null.",
+      "Existing rows, including task-526a2080's and task-1c2bfeca's, pass unchanged, and the JetBrains gradle test run exits 0."
+    ],
+    "invariants": [
+      "No filesystem call happens before the raw base check in isOutsideProject or select.",
+      "The base checks run if and only if the switch turns on the candidate plain-local checks.",
+      "isOutsideProject never throws, and select never throws.",
+      "On POSIX isPlainLocalPath is always true, so nothing changes there.",
+      "Refusal reasons never contain a path; only the log gets it."
+    ],
+    "compatibility": [
+      "isOutsideProject, installedArtifact and installedExecutable keep the signatures task-526a2080's reopen lands; no new parameter.",
+      "A plain base that cannot be resolved keeps 'the project directory cannot be resolved'.",
+      "Restart Daemon's LEGACY stop selection (MoeDaemonSupervisor.stopCommandOrNull, protectedNode, stopBuilder) behaves exactly as before."
+    ],
+    "approvedScope": [
+      "RuntimeSelectionPolicy.isOutsideProject: raw base spelling check before any lookup, and a plain-local check on the base's real path",
+      "RuntimeSelectionPolicy.select: raw base check before realPathOrNull(basePath), and a real-base check after it, both with BASE_NOT_PLAIN",
+      "RuntimeSelectionPolicy.usableStore: debug wording only",
+      "RuntimeSelectionPolicyTest: nonLocalBases helper, one N row and one S row"
+    ],
+    "reuse": [
+      "isPlainLocalPath and comparablePath from task-526a2080",
+      "the PROTECTED-only switch from task-526a2080's reopen",
+      "rejected()",
+      "Test helpers share(), volumeSpelling(), protectedFixture(), installedLayout(), supervisorFor(), assertRejected() and realFile()"
+    ],
+    "sourceAssumptions": [
+      "RuntimeSelectionPolicy.kt at acdcd627: isOutsideProject (264-281) builds `projects`, including realPathOrNull(basePath), before the candidate check. select (284-303) resolves the project first.",
+      "MoeDaemonSupervisor.kt:547: stopCommandOrNull serves the LEGACY Windows Restart Daemon. 526a2080's reopen routes the switch there.",
+      "ProtectedStateStore.kt:37: usableFor = isOutsideProject(root.toString(), basePath), with the default switch.",
+      "Native probe 2026-10-30 (D:\\arch-52fb-probe\\BaseProbe.java, JDK 17.0.20). Files.isSameFile(local project, its \\\\localhost\\D$ or \\\\127.0.0.1\\D$ spelling) is true. \\\\wsl$\\<distro>\\mnt\\d\\… throws AccessDeniedException. A native \\\\wsl$ folder is not the same file."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Verify-and-close on task-1c2bfeca's file identity. A native probe (D:\\arch-52fb-probe\\BaseProbe.java, JDK 17) found:\n- Files.isSameFile(D:\\projexts\\moes\\moe-jetbrains, its \\\\localhost\\D$ and \\\\127.0.0.1\\D$ spellings) is true, so identity answers 'inside' for a reachable loopback-share base.\n- \\\\wsl$\\Ubuntu-24.04\\mnt\\d\\… throws AccessDeniedException, so it fails closed.\n- A native \\\\wsl$ folder is correctly not the same file.\nRejected anyway:\n- the refusal would come from opening the share, and DoD 1 asks for a network-free refusal path;\n- it trusts the file ids a foreign redirector (9P, third-party SMB) reports;\n- an unreachable share changes the reason;\n- VS Code rev 3 refuses the base.\n(2) Refuse only in select and keep identity in isOutsideProject. ProtectedStateStore.usableFor would then stay true for share-opened projects, which keeps RF02's persistent pin there. Rejected: the governor's scope item 2 and VS Code parity want isOutsideProject false for such a base, and its refusal would still need the share.\n(3) Chosen: refuse the base in both functions, checking the raw spelling first and then the real path, behind 526a2080's PROTECTED-only switch.\n(4) A \\\\wsl$ carve-out. Rejected: \\\\wsl$\\<distro>\\mnt\\<drive>\\… aliases a local drive, links or mounts inside the distro can lead there, and nothing on the Windows side checks them (architect-4ae016fb, msg-6653afdf).",
+    "codebaseInsights": "- MoeDaemonSupervisor.stopCommandOrNull (:547) serves the LEGACY Windows Restart Daemon. That is why 526a2080 was reopened, and why the base checks must ride the same switch.\n- ProtectedStateStore.usableFor (:37) is isOutsideProject(root, basePath) with the default switch, so the state store of a share-opened project becomes unusable.\n- ensureMoeInitialized reads or creates <base>\\.moe, and syncs role docs into it. So supervisor-level rows use a volume-GUID base (local) rather than the loopback share.\n- installedArtifact resolves the installed root (the plugin's own directory, never the base) before select.\n- java.io.File keeps the `\\\\.\\Volume{…}` and UNC prefixes.\n- IntelliJ's basePath uses forward slashes (`//localhost/D$/…`).\n- A drive-qualified raw spelling stays drive-qualified under toAbsolutePath().normalize(). So the raw check covers the normalized form.",
+    "risks": "- Two dependencies are still in flux: 526a2080 reopen 1 (the shape of the switch) and 1c2bfeca (identity). Re-read the landed code first. Keep the semantic invariant (the base checks run iff the candidate checks run), not the names.\n- Never apply the base checks with the switch off. That covers the LEGACY Restart stop selection and its PATH env.\n- Accepted cost: under protected, share-opened, device-path and \\\\wsl$ projects start nothing, and their protected state is session-only. A confirmed-protected project opened that way can therefore be downgraded by its repository after an IDE restart, without the prompt. It is the same class as the projectKey residual: records are keyed by the opened spelling (subst and mapped drives too). RF07 documents it.\n- volumeSpelling needs mountvol. The S row skips without it, like S8; the verification host has it.\n- RED runs may contact the local SMB server, or \\\\wsl$ for a distro that does not exist. Both fail fast, and GREEN contacts neither.\n- From WSL, probe with cmd.exe in single quotes, or bash collapses `\\\\`.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T17:03:04.711Z",
+  "approvedPlanRevision": 1
 }
