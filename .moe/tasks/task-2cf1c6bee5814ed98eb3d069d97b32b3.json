@@ -17,22 +17,35 @@
     {
       "stepId": "step-1",
       "description": "DAEMON: /health reports the bind the daemon listens with.\n\nPrerequisites: task-2f2484b4 and task-d8fc3955 are DONE. Before editing, read:\n- their landed bytes;\n- mem:task-task-2f2484b426ef42aaa0566323da2d550e-handoff and mem:task-task-d8fc3955a12949858a9be4f584a1cc67-handoff;\n- mem:decision-local-runner-daemon-bind (this row's design);\n- mem:gotcha-gitignored-moe-files-overwritten-by-pull.\n\npackages/moe-daemon/src/index.ts:\n- The /health handler (hoisted into a named const by task-2f2484b4) adds `bindHost: host` to its JSON.\n- `host` is the exact token startDaemon listens with (`bindHost || DEFAULT_BIND_HOST`): '127.0.0.1' by default, or 'wsl', '0.0.0.0', '::1' and so on.\n- The field is ALWAYS present, unlike daemon.json, which omits the default.\n- Never derive it from server.address(): under 'wsl' the primary listener is loopback but the extra listeners are not.\n- Every existing field (status, version, pid, uptime, projectPath, stats, checks) keeps its value.\n- One short comment says the local runner admits a daemon on this field.\n- error handling: none is new. The handler's existing 200/503 paths are unchanged.\n\npackages/moe-daemon/src/server/bindHosts.test.ts is task-2f2484b4's file, listed under newFiles only because it did not exist at plan time. Extend its spawned `_run` rows:\n- --host wsl, and MOE_BIND_HOST=wsl: /health answers bindHost 'wsl'.\n- A new variant with no --host and no MOE_BIND_HOST: /health answers bindHost '127.0.0.1', and daemon.json still has no bindHost key.\n- In each variant, the /health key set is EXACTLY status, version, pid, uptime, projectPath, stats, checks, bindHost.\n- The exported probeDaemonHealth and validateDaemonInfoForProject still accept the daemon (existing consumers).\n- If the landed file has no spawned-daemon rows, add one describe there, spawning `_run` the way delivery/acceptance.test.ts startDaemonChild does: isolated env, free port, teardown in afterEach.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/server/bindHosts.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/server/bindHosts.test.ts"
+      ],
+      "note": "/health JSON gains `bindHost: host` (the configured token, last key; comment says the local runner admits on it). bindHosts.test.ts: spawnDaemon gains a 'default' mode (no --host, no MOE_BIND_HOST); the D row runs flag/env/interfaces throw/default and asserts exact /health key order [status,version,pid,uptime,projectPath,stats,checks,bindHost], bindHost 'wsl' or '127.0.0.1', daemon.json has no bindHost key in default, and the existing probeDaemonHealth/validateDaemonInfoForProject assertions still pass. Red first in a Linux snapshot (/tmp/moe-2cf1-dev.Ka5rp3, node v24.21.0, env -i): 4 D rows failed on the key set; green after: bindHosts.test.ts 23/23, tsc --noEmit clean. Shared tree has ~60 dirty paths from other sessions, untouched.",
+      "startedAt": "2026-10-30T08:27:28.625Z",
+      "completedAt": "2026-10-30T08:29:50.015Z"
     },
     {
       "stepId": "step-2",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nCreate scripts/tests/local-runner-daemon-bind.test.mjs (node:test, node:assert/strict). It needs no built daemon, and it never touches port 9876, where a live fleet daemon may answer.\n\nFake /health, an inline factory:\n- It listens on 127.0.0.1:0, and also on ::1:0 best-effort. Rows that need ::1 skip with a reason where it cannot bind.\n- It records each request's method, url and remote address.\n- Default answer: 200 with {status:'healthy', projectPath:<row project>, bindHost:'127.0.0.1'}.\n- Per-row behaviors:\n  - a given status and body (object or raw string);\n  - silent: accept, never answer;\n  - trickle: headers, then one byte every 20 ms, never ending;\n  - oversized: MAX_HEALTH_BYTES+1 bytes;\n  - a 302.\n- A closed port is a freed 127.0.0.1:0 port.\n\nEach row's project is a scratch dir holding .moe/daemon.json {port:<fake port>, pid:1, projectPath:<project>}, plus the row's overrides.\n\nImports: at the top, only exports that exist today (runGuestSession, openRunnerChannel, readDaemonInfo, mcpCaller). Import loopbackDaemonHost and MAX_HEALTH_BYTES dynamically inside DB1, so the module rows fail one by one on pristine code.\n\nRows:\n- DB1: loopbackDaemonHost(info, projectPath, {timeoutMs}) as a table.\n  - It admits '127.0.0.1' for the default answer:\n    - with no file bindHost;\n    - with file bindHost '127.0.0.1';\n    - for this project in another spelling (trailing separator).\n  - It admits '::1' for file bindHost '::1' plus a ::1 fake reporting '::1'.\n  - It resolves null, never rejecting, for:\n    - a closed port;\n    - silent and trickle at timeoutMs 200, settling within ~1 s. This proves a TOTAL deadline, not an idle timeout.\n    - bodies '{', '[]' and 'null';\n    - an oversized body;\n    - a 503;\n    - 200 with status 'unhealthy';\n    - a 302;\n    - another project;\n    - no bindHost;\n    - bindHost '0.0.0.0', '::', 'wsl', 'localhost', '127.0.0.2', '::ffff:127.0.0.1', '', null, 1 or ['127.0.0.1'];\n    - file bindHost '0.0.0.0' or 'wsl' while the fake reports loopback. Here the fake must have seen NO request.\n  - Every request it does send is exactly 'GET /health', from a loopback address.\n- DB2: guest-session. Use runGuestSession with the bridge test's BINDING, a job, ownedInstanceName from lifecycle.mjs, a spawn spy, and timeoutMs 200.\n  - The core regression: daemon.json has no bindHost and the daemon reports '0.0.0.0' (and 'wsl'). It refuses SESSION_DAEMON_NOT_LOOPBACK, with spawn never called.\n  - Each failure kind refuses SESSION_DAEMON_NOT_LOOPBACK before spawn: no answer, a timeout, malformed, oversized, another project, a missing bind field, a non-loopback bind.\n  - A file without a usable port refuses SESSION_DAEMON_INFO_INVALID.\n  - The path names the project: daemonInfoPath is <projA>/.moe/daemon.json, the file's projectPath names projB, and the fake answers projB. This refuses.\n  - The default answer starts the session.\n  - Before each forward, using the bridge test's fakeProvider shape (hello, then requests):\n    - the first request is forwarded;\n    - the fake then reports '0.0.0.0';\n    - the second request ends the session SESSION_DAEMON_NOT_LOOPBACK, with exactly one forward.\n    - The same holds when the fake is closed between the two requests.\n- DB3: runner-client, with a scripted WebSocket class.\n  - The core regression and every failure kind refuse RUNNER_DAEMON_NOT_LOOPBACK. No WebSocket is constructed and the key is never read: the key file is absent, so reading it would surface RUNNER_KEY_MISSING.\n  - The default answer dials ws://127.0.0.1:<port>/runner. '::1' dials ws://[::1]:<port>/runner.\n  - An aborted signal stays RUNNER_ABORTED.\n- DB4: vm-control.\n  - readDaemonInfo(project, {timeoutMs:200}) refuses DAEMON_UNREACHABLE for the core regression and for every failure kind.\n  - It admits with {port, host}.\n  - mcpCaller with a scripted WebSocket dials ws://<admitted host>:<port>/mcp, and makes no socket after a refusal.\n- DB5: a non-loopback daemon.json bindHost refuses in all three modules, each with its own code, even when the fake reports loopback. The fake sees no request.\n\nAssertions are exact (deepEqual on codes, URLs and request logs).\n\nerror handling in tests: every server, socket and timer is closed in after or t.after, even when a row fails, and every refusal is asserted by its fixed code, never by message text.\n\nRed proof: on the pristine modules, run `node --test scripts/tests/local-runner-daemon-bind.test.mjs`. DB1 must fail (no such export), and the DB2-DB4 core-regression rows must fail because the session, channel or info is admitted. Record the failing row names.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/local-runner-daemon-bind.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-daemon-bind.test.mjs"
+      ],
+      "note": "New scripts/tests/local-runner-daemon-bind.test.mjs (node:test). Per-row fake /health servers on 127.0.0.1:0 (::1 best-effort, with a skip reason), closed in t.after; a shared KINDS table (no answer, timeout, malformed, oversized at cap+1, another project, missing bind, 0.0.0.0 and wsl with no file bindHost); DB1 helper matrix plus exact-cap admit, trickle/silent under a 1 s race at timeoutMs 200, file-only refusals with an empty request log, and an aborted signal; DB2 start/path-names-project/portless/per-forward (rebind, closed, abort precedence); DB3 runner-client (no WebSocket, no key read, v4/v6 URLs, abort); DB4 readDaemonInfo {port,host} and mcpCaller URLs; DB5 file non-loopback in all three modules with no request. Red on pristine modules (node v24.21.0): DB1 (MAX_HEALTH_BYTES undefined / loopbackDaemonHost not a function), DB1 ::1, DB2 start ('no answer' → SESSION_TIMEOUT, spawned), DB2 per-forward (unsettled, 2 forwards), DB3 (RUNNER_KEY_MISSING: key read), DB4 ('admitted'); DB5 green (existing file guard). A scratch copy narrowed to the two core-regression kinds fails DB2/DB3/DB4 on exactly 'a 0.0.0.0 bind with no file bindHost' (admitted / key read / admitted).",
+      "startedAt": "2026-10-30T08:29:52.378Z",
+      "completedAt": "2026-10-30T08:37:35.550Z"
     },
     {
       "stepId": "step-3",
@@ -78,7 +91,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-fe18a9a9",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -94,14 +107,16 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:42:05.249Z",
-  "updatedAt": "2026-10-30T08:16:36.043Z",
+  "updatedAt": "2026-10-30T08:37:35.550Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:42:56.107Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 10
+    "plannedDistinctFileCount": 10,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-fe18a9a9"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -110,7 +125,10 @@
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T08:05:55.740Z",
   "executionContract": {
@@ -217,5 +235,6 @@
     "kind": "checkpoint",
     "sessionId": "architect-e4b7eee0@2026-10-30T07:42:56Z",
     "at": "2026-10-30T08:16:36.043Z"
-  }
+  },
+  "workStartedAt": "2026-10-30T08:27:28.625Z"
 }

@@ -710,7 +710,9 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
         uptime: Math.floor((Date.now() - startTime) / 1000),
         projectPath,
         stats,
-        checks
+        checks,
+        // The configured token, never server.address(): the local runner admits a daemon only on this field.
+        bindHost: host
       };
 
       const statusCode = isHealthy ? 200 : 503;

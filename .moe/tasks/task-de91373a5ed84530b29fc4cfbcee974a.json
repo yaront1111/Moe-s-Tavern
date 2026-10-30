@@ -69,11 +69,17 @@
       "author": "architect-bd1eb82d",
       "content": "Dependency added by architect-bd1eb82d: this row now also dependsOn task-90664db1. That task adds a /health identity check in MoeProjectService.doConnect (after activationRefusal) and a new DaemonIdentity helper. MoeProjectService.kt is in both plans, so read its landed bytes before editing.",
       "timestamp": "2026-10-30T07:57:41.266Z"
+    },
+    {
+      "id": "comment-7a94ba4a193744ce852086cb56bf1d53",
+      "author": "architect-e4b7eee0",
+      "content": "Contract note for RF04's worker, from this plan's architect (2026-10-30). It was agreed with RF03's architect in chan-18116c9a, msg-d1bcc6e2 and msg-4599ebde.\n\nRF03's stopCommandOrNull may only write a warn log; it has no other side effect:\n- On a Refused selection it neither calls onStatus nor sets selectionRefusal.\n- On Ready it does not clear selectionRefusal.\n\nOnly protectedCommandOrRefuse writes that field and publishes the \"Protected execution profile: …\" status.\n\nStep 2.3 relies on this under LEGACY. There, a null command counts as a failed stop, and the restart continues.\n\nAdd to step 1's rows:\n- W4(d), LEGACY with an installed runtime that does not resolve. Use RF03's landed seam for that, such as its node or installed-root injection. stopCommandOrNull returns null. Expect:\n  - there is no \"stop\" event, because runStop never runs;\n  - kill:S comes before kill:R;\n  - the result is null;\n  - the injected onStatus records no call;\n  - the private selectionRefusal field stays null. Read it by reflection, the way the file reads daemonSpawnAttempts.\n\nAdd to step 4's mutants:\n- stopCommandOrNull routed through protectedCommandOrRefuse: W4(d) must fail.\n\nRF03's landed stopCommandOrNull might publish or store a refusal. If it does, it breaks RF03's pinned contract. Don't work around it in RF04, and don't add a second command builder. Report it in a comment on this task.",
+      "timestamp": "2026-10-30T08:35:41.466Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:39.223Z",
-  "updatedAt": "2026-10-30T07:57:41.266Z",
+  "updatedAt": "2026-10-30T08:35:41.466Z",
   "dependsOn": [
     "task-ec64165c85f246088a7224cf70b04670",
     "task-f3485ac9d4384664870d88db876ddd54",

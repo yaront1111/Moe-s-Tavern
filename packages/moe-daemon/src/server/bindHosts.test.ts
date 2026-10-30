@@ -182,7 +182,7 @@ function spawnDaemon(root: string, mode: string, port: number) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(MOE_|GIT_)/i.test(key)));
   Object.assign(env, { HOME: root, USERPROFILE: root, TEMP: root, TMP: root, TMPDIR: root,
     NODE_ENV: 'production', MOE_RUNNER_KEY_DIR: path.join(root, 'keys'), MOE_ACCOUNTS_FILE: path.join(root, 'accounts.json') });
-  env.MOE_BIND_HOST = mode === 'flag' ? '0.0.0.0' : 'wsl';
+  if (mode !== 'default') env.MOE_BIND_HOST = mode === 'flag' ? '0.0.0.0' : 'wsl';
   const preload = mode === 'interfaces throw' ? 'import os from "node:os";os.networkInterfaces=()=>{throw new Error("interfaces unavailable")};'
     : mode === 'listen fails' ? 'import http from "node:http";http.Server.prototype.listen=function(){queueMicrotask(()=>this.emit("error",new Error("bind failed")));return this;};'
     : mode === 'multi' ? `import os from "node:os";import http from "node:http";
@@ -220,18 +220,23 @@ async function childDaemon(root: string, mode: string, port: number) {
 // Windows kills rather than dispatches SIGTERM, and killing tsx alone orphans its child.
 // These process rows require POSIX signals; R/L still cover the Windows bind logic.
 const posixIt = it.skipIf(process.platform === 'win32');
-posixIt.each(['flag', 'env', 'interfaces throw'])('D: %s starts, probes on loopback and shuts down', async mode => {
+posixIt.each(['flag', 'env', 'interfaces throw', 'default'])('D: %s starts, probes on loopback and shuts down', async mode => {
   const root = project();
   const reservation = server();
   await listen(reservation, '127.0.0.1');
   const port = portOf(reservation);
   await close(reservation);
   const { child, exited, infoFile, info } = await childDaemon(root, mode, port);
-  expect(info.bindHost).toEqual('wsl');
+  // daemon.json omits the default bind; /health always reports the token the daemon listens with.
+  expect(Object.hasOwn(info, 'bindHost')).toEqual(mode !== 'default');
+  expect(info.bindHost).toEqual(mode === 'default' ? undefined : 'wsl');
   expect(info.port).toEqual(port);
   const response = await health('127.0.0.1', port);
   expect(response.status).toEqual(200);
-  expect(JSON.parse(response.body).pid).toEqual(info.pid);
+  const body = JSON.parse(response.body);
+  expect(Object.keys(body)).toEqual(['status', 'version', 'pid', 'uptime', 'projectPath', 'stats', 'checks', 'bindHost']);
+  expect(body.bindHost).toEqual(mode === 'default' ? '127.0.0.1' : 'wsl');
+  expect(body.pid).toEqual(info.pid);
   expect(await daemon.probeDaemonHealth(info, root, 2000)).toEqual(true);
   expect(await daemon.validateDaemonInfoForProject(root, info)).toEqual({ valid: true, info });
   // Pre-symbolic daemon.json files still take the existing loopback probe route.

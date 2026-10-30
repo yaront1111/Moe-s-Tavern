@@ -114,7 +114,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:17:43.360Z",
-  "updatedAt": "2026-10-30T08:33:20.980Z",
+  "updatedAt": "2026-10-30T08:34:12.638Z",
   "dependsOn": [
     "task-78ba155c350f4927ab5bdf53c21a4468"
   ],
@@ -224,7 +224,9 @@
     "docs/MEMORY.md",
     "packages/moe-daemon/src/generated/initFiles.ts",
     ".moe/tasks/task-142415f4cad3435a94bb879399eba160.json",
-    ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json"
+    ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json",
+    ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+    ".moe/tasks/task-90847011452544dc868039ff435b018b.json"
   ],
   "completionSummary": "Rework for the QA reject (reopen 1). docs/roles/qa.md:22 and docs/MEMORY.md:80 now carry one byte-identical, no-clobber retirement command: `(cd .serena/memories && mkdir -p _archive && for f in task-<id>-*handoff.md; do [ ! -e \"_archive/$f\" ] || { echo \"exists: _archive/$f\" >&2; exit 1; }; done && mv -n task-<id>-*handoff.md _archive/)`. It checks every destination first, so one collision retires nothing; `mv -n` is only a race backstop. Both docs forbid a plain `mv`, and MEMORY.md explains why `mv -n` alone is not enough: Git Bash ships coreutils 8.32, whose `mv -n` skips with exit 0 (verified), while 9.4 exits 1. I ran the docs' literal command in scratch trees. A collision exits 1, moves neither file and leaves the archive reading OLD. A clean run exits 0, moves both of this task's handoffs and leaves another task's alone. No match exits 1. An unsubstituted <id> is a syntax error (exit 2) that moves nothing. I regenerated only initFiles.ts, with Windows Git Bash `npm run generate-init-files`, which printed 'Generated D:\\projexts\\moes\\packages\\moe-daemon\\src\\generated\\initFiles.ts (8 role docs + 3 subagents, sha-stamped)'. Its delta is the qa.md entry only: marker 546f3f3da3d2 -> 3d85e1e8146a, the body line, and the shipped-sha list. skillFiles.ts is byte-identical, and I ran no build or prebuild. Round-1 content is unchanged: the moe-planning `mem:<name>` rule, and the MEMORY.md lifecycle and pointer convention. qa.reference.md and architect.md stay intentionally untouched: the rule lives in the always-loaded qa.md, with the detail in MEMORY.md. Diff: qa.md +1/-1 (35 lines), MEMORY.md +1/-1, initFiles.ts +3/-3; added text is ASCII. Verification: lint OK (39/30/35), tsc clean, 4 files / 38 tests pass, both greps match, exit 0. Running seats pick the change up only after the daemon is rebuilt (.moe/roles and .moe/skills re-sync at daemon boot), and IDE users after a plugin rebuild.",
   "commits": [
@@ -267,6 +269,23 @@
       "treeId": "3b6d4bc8fe38feddc60b773e46c3f04e0fd13f58",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "79e5de608ac2bba39a5e287e894856b9c6765617",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T08:30:55Z",
+      "paths": [
+        ".moe/tasks/task-142415f4cad3435a94bb879399eba160.json",
+        ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+        ".moe/tasks/task-90847011452544dc868039ff435b018b.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T08:34:12.638Z",
+      "treeId": "b0d7ea502839cb86e94b7ab564ebd4c60dfe589b",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -277,9 +296,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-093a65d0@2026-10-30T08:26:01Z",
-    "at": "2026-10-30T08:30:31.899Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T08:30:55Z",
+    "at": "2026-10-30T08:34:12.638Z"
   },
   "reviewCompletedAt": "2026-10-30T08:33:20.979Z",
   "rejectionDetails": {
