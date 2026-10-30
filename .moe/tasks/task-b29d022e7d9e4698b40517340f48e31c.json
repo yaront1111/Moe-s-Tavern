@@ -77,7 +77,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -100,18 +100,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:31:31.600Z",
-  "updatedAt": "2026-10-30T17:06:14.868Z",
+  "updatedAt": "2026-10-30T17:18:47.021Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:31:55.503Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T17:18:47.021Z",
+    "wallClockMs": 38811518
   },
   "contextFetchedBy": [
     "worker-c2da129d",
-    "qa-ba3f4f35"
+    "qa-ba3f4f35",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -257,7 +260,7 @@
     "sessionId": "worker-c2da129d@2026-10-30T16:56:41Z",
     "at": "2026-10-30T17:06:14.868Z"
   },
-  "reviewCompletedAt": "2026-10-30T16:56:33.401Z",
+  "reviewCompletedAt": "2026-10-30T17:18:47.021Z",
   "rejectionDetails": {
     "failedDodItems": [
       "'bridge-eof' passes only when, after the job printed 'ready', closing the host's stdin ends the session with the provider's own exit 74 within exitMs. Another exit, no exit (a local kill) and a missing 'ready' each fail with their own fixed code. Shown by fake-provider tests."
@@ -300,5 +303,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T17:18:47.021Z",
+  "reviewSummary": "APPROVED, round 2. Reviewed completion 3aab4a62, which is on moe/work-2026-10-24, together with the whole diff c97f4aab^..3aab4a62. The whole task is 329 changed lines (+305/-24) and the repair is +24/-3. diff --check is clean.\n\nRe-ran on an exact-commit archive with env -i and the nvm Node 24 PATH:\n- node --test local-runner + bundle: exit 0, 324 tests, 323 pass, 1 skip.\n- local-runner-check: exit 0, 51 tests, 50 pass, 1 skip.\n\nDoD 2 is fixed. onStdout now fires only while child.stdin.writable, and stop() destroys stdin synchronously.\n\nIndependent probe, /tmp/moe-qa-b29d-r2-probe-fgUtpc, passed 14/14:\n- Late readiness returns NOT_STARTED after each teardown trigger: budget, stdin error, destroy(err), write deadline, child error, protocol error.\n- With real OS pipes, writable flips false synchronously on destroy, at child exit, and on EPIPE.\n- A real-pipe supervisor stand-in passes when ready comes first and gets NOT_STARTED when ready comes late.\n- The prior QA repro exits 0.\n\nMutation check: deleting the gate fails both new CB5 subtests with AssertionError. The restored copy is cmp-identical and passes 9/9.\n\nDoD 1/3/4/5:\n- CB1-CB6 verified.\n- CF rows only gain the two bridge ids (teardown index 3 to 5); nothing is weakened.\n- Bounds are validated before any provider call, and the native entry uses BRIDGE_BOUNDS.\n- certify-bridge.mjs is in the bundle's shipped list.\n\nNon-blocking notes:\n1. notify is always defined, so tee's onStdout?.() no longer short-circuits. Framing now builds and discards a Buffer.concat on every frame. The cost is bounded by limit and the session budget; `onStdout && notify` would fix it in CQ-R13e.\n2. eof accepts ready without a prior hello. Only a non-conforming guest can send that, and bridge-framing already requires a hello-first passed session, so it is not a bypass.\n\nponytail: lean already, net -0. Native Multipass certification was not run (operator-only). executionReady stays false; verified-local is unavailable.",
+  "requiredCheckAtDone": null
 }
