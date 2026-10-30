@@ -4004,9 +4004,19 @@ try {
 
                 # Scenario AJ -- held paths survive BOTH peel-failure sends
                 # and the rescue row. Twin: postflight.sh (task-dfbda1a8).
+                # Every row is checked: the no-candidate peel adds a second,
+                # finally-block row. AJ2 owns nothing but a TOOL-witnessed
+                # held.txt, so its completion refuses NO_OWNED_PATHS and takes
+                # the no-candidate peel.
                 Write-Host '[scenario AJ] peel failures and rescue records retain held contested paths'
                 $ajCli = Join-Path $tempRoot 'aj-cli.cmd'
                 Set-Content -Path $ajCli -Encoding ASCII -Value "@echo off`r`necho owned-a-session > `"%MOE_PROJECT_PATH%\owned-a.txt`"`r`nexit /b 0`r`n"
+                Set-Content -Path (Join-Path $tempRoot 'aj-tool.jsonl') -Encoding ASCII -Value @'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"aj-held","name":"mcp__serena__replace_content","input":{"relative_path":"held.txt","needle":"pre","repl":"pre","mode":"literal"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"aj-held","is_error":false,"content":[{"type":"text","text":"OK"}]}]}}
+'@
+                $ajToolCli = Join-Path $tempRoot 'aj-tool.cmd'
+                Set-Content -Path $ajToolCli -Encoding ASCII -Value "@echo off`r`ntype `"%~dp0aj-tool.jsonl`"`r`nexit /b 0`r`n"
                 $ajCheck = Join-Path $tempRoot 'scope-aj-check.cjs'
                 [System.IO.File]::WriteAllText($ajCheck, @'
 const [f,run]=process.argv.slice(2),assert=require("assert");
@@ -4014,9 +4024,9 @@ const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.pars
 const expected=run==="1"?[["committed","peel-failed","rescue"],["failed","MOE_COMMIT_FAILED_PEEL","completion"]]:[["failed","MOE_COMMIT_FAILED_PEEL","completion"]];
 try {
   assert.ok(rows.length>=expected.length,"missing ledger rows");
-  rows.slice(-expected.length).forEach((r,i)=>{
-    const label=expected[i].join("/");
-    assert.deepStrictEqual([r.outcome,r.code,r.kind],expected[i],label);
+  rows.slice(-expected.length).forEach((r,i)=>assert.deepStrictEqual([r.outcome,r.code,r.kind],expected[i],expected[i].join("/")));
+  rows.forEach(r=>{
+    const label=[r.outcome,r.code,r.kind].join("/");
     assert.ok(Array.isArray(r.skipped)&&Array.isArray(r.contested),label+": skipped and contested must be JSON arrays");
     assert.deepStrictEqual(r.skipped.filter(s=>String(s.code).startsWith("MOE_ATTR_CONTESTED")),[{path:"held.txt",code:"MOE_ATTR_CONTESTED"}],label+": skipped");
     assert.ok(r.contested.some(c=>c.path==="held.txt"&&c.taskId==="task-peer"),label+": contested must name held.txt with task-peer");
@@ -4029,12 +4039,13 @@ try {
                     $ajOut = Join-Path $tempRoot "scope-aj$ajRun.out"
                     $ajFiles = @(); if ($ajRun -eq 1) { $ajFiles = @('owned-a.txt') }
                     $ajFilesJson = if ($ajRun -eq 1) { '["owned-a.txt"]' } else { '[]' }
+                    $ajDeclaredJson = if ($ajRun -eq 1) { '["held.txt"]' } else { '[]' }
                     New-ScopeProject $ajDir $ajFiles -Status 'REVIEW' -Settings @{ attribution = @{ contested = 'skip' } }
                     [System.IO.File]::WriteAllText((Join-Path $ajDir '.moe\tasks\task-postflight.json'),
-                        ('{"id":"task-postflight","title":"Postflight smoke","status":"REVIEW","filesModified":' + $ajFilesJson + ',"declaredFiles":["held.txt"]}'), (New-Object System.Text.UTF8Encoding($false)))
+                        ('{"id":"task-postflight","title":"Postflight smoke","status":"REVIEW","filesModified":' + $ajFilesJson + ',"declaredFiles":' + $ajDeclaredJson + '}'), (New-Object System.Text.UTF8Encoding($false)))
                     & git -C $ajDir commit -qm aj-declared .moe/tasks/task-postflight.json 2>$null | Out-Null
                     [System.IO.File]::WriteAllText((Join-Path $ajDir 'held.txt'), "pre`n", (New-Object System.Text.UTF8Encoding($false)))
-                    $ajCmd = $trueCmd
+                    $ajCmd = $ajToolCli
                     if ($ajRun -eq 1) {
                         Set-Content -Path (Join-Path $ajDir 'owned-a.txt') -Value 'owned-a'
                         # declaredFiles enables the foreign-byte guard: change
@@ -4058,6 +4069,7 @@ try {
                         Write-Host $ajText; throw "SCENARIO $ajName FAILED: HEAD and branch must not move"
                     }
                     if ([System.IO.File]::ReadAllText((Join-Path $ajDir 'held.txt')) -ne "pre`n") { Write-Host $ajText; throw "SCENARIO $ajName FAILED: held.txt must keep its pre-flight bytes" }
+                    if ($ajRun -eq 2 -and $ajText -notmatch 'MOE_COMMIT_REFUSED_NO_OWNED_PATHS') { Write-Host $ajText; throw "SCENARIO $ajName FAILED: must take the no-candidate refused completion peel" }
                     & node $ajCheck (Join-Path $ajDir '.moe\record_commit.jsonl') $ajRun
                     if ($LASTEXITCODE -ne 0) { Write-Host $ajText; throw "SCENARIO $ajName FAILED: peel-failure and rescue rows must retain held paths" }
                     Write-Host "[scenario $ajName] ok"
