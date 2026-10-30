@@ -14,7 +14,24 @@ import {
 } from './daemonIdentity.js';
 
 const HOST = '127.0.0.1';
-const HOSTS = [[HOST, HOST], ['::1', '[::1]']] as const;
+
+// Same bind probe as scripts/tests/local-runner-daemon-bind.test.mjs: a host
+// without IPv6 skips the ::1 rows instead of failing them.
+const V6 = await new Promise<boolean>((resolve) => {
+  const probe = http.createServer().once('error', () => resolve(false));
+  probe.listen(0, '::1', () => probe.close(() => resolve(true)));
+});
+const itV6 = V6 ? it : it.skip;
+
+// [bind address, MOE_DAEMON_HOST spelling]
+const HOSTS: (readonly [string, string])[] = [[HOST, HOST], ...(V6 ? [['::1', '[::1]'] as const] : [])];
+
+// Spellings that ws's WHATWG URL parse repairs and http.request's hostname does not.
+const REPAIRED_HOSTS: (readonly [string, string])[] = [
+  ...['127.0.0.1\r', '127.0.0.1\t', '127.0.0.1\n', '%31%32%37.0.0.1', 'x@127.0.0.1', 'x:y@127.0.0.1']
+    .map((spelling) => [HOST, spelling] as const),
+  ...(V6 ? [['::1', '[::1]\r'] as const] : []),
+];
 const OTHER_PROJECT = path.join(os.tmpdir(), 'other-moe-project');
 const PROXY_ENTRY = path.join(__dirname, '../dist/index.js');
 
@@ -48,7 +65,7 @@ afterEach(async () => {
 });
 
 describe('probeDaemonIdentity', () => {
-  it.each([
+  itV6.each([
     ['::1', '/mnt/d/proj', 'same'], ['[::1]', '/mnt/d/proj', 'same'],
     ['::1', OTHER_PROJECT, 'foreign'], ['[::1]', OTHER_PROJECT, 'foreign'],
   ])('classifies IPv6 host %s serving %s as %s', async (host, served, kind) => {
@@ -56,6 +73,33 @@ describe('probeDaemonIdentity', () => {
     await expect(probeDaemonIdentity(host, port, '/mnt/d/proj')).resolves.toEqual(
       kind === 'foreign' ? { kind, projectPath: served } : { kind },
     );
+  });
+
+  // Answers only a plain GET /health with no credentials, so a probe that leaked
+  // userinfo as an Authorization header or carried a URL path along reads 404.
+  const strict = (projectPath: unknown): Handler => (req, res) => (
+    req.url === '/health' && req.headers.authorization === undefined
+      ? healthy(projectPath)(req, res)
+      : reply(404, '{}')(req, res)
+  );
+
+  // ws parses `ws://${host}:${port}/mcp` with WHATWG URL, which strips TAB/LF/CR,
+  // percent-decodes the host and drops userinfo. The probe must dial the same place.
+  it.each([
+    '127.0.0.1\r', '127.0.0.1\t', '127.0.0.1\n', '127.0.\r0.1', '%31%32%37.0.0.1',
+    'x@127.0.0.1', 'x:y@127.0.0.1', '127.1', '0x7f000001',
+  ])('classifies the host spelling %j that ws repairs as foreign', async (host) => {
+    const { port } = await listen(strict(OTHER_PROJECT));
+    await expect(probeDaemonIdentity(host, port, '/mnt/d/proj'))
+      .resolves.toEqual({ kind: 'foreign', projectPath: OTHER_PROJECT });
+  });
+
+  // ws dials the port spelled inside the host, not the port argument.
+  it('probes the port spelled inside the host, not the raw port argument', async () => {
+    const foreign = await listen(strict(OTHER_PROJECT));
+    const decoy = await listen(strict('/mnt/d/proj'));
+    await expect(probeDaemonIdentity(`x:y@${HOST}:${foreign.port}/`, decoy.port, '/mnt/d/proj'))
+      .resolves.toEqual({ kind: 'foreign', projectPath: OTHER_PROJECT });
   });
 
   it('keeps an invalid bracketed IPv4 hostname unknown', async () => {
@@ -266,7 +310,7 @@ describe('moe-proxy bridges only to a daemon serving its own project', () => {
     }
   };
 
-  it.each(HOSTS)('E1: exits 1 naming both projects and never opens /mcp for a foreign daemon (%s)', async (bind, host) => {
+  it.each([...HOSTS, ...REPAIRED_HOSTS])('E1: exits 1 naming both projects and never opens /mcp for a foreign daemon (%s via %j)', async (bind, host) => {
     const daemon = await startFakeDaemon(() => OTHER_PROJECT, bind);
     const { stdout, exited } = startProxy(daemon.port, host);
 

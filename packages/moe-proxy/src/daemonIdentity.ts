@@ -97,10 +97,15 @@ export function probeDaemonIdentity(
     }
 
     try {
-      // WebSocket URLs need IPv6 brackets; http.request's hostname must omit them.
-      const hostname = host.startsWith('[') && host.endsWith(']') && isIPv6(host.slice(1, -1))
-        ? host.slice(1, -1) : host;
-      req = http.request({ hostname, port, path: '/health', method: 'GET', timeout: timeoutMs }, (res) => {
+      // Ask the endpoint ws dials for `ws://${host}:${port}/mcp`, not the raw
+      // arguments: WHATWG URL strips TAB/LF/CR, percent-decodes the host, drops
+      // userinfo and honors a port spelled inside the host, and http.request does
+      // none of that. A bare IPv6 literal is not URL syntax, so bracket it first.
+      // Copy only hostname and port: the URL object itself would turn userinfo
+      // into an Authorization header and carry its path along.
+      const url = new URL(`ws://${isIPv6(host) ? `[${host}]` : host}:${port}/mcp`);
+      const hostname = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
+      req = http.request({ hostname, port: url.port || 80, path: '/health', method: 'GET', timeout: timeoutMs }, (res) => {
         const chunks: Buffer[] = [];
         let total = 0;
         res.on('data', (chunk: Buffer) => {
@@ -119,7 +124,8 @@ export function probeDaemonIdentity(
       req.on('error', () => finish(UNKNOWN));
       req.end();
     } catch {
-      // http.request throws synchronously on an invalid host or port.
+      // new URL() throws on a host ws cannot parse either (no socket opens there),
+      // and http.request throws synchronously on an invalid port.
       finish(UNKNOWN);
     }
   });
