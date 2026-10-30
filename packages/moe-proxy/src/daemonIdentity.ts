@@ -15,6 +15,7 @@
 // answer naming another project is 'foreign'.
 
 import http from 'http';
+import { isIPv6 } from 'net';
 import { comparableProjectPath } from './utils.js';
 
 export type DaemonIdentity =
@@ -96,8 +97,10 @@ export function probeDaemonIdentity(
     }
 
     try {
-      // `hostname` (not `host`) so a bare IPv6 literal needs no brackets.
-      req = http.request({ hostname: host, port, path: '/health', method: 'GET', timeout: timeoutMs }, (res) => {
+      // WebSocket URLs need IPv6 brackets; http.request's hostname must omit them.
+      const hostname = host.startsWith('[') && host.endsWith(']') && isIPv6(host.slice(1, -1))
+        ? host.slice(1, -1) : host;
+      req = http.request({ hostname, port, path: '/health', method: 'GET', timeout: timeoutMs }, (res) => {
         const chunks: Buffer[] = [];
         let total = 0;
         res.on('data', (chunk: Buffer) => {

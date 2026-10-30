@@ -14,6 +14,7 @@ import {
 } from './daemonIdentity.js';
 
 const HOST = '127.0.0.1';
+const HOSTS = [[HOST, HOST], ['::1', '[::1]']] as const;
 const OTHER_PROJECT = path.join(os.tmpdir(), 'other-moe-project');
 const PROXY_ENTRY = path.join(__dirname, '../dist/index.js');
 
@@ -21,10 +22,13 @@ type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
 
 const servers: http.Server[] = [];
 
-async function listen(handler: Handler): Promise<{ server: http.Server; port: number }> {
+async function listen(handler: Handler, host = HOST): Promise<{ server: http.Server; port: number }> {
   const server = http.createServer(handler);
   servers.push(server);
-  await new Promise<void>((resolve) => server.listen(0, HOST, resolve));
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, host, resolve);
+  });
   return { server, port: (server.address() as AddressInfo).port };
 }
 
@@ -44,6 +48,22 @@ afterEach(async () => {
 });
 
 describe('probeDaemonIdentity', () => {
+  it.each([
+    ['::1', '/mnt/d/proj', 'same'], ['[::1]', '/mnt/d/proj', 'same'],
+    ['::1', OTHER_PROJECT, 'foreign'], ['[::1]', OTHER_PROJECT, 'foreign'],
+  ])('classifies IPv6 host %s serving %s as %s', async (host, served, kind) => {
+    const { port } = await listen(healthy(served), '::1');
+    await expect(probeDaemonIdentity(host, port, '/mnt/d/proj')).resolves.toEqual(
+      kind === 'foreign' ? { kind, projectPath: served } : { kind },
+    );
+  });
+
+  it('keeps an invalid bracketed IPv4 hostname unknown', async () => {
+    const { port } = await listen(healthy(OTHER_PROJECT));
+    await expect(probeDaemonIdentity(`[${HOST}]`, port, '/mnt/d/proj'))
+      .resolves.toEqual({ kind: 'unknown' });
+  });
+
   it.each(['D:\\proj', 'D:/proj', '/mnt/d/proj'])(
     'classifies the spelling %s of /mnt/d/proj as same',
     async (served) => {
@@ -202,15 +222,19 @@ describe('moe-proxy bridges only to a daemon serving its own project', () => {
   });
 
   /** A fake daemon: /health answers `served()`, and every /mcp upgrade is counted. */
-  async function startFakeDaemon(served: () => unknown) {
+  async function startFakeDaemon(served: () => unknown, host = HOST) {
     const upgrades: string[] = [];
-    const { server, port } = await listen((req, res) => healthy(served())(req, res));
+    const healthRequests: string[] = [];
+    const { server, port } = await listen((req, res) => {
+      healthRequests.push(`${req.method} ${req.url}`);
+      healthy(served())(req, res);
+    }, host);
     server.on('upgrade', (req) => upgrades.push(req.url ?? ''));
     const wss = new WebSocketServer({ server });
-    return { server, port, wss, upgrades };
+    return { server, port, wss, upgrades, healthRequests };
   }
 
-  function startProxy(port: number) {
+  function startProxy(port: number, host = HOST) {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-proxy-identity-test-'));
     fs.mkdirSync(path.join(testDir, '.moe'));
     fs.writeFileSync(path.join(testDir, '.moe', 'daemon.json'), JSON.stringify({
@@ -221,7 +245,7 @@ describe('moe-proxy bridges only to a daemon serving its own project', () => {
     }));
     const stdout: string[] = [];
     const proxy = spawn('node', [PROXY_ENTRY], {
-      env: { ...process.env, MOE_PROJECT_PATH: testDir },
+      env: { ...process.env, MOE_PROJECT_PATH: testDir, MOE_DAEMON_HOST: host },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     proxy.stdout!.on('data', (chunk) => {
@@ -242,15 +266,16 @@ describe('moe-proxy bridges only to a daemon serving its own project', () => {
     }
   };
 
-  it('E1: exits 1 naming both projects and never opens /mcp for a foreign daemon', async () => {
-    const daemon = await startFakeDaemon(() => OTHER_PROJECT);
-    const { stdout, exited } = startProxy(daemon.port);
+  it.each(HOSTS)('E1: exits 1 naming both projects and never opens /mcp for a foreign daemon (%s)', async (bind, host) => {
+    const daemon = await startFakeDaemon(() => OTHER_PROJECT, bind);
+    const { stdout, exited } = startProxy(daemon.port, host);
 
     expect(await exited).toBe(1);
     const message = JSON.parse(stdout[0]).error.message as string;
     expect(message).toContain(OTHER_PROJECT);
     expect(message).toContain(testDir);
     expect(message).toMatch(/restart/i);
+    expect(daemon.healthRequests).toEqual(['GET /health']);
     expect(daemon.upgrades).toEqual([]);
   }, 12000);
 
@@ -266,37 +291,40 @@ describe('moe-proxy bridges only to a daemon serving its own project', () => {
     expect(daemon.upgrades).toEqual([]);
   }, 12000);
 
-  it('E2: opens /mcp for a daemon serving this project', async () => {
-    const daemon = await startFakeDaemon(() => testDir);
-    const { proxy, exited } = startProxy(daemon.port);
+  it.each(HOSTS)('E2: opens /mcp for a daemon serving this project (%s)', async (bind, host) => {
+    const daemon = await startFakeDaemon(() => testDir, bind);
+    const { proxy, exited } = startProxy(daemon.port, host);
 
     await waitFor(() => daemon.upgrades.length >= 1);
     expect(daemon.upgrades).toEqual(['/mcp']);
     proxy.stdin!.end();
     expect(await exited).toBe(0);
+    expect(daemon.healthRequests).toEqual(['GET /health']);
   }, 12000);
 
-  it('E3: probes again on reconnect and exits 1 when another daemon took the port', async () => {
+  it.each(HOSTS)('E3: probes again on reconnect and exits 1 when another daemon took the port (%s)', async (bind, host) => {
     let served: unknown;
-    const daemon = await startFakeDaemon(() => served);
+    const daemon = await startFakeDaemon(() => served, bind);
     daemon.wss.on('connection', (ws) => {
       served = OTHER_PROJECT;
       ws.terminate();
     });
-    const { stdout, exited } = startProxy(daemon.port);
+    const { stdout, exited } = startProxy(daemon.port, host);
     served = testDir;
 
     expect(await exited).toBe(1);
     expect(daemon.upgrades).toEqual(['/mcp']);
+    expect(daemon.healthRequests).toEqual(['GET /health', 'GET /health']);
     expect(stdout.some((line) => JSON.parse(line).error?.message?.includes(OTHER_PROJECT))).toBe(true);
   }, 15000);
 
-  it('E4: an older daemon whose /health has no projectPath still connects', async () => {
-    const daemon = await startFakeDaemon(() => undefined);
-    const { proxy, exited } = startProxy(daemon.port);
+  it.each(HOSTS)('E4: an older daemon whose /health has no projectPath still connects (%s)', async (bind, host) => {
+    const daemon = await startFakeDaemon(() => undefined, bind);
+    const { proxy, exited } = startProxy(daemon.port, host);
 
     await waitFor(() => daemon.upgrades.length >= 1);
     proxy.stdin!.end();
     expect(await exited).toBe(0);
+    expect(daemon.healthRequests).toEqual(['GET /health']);
   }, 12000);
 });

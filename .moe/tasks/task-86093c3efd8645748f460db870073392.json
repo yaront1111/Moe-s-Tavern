@@ -19,9 +19,9 @@
       "modifiedFiles": [
         ".moe/tasks/task-86093c3efd8645748f460db870073392.json"
       ],
-      "note": "Phase 0, no bytes. (a) `git branch --contains 4f2d53dd` = moe/work-2026-10-24. `git show --format= --numstat 4f2d53dd` = daemonIdentity.test.ts +302/-0, daemonIdentity.ts +123/-0, index.ts +31/-1 (455 net), exactly as planned. `git log 4f2d53dd..HEAD(47b4e438) -- <3 owned paths>` is empty, and so is the worktree diff on the owned paths + utils.ts. The completion touches no utils.ts, README, daemon or scripts (DoD 3). No peer hunks to account for. (b) prop-ce253f8aee9742d0842fe0eb48868a0f (EPIC ADD_RAIL, size exception for this task only) is PENDING (.moe/proposals record, resolvedBy null), and the rail is absent from allRails.epic. Per the plan, continue and do not report_blocked. (c) No-byte round: no source edits, no declare_files; modifiedFiles is only this task's board record. 54 dirty paths in the shared checkout belong to other sessions and are untouched.",
-      "startedAt": "2026-10-30T08:32:16.973Z",
-      "completedAt": "2026-10-30T08:33:00.867Z"
+      "note": "Confirmed 4f2d53dd on moe/work-2026-10-24; exactly +302/-0 test, +123/-0 probe, +31/-1 index (+455 net). Owned-path git log from completion to HEAD e936c4f9 empty; all three clean. Applicable size waiver prop-ce253f8a is APPROVED via served epic rail, retaining QA-required-fixes clause. Shared dirty paths are peers/preexisting and untouched. Latest rejection read in full: IPv6 hostname mismatch; source inspection confirms HTTP uses URI-bracketed string as DNS hostname. QA fix reserved for step 4's explicit exception; no source edits in this step.",
+      "startedAt": "2026-10-30T09:18:44.588Z",
+      "completedAt": "2026-10-30T09:19:13.103Z"
     },
     {
       "stepId": "step-2",
@@ -35,9 +35,9 @@
       "modifiedFiles": [
         ".moe/tasks/task-86093c3efd8645748f460db870073392.json"
       ],
-      "note": "Mutation proof, scratch copy only: /tmp/moe-proxy-mut.nfGRct = git archive of HEAD 79e5de60. The 3 owned files there are cmp-identical to the 4f2d53dd blobs. Native npm ci in moe-daemon + moe-proxy under env -i, node v24.21.0. Per run: `npm test -- src/daemonIdentity.test.ts src/index.test.ts` (pretest rebuilds dist). Baseline 2 files, 64/64 green. Each mutant applied ALONE by exact unique string replacement and restored from a pristine copy between runs (cmp-verified at the end). No byte in the shared checkout changed.\n\n| Mutant | Site | Killed by (named test failures, real Tests line) |\n|---|---|---|\n| M1 foreign branch never taken | index.ts:400 | E1, E1b, E3 (3). The plan's literal `&& false` is a tsc error (TS18047 'info' possibly null, TS2339; the false literal breaks narrowing), so per the plan it was rewritten to runtime-false `identity.kind === 'foreign' && reconnectAttempts < 0`, which builds. |\n| M2 raw `served === projectPath` | daemonIdentity.ts:68 | spelling rows D:\\proj and D:/proj (2) |\n| M3 unknown exits 1 | index.ts:408 | E4 + 13 index.test.ts e2e cases (14) |\n| M4 isAbsoluteAnyOs = `value.length > 0` | daemonIdentity.ts:43 | the 5 relative served-path rows + 7 isAbsoluteAnyOs reject rows (12; the '' row survives by construction) |\n| M5 cap `>=` | daemonIdentity.ts:105 | 'accepts a body of exactly the cap' (1) |\n| M6 status filter `has(200)` | daemonIdentity.ts:58 | the 500 and 404 rows (2) |\n| M7 overall timer x1000 | daemonIdentity.ts:88 | trickling-server row (1) |\n| M8 delete `if (shuttingDown) return;` | index.ts:399 | SURVIVES as planned, 64/64 |\n\nM8 is a known gap, checked against the code. The first probe runs before the stdin reader exists, so nothing is pending and a signal's gracefulShutdown exits at once (:319-323). The 'close' handler does not reconnect after shutdown (:500). So the guard is reached only when shutdown starts during a RECONNECT probe with messages queued. The guard then opens no socket, and the queued messages get the existing 'still queued' error at gracefulShutdown's 2 s cap. Without the guard, the new socket would flush them. That window is narrow and the process is exiting anyway. No test was added; the plan adds one only if QA requires it. There were no unexpected survivors.",
-      "startedAt": "2026-10-30T08:34:46.387Z",
-      "completedAt": "2026-10-30T08:45:49.656Z"
+      "note": "Scratch-only mutations at pinned e936c4f9: /tmp/moe-proxy-ipv6-mut.Yd6utY/evidence/*.log + mutation-summary.json. Baseline npm test -- src/daemonIdentity.test.ts src/index.test.ts: 64/64. Every mutation built, no tsc-error kills. M1 index:400 runtime-false foreign guard -> E1,E1b,E3 (3 failures); M2 probe:68 raw path compare -> D:\\proj and D:/proj spellings (2); M3 index:408 unknown exits -> E4 + 13 index e2e (14); M4 probe:43 absolute validation -> 5 relative + 7 rejects (12); M5 probe:105 >= cap -> exact-cap test (1); M6 probe:58 any status -> 500/404 (2); M7 probe:88 timer*1000 -> trickle timeout (1); M8 index:399 delete shutdown guard -> survived 64/64 as expected, gap documented/no extra test per plan. Scratch source restored between/after runs. Independently reran QA IPv6 repro: bare -> foreign, brackets -> unknown/ENOTFOUND, proxy 0 health/1 upgrade, exit 0; assertion exited 1. Confirms step-4 QA fix is required.",
+      "startedAt": "2026-10-30T09:19:25.548Z",
+      "completedAt": "2026-10-30T09:25:58.296Z"
     },
     {
       "stepId": "step-3",
@@ -47,9 +47,9 @@
       "modifiedFiles": [
         ".moe/tasks/task-86093c3efd8645748f460db870073392.json"
       ],
-      "note": "Fresh gate, run once with the plan's command verbatim. My only addition was a tail (`> /tmp/moe-proxy-gate-diffstat.txt; RC=$?; cat ...; echo GATE-EXIT=$RC`) to capture the chain's exit code and print the diff --stat output.\nResult: GATE-EXIT=0 on pinned rev a0f538ffe3140995ac2896f63eb7a92d73a310d2. HEAD had moved from 79e5de60 when a peer landed; that peer touched no moe-proxy paths, so step 2's mutant results apply to these exact bytes. Snapshot /tmp/moe-proxy-gate.myLyJo is a pure git archive with no worktree overlay. npm ci ran in moe-daemon and moe-proxy under env -i with node v24.21.0.\nvitest v5.0.5: utils 97, input-framing 3, workerType 65, daemonIdentity 49 (27 probe rows; E1-E4 within the 5-test e2e block), workerType.integration 8, index 15. Test Files 6 passed (6); Tests 237 passed (237).\n'gate ok rev=a0f538ff... snap=/tmp/moe-proxy-gate.myLyJo' was printed, and the trailing `git diff --stat 4f2d53dd a0f538ff -- <3 owned paths>` printed nothing (the captured file is 0 bytes). So the owned paths at the gate rev equal completion 4f2d53dd.\nCross-checks:\n- 4f2d53dd is an ancestor of a0f538ff.\n- The snapshot's daemonIdentity.ts, daemonIdentity.test.ts, index.ts and utils.ts are cmp-identical to the 4f2d53dd blobs.\n- No utils.ts or README commit since 4f2d53dd^ (DoD 3).\nTDD note: the code already existed, so the skill's 'break the guarded line, watch it fail' check is step 2's mutant table. This round adds no code.",
-      "startedAt": "2026-10-30T08:45:57.907Z",
-      "completedAt": "2026-10-30T08:47:04.960Z"
+      "note": "Ran the exact step-3 command fresh (pure git archive, env -i Node v24.21.0, npm ci daemon+proxy, npm test). Exit 0: 6 files / 237 tests. gate ok rev=4cc44277084a0b92a69cafe7e41645781689120b snap=/tmp/moe-proxy-gate.SOeCr9; trailing owned-path diff vs 4f2d53dd empty. All three source paths identical to original completion. This is pre-fix baseline evidence only; reproduced QA bypass still present. Step 4 explicitly authorizes test-first QA defect fixes; fresh post-fix verification will additionally overlay only this session's two changed paths so the final gate covers the actual deliverable.",
+      "startedAt": "2026-10-30T09:25:58.315Z",
+      "completedAt": "2026-10-30T09:26:53.431Z"
     },
     {
       "stepId": "step-4",
@@ -61,11 +61,13 @@
         "packages/moe-proxy/src/daemonIdentity.test.ts"
       ],
       "modifiedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts",
         ".moe/tasks/task-86093c3efd8645748f460db870073392.json"
       ],
-      "note": "Adversarial self-review of `git show 4f2d53dd -- packages/moe-proxy/src`. No genuine defect was found, so no bytes changed.\n(1) The probe settles exactly once on every path. finish() has a done guard, clears the timer and calls req?.destroy(). A late end/aborted/error, or the 'error' that destroy() itself causes, hits the guard. Every req and res stream has an 'error' listener, so no unhandled error event. A synchronous http.request throw is caught with req still null, so destroy is a no-op and the result is unknown. connect()'s .catch is the same as main().catch. The probe registers only per-request http listeners, nothing on process or stdin, and the stdin once-guard (:556) is unchanged.\n(2) The cap counts Buffer chunk bytes; no setEncoding is set on res. The exact-cap test body is ASCII, so a chars-for-bytes mutant would survive. That is harmless: either count bounds memory.\n(3) http.request gets `hostname` from getDaemonHost() and the port from daemon.json. A bare IPv6 MOE_DAEMON_HOST works for the probe. The older ws URL still needs brackets, which ends in exit 1 as before, via .catch instead of main().catch. The 1.5 s overall timer also bounds DNS.\n(4) Only the served path goes through displayServedPath. Our own projectPath is printed as is.\n(5) One connect means one probe, one .then and at most one openDaemonSocket. Nothing else schedules connect() while a probe is in flight: stale-socket closes are ignored, and the close handler returns early once shuttingDown is set (:500). The foreign branch exits before any upgrade (E1, E1b, E3). M8 is the untested shutdown-during-reconnect window (step 2).\n(6) An unknown result opens the socket as before (M3 is killed by E4 and 13 index e2e cases). The only change is up to 1.5 s of probe latency. Stdin stays paused and buffered until the reader is attached.\n(7) No false 'foreign' for the owner daemon. daemon.json and /health come from the same variable (daemon index.ts:789 and :709), and the proxy compares both with the same comparableProjectPath. So any daemon that passes readDaemonInfoResult classifies as 'same', symlinks included. A relative served path is 'unknown'. /health costs only in-memory map sizes (StateManager.getStats).\nDocumented limits, unchanged:\n- TOCTOU between /health and /mcp; the hardening is deferred.\n- A foreign daemon on reconnect is fatal, as the DoD mandates. Re-reading daemon.json and retrying would survive an own-daemon port move; that is out of scope.\n- On Windows, writeError followed by exit(1) mirrors the existing daemon.json-mismatch path at :373-374.\n- NODE_USE_ENV_PROXY/HTTP_PROXY routing makes the probe 'unknown', which fails open.\nSize notes: daemonIdentity.test.ts is 302 lines, 2 over the role's 300-line soft cap. This round is no-byte, so it stays as is. openDaemonSocket is the old connect() body moved verbatim.",
-      "startedAt": "2026-10-30T08:47:09.928Z",
-      "completedAt": "2026-10-30T08:50:31.966Z"
+      "note": "Applied step-4 genuine-QA-defect exception: normalize complete bracketed IPv6 literals (net.isIPv6) before HTTP hostname; preserve bare IPv6/IPv4 and invalid-host unknown. Test-first RED 6 failures/52 pass; GREEN identity 58/58. Direct same/foreign bare+bracketed IPv6, E1/E2/E3/E4 IPv4+IPv6 with actual GET /health counts, invalid bracketed IPv4 regression. M9 removing isIPv6 guard fails named test. Exact step-3 pure-archive command re-run: 237/237, empty original-owned-path diff; baseline only. Actual final gate: /tmp/moe-proxy-ipv6-gate.AcplTJ, archive 4cc44277084a0b92a69cafe7e41645781689120b + exactly two changed owned files, fresh npm ci daemon/proxy and npm test => exit 0, 6 files/246 tests, cmp identical afterward. Adjusted verification command recorded in handoff because pure HEAD cannot verify an unlanded QA fix. Independent QA repro now exit 0: proxy health=1, upgrades=0, exit=1. Growth +52/-21 (31 net): probe +5/-2, test +47/-19; allowed QA-fixes clause of approved prop-ce253f8a; task total net486. Existing 302-line test harness retained in approved path (now330); probe48 lines. Adversarial review: concurrency/request-local normalization, malformed-host compatibility, bounded done-guarded settle, byte cap, cleanup, foreign refusal and shutdown/stdin guards checked; no extra issues. M8 documented test gap and TOCTOU design limit unchanged. index.ts/utils.ts unchanged; diff --check clean. Updated task handoff and IPv6 gotcha memories. All peer dirt untouched.",
+      "startedAt": "2026-10-30T09:26:53.451Z",
+      "completedAt": "2026-10-30T09:33:54.979Z"
     }
   ],
   "planRevision": 5,
@@ -73,8 +75,8 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 1,
-  "reopenReason": "QA's sole rejection is the mandatory >400 net LOC review-size gate, requiring an architect split or explicit project/epic waiver. Independently verified landed completion 4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08 on moe/work-2026-10-24: daemonIdentity.test.ts +302, daemonIdentity.ts +123, index.ts +31/-1 = 455 net non-board LOC. Fresh context has no applicable waiver and only the original plan reset to PENDING, which cannot resolve this rejection. Please preserve all required regression coverage and either split into reviewable <=400-net-LOC slices or obtain an explicit rail exception for the already landed bytes, then approve a re-verification/resubmission plan. No functional defect was asserted, no source edits were made, and no new test result is claimed. Full evidence and handoff preserved in Serena.",
+  "reopenCount": 2,
+  "reopenReason": "DoD 1 fails for the already-working IPv6 WebSocket host spelling MOE_DAEMON_HOST='[::1]'. daemonIdentity.ts:100 passes URI brackets as http.request.hostname; Node reports ENOTFOUND for '[::1]', the probe returns unknown, and the proxy connects to a reachable foreign daemon. Reproduced twice with a real ::1 HTTP/WebSocket server returning 200 with an absolute foreign projectPath: bare probe => foreign; bracketed probe => unknown; actual built proxy makes 0 /health requests and 1 /mcp upgrade, logs Connected to daemon, exits 0 on EOF. This is local endpoint-format divergence, not genuine health unavailability. Normalize the HTTP hostname consistently with the valid WebSocket endpoint, add bracketed IPv6 regressions, preserve genuine unknown fail-open, and leave utils.ts untouched.\nRepro: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node /tmp/moe-proxy-qa-ipv6.mOUWF1/repro.mjs exits 1: expected no foreign /mcp upgrade, actual 1 (output.log alongside it). It uses the clean 591ec520 snapshot, whose owned sources cmp-match completion 4f2d53dd. Exact task.verification rerun passed: 6 files/237 tests. M1-M7 independently killed; M8 survives the suite as documented, but an additional QA-only shutdown probe passes and detects removal of the guard. All four ledger commits are on the shared branch; f90ff850 is board-only. +456/-1 (455 net) is explicitly waived; this rejection is functional, not size-based. No shared source edited.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -97,24 +99,34 @@
       "author": "worker-55e6716a",
       "content": "Rework triage: independently confirmed recorded completion 4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08 is +456/-1 = 455 net non-board LOC (tests 302, probe 123, index +31/-1). Fresh get_context still has no applicable project/epic size waiver and only the original implementation plan. QA requests an architect split or explicit waiver, not a functional fix. I will preserve the landed implementation and all regression coverage; no source edits or fresh test run in this session. Requesting an architect replan to resolve the size gate before resubmission.",
       "timestamp": "2026-10-30T08:21:12.714Z"
+    },
+    {
+      "id": "comment-b70bbd81efab4bf5a9b2f77777b75924",
+      "author": "worker-262588d0",
+      "content": "QA rework: the latest rejection is functional, not the already-approved size waiver. The HTTP probe passes getDaemonHost() verbatim as hostname, whereas /mcp uses it as URI authority; [::1] is valid only in the latter. I will perform the approved no-byte baseline/mutation steps, then use step 4's explicit QA-defect exception for test-first bracketed IPv6 normalization in daemonIdentity.ts and its existing tests. utils.ts/index.ts remain untouched. The pure-archive step-3 gate will be reported as baseline only; final verification must additionally overlay exactly the two QA-fix paths into a clean Linux archive and rerun npm test, otherwise it would test old HEAD rather than the fix. No peer dirty paths will be overlaid or claimed.",
+      "timestamp": "2026-10-30T09:19:13.088Z"
+    },
+    {
+      "id": "comment-dde8965d2b2a42cf862e54d1ce60b845",
+      "author": "worker-262588d0",
+      "content": "QA fix implemented test-first. RED: the new bracketed IPv6 same/foreign unit rows and E1/E2/E3/E4 IPv6 e2e variants produced 6 failures (52 pass), matching unknown/zero-health/foreign-upgrade bypass; build was green. GREEN: identity suite 58/58 after normalizing only a complete bracketed IPv6 literal using net.isIPv6 before http.request.hostname. IPv4 and bare IPv6 untouched; bracketed IPv4 stays unknown (removing the isIPv6 guard produces a named failing test). E1 proves exit 1, both project names/restart hint and zero upgrades; E2 proves same-project connection; E3 reprobes on reconnect; E4 preserves genuine unknown fail-open. Scope remains daemonIdentity.ts + existing daemonIdentity.test.ts only; delta +52/-21, net +31 (+3 runtime/+28 tests), allowed by QA-required-fixes waiver. Final fresh full proxy gate in progress in a clean archive with only those two files overlaid and cmp-checked.",
+      "timestamp": "2026-10-30T09:30:04.001Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:54:43.638Z",
-  "updatedAt": "2026-10-30T08:52:26.038Z",
+  "updatedAt": "2026-10-30T09:34:24.888Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:56:12.926Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 9,
-    "rejectCount": 1,
-    "reopenCount": 1
+    "executedStepCount": 13,
+    "rejectCount": 2,
+    "reopenCount": 2
   },
   "contextFetchedBy": [
-    "worker-55e6716a",
-    "qa-ba3f4f35",
-    "architect-e4b7eee0",
-    "worker-0062feec"
+    "worker-262588d0",
+    "qa-ba3f4f35"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -126,7 +138,13 @@
     "step-3",
     "step-4"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "connect() probes the daemon's /health before opening /mcp, on every connect and reconnect. When the reply's projectPath is another project by comparableProjectPath, the proxy exits 1 with an error naming both projects and telling the reader to restart this project's daemon, and it makes no /mcp upgrade. Proven by an end-to-end test against a fake daemon.",
+      "rejectedAt": "2026-10-30T09:17:07.750Z",
+      "rejectedBy": "qa-ba3f4f35"
+    }
+  ],
   "planSubmittedAt": "2026-10-30T08:31:37.077Z",
   "executionContract": {
     "intendedBehavior": "Unchanged from the approved plan, and already landed in completion 4f2d53dd. Before every /mcp connect and reconnect, moe-proxy GETs the daemon's /health. When the reply's projectPath is another project by comparableProjectPath, the proxy writes a JSON-RPC error naming both projects and telling the reader to restart this project's daemon, exits 1, and never opens /mcp. A same-project reply keeps today's behavior, and so does every unknown outcome: unreachable, timeout, non-JSON, oversize, a status other than 200/503, or a missing or relative projectPath. This round adds no bytes. It re-verifies those landed bytes under the task-specific size waiver prop-ce253f8a.",
@@ -186,19 +204,20 @@
   "planApprovedAt": "2026-10-30T08:31:37.103Z",
   "approvedPlanRevision": 5,
   "workStartedAt": "2026-10-30T07:59:50.098Z",
-  "reviewStartedAt": "2026-10-30T08:51:45.070Z",
+  "reviewStartedAt": "2026-10-30T09:34:24.887Z",
   "verification": {
-    "command": "cd /mnt/d/projexts/moes && REV=$(git rev-parse HEAD) && SNAP=$(mktemp -d /tmp/moe-proxy-gate.XXXXXX) && git archive \"$REV\" | tar -x -C \"$SNAP\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c \"cd '$SNAP/packages/moe-daemon' && npm ci --no-audit --no-fund && cd '$SNAP/packages/moe-proxy' && npm ci --no-audit --no-fund && npm test\" && echo \"gate ok rev=$REV snap=$SNAP; owned-path diff vs 4f2d53dd follows (empty = identical):\" && git diff --stat 4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08 \"$REV\" -- packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts packages/moe-proxy/src/index.ts",
+    "command": "set -euo pipefail\ncd /mnt/d/projexts/moes\nREV=$(git rev-parse HEAD)\nSNAP=$(mktemp -d /tmp/moe-proxy-ipv6-gate.XXXXXX)\ngit archive \"$REV\" | tar -x -C \"$SNAP\"\nfor f in packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts; do cp \"$f\" \"$SNAP/$f\"; done\nenv -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c \"cd '$SNAP/packages/moe-daemon' && npm ci --no-audit --no-fund && cd '$SNAP/packages/moe-proxy' && npm ci --no-audit --no-fund && npm test\" 2>&1 | tee \"$SNAP/verification.log\"\nfor f in packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts; do cmp \"$f\" \"$SNAP/$f\"; done\ngit diff --exit-code -- packages/moe-proxy/src/index.ts packages/moe-proxy/src/utils.ts\ngit diff --check -- packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts\necho \"QA-fix gate ok rev=$REV snap=$SNAP; only daemonIdentity.ts/test overlaid and cmp-matched\"\ngit diff --numstat -- packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts",
     "exitCode": 0,
-    "outputTail": "npm notice run moe-proxy@0.8.0 test\nnpm notice run vitest run\n\n RUN  v5.0.5 /tmp/moe-proxy-gate.myLyJo/packages/moe-proxy\n\n ✓ src/utils.test.ts (97 tests) 73ms\n ✓ src/input-framing.test.ts (3 tests) 505ms\n ✓ src/workerType.test.ts (65 tests) 623ms\n ✓ src/daemonIdentity.test.ts (49 tests) 2162ms\n   ✓ probeDaemonIdentity (27)\n     ✓ classifies a server that trickles bytes forever as unknown within the timeout 301ms\n   ✓ moe-proxy bridges only to a daemon serving its own project (5)\n     ✓ E3: probes again on reconnect and exits 1 when another daemon took the port 1324ms\n ✓ src/workerType.integration.test.ts (8 tests) 3153ms\n   ✓ launcher worker type through the proxy into the daemon (8)\n     ✓ a relaunch under another CLI refreshes the type and keeps the task and the team 457ms\n ✓ src/index.test.ts (15 tests) 16238ms\n   ✓ moe-proxy graceful shutdown (15)\n     ✓ returns error response when server never responds and message times out 5118ms\n     ✓ does not crash when connection drops during message exchange 560ms\n     ✓ drops a late daemon response that arrives after the per-message timeout 9068ms\n\n Test Files  6 passed (6)\n      Tests  237 passed (237)\n   Start at  10:46:22\n   Duration  16.44s (tests 97%, transform 2%, import 1%)\n\ngate ok rev=a0f538ffe3140995ac2896f63eb7a92d73a310d2 snap=/tmp/moe-proxy-gate.myLyJo; owned-path diff vs 4f2d53dd follows (empty = identical):\nGATE-EXIT=0",
-    "reportedAt": "2026-10-30T08:51:45.070Z",
+    "outputTail": "npm notice run moe-proxy@0.8.0 clean\nnpm notice run node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"\nnpm notice run moe-proxy@0.8.0 build\nnpm notice run tsc\nnpm notice run moe-proxy@0.8.0 test\nnpm notice run vitest run\n\n RUN  v5.0.5 /tmp/moe-proxy-ipv6-gate.AcplTJ/packages/moe-proxy\n\n ✓ src/utils.test.ts (97 tests) 57ms\n ✓ src/input-framing.test.ts (3 tests) 467ms\n ✓ src/workerType.test.ts (65 tests) 572ms\n ✓ src/workerType.integration.test.ts (8 tests) 2909ms\n   ✓ launcher worker type through the proxy into the daemon (8)\n     ✓ a relaunch under another CLI refreshes the type and keeps the task and the team 402ms\n ✓ src/daemonIdentity.test.ts (58 tests) 3248ms\n   ✓ probeDaemonIdentity (32)\n     ✓ classifies a server that trickles bytes forever as unknown within the timeout 300ms\n   ✓ moe-proxy bridges only to a daemon serving its own project (9)\n     ✓ E3: probes again on reconnect and exits 1 when another daemon took the port (127.0.0.1) 1156ms\n     ✓ E3: probes again on reconnect and exits 1 when another daemon took the port (::1) 1154ms\n ✓ src/index.test.ts (15 tests) 16271ms\n   ✓ moe-proxy graceful shutdown (15)\n     ✓ returns error response when server never responds and message times out 5117ms\n     ✓ does not crash when connection drops during message exchange 611ms\n     ✓ drops a late daemon response that arrives after the per-message timeout 9066ms\n\n Test Files  6 passed (6)\n      Tests  246 passed (246)\n   Start at  11:30:09\n   Duration  16.44s (tests 98%, transform 1%, import 1%)\n\n\nQA-fix gate ok rev=4cc44277084a0b92a69cafe7e41645781689120b snap=/tmp/moe-proxy-ipv6-gate.AcplTJ; only daemonIdentity.ts/test overlaid and cmp-matched\n47\\t19 packages/moe-proxy/src/daemonIdentity.test.ts\n5\\t2 packages/moe-proxy/src/daemonIdentity.ts\n",
+    "reportedAt": "2026-10-30T09:34:24.887Z",
     "source": "agent-reported"
   },
   "filesModified": [
     ".moe/tasks/task-86093c3efd8645748f460db870073392.json",
-    ".moe/tasks/task-f23c4464c8f24efeb8d62973111839ce.json"
+    "packages/moe-proxy/src/daemonIdentity.ts",
+    "packages/moe-proxy/src/daemonIdentity.test.ts"
   ],
-  "completionSummary": "No-byte re-verification of landed completion 4f2d53dd. moe-proxy GETs the daemon's /health before every /mcp connect and reconnect. If the daemon serves another project, it exits 1 naming both projects with a restart hint, and never upgrades. QA rejected only on the size gate: 455 net (daemonIdentity.ts +123, index.ts +31/-1, test +302). Waiver prop-ce253f8aee9742d0842fe0eb48868a0f is APPROVED (HUMAN, 08:46:44Z), so substantive QA can proceed. The 3 owned paths are unchanged since 4f2d53dd. utils.ts, README, daemon and wrappers are untouched (DoD 3).\n\nGate (DoD 4): the plan's command, run fresh once on pinned rev a0f538ff from a pure git archive. Exit 0, 6 files / 237 tests passed (daemonIdentity 49, index 15, utils 97, workerType 65, integration 8, framing 3). The trailing diff --stat vs 4f2d53dd was empty. I appended `> file; RC=$?; cat file; echo GATE-EXIT=$RC` only to capture the exit code. No moe-proxy commit since (HEAD 3c5af5e1).\n\nMutants, each alone on a scratch archive, killed by named tests:\n- M1 foreign branch off (index.ts:400): E1, E1b, E3. The plan's `&& false` fails tsc, so I used `&& reconnectAttempts < 0`.\n- M2 raw compare (daemonIdentity.ts:68): D:\\ and D:/ rows.\n- M3 unknown exits (:408): E4 + 13 index e2e.\n- M4 isAbsoluteAnyOs always true (:43): 12 rows.\n- M5 cap >= (:105): exact-cap row.\n- M6 has(200) (:58): 500/404.\n- M7 timer x1000 (:88): trickle row.\n- M8 delete the post-probe shuttingDown guard (:399): survives as planned. Reachable only on shutdown during a RECONNECT probe with queued messages, which then get the existing 'still queued' error at the 2 s cap. No test added.\n\nSelf-review found no defect. The owner daemon writes one variable to both daemon.json and /health, compared by the same comparableProjectPath, so it never reads as foreign. Limits stand: TOCTOU, foreign-on-reconnect is fatal by design, and the Windows exit mirrors :373. The test file is 302 lines, 2 over the soft cap, left as is in a no-byte round.",
+  "completionSummary": "Fixed QA's bracketed-IPv6 foreign-daemon bypass under step 4's explicit defect exception. HTTP hostname now strips brackets only from a valid IPv6 literal; bare IPv6/IPv4 and genuine unknown fail-open stay unchanged. Added direct bare/bracketed same/foreign tests and IPv4+IPv6 E1/E2/E3/E4 e2e health-count assertions. E1 proves exit 1, both project names/restart hint, zero /mcp upgrades; E3 proves reconnect refusal. RED: 6 named failures. GREEN: identity 58/58; fresh full proxy build/test 6 files, 246/246. QA's independent repro now passes: health=1/upgrades=0/proxy exit=1.\nFinal verification uses clean pinned archive 4cc44277 plus exactly the two QA-fix paths, cmp-checked. Exact original pure-archive gate also rerun fresh: 237/237, original owned paths identical to 4f2d53dd; baseline only, not misrepresented as fix verification. Artifact /tmp/moe-proxy-ipv6-gate.AcplTJ/verification.log.\nDelta daemonIdentity.ts +5/-2; daemonIdentity.test.ts +47/-19 = +31 net, cumulative task net486. Approved size waiver prop-ce253f8a allows QA-required growth. index.ts/utils.ts/README/wrappers untouched; no peer dirt claimed. Retained existing consolidated test harness (302->330 lines); probe48 lines.\nMutants built: M1 foreign guard killed E1/E1b/E3; M2 raw compare killed two path spellings; M3 unknown-exit killed E4+13 index cases; M4 absolute guard killed12 rows; M5 >=cap killed exact-cap; M6 status guard killed500/404; M7 long timer killed trickle; M8 survives documented shutdown gap (guard unchanged); M9 broad bracket stripping killed invalid IPv4 hostname regression. Adversarial review and diff --check clean; handoff/gotcha memories saved. Existing health-to-mcp TOCTOU remains deferred.",
   "commits": [
     {
       "sha": "4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08",
@@ -282,21 +301,49 @@
     "sessionId": "worker-0062feec@2026-10-30T08:34:00Z",
     "at": "2026-10-30T08:52:26.037Z"
   },
-  "reviewCompletedAt": "2026-10-30T08:18:43.932Z",
+  "reviewCompletedAt": "2026-10-30T09:17:07.750Z",
   "rejectionDetails": {
     "failedDodItems": [
-      "Mandatory QA approval-size gate: at most 400 net changed LOC unless a project/epic rail explicitly waives it for this task."
+      "connect() probes the daemon's /health before opening /mcp, on every connect and reconnect. When the reply's projectPath is another project by comparableProjectPath, the proxy exits 1 with an error naming both projects and telling the reader to restart this project's daemon, and it makes no /mcp upgrade. Proven by an end-to-end test against a fake daemon."
     ],
     "issues": [
       {
-        "type": "other",
+        "type": "security",
+        "file": "packages/moe-proxy/src/daemonIdentity.ts",
+        "line": 100,
+        "description": "MOE_DAEMON_HOST='[::1]' causes HTTP DNS ENOTFOUND -> unknown, while index.ts:421 opens a valid ws://[::1]:port/mcp connection. A reachable foreign daemon receives an upgrade without any /health request. Normalize the HTTP hostname/endpoint consistently with WebSocket (IPv6 URI brackets are not part of a DNS name). Preserve fail-open for genuine unknown outcomes; keep utils.ts unchanged."
+      },
+      {
+        "type": "test_failure",
         "file": "packages/moe-proxy/src/daemonIdentity.test.ts",
-        "line": 1,
-        "description": "Combined completion is 455 net changed LOC (>400 cap): tests +302, new probe +123, index +30 net. No applicable size waiver exists. Route to architect to split into independently reviewable <=400-net-LOC slices while retaining all mandated regression tests, or obtain an explicit task-specific project/epic rail exception for landed SHA 4f2d53dd. Then resubmit for substantive QA. Green tests alone cannot override this approval gate."
+        "line": 16,
+        "description": "The hardcoded IPv4 HOST misses this endpoint-format bypass. Add direct bare/bracketed IPv6 classification and a real bracketed-host e2e regression: foreign => exit 1, both project names plus restart hint, zero /mcp upgrades; same project => connects. QA's scratch repro fails the no-upgrade assertion on unchanged completion bytes despite all 237 existing tests passing."
       }
     ]
   },
   "rejectionHistory": [
+    {
+      "reason": "DoD 1 fails for the already-working IPv6 WebSocket host spelling MOE_DAEMON_HOST='[::1]'. daemonIdentity.ts:100 passes URI brackets as http.request.hostname; Node reports ENOTFOUND for '[::1]', the probe returns unknown, and the proxy connects to a reachable foreign daemon. Reproduced twice with a real ::1 HTTP/WebSocket server returning 200 with an absolute foreign projectPath: bare probe => foreign; bracketed probe => unknown; actual built proxy makes 0 /health requests and 1 /mcp upgrade, logs Connected to daemon, exits 0 on EOF. This is local endpoint-format divergence, not genuine health unavailability. Normalize the HTTP hostname consistently with the valid WebSocket endpoint, add bracketed IPv6 regressions, preserve genuine unknown fail-open, and leave utils.ts untouched.\nRepro: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node /tmp/moe-proxy-qa-ipv6.mOUWF1/repro.mjs exits 1: expected no foreign /mcp upgrade, actual 1 (output.log alongside it). It uses the clean 591ec520 snapshot, whose owned sources cmp-match completion 4f2d53dd. Exact task.verification rerun passed: 6 files/237 tests. M1-M7 independently killed; M8 survives the suite as documented, but an additional QA-only shutdown probe passes and detects removal of the guard. All four ledger commits are on the shared branch; f90ff850 is board-only. +456/-1 (455 net) is explicitly waived; this rejection is functional, not size-based. No shared source edited.",
+      "rejectedAt": "2026-10-30T09:17:07.750Z",
+      "reopenCount": 2,
+      "failedDodItems": [
+        "connect() probes the daemon's /health before opening /mcp, on every connect and reconnect. When the reply's projectPath is another project by comparableProjectPath, the proxy exits 1 with an error naming both projects and telling the reader to restart this project's daemon, and it makes no /mcp upgrade. Proven by an end-to-end test against a fake daemon."
+      ],
+      "issues": [
+        {
+          "type": "security",
+          "file": "packages/moe-proxy/src/daemonIdentity.ts",
+          "line": 100,
+          "description": "MOE_DAEMON_HOST='[::1]' causes HTTP DNS ENOTFOUND -> unknown, while index.ts:421 opens a valid ws://[::1]:port/mcp connection. A reachable foreign daemon receives an upgrade without any /health request. Normalize the HTTP hostname/endpoint consistently with WebSocket (IPv6 URI brackets are not part of a DNS name). Preserve fail-open for genuine unknown outcomes; keep utils.ts unchanged."
+        },
+        {
+          "type": "test_failure",
+          "file": "packages/moe-proxy/src/daemonIdentity.test.ts",
+          "line": 16,
+          "description": "The hardcoded IPv4 HOST misses this endpoint-format bypass. Add direct bare/bracketed IPv6 classification and a real bracketed-host e2e regression: foreign => exit 1, both project names plus restart hint, zero /mcp upgrades; same project => connects. QA's scratch repro fails the no-upgrade assertion on unchanged completion bytes despite all 237 existing tests passing."
+        }
+      ]
+    },
     {
       "reason": "Reject as oversized, not for a demonstrated functional DoD failure. Recorded completion 4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08 is on moe/work-2026-10-24. `git show --format= --numstat <sha>` measures +456/-1 = 455 net non-board LOC: daemonIdentity.test.ts +302, daemonIdentity.ts +123, index.ts +31/-1. Current project/epic/task rails contain exceptions for other task IDs only, none for this row. Per QA workflow, substantive sign-off stops at the size gate. Architect must split into reviewable slices (<=400 net LOC each, preserving required regression coverage), or explicitly authorize these landed bytes with a task-specific project/epic rail before re-review; do not delete useful tests just to meet the cap. Freshly reran the exact task.verification Linux-native snapshot command: exit 0, six files/237 tests passed, including daemonIdentity 49 and index 15, at /tmp/moe-proxy-gate.OHkEkC. All three snapshot source paths cmp-identical to the recorded completion blobs. DoD 4 verification reproduced and DoD 3 scope is correct (utils.ts, README, daemon and wrappers unchanged); no functional DoD failure is asserted, but full substantive approval remains unverified until the mandatory size gate is resolved.",
       "rejectedAt": "2026-10-30T08:18:43.932Z",
