@@ -99,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:57.787Z",
-  "updatedAt": "2026-10-30T07:32:35.152Z",
+  "updatedAt": "2026-10-30T07:33:14.142Z",
   "dependsOn": [
     "task-a9d1a74d845b4d3d83f359bf864f8651"
   ],
@@ -209,7 +209,10 @@
     ".moe/tasks/task-6be626cfe5744ee29deeb2bb1b59468e.json",
     ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
     ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
-    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json"
+    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+    ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+    ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+    ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json"
   ],
   "completionSummary": "CQ-V05 bounded repair policy: a pure module, two NEW files, no existing file changed (393 net LOC: 182 runtime + 211 tests).\n- delivery/repairPolicy.ts exports RepairPolicy, DEFAULT_REPAIR_POLICY (frozen 3 code repairs / 2 infra retries), resolveRepairPolicy, RepairRun, RepairInput, RepairDiagnostics, EscalationReason, RepairDecision and decideRepair. It imports only schema types and util/errors.\n- resolveRepairPolicy reads settings.repairPolicy; absent/null gives the defaults. It fails closed: non-object, array, unknown key, or anything but an integer 0-10 is INVALID_INPUT naming settings.repairPolicy[.key].\n- decideRepair returns none (passed | awaiting-evidence), repair, retry-infra, escalate (code/infra budget exhausted, unchanged-candidate, unchanged-failure, non-repairable-outcome) or replan.\n  - N failing candidates have spent N-1 repairs.\n  - Infra retries are counted separately, on the current candidate only.\n  - Only runs on the current candidate count, and runs of another plan revision are ignored, which gives a fresh budget.\n  - An unapproved plan revision gives replan.\n  - Diagnostics: run id, candidate, command, outcome, exit code, excerpt (last 20 lines, <= 2000 chars) and <= 5 newest non-passing log refs.\n  - Legacy runs without an outcome use the exit-code rule. An outcome that disagrees with its exit code, or is unrecognised, is non-repairable and fails closed.\n  - Deterministic: code-unit order by createdAt then id, with duplicate ids collapsed in linear time.\n- Evidence: 43 tests. 25 mutants (the 6 planned plus 19 more) were all killed. A fresh Linux snapshot gate ran `npm test` and `npx tsc --noEmit`, both exit 0, with the overlay cmp-identical to the worktree.\n- Deviations and notes:\n  - The first draft was 599 net LOC, over QA's 400 reject default with no waiver, so I compacted it; the mutants were re-run afterwards.\n  - Activation is not wired: V04 left no repair seam, so it is CQ-V12's job.\n  - settings.repairPolicy is undocumented and not i",
   "commits": [
@@ -235,18 +238,38 @@
       "treeId": "b78b1bd13aaec27c511eace3147f47b29799dfe6",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "102c9838af2de5a02cbd74fe511a9a622730a3e1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T07:30:33Z",
+      "paths": [
+        ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+        ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+        ".moe/tasks/task-6be626cfe5744ee29deeb2bb1b59468e.json",
+        ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T07:33:14.142Z",
+      "treeId": "622feff6a9e1fd28cd4f316c1ac6357b3fd50dcf",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/delivery/repairPolicy.test.ts",
     "packages/moe-daemon/src/delivery/repairPolicy.ts"
   ],
-  "unattributedPaths": [],
+  "unattributedPaths": [
+    "moe-jetbrains/.kotlin/sessions/kotlin-compiler-15892967191596996317.salive"
+  ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-73c29a03@2026-10-30T06:59:15Z",
-    "at": "2026-10-30T07:11:36.213Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T07:30:33Z",
+    "at": "2026-10-30T07:33:14.142Z"
   },
   "completedAt": "2026-10-30T07:32:35.152Z",
   "reviewCompletedAt": "2026-10-30T07:32:35.152Z",

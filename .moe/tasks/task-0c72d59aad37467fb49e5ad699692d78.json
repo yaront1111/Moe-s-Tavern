@@ -1,0 +1,33 @@
+{
+  "id": "task-0c72d59aad37467fb49e5ad699692d78",
+  "epicId": "epic-be924fb8",
+  "title": "JetBrains WSL agent mode starts the daemon with --host wsl",
+  "description": "Objective: JetBrains' 'Run Agents in WSL' toggle starts the daemon with the WSL-scoped bind from task-2f2484b4 (`--host wsl`) instead of --host 0.0.0.0. This task was split out of task-724e31fa, the HIGH security row, which stays the final verification row.\n\nDeliverable:\n- In moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt, add a companion constant WSL_BIND_HOST = \"wsl\". Use it at all three sites that add --host for WSL agents today:\n  - protectedDaemonCommand;\n  - buildDaemonCommand's hostSuffix;\n  - buildDirectDaemonCommand.\n- Update the comment in moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt that says the spawner passes --host 0.0.0.0.\n- In RuntimeSelectionPolicyTest, update the pin on the protected argv, which says `--host 0.0.0.0` today.\n- Add new MoeDaemonSupervisorTest rows that pin both legacy start commands with wslAgentsEnabled on and off.\n\nOrdering: this edits files the CQ-RF tasks also edit (MoeDaemonSupervisor.kt, MoeDaemonSupervisorTest.kt, RuntimeSelectionPolicyTest.kt).\n- It dependsOn RF01 (task-fd653cfb) and RF02 (task-f3485ac9).\n- RF03 (task-ec64165c) waits for this task.\n- Read the landed bytes.\n\nNot in scope:\n- daemon code (task-2f2484b4);\n- moe-agent.sh and docs (task-724e31fa);\n- VS Code, which has no WSL agent mode;\n- RF behavior.\n\nVerification command (fresh, exit 0 required), under the jetbrains-gradle lease:\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\nThis is the same as `cd moe-jetbrains && ./gradlew test`; this WSL host has no JDK.",
+  "definitionOfDone": [
+    "With wslAgentsEnabled, every daemon start command the supervisor builds (protected direct, legacy direct and legacy shell) carries `--host wsl` and never 0.0.0.0. Without it, none carries --host. Proven by MoeDaemonSupervisorTest rows and the updated RuntimeSelectionPolicyTest pin.",
+    "No `0.0.0.0` remains under moe-jetbrains/src/main, shown by a grep quoted in complete_task's summary.",
+    "The verification command exits 0, with its output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-2f2484b426ef42aaa0566323da2d550e",
+    "task-fd653cfbaea541c39569dfed9452cf5c",
+    "task-f3485ac9d4384664870d88db876ddd54"
+  ],
+  "priority": "HIGH",
+  "order": 285.3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:33:14.135Z",
+  "updatedAt": "2026-10-30T07:33:14.135Z"
+}

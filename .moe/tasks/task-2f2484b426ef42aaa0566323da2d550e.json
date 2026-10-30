@@ -1,0 +1,33 @@
+{
+  "id": "task-2f2484b426ef42aaa0566323da2d550e",
+  "epicId": "epic-be924fb8",
+  "title": "daemon --host wsl listens on loopback plus the WSL adapter instead of every interface",
+  "description": "Objective: give the daemon a bind mode for JetBrains' 'Run Agents in WSL' that reaches WSL agents without listening on every interface. Today that mode passes --host 0.0.0.0. This task was split out of task-724e31fa, the HIGH security row, which stays the final verification row. It dependsOn task-801272c4, the Origin rule: the extra listeners must go through that same WebSocket server, and both tasks edit the same two docs.\n\nDeliverable:\n1. A new packages/moe-daemon/src/server/bindHosts.ts containing:\n   - a pure resolveBindHosts(host, interfaces). It maps the symbolic host 'wsl' to ['127.0.0.1', ...the non-internal IPv4 addresses of interfaces whose name starts with 'vEthernet (WSL'], deduplicated. Any other host maps to [host] unchanged, so an explicit 0.0.0.0 stays an operator choice.\n   - a listen helper that opens one http.Server per address, all on one port. Each extra server shares the request handler and forwards 'upgrade' to the primary server, so the single WebSocket server serves them all, Origin rule included.\n2. packages/moe-daemon/src/index.ts uses that module:\n   - --host wsl and MOE_BIND_HOST=wsl are accepted;\n   - port selection checks every resolved address;\n   - shutdown closes every server;\n   - daemon.json records bindHost 'wsl';\n   - status and health probes use loopback.\n3. With no WSL adapter (mirrored networking, or a non-Windows host), only loopback is bound, and moe-agent.sh's existing loopback probe reaches it. In NAT mode, the adapter address is the gateway that moe-agent.sh already probes.\n4. Tests in packages/moe-daemon/src/server/bindHosts.test.ts.\n5. docs/CONFIGURATION.md (the MOE_BIND_HOST row) and docs/TROUBLESHOOTING.md (WSL reachability) describe 'wsl'.\n\nNot in scope:\n- the JetBrains argv (a sibling task);\n- moe-agent.sh, the proxy, types/schema.ts comments and CLAUDE.md (all task-724e31fa);\n- VS Code, which has no WSL agent mode;\n- any change to what an explicit 0.0.0.0 means.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "resolveBindHosts maps 'wsl' to loopback plus every non-internal IPv4 address on an interface named 'vEthernet (WSL…'. With no such interface it maps to loopback alone, and it leaves every other host unchanged. Proven by table rows in bindHosts.test.ts.",
+    "With 'wsl' and an injected interface map, the listeners are exactly the resolved addresses on one port, and none of them is 0.0.0.0. /health and an /mcp upgrade succeed on each address, and an upgrade carrying an Origin is still refused there. Proven in bindHosts.test.ts, which uses 127.0.0.2 as the stand-in adapter address and skips that row where 127.0.0.2 cannot bind.",
+    "--host wsl and MOE_BIND_HOST=wsl both start the daemon, daemon.json records bindHost 'wsl', status and health probes use 127.0.0.1, and shutdown closes every listener. Proven by tests.",
+    "docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md document 'wsl'.",
+    "`cd packages/moe-daemon && npm test` exits 0, with its output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-801272c49c0447cc944e6aaa2963f85f"
+  ],
+  "priority": "HIGH",
+  "order": 285.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:33:01.209Z",
+  "updatedAt": "2026-10-30T07:33:01.209Z"
+}
