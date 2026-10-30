@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -97,16 +97,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T13:43:36.349Z",
-  "updatedAt": "2026-10-30T04:27:05.490Z",
+  "updatedAt": "2026-10-30T04:31:40.416Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T14:23:40.801Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T04:31:40.416Z",
+    "wallClockMs": 223679615
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "worker-b5749787"
+    "worker-b5749787",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -145,7 +148,56 @@
   "filesModified": [
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
+    "scripts/tests/daemon-json-cap.test.mjs",
+    ".moe/tasks/task-ad0dc2e7557d4ceca42ce7fab3708942.json",
+    ".moe/tasks/task-b8b8faba152a4d7fae09d9388407f707.json"
+  ],
+  "completionSummary": "Both launchers now read .moe/daemon.json through one bounded read of at most 65537 bytes. A larger file takes the existing unparseable path.\n- moe-agent.sh: new daemon_json_field helper. It does python open(p,'rb').read(65537), exits with 'daemon.json is larger than 64 KiB' above 65536, and writes via sys.stdout.write. All 4 reads use it (PID, port, projectPath, wait-loop PID). The PID read gains `|| PID_EXIT_CODE=$?`.\n- moe-agent.ps1: new Read-MoeDaemonJsonText, a FileStream into byte[65537] with the same throw, disposed in finally. Both Get-Content reads use it. BOM kept; parity passes.\n\nINTENDED behavior change (sh): a malformed or vanished daemon.json now prints '[WARN] Failed to parse daemon.json' and starts a daemon, as ps1 does. Before, the unguarded assignment under set -e silently aborted the launcher, so that WARN was dead code.\n\nDeviation from the plan, verified: the ps1 helper opens `Convert-Path -LiteralPath $Path`. Resolve-Path makes a UNC project's path provider-qualified (`Microsoft.PowerShell.Core\\FileSystem::\\\\...`). [IO.File]::OpenRead rejects that form; Get-Content accepted it. A ps1 test case covers it.\n\nNew scripts/tests/daemon-json-cap.test.mjs (14 tests) runs the real check blocks on bash/Git Bash, PS 5.1 and pwsh 7:\n- 65536-byte ok;\n- 65537-byte takes the WARN/catch path and the file is kept;\n- malformed;\n- the UNC path form;\n- ParseFile;\n- static checks: no unbounded read is left, the cap literals, the shared message.\n\nResults:\n- RED on pristine launchers: WSL bash (b)/(c) and the static check fail; on Windows Git Bash (b)/(c) and PS (b) fail too.\n- GREEN: WSL 4 pass / 10 PS skipped; Windows 14/14, 0 skipped.\n- Mutants (no Convert-Path, -gt 65537) are caught on both PS engines.\n- Edits went through a %TEMP% mirror, then a compare-and-swap Edit replay; the checkout is cmp-identical to the mirror.\n\nResiduals (pre-existing):\n- a live daemon with an unreadable daemon.json gets a second start, as on ps1;\n- a FIFO blocks the open;\n- the malformed",
+  "commits": [
+    {
+      "sha": "15fd2760ff2fd7cb44a0377bd4646c028fb9c17f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b5749787@2026-10-30T04:09:38Z",
+      "paths": [
+        ".moe/tasks/task-ad0dc2e7557d4ceca42ce7fab3708942.json",
+        ".moe/tasks/task-b8b8faba152a4d7fae09d9388407f707.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "recordedBy": "worker-b5749787",
+      "recordedAt": "2026-10-30T04:27:56.394Z",
+      "treeId": "5d48c8fc61926722c4086d86ba88c75be402811d",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
     "scripts/tests/daemon-json-cap.test.mjs"
   ],
-  "completionSummary": "Both launchers now read .moe/daemon.json through one bounded read of at most 65537 bytes. A larger file takes the existing unparseable path.\n- moe-agent.sh: new daemon_json_field helper. It does python open(p,'rb').read(65537), exits with 'daemon.json is larger than 64 KiB' above 65536, and writes via sys.stdout.write. All 4 reads use it (PID, port, projectPath, wait-loop PID). The PID read gains `|| PID_EXIT_CODE=$?`.\n- moe-agent.ps1: new Read-MoeDaemonJsonText, a FileStream into byte[65537] with the same throw, disposed in finally. Both Get-Content reads use it. BOM kept; parity passes.\n\nINTENDED behavior change (sh): a malformed or vanished daemon.json now prints '[WARN] Failed to parse daemon.json' and starts a daemon, as ps1 does. Before, the unguarded assignment under set -e silently aborted the launcher, so that WARN was dead code.\n\nDeviation from the plan, verified: the ps1 helper opens `Convert-Path -LiteralPath $Path`. Resolve-Path makes a UNC project's path provider-qualified (`Microsoft.PowerShell.Core\\FileSystem::\\\\...`). [IO.File]::OpenRead rejects that form; Get-Content accepted it. A ps1 test case covers it.\n\nNew scripts/tests/daemon-json-cap.test.mjs (14 tests) runs the real check blocks on bash/Git Bash, PS 5.1 and pwsh 7:\n- 65536-byte ok;\n- 65537-byte takes the WARN/catch path and the file is kept;\n- malformed;\n- the UNC path form;\n- ParseFile;\n- static checks: no unbounded read is left, the cap literals, the shared message.\n\nResults:\n- RED on pristine launchers: WSL bash (b)/(c) and the static check fail; on Windows Git Bash (b)/(c) and PS (b) fail too.\n- GREEN: WSL 4 pass / 10 PS skipped; Windows 14/14, 0 skipped.\n- Mutants (no Convert-Path, -gt 65537) are caught on both PS engines.\n- Edits went through a %TEMP% mirror, then a compare-and-swap Edit replay; the checkout is cmp-identical to the mirror.\n\nResiduals (pre-existing):\n- a live daemon with an unreadable daemon.json gets a second start, as on ps1;\n- a FIFO blocks the open;\n- the malformed"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-b5749787@2026-10-30T04:09:38Z",
+    "at": "2026-10-30T04:27:56.394Z"
+  },
+  "completedAt": "2026-10-30T04:31:40.416Z",
+  "reviewCompletedAt": "2026-10-30T04:31:40.416Z",
+  "reviewSummary": "Reviewed completion 15fd276 (pushed, HEAD). Diff: sh +15/-5, ps1 +21/-2, new test 183 lines, ~212 net non-board LOC. The Moe-Contested trailer names task-16bbf8ff, but the launcher hunks are only this task's helper and call sites.\n\nGate re-run fresh on WSL: bash -n && node --test daemon-json-cap && parity-check exits 0. The test shows 4 pass, 0 fail, and 10 PowerShell tests skipped with a stated reason, not counted as passes. Parity PASS.\nWindows leg (cmd.exe node 24.16): 14/14 pass, 0 skipped (Git Bash 3, PS 5.1 5, pwsh 7 5, incl. ParseFile and the UNC provider path).\n\nDoD:\n(1) A grep confirms every daemon.json read goes through the bounded helpers (sh: 4 sites; ps1: 2). An oversize file takes the existing WARN path or catch, and is never deleted.\n(2) The test runs the real blocks against 65536- and 65537-byte and malformed fixtures, and reports missing engines as skip.\n(3) Parity passes and the ps1 BOM is kept.\n(4) The gate exits 0.\n\nMy mutants on temp copies were all caught: the pristine launchers, a dropped set -e guard, and an off-by-one bound. The ps1 stream is disposed in finally.\n\nThe intended sh change (a malformed file now WARNs and starts a daemon, not a silent abort) matches ps1. Rails: tests added, no MCP change, .moe state compatible.",
+  "requiredCheckAtDone": null
 }

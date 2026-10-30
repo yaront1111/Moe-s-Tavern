@@ -17,67 +17,115 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red).\n\nCreate packages/moe-daemon/src/context/recipes/recipe.test.ts:\n- Use a real temporary Git repo with ToolTestHarness.\n- Copy the git()/commit() helpers from delivery/requiredChecks.delivery.test.ts: GIT_* masked, GIT_CONFIG_NOSYSTEM and GIT_CONFIG_GLOBAL set, fixed identities.\n- No Git mocks.\n- Assert exact reasons and exact objects, never truthiness.\n- Keep it table-driven, about 180 net lines. The whole task budget is 400 net lines, tests included.\n\nFixture, in beforeEach:\n- h.init(); h.setupMoeFolder(); h.createEpic(); h.createTask({status:'PLANNING'}) as task-1; await h.state.load().\n- Patch settings in memory the way the V01 test's settings() helper does, with approvalMode 'TURBO' by default.\n- git init, then commit .moe/recipes.json = {version:1, recipes:[DEF]} together with docs/a.md, where DEF = {id:'docs-fix', kind:'fake', version:3, requiredChecks:[{id:'docs', command:'npm run lint:docs'}], params:{allowedPaths:['docs']}}.\n- A recipes file only ever exists in the temp repo. Never create .moe/recipes.json in the real project.\n- Register a fake kind with recipeKinds.set('fake', kind). Its hooks are vi.fn:\n  - validateDefinition and validateInputs return null;\n  - assessSource resolves {ok:true, assessment:'seen'};\n  - instantiate returns {ok:true, steps:[{description:'Replace the docs text; keep error handling and the test unchanged', affectedFiles:['docs/a.md']}], executionContract:{approvedScope:['docs/a.md']}}.\n- INPUTS = {path:'docs/a.md', text:'x'}.\n- afterEach: recipeKinds.delete('fake'); clearAllSpeedModeTimeouts(); vi.restoreAllMocks(); h.state.clearEmitter(); h.cleanup().\n\nNamed cases. Each calls instantiateRecipe(h.state, {taskId:'task-1', recipeId:'docs-fix', inputs:INPUTS}) unless stated.\n\nR1 (DoD2: approval modes), it.each over TURBO, SPEED and CONTROL.\n- TURBO: the outcome is exactly {instantiated:true, status:'WORKING', planRevision:<stored>}.\n  - The row is WORKING and unassigned, and approvedPlanRevision === planRevision.\n  - implementationPlan is the fake's one step.\n  - executionContract.requiredChecks deep-equals [{id:'docs', command:'npm run lint:docs', configs:['.moe/recipes.json']}].\n  - requiredCheckSnapshot.entries equals [{path:'.moe/recipes.json', oid: git rev-parse HEAD:.moe/recipes.json}].\n  - recipeInstance deep-equals {version:1, recipeId:'docs-fix', kind:'fake', recipeVersion:3, definitionDigest:recipeDefinitionDigest(DEF), commit:git rev-parse HEAD, inputs:INPUTS, inputsDigest:recipeInputsDigest(DEF, INPUTS), planRevision}.\n  - vi.spyOn(h.state,'appendActivity') saw 'PLAN_SUBMITTED' with actor 'moe-recipe' (the last argument).\n- SPEED (speedModeDelayMs 20): the outcome status is 'AWAITING_APPROVAL' and approvedPlanRevision is unset. Then vi.waitFor shows WORKING with approvedPlanRevision === planRevision.\n- CONTROL: 'AWAITING_APPROVAL'. After one macrotask the row is still AWAITING_APPROVAL with no approvedPlanRevision.\n\nR2 (DoD2: ownership and identity).\n(a) Assign task-1 to 'architect-1' (h.state.updateTask).\n  - The outcome is {instantiated:false, fallback:'ordinary-planning', reason:'recipe-plan-refused:NOT_ALLOWED'} plus a detail string.\n  - The row is still PLANNING and assigned to architect-1, with the same planRevision, no plan steps and no recipeInstance.\n(b) submitPlanTool(h.state).handler({taskId:'task-1', steps:[{description:'x', affectedFiles:['docs/a.md']}], workerId:'moe-recipe'}, h.state) rejects with NOT_ALLOWED and writes nothing.\n(c) After a TURBO instantiation:\n  - h.state.updateTask('task-1', {recipeInstance:<forged>}) leaves the stored record unchanged.\n  - Then move the row to PLANNING and submit an ordinary plan as 'architect-2'. recipeInstance is gone.\n(d) readRecipeInstance returns null in three cases:\n  - after a plan edit bumps planRevision (h.state.updateTask with a changed step description);\n  - for a record with an extra key;\n  - for a record with a non-hex digest.\n\nR3 (DoD3: fallback before any planner), it.each. Each row arranges one failure, then asserts:\n- the outcome is {instantiated:false, fallback:'ordinary-planning', reason:<exact>};\n- the row is untouched: same status, assignee and planRevision, no steps, no recipeInstance and no requiredCheckSnapshot;\n- vi.spyOn(h.state,'postSystemMessage') was called for 'task-1' with text containing the reason.\nRows:\n1. vi.spyOn(planSourceGit,'run') rejects: recipe-source-unavailable.\n2. git rm --cached .moe/recipes.json and commit, leaving the worktree file (committed bytes only): recipe-definitions-missing.\n3. A committed file that is malformed JSON: recipe-definitions-invalid.\n4. A committed definition with requiredChecks []: recipe-definitions-invalid.\n5. recipeId 'nope': recipe-not-found.\n6. A committed definition whose kind is not registered: recipe-kind-unknown.\n7. inputs {a:{b:1}}: recipe-request-invalid.\n8. validateInputs returns 'fake-inputs-bad': that reason, verbatim.\n9. assessSource resolves {ok:false, reason:'fake-source-stale'}: verbatim, and instantiate is never called.\n10. assessSource throws: recipe-kind-failed.\n11. instantiate returns {ok:false, reason:'fake-no-plan'}: verbatim.\n12. The step text contains the harness's forbidden rail pattern 'rm -rf': recipe-plan-refused:CONSTRAINT_VIOLATION. The existing rails validation refuses it.\n13. The row was first moved to BACKLOG: recipe-plan-refused:INVALID_STATE.\n\nR4 (DoD1: protected definitions), under deliveryPolicy 'local-branch'.\n- Overwrite the worktree .moe/recipes.json with version 4 WITHOUT committing, then instantiate in TURBO. recipeInstance.recipeVersion is still 3.\n- Record a runner candidate the way the V01 test's candidate() helper does: protectedEntries [{path:'.moe/recipes.json', oid:<a different 40-hex>}] and a passing runner-observed run of 'npm run lint:docs'. evaluateDeliveryEvidence(h.state, task).missingEvidence contains 'protected-check-changed:.moe/recipes.json'.\n- With the approved oid, missingEvidence does not contain it.\n\nRun npx vitest run src/context/recipes/recipe.test.ts. Every case must fail for the right reason: the missing module or exports.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/context/recipes/recipe.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/recipes/recipe.test.ts"
+      ],
+      "note": "recipe.test.ts written (R1 x3 modes, R2a-d, R3 13-row table, R4). Red for the right reason: import of ./recipe.js fails (module missing). Iteration runs use the Linux snapshot /tmp/moe-c08-dev.Yrg1U5 (native npm ci, env -i). Shared tree has many peer dirty paths; none touched.",
+      "startedAt": "2026-10-30T04:11:33.823Z",
+      "completedAt": "2026-10-30T04:14:38.879Z"
     },
     {
       "stepId": "step-2",
       "description": "Schema and store (DoD1, DoD2).\n\nIn packages/moe-daemon/src/types/schema.ts:\n- Add RecipeDefinition {id, kind, version, requiredChecks: ProtectedCheckDefinition[], params?: Record<string, unknown>}. Its doc comment says it lives in RECIPE_DEFINITIONS_PATH (context/recipes/recipe.ts) and is read only from committed bytes.\n- Add RecipeInstance {version: 1; recipeId; kind; recipeVersion; definitionDigest; commit; inputs: Record<string, string | number | boolean>; inputsDigest; planRevision}.\n  - Give each non-obvious field one doc line. For example, commit is where the definitions, the source and the protected snapshot were read; planRevision is the revision the PLAN_SUBMITTED write committed.\n- Add the optional Task.recipeInstance. Document it as daemon-owned: only submit_plan's internal recipe channel writes it, on PLAN_SUBMITTED.\n\nIn packages/moe-daemon/src/state/taskStore.ts updateTask:\n- Strip it from caller updates next to the plan-reuse strips: `delete sanitized.recipeInstance;` with a one-line comment.\n- Add `recipeInstance?: Omit<RecipeInstance, 'version' | 'planRevision'>` to the daemonOwned parameter type.\n- Inside the existing `if (event === 'PLAN_SUBMITTED' && daemonOwned)` block: when supplied, set `updated.recipeInstance = { version: 1, ...daemonOwned.recipeInstance, planRevision }`; otherwise `delete updated.recipeInstance`.\n  - An ordinary resubmission therefore clears a stale binding exactly like planSourceBasis does.\n  - No other event touches it.\n\nConstraints:\n- Do NOT import context/recipes/recipe.ts from taskStore.ts. recipe.ts imports tools/submitPlan.ts, which imports taskStore.ts, so that import would be a cycle.\n- As with requiredCheckSnapshot, the value's only producer is daemon code that builds it from validated parts. Readers decode it with readRecipeInstance.\n- No WebSocketServer change is needed: the updateTask strip already covers every caller, as it does for requiredCheckSnapshot.\n- Do not add activity event types: ACTIVITY_EVENT_TYPES is mirrored in moe-vscode.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts",
         "packages/moe-daemon/src/state/taskStore.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ],
+      "note": "schema.ts: RecipeDefinition, RecipeInstance, Task.recipeInstance (+34). taskStore.ts: strip sanitized.recipeInstance; daemonOwned.recipeInstance (Omit version/planRevision); written {version:1,...,planRevision} only inside the PLAN_SUBMITTED&&daemonOwned block, else deleted (+7/-2). No recipe.ts import from taskStore; no WS or activity-type change.",
+      "startedAt": "2026-10-30T04:14:39.810Z",
+      "completedAt": "2026-10-30T04:15:27.355Z"
     },
     {
       "stepId": "step-3",
       "description": "Internal plan authority in packages/moe-daemon/src/tools/submitPlan.ts (DoD2).\n\nAdd these near the top-level exports:\n- `export const RECIPE_ACTOR = 'moe-recipe'`: the explicit identity of the internal recipe adapter. It is never an architect id.\n- A module-private `const recipeSubmissions = new WeakMap<object, Omit<RecipeInstance, 'version' | 'planRevision'>>()`.\n  - It is keyed by the argument object submitRecipePlan creates, so no MCP or /ws payload can be one of its keys.\n  - Do not extend ToolCallContext (the handler's third parameter): that touches tools/index.ts.\n  - Do not move the handler body either: re-indenting about 500 lines would blow the size budget.\n- `export async function submitRecipePlan(state, args, recipeInstance)`:\n  - `const call = { ...args, workerId: RECIPE_ACTOR }`;\n  - `recipeSubmissions.set(call, recipeInstance)`;\n  - return `submitPlanTool(state).handler(call, state)`, typed as `{ status: TaskStatus; planRevision: number }`.\n\nIn the handler, as its first statements and before any Git work:\n- `const recipeInstance = recipeSubmissions.get(args as object)`. Guard null args.\n- Error handling for the reserved identity: if there is no recipeInstance but args.workerId === RECIPE_ACTOR, throw new MoeError(MoeErrorCode.NOT_ALLOWED, ...) with codeName 'NOT_ALLOWED'. The message says the identity is reserved for recipe instantiation, so no caller can impersonate the recipe adapter.\n- Pass `...(recipeInstance ? { recipeInstance } : {})` in the daemonOwned argument of the existing PLAN_SUBMITTED updateTask call.\n\nEverything else stays as it is, and the recipe path gets the same treatment as any other submission:\n- the locked status check;\n- assertWorkerOwns: the row must be unassigned or held by RECIPE_ACTOR, so a row a planner holds is refused with NOT_ALLOWED;\n- rails, the size gate, path existence and contract validation;\n- measureRequiredCheckSnapshot at requiredCheckRevision;\n- the CONTROL, SPEED and TURBO approval branches.\n\nThe adapter never writes status itself. The activity actor of PLAN_SUBMITTED becomes RECIPE_ACTOR. touchWorker skips the missing worker record.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/submitPlan.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "note": "RECIPE_ACTOR='moe-recipe', module-private WeakMap recipeSubmissions keyed by the call object submitRecipePlan creates, submitRecipePlan(state,args,instance). Handler's first statements: WeakMap lookup (null-guarded) and NOT_ALLOWED refusal for workerId moe-recipe without an entry, before any Git work. recipeInstance rides in the existing PLAN_SUBMITTED daemonOwned arg. Rest of the handler unchanged; no ToolCallContext/index.ts change.",
+      "startedAt": "2026-10-30T04:15:28.286Z",
+      "completedAt": "2026-10-30T04:17:32.238Z"
     },
     {
       "stepId": "step-4",
       "description": "Create packages/moe-daemon/src/context/recipes/recipe.ts (DoD1, DoD3), about 150 net lines.\n\nIts module doc comment says:\n- what a recipe is;\n- that definitions are read only from committed bytes;\n- that submission runs through submit_plan's validation and approval flow as RECIPE_ACTOR;\n- that callers must call it OUTSIDE the state mutex. A caller inside a locked tool must use state.detachFromMutexContext. That is the activation's job, which is out of scope here.\n\nExports:\n(a) `RECIPE_DEFINITIONS_PATH = '.moe/recipes.json'`.\n- The file is {version:1, recipes:[RecipeDefinition, ...]}: versioned project configuration that a human commits.\n- This task never creates it in the real project.\n\n(b) Types:\n- RecipeInputs = Record<string, string|number|boolean>.\n- RecipePlanStep {description; affectedFiles?; newFiles?}.\n- RecipeKind:\n  - readonly name;\n  - validateDefinition(def): string|null, which checks def.params;\n  - validateInputs(inputs, def): string|null;\n  - assessSource(projectRoot, commit, inputs, def): Promise<{ok:true; assessment:unknown}|{ok:false; reason:string}>. It is bounded and read-only, uses committed bytes only and never throws.\n  - instantiate(inputs, def, assessment, commit): {ok:true; steps:RecipePlanStep[]; executionContract?: Omit<TaskExecutionContract,'requiredChecks'>}|{ok:false; reason:string}. It is deterministic, with no IO.\n  - optional assessPostpatch?(projectRoot, ctx:{taskId; instance:RecipeInstance; definition:RecipeDefinition; postCommit:string}): Promise<{ok:true}|{ok:false; reason:string}>. Document it as the hook a later post-patch consumer calls. Nothing calls it in this task, as agreed with C09 in msg-c7ac9a51.\n- RecipeRequest {taskId; recipeId; inputs:unknown}.\n- RecipeOutcome = {instantiated:true; status:TaskStatus; planRevision:number} | {instantiated:false; fallback:'ordinary-planning'; reason:string; detail?:string}.\n\n(c) `export const recipeKinds = new Map<string, RecipeKind>()`: the registry, empty here.\n- Kinds register themselves (C09 adds docs-literal-replace).\n- recipe.ts never imports a kind module, so there is no import cycle.\n- Tests set and delete entries.\n\n(d) recipeDefinitionDigest(def) and recipeInputsDigest(def, inputs). Each is the sha256 hex (node:crypto) of JSON.stringify of:\n- for the definition: [id, kind, version, requiredChecks, params ?? null];\n- for the inputs: [id, kind, version, the input keys sorted by code unit, each as [key, value]].\n\n(e) readRecipeInstance(task) never throws. It returns a detached copy, or null unless all of these hold:\n- exact keys and version 1;\n- recipeId and kind match ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;\n- recipeVersion is a positive safe integer;\n- both digests are 64 lowercase hex;\n- commit is 40 or 64 lowercase hex;\n- inputs pass the same flat-inputs check as (f);\n- planRevision === (task.planRevision ?? 0): a later plan edit makes the binding stale.\nReuse the plain-object and prototype checks of fieldsOf in context/planReuseState.ts. Never spell the prototype-pollution key literally: the project forbids that pattern.\n\n(f) async instantiateRecipe(state, request): Promise<RecipeOutcome>. It never throws.\n\nError handling: every failure is one fallback with a stable reason, built by one local helper. The helper:\n- replaces control characters with '?';\n- clips reason and detail to 300 chars;\n- best-effort posts 'Recipe <id> not instantiated (<reason>): ordinary planning applies.' with state.postSystemMessage(taskId, ...) inside state.runExclusive, catching and ignoring failure;\n- returns the outcome.\nIt never assigns, claims, launches or writes the row, so the row stays claimable for ordinary planning.\n\nOrder, so the cheap refusals run first:\n1. recipe-request-invalid when recipeId fails ID, or inputs are not a plain object with:\n   - at most 32 keys, each 1-64 chars with no control characters;\n   - string, finite number or boolean values;\n   - at most 16384 chars of JSON.\n2. capturePlanSourceBasis(state.projectPath) from context/planReuseState.ts. Null gives recipe-source-unavailable. That one commit is used for everything below.\n3. readRepositorySource(state.projectPath, commit, [{id:'recipes', purpose:'config', op:'read', path:RECIPE_DEFINITIONS_PATH}]), in try/catch:\n   - missing: recipe-definitions-missing;\n   - unavailable, or a throw: recipe-source-unavailable;\n   - refused, truncated or omitted: recipe-definitions-refused, with item.reason as the detail.\n4. Decode strictly, all entries, failing closed with recipe-definitions-invalid and the offending field as the detail:\n   - JSON.parse;\n   - the top level is exactly {version:1, recipes}, with an array of 1-50 entries;\n   - each entry's keys are within {id, kind, version, requiredChecks, params};\n   - id and kind match ID, and ids are unique;\n   - version is a positive safe integer;\n   - requiredChecks goes through validateExecutionContract({requiredChecks}, 'requiredChecks') from state/validators.ts, must be non-empty, and the validated copy is kept;\n   - params is an optional plain object.\n5. No entry with that id gives recipe-not-found. A kind not in recipeKinds gives recipe-kind-unknown.\n6. Kind hooks, in order, inside one try/catch: validateDefinition, validateInputs, await assessSource, instantiate.\n   - Each refusal returns the kind's reason verbatim, and no later hook runs.\n   - A throw or a malformed hook result gives recipe-kind-failed.\n7. requiredChecks: the definition's checks, with RECIPE_DEFINITIONS_PATH appended (deduplicated) to every check's configs.\n   - The definition defines those checks, so V01's snapshot pins its blob. A candidate that changes it is then refused at delivery with protected-check-changed until a new approval revision (DoD1).\n   - The contract is {...plan.executionContract, requiredChecks}, so the framework's checks always win.\n8. await submitRecipePlan(state, {taskId, steps, executionContract, requiredCheckRevision: commit}, {recipeId, kind, recipeVersion, definitionDigest, commit, inputs, inputsDigest}).\n   - On success, return {instantiated:true, status, planRevision} from its result.\n   - A MoeError gives `recipe-plan-refused:${error.codeName}`, with the first line of the message as the detail. This covers ownership, status, rails, size, paths and contract.\n   - Anything else gives recipe-instantiation-failed.\n\nMake R1-R4 green with npx vitest run src/context/recipes/recipe.test.ts.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/context/recipes/recipe.test.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/context/recipes/recipe.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/recipes/recipe.ts",
+        "packages/moe-daemon/src/context/recipes/recipe.test.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "note": "recipe.ts (177 lines): RECIPE_DEFINITIONS_PATH, RecipeKind/Request/Outcome types, recipeKinds registry, digests, readRecipeInstance, instantiateRecipe in the planned order (request -> basis -> committed read -> strict decode -> lookup -> kind hooks -> configs append -> submitRecipePlan). The instance record and checks are bound before the kind hooks run. fieldsOf is module-private in planReuseState.ts (not an owned file), so its plain/prototype check is mirrored locally. Compressed tests and comments to fit the budget, dropping no assertions: 5 files net 395 (cap 400). Snapshot: recipe.test.ts 21/21 pass; src tsc 0; test-file tsc 0.",
+      "startedAt": "2026-10-30T04:17:33.161Z",
+      "completedAt": "2026-10-30T04:26:17.160Z"
     },
     {
       "stepId": "step-5",
       "description": "Verify once.\n\nThis task changes a shared schema type and the submit_plan path, so the gate is the full daemon suite: `cd packages/moe-daemon && npm test`.\n- Run it fresh. It must exit 0.\n- Its command, exit code and output tail are the complete_task verification evidence.\n\nRun it in a Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate):\n- git archive HEAD of the WHOLE repo;\n- overlay ONLY the five owned paths;\n- npm ci the native deps under env -i with a Linux-only PATH, so no MOE_* variable is set;\n- cmp the owned files against the snapshot before you cite the run.\n\nAlso run npx tsc --noEmit, plus the test-file typecheck the daemon gate uses.\n\nRecord the pass and skip counts against the pre-change baseline. Any newly failing test is a regression: fix it, and never weaken an existing assertion.\n\nProve the tests bite. On a scratch copy, apply each mutant, confirm a named case turns red, then restore and cmp. Mutants and the cases that must kill them:\n1. drop the configs append: R4;\n2. read the worktree file instead of committed bytes: R3 row 2 and R4;\n3. remove the reserved-identity guard: R2b;\n4. keep recipeInstance on an ordinary PLAN_SUBMITTED: R2c;\n5. ignore planRevision in readRecipeInstance: R2d;\n6. continue after a kind refusal: R3 row 9.\nList each mutant and its killing test in the completion summary.\n\nMeasure net changed lines over the five paths: git diff --numstat, plus wc -l for the new files. The total must be at most 400, tests included. If it is over, compress the tests into it.each tables; never drop an assertion.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/context/recipes/recipe.ts",
         "packages/moe-daemon/src/context/recipes/recipe.test.ts",
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/state/taskStore.ts",
         "packages/moe-daemon/src/types/schema.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/recipes/recipe.ts",
+        "packages/moe-daemon/src/context/recipes/recipe.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "Gate: fresh git archive HEAD 42fd78e (whole repo) at /tmp/moe-c08-gate.gnZifd. Overlaid only the 5 owned files (cmp-equal); native node_modules (lock cmp-equal); env -i; node v24.21.0. Baseline pure HEAD: 190 files, 5320 passed / 16 skipped, exit 0. With the change: npm test exit 0, 191 files, 5341 passed / 16 skipped (+21, the new file); no regressions. Source tsc --noEmit 0; test-file tsc (scratch tsconfig) 0. Mutants, all killed, then restored and cmp-checked: 1 configs append -> R4 (+R1x3); 2 worktree read -> R3 definitions-missing + R4; 3 reserved guard -> R2b; 4 keep binding on ordinary submit -> R2c; 5 ignore planRevision -> R2d; 6 continue after kind refusal -> R3 fake-source-stale; 7 (extra) drop caller strip -> R2c. Size: taskStore +7/-2, submitPlan +22/-2, schema +28, recipe.ts 177, recipe.test.ts 165 = 395 net (cap 400).",
+      "startedAt": "2026-10-30T04:26:18.172Z",
+      "completedAt": "2026-10-30T04:30:18.560Z"
     },
     {
       "stepId": "step-6",
       "description": "One adversarial self-review of this task's diff only. Load the adversarial-self-review skill, then check each point.\n\nConcurrency:\n- Two instantiateRecipe calls on one row: submit_plan's lock serializes them, and the second falls back with recipe-plan-refused:INVALID_STATE.\n- A planner claims the row mid-assessment: the call falls back with NOT_ALLOWED, and the planner's plan is never overwritten.\n- The SPEED timer stays bound to the recipe submission's revision.\n\nInputs:\n- null, nested or oversized inputs, NaN or Infinity values, and keys with control characters;\n- a definitions file that is over 64 KiB, a symlink, binary, or starts with a BOM;\n- duplicate recipe ids;\n- JSON prototype keys;\n- a kind that returns junk or throws.\n\nIdentity:\n- No MCP or /ws path can set recipeInstance or act as 'moe-recipe'.\n- The WeakMap channel is unreachable from the wire.\n\nAlso confirm:\n- There is no .moe/recipes.json, nor any other .moe edit, in the real project, and no Git writes.\n- Legacy (non-recipe) tasks see submit_plan unchanged, except that an ordinary resubmission deletes a stale binding.\n- There is no new activity event type, tool or timer.\n- There is no import cycle: taskStore and submitPlan never import recipe.ts.\n- Error handling: instantiateRecipe never throws and never leaves a half-written row.\n- Net changed lines are at most 400.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/context/recipes/recipe.ts",
         "packages/moe-daemon/src/context/recipes/recipe.test.ts",
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/state/taskStore.ts",
         "packages/moe-daemon/src/types/schema.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/recipes/recipe.ts",
+        "packages/moe-daemon/src/context/recipes/recipe.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "Adversarial review of the 5-file diff; no code change needed.\nConcurrency: a second call on one row hits submit_plan's locked status check (recipe-plan-refused:INVALID_STATE). A planner who claims mid-assessment is refused by assertWorkerOwns (NOT_ALLOWED), and their row is never written. The SPEED timer is bound to the decoded revision (code unchanged).\nIdentity: the WeakMap key is the object submitRecipePlan creates, so no wire payload can be a key. workerId moe-recipe without a key is refused NOT_ALLOWED before any Git work. updateTask strips caller recipeInstance, so /ws UPDATE_TASK echoes are covered. createTask builds rows from an allowlist without the field. No other code uses the moe-recipe id.\nInputs: null request (caught: recipe-instantiation-failed, no post); nested/NaN/Infinity/control-char keys/>32 keys/>16384 JSON chars (request-invalid); throwing getters (caught). Definitions file >64KiB (truncated), symlink or binary: definitions-refused. A BOM is kept by readBlob, so JSON.parse fails: definitions-invalid. Duplicate ids, unknown keys and JSON prototype keys: definitions-invalid (Object.fromEntries/own props, no prototype writes). Kind junk or throw: recipe-kind-failed.\nOther: no import cycle (only recipe.ts imports submitPlan); no new tool, event type or timer; no .moe/recipes.json or .moe edit in the real project; no Git writes.\nTheoretical, noted:\n(a) A MoeError after the PLAN_SUBMITTED write (e.g. the TURBO auto-approve refused under verified-local) is reported as a fallback although the plan exists. This matches what submit_plan tells an architect today.\n(b) A SHA-256 repo gives recipe-plan-refused:INVALID_INPUT (requiredCheckRevision is 40-hex only).\n(c) planSourceBasis (submit_plan's own HEAD read) may name a later commit than recipeInstance.commit if HEAD moves in between. Both are recorded faithfully.\n(d) A kind whose assessSource never resolves hangs the call; boundedness is the kind's contract.",
+      "startedAt": "2026-10-30T04:30:19.561Z",
+      "completedAt": "2026-10-30T04:31:15.390Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -90,7 +138,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:44.843Z",
-  "updatedAt": "2026-10-29T14:12:49.169Z",
+  "updatedAt": "2026-10-30T04:31:28.074Z",
   "dependsOn": [
     "task-93dee42f71db4a6a8e47a8de052ad411",
     "task-bde8654052f648f9b209174c3708322b",
@@ -100,12 +148,14 @@
   "metrics": {
     "firstClaimAt": "2026-10-27T17:38:04.226Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
     "architect-e4b7eee0",
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-093a65d0"
   ],
   "commits": [
     {
@@ -142,9 +192,11 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
-    ".moe/tasks/task-f12b03e83a1a491494a08e42c7a58504.json",
-    ".moe/tasks/task-34632f08a9a549a28bcf2b9f6946244b.json"
+    "packages/moe-daemon/src/context/recipes/recipe.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts",
+    "packages/moe-daemon/src/context/recipes/recipe.ts"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -157,7 +209,14 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T14:10:32.942Z",
   "planningNotes": {
@@ -177,5 +236,15 @@
       "packages/moe-daemon/src/util/enforcement.ts"
     ]
   },
-  "planApprovedAt": "2026-10-29T14:10:33.049Z"
+  "planApprovedAt": "2026-10-29T14:10:33.049Z",
+  "workStartedAt": "2026-10-30T04:11:33.823Z",
+  "reviewStartedAt": "2026-10-30T04:31:28.071Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test   # fresh Linux snapshot /tmp/moe-c08-gate.gnZifd: git archive HEAD 42fd78e (whole repo) + only the 5 owned files (cmp-equal to worktree), native node_modules (lock cmp-equal), env -i (no MOE_*), node v24.21.0",
+    "exitCode": 0,
+    "outputTail": " ✓ src/util/qaCommitPolicy.test.ts (8 tests) 4ms\n ✓ src/util/ids.test.ts (4 tests) 3ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n\n Test Files  191 passed (191)\n      Tests  5341 passed | 16 skipped (5357)\n   Start at  06:28:17\n   Duration  21.99s (tests 94%, import 4%, transform 1%)\n\nBaseline (pure HEAD 42fd78e, same snapshot, before overlay): Test Files 190 passed (190); Tests 5320 passed | 16 skipped (5336); exit 0. Delta +1 file / +21 tests = src/context/recipes/recipe.test.ts. npx tsc --noEmit exit 0; test-file tsc (scratch tsconfig including recipe.test.ts) exit 0.",
+    "reportedAt": "2026-10-30T04:31:28.071Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-C08 protected recipe instantiation. 5 files, net 395 lines (cap 400): recipe.ts 177 (new), recipe.test.ts 165 (new, 21 tests), schema.ts +28, submitPlan.ts +22/-2, taskStore.ts +7/-2.\n\nBehaviour:\n- `.moe/recipes.json` is {version:1, recipes:[{id,kind,version,requiredChecks,params?}]}. It is read only as committed bytes (readRepositorySource) at the commit capturePlanSourceBasis pins, and decoded strictly.\n- recipeKinds is a registry; this task registers none.\n- instantiateRecipe never throws. A failure returns {instantiated:false, fallback:'ordinary-planning', reason, detail?} and posts a task notice. Reasons: recipe-*, a kind's reason verbatim, or recipe-plan-refused:<codeName>.\n- The plan goes through the unchanged submit_plan handler as RECIPE_ACTOR='moe-recipe', via a module-private WeakMap keyed by the call object. Status, ownership, rails, size, paths, contract, snapshot and the CONTROL/SPEED/TURBO branches all run as before.\n- A wire workerId 'moe-recipe' is refused NOT_ALLOWED.\n- .moe/recipes.json is appended to every check's configs, and the snapshot is measured at the same commit.\n- Task.recipeInstance is daemon-owned: caller updates strip it, only PLAN_SUBMITTED via the channel sets it, and any other submission deletes it. readRecipeInstance returns null when the record is malformed or stale.\n\nDoD:\n1. R4: an uncommitted worktree edit doesn't count (recipeVersion stays 3). A candidate with a changed .moe/recipes.json oid gets protected-check-changed; with the approved oid it does not.\n2. R1 (TURBO/SPEED/CONTROL; actor moe-recipe); R2a (row held by a planner: NOT_ALLOWED, untouched); R2b (wire impersonation refused); R2c, R2d.\n3. R3: 13 fallback rows, each leaving the row untouched and posting a notice; instantiate is never called after a refusal.\n4. Gate EXIT 0: 5341 passed / 16 skipped (baseline 5320/16, +21); both tsc runs 0.\n\nMutants, all killed:\n- configs append: R4 (+R1)\n- worktree read: R3 definitions-missing, R4\n- reserved guard: R2b\n- keep bindi"
 }
