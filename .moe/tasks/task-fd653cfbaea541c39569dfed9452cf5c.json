@@ -111,7 +111,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:18.870Z",
-  "updatedAt": "2026-10-30T07:40:47.643Z",
+  "updatedAt": "2026-10-30T07:41:12.772Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T06:51:59.902Z",
@@ -181,7 +181,44 @@
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
-    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
+    ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json"
   ],
-  "completionSummary": "CQ-RF01: a protected-profile IDE can again activate, after a restart, a daemon it spawned earlier. Each protected spawn record (project key, pid, start instant, supervisor flag, installed-daemon real path) is persisted to the new owner-only ProtectedStateStore under the IDE system dir, never in the repository. The store is exact 700/600 on POSIX; on Windows the ACL holds only owner ALLOW entries. Files are read with no links, capped at 64 KiB, and named by a sha-256 hex; CQ-RF02 is meant to reuse this store. verifyProvenance checks the session first (rules unchanged; the in-session child is now persisted too, because Windows orphans `_run`). Otherwise it reads the strict file for this project and prunes records whose pid+start no longer match (rewriting or deleting the file). It accepts only an own (pid,start) record, or a child of a persisted supervisor, that names the currently installed daemon. Everything else gets today's exact refusal. MoeDaemonSupervisor passes the installed daemon at spawn and in activationRefusal; LEGACY never touches the store. Only the five planned files changed. Tests: PS1-PS5, PP1/PP2a/PP2b/PP3 and S6 in RuntimeSelectionPolicyTest, plus a legacy no-store test in MoeDaemonSupervisorTest. RED was observed before each step's code. Windows gate: 352 tests, 0 failed/skipped (RuntimeSelectionPolicyTest 39, MoeDaemonSupervisorTest 21). Mutants M1-M7 all killed. Extras M6b and M10 first survived; assertions were added and both are now killed. M7b and M9 were killed. The POSIX branch runs on CI Linux only. Theoretical risks are noted in the step-5 note."
+  "completionSummary": "CQ-RF01: a protected-profile IDE can again activate, after a restart, a daemon it spawned earlier. Each protected spawn record (project key, pid, start instant, supervisor flag, installed-daemon real path) is persisted to the new owner-only ProtectedStateStore under the IDE system dir, never in the repository. The store is exact 700/600 on POSIX; on Windows the ACL holds only owner ALLOW entries. Files are read with no links, capped at 64 KiB, and named by a sha-256 hex; CQ-RF02 is meant to reuse this store. verifyProvenance checks the session first (rules unchanged; the in-session child is now persisted too, because Windows orphans `_run`). Otherwise it reads the strict file for this project and prunes records whose pid+start no longer match (rewriting or deleting the file). It accepts only an own (pid,start) record, or a child of a persisted supervisor, that names the currently installed daemon. Everything else gets today's exact refusal. MoeDaemonSupervisor passes the installed daemon at spawn and in activationRefusal; LEGACY never touches the store. Only the five planned files changed. Tests: PS1-PS5, PP1/PP2a/PP2b/PP3 and S6 in RuntimeSelectionPolicyTest, plus a legacy no-store test in MoeDaemonSupervisorTest. RED was observed before each step's code. Windows gate: 352 tests, 0 failed/skipped (RuntimeSelectionPolicyTest 39, MoeDaemonSupervisorTest 21). Mutants M1-M7 all killed. Extras M6b and M10 first survived; assertions were added and both are now killed. M7b and M9 were killed. The POSIX branch runs on CI Linux only. Theoretical risks are noted in the step-5 note.",
+  "commits": [
+    {
+      "sha": "227833f4585675ac3ab82e587ed97de302869629",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T07:02:58Z",
+      "paths": [
+        ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
+        ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T07:41:12.772Z",
+      "treeId": "66559bb3b53103d9b2833c7c545edb0e51377803",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-30T07:02:58Z",
+    "at": "2026-10-30T07:41:12.772Z"
+  }
 }
