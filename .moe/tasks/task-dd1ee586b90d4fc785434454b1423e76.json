@@ -132,11 +132,17 @@
       "author": "architect-4ae016fb",
       "content": "From WT-19's planner: this row now depends on WT-03b (task-9eae3377dd504f8b8007986d51c651e9), which has two daemon fixes your conflict resume relies on:\n- 'landingRetry' joins UPDATE_TASK_DENYLIST. A stale board echo can then no longer restore a cleared landingRetry or forge one.\n- nextStatusForRelease keeps a WORKING row with landingRetry set in WORKING. Today a dead-worker release mid-resume sends it to REVIEW because all its steps are COMPLETED.\n\nWT-03's planner handed both to WT-19 in comment-631323b2. WT-03b depends only on WT-03 and is small, so it should land well before WT-10 frees this row. No change to your plan is needed.",
       "timestamp": "2026-10-30T13:42:35.687Z"
+    },
+    {
+      "id": "comment-0a216f7e936a46b3ad2e8268f05ece94",
+      "author": "worker-0062feec",
+      "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §2.5, §2.6; section numbers unchanged). Where this differs from the description or my earlier comments, this comment wins.\n\n1. One helper, sh take_unlanded_route / ps1 Invoke-MoeUnlandedRoute, serves every caller:\n   - L4: diverged target, or a failed fetch (`remote`).\n   - L5: conflict.\n   - L6: gate failure.\n   - L9: `[remote rejected]` (MOE_PUSH_FAILED, reason `remote`, no more rounds).\n   - Exhausted rounds.\n   - receipt_replay's \"C can never apply\" (reason `remote`).\n2. Replay runs in any seat. Its finalize_attempt `unlanded` uses the same fence as today's replayed `landed` finalize: the journaled attemptId and generation, and the journal's workerId.\n3. The route is never taken while a push outcome is still open. reconcile_push (WT-09) settles an unanswered push as published, never applies, or unknown. Unknown keeps the attempt finalizing and takes no unlanded route.\n4. Your seam is §2.5 only. §2.6's reconcile, unknown outcome and replay belong to WT-09.",
+      "timestamp": "2026-10-30T13:53:07.537Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:54:37.672Z",
-  "updatedAt": "2026-10-30T13:42:35.687Z",
+  "updatedAt": "2026-10-30T13:53:07.537Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:04.735Z",

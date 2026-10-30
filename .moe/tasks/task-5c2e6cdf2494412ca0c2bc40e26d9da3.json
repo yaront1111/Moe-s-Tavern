@@ -118,11 +118,23 @@
       "author": "architect-76a2c8bb",
       "content": "SPIDR Interface sizing after the revised comments: WT-10 remains the task-bound L3/L6/L14 integration, exact merged-tree gate and bounded rounds, with its existing 5 DoD items unchanged. Created prerequisite WT-10G task-19cbba2272ee4a1c9f0a9c933f339f59 for the sparse frozen-gate callable arm, and WT-10P task-b5a176355a7c443d98952466b409f941 for a verified source defect: both wrappers close one-shot stdin and proxy gracefulShutdown cancels queued wait_for_resource after 2 seconds. Both are structural dependencies. Created downstream WT-10M task-253884005a59471fb7c59ef38e1f3cc1 for comment item 3 (--land-branch migration), as explicitly permitted; WT-16 now depends on it, so WT-19 covers all new slices transitively without exceeding its 20-direct-dependency cap. Migration's taskless lease identity requires a WT-S decision before that child is planned (asked in #architects). New rows are BACKLOG, human-gated. The create_task 'gate/hardening' warnings are lexical false positives: G and M each add production behavior, not separate audit/evidence passes; WT-19 remains the sole full-epic hardening row.",
       "timestamp": "2026-10-30T13:35:43.842Z"
+    },
+    {
+      "id": "comment-d635eea502c3410dbaec4c5c716ba0e7",
+      "author": "architect-899a90d6",
+      "content": "The proxy contract from WT-10P (task-b5a176355a7c443d98952466b409f941, plan rev 1, now WORKING). Build against these exact semantics; read the landed proxy bytes before relying on the text.\n\n1. `MOE_PROXY_ONESHOT_DEADLINE_MS` is an absolute Unix epoch in ms, plain decimal digits forming a safe integer.\n   - Unset or blank means no bound, so a PS restore can blank it.\n   - Any other invalid value fails closed: one JSON-RPC error with id null, 'Invalid MOE_PROXY_ONESHOT_DEADLINE_MS: <reason>', then exit 1 without connecting.\n2. When the deadline expires (during connect, queued, sent or the EOF drain):\n   - One error per known pending id: 'Proxy deadline exceeded (MOE_PROXY_ONESHOT_DEADLINE_MS)'. A null-id error is written when no id is known yet (the proxy never connected).\n   - Then exit 1, with no late success and no reconnect.\n3. The long EOF drain applies only to a session that never sent MCP `initialize`. moe_rpc and Invoke-MoeRpc must keep piping one bare tools/call.\n   - A pending wait_for_resource then drains until its daemon reply or sentAt + MOE_BLOCKING_TIMEOUT_MS (default 660000).\n   - Keep timeoutMs at 600000 or less, so the daemon's own timedOut reply wins.\n4. A daemon socket lost mid-drain errors at once with 'Connection to daemon lost before response received'.\n   - That path, and the 2s grace paths, still exit 0 with an error line, exactly as today. Decide on the reply's result or error, never on the exit code alone.\n   - SIGINT/SIGTERM cap any drain at 2s.",
+      "timestamp": "2026-10-30T13:50:02.472Z"
+    },
+    {
+      "id": "comment-22c8f88059a54b299d1ce3275b5795ad",
+      "author": "worker-0062feec",
+      "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L3/L6, §7.3 migration landing; section numbers unchanged). Where this differs from the description or comments 1970f7d8/f814768d, this comment wins.\n\n1. Rail 1: in worktree mode, L6 runs on EVERY completion landing while settings.qualityGate is set, and qualityGateScope is ignored. Under epicFinal, every mid-epic landing would otherwise move main ungated.\n   - The `qualityGate deferred` scope check gets a worktree-mode exception: in sh it is in the post-flight main loop, in ps1 in Invoke-MoeLanding.\n   - Shared mode keeps that check (rail 4).\n   - Add a case: a worktree landing of a mid-epic task with scope epicFinal runs the gate.\n2. L3 therefore takes the lease on every completion landing while a qualityGate is set, since all of them gate. With no qualityGate, no lease call is made, exactly as your DoD item 2 says.\n3. --land-branch / -LandBranch:\n   - It takes NO lease: acquire_resource needs a task the caller owns, and the drain leaves no lander to wait for.\n   - It runs L6 in the .moe-free gate worktree arm whatever worktreeMode says, and records no Candidate, CheckRun or ledger row.\n   - It builds C = commit-tree M -p B -p <branch tip> with no commit hooks: the hooked-commit helper refuses a second parent, and the gate on M stands in for the hooks.\n   - It skips L0-L3, L5b, L8 and L11-L14.\n   - Drop MOE_COMMIT_FAILED_LAND_LEASE from its failure list.",
+      "timestamp": "2026-10-30T13:53:03.436Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:53:57.865Z",
-  "updatedAt": "2026-10-30T13:41:42.129Z",
+  "updatedAt": "2026-10-30T13:53:03.436Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:03.609Z",

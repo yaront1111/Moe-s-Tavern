@@ -12,7 +12,9 @@ import { spawn as spawnChild } from 'node:child_process';
 import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { checkArgv, checkFrame as hostCheckFrame } from '../local-runner/guest-bridge.mjs';
-import { MAX_BUDGET_MS, MAX_CHECK_TAIL_BYTES, PROTECTED_CHANGED, PROTECTED_MISMATCH, runCheckSession } from '../local-runner/check-session.mjs';
+import {
+  DEPENDENCIES_FAILED, MAX_BUDGET_MS, MAX_CHECK_TAIL_BYTES, PROTECTED_CHANGED, PROTECTED_MISMATCH, runCheckSession,
+} from '../local-runner/check-session.mjs';
 import { ownedInstanceName } from '../local-runner/lifecycle.mjs';
 import {
   MAX_DEPENDENCY_BYTES, MAX_DEPENDENCY_PACKAGES, MAX_LOCKFILE_BYTES, MAX_LOCKFILES, MAX_PACKAGE_BYTES, OFFLINE_INSTALL_ARGS, admitLockfiles,
@@ -399,7 +401,7 @@ test('K2 main() routes a root check to relay as sh -c command under the CHECK_BO
     const { identity, network, resources } = CHECK_BOUNDARIES;
     const [uid, gid, home] = [process.getuid(), process.getgid(), job.env.HOME];
     assert.deepEqual(job, {
-      env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: home, USER: identity.user, LOGNAME: identity.user, LANG: 'C.UTF-8', MOE_CHECK_ID: CHECK.id },
+      env: { PATH: '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin', HOME: home, USER: identity.user, LOGNAME: identity.user, LANG: 'C.UTF-8', MOE_CHECK_ID: CHECK.id },
       spawn: { user: uid, group: gid, extra_groups: identity.supplementaryGroups, umask: parseInt(identity.umask, 8), cwd: join(run.dir, 'ws'),
         rlimits: resources.rlimits, netns: network.namespace === 'private' },
     });
@@ -532,7 +534,7 @@ test('K3 a real check job is sh -c command with exactly the allowlisted environm
     const homes = readdirSync(join(dir, 'sessions'));
     assert.equal(homes.length, 1);
     assert.deepEqual(probe.cmdline, ['/bin/sh', '-c', command]);
-    assert.deepEqual(probe.env, { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: join(dir, 'sessions', homes[0]), USER: identity.user,
+    assert.deepEqual(probe.env, { PATH: '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin', HOME: join(dir, 'sessions', homes[0]), USER: identity.user,
       LOGNAME: identity.user, LANG: 'C.UTF-8', MOE_CHECK_ID: CHECK.id });
     assert.deepEqual([probe.cwd, probe.status], [realpathSync(join(dir, 'ws')), [`Umask:\t0${identity.umask}`, 'NoNewPrivs:\t1']]);
     for (const [name, value] of Object.entries(rlimits)) {
@@ -794,6 +796,124 @@ test('K8 a real check job that removes its protected file is observed exiting 0,
     assert.equal(existsSync(join(dir, 'ws', 'a.txt')), false);
   });
 
+// CQ-R11e5: the check mode's offline dependency install phase. The fake toolchain's node, a /bin/sh script, logs one line
+// per install: pid, cwd, umask, open-file limit, NoNewPrivs, PATH, HOME and argv. It then hangs if its cwd holds `hang`,
+// else exits with the status in `status` (default 0). The real GUARD runs it as the test user (groups None, netns False);
+// relay() stays CHECK_RECORD's recorder, and `logged` hands it the installs logged by then.
+const FAKE_NODE = `#!/bin/sh
+echo "$$|$PWD|$(umask)|$(ulimit -n)|$(grep -c '^NoNewPrivs:.1' /proc/$$/status)|$PATH|$HOME|$*" >> BASE/install.log
+[ -e hang ] && exec sleep 30
+[ -e status ] && read s < status && exit $s
+exit 0
+`;
+const INSTALL = (list, dirs, more, manifest) => `log, tc, deps = (os.path.join(base, name) for name in ('install.log', 'tc', 'deps'))
+for sub in ('tc/bin', 'tc/lib/node_modules/npm/bin', 'deps'):
+    os.makedirs(os.path.join(base, sub))
+open(os.path.join(tc, 'lib/node_modules/npm/bin/npm-cli.js'), 'w').close()
+with open(os.path.join(tc, 'bin/node'), 'w') as f:
+    f.write(${JSON.stringify(FAKE_NODE)}.replace('BASE', base))
+os.chmod(os.path.join(tc, 'bin/node'), 0o755)
+for name in ${JSON.stringify(dirs)}:
+    os.makedirs(os.path.join(workspace, name), exist_ok=True)
+    open(os.path.join(workspace, name, 'package-lock.json'), 'w').close()
+${list === null ? '' : `with open(os.path.join(deps, 'moe-dependencies.json'), 'w') as f:\n    f.write(${JSON.stringify(list)})\n`}${manifest ? "open(os.path.join(base, 'deps.manifest'), 'w').close()\n" : ''}def logged(argv, *args, job, record=m.relay):
+    job['logged'] = len(open(log).read().splitlines()) if os.path.exists(log) else 0
+    return record(argv, *args, job=job)
+m.relay = logged
+${more}`;
+const dirList = dirs => JSON.stringify({ version: 1, dirs });
+const lockDirs = count => Array.from({ length: count }, (_, i) => `d${String(i).padStart(2, '0')}`);
+function installRun(t, list, dirs, { more = '', timeout = 2, toolchain = 'tc', manifest = true } = {}) {
+  const seams = `, identity=(os.getuid(), os.getgid(), None), netns=False, toolchain=${toolchain}, dependencies=deps,
+    dependencies_manifest=os.path.join(base, 'deps.manifest'), install_timeout=${timeout}`;
+  const run = checkRun(checkFrame(CHECK), { setup: INSTALL(list, dirs, more, manifest), seams });
+  t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+  const log = join(run.dir, 'install.log');
+  return Object.assign(run, { installs: existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map(line => line.split('|')) : [] });
+}
+const refusedInstall = (run, label) => assert.deepEqual([run.status, run.stdout.length, run.relays, run.stray], [DEPENDENCIES_FAILED, 0, [], []], `${label} ${run.stderr}`);
+const INSTALLS_RUN = NO_GUEST || (process.platform !== 'linux' && 'the fake toolchain reads /proc');
+const busy = t => {
+  const tasks = userTasks();
+  if (tasks >= 1792) t.skip(`the test user already runs ${tasks} tasks, too near RLIMIT_NPROC`);
+  return tasks >= 1792;
+};
+
+test('KI1 each listed directory installs in list order before relay(), under the check spawn, with the toolchain first on PATH',
+  { skip: INSTALLS_RUN, timeout: 60_000 }, t => {
+    if (busy(t)) return;
+    const expected = (run, names) => {
+      assert.deepEqual([run.status, run.stdout.length, run.stray, run.relays.length], [42, 0, [], 1], String(run.stderr));
+      const [{ argv, job }] = run.relays;
+      const [ws, tc] = [join(run.dir, 'ws'), join(run.dir, 'tc')];
+      const path = `${join(tc, 'bin')}:/usr/local/bin:/usr/bin:/bin`;
+      // OFFLINE_INSTALL_ARGS is dependency-cache.mjs's list, so this also pins the supervisor's mirror of it.
+      const args = [join(tc, 'lib/node_modules/npm/bin/npm-cli.js'), 'ci', ...OFFLINE_INSTALL_ARGS, '--cache', join(run.dir, 'deps')].join(' ');
+      assert.deepEqual(run.installs.map(([, ...fields]) => fields),
+        names.map(name => [realpathSync(name === '.' ? ws : join(ws, name)), '0077', '4096', '1', path, job.env.HOME, args]));
+      assert.deepEqual([argv, job.env.PATH, job.logged, job.spawn.cwd], [['/bin/sh', '-c', CHECK.command], path, names.length, ws]);
+    };
+    expected(installRun(t, dirList(['pkg', '.']), ['.', 'pkg']), ['pkg', '.']);
+    // The bounds: 16 directories in a list of exactly 65536 bytes.
+    const sixteen = lockDirs(16).reverse();
+    expected(installRun(t, dirList(sixteen).padEnd(65536), sixteen), sixteen);
+  });
+
+test('KI2 an install that fails, cannot start or outlives install_timeout exits 81 before hello, with nothing installed after it',
+  { skip: INSTALLS_RUN, timeout: 60_000 }, t => {
+    if (busy(t)) return;
+    const status = installRun(t, dirList(['.', 'pkg', 'zz']), ['.', 'pkg', 'zz'], { more: "open(os.path.join(workspace, 'pkg', 'status'), 'w').write('3\\n')\n" });
+    refusedInstall(status, 'a non-zero status');
+    assert.deepEqual(status.installs.map(fields => fields[1]), ['ws', 'ws/pkg'].map(name => realpathSync(join(status.dir, name))));
+    for (const [label, options] of [['no toolchain', { toolchain: "os.path.join(base, 'absent')" }], ['a guard hung before it starts the job', { more: "m.GUARD = 'import time\\ntime.sleep(30)'\n", timeout: 1 }],
+      ['a hung install', { more: "open(os.path.join(workspace, 'hang'), 'w').close()\n", timeout: 1 }]]) {
+      const started = Date.now();
+      const run = installRun(t, dirList(['.']), ['.'], options);
+      refusedInstall(run, label);
+      assert.ok(Date.now() - started < 6_000, label);
+      assert.deepEqual(run.installs.length, label === 'a hung install' ? 1 : 0, label);
+      for (const [pid] of run.installs) { // killed with its group: gone, or a zombie its new parent has yet to reap
+        assert.ok(!existsSync(`/proc/${pid}/stat`) || readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1][0] === 'Z', label);
+      }
+    }
+  });
+
+test('KI3 a malformed dependency list, or a missing, non-regular or symlinked lockfile, exits 81 before any install or frame',
+  { skip: NO_GUEST, timeout: 60_000 }, t => {
+    const planted = ['.', ...lockDirs(17)];
+    const lists = [null, 'nope', '[]', JSON.stringify({ version: 1, dirs: ['.'], extra: 1 }), '{"version":1.0,"dirs":["."]}',
+      ...[2, true, '1'].map(version => JSON.stringify({ version, dirs: ['.'] })), JSON.stringify({ version: 1, dirs: '.' }),
+      dirList([]), dirList(['.', '.']), dirList(lockDirs(17)), dirList(['.']).padEnd(65537),
+      ...['', '/abs', 'a/../b', 'a//b', './d00', 'd00/', 'a\u0000b', '\ud800', 7, null].map(dir => dirList([dir]))];
+    for (const list of lists) {
+      const run = installRun(t, list, planted);
+      refusedInstall(run, list?.slice(0, 80));
+      assert.deepEqual(run.installs, [], list?.slice(0, 80));
+    }
+    // reown (K4) already refuses any link in the workspace with 65; without it the lockfile walk still follows none.
+    const NO_REOWN = 'm.reown = lambda *args, **kwargs: None\n';
+    const outside = "os.makedirs(os.path.join(base, 'out'))\nopen(os.path.join(base, 'out', 'package-lock.json'), 'w').close()\n";
+    for (const [label, dirs, locks, more] of [['a missing lockfile', ['.', 'pkg'], ['.'], ''],
+      ['a lockfile that is a directory', ['pkg'], [], "os.makedirs(os.path.join(workspace, 'pkg', 'package-lock.json'))\n"],
+      ['a symlinked lockfile', ['pkg'], [], `${NO_REOWN}${outside}os.makedirs(os.path.join(workspace, 'pkg'))
+os.symlink(os.path.join(base, 'out', 'package-lock.json'), os.path.join(workspace, 'pkg', 'package-lock.json'))\n`],
+      ['a directory reached through a symlink', ['pkg'], [], `${NO_REOWN}${outside}os.symlink(os.path.join(base, 'out'), os.path.join(workspace, 'pkg'))\n`]]) {
+      const run = installRun(t, dirList(dirs), locks, { more });
+      refusedInstall(run, label);
+      assert.deepEqual(run.installs, [], label);
+    }
+    const linked = installRun(t, dirList(['pkg']), [], { more: "os.symlink(os.path.join(base, 'file'), os.path.join(workspace, 'pkg'))\n" });
+    assert.deepEqual([linked.status, linked.stdout.length, linked.relays, linked.installs], [65, 0, [], []], String(linked.stderr));
+  });
+
+test('KI4 with no dependency manifest the check reaches relay() as before, with no install, whatever the list holds',
+  { skip: NO_GUEST, timeout: 30_000 }, t => {
+    const run = installRun(t, 'nope', ['.'], { manifest: false });
+    assert.deepEqual([run.status, run.stdout.length, run.stray, run.installs, run.relays.length], [42, 0, [], [], 1], String(run.stderr));
+    const [{ argv, job: { env, logged } }] = run.relays;
+    assert.deepEqual([argv, logged, env.PATH], [['/bin/sh', '-c', CHECK.command], 0, `${join(run.dir, 'tc', 'bin')}:/usr/local/bin:/usr/bin:/bin`]);
+  });
+
 // CQ-R11c: the host check session. C1-C2 cover guest-bridge.mjs's checkArgv and checkFrame, C3-C6 runCheckSession through
 // a spawn-compatible fake provider, and C7 runCheckSession through the real supervisor's check mode.
 const NAME = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
@@ -850,13 +970,13 @@ test('C2 checkFrame accepts exactly the check frames the supervisor read_check a
         print('accepted')
     except ValueError:
         print('refused')
-print(m.PROTECTED_MISMATCH, m.PROTECTED_CHANGED)
+print(m.PROTECTED_MISMATCH, m.PROTECTED_CHANGED, m.DEPENDENCIES_FAILED)
 `;
   const run = spawnSync('python3', ['-I', '-B', '-c', code, SUPERVISOR, String(rows.length)], { input, maxBuffer: 64 << 20, timeout: 30_000, killSignal: 'SIGKILL' });
   assert.equal(run.status, 0, String(run.stderr));
   const lines = String(run.stdout).trim().split('\n');
   assert.deepEqual(lines.slice(0, -1), accepted.map(ok => (ok ? 'accepted' : 'refused')));
-  assert.equal(lines.at(-1), `${PROTECTED_MISMATCH} ${PROTECTED_CHANGED}`);
+  assert.deepEqual([lines.at(-1), DEPENDENCIES_FAILED], [`${PROTECTED_MISMATCH} ${PROTECTED_CHANGED} ${DEPENDENCIES_FAILED}`, 81]);
 });
 
 // A spawn-compatible fake provider of real Node streams. Like the supervisor it exits 74 on host EOF unless it is hung,
@@ -919,7 +1039,7 @@ test('C5 each outcome arises only from its condition, and only hello, one observ
     ['code 3', proc => { proc.send(HELLO, exited(3)); proc.exit(0); }, ended('code-failure', 3)],
     ['SIGKILL', proc => { proc.send(HELLO, exited(null, 'SIGKILL')); proc.exit(0); }, ended('code-failure', null, 'SIGKILL')],
     ...[0, 3].map(code => [`80 after ${code}`, proc => { proc.send(HELLO, exited(code)); proc.exit(80); }, ended('inconclusive', code)]),
-    ['79, no frame', proc => proc.exit(79), ended('skipped')], ['close before EOF', proc => { proc.send(HELLO, OBS); proc.emit('close', 0, null); }],
+    ['79, no frame', proc => proc.exit(79), ended('skipped')], ['81, no frame', proc => proc.exit(DEPENDENCIES_FAILED)], ['close before EOF', proc => { proc.send(HELLO, OBS); proc.emit('close', 0, null); }],
     ['79 after hello', proc => { proc.send(HELLO); proc.exit(79); }], ['79 after the observation', clean(79)],
     ['80 without observation', proc => { proc.send(HELLO); proc.exit(80); }], ...[74, 71, 1].map(code => [`exit ${code}`, clean(code)]),
     ['hello only', proc => { proc.send(HELLO); proc.exit(0); }], ['no frame, exit 0', proc => proc.exit(0)],

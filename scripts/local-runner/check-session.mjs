@@ -8,10 +8,11 @@
 import { spawn as spawnProcess } from 'node:child_process';
 import { checkArgv, checkFrame, createFrameDecoder, parseGuestFrame } from './guest-bridge.mjs';
 
-// guest-supervisor.py's codes, which C2 pins: 79 before hello (the candidate lacks an approved protected blob) and 80
-// after the observation (the job changed one).
+// guest-supervisor.py's codes, which C2 pins: 79 before hello (the candidate lacks an approved protected blob), 80
+// after the observation (the job changed one) and 81 before hello, with no frame (the CQ-R11e5 dependency install failed).
 export const PROTECTED_MISMATCH = 79;
 export const PROTECTED_CHANGED = 80;
+export const DEPENDENCIES_FAILED = 81;
 export const MAX_BUDGET_MS = 86_400_000;
 export const MAX_CHECK_TAIL_BYTES = 16_384; // the daemon's MAX_CHECK_LOG_BYTES (checkRunStore.ts)
 // Raw output bytes kept: twice the tail, so a cut sequence or U+FFFD expansion at the window's start never reaches it.
@@ -27,7 +28,8 @@ const result = (outcome, observation = null, outputTail = '') =>
 
 /**
  * Resolves a frozen {outcome, exitCode, signal, outputTail}: 'timeout' when budgetMs, the host's wall clock from spawn,
- * fired; else 'infra-failure' for a spawn, stdin, protocol or provider failure, an abort or a local kill; 'skipped' for
+ * fired; else 'infra-failure' for a spawn, stdin, protocol or provider failure, an abort, a local kill or any other exit
+ * before hello, such as supervisor exit 81 (DEPENDENCIES_FAILED, the dependency install failed); 'skipped' for
  * supervisor exit 79 with no frame; 'inconclusive' for exit 80 after hello and one observation; and only after hello,
  * one observation, a clean stdout EOF and exit 0, 'passed' for job exit code 0, else 'code-failure'. exitCode and signal
  * are the observation's for those three, else null. provider: {executable = 'multipass', spawn = child_process.spawn};

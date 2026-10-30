@@ -17,42 +17,72 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. CQ-R11e4 lands first (the 'dependencies' mode and DEPENDENCIES/DEPENDENCIES_MANIFEST); before it come CQ-R11e2 (TOOLCHAIN), CQ-R11e3 (dependency-cache.mjs with OFFLINE_INSTALL_ARGS, plus its rows in this file) and CQ-R11f (file_identity). Re-read guest-supervisor.py, check-session.mjs and this file first.\n\nWork in scripts/tests/local-runner-check.test.mjs, beside the K rows. Reuse checkRun, PY_LOAD, CHECK_DIRS, CHECK_RECORD (its relay recorder prints RELAY and returns 42), NO_GUEST, CHECK and checkFrame.\n\nNew setup snippets:\n- A fake toolchain at base/tc. bin/node is a 0755 /bin/sh script that appends one line to base/install.log: `$$|$PWD|$(umask)|$PATH|$HOME|$*`. Then it either exits with the status in base/status.<n> (default 0) or, when base/hang exists, runs `exec sleep 30`. lib/node_modules/npm/bin/npm-cli.js also exists.\n- DEPS(text) writes base/deps/moe-dependencies.json with that exact text, and creates base/deps.manifest, which turns the phase on.\n- LOCK(dirs) plants ws/<dir>/package-lock.json.\n- The seams are: toolchain=<base>/tc, dependencies=<base>/deps, dependencies_manifest=<base>/deps.manifest, install_timeout=2, netns=False, identity=(os.getuid(), os.getgid(), []).\n- HAS_WAITID probes python3 for os.waitid. Rows that need it skip with a reason when it is absent.\n\nRows (skip NO_GUEST):\n- KI1: dirs [\".\", \"pkg\"], each with its lockfile. install.log has two lines, in order: cwd ws, then ws/pkg.\n  - Each line's argv is the npm-cli.js path, 'ci', ...OFFLINE_INSTALL_ARGS, '--cache', <base>/deps.\n  - umask is 0077.\n  - PATH starts with <base>/tc/bin.\n  - HOME is the run's session home.\n  - Then exactly one RELAY line, for the check job, follows.\n- KI2 failures exit 81 with an empty stdout and no RELAY line:\n  - a non-zero status for the second dir: the first dir ran, and nothing ran after the failure;\n  - a hanging install with install_timeout=1: it returns within install_timeout + 5 s, and the fake node's pid is gone afterwards (os.kill(pid, 0) raises ESRCH).\n- KI3: each of these exits 81 with no install.log line and no RELAY line:\n  - a missing moe-dependencies.json, non-JSON, or an extra key;\n  - version 2;\n  - dirs [] or 17 dirs, a duplicate, '', '/abs', 'a/../b', 'a//b', or a non-string;\n  - a missing lockfile, a lockfile that is a directory, a symlinked lockfile, or a dir reached through a symlink.\n- KI4: with no manifest there is no install.log, and the RELAY call is exactly the one K2 pins.\n- KI5: the check job env's PATH is `<toolchain>/bin:` + JOB_PATH. K2 and K3 pin the default '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin'. Only that one field of their expectations changes.\n- KI6 drift:\n  - m.OFFLINE_INSTALL_ARGS equals dependency-cache.mjs OFFLINE_INSTALL_ARGS;\n  - C2 also pins m.DEPENDENCIES_FAILED === check-session.mjs DEPENDENCIES_FAILED === 81.\n- A C5-style row: runCheckSession with checkProvider, on a child that writes nothing and exits 81, resolves 'infra-failure' with exitCode null and signal null, never 'skipped'.\n\nRun `node --test scripts/tests/local-runner-check.test.mjs`. The new and changed rows fail for the expected reason; every other row passes.\n\nError handling in the tests: assertions name exit codes and outcomes, never messages, and every scratch directory is removed.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "RED tests added in local-runner-check.test.mjs. KI1 covers order ['pkg','.'] plus a 16-dir list padded to exactly 65536 bytes: argv npm-cli ci ...OFFLINE_INSTALL_ARGS --cache deps, umask 0077, ulimit -n 4096, NoNewPrivs 1, PATH tc/bin first, session HOME, `logged` == installs at relay(). That also pins the OFFLINE_INSTALL_ARGS drift (KI6). KI2: a non-zero status stops later dirs; no toolchain, a GUARD hung before '+', and a hung install (timeout 1) each give 81 within 6 s, and the hung pid is gone or a zombie. KI3: 23 malformed lists including 17 dirs and 65537 bytes; missing, directory and symlinked lockfiles and a dir through a link (with reown stubbed, since reown refuses links first with 65, also pinned). KI4: no manifest means no install. K2/K3 PATH pins changed; C2 pins 81; C5 adds '81, no frame' -> infra-failure. RED on a scratch copy (deleted): K2, K3, KI1-4 and C2 fail for the expected reasons (unexpected keyword 'toolchain', the PATH diff, the missing constant); the real file fails to link on the missing export. 42 other rows pass. Deviation: lockfile check uses the landed blob_oid walk (file_identity requires a size argument). Peer dirty paths untouched.",
+      "startedAt": "2026-10-30T13:37:51.136Z",
+      "completedAt": "2026-10-30T13:44:23.240Z"
     },
     {
       "stepId": "step-2",
       "description": "scripts/local-runner/guest-supervisor.py: the dependency install phase of check_job.\n\nConstants:\n- DEPENDENCIES_FAILED = 81;\n- INSTALL_TIMEOUT = 900 (seconds per lockfile dir);\n- MAX_DEPENDENCY_DIRS = 16;\n- MAX_DEPENDENCY_LIST_BYTES = 65536;\n- OFFLINE_INSTALL_ARGS, a tuple mirroring dependency-cache.mjs and pinned by KI6.\n\nNew helpers:\n- dependency_dirs(tree)\n  - Opens tree/moe-dependencies.json with READ (O_NOFOLLOW|O_NONBLOCK). It reads at most MAX_DEPENDENCY_LIST_BYTES + 1 bytes; more is a ValueError.\n  - It json.loads the UTF-8 text. That must be exactly {'version': 1, 'dirs': [...]}: an int version, and a list of 1..MAX_DEPENDENCY_DIRS unique strs.\n  - Each dir is '.', or a relative path whose UTF-8 segments are none of '', '.' or '..', contain no NUL, and total at most MAX_PATH_BYTES. These are create()'s rules.\n  - The tree is root-owned, written by this run's 'dependencies' mode.\n- install_dependencies(workspace, tree, toolchain, env, spawn, timeout)\n  - First, before any install, validate every dir. For each, R11f's file_identity(root, rel) on the workspace root fd must not be None, where rel is 'package-lock.json' or '<dir>/package-lock.json'. That is a regular file reached with WALK/READ and never through a symlink.\n  - Then, in order, run_install([toolchain + '/bin/node', toolchain + '/lib/node_modules/npm/bin/npm-cli.js', 'ci', *OFFLINE_INSTALL_ARGS, '--cache', tree], env, {**spawn, 'cwd': <workspace, or workspace/dir>}, timeout).\n  - It returns True only if every install succeeded. A ValueError, RecursionError or OSError gives False.\n- run_install(argv, env, spawn, timeout): one GUARD job, as run_bridge starts it, but with no relay.\n  1. Create the life and start pipes, then subprocess.Popen([sys.executable, '-I', '-B', '-c', GUARD, life, start, json.dumps(spawn), *argv]). stdin, stdout and stderr are DEVNULL, with start_new_session=True, pass_fds and env=env. Close the child's ends.\n  2. Wait for '+' on start_end with selectors, bounded by the deadline. Anything else (EOF, or the deadline passing) is failure.\n  3. Write the stand-down byte at once. There are no output pipes to wait on, and GUARD's watch thread still kills the group if this process dies.\n  4. Poll os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG) until the guard exits or the deadline passes. The guard stays unreaped, so it pins the group id.\n  5. Then os.killpg(pid, SIGKILL), ignoring ProcessLookupError. That kills any leftover descendants, or the whole timed-out group.\n  6. Reap the guard with child.wait().\n  7. The finally closes both pipe ends, and kills and reaps an unreaped child.\n  It returns True only when the guard exited by itself before the deadline with returncode 0. With no os.waitid it returns False, failing closed.\n\nchanges to check_job:\n- New keywords: toolchain=TOOLCHAIN, dependencies=DEPENDENCIES, dependencies_manifest=DEPENDENCIES_MANIFEST and install_timeout=INSTALL_TIMEOUT. Like the others, they are injectable from Python only.\n- env['PATH'] becomes toolchain + '/bin:' + JOB_PATH. JOB_PATH and the bridge's PATH are unchanged.\n- After reown, session_home and protect_mounts (the existing try/finally), and after env and spawn are built: if os.path.lexists(dependencies_manifest), then install_dependencies(...) must be True, else `return DEPENDENCIES_FAILED`. This happens before relay(), so no hello is written, no frame is written and no check job starts.\n- With no manifest, the flow is exactly today's.\n\nHeader: the check-mode paragraph gains the install phase, and the exit codes gain 81: before hello, no frame and no job. The dependency phase failed, so CQ-R11c's host reports infra-failure.\n\nError handling: every phase failure is 81, with nothing written to stdout. A dead supervisor still ends the install group through GUARD's life pipe.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/guest-supervisor.py"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "guest-supervisor.py adds:\n- constants DEPENDENCIES_FAILED=81, INSTALL_TIMEOUT=900, MAX_DEPENDENCY_DIRS=16 (= MAX_LOCKFILES), MAX_DEPENDENCY_LIST_BYTES=65536 and the OFFLINE_INSTALL_ARGS tuple;\n- dependency_dir/dependency_dirs: READ open, fstat-bounded like read_manifest, strict {version:1, dirs};\n- wait_byte, run_install and install_dependencies;\n- check_job gets the toolchain/dependencies/dependencies_manifest/install_timeout seams, PATH = toolchain/bin:JOB_PATH, and the install phase before relay() (81, no hello);\n- the header and docs are updated.\n\nTOOLCHAIN moved up beside JOB_PATH, because check_job's default argument needs it at def time. `import time` was added.\n\nDeviations, both justified:\n(1) run_install waits for the guard's exit through EOF on the start pipe (run_bridge's own signal: only the guard holds start), bounded by the deadline with selectors, instead of an os.waitid WNOWAIT poll. The guard stays unreaped, so killpg still targets a pinned group. It needs no polling or os.waitid, so there is no HAS_WAITID skip. It also resets SIGCHLD to SIG_DFL, as relay() does, so an inherited SIG_IGN cannot auto-reap the guard and unpin the group.\n(2) The lockfile check uses blob_oid's walk, because the landed file_identity requires a size.\n\nTest fix: the status fixture now writes '3\\n' (sh read fails without a newline).\n\nScratch-copy run (DEPENDENCIES_FAILED inlined until step 3): 50 tests, 49 pass after the fix, 1 skip (K9, root-only).",
+      "startedAt": "2026-10-30T13:44:24.187Z",
+      "completedAt": "2026-10-30T13:46:47.863Z"
     },
     {
       "stepId": "step-3",
       "description": "scripts/local-runner/check-session.mjs: export the code.\n\n- export const DEPENDENCIES_FAILED = 81; beside PROTECTED_MISMATCH and PROTECTED_CHANGED, with the comment extended: 81 comes before hello, with no frame, when the CQ-R11e5 dependency phase fails. C2 pins it.\n- runCheckSession's JSDoc says that 'infra-failure' includes supervisor exit 81 (dependencies failed). outcomeOf already gives that through the !opened rule, and only 79 maps to 'skipped'.\n- No logic changes.\n\nError handling: unchanged. Nothing after the input check rejects.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/check-session.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-session.mjs"
+      ],
+      "note": "check-session.mjs: export DEPENDENCIES_FAILED = 81 beside PROTECTED_MISMATCH/PROTECTED_CHANGED, with the codes comment extended. The runCheckSession JSDoc now says any other exit before hello, including 81, is infra-failure. No logic changes. Real file: node --test local-runner-check.test.mjs exits 0 with 50 tests, 49 pass, 1 skip (K9, root-only); C2 pins 81 and C5 '81, no frame' gives infra-failure.",
+      "startedAt": "2026-10-30T13:46:48.721Z",
+      "completedAt": "2026-10-30T13:47:25.912Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh.\n\n1. Run `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner.test.mjs`.\n   - That is the DoD command plus the two other suites that load guest-supervisor.py, which this row edits.\n   - On WSL, run it under env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\", so Windows Node is never used.\n   - It must exit 0, with the KI rows run, not skipped, on Linux.\n   - Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. `git diff --check -- scripts/local-runner/guest-supervisor.py scripts/local-runner/check-session.mjs scripts/tests/local-runner-check.test.mjs` is clean.\n3. A read-only `git status --short` shows that only those three files changed, and no __pycache__ appeared. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code. Never weaken a K, C or E row beyond the PATH field this row changes.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh run: env -i HOME PATH=nvm v24.21.0 node --test of the check, bridge and local-runner test files. Exit 0: 385 tests, 382 pass, 0 fail, 3 skips, all pre-existing: K9 root-only, LA5 needs MOE_PINNED_CODEX, macOS smoke opt-in. KI1-KI4 ran and passed on Linux. Log /tmp/r11e5-step4.log. git diff --check is clean for the 3 files. Size +244/-15 = 259: supervisor +113/-6, check-session +5/-3, tests +126/-6. No __pycache__. git status shows only my 3 files changed, plus a peer's packages/moe-daemon/src/util/heartbeatStop.test.ts and untracked scripts/mods tsconfig files, all left untouched.",
+      "startedAt": "2026-10-30T13:47:26.840Z",
+      "completedAt": "2026-10-30T13:48:35.423Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the three-file diff as an attacker:\n- Can any path reach relay(), and so hello, after a failed, partial or timed-out install? Can a check job start before every listed dir has installed?\n- Is anything written to stdout before hello on the failure path?\n- Can a candidate-controlled path redirect the install?\n  - The cwd is chdir'd by root before setuid, so a symlinked dir must be refused first.\n  - reown has already refused every symlink in the workspace, and the lockfile walk is O_NOFOLLOW. Confirm both.\n- Is killpg ever sent to an id the unreaped guard no longer pins? Does a hung guard before '+' respect the deadline?\n- Does the install run as the check identity, with the check spawn's umask 077, rlimits, NoNewPrivs and private netns, never as root?\n- Is the host's classification unchanged? 81 must be infra-failure, never skipped or code-failure.\n- Huge or hostile list: capped bytes and dirs, and strict JSON.\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 4's command fresh before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/local-runner/check-session.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Adversarial review: no fixes needed.\n- relay() runs only when install_dependencies returns True, i.e. every dir's guard hit EOF before its deadline with status 0. Every caught error returns 81; anything uncaught crashes the supervisor before hello (infra-failure).\n- Nothing reaches stdout: the guard's stdio is DEVNULL, and KI asserts stdout length 0.\n- Dirs are lexically confined (no ''/'.'/'..'/NUL, at most MAX_PATH_BYTES). reown refuses links first (65, pinned in KI3), and blob_oid's WALK/READ walk follows none (KI3 with reown stubbed).\n- killpg runs only before reap. SIGCHLD is reset to SIG_DFL so the guard cannot be auto-reaped. A guard hung before '+' ends at the deadline (KI2).\n- The install uses the check spawn: user/group, umask 077, CHECK_RLIMITS, NoNewPrivs, netns (KI1 pins umask/NOFILE/NoNewPrivs). The host maps 81 to infra-failure (C5).\n- Mutation probes, file restored byte-identical afterwards: 9/9 killed: manifest gate, killpg, check spawn, dir cap 17, list cap +1, stand-down byte, up-front lockfile check, uniqueness, toolchain PATH.\n\nTheoretical, unchanged:\n(1) os.path.lexists treats an lstat error other than ENOENT as absent. Root-owned /var/lib/moe makes that implausible; the plan specified lexists.\n(2) cwd is chdir'd by root before setuid. Between installs only the pinned npm with --ignore-scripts runs as the check identity, and a redirected cwd grants nothing the check job lacks.\n(3) A failed second os.pipe() leaks two fds just before the process exits 81.\n(4) Project .npmrc settings cannot override the CLI flags, and the private netns is the network boundary (R11e3's domain).",
+      "startedAt": "2026-10-30T13:48:36.480Z",
+      "completedAt": "2026-10-30T13:51:36.336Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -70,20 +100,28 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:53:31.651Z",
-  "updatedAt": "2026-10-29T23:05:50.402Z",
+  "updatedAt": "2026-10-30T13:52:55.938Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T23:03:01.441Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-e60b90bd"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T23:05:50.304Z",
   "planningNotes": {
@@ -104,5 +142,20 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T23:05:50.402Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T13:37:51.136Z",
+  "reviewStartedAt": "2026-10-30T13:52:55.935Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "﹣ K9 under the real mounts a root check job cannot write, chmod, rename, replace or unlink a protected file, nor rename its directory # needs root for a mount namespace; CQ-R13 certifies it on real guests\n✔ KI1 each listed directory installs in list order before relay(), under the check spawn, with the toolchain first on PATH (485.578381ms)\n✔ KI2 an install that fails, cannot start or outlives install_timeout exits 81 before hello, with nothing installed after it (2279.618588ms)\n✔ KI3 a malformed dependency list, or a missing, non-regular or symlinked lockfile, exits 81 before any install or frame (1521.978481ms)\n✔ KI4 with no dependency manifest the check reaches relay() as before, with no install, whatever the list holds (46.338359ms)\n﹣ LA5 pinned codex forwards exactly MOE_ROLE to its MCP server # set MOE_PINNED_CODEX\n﹣ opt-in native provider smoke on real macOS hardware establishes support # not run\nℹ tests 385\nℹ suites 0\nℹ pass 382\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 38578.447681",
+    "reportedAt": "2026-10-30T13:52:55.935Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/local-runner/check-session.mjs"
+  ],
+  "completionSummary": "CQ-R11e5 delivered: guest check mode now runs an offline `npm ci` phase before hello.\n\nguest-supervisor.py (+113/-6):\n- check_job: with this run's DEPENDENCIES_MANIFEST present, install_dependencies runs after reown/session_home/protect_mounts and before relay(); failure returns DEPENDENCIES_FAILED=81 (no hello, frame or check job). No manifest = today's flow.\n- dependency_dirs: strict fstat-bounded read (<=64 KiB), exactly {version:1(int), dirs}, 1-16 unique dirs, '.' or create()'s segment rules (<=MAX_PATH_BYTES).\n- Every lockfile is checked before any install via blob_oid's WALK/READ walk (landed file_identity needs a size arg); no link followed.\n- run_install: one GUARD job per dir under the check spawn (identity, umask 077, CHECK_RLIMITS, NoNewPrivs, netns), cwd workspace/dir, DEVNULL stdio. argv: TOOLCHAIN node + npm-cli.js ci *OFFLINE_INSTALL_ARGS --cache DEPENDENCIES.\n- run_install waits for '+', stands down at once, then waits for start-pipe EOF (guard exited; run_bridge's own signal) within INSTALL_TIMEOUT=900s via selectors, then killpg while unreaped, then reap. SIGCHLD reset to SIG_DFL first. Deviation from plan: start-pipe EOF instead of an os.waitid WNOWAIT poll.\n- Check env PATH = TOOLCHAIN/bin:JOB_PATH; bridge PATH unchanged. TOOLCHAIN moved above check_job (default-arg order). Header and docs updated.\n\ncheck-session.mjs (+5/-3): exports DEPENDENCIES_FAILED=81, doc only.\n\nTests (+126/-6), real supervisor with a fake /bin/sh toolchain:\n- KI1: list order, argv, umask 0077, NOFILE 4096, NoNewPrivs 1, toolchain-first PATH, session HOME, all before relay(); 16 dirs in a 65536-byte list. Pins the OFFLINE_INSTALL_ARGS mirror.\n- KI2: non-zero status (later dirs skipped), no toolchain, guard hung before '+', and hung install all give 81 in under 6s; the pid is dead.\n- KI3: 23 malformed lists (incl. 17 dirs, 65537 bytes) and bad lockfiles give 81 with no install; a linked dir without the stub gives reown's 65.\n- KI4: no manifest, no phase.\n- Also: K2/K3 PATH-"
 }

@@ -21,7 +21,10 @@
 # namespace, and 74 EOF before the check frame. CQ-R11b adds 79 (before hello, no frame, no job): a protected path is
 # missing, not a regular file, reached through a symlink, or holds another git blob oid, so the candidate does not carry
 # the approved bytes. It adds 80, written after the observation frame: a protected path no longer holds its approved
-# blob once the job is reaped; CQ-R11c classifies the run as inconclusive.
+# blob once the job is reaped; CQ-R11c classifies the run as inconclusive. CQ-R11e5: when this run's 'dependencies' mode
+# wrote its manifest, `npm ci` from that offline tree runs for each listed lockfile directory as the check job would, after
+# the re-own and the protected mounts. 81 (before hello, no frame, no job; CQ-R11c reports infra-failure) is a malformed
+# directory list, a missing or linked lockfile, or an install that failed, could not start or outlived INSTALL_TIMEOUT.
 # Mode 'verify' (CQ-R11f): reads no stdin and writes one {kind: 'verified', changed} frame, the count of manifest paths no
 # longer holding their materialized bytes and exec bit; 65 a missing or malformed manifest or workspace root, 74 a gone
 # host, each with no frame.
@@ -52,6 +55,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import types
 import zlib
 
@@ -813,6 +817,7 @@ LAUNCH = {
               '[mcp_servers.moe]\ncommand = "' + SHIM + '"\nenv_vars = ["MOE_ROLE"]\ndefault_tools_approval_mode = "approve"\n'),
 }
 JOB_PATH = '/usr/local/bin:/usr/bin:/bin'
+TOOLCHAIN = '/opt/moe/toolchain'  # CQ-R11e2's 'toolchain' mode installs Node here; a check job's PATH puts its bin first
 SESSIONS = '/var/lib/moe/sessions'
 CREDENTIAL = re.compile(r'[\x21-\x7e]{1,4096}')
 
@@ -940,6 +945,13 @@ MAX_PROTECTED_PATH = 500
 OID = re.compile(r'[0-9a-f]{40}')
 PROTECTED_MISMATCH = 79
 PROTECTED_CHANGED = 80
+# CQ-R11e5: the offline install of this run's 'dependencies' tree, one `npm ci` per lockfile directory it lists.
+DEPENDENCIES_FAILED = 81
+INSTALL_TIMEOUT = 900  # seconds per directory
+MAX_DEPENDENCY_DIRS = 16  # dependency-cache.mjs MAX_LOCKFILES
+MAX_DEPENDENCY_LIST_BYTES = 65536
+# dependency-cache.mjs OFFLINE_INSTALL_ARGS, which KI1 pins: --offline never fetches and --ignore-scripts runs no script.
+OFFLINE_INSTALL_ARGS = ('--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0')
 
 
 def protected_path(path):
@@ -1083,14 +1095,107 @@ def reown(fd, uid, gid, prefix=b'', protected=frozenset()):
             os.close(child)
 
 
+def dependency_dir(name):
+    # '.', or a path create() accepts: UTF-8 segments none of '', '.' or '..', no NUL, and at most MAX_PATH_BYTES in all.
+    raw = name.encode('utf-8')  # UnicodeEncodeError, a ValueError, for a lone surrogate
+    return name == '.' or (len(raw) <= MAX_PATH_BYTES and b'\0' not in raw
+                           and all(part not in (b'', b'.', b'..') for part in raw.split(b'/')))
+
+
+def dependency_dirs(tree):
+    # The tree is root-owned, written by this run's 'dependencies' mode; its list is still read strictly and bounded.
+    fd = os.open(os.path.join(tree, 'moe-dependencies.json'), READ)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_DEPENDENCY_LIST_BYTES:
+            raise ValueError('not a bounded dependency list')
+        stored = json.loads(b''.join(chunks(fd, info.st_size)).decode('utf-8'))
+    finally:
+        os.close(fd)
+    dirs = stored.get('dirs') if type(stored) is dict else None
+    if not (type(stored) is dict and stored.keys() == {'version', 'dirs'} and type(stored['version']) is int
+            and stored['version'] == 1 and type(dirs) is list and 1 <= len(dirs) <= MAX_DEPENDENCY_DIRS
+            and all(type(name) is str and dependency_dir(name) for name in dirs) and len(set(dirs)) == len(dirs)):
+        raise ValueError('a malformed dependency list')
+    return dirs
+
+
+def wait_byte(fd, deadline):
+    # One byte, b'' at EOF, or None once the time.monotonic() deadline passes first.
+    with selectors.DefaultSelector() as selector:
+        selector.register(fd, selectors.EVENT_READ)
+        while (left := deadline - time.monotonic()) > 0:
+            if selector.select(left):
+                return os.read(fd, 1)
+    return None
+
+
+# One install as one GUARD job, started as run_bridge starts a job but with no relay, so nothing reaches the host before
+# hello. The start pipe gets '+' once the job runs and EOF once the guard has exited, so both waits end by the deadline.
+# The group is then SIGKILLed while the unreaped guard still pins its id, which also ends any leftover descendant, and
+# the guard is reaped. True only for a guard that exited by itself in time with the job's status 0.
+def run_install(argv, env, spawn, timeout):
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)  # as relay(): an inherited SIG_IGN would reap the guard unasked
+    deadline = time.monotonic() + timeout
+    life, life_end = os.pipe()
+    start_end, start = os.pipe()
+    child, exited = None, False
+    try:
+        try:
+            child = subprocess.Popen([sys.executable, '-I', '-B', '-c', GUARD, str(life), str(start), json.dumps(spawn), *argv],
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     start_new_session=True, pass_fds=(life, start), env=env)
+        finally:
+            os.close(life)
+            os.close(start)
+        if wait_byte(start_end, deadline) == b'+':
+            try:
+                os.write(life_end, b'0')  # stand down at once: no output pipes to drain first
+            except BrokenPipeError:
+                pass  # the job SIGKILLed its own group, guard included
+            exited = wait_byte(start_end, deadline) == b''
+    finally:
+        if child is not None:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            reap(child)
+        os.close(life_end)
+        os.close(start_end)
+    return exited and child.returncode == 0
+
+
+# Every listed lockfile is checked before any install runs: a regular file by blob_oid's walk, so no link is followed.
+# Each cwd is a path GUARD's root chdir follows, which is safe: reown refused every link in the workspace, and since then
+# only the pinned npm, running no scripts, has run as the check identity.
+def install_dependencies(workspace, tree, toolchain, env, spawn, timeout):
+    try:
+        dirs = dependency_dirs(tree)
+        root = os.open(workspace, WALK)
+        try:
+            if not all(blob_oid(root, 'package-lock.json' if name == '.' else name + '/package-lock.json') for name in dirs):
+                return False
+        finally:
+            os.close(root)
+        argv = [toolchain + '/bin/node', toolchain + '/lib/node_modules/npm/bin/npm-cli.js', 'ci', *OFFLINE_INSTALL_ARGS,
+                '--cache', tree]
+        return all(run_install(argv, env, {**spawn, 'cwd': workspace if name == '.' else os.path.join(workspace, name)}, timeout)
+                   for name in dirs)
+    except (ValueError, RecursionError, OSError):
+        return False
+
+
 # One check session runs one check job: the host's approved command, never candidate bytes, as ['/bin/sh', '-c',
 # command] in the materialized WORKSPACE, with no agent socket. identity is (uid, gid, groups) as in start_job; netns
 # False skips GUARD's network namespace, for a non-root test only. workspace, sessions, identity and netns are injectable
 # from Python only (tests). A refusal writes no frame and starts no job: 74 host EOF, 65 a malformed or disallowed
 # frame, 71 no account, 66 no workspace, 79 a protected path that does not hold its approved blob, 65 a workspace entry
-# reown refuses, 71 a failed re-own, no session home or a failed protect_mounts. After the observation, 80 is a
-# protected path the job changed.
-def check_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=None, netns=True):
+# reown refuses, 71 a failed re-own, no session home or a failed protect_mounts, 81 a failed dependency install phase
+# (CQ-R11e5; toolchain, dependencies, dependencies_manifest and install_timeout are injectable from Python only too).
+# After the observation, 80 is a protected path the job changed.
+def check_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=None, netns=True, toolchain=TOOLCHAIN,
+              dependencies=DEPENDENCIES, dependencies_manifest=DEPENDENCIES_MANIFEST, install_timeout=INSTALL_TIMEOUT):
     try:
         frame = read_check(in_fd)
     except (EOFError, OSError):
@@ -1122,10 +1227,13 @@ def check_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=No
         return os.EX_OSERR
     finally:
         os.close(root)
-    env = {'PATH': JOB_PATH, 'HOME': home, 'USER': CHECK_IDENTITY, 'LOGNAME': CHECK_IDENTITY, 'LANG': 'C.UTF-8',
+    env = {'PATH': toolchain + '/bin:' + JOB_PATH, 'HOME': home, 'USER': CHECK_IDENTITY, 'LOGNAME': CHECK_IDENTITY, 'LANG': 'C.UTF-8',
            'MOE_CHECK_ID': frame['id']}
     spawn = {'user': uid, 'group': gid, 'extra_groups': groups, 'umask': 0o077, 'cwd': workspace, 'rlimits': CHECK_RLIMITS,
              'netns': netns}
+    if os.path.lexists(dependencies_manifest) and not install_dependencies(workspace, dependencies, toolchain, env, spawn,
+                                                                            install_timeout):
+        return DEPENDENCIES_FAILED  # before relay(): no hello, no frame, no check job
     code = relay(['/bin/sh', '-c', frame['command']], out_fd, in_fd, job={'env': env, 'spawn': spawn})
     # relay's 0 means its observation frame is written; a failed relay is already a failure and is never re-checked.
     return PROTECTED_CHANGED if code == 0 and paths and not unchanged(workspace, frame['protected']) else code
@@ -1246,7 +1354,6 @@ def install_agents(in_fd, out_fd, agents=AGENTS, owner=(0, 0)):
             os.close(root)
 
 
-TOOLCHAIN = '/opt/moe/toolchain'
 MAX_TOOLCHAIN_BYTES = 134217728  # mirrors snapshot-transfer.mjs
 
 
