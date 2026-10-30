@@ -78,7 +78,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -107,7 +107,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:17:28.429Z",
-  "updatedAt": "2026-10-30T11:31:20.199Z",
+  "updatedAt": "2026-10-30T11:36:33.143Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T10:45:00.336Z",
@@ -117,11 +117,14 @@
     "firstClaimAt": "2026-10-30T10:45:13.585Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T11:36:33.143Z",
+    "wallClockMs": 3079558
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -221,19 +224,48 @@
       "treeId": "bb17f4e1413c611a4dc356cae030e211c65fd97b",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "25b9abd7905c7ba0916cf44a3fff9ff65fc3d3f2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T11:25:14Z",
+      "paths": [
+        ".moe/tasks/task-007c0ea856e546d2a619e012815cd89f.json",
+        ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
+        ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeSnapshotProjectCheckTest.kt"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T11:31:40.206Z",
+      "treeId": "7d66a5082ae776de5fa07eec123b4b0c0c9a6b38",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+          "taskId": "task-de91373a5ed84530b29fc4cfbcee974a"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeSnapshotProjectCheckTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+    ".moe/tasks/task-007c0ea856e546d2a619e012815cd89f.json",
+    ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
+    ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-5ebbf433@2026-10-30T11:01:55Z",
-    "at": "2026-10-30T11:04:42.463Z"
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-30T11:25:14Z",
+    "at": "2026-10-30T11:31:40.206Z"
   },
   "blockedOnTaskIds": null,
   "reviewStartedAt": "2026-10-30T11:31:20.197Z",
@@ -244,5 +276,13 @@
     "reportedAt": "2026-10-30T11:31:20.197Z",
     "source": "agent-reported"
   },
-  "completionSummary": "DoD1 (S1, C1): the STATE_SNAPSHOT check now uses MoeDaemonSupervisor.isSameProject (comparableProjectPath first, canonicalPath fallback). A rootPath naming this project in a drive, backslash/forward-slash, case, trailing-separator, dot-segment, /mnt/<d>, //wsl$ or //wsl.localhost spelling gives no mismatch, no disconnect and no reconnect, and applies the state. A live loopback client given the other-side spelling stays connected with daemon.json unchanged. DoD2 (S2, C2, C3): another project's rootPath (native and other-side spelling) gives exactly one onProjectMismatch, applies no state, and the dispatcher no longer touches .moe/. MoeProjectService.onProjectMismatch removes daemon.json only via deleteDaemonInfoIfUnchanged(clientDaemonInfo), the DaemonInfo the current client was opened with, then disconnects and schedules the reconnect as before. A daemon.json changed in pid, port, startedAt or projectPath since connect survives byte for byte. DoD3: the exact Windows gate (cmd.exe gradlew.bat test --rerun, jetbrains-gradle lease) exits 0 with 27 classes / 432 tests, 0 failures/errors/skips, counted from TEST-*.xml dated after the gate start (MoeSnapshotProjectCheckTest 5, MoeProjectForeignDaemonTest 10, MoeProjectConnectionTest 5, MoeDaemonSupervisorTest 57, both MoeMessageDispatcher classes 5+5). Red proof on old code: S1, S2, C1, C3 failed. Mutants M1-M6 (canonical-only, dispatcher delete back, File.delete in service, skip removal, no scheduleReconnect, no return) each died on assertions in the named rows in an archive copy. Files: MoeMessageDispatcher.kt, MoeProjectService.kt (adds clientDaemonInfo plus an explicit type on daemonSupervisor, needed to break a Kotlin recursive-type error), new MoeSnapshotProjectCheckTest.kt. Windows evidence only; no native Linux/UI run (S1 is host-independent, S2/C1 derive spellings from the host basePath). restartDaemon's post-stop delete is untouched (RF04). Evidence: D:/moe-scratch/task-007c0ea8/."
+  "completionSummary": "DoD1 (S1, C1): the STATE_SNAPSHOT check now uses MoeDaemonSupervisor.isSameProject (comparableProjectPath first, canonicalPath fallback). A rootPath naming this project in a drive, backslash/forward-slash, case, trailing-separator, dot-segment, /mnt/<d>, //wsl$ or //wsl.localhost spelling gives no mismatch, no disconnect and no reconnect, and applies the state. A live loopback client given the other-side spelling stays connected with daemon.json unchanged. DoD2 (S2, C2, C3): another project's rootPath (native and other-side spelling) gives exactly one onProjectMismatch, applies no state, and the dispatcher no longer touches .moe/. MoeProjectService.onProjectMismatch removes daemon.json only via deleteDaemonInfoIfUnchanged(clientDaemonInfo), the DaemonInfo the current client was opened with, then disconnects and schedules the reconnect as before. A daemon.json changed in pid, port, startedAt or projectPath since connect survives byte for byte. DoD3: the exact Windows gate (cmd.exe gradlew.bat test --rerun, jetbrains-gradle lease) exits 0 with 27 classes / 432 tests, 0 failures/errors/skips, counted from TEST-*.xml dated after the gate start (MoeSnapshotProjectCheckTest 5, MoeProjectForeignDaemonTest 10, MoeProjectConnectionTest 5, MoeDaemonSupervisorTest 57, both MoeMessageDispatcher classes 5+5). Red proof on old code: S1, S2, C1, C3 failed. Mutants M1-M6 (canonical-only, dispatcher delete back, File.delete in service, skip removal, no scheduleReconnect, no return) each died on assertions in the named rows in an archive copy. Files: MoeMessageDispatcher.kt, MoeProjectService.kt (adds clientDaemonInfo plus an explicit type on daemonSupervisor, needed to break a Kotlin recursive-type error), new MoeSnapshotProjectCheckTest.kt. Windows evidence only; no native Linux/UI run (S1 is host-independent, S2/C1 derive spellings from the host basePath). restartDaemon's post-stop delete is untouched (RF04). Evidence: D:/moe-scratch/task-007c0ea8/.",
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+  ],
+  "completedAt": "2026-10-30T11:36:33.143Z",
+  "reviewCompletedAt": "2026-10-30T11:36:33.143Z",
+  "reviewSummary": "Reviewed completion 25b9abd7 (on moe/work-2026-10-24, pushed, in task.commits). Non-board diff net +253 LOC (dispatcher +3/-7, service +12/-1, new MoeSnapshotProjectCheckTest +246), under the 400 cap; board JSONs in the commit are other rows' state.\n\nRe-ran the exact gate under the jetbrains-gradle lease: cmd.exe gradlew.bat test --rerun -> exit 0. Counted from TEST-*.xml dated after gate start 11:34:18Z: 27 classes, 432 tests, 0 failures/errors/skips (Snapshot 5, ForeignDaemon 10, Connection 5, DaemonSupervisor 57, both Dispatcher classes 5+5). Matches the worker's evidence. Windows only.\n\nIndependent mutants in my own git-archive copy (shared tree untouched, files restored byte-identical): baseline 5/5 green; M1 canonical-only died on S1,C1; M3 File.delete in service died on C3; M5 no scheduleReconnect died on C2,C3; M6 no return died on S2,C2,C3. All assertion failures, no compile errors. M2/M4 not re-run by me.\n\nDoD1: STATE_SNAPSHOT now uses MoeDaemonSupervisor.isSameProject (comparableProjectPath first, canonical fallback); S1 table (drive/slash/case/trailing/dot/mnt/wsl$/wsl.localhost) gives zero mismatches and applies state; C1 live client stays connected with daemon.json unchanged. DoD2: another project (native + other-side spelling) gives exactly one mismatch, no state, dispatcher no longer touches .moe (S2); service removes daemon.json only via deleteDaemonInfoIfUnchanged(clientDaemonInfo) and still disconnects and schedules the reconnect (C2); a pid/port/startedAt/projectPath change survives byte for byte (C3). DoD3: gate above.\n\nStatic: git diff --check clean; the only remaining .delete( in MoeProjectService is restartDaemon L728 (RF04's, out of scope); restartDaemon hunk untouched; no forbidden patterns; error handling kept (null basePath, empty rootPath, IOException skip).\n\nUnverified: native Linux/UI run; compare-delete TOCTOU (accepted, same class as before). Detail in Serena memory task-task-007c0ea856e546d2a619e012815cd89f-handoff.",
+  "requiredCheckAtDone": null
 }
