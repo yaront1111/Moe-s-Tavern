@@ -35,8 +35,9 @@
 //     definition needs its own dispatch. owedChecks is the frozen list such a task
 //     owes; assertCheckDispatchApproved admits only those dispatches. A strong
 //     task that owes nothing reports required-checks-undeclared. An architecture
-//     check not in the installed form runs code the candidate builds, so it never
-//     delivers (required-check-untrusted-checker, task-efbf1742). This holds
+//     check not in the installed form, whether a definition or the gate owes it,
+//     runs code the candidate builds, so it never delivers
+//     (required-check-untrusted-checker, task-efbf1742). This holds
 //     under every deliveryPolicy, legacy (set, absent or null) included: legacy
 //     adds no landing evidence and never excuses the checks (task-43088e9b).
 //
@@ -102,6 +103,8 @@ export const EVIDENCE_TOKENS = {
 export const REQUIRED_CHECK_TOKEN_PREFIX = 'required-check:';
 export const PROTECTED_CHECK_CHANGED_PREFIX = 'protected-check-changed:';
 export const UNTRUSTED_CHECKER_PREFIX = 'required-check-untrusted-checker:';
+/** The untrusted-checker id for settings.qualityGate. No definition id can take it: ids start alphanumeric, without parentheses. */
+const QUALITY_GATE_CHECK_ID = '(qualityGate)';
 /** Changed-path tokens beyond this are summarised as `protected-check-changed:+<n> more`. */
 const MAX_CHANGED_TOKENS = 10;
 
@@ -381,7 +384,7 @@ function protectedCheckShortfall(state: StateManager, task: Task, defs: readonly
   // Trimmed like qualityGate: the validator keeps padding no shell would see.
   const owed = (passed: (def: ProtectedCheckDefinition) => boolean) =>
     [...new Set(defs.filter((d) => !passed(d)).map((d) => requiredCheckToken(d.command.trim())))];
-  const untrusted = trusted ? untrustedArchitectureChecks(defs).map(untrustedCheckerToken) : [];
+  const untrusted = trusted ? untrustedArchitectureChecks(defs, snapshot.entries).map(untrustedCheckerToken) : [];
   try {
     const candidates = listCandidatesForTask(state, task.id);
     const current = candidates[candidates.length - 1];
@@ -436,14 +439,20 @@ function owedGate(state: StateManager, task: Task): string | null | undefined {
   return undefined;
 }
 
-/** The required-check token for the gate `task` owes (owedGate), or none. An unreadable snapshot is logged and reported missing: fail closed. */
+/**
+ * The tokens for the gate `task` owes (owedGate), or none. An unreadable snapshot is logged and reported missing:
+ * fail closed. Under verified-local the gate is first judged like a definition that protects no files, so a
+ * candidate-built checker it runs never delivers (task-efbf1742).
+ */
 function checkShortfall(state: StateManager, task: Task, trusted: readonly string[] | null): string[] {
   const command = owedGate(state, task);
   if (command === undefined) {
     logger.warn({ taskId: task.id, snapshot: renderGot(task.requiredCheckAtDone) }, 'Delivery policy: requiredCheckAtDone unreadable; reporting the check missing');
     return [EVIDENCE_TOKENS.unreadableRequiredCheck];
   }
-  return command !== null && !hasPassingCheck(state, task, command, trusted) ? [requiredCheckToken(command)] : [];
+  if (command === null) return [];
+  const untrusted = trusted ? untrustedArchitectureChecks([{ id: QUALITY_GATE_CHECK_ID, command }]).map(untrustedCheckerToken) : [];
+  return hasPassingCheck(state, task, command, trusted) ? untrusted : [...untrusted, requiredCheckToken(command)];
 }
 
 /** One check a task owes on its current candidate: an approved protected definition (checkId set) or the gate. */
@@ -621,8 +630,10 @@ export function describeMissingEvidence(token: string): string {
     return `no runner-observed exit-0 run of "${command}" is recorded for the current candidate's tree`;
   }
   if (token.startsWith(UNTRUSTED_CHECKER_PREFIX)) {
-    // The id comes from the approved snapshot, never from candidate data.
-    return `required check ${token.slice(UNTRUSTED_CHECKER_PREFIX.length)} runs the architecture checker from code the candidate builds; ` +
+    // The id comes from the approved snapshot, or names the gate; never from candidate data.
+    const id = token.slice(UNTRUSTED_CHECKER_PREFIX.length);
+    const check = id === QUALITY_GATE_CHECK_ID ? 'the quality gate (settings.qualityGate)' : `required check ${id}`;
+    return `${check} runs the architecture checker from code the candidate builds; ` +
       'under verified-local its command must be exactly the installed `moe-daemon check-architecture ...`, which the runner provisions from the base revision';
   }
   if (token.startsWith(PROTECTED_CHECK_CHANGED_PREFIX)) {

@@ -72,10 +72,10 @@ async function approve(extra: Record<string, unknown> = {}, requiredChecks = def
 let seq = 0;
 let cand = '';
 /** A runner-recorded candidate, now the current one, reporting the protected entries of `tree`. */
-function candidate(tree: string): string {
+function candidate(tree: string, paths = PROTECTED): string {
   const id = `cand-${String(++seq).padStart(3, '0')}`;
   h.state.candidates.set(id, { id, attemptId: 'attempt-1', taskId: 'task-1', baseRevision: tree, treeSha: tree,
-    deliveryTarget: 'refs/heads/main', protectedEntries: PROTECTED.map((p) => ({ path: p, oid: git('rev-parse', `${tree}:${p}`) })),
+    deliveryTarget: 'refs/heads/main', protectedEntries: paths.map((p) => ({ path: p, oid: git('rev-parse', `${tree}:${p}`) })),
     createdAt: new Date(Date.UTC(2026, 9, 30, 0, 0, seq)).toISOString() });
   return id;
 }
@@ -314,6 +314,7 @@ const BUILT = 'node packages/moe-daemon/dist/index.js check-architecture --rules
 const CHECKER_SRC = 'packages/moe-daemon/src/commands/checkArchitecture.ts';
 const ENGINE_SRC = 'packages/moe-daemon/src/delivery/architectureRules.ts';
 const untrusted = (id: string) => `required-check-untrusted-checker:${id}`;
+const GATE_CHECKER = untrusted('(qualityGate)');
 const archDef = (command: unknown, extra: Partial<ProtectedCheckDefinition> = {}, id = 'x') =>
   ({ id, command, ...extra }) as ProtectedCheckDefinition;
 
@@ -333,10 +334,19 @@ describe('UC a candidate-built architecture checker under verified-local (bug ta
     ['moe-daemon  check-architecture --rules arch.json'], ['moe-daemon\tcheck-architecture --rules arch.json'],
     ['moe-daemon\u00a0check-architecture --rules arch.json'], ['MOE-DAEMON CHECK-ARCHITECTURE --rules arch.json'],
     [`node -e "import('./packages/moe-daemon/dist/commands/checkArchitecture.js')"`],
+    [`node -e "import('./packages/moe-daemon/dist/delivery/architectureRules.js')"`],
     ['npm run arch', { scripts: [CHECKER_SRC] }], ['npm run arch', { scripts: ['scripts/a.sh', ENGINE_SRC] }],
     ['npm run arch', { configs: [CHECKER_SRC] }], [42], ['npm test', { scripts: 'scripts/a.sh' as never }],
   ] as [unknown, Partial<ProtectedCheckDefinition>?][])('UC1 refuses %j and never throws', (command, extra) => {
     expect(untrustedArchitectureChecks([archDef(command, extra)])).toEqual(['x']);
+  });
+
+  it.each([
+    ['npm run arch', ['pkg/src/commands'], ['x']], ['npm run arch', ['pkg'], ['x']], [INSTALLED, ['pkg'], []],
+    ['npm run arch', ['pkg/src/tools'], []], ['npm run arch', ['pkg/src/comm'], []],
+  ])('UC1 judges %j protecting %j through the approved entries under it', (command, scripts, expected) => {
+    const entries = [{ path: 'pkg/src/commands/checkArchitecture.ts' }, { path: 'pkg/src/tools/a.ts' }, { path: 42 } as never];
+    expect(untrustedArchitectureChecks([archDef(command, { scripts })], entries)).toEqual(expected);
   });
 
   it('UC1 lists refused ids in definition order', () => {
@@ -357,10 +367,11 @@ describe('UC a candidate-built architecture checker under verified-local (bug ta
     expect(unmetDependsOn(h.state, { dependsOn: ['task-1'] })).toEqual(after.length === 0 ? [] : ['task-1']);
   });
 
-  it.each(['legacy', 'observe'])('UC4 leaves %s verdicts unchanged: no untrusted-checker token appears', async (name) => {
+  it.each([['legacy', 'definition'], ['observe', 'definition'], ['legacy', 'gate'], ['observe', 'gate']])(
+    'UC4 leaves %s %s verdicts unchanged: no untrusted-checker token appears', async (name, route) => {
     profile(name);
-    settings({ checkEnvironments: undefined });
-    await approve({}, [{ id: 'arch', command: BUILT, scripts: ['scripts/lint.sh'] }]);
+    settings({ checkEnvironments: undefined, ...(route === 'gate' ? { qualityGate: BUILT, qualityGateScope: 'everyTask' } : {}) });
+    await approve({}, route === 'gate' ? [] : [{ id: 'arch', command: BUILT, scripts: ['scripts/lint.sh'] }]);
     expect(missing()).toEqual([token(BUILT)]);
     await recordCheckRunTool(h.state).handler({ id: 'run-built', candidateId: cand, treeSha: tree1, command: BUILT, exitCode: 0,
       runnerId: 'runner-1', source: 'runner-observed' }, h.state);
@@ -369,9 +380,47 @@ describe('UC a candidate-built architecture checker under verified-local (bug ta
     expect(evaluateDeliveryEvidence(h.state, task())).toEqual({ policy: 'legacy', satisfied: true, missingEvidence: [] });
   });
 
-  it('UC5 names the id and the installed form, and nothing from candidate data', () => {
+  it('UC5 names the id or the gate, and the installed form, and nothing from candidate data', () => {
     const reason = describeMissingEvidence(untrusted('arch'));
     expect(reason).toContain('required check arch runs the architecture checker from code the candidate builds');
     expect(reason).toContain('`moe-daemon check-architecture ...`');
+    expect(describeMissingEvidence(GATE_CHECKER)).toContain('the quality gate (settings.qualityGate) runs the architecture checker from code');
+  });
+
+  // The gate is judged as a definition that protects no files: only its command can name the checker.
+  it.each([
+    ['UC6 a gate-only task never delivers a candidate-built gate', BUILT, [], [GATE_CHECKER]],
+    ['UC6 a candidate-built gate beside passing definitions never delivers', BUILT, defs, [GATE_CHECKER]],
+    ['UC6 the installed gate delivers', ` ${INSTALLED} `, [], []],
+  ] as [string, string, ProtectedCheckDefinition[], string[]][])('%s, even with a passing runner run', async (_label, gate, requiredChecks, after) => {
+    await approve({}, requiredChecks);
+    settings({ qualityGate: gate, qualityGateScope: 'everyTask' });
+    for (const d of requiredChecks) await pass(d.command, d.id);
+    expect(missing()).toEqual([...after, token(gate.trim())]);
+    await pass(gate.trim());
+    expect(evaluateDeliveryEvidence(h.state, task())).toEqual({ policy: 'local-branch', satisfied: after.length === 0, missingEvidence: after });
+    expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBe(after.length === 0);
+    setDone();
+    expect(dependencyShortfall(h.state, 'task-1')).toEqual({ satisfied: after.length === 0, missingEvidence: after });
+    expect(unmetDependsOn(h.state, { dependsOn: ['task-1'] })).toEqual(after.length === 0 ? [] : ['task-1']);
+  });
+
+  it('UC7 judges the requiredCheckAtDone gate a DONE task owes the same way, after the live gate is cleared', async () => {
+    await approve({}, []);
+    settings({ qualityGate: BUILT, qualityGateScope: 'everyTask' });
+    await pass(BUILT);
+    settings({ qualityGate: undefined });
+    h.state.tasks.set('task-1', { ...task(), status: 'DONE', requiredCheckAtDone: BUILT });
+    expect(dependencyShortfall(h.state, 'task-1')).toEqual({ satisfied: false, missingEvidence: [GATE_CHECKER] });
+    expect(unmetDependsOn(h.state, { dependsOn: ['task-1'] })).toEqual(['task-1']);
+  });
+
+  it('UC8 never delivers a check whose listed directory protects the checker sources, read from the approved snapshot', async () => {
+    const tree = commit({ 'pkg/src/commands/checkArchitecture.ts': 'checker\n' });
+    await approve({}, [{ id: 'arch', command: 'npm run arch', scripts: ['pkg/src/commands'] }]);
+    cand = candidate(tree, ['pkg/src/commands/checkArchitecture.ts']);
+    await pass('npm run arch', 'arch');
+    expect(evaluateDeliveryEvidence(h.state, task())).toEqual({ policy: 'local-branch', satisfied: false, missingEvidence: [untrusted('arch')] });
+    expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBe(false);
   });
 });

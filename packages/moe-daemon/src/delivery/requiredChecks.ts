@@ -39,16 +39,20 @@ const CHECKER_SOURCES = ['src/commands/checkArchitecture.ts', 'src/delivery/arch
  * every module the daemon imports, and a definition protects only the files it names, so an
  * unprotected import (repositorySource, cachedPlanPaths, logger, ...) could serve '' content or
  * override stdout and exitCode. A def is an architecture check when its command mentions the checker
- * or it protects the checker's sources (an npm-script wrapper). Pure and never throws: a malformed
- * def counts as an architecture check that is not installed.
+ * or its engine, or it protects the checker's sources (an npm-script wrapper): a listed path, or one
+ * of the approved snapshot's `entries` under a listed directory. Pure and never throws: a malformed
+ * def counts as an architecture check that is not installed. policy.ts judges settings.qualityGate
+ * here too, as a def that protects no files.
  */
-export function untrustedArchitectureChecks(defs: readonly ProtectedCheckDefinition[]): string[] {
+export function untrustedArchitectureChecks(defs: readonly ProtectedCheckDefinition[], entries: readonly { path: string }[] = []): string[] {
   return defs.filter((def) => {
     const command: unknown = def?.command;
     const lists: unknown[] = PATH_KINDS.map((kind) => def?.[kind] ?? []);
     if (typeof command !== 'string' || !lists.every((l) => Array.isArray(l) && l.every((p) => typeof p === 'string'))) return true;
-    const architecture = /check-?architecture/i.test(command)
-      || (lists as string[][]).flat().some((p) => CHECKER_SOURCES.some((source) => p.endsWith(source)));
+    const roots = (lists as string[][]).flat();
+    const covered = entries.map((e) => e?.path).filter((p): p is string => typeof p === 'string' && roots.some((root) => covers(root, p)));
+    const architecture = /check-?architecture|architecture-?rules/i.test(command)
+      || [...roots, ...covered].some((p) => CHECKER_SOURCES.some((source) => p.endsWith(source)));
     return architecture && !INSTALLED_ARCHITECTURE_CHECK.test(command.trim());
   }).map((def) => String(def?.id));
 }
