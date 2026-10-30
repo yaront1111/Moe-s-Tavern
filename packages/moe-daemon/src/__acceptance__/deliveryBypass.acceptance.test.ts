@@ -130,6 +130,7 @@ const observe = (dispatchId: string, outcome = 'passed', extra: Record<string, u
 const pass = async (candidateId = 'cand-a', outcome = 'passed') => observe((await dispatch(candidateId)).dispatch.id, outcome);
 const approve = (q: Ids, candidateId = 'cand-a') => call('moe.qa_approve', { taskId: TASK, summary: SUMMARY, ...q, candidateId });
 
+/** Sorted recursive entries under .moe/<dir>; nested ones carry the host's path separator, so expect them via path.join. */
 const files = (dir: string) => { const d = path.join(h.moePath, dir); return fs.existsSync(d) ? (fs.readdirSync(d, { recursive: true }) as string[]).sort() : []; };
 const taskBytes = () => fs.readFileSync(path.join(h.moePath, 'tasks', `${TASK}.json`), 'utf8');
 const failure = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e) as Promise<McpCallError | null>;
@@ -213,7 +214,7 @@ describe('CQ-V12a delivery bypass fixtures (strict task, through McpAdapter)', (
       const { dispatch: d } = await dispatch('cand-a');
       const err = await failure(observe(d.id, 'passed', { [field]: value() }));
       expect([err?.codeName, err?.message]).toEqual(['INVALID_INPUT', invalidInput(field, 'is not a supported check observation field').message]);
-      expect(files('checks')).toEqual(['dispatches', `dispatches/${d.id}.json`]);
+      expect(files('checks')).toEqual(['dispatches', path.join('dispatches', `${d.id}.json`)]);
       await refusedApproval(q, 'DELIVERY_EVIDENCE_MISSING', OWED);
     });
   });
