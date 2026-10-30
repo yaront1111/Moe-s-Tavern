@@ -1,5 +1,7 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import net from 'net';
+import http from 'http';
+import dns from 'dns';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
@@ -204,4 +206,90 @@ describe.skipIf(process.platform === 'win32')('GET /health Host rule on a real d
     expect(Object.keys(body)).toEqual(expect.arrayContaining(['status', 'projectPath', 'pid', 'version', 'uptime', 'stats', 'checks']));
     expect(Array.isArray(body.checks)).toBe(true);
   }
+});
+
+// C. The CLI probe of a daemon bound by a DNS name. In-process, no signals, so it also runs on win32.
+describe('the daemon CLI probe of a daemon bound by a DNS name', () => {
+  const NAME = 'moe-health-probe.test'; // reserved .test TLD: never reaches real DNS
+  let root = '';
+  let server: http.Server;
+  let port = 0;
+  let seenHosts: Array<string | undefined> = [];
+  let info: DaemonInfo;
+
+  const enotfound = (name: string) => Object.assign(new Error(`getaddrinfo ENOTFOUND ${name}`), { code: 'ENOTFOUND' });
+  const resolveStub = (name: string) => name === NAME ? { address: '127.0.0.1', family: 4 } : undefined;
+  const stubDns = () => {
+    const promised = vi.spyOn(dns.promises, 'lookup').mockImplementation((async (name: string) => {
+      const hit = resolveStub(name);
+      if (!hit) throw enotfound(name);
+      return hit;
+    }) as unknown as typeof dns.promises.lookup);
+    // Callback form too, so a probe that dialed the name would reach the server and fail on the Host rule, not on resolution.
+    vi.spyOn(dns, 'lookup').mockImplementation(((name: string, ...rest: unknown[]) => {
+      const cb = rest[rest.length - 1] as (err: Error | null, address?: string, family?: number) => void;
+      const hit = resolveStub(name);
+      if (hit) cb(null, hit.address, hit.family); else cb(enotfound(name));
+    }) as unknown as typeof dns.lookup);
+    return promised;
+  };
+
+  beforeAll(async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-health-name-'));
+    server = http.createServer((req, res) => {
+      seenHosts.push(req.headers.host);
+      if (!isAllowedHealthHost(req.headers.host, req.socket.localAddress)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' }).end('Forbidden');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+        .end(JSON.stringify({ status: 'healthy', projectPath: root, pid: process.pid }));
+    });
+    await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+    port = (server.address() as net.AddressInfo).port;
+    info = { port, pid: process.pid, startedAt: new Date().toISOString(), projectPath: root, bindHost: NAME } as DaemonInfo;
+  });
+
+  afterEach(() => { vi.restoreAllMocks(); seenHosts = []; });
+
+  afterAll(async () => {
+    await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
+    if (root) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('(a) passes, dialing the resolved address, so the Host it sends is the IP literal', async () => {
+    stubDns();
+    expect(await daemon.probeDaemonHealth(info, root, 2000)).toBe(true);
+    expect(seenHosts).toEqual([`127.0.0.1:${port}`]);
+  });
+
+  it.each([
+    ['an IP-literal bindHost', '127.0.0.1'],
+    ['no bindHost', undefined],
+  ])('(b) still passes for %s without any lookup', async (_name, bindHost) => {
+    const lookup = stubDns();
+    const literal = { ...info, bindHost } as DaemonInfo;
+    expect(await daemon.probeDaemonHealth(literal, root, 2000)).toBe(true);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('(c) fails when the name does not resolve, and sends no request', async () => {
+    stubDns();
+    expect(await daemon.probeDaemonHealth({ ...info, bindHost: 'unresolvable.test' } as DaemonInfo, root, 2000)).toBe(false);
+    expect(seenHosts).toEqual([]);
+  });
+
+  it('(d) fails within the probe timeout when the lookup never settles', async () => {
+    vi.spyOn(dns.promises, 'lookup').mockImplementation((() => new Promise(() => undefined)) as unknown as typeof dns.promises.lookup);
+    const started = Date.now();
+    expect(await daemon.probeDaemonHealth(info, root, 300)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(seenHosts).toEqual([]);
+  });
+
+  it('(e) a foreign Host name still gets 403 from the unchanged rule', async () => {
+    const reply = await raw(port, get('/health', `evil.example:${port}`));
+    expect(reply.status).toBe(403);
+    expect(reply.body).toBe('Forbidden');
+  });
 });

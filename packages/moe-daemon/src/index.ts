@@ -7,6 +7,7 @@
 import fs from 'fs';
 import path from 'path';
 import net from 'net';
+import dns from 'dns';
 import http from 'http';
 import crypto from 'crypto';
 import { spawn, type ChildProcess } from 'child_process';
@@ -312,7 +313,31 @@ function waitForPortListening(port: number, timeoutMs: number = PORT_READY_TIMEO
   });
 }
 
-function probeDaemonHealth(
+/**
+ * The IP literal a health probe should dial for `target`. The /health Host rule (server/healthHost.ts)
+ * admits IP literals and localhost, never a configured name, so a daemon bound by name is probed at the
+ * address that name resolves to: that literal is the Host Node sends, and it is the connection's arrival
+ * address, which the rule admits. Admitting the configured name instead would trust whoever controls its DNS.
+ * Null when the lookup fails or outlasts the probe timeout.
+ */
+async function healthProbeAddress(target: string, timeoutMs: number): Promise<string | null> {
+  if (net.isIP(target) !== 0) return target;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const timedOut = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), timeoutMs);
+      timer.unref();
+    });
+    const resolved = dns.promises.lookup(target).then((found) => found.address, () => null);
+    return await Promise.race([resolved, timedOut]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function probeDaemonHealth(
   info: DaemonInfo,
   expectedProjectPath: string,
   timeoutMs: number = SOCKET_TIMEOUT_MS,
@@ -321,12 +346,18 @@ function probeDaemonHealth(
   // Exported, so it resolves the caller's own path itself (see validateDaemonInfoForProject).
   const own = canonicalProjectPath(expectedProjectPath);
   if (!isDaemonInfoShape(info) || !isSameProjectPath(info.projectPath, own)) {
-    return Promise.resolve(false);
+    return false;
   }
+
+  const address = await healthProbeAddress(
+    host ?? (info.bindHost ? probeHostFor(info.bindHost) : DEFAULT_BIND_HOST),
+    timeoutMs,
+  );
+  if (address === null) return false;
 
   return new Promise((resolve) => {
     const req = http.request({
-      hostname: host ?? (info.bindHost ? probeHostFor(info.bindHost) : DEFAULT_BIND_HOST),
+      hostname: address,
       port: info.port,
       path: '/health',
       method: 'GET',
