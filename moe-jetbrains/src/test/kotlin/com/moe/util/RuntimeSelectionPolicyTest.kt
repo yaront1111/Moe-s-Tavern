@@ -1,6 +1,7 @@
 package com.moe.util
 
 import com.google.gson.Gson
+import com.google.gson.JsonObject
 import com.intellij.openapi.project.Project as IdeaProject
 import com.moe.model.DaemonInfo
 import com.moe.model.MoeState
@@ -20,6 +21,7 @@ import org.java_websocket.server.WebSocketServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -34,6 +36,13 @@ import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.AclEntry
+import java.nio.file.attribute.AclEntryPermission
+import java.nio.file.attribute.AclEntryType
+import java.nio.file.attribute.AclFileAttributeView
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermissions
 import java.time.Instant
 import java.util.Optional
 import java.util.concurrent.CopyOnWriteArrayList
@@ -306,10 +315,220 @@ class RuntimeSelectionPolicyTest {
         RuntimeSelectionPolicy.recordProtectedSpawn(b, fakeHandle(42) { noStart })
         RuntimeSelectionPolicy.recordProtectedSpawn(b, fakeHandle(43) { throw UnsupportedOperationException("info") })
         listOf(T0, Instant.EPOCH).forEach { start ->
-            assertEquals("start $start", refusal(42), RuntimeSelectionPolicy.verifyProvenance(b, 42) { ProcessFacts(42, start, null) })
+            assertEquals("start $start", refusal(42), RuntimeSelectionPolicy.verifyProvenance(b, 42, facts = { ProcessFacts(42, start, null) }))
         }
         RuntimeSelectionPolicy.resetForTest()
         assertEquals("after reset", refusal(self.pid()), RuntimeSelectionPolicy.verifyProvenance(a, self.pid()))
+    }
+
+    @Test
+    fun `PS1 a state write leaves the root and the file owner-only and reads back`() {
+        val store = newStore()
+        store.write(NAME_A, """{"version":1}""")
+        assertOwnerOnly(store.root, directory = true)
+        assertOwnerOnly(store.root.resolve(NAME_A), directory = false)
+        assertEquals("""{"version":1}""", store.read(NAME_A))
+
+        store.write(NAME_A, "replaced")
+        assertEquals("replaced", store.read(NAME_A))
+        assertOwnerOnly(store.root.resolve(NAME_A), directory = false)
+        assertEquals("no temporary file is left behind", listOf(NAME_A), store.root.toFile().list()?.toList())
+        store.delete(NAME_A)
+        assertNull("deleted", store.read(NAME_A))
+        store.delete(NAME_A)
+    }
+
+    @Test
+    fun `PS2 a loosened state file or root reads as untrusted until the next write`() {
+        listOf(false, true).forEach { loosenRoot ->
+            val store = newStore().apply { write(NAME_A, "text") }
+            val target = if (loosenRoot) store.root else store.root.resolve(NAME_A)
+            assumeTrue("cannot grant another principal access on this host", loosen(target, directory = loosenRoot))
+            assertThrows("root=$loosenRoot", ProtectedStateStore.Untrusted::class.java) { store.read(NAME_A) }
+            store.write(NAME_A, "rewritten")
+            assertEquals("root=$loosenRoot rewritten", "rewritten", store.read(NAME_A))
+            assertOwnerOnly(store.root, directory = true)
+        }
+    }
+
+    @Test
+    fun `PS3 absent, oversize, linked and badly named state files`() {
+        val store = newStore()
+        assertNull("no root yet", store.read(NAME_A))
+        store.write(NAME_B, "other")
+        assertNull("absent file", store.read(NAME_A))
+        val cap = ProtectedStateStore.MAX_BYTES
+        store.write(NAME_A, "x".repeat(cap))
+        assertEquals("exactly the cap", cap, store.read(NAME_A)?.length)
+        Files.write(store.root.resolve(NAME_A), byteArrayOf(' '.code.toByte()), StandardOpenOption.APPEND)
+        assertThrows("one byte over the cap", ProtectedStateStore.Untrusted::class.java) { store.read(NAME_A) }
+        assertThrows("a write over the cap", ProtectedStateStore.Untrusted::class.java) { store.write(NAME_B, "x".repeat(cap + 1)) }
+        assertEquals("a refused write keeps the old bytes", "other", store.read(NAME_B))
+
+        val hex = "a".repeat(64)
+        listOf("", "x.json", "../$NAME_A", "sub/$NAME_A", File.separator + NAME_A, hex, "A".repeat(64) + ".json", "a".repeat(63) + ".json", "$NAME_A.tmp")
+            .forEach { bad ->
+                assertThrows("read '$bad'", IllegalArgumentException::class.java) { store.read(bad) }
+                assertThrows("write '$bad'", IllegalArgumentException::class.java) { store.write(bad, "x") }
+                assertThrows("delete '$bad'", IllegalArgumentException::class.java) { store.delete(bad) }
+            }
+        assertEquals("bad names wrote nothing", listOf(NAME_A, NAME_B), store.root.toFile().list()?.sorted())
+
+        // An owner-only file the IDE wrote elsewhere is still refused through a link, as is a linked root.
+        val elsewhere = newStore().apply { write(NAME_C, "elsewhere") }
+        assumeTrue("links unavailable on this host", symlink(store.root.resolve(NAME_C), elsewhere.root.resolve(NAME_C)))
+        assertThrows("linked file", ProtectedStateStore.Untrusted::class.java) { store.read(NAME_C) }
+        val linkedRoot = ProtectedStateStore(temporaryFolder.root.toPath().resolve("linked-root"))
+        assumeTrue("links unavailable on this host", symlink(linkedRoot.root, elsewhere.root))
+        assertThrows("linked root read", ProtectedStateStore.Untrusted::class.java) { linkedRoot.read(NAME_C) }
+        assertThrows("linked root write", ProtectedStateStore.Untrusted::class.java) { linkedRoot.write(NAME_C, "planted") }
+        assertEquals("elsewhere", elsewhere.read(NAME_C))
+    }
+
+    @Test
+    fun `PS4 a state root inside the project is not usable for it`() {
+        val project = temporaryFolder.newFolder("project")
+        val sandbox = ProtectedStateStore(File(project, "build/idea-sandbox/system/moe/protected-state").toPath())
+        assertFalse("sandbox under the project", sandbox.usableFor(project.path))
+        assertFalse("the project itself", ProtectedStateStore(project.toPath()).usableFor(project.path))
+        val outside = ProtectedStateStore(temporaryFolder.root.toPath().resolve("system/moe/protected-state"))
+        assertTrue("outside the project", outside.usableFor(project.path))
+    }
+
+    @Test
+    fun `PS5 plain JUnit has no IDE state store`() {
+        assertNull(ProtectedStateStore.forIde())
+    }
+
+    @Test
+    fun `PP1 a persisted supervisor verifies its daemon after a restart, which then stays verified without it`() {
+        val store = useStore()
+        val dir = temporaryFolder.newFolder("a").path
+        val daemon = installedDaemon()
+        val live = mutableMapOf(100L to ProcessFacts(100, T0, 1), 200L to ProcessFacts(200, T1, 100))
+        RuntimeSelectionPolicy.remember(dir, SpawnRecord(100, T0, supervisor = true, daemon = daemonKey(daemon)), live::get)
+        assertEquals("the supervisor is persisted", listOf(100L), storedPids(store))
+        RuntimeSelectionPolicy.forgetSessionForTest()
+
+        assertNull("child after a restart", RuntimeSelectionPolicy.verifyProvenance(dir, 200, live::get, daemon))
+        assertEquals("the child is persisted", listOf(100L, 200L), storedPids(store))
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        live.remove(100L)
+        assertNull("supervisor gone", RuntimeSelectionPolicy.verifyProvenance(dir, 200, live::get, daemon))
+        assertEquals("the dead supervisor is pruned", listOf(200L), storedPids(store))
+
+        // The usual order: the spawning session verifies the child through its supervisor, and that persists the child too.
+        val second = temporaryFolder.newFolder("second").path
+        val session = mutableMapOf(110L to ProcessFacts(110, T0, 1), 210L to ProcessFacts(210, T1, 110))
+        RuntimeSelectionPolicy.remember(second, SpawnRecord(110, T0, supervisor = true, daemon = daemonKey(daemon)), session::get)
+        assertNull("child in the spawning session", RuntimeSelectionPolicy.verifyProvenance(second, 210, session::get))
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        session.remove(110L)
+        assertNull("that child after a restart", RuntimeSelectionPolicy.verifyProvenance(second, 210, session::get, daemon))
+
+        // A store that cannot be written never throws, and the session keeps its record in memory.
+        val blocked = File(temporaryFolder.root, "not-a-directory").apply { writeText("file") }
+        RuntimeSelectionPolicy.store = { ProtectedStateStore(blocked.toPath().resolve("protected-state")) }
+        val third = temporaryFolder.newFolder("third").path
+        RuntimeSelectionPolicy.remember(third, SpawnRecord(120, T0, supervisor = true, daemon = daemonKey(daemon))) { ProcessFacts(it, T0, 1) }
+        assertNull("in memory", RuntimeSelectionPolicy.verifyProvenance(third, 120, { ProcessFacts(it, T0, 1) }, daemon))
+    }
+
+    @Test
+    fun `PP2a persisted records verify nothing for another daemon, project or pid, the daemon's child, or from inside the project`() {
+        val dir = temporaryFolder.newFolder("a").path
+        val daemon = installedDaemon()
+        // The stored supervisor verifies itself and its child, so each refusal below comes from the one thing it changes.
+        persistedSession(dir, daemon)
+        assertVerified("baseline", dir, daemon)
+        // That persisted the child too, yet only a supervisor vouches: the daemon's own child stays unverified.
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        val grandchild = LIVE + (300L to ProcessFacts(300, T1, 200))
+        assertEquals("the daemon's child", refusal(300), RuntimeSelectionPolicy.verifyProvenance(dir, 300, grandchild::get, daemon))
+
+        persistedSession(dir, daemon)
+        assertRefused("another installed daemon", dir, installedDaemon())
+        assertRefused("no installed daemon", dir, null)
+        assertRefused("an installed daemon that does not resolve", dir, File(temporaryFolder.root, "missing/daemon/index.js"))
+        assertRefused("another project", temporaryFolder.newFolder("b").path, daemon)
+        assertRefused("a reused pid", dir, daemon, mapOf(100L to ProcessFacts(100, T1, 1), 200L to ProcessFacts(200, T1, 100)))
+
+        val foreign = persistedSession(temporaryFolder.newFolder("c").path, daemon).let { it.read(storeFiles(it).single())!! }
+        persistedSession(dir, daemon).let { it.write(storeFiles(it).single(), foreign) }
+        assertRefused("a file under this project's name for another project", dir, daemon)
+
+        val (name, valid) = persistedSession(dir, daemon).let { store -> storeFiles(store).single().let { it to store.read(it)!! } }
+        val inProject = ProtectedStateStore(File(dir, "state").toPath())
+        RuntimeSelectionPolicy.store = { inProject }
+        RuntimeSelectionPolicy.remember(dir, SpawnRecord(100, T0, supervisor = true, daemon = daemonKey(daemon))) { ProcessFacts(it, T0, 1) }
+        assertFalse("nothing is written inside the project", inProject.root.toFile().exists())
+        inProject.write(name, valid)
+        assertRefused("a valid file in a store inside the project", dir, daemon)
+    }
+
+    @Test
+    fun `PP2b a persisted file the IDE would not have written verifies nothing`() {
+        val dir = temporaryFolder.newFolder("a").path
+        val daemon = installedDaemon()
+        val valid = persistedSession(dir, daemon).let { it.read(storeFiles(it).single())!! }
+        fun rewrite(text: String) = persistedSession(dir, daemon).let { it.write(storeFiles(it).single(), text) }
+        rewrite(valid)
+        assertVerified("the valid file, rewritten", dir, daemon)
+        mapOf(
+            "truncated JSON" to valid.dropLast(1),
+            "a byte order mark" to "\uFEFF" + valid,
+            "trailing content" to "$valid {}",
+            "lenient JSON" to valid.replace("\"version\":", "version:"),
+            "version 2" to valid.replace("\"version\":1", "\"version\":2"),
+            "version 1.0" to valid.replace("\"version\":1", "\"version\":1.0"),
+            "a missing project" to valid.replace(Regex("\"project\":\"[^\"]*\","), ""),
+            "a missing record field" to valid.replace(",\"supervisor\":true", ""),
+            "an extra record field" to valid.replace("\"supervisor\":true", "\"supervisor\":true,\"extra\":true"),
+            "an extra top-level field" to valid.replace("\"version\":1", "\"version\":1,\"extra\":1"),
+            "a string pid" to valid.replace("\"pid\":100", "\"pid\":\"100\""),
+            "a string supervisor" to valid.replace("\"supervisor\":true", "\"supervisor\":\"true\""),
+            "records as an object" to valid.replace(Regex("\"records\":\\[(.*)]}$"), "\"records\":$1}")
+        ).forEach { (label, text) ->
+            assertTrue("$label changes the file", text != valid)
+            rewrite(text)
+            assertRefused(label, dir, daemon)
+        }
+
+        rewrite(valid + " ".repeat(ProtectedStateStore.MAX_BYTES - valid.toByteArray(Charsets.UTF_8).size))
+        // The supervisor's own record adds no child, so this verify leaves the file exactly 64 KiB.
+        assertNull("exactly 64 KiB", RuntimeSelectionPolicy.verifyProvenance(dir, 100, LIVE::get, daemon))
+        RuntimeSelectionPolicy.store()!!.let { Files.write(it.root.resolve(storeFiles(it).single()), byteArrayOf(' '.code.toByte()), StandardOpenOption.APPEND) }
+        assertRefused("over 64 KiB", dir, daemon)
+
+        persistedSession(dir, daemon).let { store ->
+            assumeTrue("cannot grant another principal access on this host", loosen(store.root.resolve(storeFiles(store).single()), directory = false))
+        }
+        assertRefused("a loosened file", dir, daemon)
+    }
+
+    @Test
+    fun `PP3 a verify or a new record prunes persisted records whose process is gone or whose pid was reused`() {
+        val store = useStore()
+        val dir = temporaryFolder.newFolder("a").path
+        val daemon = installedDaemon()
+        listOf(100L, 300L, 500L).forEach {
+            RuntimeSelectionPolicy.remember(dir, SpawnRecord(it, T0, supervisor = true, daemon = daemonKey(daemon))) { pid -> ProcessFacts(pid, T0, 1) }
+        }
+        assertEquals(listOf(100L, 300L, 500L), storedPids(store))
+        RuntimeSelectionPolicy.forgetSessionForTest()
+
+        // 300 is gone and 500 now names a later process; 100 still runs, and 900 was never recorded.
+        val live = mapOf(100L to ProcessFacts(100, T0, 1), 500L to ProcessFacts(500, T1, 1), 900L to ProcessFacts(900, T1, 1))
+        assertEquals(refusal(900), RuntimeSelectionPolicy.verifyProvenance(dir, 900, live::get, daemon))
+        assertEquals(listOf(100L), storedPids(store))
+        assertEquals(refusal(900), RuntimeSelectionPolicy.verifyProvenance(dir, 900, (live - 100L)::get, daemon))
+        assertEquals("the file goes with its last record", emptyList<String>(), storeFiles(store))
+
+        listOf(300L, 500L).forEach {
+            RuntimeSelectionPolicy.remember(dir, SpawnRecord(it, T0, supervisor = true, daemon = daemonKey(daemon))) { pid -> ProcessFacts(pid, T0, 1) }
+        }
+        RuntimeSelectionPolicy.remember(dir, SpawnRecord(100, T0, supervisor = true, daemon = daemonKey(daemon)), live::get)
+        assertEquals("a new record prunes the same way", listOf(100L), storedPids(store))
     }
 
     @Test
@@ -427,6 +646,27 @@ class RuntimeSelectionPolicyTest {
         assertEquals("unrecorded", refusal(pid), supervisor.activationRefusal(info))
         RuntimeSelectionPolicy.recordProtectedSpawn(project.path, ProcessHandle.current())
         assertNull("recorded", supervisor.activationRefusal(info))
+    }
+
+    @Test
+    fun `S6 after an IDE restart the daemon a protected supervisor started activates only for its project and installed daemon`() {
+        val store = useStore()
+        val (project, root, node) = protectedFixture()
+        val self = ProcessHandle.current()
+        val spawning = MoeDaemonSupervisor(project.path, "Test Project", processStarter = { IdleProcess(self) },
+            profile = { RuntimeProfile.PROTECTED }, installedRoot = { root }, nodeExecutable = { node.path })
+        assertTrue(spawning.ensureDaemonRunning())
+        // The IDE restarts: a new supervisor serves the project, and nothing of the earlier session is remembered.
+        fun afterRestart(dir: File, installed: File): String? {
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            return MoeDaemonSupervisor(dir.path, "Test Project", profile = { RuntimeProfile.PROTECTED }, installedRoot = { installed },
+                nodeExecutable = { node.path }).activationRefusal(DaemonInfo(9876, self.pid().toInt(), "now", dir.path))
+        }
+        assertNull("its project and installed daemon", afterRestart(project, root))
+        assertEquals("another installed daemon", refusal(self.pid()), afterRestart(project, installedLayout(temporaryFolder.newFolder("other-installed"))))
+        assertEquals("another project", refusal(self.pid()), afterRestart(temporaryFolder.newFolder("other-project"), root))
+        Files.delete(store.root.resolve(storeFiles(store).single()))
+        assertEquals("no persisted record", refusal(self.pid()), afterRestart(project, root))
     }
 
     @Test
@@ -893,10 +1133,82 @@ class RuntimeSelectionPolicyTest {
         false
     }
 
+    /** A store whose root does not exist yet, under a fresh folder outside every test project. */
+    private fun newStore(): ProtectedStateStore = ProtectedStateStore(temporaryFolder.newFolder().toPath().resolve("moe/protected-state"))
+
+    /** A fresh store, installed as the one the policy persists to; resetForTest restores the default. */
+    private fun useStore(): ProtectedStateStore = newStore().also { store -> RuntimeSelectionPolicy.store = { store } }
+
+    /** A fresh store holding what an earlier session left for [dir]: supervisor (100, T0) started from [daemon]. */
+    private fun persistedSession(dir: String, daemon: File): ProtectedStateStore {
+        val store = useStore()
+        RuntimeSelectionPolicy.remember(dir, SpawnRecord(100, T0, supervisor = true, daemon = daemonKey(daemon))) { ProcessFacts(it, T0, 1) }
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        return store
+    }
+
+    private fun installedDaemon(): File = File(installedLayout(temporaryFolder.newFolder()), "daemon/index.js")
+
+    /** Daemons 100 and 200 each verify from the store alone: nothing is remembered in this session. */
+    private fun assertVerified(label: String, project: String, installed: File?) = listOf(100L, 200L).forEach { pid ->
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        assertNull("$label, pid $pid", RuntimeSelectionPolicy.verifyProvenance(project, pid, LIVE::get, installed))
+    }
+
+    private fun assertRefused(label: String, project: String, installed: File?, facts: Map<Long, ProcessFacts> = LIVE) =
+        listOf(100L, 200L).forEach { pid ->
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            assertEquals("$label, pid $pid", refusal(pid), RuntimeSelectionPolicy.verifyProvenance(project, pid, facts::get, installed))
+        }
+
+    private fun daemonKey(daemon: File): String = RuntimeSelectionPolicy.installedDaemonKey(daemon) ?: throw AssertionError("$daemon")
+
+    private fun storeFiles(store: ProtectedStateStore): List<String> = store.root.toFile().list()?.sorted().orEmpty()
+
+    /** The pids, in file order, of the records in the one provenance file [store] holds. */
+    private fun storedPids(store: ProtectedStateStore): List<Long> =
+        Gson().fromJson(store.read(storeFiles(store).single()), JsonObject::class.java).getAsJsonArray("records")
+            .map { it.asJsonObject.get("pid").asLong }
+
+    /** The owner-only definition, checked independently of the store: exact POSIX modes, else one ACL entry allowing the owner. */
+    private fun assertOwnerOnly(path: Path, directory: Boolean) {
+        val posix = Files.getFileAttributeView(path, PosixFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS)
+        if (posix != null) {
+            assertEquals("$path", if (directory) "rwx------" else "rw-------", PosixFilePermissions.toString(posix.readAttributes().permissions()))
+            return
+        }
+        val view = Files.getFileAttributeView(path, AclFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS)
+            ?: throw AssertionError("$path has neither a POSIX nor an ACL view")
+        assertEquals("$path", listOf(AclEntryType.ALLOW to view.owner), view.acl.map { it.type() to it.principal() })
+    }
+
+    /** Grants group and world read (POSIX) or adds an Everyone entry (ACL); false when this host cannot. */
+    private fun loosen(path: Path, directory: Boolean): Boolean {
+        val posix = Files.getFileAttributeView(path, PosixFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS)
+        if (posix != null) {
+            posix.setPermissions(PosixFilePermissions.fromString(if (directory) "rwxr-xr-x" else "rw-r--r--"))
+            return true
+        }
+        val view = Files.getFileAttributeView(path, AclFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS) ?: return false
+        val everyone = try {
+            path.fileSystem.userPrincipalLookupService.lookupPrincipalByGroupName("Everyone")
+        } catch (_: Exception) {
+            return false
+        }
+        val entry = AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(everyone).setPermissions(AclEntryPermission.READ_DATA).build()
+        view.acl = view.acl + entry
+        return true
+    }
+
     companion object {
+        private val NAME_A = "a".repeat(64) + ".json"
+        private val NAME_B = "b".repeat(64) + ".json"
+        private val NAME_C = "c".repeat(64) + ".json"
         private const val MIB = 1 shl 20
         private val T0: Instant = Instant.parse("2026-01-01T00:00:00Z")
         private val T1: Instant = T0.plusSeconds(60)
+        // Supervisor 100 and the daemon 200 it started, both still running.
+        private val LIVE = mapOf(100L to ProcessFacts(100, T0, 1), 200L to ProcessFacts(200, T1, 100))
         private const val NOT_STARTED_HERE = "this IDE did not start it from the installed Moe runtime"
         private const val STOP_FAILED = "the stop request failed"
         private val SPAWN_ATTEMPTS = MoeDaemonSupervisor::class.java.getDeclaredField("daemonSpawnAttempts").apply { isAccessible = true }

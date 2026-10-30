@@ -105,7 +105,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:17.692Z",
-  "updatedAt": "2026-10-30T07:39:21.582Z",
+  "updatedAt": "2026-10-30T07:40:16.354Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:28:21.268Z",
     "plannedStepCount": 4,
@@ -219,7 +219,9 @@
     ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
     ".moe/tasks/task-6be626cfe5744ee29deeb2bb1b59468e.json",
     ".moe/tasks/task-e493ed19006d4be4a96e3ca2f80a5ab4.json",
-    ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json"
+    ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+    ".moe/tasks/task-43088e9b504b49a5ae59c562fcc0c784.json",
+    ".moe/tasks/task-78ba155c350f4927ab5bdf53c21a4468.json"
   ],
   "completionSummary": "CQ-R10d3 delivered. installAgents and checkAgents, three files, 247 changed lines against the 300 target and 400 cap (measured against scratch baselines: snapshot-transfer.mjs +66/-12, guest-readiness.mjs +31/-0, local-runner.test.mjs +136/-2). agent-cache.mjs, guest-supervisor.py and local-runner-agents.test.mjs are untouched. No verified-local or isolation claim; executionReady stays false.\n\nscripts/local-runner/snapshot-transfer.mjs:\n- installAgents({name, arch, cacheDir, provider, timeoutMs}, {fetch, manifest}) validates the stream options first, then takes both CLIs only from fetchAgentBinary (pins from the installed manifest, verified cache files). It streams them through the 'agents' mode between two no-mount checks and accepts exactly one {kind:'installed', count}. It resolves a frozen {instance, agents, bytes, executionReady:false}.\n- agentFrames is an async generator: positional reads through an O_NOFOLLOW|O_NONBLOCK descriptor, re-hashed as they stream. A short read or a digest that is not the pin throws TRANSFER_INPUT_INVALID BEFORE that binary's last data frame, so the guest never completes a binary the host did not just re-verify.\n- The shared transfer(name, provider, options, delivered) helper keeps the name CQ-R11e2 expects. materializeSnapshot and verifyWorkspace now use it with unchanged order, codes and results. MODES gains 'agents', feed uses for-await, and streamOptions accepts async iterables.\n\nscripts/local-runner/guest-readiness.mjs:\n- checkAgents({name, arch, provider}) runs one fixed `sudo -n sha256sum` probe and compares it with the installed manifest's pins (memberSha256 for the codex archive). It reports AGENT_MISSING, AGENT_HASH_MISMATCH or a provider code.\n- One refinement inside the existing code vocabulary: a non-zero exit with no per-cli failure reads PROBE_UNKNOWN.\n- GUEST_PROBES.agentHashes is appended after CHECKS and kept out of them, so bootstrap never runs it.\n\nTests, all added with the Edit tool. The task's rows are AH1-AH3, ",
   "commits": [
@@ -263,6 +265,22 @@
       "treeId": "bb823a98b9c35f0c5a7f053906170e1b77fe6636",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "0f0518a33af1b440fc5c8cf9ec9210e7a257aea9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T07:34:30Z",
+      "paths": [
+        ".moe/tasks/task-43088e9b504b49a5ae59c562fcc0c784.json",
+        ".moe/tasks/task-78ba155c350f4927ab5bdf53c21a4468.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T07:40:16.354Z",
+      "treeId": "1b5c26002f8b702b677e2714e24e6510e7899e3e",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -270,14 +288,12 @@
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-readiness.mjs"
   ],
-  "unattributedPaths": [
-    "moe-jetbrains/.kotlin/sessions/kotlin-compiler-10694370982063904823.salive"
-  ],
+  "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-ba3f4f35@2026-10-30T07:28:48Z",
-    "at": "2026-10-30T07:33:56.741Z"
+    "sessionId": "qa-ba3f4f35@2026-10-30T07:34:30Z",
+    "at": "2026-10-30T07:40:16.354Z"
   },
   "completedAt": "2026-10-30T07:39:21.582Z",
   "reviewCompletedAt": "2026-10-30T07:39:21.582Z",

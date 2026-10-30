@@ -2,7 +2,9 @@ package com.moe.services
 
 import com.google.gson.Gson
 import com.moe.model.DaemonInfo
+import com.moe.util.ProtectedStateStore
 import com.moe.util.RuntimeProfile
+import com.moe.util.RuntimeSelectionPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -153,6 +155,28 @@ class MoeDaemonSupervisorTest {
 
     private fun initializedRoot(name: String): File =
         temporaryFolder.newFolder(name).also { File(it, ".moe").mkdirs() }
+
+    @Test
+    fun `a legacy spawn and activation neither write nor read the protected state store`() {
+        val root = initializedRoot("legacy-store")
+        // The direct command, and a process with a real handle: a legacy spawn that recorded would persist.
+        File(root, "packages/moe-daemon/dist/index.js").apply { parentFile.mkdirs() }.writeText("repo")
+        val store = ProtectedStateStore(temporaryFolder.newFolder("state").toPath().resolve("moe/protected-state"))
+        var consulted = 0
+        RuntimeSelectionPolicy.store = { consulted++; store }
+        try {
+            assertEquals(RuntimeProfile.LEGACY, RuntimeSelectionPolicy.profile(root.absolutePath))
+            val self = ProcessHandle.current()
+            val supervisor = supervisor(root, processStarter = { FakeProcess(self) })
+            assertTrue(supervisor.ensureDaemonRunning())
+            assertFalse("a legacy spawn persists nothing", Files.exists(store.root))
+            store.write("a".repeat(64) + ".json", "garbage")
+            assertNull(supervisor.activationRefusal(DaemonInfo(9876, self.pid().toInt(), "now", root.absolutePath)))
+            assertEquals("legacy never consults the store", 0, consulted)
+        } finally {
+            RuntimeSelectionPolicy.resetForTest()
+        }
+    }
 
     @Test
     fun `GUI without PATH Node discovers the bootstrapped runtime`() {
@@ -317,10 +341,13 @@ class MoeDaemonSupervisorTest {
         field.setInt(supervisor, attempts)
     }
 
-    private class FakeProcess : Process() {
+    /** Without [handle] it has none, as before; destroying it never signals that handle. */
+    private class FakeProcess(private val handle: ProcessHandle? = null) : Process() {
         private var alive = true
         var destroyCalls = 0
             private set
+
+        override fun toHandle(): ProcessHandle = handle ?: super.toHandle()
 
         override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
         override fun getInputStream(): InputStream = ByteArrayInputStream(ByteArray(0))

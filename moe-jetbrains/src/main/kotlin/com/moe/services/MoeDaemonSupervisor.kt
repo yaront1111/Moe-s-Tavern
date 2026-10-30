@@ -125,7 +125,7 @@ class MoeDaemonSupervisor(
             applyDaemonPath(env, direct?.firstOrNull())
             if (isProtected) protectedDaemonEnvironment(env, projectBasePath)
             val process = processStarter(pb)
-            if (isProtected) recordProtectedSpawn(projectBasePath, process)
+            if (isProtected && direct != null) recordProtectedSpawn(projectBasePath, process, File(direct[1]))
             val oldProcess = spawnedDaemonProcess
             if (oldProcess != null) {
                 try {
@@ -165,9 +165,17 @@ class MoeDaemonSupervisor(
     /** Why the protected profile refused to start a daemon; null under LEGACY or once a selection succeeds. */
     fun selectionRefusal(): String? = selectionRefusal?.takeIf { profile() == RuntimeProfile.PROTECTED }
 
-    /** Under PROTECTED, why the daemon [info] names must not be activated; null when it may be. */
-    fun activationRefusal(info: DaemonInfo): String? =
-        if (profile() == RuntimeProfile.PROTECTED) RuntimeSelectionPolicy.verifyProvenance(basePath, info.pid.toLong()) else null
+    /**
+     * Under PROTECTED, why the daemon [info] names must not be activated; null when it may be. A spawn an
+     * earlier IDE session persisted verifies only for the daemon installed now; LEGACY never reads the store.
+     */
+    fun activationRefusal(info: DaemonInfo): String? {
+        if (profile() != RuntimeProfile.PROTECTED) return null
+        val installed = RuntimeSelectionPolicy.installedArtifact(installedRoot(), "daemon/index.js", basePath)
+        return RuntimeSelectionPolicy.verifyProvenance(
+            basePath, info.pid.toLong(), installedDaemon = (installed as? RuntimeSelection.Accepted)?.file
+        )
+    }
 
     /**
      * Stops the daemon [info] names so Restart Daemon can start a fresh one: null when the restart may go
@@ -263,9 +271,10 @@ class MoeDaemonSupervisor(
 
     private fun unquoted(entry: String): String = entry.trim().removeSurrounding("\"")
 
-    private fun recordProtectedSpawn(basePath: String, process: Process) {
+    // [installedDaemon] is the installed daemon the command runs, so a later IDE session can match it.
+    private fun recordProtectedSpawn(basePath: String, process: Process, installedDaemon: File) {
         try {
-            RuntimeSelectionPolicy.recordProtectedSpawn(basePath, process.toHandle())
+            RuntimeSelectionPolicy.recordProtectedSpawn(basePath, process.toHandle(), installedDaemon)
         } catch (ex: Exception) {
             // Test fakes have no handle; the daemon then fails provenance and is never activated.
             log.debug("Cannot record the protected Moe daemon process: ${ex.message}")
