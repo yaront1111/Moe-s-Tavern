@@ -51,7 +51,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -67,7 +67,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T08:07:00.870Z",
-  "updatedAt": "2026-10-30T11:19:38.471Z",
+  "updatedAt": "2026-10-30T11:21:29.604Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T08:46:38.891Z",
@@ -77,11 +77,14 @@
     "firstClaimAt": "2026-10-30T08:54:11.432Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-30T11:21:29.604Z",
+    "wallClockMs": 8838172
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-55e6716a"
+    "worker-55e6716a",
+    "qa-952969be"
   ],
   "tier": "light",
   "effort": "high",
@@ -157,17 +160,42 @@
       "treeId": "3155ae75368c453fd8d240892d7e31c802b8d4d2",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "b556875eeff16ee1c4a148d7a37f827f16df45a2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T11:16:53Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-c61311dc98424120be5775ce91c50ed0.json",
+        ".moe/tasks/task-dc833bfb10984e23a94ee047ae187c90.json"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T11:19:56.348Z",
+      "treeId": "50296cffef152df30d1e59842b787e8847005ebf",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "taskId": "task-4e412148225f480c8c0d5a1706a3cc76"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".github/workflows/ci.yml"
+    ".github/workflows/ci.yml",
+    ".moe/tasks/task-c61311dc98424120be5775ce91c50ed0.json",
+    ".moe/tasks/task-dc833bfb10984e23a94ee047ae187c90.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-bd1eb82d@2026-10-30T08:54:12Z",
-    "at": "2026-10-30T09:04:35.764Z"
+    "kind": "completion",
+    "sessionId": "worker-55e6716a@2026-10-30T11:16:53Z",
+    "at": "2026-10-30T11:19:56.348Z"
   },
   "workStartedAt": "2026-10-30T11:17:32.163Z",
   "reviewStartedAt": "2026-10-30T11:19:38.469Z",
@@ -178,5 +206,9 @@
     "reportedAt": "2026-10-30T11:19:38.469Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Appended local-runner-vm-control.test.mjs and local-runner-daemon-bind.test.mjs to the existing CI local-runner command, preserving all eight existing paths/order. Only non-board file modified: .github/workflows/ci.yml (1 insertion/1 deletion). Each added path occurs exactly once; exact byte comparison, LF and whitespace checks pass. No tests/source/docs changed. Fresh exact gate passed in authorized HEAD archive snapshot /tmp/moe-c613-gate.NyOuPI with own ci.yml overlaid: npm ci + daemon npm run build exit 0; 482 tests, 479 pass, 3 skip, 0 fail. Shared-tree prebuild failed on Windows-only esbuild dependency under Linux, so shared dependencies were left untouched; shared generated tracked paths clean. Windows added suites: 19 tests, 17 pass, 2 expected /mnt skips, 0 fail. macOS not verified locally. Still absent from CI (out of scope): scripts/tests/account-trust-docs.test.mjs and scripts/tests/postflight-owner-scope.test.mjs. Adversarial review completed; handoff/gotcha recorded in Serena. Logs /tmp/moe-c613-{gate,windows,snapshot-build}.log."
+  "completionSummary": "Appended local-runner-vm-control.test.mjs and local-runner-daemon-bind.test.mjs to the existing CI local-runner command, preserving all eight existing paths/order. Only non-board file modified: .github/workflows/ci.yml (1 insertion/1 deletion). Each added path occurs exactly once; exact byte comparison, LF and whitespace checks pass. No tests/source/docs changed. Fresh exact gate passed in authorized HEAD archive snapshot /tmp/moe-c613-gate.NyOuPI with own ci.yml overlaid: npm ci + daemon npm run build exit 0; 482 tests, 479 pass, 3 skip, 0 fail. Shared-tree prebuild failed on Windows-only esbuild dependency under Linux, so shared dependencies were left untouched; shared generated tracked paths clean. Windows added suites: 19 tests, 17 pass, 2 expected /mnt skips, 0 fail. macOS not verified locally. Still absent from CI (out of scope): scripts/tests/account-trust-docs.test.mjs and scripts/tests/postflight-owner-scope.test.mjs. Adversarial review completed; handoff/gotcha recorded in Serena. Logs /tmp/moe-c613-{gate,windows,snapshot-build}.log.",
+  "completedAt": "2026-10-30T11:21:29.604Z",
+  "reviewCompletedAt": "2026-10-30T11:21:29.604Z",
+  "reviewSummary": "Approved. Reviewed completion b556875e (on moe/work-2026-10-24, pushed). Non-board diff is .github/workflows/ci.yml only, 1 insertion/1 deletion (numstat b556875e~1..b556875e). It appends the vm-control and daemon-bind test paths to the single-line run: of step 'Test local runner prerequisite bundles'; the 8 existing paths keep order and spelling. Trailer lists ci.yml as Moe-Contested (peer task-4e412148) but the committed hunk is exactly the one -/+ pair, so no peer bytes were carried.\n\nDoD 1: grep -c of each new path in ci.yml at b556875e prints 1 and 1; both suites tracked; no CR, no trailing whitespace; plain forward-slash relative paths work in bash and pwsh.\nDoD 2: scoped numstat 1/1; commit's non-board stat is ci.yml only (the other two files are .moe/tasks board JSONs).\nDoD 3: re-ran myself. Shared-tree esbuild mismatch (win32 binary under Linux node), so I used a fresh git archive b556875e snapshot: npm ci exit 0, npm run build exit 0, then the exact node --test line from the snapshot root: EXIT 0, tests 482, pass 479, fail 0, skipped 3. Skips are LA5, K9 and the macOS smoke, none from the two added suites; 12 VC rows and the DB rows ran and passed. Snapshot ci.yml byte-equal to the committed file. Snapshot removed.\n\nNot verified: macOS leg (no host); Windows-node leg not re-run (worker reported 17 pass/2 expected /mnt skips/0 fail). Still absent from CI, out of scope and correctly untouched: scripts/tests/account-trust-docs.test.mjs, scripts/tests/postflight-owner-scope.test.mjs. No test/source/doc content changed. No defects found.",
+  "requiredCheckAtDone": null
 }
