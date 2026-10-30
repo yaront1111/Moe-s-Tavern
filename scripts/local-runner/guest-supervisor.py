@@ -2,7 +2,7 @@
 # Protected guest supervisor, bridge core (CQ-R08b). guest-bootstrap.mjs buildUserData installs these bytes at
 # GUEST_LAYOUT.supervisor, and guest-bridge.mjs is the protocol source of truth. This process is the ONLY writer of
 # its stdout: child bytes reach the host only inside base64 'output' frames, and termination only as this process's
-# own 'observation' frame from waitpid. Standard library only; the guest has python3 for cloud-init and no Node.
+# own 'observation' frame from waitpid. Standard library only; Node is installed separately by the toolchain mode.
 # Modes: 'bridge' (CQ-R08b/c; CQ-R10b: one host job frame on stdin, then that agent CLI job as the AGENT_IDENTITY
 # account, CQ-R10d4: fixed headless argv and private shim-only MCP config), 'materialize' (CQ-R09c: one snapshot from
 # host frames on stdin into WORKSPACE) and 'export' (CQ-R09:
@@ -28,10 +28,14 @@
 # Mode 'agents' (CQ-R10d3a): the pinned agent CLIs from host frames on stdin into AGENTS as root:root 0555, then one
 # {kind: 'installed', count} frame and 0; 65 a malformed, mismatched or empty stream, 74 an I/O failure or an AGENTS path
 # that is a symlink or a file, 77 not root, 64 any other argv. No refusal writes a frame.
+# Mode 'toolchain' (CQ-R11e2): a pinned tarball from host frames into root-owned TOOLCHAIN, then {kind: 'installed',
+# sha256} and 0; 65 malformed stream/archive or unsafe tree, 71 no tarfile.data_filter, 73 existing install, 74 I/O
+# failure, 77 not root, 64 any other argv. Refusals leave no new install or staging tree.
 import base64
 import contextlib
 import hashlib
 import json
+import lzma
 import os
 import pwd
 import re
@@ -43,8 +47,10 @@ import stat
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 import types
+import zlib
 
 PROTOCOL = 1
 MAX_GUEST_FRAME_BYTES = 262144  # mirrors guest-bridge.mjs
@@ -1229,14 +1235,98 @@ def install_agents(in_fd, out_fd, agents=AGENTS, owner=(0, 0)):
             os.close(root)
 
 
+TOOLCHAIN = '/opt/moe/toolchain'
+MAX_TOOLCHAIN_BYTES = 134217728  # mirrors snapshot-transfer.mjs
+
+
+def receive_toolchain(in_fd, archive):
+    frames = snapshot_frames(in_fd)
+    head = expect(next(frames, None), 'toolchain', 'version', 'size', 'sha256')
+    size, digest = head['size'], head['sha256']
+    if not (type(head['version']) is int and head['version'] == 1 and type(size) is int and 1 <= size <= MAX_TOOLCHAIN_BYTES
+            and type(digest) is str and DIGEST.fullmatch(digest)):
+        raise ValueError('a malformed toolchain header')
+    fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        actual = copy_data(frames, fd, size).hexdigest()
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    expect(next(frames, None), 'end')
+    if next(frames, None) is not None or actual != digest:
+        raise ValueError('a mismatched toolchain or bytes after end')
+    return digest
+
+
+def toolchain_members(tar):
+    for member in tar:
+        # data_filter strips leading slashes; our contract refuses them instead of silently rewriting a name.
+        if os.path.isabs(member.name) or '..' in member.name.split('/'):
+            raise ValueError('an unsafe toolchain member name')
+        yield member
+
+
+def extract_toolchain(archive, tree):
+    os.mkdir(tree, 0o700)
+    with tarfile.open(archive, mode='r:*') as tar:
+        tar.extractall(tree, members=toolchain_members(tar), filter='data')
+    entries = os.listdir(tree)
+    if len(entries) != 1 or not stat.S_ISDIR(os.lstat(os.path.join(tree, entries[0])).st_mode):
+        raise ValueError('not one top-level toolchain directory')
+    top = os.path.realpath(os.path.join(tree, entries[0]))
+    for root, dirs, files in os.walk(top, followlinks=False):
+        for path in [root, *(os.path.join(root, name) for name in dirs + files)]:
+            info = os.lstat(path)
+            if info.st_uid != os.geteuid() or (not stat.S_ISLNK(info.st_mode) and info.st_mode & 0o7022):
+                raise ValueError('an unsafe toolchain owner or mode')
+            if stat.S_ISLNK(info.st_mode) and os.path.commonpath([top, os.path.realpath(path)]) != top:
+                raise ValueError('a link outside the installed toolchain')
+    return top
+
+
+def install_toolchain(in_fd, out_fd, toolchain=TOOLCHAIN):
+    if not hasattr(tarfile, 'data_filter'):
+        return os.EX_OSERR
+    if os.path.lexists(toolchain):
+        return os.EX_CANTCREAT
+    staging = None
+    previous_umask = os.umask(0o022)  # data_filter ignores directory modes; even an inherited zero umask is safe
+    try:
+        parent = os.path.dirname(toolchain)
+        os.makedirs(parent, 0o755, exist_ok=True)
+        staging = tempfile.mkdtemp(prefix='.toolchain-', dir=parent)  # root 0700, never exposed to the job
+        archive = os.path.join(staging, 'archive')
+        digest = receive_toolchain(in_fd, archive)
+        top = extract_toolchain(archive, os.path.join(staging, 'tree'))
+        # Only root can create a destination under /opt/moe; callers serialize per VM through R06's job lease.
+        # rename could replace an empty directory created after lexists, but no job identity can race this boundary.
+        os.rename(top, toolchain)
+        try:
+            write_frame(out_fd, {'kind': 'installed', 'sha256': digest})
+        except OSError:
+            shutil.rmtree(toolchain, ignore_errors=True)
+            raise
+        return 0
+    except (ValueError, RecursionError, EOFError, KeyError, tarfile.TarError, lzma.LZMAError, zlib.error):
+        return os.EX_DATAERR
+    except OSError:
+        return os.EX_IOERR
+    finally:
+        os.umask(previous_umask)
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
 # geteuid and the keywords (seams) of start_job or check_job are injectable from Python only (tests), never from argv or
 # the environment. No refusal writes to stdout.
 def main(argv, geteuid=os.geteuid, **seams):
     # bridgeArgv and snapshotArgv pass exactly these, CQ-R11c's checkArgv passes ['check'] and CQ-R10d3 ['agents'].
-    if argv not in (['bridge'], ['check'], ['materialize'], ['export'], ['verify'], ['agents']):
+    if argv not in (['bridge'], ['check'], ['materialize'], ['export'], ['verify'], ['agents'], ['toolchain']):
         return os.EX_USAGE
     if geteuid() != 0:
         return os.EX_NOPERM
+    if argv == ['toolchain']:
+        return install_toolchain(0, 1)
     if argv == ['materialize']:
         return materialize(0, 1)
     if argv == ['agents']:

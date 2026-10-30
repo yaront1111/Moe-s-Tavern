@@ -4,10 +4,12 @@
 // the frames written here, and no mount or transfer subcommand is ever run. Mounts are checked before and after.
 // This is local transfer logic, not isolation certification: executionReady is false and verified-local stays
 // unavailable. installAgents (CQ-R10d3) streams the cache-verified agent CLIs the same way, into the 'agents' mode.
+// installToolchain (CQ-R11e2) copies the pinned check toolchain the same way, still copy-only and mount-checked.
 import { spawn as spawnProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import { AGENT_CLIS, fetchAgentBinary } from './agent-cache.mjs';
 import { GUEST_LAYOUT } from './guest-bootstrap.mjs';
 import { createFrameDecoder, encodeFrame, MAX_GUEST_FRAME_BYTES } from './guest-bridge.mjs';
@@ -17,7 +19,8 @@ import { validateImport } from './source-snapshot.mjs';
 
 // Raw bytes per data frame: base64 makes 1,398,104 characters, inside MAX_HOST_FRAME_BYTES with its JSON envelope.
 export const SNAPSHOT_CHUNK_BYTES = 1_048_576;
-const MODES = ['materialize', 'export', 'verify', 'agents'];
+export const MAX_TOOLCHAIN_BYTES = 134_217_728;
+const MODES = ['materialize', 'export', 'verify', 'agents', 'toolchain'];
 const MAX_TIMEOUT_MS = 600_000;
 const CONTROL = /[\x00-\x1f\x7f]/;
 // Fixed text only: a message never carries a path, guest text or snapshot byte.
@@ -30,6 +33,7 @@ const MESSAGES = {
   TRANSFER_EXIT_FAILED: 'The guest supervisor exited unsuccessfully.',
   TRANSFER_FRAME_INVALID: 'The guest supervisor sent a malformed or unexpected frame.',
   TRANSFER_DIGEST_MISMATCH: 'The guest materialized a different snapshot digest.',
+  TRANSFER_TOOLCHAIN_MISMATCH: 'The cached toolchain no longer matches its pin.',
 };
 const isRecord = value => value !== null && typeof value === 'object'
   && [Object.prototype, null].includes(Object.getPrototypeOf(value));
@@ -266,4 +270,60 @@ export async function installAgents(options, seams) {
   for (const cli of AGENT_CLIS) binaries.push({ cli, ...await fetchAgentBinary({ cli, arch, cacheDir }, { fetch: seams?.fetch, manifest: seams?.manifest }) });
   await transfer(name, provider, stream, () => installed);
   return Object.freeze({ instance: name, agents: binaries.length, bytes: binaries.reduce((sum, { size }) => sum + size, 0), executionReady: false });
+}
+
+function toolchainRecord(value) {
+  try {
+    if (!isRecord(value) || Reflect.ownKeys(value).length !== 4 || Object.keys(value).sort().join() !== 'file,sha256,size,version') throw new TypeError();
+    const { file, sha256, size, version } = value; // read each field once; frame only this validated copy
+    if (typeof file !== 'string' || !isAbsolute(file) || CONTROL.test(file)
+      || typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256)
+      || !Number.isSafeInteger(size) || size < 1 || size > MAX_TOOLCHAIN_BYTES
+      || typeof version !== 'string' || !/^[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$/.test(version)) throw new TypeError();
+    return { file, sha256, size, version };
+  } catch { throw transferError('TRANSFER_INPUT_INVALID'); }
+}
+
+async function toolchainBytes(file, size, sha256) {
+  const handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size !== size) throw new Error();
+    const bytes = Buffer.alloc(size); // never readFile: a file growing after stat must not grow our allocation
+    for (let at = 0; at < size;) {
+      const { bytesRead } = await handle.read(bytes, at, size - at, at);
+      if (!bytesRead) throw new Error();
+      at += bytesRead;
+    }
+    if ((await handle.read(Buffer.alloc(1), 0, 1, size)).bytesRead || createHash('sha256').update(bytes).digest('hex') !== sha256) throw new Error();
+    return bytes;
+  } finally { await handle.close(); }
+}
+
+/** Copies a cache-verified Node tarball into the root-owned guest toolchain. Rechecks size/hash before any provider
+ * call, sends only that single read's bytes, and accepts one matching installed frame between two no-mount checks. */
+export async function installToolchain(options = {}) {
+  const { name, toolchain, provider = {}, timeoutMs } = isRecord(options) ? options : {};
+  const { file, sha256, size, version } = toolchainRecord(toolchain);
+  let bytes, installed = false;
+  function* input() {
+    yield encodeFrame({ kind: 'toolchain', version: 1, size, sha256 });
+    for (let at = 0; at < size; at += SNAPSHOT_CHUNK_BYTES) {
+      yield encodeFrame({ kind: 'data', data: bytes.subarray(at, at + SNAPSHOT_CHUNK_BYTES).toString('base64') });
+    }
+    yield encodeFrame({ kind: 'end' });
+  }
+  const onFrame = frame => {
+    if (installed || frame.kind !== 'installed' || Object.keys(frame).sort().join() !== 'kind,sha256') {
+      throw transferError('TRANSFER_FRAME_INVALID');
+    }
+    if (frame.sha256 !== sha256) throw transferError('TRANSFER_DIGEST_MISMATCH');
+    installed = true;
+  };
+  const stream = streamOptions({ name, mode: 'toolchain', provider, timeoutMs, input: input(), onFrame });
+  try {
+    bytes = await toolchainBytes(file, size, sha256);
+  } catch { throw transferError('TRANSFER_TOOLCHAIN_MISMATCH'); }
+  await transfer(name, provider, stream, () => installed);
+  return Object.freeze({ instance: name, sha256, version, executionReady: false });
 }

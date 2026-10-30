@@ -16,42 +16,71 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development. Edit the LANDED bytes. CQ-R11f, CQ-R10d3 and CQ-R10d4 land before this row and change main()'s argv list, MODES and the headers, so re-read guest-supervisor.py, snapshot-transfer.mjs and this file first.\n\nWork in scripts/tests/local-runner.test.mjs, after R09c's M rows and T7. Reuse PY_LOAD, PY_SUPERVISOR, NOT_POSIX, framesOf, modeOf, scratch, fakeGuest, transferProvider, transferRefused and spawnChild.\n\nNew helpers:\n- HAS_DATA_FILTER: python3 -I -c checks hasattr(tarfile, 'data_filter'). Rows that need it skip with a reason when it is false, the way NOT_POSIX rows skip.\n- tarballOf(dir, members, compression): python3 -I -B with tarfile writes a fixture tarball from JSON member specs and returns its bytes. A spec is {name, type: file|dir|symlink|hardlink|chr, data, mode, linkname}, so hostile names and types can be produced. Nothing is downloaded.\n- toolchainIn(dir, input, setup): like materializeIn, runs `m.install_toolchain(0, 1, sys.argv[2])` with the path <dir>/opt/toolchain, and returns the spawnSync result and the paths.\n- toolchainFrames(bytes, overrides): framesOf([{kind:'toolchain', version:1, size, sha256}, ...base64 data chunks of SNAPSHOT_CHUNK_BYTES, {kind:'end'}]).\n\nSupervisor rows (skip NOT_POSIX and !HAS_DATA_FILTER):\n- TC1 CLI:\n  - ['toolchain','x'] and ['TOOLCHAIN'] exit 64; non-root (the geteuid seam) exits 77;\n  - as root, main(['toolchain']) routes to install_toolchain(0, 1) with no keywords (M1's routing pattern);\n  - m.MAX_TOOLCHAIN_BYTES equals snapshot-transfer.mjs MAX_TOOLCHAIN_BYTES.\n- TC2: a clean .tar.gz and a clean .tar.xz each install exactly their members at the toolchain path:\n  - the members are node-v1.2.3-linux-x64/bin/node (0755), lib/x.js, and a relative symlink bin/npm -> ../lib/x.js;\n  - setup runs os.umask(0), and members carry modes 0o4777, 0o2777 and 0o666. Even so, no non-symlink entry has a group/other write bit or setuid/setgid/sticky;\n  - every entry is owned by the running uid;\n  - stdout is exactly one {kind:'installed', sha256} frame;\n  - the parent directory holds no staging entry afterwards.\n- TC3 stream refusals exit 65, with no install, no staging entry and an empty stdout:\n  - a size off by one, or a wrong sha256;\n  - a header with version 2, size 0, size over 134217728, an uppercase or short sha256, or an extra key;\n  - a data frame that is not canonical base64, or that overruns the size;\n  - a missing end, or a frame after end;\n  - bytes that are not a tarball.\n- TC4 hostile archives exit 65, with nothing installed:\n  - an absolute member, or a '../' member;\n  - a symlink to /etc or to ../../x, or a hardlink outside the tree;\n  - a character device;\n  - two top-level entries, a top-level regular file, or a top-level symlink.\n- TC5:\n  - an existing toolchain path (a directory, a file or a symlink) exits 73, untouched;\n  - setup `del tarfile.data_filter` exits 71, with nothing installed.\n\nHost rows, using transferProvider:\n- TT1: installToolchain writes on stdin exactly the header, ceil(size / SNAPSHOT_CHUNK_BYTES) data frames and end.\n  - The provider calls are info+mountinfo, the stream on snapshotArgv(GUEST, 'toolchain'), then info+mountinfo.\n  - It resolves the frozen {instance, sha256, version, executionReady:false}.\n- TT2 refusals:\n  - TRANSFER_INPUT_INVALID before any provider call: a toolchain record with a missing or extra key, a relative file, a bad sha256, size 0 or over the bound, or a bad version;\n  - TRANSFER_TOOLCHAIN_MISMATCH before any provider call: a cached file whose size or bytes differ, or a missing file;\n  - TRANSFER_FRAME_INVALID: no 'installed' frame, a second frame, or extra keys;\n  - TRANSFER_DIGEST_MISMATCH: another sha256;\n  - TRANSFER_MOUNTS_PRESENT: mounts before or after;\n  - TRANSFER_EXIT_FAILED: a non-zero exit.\n- TT3 end to end, like T7: installToolchain through the real supervisor's install_toolchain installs a fixture tarball. A second install is refused (73, then TRANSFER_EXIT_FAILED), and the first stays untouched.\n\nRun `node --test scripts/tests/local-runner.test.mjs`. The new rows fail because there is no mode and no export yet; every other row passes.\n\nError handling in the tests: assertions name fixed exit codes and TRANSFER_* codes, never messages, and the scratch directories are removed in t.after.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Added TC1-TC5 and TT1-TT3 with local Python gz/xz fixtures, strict protocol/hostile archive/cached-pin/mount refusals and real-supervisor round trip. RED: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs exited 1: only the 8 new tests fail (missing toolchain mode/function/export), 250 existing pass, 1 existing skip. No production changes yet. Relevant comment confirmed transfer helper already landed. Found stdlib data_filter strips leading slash instead of refusing absolute tar member names; implementation will add a strict name precheck to satisfy approved TC4/DoD.",
+      "startedAt": "2026-10-30T08:34:42.578Z",
+      "completedAt": "2026-10-30T08:37:34.901Z"
     },
     {
       "stepId": "step-2",
       "description": "scripts/local-runner/guest-supervisor.py: the root 'toolchain' mode.\n\nConstants and imports:\n- TOOLCHAIN = '/opt/moe/toolchain'.\n- MAX_TOOLCHAIN_BYTES = 134217728, which mirrors snapshot-transfer.mjs.\n- Import tarfile, lzma and zlib with the other stdlib imports. Ubuntu 24.04's python3 ships all three.\n\ninstall_toolchain(in_fd, out_fd, toolchain=TOOLCHAIN):\n1. Refuse before any write:\n   - no tarfile.data_filter is os.EX_OSERR (71);\n   - os.path.lexists(toolchain) is os.EX_CANTCREAT (73).\n2. os.umask(0o022). The data filter ignores directory modes, so directories are created with the default mode, and umask 022 makes them 0755.\n3. Create the parent with os.makedirs(parent, 0o755, exist_ok=True). staging = tempfile.mkdtemp(prefix='.toolchain-', dir=parent), which is root 0700.\n4. Read the header from snapshot_frames(in_fd) with expect(..., 'toolchain', 'version', 'size', 'sha256'). It requires:\n   - version is an int equal to 1;\n   - size is an int from 1 to MAX_TOOLCHAIN_BYTES;\n   - DIGEST.fullmatch(sha256).\n5. Write the bytes to <staging>/archive, opened O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW at 0600:\n   - use receive()'s strict data loop: canonical base64, non-empty, never past the size; then write_all and a running sha256;\n   - fsync, then close;\n   - then expect 'end', and require no frame after it;\n   - the total must equal size and the hexdigest must equal sha256, or it is a ValueError.\n6. Extract with tarfile.open(archive, mode='r:*') and tar.extractall(<staging>/tree, filter='data'). The tree directory is made 0700 first.\n7. The tree must hold exactly one entry, and lstat must show a directory.\n8. Walk it with os.walk (no link following) and lstat every entry. Each non-symlink entry must be owned by os.geteuid() and must have no S_IWGRP, S_IWOTH, S_ISUID, S_ISGID or S_ISVTX; otherwise it is a ValueError. This verifies what the filter and the umask guarantee. Nothing races it, because the staging directory is root 0700.\n9. os.rename(top, toolchain), then write_frame(out_fd, {'kind': 'installed', 'sha256': sha256}) and return 0.\n\nError handling:\n- ValueError, RecursionError, EOFError, tarfile.TarError (which includes the filter's refusals), lzma.LZMAError and zlib.error are os.EX_DATAERR (65).\n- OSError is os.EX_IOERR (74).\n- The finally always runs shutil.rmtree(staging, ignore_errors=True), so a refusal leaves neither a toolchain nor a staging directory.\n- No refusal writes to stdout.\n\nmain():\n- Add ['toolchain'] to the accepted argv tuple.\n- After the euid check: `if argv == ['toolchain']: return install_toolchain(0, 1)`.\n\nUpdate the module header: the mode list gains 'toolchain' (CQ-R11e2), with its exit-code lines (65, 71, 73, 74; 77 as for every mode).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/guest-supervisor.py"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "note": "Implemented root-only toolchain mode with strict bounded framing via existing copy_data, fsync/hash before tar extraction, data_filter, ownership/mode walk, single-directory rename, cleanup and fixed exit codes. TC2-TC5 targeted run: 4/4 pass, exit 0. TC1 constant parity awaits host step. Minimal same-scope security additions: explicitly reject absolute/.. member names (stdlib data_filter rewrites absolute paths), refuse links outside final top directory, catch tarfile missing-hardlink KeyError, rollback a new install on output I/O failure, restore umask. Reused existing primitives and stdlib; no dependency or policy changes.",
+      "startedAt": "2026-10-30T08:38:31.416Z",
+      "completedAt": "2026-10-30T08:38:59.088Z"
     },
     {
       "stepId": "step-3",
       "description": "scripts/local-runner/snapshot-transfer.mjs: installToolchain.\n\nConstants and codes:\n- export const MAX_TOOLCHAIN_BYTES = 134_217_728, which mirrors the supervisor and is pinned by TC1.\n- MODES gains 'toolchain'.\n- MESSAGES gains TRANSFER_TOOLCHAIN_MISMATCH: 'The cached toolchain no longer matches its pin.'\n\nShared helper: extract materializeSnapshot's sandwich into one internal helper, `transfer(name, provider, options, delivered)`. It runs assertNoMounts, then supervise(options); then, if !delivered(), throws TRANSFER_FRAME_INVALID; then assertNoMounts again. materializeSnapshot calls it, keeping streamOptions before any provider call. Its behavior and the T1-T7 rows are unchanged, and CQ-R11e4's installDependencies reuses the helper.\n\nexport async function installToolchain({ name, toolchain, provider = {}, timeoutMs } = {}):\n1. Validate the toolchain record before any I/O, reading each field once:\n   - exactly the keys file, sha256, size and version;\n   - file is an absolute path with no control characters;\n   - sha256 is 64 lowercase hex;\n   - size is a safe integer from 1 to MAX_TOOLCHAIN_BYTES;\n   - version matches /^[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}$/.\n   Anything else is TRANSFER_INPUT_INVALID.\n2. Call streamOptions({ name, mode: 'toolchain', provider, timeoutMs, input, onFrame }). It refuses a non-owned name, a bad provider or a bad timeout before any call. input is a generator: when pulled, it yields encodeFrame of the header, the base64 data frames of the verified bytes, and end.\n3. Read and verify the bytes: fs/promises stat first, and a size mismatch refuses without reading; then readFile once and hash it with createHash('sha256'). A mismatch, or any stat/read error, is TRANSFER_TOOLCHAIN_MISMATCH. Only those bytes are ever framed.\n4. onFrame accepts exactly one frame with exactly the keys kind and sha256, and kind 'installed'; anything else is TRANSFER_FRAME_INVALID. A sha256 other than the record's is TRANSFER_DIGEST_MISMATCH.\n5. await transfer(name, provider, options, () => installed).\n6. Return Object.freeze({ instance: name, sha256, version, executionReady: false }).\n\nDocumentation: a JSDoc in the module's style, and a header line saying the module also copies the pinned check toolchain (CQ-R11e2), still copy-only, mounts checked.\n\nError handling: only fixed TRANSFER_* codes. No message carries a path, a byte or provider text. A rejection never leaves a spawned provider running, which supervise's own teardown handles.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/snapshot-transfer.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/snapshot-transfer.mjs"
+      ],
+      "note": "Added installToolchain, mirrored 128 MiB bound, toolchain mode argv and fixed mismatch message. Exact record validated once, streamOptions before I/O, stat + single readFile/hash before any provider call, frames from that buffer only, exactly one matching installed reply and frozen executionReady:false. Reused the landed transfer helper unchanged per architect comment; materializeSnapshot/verifyWorkspace/installAgents unchanged. Targeted TC1-TC5/TT1-TT3: 8/8 pass, exit 0.",
+      "startedAt": "2026-10-30T08:38:59.114Z",
+      "completedAt": "2026-10-30T08:40:38.372Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh.\n\n1. Run `node --test scripts/tests/local-runner.test.mjs`. On WSL, run it under env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\" so Windows Node is never used, and python3 is the distro's. It must exit 0, with every TC and TT row run, not skipped, on Linux. Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. `git diff --check -- scripts/local-runner/guest-supervisor.py scripts/local-runner/snapshot-transfer.mjs scripts/tests/local-runner.test.mjs` is clean.\n3. A read-only `git status --short` shows that only those three files changed, and no __pycache__ appeared under scripts/local-runner. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code. Never weaken a refusal row or a mode assertion.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh named verification: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs -> exit 0, 259 tests, 258 pass, 1 pre-existing macOS skip; all TC/TT rows ran. git diff --check on all 3 task paths clean; no __pycache__ under scripts/local-runner. Shared tree contains peer/pre-existing paths (including active guest-mcp-shim/tools edits), untouched by this task; only our 3 planned paths edited.",
+      "startedAt": "2026-10-30T08:40:38.397Z",
+      "completedAt": "2026-10-30T08:41:50.996Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the three-file diff as an attacker:\n- Can a member escape staging? Check absolute paths, '..', a symlink chain or a hardlink to an outside inode; the data filter and the walk must both refuse.\n- Can a directory end up group- or other-writable under a zero umask, or keep setuid bits?\n- Is the tree ever visible half-extracted, or is the toolchain path ever replaced?\n  - rename(2) can replace an EMPTY directory created after the lexists check. Only root can create one under /opt/moe, and callers serialize per VM through R06's job lease, as for materialize; say so in a comment.\n- Is the archive's sha256 checked before a single byte is extracted?\n- Does the host stream exactly the bytes it hashed? It must read once, with no second open between the hash and the framing.\n- Huge input: the header size is bounded before any write, data frames are capped by MAX_HOST_FRAME_BYTES, and the host holds at most 128 MiB in memory.\n- Is materializeSnapshot still byte-for-byte the same in its behavior, after the helper extraction?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 4's command fresh before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/local-runner/snapshot-transfer.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Adversarial self-review complete. Fixed/probed cache-growth unbounded read (TT4 red: 100 bytes for 5-byte pin -> bounded one-descriptor read, green) and canonical containment through symlink temp parents (TC2 red->green). Explicit absolute/.. refusal, final-top symlink containment, owner/mode checks, before-extract digest guard, output-failure rollback and single-read/getter semantics covered. Plan deviation: bounded descriptor reads replace literal stat+readFile to honor memory bound; same three-file scope. Root-only /opt/moe plus R06 lease race assumption documented. Existing Python functions AST-identical except main; existing JS consumers/helper unchanged. Fresh final named suite: 260 tests, 259 pass, 1 pre-existing skip, exit 0. Broader bridge/check/agents: 131 tests, 129 pass, 2 pre-existing skips, exit 0. Scoped diff check clean, no pycache; 377 changed lines in exactly 3 paths. Handoff and gotcha memories written. No readiness/isolation claim.",
+      "startedAt": "2026-10-30T08:41:51.022Z",
+      "completedAt": "2026-10-30T08:49:58.908Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -71,24 +100,38 @@
       "author": "architect-bd1eb82d",
       "content": "Overlap note from architect-bd1eb82d, 2026-10-30, for whoever works this row.\n\nCQ-R10d3 (task-b8e7ad92, plan revision 1) lands before you, by way of CQ-R10d4. In scripts/local-runner/snapshot-transfer.mjs it already does what your step 3 calls \"extract the shared helper\":\n- It adds the internal `transfer(name, provider, options, delivered)` under that exact name and contract: assertNoMounts, then supervise(options), then TRANSFER_FRAME_INVALID unless delivered(), then assertNoMounts again. materializeSnapshot and verifyWorkspace both call it.\n- feed now iterates `for await`, and streamOptions also accepts async-iterable inputs. Sync generators feed exactly as before.\n- MODES gains 'agents', and installAgents is exported.\n\nReuse the landed helper instead of extracting it again, and add 'toolchain' beside 'agents' in MODES. Also: CQ-R10d3a (task-796f3c66) adds the supervisor's 'agents' mode, its main() argv entry and its header lines in guest-supervisor.py, ahead of you.",
       "timestamp": "2026-10-30T06:28:47.379Z"
+    },
+    {
+      "id": "comment-066ba58538e949229aa45db961097d98",
+      "author": "worker-fe18a9a9",
+      "content": "From worker-fe18a9a9 (task-2cf1c6be): my plan edits two fixture lines in scripts/tests/local-runner.test.mjs (agentHarness's daemonInfoPath, plus a small fake /health near it). Your uncommitted toolchain hunks are in that file, so I am not touching it until your completion lands. No action needed from you. Please just keep the file in your own landing as planned.",
+      "timestamp": "2026-10-30T08:47:55.488Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:52:33.539Z",
-  "updatedAt": "2026-10-30T06:28:47.379Z",
+  "updatedAt": "2026-10-30T08:50:20.288Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:57:25.378Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-55e6716a"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T23:00:54.178Z",
   "planningNotes": {
@@ -109,5 +152,20 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T23:00:54.270Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T08:34:42.578Z",
+  "reviewStartedAt": "2026-10-30T08:50:20.286Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 260\nℹ suites 0\nℹ pass 259\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 41753.423856\nAll TC1-TC5 and TT1-TT4 ran; the sole skip is the pre-existing macOS-specific provider test.",
+    "reportedAt": "2026-10-30T08:50:20.286Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/local-runner/snapshot-transfer.mjs"
+  ],
+  "completionSummary": "Implemented copy-only root toolchain install and host installToolchain in the 3 approved files (377 changed lines). Guest validates bounded frames and hash before filtered extraction, refuses hostile paths/links and existing installs, verifies ownership/modes, atomically installs and cleans failures. Host validates each field once, re-verifies cached bytes before provider calls, checks mounts twice and accepts exactly one matching installed reply; executionReady stays false. Reused landed transfer helper unchanged.\nSelf-review: explicit absolute-path refusal is required because data_filter strips leading slashes; final-top symlink containment uses canonical paths. Replaced planned stat+readFile with bounded reads through one no-follow descriptor after TT4 reproduced cache-growth over-allocation. Tests prove no reread after hashing, getter single reads, cleanup, malformed streams and real-supervisor round trip. TC1-TC5/TT1-TT4 all ran. Additional bridge/check/agents regression: 129 pass, 2 pre-existing skips (LA5 pinned codex; K9 root namespace). Scoped diff --check clean, no pycache. Handoff and gotcha memories recorded; peer dirty paths untouched. No Git writes, VM certification, verified-local enablement or isolation claim."
 }
