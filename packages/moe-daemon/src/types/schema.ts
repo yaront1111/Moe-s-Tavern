@@ -1555,6 +1555,37 @@ export interface CheckRun {
   readonly createdAt?: string;
 }
 
+/**
+ * Which check a trusted runner was asked to run; .moe/checks/dispatches/<id>.json, written only by
+ * state/checkObservationStore.ts. Pinned while current: the task's current candidate, its tree, its approved
+ * planRevision (at least 1) and the channel's runnerId, never caller-supplied. Never edited or deleted.
+ */
+export interface CheckDispatch {
+  readonly id: string;
+  readonly taskId: string;
+  readonly candidateId: string;
+  readonly treeSha: string;
+  readonly planRevision: number;
+  /** Verbatim, under the CheckRun command rule. */
+  readonly command: string;
+  readonly checkId?: string;
+  /** Opaque and verbatim: compared exactly. */
+  readonly environment: string;
+  readonly runnerId: string;
+  readonly createdAt: string;
+}
+
+/**
+ * The one CheckRun observed for a dispatch, whose id it carries; .moe/checks/observations/<dispatchId>.json,
+ * written only by state/checkObservationStore.ts after that run, never edited. A record_check_run run has none.
+ */
+export interface CheckObservation {
+  readonly id: string;
+  readonly checkRunId: string;
+  readonly runnerId: string;
+  readonly createdAt: string;
+}
+
 // =============================================================================
 // Delivery receipts — where a wrapper says one candidate's bytes landed
 // =============================================================================

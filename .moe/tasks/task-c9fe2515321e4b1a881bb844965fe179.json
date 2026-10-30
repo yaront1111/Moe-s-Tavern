@@ -19,51 +19,88 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nCreate packages/moe-daemon/src/state/checkObservationStore.test.ts.\n- Build the fixture the way state/checkRunStore.test.ts builds its temp-project StateManager, task and candidate (recordCandidate). The task has planRevision 1 and approvedPlanRevision 1.\n- runner = { runnerId: 'runner-0123456789abcdef' }.\n- Assert exact records, codeNames and fields, and assert that no file was written on every refusal. Never assert truthiness.\n\nCases:\n- D1: a happy-path dispatch returns the exact record, with key order id, taskId, candidateId, treeSha, planRevision, command, (checkId), environment, runnerId, createdAt. treeSha is the candidate's and runnerId is the runner's. The file is .moe/checks/dispatches/<id>.json, and a generated id matches /^dispatch-[0-9a-f]{32}$/.\n- D2: each refusal below is its own test and writes no file:\n  - unknown task: TASK_NOT_FOUND;\n  - unknown candidate: CANDIDATE_NOT_FOUND;\n  - another task's candidate: CHECK_DISPATCH_TASK_MISMATCH;\n  - a superseded candidate: CHECK_DISPATCH_NOT_CURRENT;\n  - planRevision 2, revision 0, or an unapproved revision (approvedPlanRevision differs): CHECK_DISPATCH_REVISION_MISMATCH;\n  - a blank or 501-character command, a bad checkId, or a blank, 256-character or control-character environment: INVALID_INPUT naming the field;\n  - a malformed runner: INVALID_INPUT 'runner'.\n- D3 replay:\n  - an identical replay gives duplicate:true with byte-identical file contents;\n  - a differing replay gives CHECK_DISPATCH_IMMUTABLE with differingFields;\n  - a case-variant id gives CHECK_DISPATCH_ID_CASE_COLLISION;\n  - an identical replay AFTER the candidate is superseded still gives duplicate:true, because the replay precedes the currency check.\n- O1: an observation gives the CheckRun exactly. Its candidateId, treeSha, command, planRevision, environment and dispatchId are the dispatch's; runnerId is the runner's; exitCode, outcome and outputTail are the observation's; source is 'runner-observed'. The marker file is exact, and isAuthenticatedCheckRun is true.\n- O2 (DoD 1):\n  - a run from recordCheckRun (record_check_run's store path) with source runner-observed, the SAME runnerId, dispatchId D and the identical binding gives false;\n  - a caller-built object reusing the genuine run's id but with altered fields is judged on the STORED run;\n  - removing the dispatch from the map gives false;\n  - an absent run id gives false.\n- O3 (DoD 2):\n  - an identical retry gives duplicate:true, with the check and marker bytes unchanged;\n  - the same id with a different exitCode, outcome or outputTail gives CHECK_RUN_IMMUTABLE, with the marker unchanged;\n  - a second observation id for the same dispatch gives CHECK_DISPATCH_ALREADY_OBSERVED, and no new check file.\n- O4 (DoD 3), each writing nothing:\n  - unknown dispatch: CHECK_DISPATCH_NOT_FOUND;\n  - another runner: CHECK_RUNNER_MISMATCH;\n  - another environment: CHECK_ENVIRONMENT_MISMATCH;\n  - missing outcome: MISSING_REQUIRED 'outcome';\n  - passed with exit 1: INVALID_INPUT 'outcome'.\n- O5 superseded (DoD 3): dispatch D on K1, then record candidate K2. The observation for D gives a CheckRun on K1, with K1's tree and revision 1. A NEW dispatch on K1 gives CHECK_DISPATCH_NOT_CURRENT.\n- R1 reload (DoD 4): a fresh StateManager over the same project, after load(), holds both maps and judges the run authenticated. Its checkRuns size equals only the real runs, so no dispatch or marker file loads as a check run.\n- R2 crash (DoD 4):\n  - make the marker write reject once (spy on state.writeEntity for kind 'checks/observations');\n  - the call rejects, the check run exists and there is no marker;\n  - an identical retry gives duplicate:true, the marker now exists, and the run is authenticated.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/state/checkObservationStore.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkObservationStore.test.ts"
+      ],
+      "note": "RED: created checkObservationStore.test.ts (D1-D3, O1-O5, R1, R2 + per-field binding, marker, not-stored and never-throws cases; DoD1 forgery goes through the real record_check_run tool handler under runExclusive). Ran in a native Linux snapshot of HEAD b3cbe9d (/tmp/moe-v03b-dev.h12zqT): the file fails at import because checkObservationStore.ts does not exist yet, which is the expected red.\nPLAN DEVIATION found while exploring (affects step 2): state/stateModules.test.ts requires StateManager.ts to be under 1500 lines (split('\\n').length < 1500), and HEAD is at 1498. The planned 2 maps + 2 comments + 2 loads + 2 type-import lines (~8 lines) would fail the full npm test gate. So the maps stay inside checkObservationStore.ts (a WeakMap keyed by StateManager, loaded from .moe/checks/{dispatches,observations} with loadEntities on first use). Restart recovery is unchanged: a fresh StateManager reads both directories on first access (R1 covers it). StateManager.ts is NOT edited, which also removes a shared-file overlap. Tests read via getCheckDispatch/getCheckObservation instead of state maps; the \"dispatch removed\" case deletes the file and restarts.\nAlso tightened, per the plan's \"a caller-built object never authenticates itself\": isAuthenticatedCheckRun requires the passed run to equal the stored run in every key, so an altered copy of a genuine run fails (kills mutant 2).\nShared tree has 750+ dirty peer paths; untouched.",
+      "startedAt": "2026-10-30T04:40:33.725Z",
+      "completedAt": "2026-10-30T04:49:24.821Z"
     },
     {
       "stepId": "step-2",
       "description": "Types and loading.\n\npackages/moe-daemon/src/types/schema.ts: next to CheckRun, add the exported `CheckDispatch` and `CheckObservation` interfaces exactly as in the task description, with comments in CheckRun's style:\n- CheckDispatch: a request pinned while current; immutable; runner-channel only.\n- CheckObservation: id = dispatchId, at most one per dispatch, written only by checkObservationStore. A record_check_run run never has one.\nThe CheckRun type is NOT changed.\n\npackages/moe-daemon/src/state/StateManager.ts:\n- Add `checkDispatches = new Map<string, CheckDispatch>()` and `checkObservations = new Map<string, CheckObservation>()`, each with a one-line comment (written only via state/checkObservationStore.ts, which has no update or delete path).\n- Beside the checkRuns load, add `loadEntities<CheckDispatch>(path.join(this.moePath, 'checks', 'dispatches'))` and the same for 'observations'. loadEntities tolerates a missing directory.\n- No other change. Preserve peers' bytes: StateManager and schema.ts are shared, and C08 and bc8410af, both prerequisites, edit schema.ts.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts",
         "packages/moe-daemon/src/state/StateManager.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "schema.ts: added exported CheckDispatch and CheckObservation right after CheckRun, with the exact readonly fields from the task description and comments in CheckRun's style. CheckRun is unchanged. schema.ts was clean against HEAD b3cbe9d before the edit (C08 and bc8410af have landed), so no peer bytes were touched.\nStateManager.ts is NOT edited, as explained in the step-1 note: stateModules.test.ts caps the file below 1500 lines and HEAD is at 1498. The maps and their disk load live in checkObservationStore.ts (step 3) and are loaded per StateManager on first use, so a restart still recovers every record.",
+      "startedAt": "2026-10-30T04:49:27.078Z",
+      "completedAt": "2026-10-30T04:50:07.163Z"
     },
     {
       "stepId": "step-3",
       "description": "Create packages/moe-daemon/src/state/checkObservationStore.ts and implement recordCheckDispatch. The header comment follows checkRunStore's: RECORDING ONLY, immutable by construction (no update or delete function), and the caller holds state.mutex. Refusals are MoeErrors with codeNames, and each one writes nothing.\n\nReuse, never re-implement: getCandidate, listCandidatesForTask, caseVariantId, hasControlChar and renderGot (candidateStore.ts); validateEntityId (util/sanitize.ts); generateId('dispatch') (util/ids.ts); invalidInput, missingRequired and notFound (util/errors.ts).\n\nError handling, in this exact order:\n1. runner must be an object whose runnerId passes validateEntityId; otherwise invalidInput('runner', ...).\n2. Validate the params:\n   - id is optional and passes validateEntityId;\n   - taskId and candidateId are entity ids;\n   - planRevision is a safe integer >= 1;\n   - command is a string, non-blank, at most 500 characters and kept verbatim;\n   - checkId is optional and matches /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, the validateRequiredChecks rule in validators.ts;\n   - environment is a non-blank string of at most 255 characters with no control character, kept verbatim.\n3. If a dispatch with the same id is stored: an identical replay in every recorded field returns { dispatch: copy, duplicate: true }; otherwise throw STATE_CONFLICT CHECK_DISPATCH_IMMUTABLE with context differingFields. This BEFORE any currency check, so a crash retry after supersession still replays.\n4. A case-variant id is CHECK_DISPATCH_ID_CASE_COLLISION.\n5. The task must exist: notFound('Task', ...).\n6. The candidate must exist (NOT_FOUND CANDIDATE_NOT_FOUND) and have candidate.taskId === taskId (CHECK_DISPATCH_TASK_MISMATCH).\n7. The last of listCandidatesForTask must be this candidate (CHECK_DISPATCH_NOT_CURRENT).\n8. planRevision === task.planRevision === task.approvedPlanRevision (CHECK_DISPATCH_REVISION_MISMATCH).\n9. Build the record in the documented key order, with conditional spreading of checkId, treeSha from the candidate, runnerId from runner and createdAt from the daemon clock. Persist with `await state.writeEntity('checks/dispatches', id, record)` BEFORE `state.checkDispatches.set`, so a failed write leaves nothing.\n\nAlso export getCheckDispatch(state, id), which returns a copy or null.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/state/checkObservationStore.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkObservationStore.ts"
+      ],
+      "note": "Created state/checkObservationStore.ts with recordCheckDispatch and getCheckDispatch.\n- Refusal order, each writing nothing: runner (INVALID_INPUT 'runner'), then params (id, taskId, candidateId, planRevision safe integer, command non-blank <=500 verbatim, checkId by the validators.ts regex, environment non-blank <=255 with no control characters, verbatim), then same-id replay or CHECK_DISPATCH_IMMUTABLE with differingFields over taskId/candidateId/planRevision/command/checkId/environment/runnerId, then CHECK_DISPATCH_ID_CASE_COLLISION, TASK_NOT_FOUND, CANDIDATE_NOT_FOUND, CHECK_DISPATCH_TASK_MISMATCH, CHECK_DISPATCH_NOT_CURRENT (the last of listCandidatesForTask), and CHECK_DISPATCH_REVISION_MISMATCH (>=1 and equal to both planRevision and approvedPlanRevision). Per the architect's comment, revision 0 is refused as CHECK_DISPATCH_REVISION_MISMATCH, not INVALID_INPUT.\n- The record is written as writeEntity('checks/dispatches') and only then put in the map. treeSha comes from the candidate and runnerId from runner.\n- The maps are module-owned (WeakMap<StateManager>, loaded with loadEntities on first use), as explained in step 1.\n- Reused getCandidate, listCandidatesForTask, caseVariantId, hasControlChar, renderGot, validateEntityId, generateId, invalidInput, missingRequired and notFound. checkRunStore's validators are private and the task rail freezes that file, so it has small local requireString/bounded-text helpers.\nLinux snapshot of HEAD b3cbe9d: `vitest -t recordCheckDispatch` 35 passed; `tsc --noEmit` 0.",
+      "startedAt": "2026-10-30T04:50:41.823Z",
+      "completedAt": "2026-10-30T04:52:50.964Z"
     },
     {
       "stepId": "step-4",
       "description": "In checkObservationStore.ts, implement recordCheckObservation and isAuthenticatedCheckRun. Report the file in modifiedFiles.\n\nrecordCheckObservation(state, runner, params). Error handling, in order; each refusal writes nothing:\n1. runner is validated as in recordCheckDispatch. id and dispatchId must pass validateEntityId. outcome must be present (missingRequired('outcome')).\n2. The dispatch must exist: NOT_FOUND CHECK_DISPATCH_NOT_FOUND. Only a recorded dispatch can be answered.\n3. runner.runnerId must equal dispatch.runnerId: NOT_ALLOWED CHECK_RUNNER_MISMATCH.\n4. params.environment must equal dispatch.environment exactly: STATE_CONFLICT CHECK_ENVIRONMENT_MISMATCH.\n5. If a marker for dispatchId exists with checkRunId !== params.id, throw STATE_CONFLICT CHECK_DISPATCH_ALREADY_OBSERVED.\n6. Build the CheckRun parameters ONLY from these sources:\n   - the dispatch: candidateId, treeSha, command, planRevision, environment, and dispatchId (its id);\n   - runner: runnerId;\n   - params: id, exitCode, outcome and outputTail;\n   - source: 'runner-observed'.\n   Then call validateCheckRunParams and recordCheckRun from the UNCHANGED checkRunStore.ts. Its refusals propagate (CHECK_RUN_IMMUTABLE and the INVALID_INPUT coherence and tail rules), as does its duplicate result.\n7. If no marker exists, write { id: dispatchId, checkRunId, runnerId, createdAt } with `state.writeEntity('checks/observations', dispatchId, marker)`, then map.set.\n8. Return { checkRun, duplicate }, where duplicate is recordCheckRun's.\n   A crash between steps 6 and 7 leaves a run without a marker. The identical retry gets duplicate:true from recordCheckRun and then writes the marker.\n\nisAuthenticatedCheckRun(state, run):\n- Wrap the whole body in try/catch and return false on any error.\n- Look up the STORED run by run.id; a caller-built object never authenticates itself. If it is absent, false.\n- Require all of these:\n  - stored.source === 'runner-observed';\n  - stored.dispatchId is a string;\n  - the marker exists, with checkRunId === stored.id and runnerId === stored.runnerId;\n  - the dispatch exists;\n  - the dispatch's runnerId, candidateId, treeSha, command, planRevision and environment are each === the stored run's.\n- Export getCheckObservation(state, dispatchId) too.\n\nMake every test pass with `npx vitest run src/state/checkObservationStore.test.ts`.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkObservationStore.ts",
+        "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "Implemented recordCheckObservation, getCheckObservation and isAuthenticatedCheckRun.\n- recordCheckObservation refuses in this order, each writing nothing: runner, id, dispatchId, then an absent outcome (MISSING_REQUIRED 'outcome'); CHECK_DISPATCH_NOT_FOUND (NOT_FOUND); CHECK_RUNNER_MISMATCH (NOT_ALLOWED); CHECK_ENVIRONMENT_MISMATCH (exact, verbatim); CHECK_DISPATCH_ALREADY_OBSERVED. Then validateCheckRunParams and recordCheckRun from the unchanged checkRunStore. The binding comes only from the dispatch (candidateId, treeSha, command, planRevision, environment, dispatchId), runnerId comes from runner, and source is 'runner-observed'. The marker is written after the run, and only when it is missing.\n- isAuthenticatedCheckRun runs inside try/catch. The passed run must equal the STORED run in every key, be runner-observed with a string dispatchId, have a marker whose checkRunId and runnerId match, and have a dispatch whose 6 binding fields are each ===.\nSIZE: rewrote all 3 files compactly. Net additions are module +202, schema +31 and test +241, about 474. That is over QA's 400 cap, and no rail waives it, so I asked governor-693b7073 and architect-e4b7eee0 for a size-exception rail (comment-8c289c60). Fitting under 400 would delete about a third of the DoD and mutant tests.\nTest fix: the fixed fake-clock times moved to 2099. A fake T1 earlier than the real createdAt of the fixture candidate inverted candidate currency, because currency follows createdAt (listCandidatesForTask sorts by it).\nLinux snapshot of HEAD b3cbe9d: checkObservationStore.test.ts 42/42 passed; `tsc --noEmit` 0; the scratch-tsconfig typecheck of the test file 0.",
+      "startedAt": "2026-10-30T04:52:53.035Z",
+      "completedAt": "2026-10-30T05:02:42.567Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy of checkObservationStore.ts, restore it, then `cmp` afterwards. Each must fail at least one test:\n   1. Skip the marker check in isAuthenticatedCheckRun: O2 fails.\n   2. Judge the passed object instead of the stored run: O2 fails on the caller-built object.\n   3. Bind the observation to the task's current candidate instead of dispatch.candidateId: O5 fails.\n   4. Skip the runner compare: O4 fails.\n   5. Allow a second observation id: O3 fails.\n   6. Check currency before the replay: D3 fails on the superseded replay.\n   7. Write the marker before the CheckRun: R2 fails.\n2. Confirm `git diff --stat` shows no change to checkRunStore.ts, recordCheckRun.ts or delivery/policy.ts (task rail).\n3. The GATE runs fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate).\n   - Take `git archive HEAD` of the WHOLE repo.\n   - Overlay ONLY this task's 4 files.\n   - Run `npm ci --no-audit --no-fund` after checking that the lockfile matches the tree modulo CR.\n   - Use `env -i` with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH.\n   - Run `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`. Both must exit 0. schema.ts is a shared type, so the full suite is the right scope.\n   - `cmp` the overlay against the worktree.\n4. A red run outside this task is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n5. Supply the npm test command, its exit code and the output tail to complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "VERIFY, with no edits needed.\n1. Mutants, each applied to a scratch copy in the Linux snapshot, then restored and cmp-equal to the worktree. All 7 planned mutants were killed:\n   (1) skipping the marker check: the record_check_run forgery test and the lost-marker restart test fail;\n   (2) judging the passed object: the STORED-run test fails;\n   (3) binding to the current candidate: the superseded-dispatch test fails;\n   (4) skipping the runner compare: the \"another runner\" row fails;\n   (5) allowing a second observation: the duplicates test and the reload test fail;\n   (6) checking currency before replay: the supersession/replay test fails;\n   (7) writing the marker before the run: the crash test and \"passed with exit 1\" fail.\n   8 extra mutants were also killed: publish before persist, no revision floor, no approval compare, no environment compare, command not bound, no key-count compare, no case collision check, no task match. That is 15/15.\n2. Rail: `git diff HEAD` is empty for checkRunStore.ts, tools/recordCheckRun.ts, delivery/policy.ts and StateManager.ts.\n3. GATE: fresh `git archive HEAD` 6560e38 of the whole repo in /tmp/moe-v03b-gate.7zfqbe, overlaid with only the 3 owned files (all cmp-equal to the worktree). The lock equals HEAD modulo CR; npm ci ran native under env -i (HOME, NO_COLOR=1, node v24.21.0 on a Linux-only PATH).\n   - `cd packages/moe-daemon && npm test`: EXIT 0, Test Files 193 passed (193), Tests 5450 passed | 16 skipped (5466).\n   - `npx tsc --noEmit`: EXIT 0.\n   - stateModules.test.ts (StateManager under 1500 lines) and daemonGitDocs pass.\nNo red outside this task.",
+      "startedAt": "2026-10-30T05:02:44.669Z",
+      "completedAt": "2026-10-30T05:04:40.111Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as an agent trying to mint an authenticated run:\n\n1. Forgery and retargeting:\n   - record_check_run runs with copied runnerIds and dispatchIds;\n   - squatting a future observation id: identical content is harmless, and differing content becomes CHECK_RUN_IMMUTABLE, so the worst case is denial, not trust;\n   - dispatching a superseded candidate;\n   - an observation naming any binding field.\n2. Atomicity:\n   - every refusal ordered before the first write;\n   - the CheckRun written before the marker;\n   - the R2 retry path;\n   - two observations racing under the mutex.\n3. Files:\n   - the checks/dispatches and checks/observations paths go through writeEntity's traversal guard;\n   - case-variant ids on NTFS and APFS;\n   - loadEntities never mixing them into checkRuns.\n4. Rails:\n   - checkRunStore, recordCheckRun and policy byte-unchanged, so legacy policy is identical;\n   - no forbidden-pattern tokens;\n   - no .moe edits and no Git writes;\n   - verified-local untouched.\n\nWrite the Serena handoff memory 'task-task-c9fe2515321e4b1a881bb844965fe179-handoff', giving the landed names and codeNames for CQ-V03 (task-9cc13170) and CQ-V04 (task-a9d1a74d).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkObservationStore.ts",
+        "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "ADVERSARIAL SELF-REVIEW (once, own diff: 3 owned paths).\n\n- FORGERY: isAuthenticatedCheckRun judges the STORED run. Every key must be equal and the key count the same, so a caller-built object never self-authenticates. It also requires runner-observed, a dispatchId, a marker naming this run id and runner, and all 6 BINDING_FIELDS equal to the dispatch. A record_check_run run (runner-observed + dispatchId) has no marker, so it is false. Tested via the real tool handler.\n- RETARGETING: the observation binding comes from the dispatch only. Smuggled params are ignored (tested). Dispatches go to the CURRENT candidate at the current approved revision >= 1 only. The runner comes from the channel identity.\n- SQUAT: pre-writing a future observation id via record_check_run is either identical (harmless) or gives CHECK_RUN_IMMUTABLE with no marker: denial only, tested.\n- CONCURRENCY: the caller holds state.mutex (checkRunStore pattern). mapsOf is synchronous and idempotent.\n- ATOMICITY: every refusal precedes the first write. writeEntity runs before map.set. CheckRun before marker: an identical retry completes a crashed marker (R2 test), and an orphan run is fail-closed.\n- FILES: writeEntity validates ids. Marker ids are validated dispatch ids. Case-variant dispatch ids are refused. loadEntities is top-level only, so the subdirs never load as check runs (R1).\n- THEORETICAL (not fixed): the maps are cached per process, so an external rm of a dispatch file under a live daemon is not seen until restart. .moe is daemon-only, and a wiped run still fails closed. A throwing runner getter gives a non-MoeError, but before any write.\n- RAILS: checkRunStore.ts, recordCheckRun.ts, delivery/policy.ts and StateManager.ts are byte-identical (empty git diff). No forbidden patterns (grep exit 1). No .moe edits, no git writes, verified-local untouched.\n\nMutants: 15/15 killed. Handoff memory task-task-c9fe2515321e4b1a881bb844965fe179-handoff written, plus gotcha-statemanager-line-budget.",
+      "startedAt": "2026-10-30T05:04:42.266Z",
+      "completedAt": "2026-10-30T05:07:33.443Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -84,25 +121,40 @@
       "author": "architect-e4b7eee0",
       "content": "Planning note from architect-e4b7eee0, who split this slice out of V03:\n- Require planRevision >= 1 at dispatch time. checkRunStore's readPlanRevision refuses anything below 1, so a revision-0 dispatch could never be answered. Refuse it up front with CHECK_DISPATCH_REVISION_MISMATCH.\n- The consumer plan (V03 rev 1, the tool slice) calls these functions with the exact names in this description: recordCheckDispatch(state, runner, params), recordCheckObservation(state, runner, params) and isAuthenticatedCheckRun(state, run). It asserts these codeNames: CHECK_DISPATCH_NOT_CURRENT, CHECK_DISPATCH_REVISION_MISMATCH, CHECK_DISPATCH_IMMUTABLE, CHECK_DISPATCH_NOT_FOUND, CHECK_RUNNER_MISMATCH, CHECK_ENVIRONMENT_MISMATCH and CHECK_DISPATCH_ALREADY_OBSERVED.",
       "timestamp": "2026-10-29T17:41:05.283Z"
+    },
+    {
+      "id": "comment-8c289c60238841d09d9537edc43c5f16",
+      "author": "worker-fe18a9a9",
+      "content": "@governor-693b7073 @architect-e4b7eee0, a size-exception request for CQ-V03b (task-c9fe2515). It is like the V03a and V10a epic rails.\n\nThe approved plan comes to about 474 net non-board LOC, all new code (no deletions), in 3 files:\n- state/checkObservationStore.ts: +202 runtime.\n- types/schema.ts: +31 (CheckDispatch and CheckObservation).\n- state/checkObservationStore.test.ts: +241 tests, 42 passing.\n\nThe plan already implied more than 400 lines: \"module under about 250 lines\" plus the full D1-D3/O1-O5/R1/R2 case list and 7 mutants. I have compressed it once. Getting under 400 would mean deleting about a third of the DoD and mutant-killing tests: the per-field binding tamper table, the lost-record restart cases and refusal rows. Please add an epic rail that waives size-based rejection for this row only, or say \"split\" and I'll stop at REVIEW for re-slicing.\n\nSeparate deviation, FYI: StateManager.ts is NOT edited. stateModules.test.ts requires it to stay under 1500 lines, and it is at 1498, so the planned maps and loads would fail the gate. The two maps live in the store instead, loaded from .moe/checks/{dispatches,observations} on first use per StateManager. Restart recovery is unchanged and tested.",
+      "timestamp": "2026-10-30T05:02:30.310Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:38:47.791Z",
-  "updatedAt": "2026-10-29T17:50:31.110Z",
+  "updatedAt": "2026-10-30T05:08:19.164Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:43:34.854Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-fe18a9a9"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T17:46:17.107Z",
   "executionContract": {
@@ -167,5 +219,20 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T17:46:17.256Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T04:40:33.725Z",
+  "reviewStartedAt": "2026-10-30T05:08:19.162Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": " Test Files  193 passed (193)\n      Tests  5450 passed | 16 skipped (5466)\n   Start at  07:07:46\n   Duration  23.64s (tests 95%, import 4%, transform 1%)\n[fresh Linux snapshot: git archive 6560e38 (no packages/moe-daemon diff to HEAD 6ead6a0) + the 3 owned files overlaid and cmp-equal to the worktree; native npm ci; env -i; node v24.21.0. Earlier the same session: npx tsc --noEmit EXIT 0 and test-file typecheck EXIT 0]",
+    "reportedAt": "2026-10-30T05:08:19.162Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/checkObservationStore.ts"
+  ],
+  "completionSummary": "CQ-V03b: a recorded check dispatch and observation store. No tool or wiring yet; that is for CQ-V03/V04.\n\nFiles:\n- types/schema.ts (+31): CheckDispatch and CheckObservation.\n- New state/checkObservationStore.ts (202 LOC) exports:\n  - recordCheckDispatch: pinned to the task's CURRENT candidate and tree, the approved planRevision >= 1 equal to both planRevision and approvedPlanRevision, and the channel RunnerIdentity runnerId.\n  - recordCheckObservation: exactly one CheckRun per dispatch, bound only to the dispatch and runner, source runner-observed. It goes through the unchanged checkRunStore, then writes the marker.\n  - isAuthenticatedCheckRun: judges the STORED run (every key equal) plus the marker and dispatch binding. Never throws; fails closed.\n  - getCheckDispatch and getCheckObservation.\n- New checkObservationStore.test.ts: 42 tests.\n\nDoD:\n- Forgery via the real record_check_run handler (runner-observed + dispatchId) stays unauthenticated.\n- An exact binding is authenticated. Smuggled params are ignored.\n- Same-id replays return duplicate:true, and differing ones are refused (CHECK_DISPATCH_IMMUTABLE, CHECK_RUN_IMMUTABLE, CHECK_DISPATCH_ALREADY_OBSERVED).\n- Refused dispatches: superseded, wrong-task, wrong-revision and case-collision.\n- Restart reload works, and a failed write publishes nothing. A crash retry completes the marker.\n\nDEVIATION: StateManager.ts is not edited. stateModules.test.ts caps it at < 1500 lines and HEAD is at 1498, so the maps are module-owned (a WeakMap<StateManager>, lazily loaded from .moe/checks/{dispatches,observations}).\n\nSIZE: ~474 net LOC including tests, which is over the 400 guideline. A size-exception rail was requested in comment-8c289c60 with no reply yet; QA may ask for a re-slice.\n\nMutants: 15/15 killed.\n\nRails: checkRunStore.ts, recordCheckRun.ts, delivery/policy.ts and StateManager.ts have an empty diff. No forbidden patterns, no .moe edits, no git writes, verified-local untouched.\n\nHandoff: Serena memories task-task-c9f"
 }
