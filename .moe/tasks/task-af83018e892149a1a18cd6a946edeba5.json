@@ -81,7 +81,7 @@
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE, since the shared readiness predicate changes. Run the FULL gate fresh in a Linux-native snapshot of HEAD (mem:gotcha-daemon-linux-snapshot-gate):\n- `git archive HEAD` of the whole repo;\n- overlay ONLY this task's 7 files;\n- `npm ci` in packages/moe-daemon under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin` (MOE_* unset);\n- `cmp` the overlay against the worktree.\n\nGATE: `cd packages/moe-daemon && npm test` must exit 0. Its command, exit code and output tail are the complete_task evidence. Also run `npx tsc --noEmit` (exit 0), and typecheck the new test file through a scratch tsconfig ({extends ./tsconfig.json, compilerOptions {noEmit, types:[node]}, include [that file], exclude []}), since the package tsconfig excludes tests.\n\nExpect every pre-existing test to pass unchanged, apart from step 2's fixture. Baseline at 87a1e939: 6070 passed, 20 skipped. That includes dependencyUnblock.test.ts's strict-deliveryPolicy rows, executionPolicyIntegration's CQ-M01f Q5/E rows (E1-control included), acceptance, requiredChecks.delivery and claimNextTask.contract, which proves legacy/observe consumers are untouched.\n\nKnown peer failure: at 87a1e939 src/providers/providerDescriptor.contract.test.ts fails because 447281cf (task-c4cd6dce, in REVIEW; reported to qa-952969be) changed scripts/moe-agent.ps1's codex launch to Invoke-MoeGuardedCommand. Never edit scripts or the provider descriptor for it. If it is the ONLY failure when you run, report_blocked with blockedOnTaskIds naming the row that fixes it (c4cd6dce, or its fix row), then re-run once that lands.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/dependencyUnblock.ts",
         "packages/moe-daemon/src/delivery/policy.ts",
@@ -93,20 +93,25 @@
       "newFiles": [
         "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts"
       ],
-      "startedAt": "2026-10-30T18:09:06.116Z"
+      "note": "Resumed IN_PROGRESS step 5; prior steps' seven source paths are byte-identical to checkpoint ddc1f35c. Fresh whole-HEAD archive c6c5d6c7769f64dba5a73ec072dc00793bfb5d58 at /tmp/moe-v09-resume.UWGWkE/repo, only seven task paths overlaid/cmp, native npm ci under env -i (Node 24.21.0, no MOE_*). `cd packages/moe-daemon && npm test` exit 0: 211 files passed, 6116 tests passed / 20 skipped, 36.71s. `npx tsc --noEmit` exit 0; scratch tsconfig.v09-test.json with types:[node], include new test, exclude:[] also exit 0. Logs gate.log, tsc.log, tsc-test.log and .exit files in snapshot parent. All seven overlays cmp equal after run. Known peer failure fixed by landed dependency. No source edits or Git writes; peer dirty paths untouched.",
+      "startedAt": "2026-10-30T18:09:06.116Z",
+      "completedAt": "2026-10-30T18:26:39.257Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, last (load adversarial-self-review).\n\nMUTANTS: on scratch copies in the snapshot, one exact replacement each, then restore and cmp. Kill only by real test failures: a no-tests or compile failure is a false kill.\n- M1 drop the verified-local-snapshot check: the DoD1 legacy-captured row.\n- M2 a strict consumer treats a missing id as satisfied: the DoD1 missing and delete_task rows.\n- M3 ARCHIVED satisfied without a receipt: the DoD2 receipt row.\n- M4 accept an approval on any candidate: the older-candidate row.\n- M5 `.some(approve)` instead of the LAST review: the later-reject row.\n- M6 unmetDependsOn ignores its consumer: the unblock/claim path rows.\n- M7 reportBlocked without the consumer: its row.\n- M8 setTaskDependencies without the actor: the DoD3 audit row.\n- M9, the rejected design: strictness from `resolveTaskDeliveryPolicy(...) !== 'legacy'`. It must break existing rows, which proves the M01f boundary. At the architect's prototype that was 14 rows incl. executionPolicyIntegration E1-control and dependencyUnblock.test.ts's strict-policy rows.\n\nThen read the diff as an attacker trying to release a strict consumer early:\n- a path still judging without the consumer;\n- a forged or late review or receipt (both stores are append-only; only the LAST review on the CURRENT candidate and that candidate's single receipt count);\n- a status flip, delete or removal manufacturing proof;\n- a malformed snapshot or setting reading as legacy (it must fail closed);\n- legacy byte-identity of every message;\n- cost: for strict consumers only, each prerequisite does linear store scans; legacy consumers pay one profile read;\n- no .moe edits, no forbidden tokens, no new activity types (ACTIVITY_EVENT_TYPES is mirrored in moe-vscode).\nKeep the non-board diff at or under 400 net lines.\n\nIf a finding changes a file, rerun the step-5 gate fresh and submit that output. Write the handoff memory.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/dependencyUnblock.ts",
         "packages/moe-daemon/src/tools/claimNextTask.ts"
-      ]
+      ],
+      "note": "Adversarial review complete; no source changes/findings. Reviewed owned checkpoint diff, every predicate caller and append-only stores; strict identity, current-candidate LAST review, unique archived receipt, malformed input fail-closed, pre-write claim refusal, actor audit, no manufactured evidence, legacy messages preserved. All nine scratch mutants compiled and were killed by real assertions: M1 11, M2 3, M3 6, M4 2, M5 2, M6 22, M7 1, M8 1, M9 12 failures (M9 four legacy suites incl E1-control/acceptance; initial wrong acceptance filter corrected and rerun). Each restored byte-for-byte; all seven source files cmp equal shared tree and ddc1f35c. Restored targeted six suites 320/320 pass, exit0; full gate from step5 remains exact-byte applicable: 6116 pass/20 skipped, 211 files, exit0; both typechecks exit0. Logs and mutation details /tmp/moe-v09-resume.UWGWkE; handoff and existing gotcha memory updated. Net task source diff +278, diff --check clean, no new activity types/forbidden code/activation. No project paths edited this session; seven implemented paths already reported in steps1–4, wrapper owns landing.",
+      "startedAt": "2026-10-30T18:26:45.047Z",
+      "completedAt": "2026-10-30T18:29:30.861Z"
     }
   ],
   "planRevision": 2,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -138,7 +143,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:02.918Z",
-  "updatedAt": "2026-10-30T18:20:22.930Z",
+  "updatedAt": "2026-10-30T18:29:43.828Z",
   "dependsOn": [
     "task-a4ca766a67184630842d4a6d12338cf8",
     "task-5b0e90fe108f430b8aa02451e7f8915a"
@@ -147,13 +152,14 @@
     "firstClaimAt": "2026-10-29T16:58:05.289Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 4
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
     "worker-6e57c4f8",
     "architect-6fc3dd5c",
-    "worker-c2da129d"
+    "worker-c2da129d",
+    "worker-681f4f22"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -163,7 +169,9 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T18:03:44.323Z",
@@ -240,14 +248,9 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-af83018e892149a1a18cd6a946edeba5.json",
-    ".moe/tasks/task-d00dafdf2dde4a41bf5983b1f7d495de.json",
-    ".moe/tasks/task-57bbd302b69241f1986accbe2d170fa3.json",
-    ".moe/tasks/task-5b0e90fe108f430b8aa02451e7f8915a.json",
-    ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
-    "packages/moe-daemon/src/delivery/policy.ts",
-    "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
     "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts",
+    "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+    "packages/moe-daemon/src/delivery/policy.ts",
     "packages/moe-daemon/src/state/dependencyUnblock.ts",
     "packages/moe-daemon/src/tools/claimNextTask.ts",
     "packages/moe-daemon/src/tools/reportBlocked.ts",
@@ -317,5 +320,14 @@
       "cd packages/moe-daemon && npm test",
       "cd packages/moe-daemon && npx tsc --noEmit"
     ]
-  }
+  },
+  "reviewStartedAt": "2026-10-30T18:29:43.826Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh whole-repo Linux snapshot /tmp/moe-v09-resume.UWGWkE/repo at c6c5d6c7769f64dba5a73ec072dc00793bfb5d58; ONLY seven task files overlaid, cmp identical before/after. Native npm ci under env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin; MOE_* unset.\n Test Files  211 passed (211)\n      Tests  6116 passed | 20 skipped (6136)\n   Start at  20:25:49\n   Duration  36.71s (tests 92%, transform 4%, import 3%)\nGATE_EXIT=0\nnpx tsc --noEmit: exit 0\nnpx tsc -p tsconfig.v09-test.json (new test, types:[node], exclude:[]): exit 0\nPost-mutant restored targeted run: 6 files passed, 320 tests passed, exit 0. All seven overlays restored and cmp equal; no source edits after full gate.",
+    "reportedAt": "2026-10-30T18:29:43.826Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-V09 complete. Consumer-aware shared readiness requires captured verified-local prerequisite identity, current-candidate last approval and existing delivery evidence; ARCHIVED additionally requires its candidate receipt. Missing/deleted or legacy-only proof cannot release strict consumers. Legacy/observe behavior preserved; report/claim/unblock/alerts share the predicate and dependency removal records its actor without evidence writes. Source is checkpoint ddc1f35c (7 files, +278 net LOC); this resumed session changed no project source. Fresh whole-HEAD Linux snapshot c6c5d6c7 + seven identical overlays, native npm ci, sanitized env: daemon suite 211 files, 6116 passed/20 skipped, exit0; production and isolated new-test typechecks exit0. All nine mutants compiled and failed real assertions; restored targeted six suites 320/320 passed and all overlays cmp equal. Adversarial review found no changes needed. verified-local remains disabled. Logs /tmp/moe-v09-resume.UWGWkE; Serena task handoff and live-policy gotcha updated. Wrapper owns completion landing; QA should include source checkpoint ddc1f35c when reviewing the verification-only completion."
 }

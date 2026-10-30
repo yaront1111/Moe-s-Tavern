@@ -87,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T18:03:40.123Z",
-  "updatedAt": "2026-10-30T18:28:10.155Z",
+  "updatedAt": "2026-10-30T18:28:49.146Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T18:04:27.031Z",
     "plannedStepCount": 4,
@@ -146,7 +146,9 @@
     "scripts/tests/prompt-cache-launcher.test.mjs",
     "scripts/tests/usage-launcher.test.mjs",
     ".moe/tasks/task-57bbd302b69241f1986accbe2d170fa3.json",
-    ".moe/tasks/task-5b0e90fe108f430b8aa02451e7f8915a.json"
+    ".moe/tasks/task-5b0e90fe108f430b8aa02451e7f8915a.json",
+    ".moe/tasks/task-a28c66bbd21448c7b25daec49a3fa217.json",
+    ".moe/tasks/task-dcde1ed47ee54a23af192f4467271fc9.json"
   ],
   "completionSummary": "Re-anchored the two launcher test files after 447281cf's Git guard. Both now cut the launcher's own guard (agent_git_exec / Invoke-MoeGuardedCommand, with empty guard state) via between() over the launcher source, and run each launch line with the guard call intact. Updated the Codex exec anchors in prompt-cache-launcher.test.mjs and the Claude end anchors in usage-launcher.test.mjs. No assertion removed or weakened; scripts/moe-agent.{sh,ps1} untouched. Linux snapshot of HEAD with only these two files overlaid, under env -i: 40 tests, 38 pass, 0 fail, 2 skipped (PowerShell-only rows), exit 0. Native Windows node.exe on a /mnt/d snapshot (powershell.exe, pwsh.exe, Git Bash): 126/126, 0 skipped, exit 0; scratch dir deleted. Four scratch mutants (old sh exec anchor, guard dropped from prompt-cache, guard dropped from usage run(), old Claude end anchor) each failed by assertion. CI's 'Test agent runtime discovery' step runs these two files on ubuntu, windows and macos.",
   "commits": [
@@ -167,14 +169,32 @@
       "treeId": "cb157a5adcbd8bf33eb1a8aef093d4b1511a85ce",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "85bb6f7c53aedd320b55d396fc2375d7bd614d2f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T18:25:21Z",
+      "paths": [
+        ".moe/tasks/task-57bbd302b69241f1986accbe2d170fa3.json",
+        ".moe/tasks/task-5b0e90fe108f430b8aa02451e7f8915a.json",
+        ".moe/tasks/task-a28c66bbd21448c7b25daec49a3fa217.json",
+        ".moe/tasks/task-dcde1ed47ee54a23af192f4467271fc9.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T18:28:49.146Z",
+      "treeId": "46b0ea3fbc25d77cff827cda69fe00f4ff9b1ac1",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5ebbf433@2026-10-30T18:20:41Z",
-    "at": "2026-10-30T18:22:48.901Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T18:25:21Z",
+    "at": "2026-10-30T18:28:49.146Z"
   },
   "completedAt": "2026-10-30T18:28:10.155Z",
   "reviewCompletedAt": "2026-10-30T18:28:10.155Z",
