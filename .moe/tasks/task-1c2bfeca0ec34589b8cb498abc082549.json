@@ -17,34 +17,52 @@
     {
       "stepId": "step-1",
       "description": "Windows: prove a drive-qualified candidate outside the project by file identity. Production change, one file: moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt.\n\nStart by re-reading the file as task-526a2080 landed it. That task is the dependency; its plan adds `windowsHost`, `isPlainLocalPath(path, windows)`, isOutsideProject's trailing `resolve` seam with the spelling checked first, and select's first plain-local branch. Adapt the names below if it landed differently.\n\n(a) Add a private helper `outsideByIdentity(path: Path, project: Path): Boolean`. It walks `current = path`, then `current.parent`, up to the root, and calls `Files.isSameFile(current, project)` on each:\n- isSameFile compares volume serial + file index and follows links.\n- If any call answers true, return false: the path is the project or inside it.\n- Skip a NoSuchFileException: a missing folder holds nothing, and its parent decides.\n- Error handling fails closed: any other exception returns false.\n- Return true only if at least one folder existed and none was the project. A path on a drive that does not exist (an unmapped letter, or a share that is unplugged or unreachable) proves nothing and answers false. That also stops a later subst or net use from turning a kept entry into the project.\n- A project that went missing makes every call throw NoSuchFileException, so the answer is false.\n- Cost is O(depth) calls, each opening two handles. No cache and no new state.\nIts KDoc gives the why: on Windows, toRealPath calls GetFinalPathNameByHandle only at a reparse point, so a subst or mapped drive letter is never resolved. `Q:\\bin` can then be `<project>\\bin` with no shared prefix, and only identity sees it. Node's realpath.native resolves these, so VS Code needs no twin.\n\n(b) isOutsideProject:\n- After the existing checks (absolute; plain-local spelling first; every form plain local and not within the project) pass, add on a Windows host only (`windowsHost`): `val project = realPathOrNull(basePath)`, then `project != null && outsideByIdentity(realForm ?: candidate.normalize(), project)`.\n- realForm is the value the `resolve` seam returned, so compute it once and reuse it.\n- Identity runs only for entries that would otherwise be kept.\n- POSIX does not change: no identity walk there.\n- Keep both outer catches.\n- KDoc: add 'and, on a Windows host, no existing folder from it up to its root is the project (file identity)'.\n\n(c) select: add a when-branch before `else`: `windowsHost && !outsideByIdentity(real, project) -> rejected(\"$label resolves inside the project\", real)`.\n- `project` there is already the real path.\n- The reason string is the existing one, which is also what VS Code reports for the same subst case.\n- An identity lookup failure is practically unreachable for a path toRealPath just resolved, and it refuses the same way (fail closed). Say so in a comment.\n- This covers installedExecutable (node) and installedArtifact (daemon, wrapper, proxy).\n\nNo other production file changes. protectedPathEntries, nodeOnProtectedPath, protectedDaemonEnvironment, protectedDaemonCommand, TerminalAgentLauncher, ManagedVmPanel:137-138 and ProtectedStateStore.usableFor inherit the change with unchanged signatures. LEGACY never calls them.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "note": "Added private outsideByIdentity(path, project): walks path→root with Files.isSameFile; a match answers false, NoSuchFileException skips (parent decides), any other Exception/IOError answers false, true only if some folder existed. isOutsideProject: real path now computed once via a local `by lazy` (still only after the spelling check, so no share is opened), plus a conjunct `LEGACY || !windowsHost || project != null && outsideByIdentity(real ?: candidate.normalize(), project)`. select: new branch before else, `PROTECTED && windowsHost && !outsideByIdentity(real, project)` -> existing \"$label resolves inside the project\". Adaptation vs plan: task-526a2080 landed a RuntimeProfile switch (LEGACY Windows Restart Daemon reaches select/isOutsideProject via stopCommandOrNull, per planner correction comment-429811a1), so identity is gated on PROTECTED as well as windowsHost, which keeps LEGACY unchanged. No signature changes, no new refusal strings. Peer dirty paths (scripts/, docs/, moe-vscode/, .moe/tasks) untouched.",
+      "startedAt": "2026-10-30T17:10:25.392Z",
+      "completedAt": "2026-10-30T17:12:52.880Z"
     },
     {
       "stepId": "step-2",
       "description": "Tests, one file: moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt. Change no existing row, including task-526a2080's N5-N6 and S7-S8; use the next free N and S numbers. Both new methods start with `assumeTrue(\"Windows path forms\", RuntimeSelectionPolicy.windowsHost)`. They must RUN on the Windows verification host.\n\nHelper withSubst(target: File, body: (String) -> T): T\n- For letters 'Z' downTo 'D':\n  - Skip a letter where File(\"$L:\\\\\").exists().\n  - Otherwise run `File(System.getenv(\"SystemRoot\"), \"System32\\\\subst.exe\").path`, \"$L:\", target.path through ProcessBuilder (redirectErrorStream; read all output, then waitFor, as junction() does).\n  - On exit 0: try { return body(\"$L:\") } finally { run subst \"$L:\" /D }.\n  - A nonzero exit means the letter was taken or is held by a remembered network mapping: try the next letter.\n- Call `/D` only for a drive this helper created; never touch a pre-existing mapping.\n- If no letter works: assumeTrue(\"no free drive letter for subst\", false).\n- Error handling: a cleanup failure must not hide the body's own failure.\n\nN-row: a subst drive into the project is inside it by identity. Setup:\n- work = newFolder(\"work\");\n- project = File(work, \"proj\"), with bin/ created;\n- other = File(work, \"other\"), created;\n- outsideA = newFolder(\"path-a\").\nShape 1, withSubst(project) { d ->\n- isOutsideProject(\"$d\\\\\", project.path) is false (the drive root is the project);\n- \"$d\\\\bin\" is false;\n- \"$d\\\\missing\" is false (a missing folder: its parent, the root, is the project). }\nShape 2, withSubst(work) { d ->\n- \"$d\\\\proj\" and \"$d\\\\proj\\\\bin\" are false: the drive is substed to the parent and the entry reaches the project;\n- \"$d\\\\other\" is TRUE: an unrelated folder on the same subst drive is kept;\n- reverse alias: isOutsideProject(File(project, \"bin\").path, \"$d\\\\proj\") is false, for a project opened through the subst drive;\n- PATH: supervisorFor(project, { null }, { null }).protectedDaemonEnvironment(env, project.path), with PATH = outsideA, \"$d\\\\proj\", \"$d\\\\proj\\\\bin\", \"$d\\\\other\". Then assertEquals(mapOf(\"PATH\" to listOf(outsideA.path, \"$d\\\\other\").joinToString(File.pathSeparator)), env). }\nAfter both shapes, the drive is gone: an entry on that now-free letter (\"$d\\\\bin\") answers false, because no existing folder proves anything.\nControls: outsideA.path is true and project.path is false, so each refusal comes from identity alone.\n\nS-row: a node under a subst drive into the project spawns nothing. Take (project, root, node) from protectedFixture(), and inProject = File(project, \"node\") with \"planted\" written to it. withSubst(project) { d ->\n- (i) assertRejected on installedExecutable(\"$d\\\\node\", project.path) gives exactly \"node executable resolves inside the project\".\n- (ii) Add installedLayout(File(project, \"build/idea-sandbox/plugins/moe-jetbrains\")). Then installedArtifact(File(\"$d\\\\build\\\\idea-sandbox\\\\plugins\\\\moe-jetbrains\"), \"daemon/index.js\", project.path) gives \"installed daemon/index.js resolves inside the project\".\n- (iii) For supervisorFor(project, { root }, { \"$d\\\\node\" }, started = started, statuses = statuses), ensureDaemonRunning() is false, started is empty, and selectionRefusal() is \"Protected execution profile: node executable resolves inside the project. Project and PATH copies of the Moe daemon are not used.\" }\nControl: withSubst(node.parentFile) { d -> installedExecutable(\"$d\\\\node\", project.path) is Accepted(Paths.get(\"$d\\\\node\").toRealPath().toFile()) }. Identity proves an outside node on a subst drive is outside.\n\nRED then GREEN, recorded in the step note:\n- Run `--tests com.moe.util.RuntimeSelectionPolicyTest` (unquoted) once with outsideByIdentity temporarily returning true. The new rows must fail.\n- Restore it, and they must pass.\n- Afterwards `subst` lists no leftover drive.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Added N8 (subst to project: L:\\, L:\\bin, L:\\missing inside; subst to parent: L:\\proj, L:\\proj\\bin inside, L:\\other KEPT; reverse alias with project opened as L:\\proj; protected PATH whole-map assert keeps outsideA + L:\\other; after removal L:\\bin answers false; plain controls) and S9 (L:\\node refused 'node executable resolves inside the project'; sandbox root through subst refused 'installed daemon/index.js resolves inside the project'; supervisor spawns nothing with the exact status/selectionRefusal message; control: outside node through subst Accepted as its toRealPath). Helper withSubst(target, body): Z..D, skips existing roots, runs System32\\subst.exe, removes only its own drive (asserted on success; on body failure cleanup runs via non-throwing exitOf and the body's failure is rethrown), AssumptionViolatedException when no letter works. Existing rows unchanged. RED (outsideByIdentity temporarily `return true`): `gradlew.bat test --rerun --tests com.moe.util.RuntimeSelectionPolicyTest` exit 1, 56 tests 2 failed: N8 'Z:\\' (line 520), S9 'node through subst: Accepted(file=Z:\\node)'. GREEN after restore: exit 0, XML tests=56 skipped=0 failures=0 errors=0 @17:16:44Z, N8/S9 not skipped. `cmd.exe /d /c subst` lists nothing after both runs.",
+      "startedAt": "2026-10-30T17:12:55.214Z",
+      "completedAt": "2026-10-30T17:16:59.478Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification, run once.\n- Take the `jetbrains-gradle` lease with moe.acquire_resource, and release it afterwards.\n- WSL has no JDK. Run exactly: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n  This is the Windows equivalent of `cd moe-jetbrains && ./gradlew test`. Run it from a /mnt/d cwd.\n- It must exit 0, and :test must execute (not UP-TO-DATE).\n- Confirm in moe-jetbrains/build/test-results/test/TEST-*.xml:\n  - failures=0 and errors=0;\n  - the RuntimeSelectionPolicyTest XML is stamped by this run;\n  - the two new rows appear without <skipped/>.\n- These existing rows must pass unchanged: task-526a2080's rows, S4, N1-N4, D1, PS1-PS7 (store roots now get the identity walk) and all of MoeDaemonSupervisorTest (RP1 asserts every kept PATH entry isOutsideProject).\n- Afterwards, `cmd.exe /d /c subst` must list no leftover drive.\n- Give complete_task the command, the exit code and the output tail, labeled as the Windows equivalent, plus the test count.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Under the jetbrains-gradle lease, from /mnt/d/projexts/moes/moe-jetbrains, started 17:17:32Z: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" (Windows equivalent of cd moe-jetbrains && ./gradlew test) -> exit 0, BUILD SUCCESSFUL in 22s, :test executed. 28 fresh XML: 482 tests (480 before + N8 + S9), 0 failures, 0 errors, 0 skipped. RuntimeSelectionPolicyTest 56 @17:17:45.218Z (N8/S9 present, not skipped; N5-N7/S7/S8/S4/N1-N4/D1/PS1-PS7 pass unchanged); MoeDaemonSupervisorTest 79 @17:17:34.906Z, all pass (RP1 included). `cmd.exe /d /c subst` lists no drive afterwards. Log /tmp/task-1c2b-gate.log. TDD skill not reloaded: RED/GREEN already done in step 2.",
+      "startedAt": "2026-10-30T17:17:00.401Z",
+      "completedAt": "2026-10-30T17:18:17.690Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review, this diff only (git diff on the two files). Check:\n- Error handling fails closed: an identity failure answers not-outside; a missing project or a drive that does not exist answers not-outside; NoSuchFileException only skips a missing folder.\n- No share is contacted beyond what toRealPath already reads: identity runs only on plain-local drive spellings that task-526a2080 let through.\n- Cost is O(depth) isSameFile calls per kept entry and per selected artifact. There is no loop over drive letters in production code.\n- POSIX is unchanged: no identity walk unless windowsHost.\n- LEGACY never calls these functions.\n- Plain local paths that are not aliases keep their answers. ProtectedStateStore.usableFor still accepts a local store root whose parents do not exist yet, because existing ancestors prove it outside.\n- Concurrency: no shared state is added. Two tests racing for a letter fall through to the next one, and `/D` runs only for a drive the test created.\n- Refusal reasons carry no absolute path.\n- The diff touches exactly the two planned files, and peer dirty paths stay untouched.\n- Known residuals, out of scope and listed in the handoff:\n  - POSIX bind mounts, which need root;\n  - the profile and provenance key (projectKey) still differs for a project opened through a subst letter.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review of git diff -- moe-jetbrains (exactly the 2 planned files; +132/-5, net 127; git diff --check clean; RED-TEMP stub confirmed removed). Fail-closed: non-NoSuchFile exceptions/IOError answer false; missing project → isOutsideProject false (project null) and select already refuses; nonexistent drive → every lookup NoSuchFile → proved=false → false (N8 tail asserts). Candidate side: identity is the last && conjunct, so it runs only after the plain-local spelling and real-path checks (no new UNC/device opens); a mapped drive is read only as toRealPath already reads it. Cost O(depth) isSameFile per kept entry/selected artifact; no drive-letter loop in production. POSIX: gated on windowsHost. LEGACY: the plan's 'LEGACY never calls these' is false (stopCommandOrNull reaches select/isOutsideProject, comment-429811a1), so both new checks are gated on PROTECTED, mirroring 526a2080's switch; N7/W31-W35 stay green. usableFor: store roots with missing leaves are proved by existing ancestors (D1/PS1-PS7 green). No shared state; tests race safely (subst fails → next letter; /D only on own drive). Reasons reuse existing strings without paths. Theoretical only: (a) project deleted mid-walk after an existing ancestor could answer true, harmless since nothing can be inside a gone project; (b) the project side is still opened by realPathOrNull(basePath) and now by isSameFile, so a UNC-opened base is contacted, as before this row; task-52fb6178 refuses alias bases before any lookup. Residuals for handoff: POSIX bind mounts (need root); projectKey divergence for a subst-opened project; ReFS 64-bit id collision only over-refuses. jetbrains-gradle lease released. Peer dirty paths untouched.",
+      "startedAt": "2026-10-30T17:18:18.565Z",
+      "completedAt": "2026-10-30T17:19:04.459Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -60,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:23:28.136Z",
-  "updatedAt": "2026-10-30T16:41:40.396Z",
+  "updatedAt": "2026-10-30T17:19:33.050Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T16:27:16.644Z",
@@ -69,17 +87,24 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T16:27:21.946Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "architect-6fc3dd5c"
+    "architect-6fc3dd5c",
+    "worker-fe18a9a9"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T16:33:36.810Z",
   "executionContract": {
@@ -140,5 +165,19 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T16:33:36.840Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T17:10:25.392Z",
+  "reviewStartedAt": "2026-10-30T17:19:33.048Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "Windows equivalent of `cd moe-jetbrains && ./gradlew test` (WSL has no JDK), run 17:17:32Z under jetbrains-gradle lease:\n> Task :compileTestKotlin UP-TO-DATE\n> Task :compileTestJava NO-SOURCE\n> Task :processTestResources UP-TO-DATE\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :composedJar UP-TO-DATE\n> Task :prepareTestSandbox UP-TO-DATE\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 22s\n11 actionable tasks: 2 executed, 9 up-to-date\nexit=0\nXML (build/test-results/test, 28 files): 482 tests, 0 failures, 0 errors, 0 skipped. RuntimeSelectionPolicyTest 56 @2026-10-30T17:17:45.218Z (N8, S9 present, not skipped); MoeDaemonSupervisorTest 79 @2026-10-30T17:17:34.906Z. `cmd.exe /d /c subst` lists no drive afterwards.",
+    "reportedAt": "2026-10-30T17:19:33.048Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+  ],
+  "completionSummary": "Under PROTECTED on a Windows host, RuntimeSelectionPolicy now proves a drive-qualified candidate outside the project by file identity too. New private outsideByIdentity(path, project) walks path→root with Files.isSameFile: a match means inside; a missing folder is skipped (the parent decides); any other failure, a missing project or a nonexistent drive answers not-outside. isOutsideProject adds it as the last conjunct, so it runs only after 526a2080's plain-local spelling/real-path checks. The real path is looked up once via a local lazy. select adds a branch before Accepted with the existing \"$label resolves inside the project\" (installedExecutable + installedArtifact). Both checks are gated on PROTECTED as well as windowsHost: the plan's 'LEGACY never calls these' is false (Windows Restart Daemon stop via stopCommandOrNull), so LEGACY is unchanged. Signatures unchanged; no new strings.\n\nTests:\n- N8: subst to the project (L:\\, L:\\bin, L:\\missing) and to its parent (L:\\proj, L:\\proj\\bin) are inside, while L:\\other is kept. Also the reverse alias, the PATH whole-map (keeps outsideA + L:\\other) and the removed drive (false).\n- S9: L:\\node and the sandbox root through subst are refused, and nothing is spawned (exact refusal). Control: an outside node via subst is Accepted.\n- withSubst removes only its own drive.\n\nRED (identity stubbed true): N8/S9 fail. GREEN 56/56. Full native gate exits 0: 482 tests, 0 failures/errors/skips, 28 XML; :test ran. subst lists nothing afterwards.\n\n2 files, +132/-5. jetbrains-gradle released. Residuals (handoff memory): POSIX bind mounts, projectKey for a subst-opened project, project-side UNC opens (task-52fb6178). Wrapper owns landing; peer dirty paths untouched."
 }

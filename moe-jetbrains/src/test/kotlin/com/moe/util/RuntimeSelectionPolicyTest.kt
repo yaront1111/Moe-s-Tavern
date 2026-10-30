@@ -15,6 +15,7 @@ import com.moe.util.TerminalAgentLauncher.ResolvedScript
 import com.moe.util.TerminalAgentLauncher.ScriptKind
 import com.moe.util.TerminalAgentLauncher.ScriptSource
 import org.junit.After
+import org.junit.AssumptionViolatedException
 import org.java_websocket.WebSocket
 import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.server.WebSocketServer
@@ -506,6 +507,32 @@ class RuntimeSelectionPolicyTest {
     }
 
     @Test
+    fun `N8 on Windows a subst drive that reaches the project is inside it by file identity`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val work = temporaryFolder.newFolder("work")
+        val project = File(work, "proj").apply { File(this, "bin").mkdirs() }
+        File(work, "other").mkdirs()
+        val outsideA = temporaryFolder.newFolder("path-a")
+        // Controls: plain spellings keep their answers, so each refusal below comes from identity alone.
+        assertTrue(RuntimeSelectionPolicy.isOutsideProject(outsideA.path, project.path))
+        assertFalse(RuntimeSelectionPolicy.isOutsideProject(project.path, project.path))
+        withSubst(project) { d ->
+            listOf("$d\\", "$d\\bin", "$d\\missing").forEach { assertFalse(it, RuntimeSelectionPolicy.isOutsideProject(it, project.path)) }
+        }
+        val gone = withSubst(work) { d ->
+            listOf("$d\\proj", "$d\\proj\\bin").forEach { assertFalse(it, RuntimeSelectionPolicy.isOutsideProject(it, project.path)) }
+            assertTrue("an unrelated folder on the same drive", RuntimeSelectionPolicy.isOutsideProject("$d\\other", project.path))
+            assertFalse("a project opened through the drive", RuntimeSelectionPolicy.isOutsideProject(File(project, "bin").path, "$d\\proj"))
+            val env = mutableMapOf("PATH" to listOf(outsideA.path, "$d\\proj", "$d\\proj\\bin", "$d\\other").joinToString(File.pathSeparator))
+            supervisorFor(project, { null }, { null }).protectedDaemonEnvironment(env, project.path)
+            assertEquals(mapOf("PATH" to listOf(outsideA.path, "$d\\other").joinToString(File.pathSeparator)), env)
+            d
+        }
+        // A drive that no longer exists proves nothing, so a later subst cannot turn a kept entry into the project.
+        assertFalse("$gone\\bin on a removed drive", RuntimeSelectionPolicy.isOutsideProject("$gone\\bin", project.path))
+    }
+
+    @Test
     fun `V1 a recorded supervisor verifies its daemon, which stays verified after the supervisor exits`() {
         val dir = temporaryFolder.newFolder("a").path
         val live = mutableMapOf(100L to ProcessFacts(100, T0, 1), 200L to ProcessFacts(200, T1, 100))
@@ -967,6 +994,38 @@ class RuntimeSelectionPolicyTest {
         if (Files.isRegularFile(Paths.get(shared))) assertEquals("node through the loopback share", reason, viaShare)
 
         assertEquals(RuntimeSelection.Accepted(realFile(node)), RuntimeSelectionPolicy.installedExecutable(node.path, project.path))
+    }
+
+    @Test
+    fun `S9 on Windows a node under a subst drive that reaches the project spawns nothing`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val (project, root, node) = protectedFixture()
+        File(project, "node").writeText("planted")
+        installedLayout(File(project, "build/idea-sandbox/plugins/moe-jetbrains"))
+        val reason = "node executable resolves inside the project"
+        withSubst(project) { d ->
+            assertEquals(reason, assertRejected("node through subst", RuntimeSelectionPolicy.installedExecutable("$d\\node", project.path)))
+            val sandbox = File("$d\\build\\idea-sandbox\\plugins\\moe-jetbrains")
+            assertEquals(
+                "installed daemon/index.js resolves inside the project",
+                assertRejected("root through subst", RuntimeSelectionPolicy.installedArtifact(sandbox, "daemon/index.js", project.path))
+            )
+            val started = mutableListOf<List<String>>()
+            val statuses = mutableListOf<Pair<Boolean, String>>()
+            val supervisor = supervisorFor(project, { root }, { "$d\\node" }, started = started, statuses = statuses)
+            val message = "Protected execution profile: $reason. Project and PATH copies of the Moe daemon are not used."
+            assertFalse(supervisor.ensureDaemonRunning())
+            assertEquals(emptyList<List<String>>(), started)
+            assertEquals(listOf(false to message), statuses)
+            assertEquals(message, supervisor.selectionRefusal())
+        }
+        // Control: identity also proves a node on a subst drive outside the project is outside.
+        withSubst(node.parentFile) { d ->
+            assertEquals(
+                RuntimeSelection.Accepted(Paths.get("$d\\node").toRealPath().toFile()),
+                RuntimeSelectionPolicy.installedExecutable("$d\\node", project.path)
+            )
+        }
     }
 
     @Test
@@ -1468,6 +1527,37 @@ class RuntimeSelectionPolicyTest {
         process.waitFor() == 0 && Files.exists(link, LinkOption.NOFOLLOW_LINKS)
     } catch (_: Exception) {
         false
+    }
+
+    /**
+     * Runs [body] with a fresh subst drive (`L:`) for [target], then removes that drive; a drive this
+     * helper did not create is never touched. Skips when no letter from Z to D is free.
+     */
+    private fun <T> withSubst(target: File, body: (String) -> T): T {
+        val subst = File(System.getenv("SystemRoot"), "System32\\subst.exe").path
+        for (letter in 'Z' downTo 'D') {
+            val drive = "$letter:"
+            // Taken, or held by a remembered network mapping: try the next letter.
+            if (File("$drive\\").exists() || exitOf(subst, drive, target.path) != 0) continue
+            // exitOf never throws, so cleanup cannot hide the body's own failure.
+            val result = try {
+                body(drive)
+            } catch (failure: Throwable) {
+                exitOf(subst, drive, "/D")
+                throw failure
+            }
+            assertEquals("subst $drive /D", 0, exitOf(subst, drive, "/D"))
+            return result
+        }
+        throw AssumptionViolatedException("no free drive letter for subst")
+    }
+
+    private fun exitOf(vararg command: String): Int = try {
+        val process = ProcessBuilder(*command).redirectErrorStream(true).start()
+        process.inputStream.readBytes()
+        process.waitFor()
+    } catch (_: Exception) {
+        -1
     }
 
     /** [dir] through the [host] admin share of its drive: `\\<host>\<d>$\<rest>`. */

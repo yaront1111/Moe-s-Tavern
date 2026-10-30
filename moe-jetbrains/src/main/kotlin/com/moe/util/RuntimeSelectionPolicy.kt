@@ -269,8 +269,10 @@ object RuntimeSelectionPolicy {
     /**
      * True only for an absolute [path] outside the project, both as written and as the real path
      * it resolves to; on a Windows host both must also be plainly local ([isPlainLocalPath]), and
-     * a spelling that is not is never looked up, so no share is contacted. A relative or
-     * unparseable path, or any failure, answers false. [resolve] is the real-path lookup, which tests substitute.
+     * a spelling that is not is never looked up, so no share is contacted. On a Windows host
+     * protected also needs file identity: no existing folder from it up to its root is the project
+     * ([outsideByIdentity]). A relative or unparseable path, or any failure, answers false.
+     * [resolve] is the real-path lookup, which tests substitute.
      */
     fun isOutsideProject(
         path: String,
@@ -287,13 +289,18 @@ object RuntimeSelectionPolicy {
         resolve: (String) -> Path? = ::realPathOrNull
     ): Boolean = try {
         val candidate = Paths.get(path)
-        val projects = listOfNotNull(Paths.get(basePath).toAbsolutePath().normalize(), realPathOrNull(basePath))
+        val project = realPathOrNull(basePath)
+        val projects = listOfNotNull(Paths.get(basePath).toAbsolutePath().normalize(), project)
             .map { comparablePath(it.toString(), foldCase) }
+        // Looked up once, and only after the spelling passed.
+        val real by lazy { resolve(path) }
         candidate.isAbsolute && (profile == RuntimeProfile.LEGACY || isPlainLocalPath(candidate.normalize().toString())) &&
-            listOfNotNull(candidate.normalize(), resolve(path)).map { it.toString() }.all { form ->
+            listOfNotNull(candidate.normalize(), real).map { it.toString() }.all { form ->
                 (profile == RuntimeProfile.LEGACY || isPlainLocalPath(form)) &&
                     comparablePath(form, foldCase).let { c -> projects.none { isWithin(c, it) } }
-            }
+            } &&
+            (profile == RuntimeProfile.LEGACY || !windowsHost ||
+                project != null && outsideByIdentity(real ?: candidate.normalize(), project))
     } catch (_: Exception) {
         false
     } catch (_: IOError) {
@@ -321,8 +328,38 @@ object RuntimeSelectionPolicy {
                 rejected("$label resolves outside the installed Moe runtime", real)
             isWithin(comparablePath(real.toString(), foldCase), comparablePath(project.toString(), foldCase)) ->
                 rejected("$label resolves inside the project", real)
+            // A lookup failure on a path toRealPath just resolved is practically unreachable; it refuses too.
+            profile == RuntimeProfile.PROTECTED && windowsHost && !outsideByIdentity(real, project) ->
+                rejected("$label resolves inside the project", real)
             else -> RuntimeSelection.Accepted(real.toFile())
         }
+    }
+
+    /**
+     * On Windows toRealPath calls GetFinalPathNameByHandle only at a reparse point, so a subst or
+     * mapped drive letter is never resolved: `Q:\bin` can be `<project>\bin` with no shared prefix,
+     * and only file identity (volume serial + file index) sees it. True only when some folder from
+     * [path] up to its root exists and none is [project]. A missing folder holds nothing, so its
+     * parent decides; any other failure, a missing project or a drive that does not exist answers
+     * false. Node's realpath.native resolves these letters, so VS Code needs no twin.
+     */
+    private fun outsideByIdentity(path: Path, project: Path): Boolean {
+        var proved = false
+        var current: Path? = path
+        while (current != null) {
+            try {
+                if (Files.isSameFile(current, project)) return false
+                proved = true
+            } catch (_: NoSuchFileException) {
+                // Its parent decides.
+            } catch (_: Exception) {
+                return false
+            } catch (_: IOError) {
+                return false
+            }
+            current = current.parent
+        }
+        return proved
     }
 
     // The reason reaches the UI; the absolute path only the log.
