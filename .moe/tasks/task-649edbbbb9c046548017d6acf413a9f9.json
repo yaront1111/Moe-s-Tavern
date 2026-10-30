@@ -61,7 +61,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -74,7 +74,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:26:00.035Z",
-  "updatedAt": "2026-10-30T00:19:00.003Z",
+  "updatedAt": "2026-10-30T01:32:44.614Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T19:06:02.573Z",
@@ -84,11 +84,14 @@
     "firstClaimAt": "2026-10-30T00:11:43.771Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T01:32:44.614Z",
+    "wallClockMs": 4860843
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-b5749787"
+    "worker-b5749787",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -200,5 +203,9 @@
     "kind": "completion",
     "sessionId": "worker-b5749787@2026-10-30T00:15:54Z",
     "at": "2026-10-30T00:19:00.003Z"
-  }
+  },
+  "completedAt": "2026-10-30T01:32:44.614Z",
+  "reviewCompletedAt": "2026-10-30T01:32:44.614Z",
+  "reviewSummary": "Approved. Reviewed completion commit 3b9ce14 (on moe/work-2026-10-24, pushed, ancestor of HEAD d199aab). Non-board diff is +96/-1 (claudeAuth.ts +3/-1, new claudeAuth.test.ts +93), well under the 400-LOC cap. cli.ts and cli.test.ts are untouched.\n\nRe-ran the plan's gate in a fresh Linux snapshot of HEAD (git archive, npm ci). The two task files are byte-identical to HEAD:\n- `vitest run src/accounts/` on the seat PATH, which contains the mode-700 /root/.local/bin: 4 files, 37 passed | 1 skipped, exit 0.\n- Full suite under `env -i`: 189 files, 5276 passed | 16 skipped, exit 0.\n- `tsc --noEmit` exit 0; `tsc -p tsconfig.test-check.json` exit 0.\n\nMutants, run in the snapshot:\n- (a) ENOENT-only: 2 failed (bare name behind unsearchable dir; CLI MOE_CLAUDE_NOT_FOUND), 2 passed.\n- (b) every EACCES (bare-name condition dropped): 1 failed (explicit non-exec path expected notFound false), 3 passed.\n- Restored: 4 passed.\n\nChecked each acceptance criterion against the code and tests:\n- runClaude returns { status: null, stdout: '', notFound: true } for a bare missing name with PATH = mode-000 dir, after an EACCES precondition via raw spawnSync.\n- accounts check/login print MOE_CLAUDE_NOT_FOUND, and signInCheckedAt stays null.\n- An explicit non-executable path still gives notFound false.\n- The win32 path (findWindowsCommand / missing) is unchanged, and status stays null on any spawn error.\n\nTest hygiene: afterEach restores 0o700 before rmSync, runIf skips Windows and root, and every case passes an explicit env object. A shell:true win32 command has a full-path file, so the basename test can never match it.\n\nNot verified here: the Windows-native behaviour, because the cases are runIf Linux and non-root by design. That is acceptable, since the win32 path is untouched. Complexity pass: nothing to cut; the one-expression fix is minimal.",
+  "requiredCheckAtDone": null
 }
