@@ -6,7 +6,7 @@ import { listCheckRunsForCandidate } from './checkRunStore.js';
 import { getDeliveryReceiptForCandidate } from './receiptStore.js';
 import { currentAttempt, getAttempt } from './attemptStore.js';
 import {
-  evaluateDeliveryEvidence, EVIDENCE_TOKENS, PROTECTED_CHECK_CHANGED_PREFIX, REQUIRED_CHECK_TOKEN_PREFIX, requiredCheckCommand,
+  evaluateDeliveryEvidence, EVIDENCE_TOKENS, isVerifiedLocal, PROTECTED_CHECK_CHANGED_PREFIX, REQUIRED_CHECK_TOKEN_PREFIX, requiredCheckCommand,
 } from '../delivery/policy.js';
 import { logger } from '../util/logger.js';
 
@@ -16,8 +16,9 @@ export interface TaskDelivery {
   latestCheckRun?: Pick<CheckRun, 'command' | 'exitCode'> & Partial<Pick<CheckRun, 'source'>>;
   /**
    * delivery/policy.ts on the required check and protected required checks: false
-   * while it reports either missing or drifted, true once every owed check is satisfied. Absent under the legacy policy,
-   * when no check is owed, or when the policy cannot be read.
+   * while it reports either missing or drifted, true once every owed check is satisfied. Absent under the legacy policy
+   * (except for a verified-local task, whose checks every policy judges), when no check is owed, or when the policy
+   * cannot be read.
    */
   requiredCheckSatisfied?: boolean;
   deliveryReceipt?: Pick<DeliveryReceipt, 'target' | 'landedRevision'>;
@@ -83,7 +84,7 @@ function checkOwed(state: StateManager, task: Task): boolean {
 function requiredCheckSatisfiedFor(state: StateManager, task: Task): boolean | undefined {
   return readEvidence(task.id, 'required-check', () => {
     const { policy, missingEvidence } = evaluateDeliveryEvidence(state, task);
-    if (policy === 'legacy') return undefined;
+    if (policy === 'legacy' && !isVerifiedLocal(state, task)) return undefined;
     if (missingEvidence.some(t => t.startsWith(REQUIRED_CHECK_TOKEN_PREFIX) || t === EVIDENCE_TOKENS.unreadableRequiredCheck
       || t.startsWith(PROTECTED_CHECK_CHANGED_PREFIX) || t === EVIDENCE_TOKENS.protectedChecksUnapproved
       || t === EVIDENCE_TOKENS.protectedChecksUnmeasured)) return false;

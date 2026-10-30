@@ -34,7 +34,9 @@
 //     revokes its evidence), bound to a dispatch naming that check. Each protected
 //     definition needs its own dispatch. owedChecks is the frozen list such a task
 //     owes; assertCheckDispatchApproved admits only those dispatches. A strong
-//     task that owes nothing reports required-checks-undeclared.
+//     task that owes nothing reports required-checks-undeclared. This holds
+//     under every deliveryPolicy, legacy (set, absent or null) included: legacy
+//     adds no landing evidence and never excuses the checks (task-43088e9b).
 //
 // Which policy applies is per task (resolveTaskDeliveryPolicy): legacy and
 // observe tasks keep the live settings.deliveryPolicy, and a strict task is
@@ -482,8 +484,11 @@ export function approvedCheckEnvironments(settings: { checkEnvironments?: unknow
   return [...raw] as string[];
 }
 
-/** True when `task`'s own profile is verified-local (the live profile floored by its snapshot). May throw INVALID_INPUT. */
-function isVerifiedLocal(state: StateManager, task: Task): boolean {
+/**
+ * True when `task`'s own profile is verified-local (the live profile floored by its snapshot). May throw INVALID_INPUT.
+ * evaluateDeliveryEvidence and deliveryProjection both read it, so the checks a task owes are decided in one place.
+ */
+export function isVerifiedLocal(state: StateManager, task: Task): boolean {
   return resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot) === 'verified-local';
 }
 
@@ -522,16 +527,18 @@ export function assertCheckDispatchApproved(state: StateManager, params: Record<
  * verified-local is not ready. Every consumer reads that throw as not satisfied:
  * isDependencySatisfied withholds, describeUnmetDependency names it unjudgeable,
  * deliveryProjection omits requiredCheckSatisfied, and qa_approve refuses before
- * any write.
+ * any write. Under the legacy policy only a verified-local task is judged: its
+ * checks are, landing is not, and `policy` still reports 'legacy'.
  */
 export function evaluateDeliveryEvidence(state: StateManager, task: Task, attestations: DeliveryAttestations = {}): DeliveryEvidenceResult {
   const policy = resolveTaskDeliveryPolicy(state.project?.settings, task);
-  if (policy === 'legacy') return { policy, satisfied: true, missingEvidence: [] };
   // Verified-local only: its approved environments, read live (a malformed list throws). null keeps today's rule.
+  // An empty list is strict, so legacy is excused on `=== null` alone, never on the list's truthiness or length.
   const trusted = isVerifiedLocal(state, task) ? approvedCheckEnvironments(state.project?.settings) : null;
+  if (policy === 'legacy' && trusted === null) return { policy, satisfied: true, missingEvidence: [] };
   const defs = declaredChecks(task);
   const undeclared = trusted && defs?.length === 0 && owedGate(state, task) === null ? [EVIDENCE_TOKENS.requiredChecksUndeclared] : [];
-  const landing = LANDING_JUDGED.has(task.status) ? [] : landingShortfall(policy, task, attestations);
+  const landing = policy === 'legacy' || LANDING_JUDGED.has(task.status) ? [] : landingShortfall(policy, task, attestations);
   // First-seen order: a command both qualityGate and a protected check owe appears once.
   const missingEvidence = [...new Set([...landing, ...checkShortfall(state, task, trusted),
     ...protectedCheckShortfall(state, task, defs, trusted), ...undeclared])];

@@ -233,3 +233,77 @@ describe('verified-local required checks (CQ-V04)', () => {
     expect(missing()).toEqual([]);
   });
 });
+
+/**
+ * A verified-local task whose project never set a strict deliveryPolicy ('absent' deletes the key), with no completion
+ * commit, so an invented landing demand would show. The snapshot is written directly: submit_plan keeps a stored
+ * verified-local one whole and cannot recapture it.
+ */
+function legacyPolicy(value: 'legacy' | null | 'absent'): void {
+  const next: Record<string, unknown> = { ...h.state.project!.settings };
+  if (value === 'absent') delete next.deliveryPolicy; else next.deliveryPolicy = value;
+  h.state.project!.settings = next as never;
+  h.state.tasks.set('task-1', { ...task(), commits: [], executionPolicySnapshot: { ...task().executionPolicySnapshot!, deliveryPolicy: 'legacy' } as never });
+}
+const setDone = () => h.state.tasks.set('task-1', { ...task(), status: 'DONE' });
+const BOTH = [token(UNIT), token(LINT)];
+
+describe('V verified-local under the legacy deliveryPolicy (bug task-43088e9b)', () => {
+  it.each(['legacy', 'absent', null] as const)('V1 owes its trusted checks and no landing evidence under deliveryPolicy %s', async (value) => {
+    legacyPolicy(value);
+    expect(evaluateDeliveryEvidence(h.state, task())).toEqual({ policy: 'legacy', satisfied: false, missingEvidence: BOTH });
+    expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBe(false);
+    const { dispatch: real } = await dispatch(UNIT, 'acc');
+    await recordCheckRunTool(h.state).handler({ id: 'run-reported', candidateId: cand, treeSha: tree1, command: UNIT, exitCode: 0,
+      outcome: 'passed', runnerId: RUNNER.runner.runnerId, source: 'runner-observed', planRevision: 1, environment: ENV_A,
+      dispatchId: real.id }, h.state, RUNNER);
+    expect(missing()).toEqual(BOTH);
+    setDone();
+    expect(unmetDependsOn(h.state, { dependsOn: ['task-1'] })).toEqual(['task-1']);
+    expect(dependencyShortfall(h.state, 'task-1')).toEqual({ satisfied: false, missingEvidence: BOTH });
+  });
+
+  it('V2 is satisfied by an authenticated pass of each owed check, and an environment revoked or absent brings the tokens back', async () => {
+    legacyPolicy('legacy');
+    await pass(UNIT, 'acc');
+    await pass(LINT, 'lint');
+    expect(evaluateDeliveryEvidence(h.state, task())).toEqual({ policy: 'legacy', satisfied: true, missingEvidence: [] });
+    expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBe(true);
+    setDone();
+    expect(unmetDependsOn(h.state, { dependsOn: ['task-1'] })).toEqual([]);
+    expect(dependencyShortfall(h.state, 'task-1')).toEqual({ satisfied: true, missingEvidence: [] });
+    settings({ checkEnvironments: undefined });
+    expect(missing()).toEqual(BOTH);
+    expect(unmetDependsOn(h.state, { dependsOn: ['task-1'] })).toEqual(['task-1']);
+  });
+
+  it('V3 keeps judging a stored verified-local snapshot after the live profile and policy roll back to legacy', () => {
+    settings({ executionProfile: 'legacy', deliveryPolicy: 'legacy' });
+    expect(task().executionPolicySnapshot?.profile).toBe('verified-local');
+    expect(missing()).toEqual(BOTH);
+  });
+
+  it('V4 reports required-checks-undeclared when nothing is owed', async () => {
+    legacyPolicy('legacy');
+    await approve({ executionContract: { checkRefs: [UNIT] } });
+    expect(missing()).toEqual(['required-checks-undeclared']);
+  });
+
+  it('V5 refuses a malformed checkEnvironments as INVALID_INPUT and withholds dependents', () => {
+    legacyPolicy('legacy');
+    settings({ checkEnvironments: ENV_A });
+    expect(() => missing()).toThrow(/checkEnvironments/);
+    setDone();
+    expect(unmetDependsOn(h.state, { dependsOn: ['task-1'] })).toEqual(['task-1']);
+  });
+
+  it.each(['legacy', 'observe'])('L2 leaves a %s task satisfied with no run, even with a malformed checkEnvironments', (name) => {
+    profile(name);
+    legacyPolicy('legacy');
+    settings({ checkEnvironments: ENV_A });
+    expect(evaluateDeliveryEvidence(h.state, task())).toEqual({ policy: 'legacy', satisfied: true, missingEvidence: [] });
+    expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBeUndefined();
+    setDone();
+    expect(unmetDependsOn(h.state, { dependsOn: ['task-1'] })).toEqual([]);
+  });
+});
