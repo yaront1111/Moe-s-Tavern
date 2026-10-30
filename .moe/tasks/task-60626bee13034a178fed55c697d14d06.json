@@ -89,7 +89,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -120,19 +120,22 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:35.352Z",
-  "updatedAt": "2026-10-30T08:22:56.383Z",
+  "updatedAt": "2026-10-30T08:33:31.899Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:29:27.778Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T08:33:31.898Z",
+    "wallClockMs": 36244120
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
     "worker-55e6716a",
     "architect-4ae016fb",
     "worker-5ebbf433",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-8e551ac8"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -282,5 +285,9 @@
   "touchedFiles": [
     "scripts/tests/local-runner-bridge.test.mjs",
     "scripts/local-runner/guest-supervisor.py"
-  ]
+  ],
+  "completedAt": "2026-10-30T08:33:31.898Z",
+  "reviewCompletedAt": "2026-10-30T08:33:31.898Z",
+  "reviewSummary": "Approved CQ-R10d4 on completion cb4997e3 (tree 886f5f6bb9324bea0aad7104910c537142636b7f) on moe/work-2026-10-24 and origin. Checkpoint 5f62b98 (tree 593cfbff304c02b04c6e99f33b0ec895c02863db) is the same task; both trees match task.commits. Source diff 200 lines (checkpoint +153/-13, completion +30/-4) in guest-supervisor.py and local-runner-bridge.test.mjs, under the 400 cap. Working tree matches cb4997e3 for both files.\n\nRe-ran task.verification with env -i, Node 24.21.0, MOE_PINNED_CODEX=/tmp/r10d4-evidence/codex-x86_64-unknown-linux-musl: node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs — exit 0, 82 pass, 0 skip, 49s (LA1-LA6, J3, J4, B17; LA5 ran on the pinned member). Plan suite node --test scripts/tests/local-runner.test.mjs — exit 0, 250 pass, 1 pre-existing macOS skip.\n\nDoD: LA1/J3/LA3 pin argv (claude: -p prompt --mcp-config <home>/.moe-mcp.json --strict-mcp-config --dangerously-skip-permissions; codex: exec --sandbox danger-full-access --skip-git-repo-check prompt). Prompts start \"Call moe.get_context for your assigned task first.\"; no resume/continue; credential absent from argv. LA2 pins shim-only config, 0600/0700, fchown to the job uid, four-line codex table with env_vars=[\"MOE_ROLE\"] and CODEX_HOME; symlink/file/dir/write failure returns 71 with no relay. LA3 probe through main() checks argv, cwd WORKSPACE and config bytes.\n\nRails: JOBS stays a 2-tuple. No verified-local or isolation claim. Spawn identity drop unchanged. For CQ-R10/R13: workspace .codex is refused 65 (LA6); claude MCP inherits the full env including the credential; codex forwards only MOE_ROLE (LA5). Ponytail: lean, net 0.",
+  "requiredCheckAtDone": null
 }

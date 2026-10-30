@@ -101,7 +101,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -114,7 +114,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:17:43.360Z",
-  "updatedAt": "2026-10-30T08:30:10.642Z",
+  "updatedAt": "2026-10-30T08:33:20.980Z",
   "dependsOn": [
     "task-78ba155c350f4927ab5bdf53c21a4468"
   ],
@@ -124,11 +124,14 @@
     "plannedDistinctFileCount": 5,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T08:33:20.979Z",
+    "wallClockMs": 3704911
   },
   "contextFetchedBy": [
     "worker-093a65d0",
-    "qa-8e551ac8"
+    "qa-8e551ac8",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -219,7 +222,9 @@
     "docs/skills/moe-planning/SKILL.md",
     "docs/roles/qa.md",
     "docs/MEMORY.md",
-    "packages/moe-daemon/src/generated/initFiles.ts"
+    "packages/moe-daemon/src/generated/initFiles.ts",
+    ".moe/tasks/task-142415f4cad3435a94bb879399eba160.json",
+    ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json"
   ],
   "completionSummary": "Rework for the QA reject (reopen 1). docs/roles/qa.md:22 and docs/MEMORY.md:80 now carry one byte-identical, no-clobber retirement command: `(cd .serena/memories && mkdir -p _archive && for f in task-<id>-*handoff.md; do [ ! -e \"_archive/$f\" ] || { echo \"exists: _archive/$f\" >&2; exit 1; }; done && mv -n task-<id>-*handoff.md _archive/)`. It checks every destination first, so one collision retires nothing; `mv -n` is only a race backstop. Both docs forbid a plain `mv`, and MEMORY.md explains why `mv -n` alone is not enough: Git Bash ships coreutils 8.32, whose `mv -n` skips with exit 0 (verified), while 9.4 exits 1. I ran the docs' literal command in scratch trees. A collision exits 1, moves neither file and leaves the archive reading OLD. A clean run exits 0, moves both of this task's handoffs and leaves another task's alone. No match exits 1. An unsubstituted <id> is a syntax error (exit 2) that moves nothing. I regenerated only initFiles.ts, with Windows Git Bash `npm run generate-init-files`, which printed 'Generated D:\\projexts\\moes\\packages\\moe-daemon\\src\\generated\\initFiles.ts (8 role docs + 3 subagents, sha-stamped)'. Its delta is the qa.md entry only: marker 546f3f3da3d2 -> 3d85e1e8146a, the body line, and the shipped-sha list. skillFiles.ts is byte-identical, and I ran no build or prebuild. Round-1 content is unchanged: the moe-planning `mem:<name>` rule, and the MEMORY.md lifecycle and pointer convention. qa.reference.md and architect.md stay intentionally untouched: the rule lives in the always-loaded qa.md, with the detail in MEMORY.md. Diff: qa.md +1/-1 (35 lines), MEMORY.md +1/-1, initFiles.ts +3/-3; added text is ASCII. Verification: lint OK (39/30/35), tsc clean, 4 files / 38 tests pass, both greps match, exit 0. Running seats pick the change up only after the daemon is rebuilt (.moe/roles and .moe/skills re-sync at daemon boot), and IDE users after a plugin rebuild.",
   "commits": [
@@ -243,20 +248,40 @@
       "treeId": "ef7e6d8379d8f56cce002b9ba622e56997623b82",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "47b4e438b3d4a718bede1d8688705c07c11750ed",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T08:26:01Z",
+      "paths": [
+        ".moe/tasks/task-142415f4cad3435a94bb879399eba160.json",
+        ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json",
+        "docs/MEMORY.md",
+        "docs/roles/qa.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T08:30:31.899Z",
+      "treeId": "3b6d4bc8fe38feddc60b773e46c3f04e0fd13f58",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
     "docs/skills/moe-planning/SKILL.md",
-    "docs/roles/qa.md"
+    "docs/roles/qa.md",
+    "docs/MEMORY.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "completion",
-    "sessionId": "worker-5ebbf433@2026-10-30T08:18:30Z",
-    "at": "2026-10-30T08:20:27.540Z"
+    "sessionId": "worker-093a65d0@2026-10-30T08:26:01Z",
+    "at": "2026-10-30T08:30:31.899Z"
   },
-  "reviewCompletedAt": "2026-10-30T08:25:59.707Z",
+  "reviewCompletedAt": "2026-10-30T08:33:20.979Z",
   "rejectionDetails": {
     "failedDodItems": [
       "docs/roles/qa.md / qa.reference.md tell QA, after qa_approve, to fold reusable facts from task-<id>-handoff into a gotcha/pattern/decision memory and then retire the handoff (archive to .serena/memories/_archive/, or delete). A rejected task keeps its handoff. docs/MEMORY.md documents this lifecycle."
@@ -299,5 +324,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T08:33:20.979Z",
+  "reviewSummary": "Rework round (reopen 1) approved. Reviewed completion 47b4e438 (follow-up to 4d6b371). It is on moe/work-2026-10-24 and origin/moe/work-2026-10-24, the branch HEAD. Non-board diff +5/-5: qa.md +1/-1, MEMORY.md +1/-1, initFiles.ts +3/-3, which is the qa.md marker 546f3f3da3d2 -> 3d85e1e8146a, the body line and the shipped-sha list. Over both rounds the task is net ~16 LOC. The shared tree has no dirty edits on docs/roles, docs/skills, docs/MEMORY.md or src/generated.\n\nRe-ran task.verification from the repo root: EXIT=0. Lint OK (architect 39, worker 30, qa 35, all max 40). tsc --noEmit clean. vitest 4 files / 38 tests passed (qaCommitPolicy 8, targetedContextGuidance 6, initFiles 13, skillFiles 11). Both greps matched.\n\nRejection fix: qa.md:22 and MEMORY.md:80 now carry a byte-identical check-then-move command (string compare). I ran it in scratch trees under WSL coreutils 9.4 and Windows Git Bash 8.32, with identical results on both:\n- clean run: exit 0, this task's handoff and qa-handoff move, another task's handoff stays;\n- collision: exit 1, prints `exists: _archive/...`, moves neither file, archive still reads OLD;\n- no match: exit 1 (cannot stat);\n- unsubstituted <id>: exit 2 syntax error, nothing moved;\n- wrong cwd: exit 1, nothing moved.\n\nDoD:\n(1) moe-planning SKILL.md has the `mem:<name>` rule; architect.md is unchanged and still points at the skill; MEMORY.md has the pointer convention.\n(2) qa.md covers retire-after-approve, keep-on-reject and never-another-task's; MEMORY.md covers the lifecycle and `_archive/`; .serena/project.yml has `ignored_memory_patterns: [_archive/.*]`.\n(3) Lint, generator output and tests are green, and the completion summary names the daemon and plugin rebuild.\n\nAdded lines are ASCII. qa.reference.md and architect.md are untouched. Ponytail: the command is long, but the explicit pre-check is required because 8.32's `mv -n` exits 0 on a skip; no cuts.",
+  "requiredCheckAtDone": null
 }
