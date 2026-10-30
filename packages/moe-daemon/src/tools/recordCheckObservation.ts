@@ -3,6 +3,10 @@ import type { StateManager } from '../state/StateManager.js';
 import { recordCheckObservation, type RecordCheckObservationParams } from '../state/checkObservationStore.js';
 import { CHECK_OUTCOMES, MAX_CHECK_LOG_BYTES } from '../state/checkRunStore.js';
 import { runnerToolCall } from './recordCheckDispatch.js';
+import { applyRepairDecision, decideCheckRepair } from '../delivery/repairActivation.js';
+import type { RepairDecision } from '../delivery/repairPolicy.js';
+import type { CheckRun } from '../types/schema.js';
+import { logger } from '../util/logger.js';
 
 // =============================================================================
 // moe.record_check_observation: the one result of a recorded check dispatch
@@ -17,6 +21,9 @@ import { runnerToolCall } from './recordCheckDispatch.js';
 //
 // RECORDING, NOT APPROVAL. Not `blocking`: dispatch serializes the tool under
 // the state mutex, which keeps one marker per dispatch.
+//
+// REPAIR (CQ-V05b): a verified-local task's run then gets CQ-V05's decision, in
+// the same mutex-held call (delivery/repairActivation.ts), applied only once.
 // =============================================================================
 
 const TOOL_NAME = 'moe.record_check_observation';
@@ -32,7 +39,8 @@ export function recordCheckObservationTool(_state: StateManager): ToolDefinition
       'and any other argument are refused by name (INVALID_INPUT). A superseded dispatch is still answered against its own binding. ' +
       'Refusals: an unrecorded dispatch (CHECK_DISPATCH_NOT_FOUND), another runner\'s dispatch (CHECK_RUNNER_MISMATCH), another environment (CHECK_ENVIRONMENT_MISMATCH), ' +
       'a second result for the dispatch (CHECK_DISPATCH_ALREADY_OBSERVED) and a same-id run that differs (CHECK_RUN_IMMUTABLE). An identical same-id call returns the stored run with duplicate:true ' +
-      'and completes a marker a crash left unwritten. Recorded, never approved: a run marks nothing DONE and releases nothing.',
+      'and completes a marker a crash left unwritten. Recorded, never approved: a run marks nothing DONE and releases nothing. ' +
+      'On a verified-local task the result may carry `repair` (CQ-V05\'s decision, applied once, never on a duplicate) or `repairError`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -56,7 +64,20 @@ export function recordCheckObservationTool(_state: StateManager): ToolDefinition
     handler: async (args, state, context) => {
       const { runner, params } = runnerToolCall(TOOL_NAME, 'check observation', FIELDS, args, context);
       const { checkRun, duplicate } = await recordCheckObservation(state, runner, params as RecordCheckObservationParams);
-      return { success: true, checkRun, duplicate };
+      return { success: true, checkRun, duplicate, ...(await activateRepair(state, checkRun, duplicate)) };
     },
   };
+}
+
+/** The repair fields: none when the run is not judged. Never fails the persisted observation, so a runner retry cannot loop on it. */
+async function activateRepair(state: StateManager, checkRun: CheckRun, duplicate: boolean): Promise<{ repair?: RepairDecision; repairError?: string }> {
+  let judged: ReturnType<typeof decideCheckRepair> = null;
+  try {
+    judged = decideCheckRepair(state, checkRun);
+    if (judged && !duplicate) await applyRepairDecision(state, judged.task, judged.decision);
+    return judged ? { repair: judged.decision } : {};
+  } catch (error) {
+    logger.warn({ taskId: judged?.task.id, checkRunId: checkRun.id, error }, 'Repair activation failed; the observation stays recorded');
+    return { ...(judged ? { repair: judged.decision } : {}), repairError: error instanceof Error ? error.message : String(error) };
+  }
 }

@@ -1042,6 +1042,8 @@ Any other argument, `runnerId`, `source`, `candidateId`, `treeSha`, `command` an
 //   outcome, planRevision, environment, dispatchId, createdAt }
 // candidateId, treeSha, command, planRevision, environment and dispatchId are the dispatch's; runnerId is the channel's
 // duplicate: true when an identical run already existed under this id
+// repair?: RepairDecision   verified-local only (CQ-V05b), see Repair below
+// repairError?: string      verified-local only: activation failed; the run stays recorded
 ```
 
 **Notes:**
@@ -1050,6 +1052,7 @@ Any other argument, `runnerId`, `source`, `candidateId`, `treeSha`, `command` an
 - **Replay.** A same-id call is compared like a `moe.record_check_run` report. An identical one returns the stored run with `duplicate: true` and writes nothing, except that it completes a marker a crash left unwritten. Any difference is refused. The run is written before the marker, so a crash between the two leaves a run that is not authenticated until the identical retry completes it.
 - **Id squatting.** A `moe.record_check_run` report that takes the run id first with different content makes the observation fail (`CHECK_RUN_IMMUTABLE`), but never makes that report trusted: it has no marker. Use unguessable run ids.
 - **Recorded, not approved.** The tool is not `blocking`: dispatch serializes it under the state mutex, which keeps one marker per dispatch.
+- **Repair (CQ-V05b).** On a **verified-local** task, a run that is the check's latest on the task's current candidate gets CQ-V05's decision (`delivery/repairPolicy.ts` `decideRepair`, budgets from `settings.repairPolicy`) over that check's authenticated runs, as `repair`, and the daemon acts on it in the same call through existing transitions only. `{ action: "repair", attempt, remaining, diagnostics }`: an unparked REVIEW task returns to WORKING under the same approved plan revision (steps reset, no `reopenCount`, tier, effort or model change), and every status gets a diagnostics comment by `moe-daemon`. `{ action: "retry-infra", attempt, remaining, diagnostics }`: no task change; it is the runner's cue to re-dispatch the same candidate's check through `moe.record_check_dispatch` with a fresh dispatch id. `{ action: "escalate", reason, diagnostics }`: a diagnostics comment plus a `#governors` alert, never a loop. `{ action: "replan", reason: "plan-revision-unapproved" }`: a WORKING or REVIEW task moves to PLANNING with `request_replan`'s payload. `{ action: "none", reason }`: nothing. `diagnostics` is `{ checkRunId, candidateId, command, outcome, exitCode, excerpt, logRefs }`. A legacy or observe task, a superseded run and a run on a superseded candidate get neither field. A duplicate replay returns the decision without re-applying it. An activation failure (for example a malformed `settings.repairPolicy`) is logged and returned as `repairError` with `success: true`. Crash window: an observation persisted before activation ran is not re-activated on replay; the delivery gate still fails closed on it.
 
 **Errors.** Checked in this order, and every refusal writes nothing:
 - `-32003 RUNNER_CHANNEL_REQUIRED`: the call did not arrive over an authenticated `/runner` connection. Checked before the arguments are read.

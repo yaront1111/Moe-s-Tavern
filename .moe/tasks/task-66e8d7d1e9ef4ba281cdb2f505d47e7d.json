@@ -17,54 +17,93 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nThese prerequisites are in HEAD by WORKING time (dependsOn V04, which depends on V03 and V03b, plus V05). Adapt to their landed names and never re-implement them; planningNotes lists the assumed interfaces:\n- V05: delivery/repairPolicy.ts, with decideRepair, resolveRepairPolicy and RepairDecision;\n- V03b: state/checkObservationStore.ts, with getCheckDispatch, isAuthenticatedCheckRun and recordCheckDispatch;\n- V03: tools/recordCheckDispatch.ts and tools/recordCheckObservation.ts, whose handlers take (args, state, { runner });\n- V04: the dispatch tool's admission (owedChecks plus settings.checkEnvironments).\n\nCreate packages/moe-daemon/src/delivery/repairActivation.test.ts (vitest). Keep it to about 220 lines, using it.each tables and shared helpers, because tests count toward QA's 400-net cap.\n\nFixture: seed it on disk the way delivery/executionPolicyLifecycle.test.ts does, because strict rows exist only as raw JSON. Use NO readiness mock: every transition here is a backward move.\n- h.init(), then h.setupMoeFolder({ schemaVersion: CURRENT_SCHEMA_VERSION, settings: { qualityGate: GATE, qualityGateScope: 'everyTask', checkEnvironments: [ENV], ...overrides } }), then h.createEpic().\n- task-1 has:\n  - status REVIEW and assignedWorkerId 'qa-1';\n  - planRevision 1 and approvedPlanRevision 1;\n  - executionPolicySnapshot { version: 2, profile: 'verified-local', planRevision: 1, deliveryPolicy: 'local-branch' };\n  - one COMPLETED step, and stepsCompleted ['step-1'].\n- Worker qa-1 is { status: 'WORKING', currentTaskId: 'task-1' }. Then await h.state.load().\n- Call openAttempt and recordCandidate the way state/checkRunStore.test.ts does, through a helper candidate(id, tree).\n- dispatch(candidateId) calls recordCheckDispatchTool's handler (V04's dispatch path) with { taskId, candidateId, planRevision: 1, command: GATE, environment: ENV } and context { runner: { runnerId: 'runner-0123456789abcdef' } }.\n- observe(dispatchId, outcome, exitCode, tail) calls recordCheckObservationTool's handler with a fresh id.\n- Use vi.useFakeTimers({ toFake: ['Date'] }) and advance vi.setSystemTime by 1s before every record. Use ascending ids, so ordering never depends on random ids.\n- vi.spyOn(h.state, 'postToRoleChannel').\n\nAssert exact objects with toStrictEqual, plus exact codeNames and strings. Never assert truthiness.\n\nCases:\n- C1, repair from REVIEW (DoD 1): a cand-1 code-failure (exit 1, tail 'boom') returns repair { action: 'repair', attempt: 1, remaining: 2, diagnostics: <exact> }. Then:\n  - the task is WORKING and unassigned;\n  - planRevision 1 and approvedPlanRevision 1 are unchanged;\n  - the step is PENDING, stepsCompleted is [] and contextFetchedBy is [];\n  - reopenCount is unchanged, and reopenReason is exact;\n  - qa-1 is IDLE with currentTaskId null;\n  - the newest comment is the exact diagnostics comment, by 'moe-daemon';\n  - there is no channel post.\n- C2, repair while WORKING: a later cand-2 (new tree, tail 'boom 2') failure gives attempt 2, remaining 1. Status and reopenReason are unchanged, and there is exactly one more comment.\n- C3, escalation, as it.each rows:\n  - repairPolicy { maxCodeRepairs: 1 } with cand-2 failing gives escalate 'code-repair-budget-exhausted';\n  - cand-2 on cand-1's tree gives escalate 'unchanged-candidate'.\n  In both, status is unchanged, the comment is exact, and there is exactly one postToRoleChannel('governors', <exact text>).\n- C4, parked: a REVIEW row with needsHumanReview true stays REVIEW on a code-failure and gets only the comment.\n- I1, infra (DoD 2):\n  1. An infra-failure on cand-1 gives retry-infra attempt 1, remaining 1. The task row deep-equals its previous state, with no comment and no post.\n  2. A fresh dispatch() for cand-1 is admitted. A timeout then gives retry-infra attempt 2, remaining 0.\n  3. The next infra-failure gives escalate 'infra-retry-budget-exhausted', with its governors alert.\n  4. A code-failure on a fresh dispatch then gives repair attempt 1, remaining 2, and the reopen. Infra runs therefore never consumed a code repair.\n- R1, replan (DoD 3):\n  1. Dispatch at revision 1. Then h.state.updateTask('task-1', { definitionOfDone: ['changed'] }) advances planRevision to 2; assert it.\n  2. The observation gives { action: 'replan', reason: 'plan-revision-unapproved' }.\n  3. The task is PLANNING and unassigned, with implementationPlan [], stepsCompleted [], a priorAttempt that holds the old plan, and the exact reopenReason.\n  4. qa-1 is IDLE, and there is one postToRoleChannel('architects', <exact text>).\n- D, duplicate: replaying C1's observation byte-identically gives duplicate:true and the same repair object. There is no new comment, no post and no status change.\n- S, stale: after C2, replaying C1's observation returns no repair key, because cand-2's run is now the check's latest.\n- L, legacy and observe (DoD 3), as it.each rows over the legacy and observe snapshots, each with the matching live executionProfile:\n  - code-failure and infra-failure results toStrictEqual { success: true, checkRun, duplicate: false }, with no repair key;\n  - the task row deep-equals its previous state, with no comment and no post.\n- E, error handling: repairPolicy { maxCodeRepairs: 11 } on a strict task still records the observation (the CheckRun is on disk). The result carries repairError naming settings.repairPolicy.maxCodeRepairs, and the task is unchanged.\n- P, rail pin: the real assertExecutionProfileReady('verified-local') still throws codeName EXECUTION_PROFILE_NOT_READY.\n\nRun `cd packages/moe-daemon && npx vitest run src/delivery/repairActivation.test.ts`: every case fails before implementation.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/delivery/repairActivation.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/repairActivation.test.ts"
+      ],
+      "note": "Wrote src/delivery/repairActivation.test.ts (13 cases: C1, C2, C3x2, C4, I1, R1, D, S, L legacy/observe, E, P). Settings are patched in memory after a disk seed, and the strict row is raw JSON. RED was run in a Linux snapshot at HEAD 227833f4: 8 failed for the right reason (no repair or repairError key). 5 passed because they pin existing behaviour: D, S, L x2 and P. Deviations from the plan:\n- qa-1 seeds as CODING, because 'WORKING' is not a WorkerStatus.\n- R1 also proves a late observation from a superseded candidate does nothing.\n- S replays a superseded run on the CURRENT candidate, so it isolates the stale guard.\n846 peer dirty paths are untouched.",
+      "startedAt": "2026-10-30T07:37:11.108Z",
+      "completedAt": "2026-10-30T07:42:41.209Z"
     },
     {
       "stepId": "step-2",
       "description": "Create packages/moe-daemon/src/delivery/repairActivation.ts, about 120 lines.\n\nThe header comment states:\n- it activates CQ-V05's decision on authenticated observations (CQ doc 'Refresh, repair, or replan');\n- it uses EXISTING transitions only: qa_reject's WORKING reopen shape without its QA bookkeeping, and request_replan's PLANNING shape;\n- it is no scheduler and no revision authority;\n- legacy and observe are untouched;\n- verified-local stays unavailable, so this runs only on rows that a hand-edited strict snapshot made strict.\n\nReuse, never re-implement:\n- getCheckDispatch and isAuthenticatedCheckRun (state/checkObservationStore.ts);\n- listCandidatesForTask (state/candidateStore.ts);\n- listCheckRunsForCandidate (state/checkRunStore.ts);\n- resolveTaskExecutionProfile (./executionProfile.js);\n- decideRepair and resolveRepairPolicy (./repairPolicy.js);\n- decodeStoredPlanRevision (state/taskStore.ts);\n- resetPlanStepsToPending (util/reopen.ts);\n- generateId('comment') (util/ids.ts).\n\n1. `export function decideCheckRepair(state, run: CheckRun): { task: Task; decision: RepairDecision } | null`.\n   - Return null unless run.dispatchId names a recorded dispatch, its task exists, and isAuthenticatedCheckRun(state, run) holds.\n   - Return null unless resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot) === 'verified-local'. So legacy and observe get no repair key and no side effect.\n   - runs = every authenticated run on the task's candidates (listCandidatesForTask, oldest first) whose dispatch has the observed dispatch's command and checkId (both absent for the gate). That is ONE required check.\n   - decision = decideRepair({ planRevision: decodeStoredPlanRevision(task), approvedPlanRevision, candidates: [{ id, treeSha }], runs, policy: resolveRepairPolicy(settings) }). Pass approvedPlanRevision only when it is a number.\n   - ProjectSettings has no repairPolicy field and no index signature. If tsc refuses the weak-type conversion, pass the settings through `as unknown as { repairPolicy?: unknown }`. Never add a schema.ts field.\n   - Stale guard: when the decision carries diagnostics and diagnostics.checkRunId !== run.id, return null. A late or replayed observation then never re-acts on a newer run.\n\n2. `export async function applyRepairDecision(state, task, decision): Promise<void>`, by action:\n   - repair:\n     - When task.status is REVIEW and needsHumanReview is not true, call updateTask(task.id, { status: 'WORKING', reopenReason, contextFetchedBy: [], implementationPlan: resetPlanStepsToPending(plan), stepsCompleted: [] }, 'TASK_REOPENED').\n     - updateTask clears the assignee. Then call touchWorker(previous assignee, { status: 'IDLE', currentTaskId: null }), but only when that worker's currentTaskId is this task.\n     - Change no reopenCount, tier, effort or model, and set no rejection field: the code-repair budget is the bound. planRevision stays, because a step-status reset is not a plan change.\n     - In any status, append the diagnostics comment.\n   - escalate: append the diagnostics comment, then call state.postToRoleChannel('governors', alert). No status change.\n   - replan:\n     - When task.status is WORKING or REVIEW, updateTask to { status: 'PLANNING', implementationPlan: [], stepsCompleted: [], priorAttempt: { attemptedAt, reason, implementationPlan, stepsCompleted }, reopenReason } with 'TASK_REOPENED', which is request_replan's shape.\n     - Touch the previous assignee as for repair, then call postToRoleChannel('architects', `🔁 ${task.id} routed to PLANNING: ${reopenReason}`).\n     - In any other status the task is already planning or parked: do nothing.\n   - retry-infra and none: do nothing. The runner re-dispatches from the returned decision (V04b).\n\n3. Exact texts, which the tests assert:\n   - header = `Required check ${checkRunId} failed on candidate ${candidateId}: \\`${command}\\` ${outcome} (exit ${exitCode}).`\n   - repair line = `Repair attempt ${attempt}, ${remaining} remaining, under approved plan revision ${approvedPlanRevision}.`\n   - escalate line = `Escalated: ${reason}. No automatic repair follows.`\n   - comment content = [header, line, `Log refs: ${logRefs.join(', ')}`, 'Excerpt:', excerpt].join('\\n'). The comment has author 'moe-daemon' and id generateId('comment'), and is appended to the CURRENT row's comments with event 'TASK_COMMENT_ADDED'.\n   - repair reopenReason = `${header} ${repair line}`.\n   - governors alert = `⚠️ ${task.id} required check escalated (${reason}): \\`${command}\\` ${outcome} on ${candidateId}; log refs ${logRefs.join(', ')}.`\n   - replan reopenReason = `Plan revision ${planRevision} is not approved (approved: ${approvedPlanRevision ?? 'none'}); a required check result routed the task to PLANNING.`\n\nError handling: a malformed setting, snapshot or stored revision (INVALID_INPUT) and a failed write propagate to the caller (step 3); never swallow them here. A failed postToRoleChannel is caught and logged with logger.warn, as in qa_reject, and never undoes the transition.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/delivery/repairActivation.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/repairActivation.ts"
+      ],
+      "note": "Created delivery/repairActivation.ts with decideCheckRepair and applyRepairDecision. The texts are exactly as planned. It reuses getCheckDispatch, isAuthenticatedCheckRun, listCandidatesForTask, listCheckRunsForCandidate, decodeStoredPlanRevision, resetPlanStepsToPending, generateId, decideRepair and resolveRepairPolicy. The profile gate goes through policy.ts isVerifiedLocal, which is exactly resolveTaskExecutionProfile(...) === 'verified-local'. tsc --noEmit is clean in the Linux snapshot.\n\nDeviations:\n- No separate touchWorker. updateTask already releases the prior owner when that owner's currentTaskId is this task, and sets it IDLE from a task-bound status. That is exactly the plan's condition, so a second touch would never fire.\n- An extra current-candidate guard (run.candidateId must be the last candidate) also covers replan, which carries no diagnostics. This keeps the invariant that only the check's latest run on the current candidate acts.\n- The postToRoleChannel failure is logged with logger.warn.\n\nTests turn green after step 3 wires the tool.",
+      "startedAt": "2026-10-30T07:42:44.136Z",
+      "completedAt": "2026-10-30T07:43:21.608Z"
     },
     {
       "stepId": "step-3",
       "description": "packages/moe-daemon/src/tools/recordCheckObservation.ts was created by CQ-V03. It is listed as new only because it does not exist at plan time: edit it, never recreate it.\n\nAfter the store's recordCheckObservation returns { checkRun, duplicate }:\n- Call judged = decideCheckRepair(state, checkRun).\n- When judged is non-null, add repair: judged.decision to the result.\n- When judged is non-null and duplicate is false, also await applyRepairDecision(state, judged.task, judged.decision).\n- A duplicate replay returns the decision but never re-applies it, so a lost response is safe to retry.\n\nError handling: wrap both calls in try/catch.\n- A throw is logged with logger.warn, with taskId, checkRunId and the error.\n- It is reported as repairError: <error message>.\n- The result stays success: true with the persisted checkRun, because the observation is already durable and a runner retry must not loop on it.\n\nWhen judged is null (legacy, observe or stale), the result is exactly V03's { success: true, checkRun, duplicate }.\n\nAppend one sentence to the tool description: on a verified-local task the result may carry `repair` (CQ-V05's decision) or `repairError`. Nothing else changes. The activation runs inside the same mutex-held tool call as the store write.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/recordCheckObservation.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckObservation.ts",
+        "packages/moe-daemon/src/delivery/repairActivation.test.ts"
+      ],
+      "note": "Edited tools/recordCheckObservation.ts (+23/-2); the file was clean before.\n- Its handler spreads activateRepair(state, checkRun, duplicate). That runs decideCheckRepair, and applyRepairDecision only when the observation is not a duplicate. It returns { repair } or {}.\n- A throw is logged with logger.warn (taskId, checkRunId, error) and returned as repairError. If the decision was already made, it is returned as repair too. The result stays success:true with the persisted run.\n- Added one description sentence and a header line.\n\nTest fixes, which were expectation errors only:\n- C2 now reuses the first comment's own timestamp.\n- E expects MoeError's '[INVALID_INPUT] ' message prefix.\n\nIn the Linux snapshot, repairActivation.test.ts plus recordCheckObservation.test.ts: 37/37 passed.",
+      "startedAt": "2026-10-30T07:43:22.431Z",
+      "completedAt": "2026-10-30T07:43:58.039Z"
     },
     {
       "stepId": "step-4",
       "description": "Docs. This task owns the settings.repairPolicy entry, per architect-e4b7eee0's comment; V12 only sweeps it. Preserve peers' bytes.\n\n1. docs/CONFIGURATION.md: add a `repairPolicy` row right after the `deliveryPolicy` row, in that row's style. Say:\n   - it applies to **verified-local** tasks only (delivery/repairPolicy.ts, activated by delivery/repairActivation.ts on each authenticated moe.record_check_observation);\n   - `maxCodeRepairs` (default 3) code-failure repairs across candidates under one approved plan revision, each returning an unparked REVIEW task to WORKING with the diagnostics;\n   - `maxInfraRetries` (default 2) re-dispatches of the same candidate's check after infra-failure or timeout, which never consume a code repair;\n   - an exhausted budget, an unchanged candidate tree or an unchanged failure escalates (a task comment plus #governors) instead of looping, and an unapproved plan revision routes to PLANNING;\n   - each value is an integer from 0 to 10, and any other shape is refused INVALID_INPUT, reported as repairError;\n   - legacy and observe ignore it, and verified-local itself is still refused;\n   - set it in `.moe/project.json`; the IDE settings dialogs do not edit it.\n   Values column: `{ maxCodeRepairs: 3, maxInfraRetries: 2 }` (default).\n\n2. docs/MCP_SERVER.md, in `### moe.record_check_observation`: document the `repair` and `repairError` result fields:\n   - when present: verified-local only, and only when the observed run is the check's latest on the current candidate;\n   - the five actions, and what the daemon does for each;\n   - retry-infra is the runner's cue to re-dispatch through moe.record_check_dispatch with a fresh dispatch id;\n   - duplicate replays return the decision without re-applying it;\n   - the crash window: an observation persisted before activation ran is not re-activated on replay, and the delivery gate still fails closed.\n   Keep the heading form `### moe.<name>`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/CONFIGURATION.md",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Docs changes (+1 line each place, inserted at exact anchors; peer bytes preserved):\n- docs/CONFIGURATION.md: a `repairPolicy` row right after `deliveryPolicy`. Values `{ maxCodeRepairs: 3, maxInfraRetries: 2 }` (default).\n- docs/MCP_SERVER.md, ### moe.record_check_observation: two Returns lines for repair? and repairError?, and a 'Repair (CQ-V05b)' note covering the five actions, retry-infra as the re-dispatch cue, duplicates and the crash window.\n\nCONTESTED: both docs are declared by live peers. docs/CONFIGURATION.md carries live peer task-801272c4's own dirty hunk (the 'WebSocket Origin rule' paragraph at line 26), which appeared after my clean check. That peer is IN_PROGRESS on its step-5, which names the file. I did not touch its hunk. I will re-check `git diff -U0` and do the Edit-tool witness round trip only once that hunk has landed. Otherwise I will disclose the outcome.",
+      "startedAt": "2026-10-30T07:43:58.989Z",
+      "completedAt": "2026-10-30T07:45:28.543Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Iterate with `cd packages/moe-daemon && npx vitest run src/delivery/repairActivation.test.ts src/tools/recordCheckObservation.test.ts`.\n2. Mutants. Apply each to a scratch copy, restore it, then cmp. Each must fail the named case:\n   - apply on duplicates: D;\n   - drop the stale guard: S;\n   - drop the profile gate: L;\n   - bump reopenCount, or re-reset the steps while WORKING: C1 and C2;\n   - reopen on retry-infra: I1;\n   - let an activation error throw out of the tool: E;\n   - skip the needsHumanReview guard: C4.\n3. The GATE runs fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate):\n   - take `git archive HEAD` of the whole repo, with V03, V04 and V05 in HEAD;\n   - overlay ONLY this task's 5 files;\n   - run `npm ci` after checking the lockfile against the tree;\n   - use env -i with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH;\n   - `cd packages/moe-daemon && npm test` and `npx tsc --noEmit` must both exit 0;\n   - cmp the overlay against the worktree.\n4. Size: this task's numstat over packages/ must be at most 400 net (QA cap; tests count).\n5. A red run outside this task is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n6. Supply the npm test command, its exit code and the output tail to complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "VERIFY:\n1. Iteration: repairActivation.test.ts (13) plus recordCheckObservation.test.ts (24), 37/37 passed.\n2. Mutants, 11/11 KILLED, each by its named case, with the source restored and cmp-identical afterwards:\n   - apply on duplicates, killed by D;\n   - stale guard, killed by S;\n   - current-candidate guard, killed by R1;\n   - profile gate, killed by L;\n   - reopenCount bump, killed by C1;\n   - step re-reset while WORKING, killed by C2;\n   - reopen on retry-infra, killed by I1;\n   - activation error thrown, killed by E;\n   - needsHumanReview guard, killed by C4;\n   - governors alert dropped, killed by C3;\n   - replan keeping the status, killed by R1.\n3. GATE: `git archive` of HEAD 5f62b98f, plus ONLY the 5 owned files, then npm ci (lock equal modulo CR) under env -i with node v24.21.0 and NO_COLOR=1:\n   - `cd packages/moe-daemon && npm test` exited 0: 203 files, 5707 passed, 16 skipped;\n   - `npx tsc --noEmit` exited 0;\n   - a scratch tsconfig type-check of the test file exited 0;\n   - all 5 overlay files are cmp-identical to the worktree.\n4. Size over packages/: +356 net (repairActivation.ts 106, test 229, recordCheckObservation.ts +23/-2), under the 400 cap.\nNo peer files were edited.",
+      "startedAt": "2026-10-30T07:45:29.506Z",
+      "completedAt": "2026-10-30T07:47:13.860Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Read the diff as an agent trying to loop the repair or forge an escalation:\n- replay: a duplicate or late observation re-reopening, re-alerting or re-planning;\n- forgery: a record_check_run diagnostic run or an unauthenticated run feeding decideRepair, or another check's runs being counted;\n- races:\n  - a QA seat mid-review when REVIEW flips to WORKING; its qa_approve or qa_reject is then refused by status, which is intended;\n  - two observations, which the mutex serializes;\n- budgets: infra runs never consume code repairs, and a replan resets the budget through planRevision;\n- legacy: legacy and observe get no repair key and no side effect, and V03's result shape is otherwise byte-identical;\n- rails: no .moe edits, no Git writes, no forbidden tokens, verified-local still unavailable, and qaReject.ts untouched (V06 owns it).\n\nThen write the Serena memory 'task-task-66e8d7d1e9ef4ba281cdb2f505d47e7d-handoff' for V04b and V12. Name:\n- decideCheckRepair and applyRepairDecision;\n- the `repair` and `repairError` result fields;\n- the comment author 'moe-daemon';\n- the retry-infra contract that V04b's coordinator honours.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/repairActivation.ts",
+        "packages/moe-daemon/src/delivery/repairActivation.test.ts",
+        "packages/moe-daemon/src/tools/recordCheckObservation.ts",
+        "docs/MCP_SERVER.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Adversarial self-review of my 5 paths:\n- Replay: a duplicate is decided but not applied (D). A superseded run on the current candidate hits the stale guard (S). A run on a superseded candidate hits the current-candidate guard, which also covers replan (R1).\n- Forgery: record_check_run runs have no marker, so isAuthenticatedCheckRun gives null. Only authenticated runs of the same command and checkId count.\n- Races: the tool runs under the global mutex. A REVIEW-to-WORKING flip refuses a mid-review QA's verdict by status, which is intended (the same path as qa_reject).\n- Budgets: infra runs are counted per candidate and separately (I1). planRevision filtering resets the budget after a replan.\n- Legacy and observe get no key and no side effect (L).\n- Rails: no .moe edits, no Git writes, no forbidden tokens. executionProfile.ts, requestReplan.ts and qaReject.ts are untouched by me; qaReject.ts is dirty from a peer (V06).\n\nTheoretical, noted for V12:\n- If the escalate comment write fails, the governors alert is skipped (repairError is still returned).\n- A malformed live executionProfile adds repairError even for a legacy task (that setting is refused everywhere).\n- Daemon-initiated moves carry no actor, matching the sweeps.\n\nLANDING: peer completion 82c97980 (task-801272c4) swept my CONFIGURATION.md row (+1) together with its own 2 lines; the trailer named only task-01f37ac6. The row is on the branch. I left it as is.\n\nMCP_SERVER.md and recordCheckObservation.ts got a byte-neutral Edit round trip (hash-object equal) and are listed in this seat's harvest.\n\nRe-gate on the new HEAD 82c97980 plus the overlay: npm test exited 0 (204 files, 5731 passed, 16 skipped); tsc exited 0.\n\nHandoff memory written.",
+      "startedAt": "2026-10-30T07:47:14.857Z",
+      "completedAt": "2026-10-30T07:50:38.500Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -89,20 +128,29 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:01:29.803Z",
-  "updatedAt": "2026-10-30T07:11:02.559Z",
+  "updatedAt": "2026-10-30T07:50:57.965Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:34:19.267Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-0062feec"
   ],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T18:56:34.056Z",
   "executionContract": {
@@ -166,5 +214,22 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T18:56:34.154Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:37:11.108Z",
+  "reviewStartedAt": "2026-10-30T07:50:57.963Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Linux-native snapshot: git archive HEAD 82c97980 + ONLY this task's 5 files (cmp-identical to worktree), npm ci (lock equal modulo CR), env -i NO_COLOR=1 node v24.21.0.\n ✓ src/delivery/repairActivation.test.ts (13 tests)\n ✓ src/tools/recordCheckObservation.test.ts (24 tests)\n Test Files  204 passed (204)\n      Tests  5731 passed | 16 skipped (5747)\n   Duration  34.19s\nNPMTEST_EXIT=0; npx tsc --noEmit EXIT=0; scratch-tsconfig typecheck of repairActivation.test.ts EXIT=0",
+    "reportedAt": "2026-10-30T07:50:57.963Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/repairActivation.test.ts",
+    "packages/moe-daemon/src/delivery/repairActivation.ts",
+    "packages/moe-daemon/src/tools/recordCheckObservation.ts",
+    "docs/CONFIGURATION.md",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "CQ-V05b: repair decision activation for verified-local tasks, wired into moe.record_check_observation. It uses existing transitions only. Legacy and observe are unchanged.\n\n- delivery/repairActivation.ts (106, new):\n  - decideCheckRepair: authenticated runs of ONE check (same dispatch command and checkId) across the task's candidates go to V05's decideRepair. It returns null for a non-verified-local task (isVerifiedLocal), a superseded candidate, or a stale run whose diagnostics.checkRunId is not the run's.\n  - applyRepairDecision:\n    - repair: an unparked REVIEW task goes to WORKING (qa_reject's reopen shape: no reopenCount, tier or model change, planRevision kept); a comment by 'moe-daemon' in any status.\n    - escalate: a comment and a #governors alert.\n    - replan: WORKING or REVIEW goes to PLANNING with request_replan's payload, and #architects is told.\n    - retry-infra and none: nothing.\n- tools/recordCheckObservation.ts (+23/-2): the result gains `repair`, also on duplicates but applied only once, and `repairError` (logged; success stays true). Otherwise it is exactly V03's shape.\n- Docs: a CONFIGURATION.md repairPolicy row, and MCP_SERVER.md repair/repairError notes.\n\nDoD:\n1. C1 (repair 1, 2 remaining, WORKING, revisions 1/1, exact comment), C2 (repair 2, 1 remaining while WORKING), C3 (budget 1, then escalate).\n2. I1 (infra-failure and timeout give retry-infra 1 and 2 with the task deep-equal; the 3rd escalates with an alert; a later code-failure is repair 1, so no code budget was consumed), C3 unchanged-candidate.\n3. R1 (planRevision 2 vs approved 1 goes to PLANNING with priorAttempt; a superseded candidate is ignored), L (legacy and observe: exact V03 result, row deep-equal).\n4. Gate EXIT 0, above.\nAlso: D (duplicate), S (stale), C4 (parked), E (repairError), P (readiness pinned). 11/11 mutants were killed. Net packages/ +356.\n\nDeviations:\n- No touchWorker: updateTask already releases the prior owner under the plan's condition.\n- An added current-candi"
 }
