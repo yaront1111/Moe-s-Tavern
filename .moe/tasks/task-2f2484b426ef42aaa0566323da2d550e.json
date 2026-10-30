@@ -122,7 +122,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:33:01.209Z",
-  "updatedAt": "2026-10-30T08:26:27.312Z",
+  "updatedAt": "2026-10-30T08:27:01.521Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:36:28.519Z",
     "plannedStepCount": 6,
@@ -223,7 +223,10 @@
     "docs/CONFIGURATION.md",
     "docs/TROUBLESHOOTING.md",
     ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
-    ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json"
+    ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json",
+    ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+    ".moe/tasks/task-f23c4464c8f24efeb8d62973111839ce.json"
   ],
   "completionSummary": "Implemented the five-file WSL bind slice (373 net LOC). server/bindHosts.ts exports WSL_BIND_HOST='wsl', resolveBindHosts and listenOnHosts. Exact wsl binds loopback first plus deduplicated non-internal IPv4 WSL-adapter addresses; wildcard/malformed adapter addresses are excluded. Other host values retain their meaning. Extra HTTP listeners share one port/handler and forward upgrades to the primary's existing Origin-gated WSS. Partial failures destroy accepted sockets, close attempted listeners and release the startup lock.\nindex.ts probes wsl on loopback, falls back safely if adapter enumeration throws, checks every address during port selection and closes every listener during shutdown. Existing daemon.json persists literal bindHost wsl; local-runner non-loopback refusal is unchanged.\nDoD 1: exact R resolver rows. DoD 2: real WSS L/L-fail/L-socket/L-port rows prove HTTP/MCP, Origin 403, rollback and occupied-extra-address selection. DoD 3: real tsx _run D rows prove flag/env precedence, probes, interface failure, lock cleanup and traced multi-listener shutdown. DoD 4: configuration and WSL troubleshooting updated; Origin/peer text preserved. DoD 5: fresh tsc + full npm test exits 0: 206 files, 5789 passed/16 skipped; all 22 new rows ran. New test also type-checks separately.\n13 scratch mutants killed by real failed Tests lines; restored/cmp-checked. Adversarial review fixed test portability and strengthened shutdown evidence. D subprocess rows explicitly skip Windows because SIGTERM kills rather than dispatches handlers there (confirmed with an owned native probe); portable R/L remain enabled. Live Windows/WSL integration stays with task-724e31fa. Task handoff and gotcha-daemon-subprocess-tests memory updated. No manual .moe edits or Git writes; wrapper owns landing.",
   "commits": [
@@ -257,14 +260,32 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "9b3ab3eafe0c7fda0264780c69f96beda2a938ea",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T08:19:06Z",
+      "paths": [
+        ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
+        ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-f23c4464c8f24efeb8d62973111839ce.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T08:27:01.520Z",
+      "treeId": "512627db4e0d5da8552e8250439aa0203475aa32",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-55e6716a@2026-10-30T07:56:45Z",
-    "at": "2026-10-30T08:18:24.382Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T08:19:06Z",
+    "at": "2026-10-30T08:27:01.520Z"
   },
   "completedAt": "2026-10-30T08:26:27.311Z",
   "reviewCompletedAt": "2026-10-30T08:26:27.311Z",

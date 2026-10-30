@@ -45,6 +45,7 @@ import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermissions
 import java.time.Instant
 import java.util.Optional
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -58,6 +59,188 @@ class RuntimeSelectionPolicyTest {
 
     @After
     fun resetAfter() = RuntimeSelectionPolicy.resetForTest()
+
+    @Test
+    fun `D1 a downgrade needs confirmation across restarts and stays pinned until the next restart`() = withProfileStore { store, dir, asks ->
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
+        val valid = profileJson(dir, "protected")
+        assertEquals(valid, store.read(name))
+        assertTrue(RuntimeSelectionPolicy.isOutsideProject(store.root.toString(), dir.path))
+        assertOwnerOnly(store.root.resolve(name), directory = false)
+        RuntimeSelectionPolicy.remember(dir.path, SpawnRecord(100, T0, true, daemonKey(installedDaemon())), LIVE::get)
+        assertEquals("separate profile and provenance records", 2, storeFiles(store).size)
+        assertTrue(asks.paths.isEmpty())
+        writeProfile(dir, "legacy")
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        val calls = (1..8).map { CompletableFuture.supplyAsync { profileOf(dir) } }
+        calls.forEach { assertEquals(RuntimeProfile.PROTECTED, it.get(5, TimeUnit.SECONDS)) }
+        assertEquals(listOf(dir.path), asks.paths)
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        RuntimeSelectionPolicy.forgetSessionForTest() // No answer is a dismissal.
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertEquals(2, asks.paths.size)
+        asks.answers.last()(false)
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertEquals(3, asks.paths.size)
+        assertEquals(valid, store.read(name))
+        asks.answers.last()(true)
+        assertEquals(profileJson(dir, "legacy"), store.read(name))
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        assertEquals(RuntimeProfile.LEGACY, profileOf(dir))
+        assertEquals(3, asks.paths.size)
+        listOf("""{"settings":{"executionProfile":"observe"}}""", """{"settings":{}}""", null).forEach { weaker ->
+            val other = project("""{"settings":{"executionProfile":"verified-local"}}""")
+            assertEquals(RuntimeProfile.PROTECTED, profileOf(other))
+            if (weaker == null) assertTrue(File(other, ".moe/project.json").delete()) else writeProjectJson(other, weaker)
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            assertEquals(RuntimeProfile.PROTECTED, profileOf(other))
+            assertEquals(other.path, asks.paths.last())
+        }
+        assertEquals(6, asks.paths.size)
+    }
+
+    @Test
+    fun `D2 upgrades need no confirmation and unavailable stores preserve session-only behavior`() = withProfileStore { store, dir, asks ->
+        val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
+        store.write(name, profileJson(dir, "legacy"))
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertEquals(profileJson(dir, "protected"), store.read(name))
+        val fresh = project("""{"settings":{"executionProfile":"legacy"}}""")
+        assertEquals(RuntimeProfile.LEGACY, profileOf(fresh))
+        assertNull(store.read(RuntimeSelectionPolicy.profileRecordName(fresh.path)))
+        listOf(null, ProtectedStateStore(File(dir, "state").toPath())).forEach { unavailable ->
+            RuntimeSelectionPolicy.store = { unavailable }
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            writeProfile(dir, "verified-local")
+            assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+            writeProfile(dir, "legacy")
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            assertEquals(RuntimeProfile.LEGACY, profileOf(dir))
+            assertFalse(File(dir, "state").exists())
+        }
+        assertTrue(asks.paths.isEmpty())
+    }
+
+    @Test
+    fun `D3 untrusted profile documents fail closed and explicit confirmation repairs them`() = withProfileStore { store, dir, asks ->
+        val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
+        val valid = profileJson(dir, "protected")
+        writeProfile(dir, "legacy")
+        val bad = listOf("not JSON", valid.replace("\"version\":", "version:"), "\uFEFF$valid", "[]",
+            valid.replace("\"version\":1", "\"version\":1,\"extra\":true"), valid.replace("\"version\":1,", ""),
+            valid.replace("\"version\":1", "\"version\":2"), valid.replace("\"version\":1", "\"version\":\"1\""),
+            valid.replace("\"version\":1", "\"version\":1.0"), profileJson(temporaryFolder.newFolder(), "protected"),
+            valid.replace("\"protected\"", "\"verified-local\""), valid.replace("\"protected\"", "\"PROTECTED\""),
+            valid.replace("\"protected\"", "null"))
+        bad.forEachIndexed { index, text ->
+            store.write(name, text)
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            assertEquals("case $index", RuntimeProfile.PROTECTED, profileOf(dir))
+            assertEquals(index + 1, asks.paths.size)
+            if (index == 0) {
+                asks.answers.last()(true)
+                assertEquals(profileJson(dir, "legacy"), store.read(name))
+                assertOwnerOnly(store.root.resolve(name), directory = false)
+                RuntimeSelectionPolicy.forgetSessionForTest()
+                assertEquals(RuntimeProfile.LEGACY, profileOf(dir))
+            }
+        }
+    }
+
+    @Test
+    fun `D3 a directory or loosened profile record fails closed`() = withProfileStore { store, dir, asks ->
+        val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
+        val valid = profileJson(dir, "protected")
+        store.write(name, valid)
+        writeProfile(dir, "legacy")
+        val file = store.root.resolve(name)
+        Files.delete(file)
+        Files.createDirectory(file)
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertEquals(listOf(dir.path), asks.paths)
+        Files.delete(file)
+        store.write(name, valid)
+        try {
+            assumeTrue("no permission view or Everyone principal", loosen(file, directory = false))
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+            assertEquals(2, asks.paths.size)
+        } finally {
+            store.write(name, valid) // Atomic replacement restores owner-only access, even after an assertion fails.
+        }
+    }
+
+    @Test
+    fun `D4 confirmer failures do not downgrade and only the first answer counts`() = withProfileStore { store, dir, _ ->
+        val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
+        val valid = profileJson(dir, "protected")
+        writeProfile(dir, "legacy")
+        listOf<Boolean?>(null, true, false).forEach { first ->
+            store.write(name, valid)
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            RuntimeSelectionPolicy.confirmer = DowngradeConfirmer { _, answer ->
+                if (first == null) throw IllegalStateException("confirmer unavailable")
+                answer(first)
+                answer(!first)
+            }
+            assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+            assertEquals(profileJson(dir, if (first == true) "legacy" else "protected"), store.read(name))
+        }
+    }
+
+    @Test
+    fun `D4 store failures and malformed project reads never escape`() = withProfileStore { store, dir, asks ->
+        writeProjectJson(dir, "{")
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertTrue(storeFiles(store).isEmpty())
+        assertTrue(asks.paths.isEmpty())
+        writeProfile(dir, "legacy")
+        assertEquals("malformed read did not pin", RuntimeProfile.LEGACY, profileOf(dir))
+        Files.createDirectories(store.root.parent)
+        Files.writeString(store.root, "not a directory")
+        writeProfile(dir, "verified-local")
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        writeProfile(dir, "legacy")
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertTrue(asks.paths.isEmpty())
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        assertEquals(listOf(dir.path), asks.paths)
+        asks.answers.single()(true) // Failed persistence never escapes the answer callback either.
+        assertEquals("not a directory", Files.readString(store.root))
+    }
+
+    @Test
+    fun `D5 only Allow Downgrade confirms and a missing application declines without UI`() {
+        listOf(-1, 0, 1, 2).forEach { assertEquals(it == 1, ProfileDowngradeDialog.confirmed(it)) }
+        val answers = mutableListOf<Boolean>()
+        ProfileDowngradeDialog.ask("/project") { answers += it }
+        assertEquals(listOf(false), answers)
+    }
+
+    private class RecordingConfirmer : DowngradeConfirmer {
+        val paths = CopyOnWriteArrayList<String>()
+        val answers = CopyOnWriteArrayList<(Boolean) -> Unit>()
+        override fun ask(basePath: String, answer: (Boolean) -> Unit) { paths += basePath; answers += answer }
+    }
+
+    private fun withProfileStore(test: (ProtectedStateStore, File, RecordingConfirmer) -> Unit) {
+        try {
+            val store = useStore()
+            val asks = RecordingConfirmer().also { RuntimeSelectionPolicy.confirmer = it }
+            test(store, project("""{"settings":{"executionProfile":"verified-local"}}"""), asks)
+        } finally {
+            RuntimeSelectionPolicy.resetForTest()
+        }
+    }
+
+    private fun writeProfile(dir: File, value: String) = writeProjectJson(dir, """{"settings":{"executionProfile":"$value"}}""")
+
+    private fun profileJson(dir: File, value: String): String = Gson().toJson(linkedMapOf(
+        "version" to 1, "project" to comparable(realFile(dir).path, RuntimeSelectionPolicy.defaultFoldCase), "profile" to value))
 
     @Test
     fun `P1 absent, legacy and observe settings keep the legacy selection`() {

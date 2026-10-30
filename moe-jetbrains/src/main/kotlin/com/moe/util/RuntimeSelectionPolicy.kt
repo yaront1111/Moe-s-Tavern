@@ -25,6 +25,7 @@ import java.time.format.DateTimeParseException
 import java.util.HexFormat
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 sealed interface RuntimeSelection {
     data class Accepted(val file: File) : RuntimeSelection
@@ -34,12 +35,19 @@ sealed interface RuntimeSelection {
 /** LEGACY keeps the historical runtime selection; PROTECTED runs only the runtime installed with the plugin. */
 enum class RuntimeProfile { LEGACY, PROTECTED }
 
+/** Never blocks the caller; only an explicit human confirmation may answer true. */
+fun interface DowngradeConfirmer {
+    fun ask(basePath: String, answer: (Boolean) -> Unit)
+}
+
 /**
  * The one place JetBrains decides which Moe controller, wrapper, proxy and node it may run.
  *
  * The profile mirrors the daemon's resolveExecutionProfile (delivery/executionProfile.ts) but
  * fails closed: only a confirmed-absent setting, "legacy" or "observe" keeps the legacy
  * selection. Anything the daemon would reject, or this IDE cannot read strictly, is PROTECTED.
+ * The confirmed profile persists outside the repository: a weaker repository declaration cannot
+ * downgrade a confirmed-protected project without human confirmation, effective after an IDE restart.
  */
 object RuntimeSelectionPolicy {
     private val log = Logger.getInstance(RuntimeSelectionPolicy::class.java)
@@ -49,9 +57,46 @@ object RuntimeSelectionPolicy {
     private val DEVICE_PREFIX = Regex("^//[?.]/(unc/)?", RegexOption.IGNORE_CASE)
     private const val PLUGIN_ID = "com.moe.jetbrains"
 
-    // Projects read as verified-local this JVM session. A later repository edit (pull, admitted
-    // change) cannot downgrade their selection; a deliberate downgrade applies after an IDE restart.
+    // Projects read as verified-local or awaiting a downgrade decision this JVM session. A later
+    // repository edit cannot downgrade them; even an explicitly confirmed downgrade waits for restart.
+    // The atomic add also ensures only one confirmation request per project per session.
     private val pinned: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    @Volatile
+    internal var confirmer: DowngradeConfirmer = ProfileDowngradeDialog
+
+    private enum class StoredProfile { ABSENT, LEGACY, PROTECTED, UNTRUSTED }
+    private val PROFILE_FIELDS = setOf("version", "project", "profile")
+
+    /** Domain-separated from daemon provenance, while using the same owner-only store and name rule. */
+    internal fun profileRecordName(basePath: String): String = recordsFile("profile:" + projectKey(basePath))
+
+    private fun storedProfile(basePath: String, key: String): StoredProfile {
+        return try {
+            val text = usableStore(basePath)?.read(recordsFile("profile:$key")) ?: return StoredProfile.ABSENT
+            val root = parseStrict(text, "the profile record").fields(PROFILE_FIELDS, "the profile record")
+            if (root.get("version").exactLong() != 1L) throw UntrustedSetting("the profile record is not version 1")
+            if (root.get("project").stringOrNull() != key) throw UntrustedSetting("the profile record is for another project")
+            when (root.get("profile").stringOrNull()) {
+                "protected" -> StoredProfile.PROTECTED
+                "legacy" -> StoredProfile.LEGACY
+                else -> throw UntrustedSetting("the profile record is not protected or legacy")
+            }
+        } catch (ex: Exception) {
+            log.warn("Moe runtime selection distrusts the persisted profile: ${describe(ex)}")
+            StoredProfile.UNTRUSTED
+        }
+    }
+
+    private fun persist(basePath: String, key: String, value: RuntimeProfile) {
+        try {
+            val store = usableStore(basePath) ?: return
+            val text = gson.toJson(linkedMapOf("version" to 1, "project" to key, "profile" to value.name.lowercase(Locale.ROOT)))
+            store.write(recordsFile("profile:$key"), text)
+        } catch (ex: Exception) {
+            log.warn("Moe runtime selection could not persist the confirmed profile: ${describe(ex)}")
+        }
+    }
 
     /** Never throws: an unreadable or untrusted `.moe/project.json` answers PROTECTED. */
     fun profile(basePath: String): RuntimeProfile {
@@ -65,9 +110,26 @@ object RuntimeSelectionPolicy {
             log.warn("Moe runtime selection fails closed to the protected profile: $failure")
             return RuntimeProfile.PROTECTED
         }
-        if (!verifiedLocal) return RuntimeProfile.LEGACY
-        pinned += key
+        val stored = storedProfile(basePath, key)
+        if (verifiedLocal) {
+            pinned += key
+            if (stored != StoredProfile.PROTECTED) persist(basePath, key, RuntimeProfile.PROTECTED)
+        } else {
+            if (stored == StoredProfile.ABSENT || stored == StoredProfile.LEGACY) return RuntimeProfile.LEGACY
+            if (pinned.add(key)) askDowngrade(basePath, key)
+        }
         return RuntimeProfile.PROTECTED
+    }
+
+    private fun askDowngrade(basePath: String, key: String) {
+        val answered = AtomicBoolean(false)
+        try {
+            confirmer.ask(basePath) { allow ->
+                if (answered.compareAndSet(false, true) && allow) persist(basePath, key, RuntimeProfile.LEGACY)
+            }
+        } catch (ex: Exception) {
+            log.warn("Moe keeps the protected profile: downgrade confirmation failed (${ex.javaClass.simpleName})")
+        }
     }
 
     /** True for exactly "verified-local", false for absent/legacy/observe; throws for anything else. */
@@ -460,6 +522,7 @@ object RuntimeSelectionPolicy {
     internal fun resetForTest() {
         forgetSessionForTest()
         store = { ideStore }
+        confirmer = DowngradeConfirmer { _, _ -> }
     }
 
     /** A failure whose message names the broken rule and never the file's contents. */
