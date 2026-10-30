@@ -2971,7 +2971,7 @@ test('CF8 CLI certify prints the report and exits 0 only when certified', async 
 
 // CQ-R13e1 bridge certify checks: the real runCheckSession and materializeSnapshot over one spawn router that answers the
 // materialize argv with fakeSpawn and the check argv with checkFake (local-runner-check.test.mjs's checkProvider is not importable).
-import { BRIDGE_BOUNDS, BRIDGE_CHECKS, CERTIFY_PAYLOAD, certifySnapshot, watchedSession } from '../local-runner/certify-bridge.mjs';
+import { BRIDGE_BOUNDS, BRIDGE_CHECKS, CERTIFY_PAYLOAD, certifySnapshot, CONNECT_PROBE, gatewayOf, watchedSession } from '../local-runner/certify-bridge.mjs';
 
 const EXPECTED_PAYLOAD = Buffer.concat(Array.from({ length: 65_536 }, (_, i) => createHash('sha256').update(`moe-certify-payload-v1:${i}`).digest()));
 const [CB_HELLO, CB_FRAMING, CB_EOF] = [{ kind: 'hello', protocol: 1 }, 'cat moe-certify/payload.bin', 'echo ready; exec sleep 600'];
@@ -3137,9 +3137,7 @@ test('CB6 certifyCore validates deps.bounds before any provider call; a bridge f
 // CQ-R13e guest-network: neither guest identity may reach the host's daemon ports at the VM gateway. Rows run the whole certify
 // flow, so each failure also shows teardown deleting the VM and the certify listener refusing host connects once it is over.
 import net from 'node:net';
-import * as certifyNetwork from '../local-runner/certify-bridge.mjs';
 
-const { CONNECT_PROBE, gatewayOf } = certifyNetwork;
 const PROBE_LITERAL = 'import socket,sys;socket.setdefaulttimeout(3);o=any(socket.socket().connect_ex((sys.argv[1],int(p)))==0 for p in sys.argv[2:]);print("open" if o else "closed");sys.exit(int(o))';
 const ROUTE_ARGV = ['exec', '--no-map-working-directory', GUEST, '--', 'ip', '-4', 'route', 'show', 'default'];
 const agentArgv = (port, gateway = '10.20.30.1') => ['exec', '--no-map-working-directory', GUEST, '--', 'sudo', '-n', '-u', 'moe-agent', 'python3', '-I', '-c',
