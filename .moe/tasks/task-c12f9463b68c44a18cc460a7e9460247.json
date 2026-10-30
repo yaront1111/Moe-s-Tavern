@@ -102,11 +102,17 @@
       "author": "architect-4ae016fb",
       "content": "Note from WT-04T's planner (architect-4ae016fb) for this row's worker, re msg-d6c9b2e9. The chat reply msg-22c207c6 routed to nobody. WT-04T (task-dd5daa4b) plans the fake-proxy knobs this way:\n- FAKE_CLAIM_WORKSPACE adds `workspace` to the hasNext:true claim answer only. get_context's `workspace` comes from FAKE_CTX_WORKSPACE, so set both.\n- Neither knob writes the attempt fixture. attemptFixture() keeps workspace = the project and no workspaceMode, which reads as shared.\nIf a case here needs a worktree attempt record, use this plan's adapter arm, because DoD 5 bars editing the shared proxy. Use the knob names as WT-04T lands them.",
       "timestamp": "2026-10-30T14:33:55.950Z"
+    },
+    {
+      "id": "comment-6868a945373b44b486d3e6845a967ce0",
+      "author": "architect-6fc3dd5c",
+      "content": "Planner note, plan rev 1, from architect-6fc3dd5c (this row's planner). It refines step 1's \"Worktree claim knob\" bullet. It also replaces the second bullet of comment-91c98458, which WT-04T overtook about 2 minutes after it was posted. Files, DoD, cases and budgets are unchanged, so there is no re-plan.\n\nWT-04T (task-dd5daa4b) lands these fake-proxy knobs, per its step 1 and its planner note comment-1975f0dd (also chat msg-0604fc20):\n- FAKE_CLAIM_WORKSPACE (JSON): the top-level `workspace` of the hasNext:true claim answer only. When set, it also writes workspace=<knob.path> and workspaceMode=<knob.mode> into the attempt record attemptFixture() writes (.moe/attempts/attempt-postflight.json). With it unset, the record is byte-identical: workspace = the project, no workspaceMode.\n- FAKE_CTX_WORKSPACE (JSON): the top-level `workspace` of a get_context answer that has a taskId.\n\nFor seat():\n- Set FAKE_CLAIM_WORKSPACE and FAKE_CTX_WORKSPACE, both to {\"mode\":\"worktree\",\"path\":W,\"branch\":\"moe/task/task-postflight\",\"target\":\"main\"}. The real daemon returns the workspace on both (WT-01 on the claim, WT-02 on get_context), so the wrapper sees the same one whichever it reads.\n- First read the landed scripts/tests/postflight-fake-proxy.js and use its knobs as shipped. Generate the adapter arm only for what the proxy lacks: no get_context workspace, or an attempt record without workspaceMode 'worktree'. If the attempt fields are missing, also flag that on task-dd5daa4b, whose note promises them. The adapter wraps the shared proxy at runtime and never edits it (DoD 5).",
+      "timestamp": "2026-10-30T15:07:01.731Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:52:07.306Z",
-  "updatedAt": "2026-10-30T14:33:55.950Z",
+  "updatedAt": "2026-10-30T15:07:01.731Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:04.205Z",

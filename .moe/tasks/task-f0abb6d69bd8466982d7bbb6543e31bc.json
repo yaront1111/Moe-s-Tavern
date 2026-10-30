@@ -64,7 +64,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -88,7 +88,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:25:13.970Z",
-  "updatedAt": "2026-10-30T14:50:43.831Z",
+  "updatedAt": "2026-10-30T15:06:37.606Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:52.723Z",
@@ -98,12 +98,15 @@
     "firstClaimAt": "2026-10-30T14:08:26.961Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T15:06:37.606Z",
+    "wallClockMs": 3490645
   },
   "contextFetchedBy": [
     "architect-bc59d28a",
     "worker-55e6716a",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-ba3f4f35"
   ],
   "tier": "standard",
   "effort": "high",
@@ -233,5 +236,9 @@
     "reportedAt": "2026-10-30T14:50:09.647Z",
     "source": "agent-reported"
   },
-  "completionSummary": "A daemon started with --host <DNS name> now passes its own CLI /health probe. probeDaemonHealth is async with the same signature and boolean result. For a non-IP probe host, new healthProbeAddress resolves it with dns.promises.lookup, bounded by the probe timeout (unref'd timer, cleared in finally), and the request dials that address, so the Host it sends is the IP literal. That literal is the connection's arrival address, which the unchanged Host rule admits. A lookup failure or timeout makes the probe return false and no request is sent. IP-literal, wildcard, wsl and absent bindHost take the same path as before, with no lookup. server/healthHost.ts is byte-identical, so no name is newly admitted and a foreign DNS name still gets 403.\nTests (healthHost.test.ts block C, in-process and win32-capable): (a) a stubbed-name probe returns true and the server records Host 127.0.0.1:<port>; (b) IP-literal and absent bindHost return true with no lookup; (c) an unresolvable name returns false and no request arrives; (d) a hung lookup returns false within the timeout; (e) a foreign Host gets 403 'Forbidden'. RED against unchanged index.ts: (a) failed, the others passed.\nDiff: index.ts +34/-3, healthHost.test.ts +89/-1.\nOut of scope, left alone: other clients that dial by a name (the proxy, moe-agent.sh with a named MOE_DAEMON_HOST) still get 403 on /health. The proxy maps that to 'unknown' and connects anyway."
+  "completionSummary": "A daemon started with --host <DNS name> now passes its own CLI /health probe. probeDaemonHealth is async with the same signature and boolean result. For a non-IP probe host, new healthProbeAddress resolves it with dns.promises.lookup, bounded by the probe timeout (unref'd timer, cleared in finally), and the request dials that address, so the Host it sends is the IP literal. That literal is the connection's arrival address, which the unchanged Host rule admits. A lookup failure or timeout makes the probe return false and no request is sent. IP-literal, wildcard, wsl and absent bindHost take the same path as before, with no lookup. server/healthHost.ts is byte-identical, so no name is newly admitted and a foreign DNS name still gets 403.\nTests (healthHost.test.ts block C, in-process and win32-capable): (a) a stubbed-name probe returns true and the server records Host 127.0.0.1:<port>; (b) IP-literal and absent bindHost return true with no lookup; (c) an unresolvable name returns false and no request arrives; (d) a hung lookup returns false within the timeout; (e) a foreign Host gets 403 'Forbidden'. RED against unchanged index.ts: (a) failed, the others passed.\nDiff: index.ts +34/-3, healthHost.test.ts +89/-1.\nOut of scope, left alone: other clients that dial by a name (the proxy, moe-agent.sh with a named MOE_DAEMON_HOST) still get 403 on /health. The proxy maps that to 'unknown' and connects anyway.",
+  "completedAt": "2026-10-30T15:06:37.606Z",
+  "reviewCompletedAt": "2026-10-30T15:06:37.606Z",
+  "reviewSummary": "Reviewed completion 29f70f795afaee4b9fc737941e7d2ab01241a96b (tree ea1ab951e715fc6b9f553acb81ac4f1092d3c5c9), confirmed contained in moe/work-2026-10-24; earlier checkpoint is board-only. Source diff: 2 files, +123/-4 (119 net LOC), within approved scope. Re-ran exact recorded gate in a clean git-archive snapshot of that commit, /tmp/moe-f0ab-qa.DuwqnC, with normalized-lock-matching native Linux dependencies (vitest 5.0.5, TypeScript 7.0.2, tsx 4.23.15): cd packages/moe-daemon && npx tsc --noEmit && npx vitest run src/server/healthHost.test.ts src/server/bindHosts.test.ts. Exit 0; tsc clean; 2 files/83 tests passed. DoD: named-host probe resolves to IP and test records Host 127.0.0.1:<port>; unresolved/hung DNS returns false without a request; IP/absent bindHost bypass lookup. Existing real-daemon tests and wildcard/WSL binding tests pass. healthHost.ts and bindHosts.test.ts are byte-identical to the parent; foreign DNS Hosts still receive 403. Timer cleanup, lookup rejection handling, concurrent-call isolation and test cleanup reviewed. No schema/config/migration changes required. Non-final slice: focused verification matches plan; no deferred required checks. Complexity pass: lean already; net: -0 lines possible.",
+  "requiredCheckAtDone": null
 }
