@@ -432,6 +432,13 @@ interface Task {
   // Structured, approval-relevant intent for the plan. Absent on legacy rows.
   // Never approval, readiness or evidence by itself. See `executionContract` below.
   executionContract?: TaskExecutionContract;
+
+  // Daemon-owned plan-reuse facts (CQ-C07a) and recipe binding (CQ-C08). Never
+  // approval, readiness or evidence. See the sections below.
+  planSourceBasis?: PlanSourceBasis;
+  planningEntry?: PlanningEntry;
+  planReuse?: PlanReuseRecord;
+  recipeInstance?: RecipeInstance;
   
   // Status
   status: TaskStatus;
@@ -784,6 +791,90 @@ Every string list holds at most 50 entries, each at most 1000 chars.
 - **Validation** (`validateExecutionContract`, run by every `updateTask` writer): strict, refusing `INVALID_INPUT` with `context.field`; unknown keys are refused; strings are preserved and never truncated; the stored object is a fresh canonical copy; empty lists are omitted. `undefined`, `null` or an empty contract clears it.
 - **Writers.** `moe.submit_plan` replaces it, and an omitted contract clears it. `moe.get_context` projects it for every role when set.
 - **Revision.** A material change increments `planRevision` once, in the same write. Object key order is not material; list order is.
+
+### `planSourceBasis`, `planningEntry`, `planReuse` (CQ-C07a)
+
+Daemon-owned facts for approved-plan reuse. Each is optional, and legacy rows load unchanged. All three are written only by `taskStore.updateTask`, stripped from every caller update and the plugin `UPDATE_TASK` denylist, and decoded by never-throwing readers in `context/planReuseState.ts`. None of them is approval, readiness or evidence. Behavior: [`docs/MCP_SERVER.md`](MCP_SERVER.md) (`moe.get_context` **Plan reuse**, `moe.claim_next_task`).
+
+| Field | Shape | Written when | Decoder |
+|---|---|---|---|
+| `planSourceBasis` | `{ version: 1, commit, planRevision }`: `commit` is the full 40/64-hex `HEAD^{commit}` `submit_plan` ran against, `planRevision` the revision that write committed | the `PLAN_SUBMITTED` write | `readPlanSourceBasis` |
+| `planningEntry` | `{ from: TaskStatus, at, seq }`: the status the task left, the write's canonical ISO time, a per-task counter from 1 | any status change into `PLANNING` | `readPlanningEntry` |
+| `planReuse` | `PlanReuseRecord` below | the plan reuse job only (`context/planReuseJob.ts`) | `readPlanReuseRecord` |
+
+```typescript
+interface PlanReuseRecord {
+  version: 1;
+  decision: 'reuse' | 'refresh' | 'reassess' | 'replan';
+  planRevision: number;
+  entrySeq: number;            // the planningEntry.seq the assessment belongs to
+  reasons: string[];           // 0-32 items of 1-300 chars, no control characters
+  assessedAt: string;          // canonical ISO time
+  basisCommit?: string;        // 40 or 64 hex
+  headCommit?: string;
+  changedPaths?: string[];     // at most 64 normalized repo-relative paths
+  candidate?: 'current' | 'revalidate';  // whether the current candidate's base still equals its delivery target
+}
+```
+
+A record is current only for its `planRevision` and, while the task is in `PLANNING`, its `entrySeq`; otherwise `planReuseView` derives `{ decision, reasons }`, with `pending` for an approved plan awaiting assessment. `reuse` and `refresh` resume the task to `WORKING` under its existing approval; `candidate: "revalidate"` never changes the decision.
+
+### `recipeInstance` and `RecipeDefinition` (CQ-C08)
+
+`Task.recipeInstance` records which recipe produced the current plan. It is daemon-owned: set only by the `PLAN_SUBMITTED` write of `moe.submit_plan`'s internal recipe channel (the reserved `moe-recipe` identity, see [`docs/MCP_SERVER.md`](MCP_SERVER.md)), deleted by any other submission, and stripped from caller updates. Decode with `readRecipeInstance`, which returns `null` for a malformed or stale binding (a later `planRevision`). It is never approval or evidence.
+
+```typescript
+interface RecipeInstance {
+  version: 1;
+  recipeId: string;            // /^[a-z0-9][a-z0-9._-]{0,63}$/
+  kind: string;
+  recipeVersion: number;
+  definitionDigest: string;    // sha256 hex of [id, kind, version, requiredChecks, params]
+  commit: string;              // where the definitions, the source and the protected snapshot were read
+  inputs: Record<string, string | number | boolean>;  // at most 32 flat keys
+  inputsDigest: string;        // sha256 hex
+  planRevision: number;
+}
+
+interface RecipeDefinition {
+  id: string;
+  kind: string;
+  version: number;
+  requiredChecks: ProtectedCheckDefinition[];  // become the plan's protected checks (1 or more)
+  params?: Record<string, unknown>;            // checked by the kind's validateDefinition
+}
+```
+
+Definitions live in the committed file `.moe/recipes.json`: `{ "version": 1, "recipes": [RecipeDefinition, ...] }` with 1 to 50 unique-id entries and no other keys. They are read only from committed bytes at the commit `submit_plan` pins (an uncommitted edit does not count), and decoded strictly. The file is appended to every instantiated check's `configs`, so the measured snapshot pins its blob and a changed file is refused `protected-check-changed` until a new approval. A recipe `kind` must be registered in `recipeKinds`; `docs-literal-replace` (`context/recipes/docsLiteralReplace.ts`) is the one kind that exists, with `params: { allowedPaths }` (1 to 16 canonical prefixes, none under `.moe`). Nothing activates a recipe on its own.
+
+### `ContextDelta` and `PacketManifest` (CQ-C06a, CQ-C01)
+
+Response shapes of `moe.get_context`; the behavior, reasons and limits are in [`docs/MCP_SERVER.md`](MCP_SERVER.md) (**Packet manifest**, **Acknowledged deltas**). Neither is approval, readiness or evidence.
+
+```typescript
+interface ContextDelta {
+  basePacketId: string;        // sha256:<64 hex>
+  packetId: string;
+  changed: { pointer: string; value: unknown }[];  // RFC 6901 pointers, sorted by code unit
+  removed: string[];           // explicit removals, sorted
+}
+// servedContext.contextDelta, present only when basePacketId or contextEpoch was presented
+type ContextDeltaStatus = { served: 'delta' }
+  | { served: 'full'; reason: 'no-base' | 'base-unavailable' | 'base-mismatch' | 'session-mismatch' | 'attempt-mismatch'
+      | 'phase-changed' | 'runner-changed' | 'epoch-missing' | 'epoch-changed' | 'diff-failed'
+      | 'identity-unreadable' | 'no-session' | 'no-running-attempt' | 'not-attempt-owner' | 'record-failed' };
+
+interface PacketManifest {
+  version: 1;
+  provenance: { task: { id: string | null; planRevision: number | null }; epic: { id: string } | null;
+                project: { id: string | null }; candidate?: { id: string } };
+  sections: { path: string; mandatory: boolean; status: 'served' | 'truncated' | 'omitted' | 'missing';
+              reason?: string; count?: number }[];
+  complete: boolean;
+  limitations: string[];       // always includes 'no-repository-source'
+  budget: { limitChars: number; mandatoryChars: number; status: 'within' | 'overflow'; requirement?: 'expand' | 'restructure' };
+}
+```
 
 ### Task subtypes
 
