@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -86,16 +86,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:44:17.905Z",
-  "updatedAt": "2026-10-30T08:02:34.990Z",
+  "updatedAt": "2026-10-30T08:05:27.505Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:47:52.464Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T08:05:27.505Z",
+    "wallClockMs": 1055041
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -220,5 +223,9 @@
     "kind": "completion",
     "sessionId": "worker-5ebbf433@2026-10-30T07:55:30Z",
     "at": "2026-10-30T08:02:34.990Z"
-  }
+  },
+  "completedAt": "2026-10-30T08:05:27.505Z",
+  "reviewCompletedAt": "2026-10-30T08:05:27.505Z",
+  "reviewSummary": "Reviewed completion commit 0d68b0d6 (on moe/work-2026-10-24, pushed per ledger): scripts diff +53/-5 (supervisor +3/-1, bridge test +50/-4), well under size limits. DoD 1: LAUNCH['codex'] config is exactly the four-line table with env_vars = [\"MOE_ROLE\"] (no env table, credential never named); real run with pinned codex 0.166.0 (member sha b8a11fed… verified by me via sha256sum = agent-binaries.json) shows its MCP server gets MOE_ROLE==role for worker and qa and no CODEX_API_KEY/SECRET (LA5). DoD 2: LA_CONFIG.codex pin + LA2 asserts (only env_vars line is exact, no `env =` table, no credential name/value) agree with the supervisor bytes; LA3 pins the same bytes through main(). Re-ran task.verification myself (env -i … MOE_PINNED_CODEX=/tmp/r10d4-evidence/codex-x86_64-unknown-linux-musl node --test local-runner-bridge + local-runner-agents): exit 0, 81/81 pass, 0 fail, 0 skipped, LA5 passed (33s, not skipped). Own mutant probe on a scratch copy (/tmp, removed; repo untouched): dropping env_vars from supervisor+pin turns LA2 and LA5 red (LA3 stays green only because both sides were mutated consistently), so LA5 is non-vacuous against the real binary. Invariants hold: claude config/argv, PROMPTS, JOBS shape, B17, shim role validation unchanged; nothing under .moe edited by the code change. Scope extra disclosed and accepted: one-token fix adding 'CODEX_HOME' to the H7 probe's excluded names (H7 was red from R10d4's landed CODEX_HOME env; its credential/role assertions are unchanged, so no weakening). Not verified: pinned claude's MCP env forwarding (explicitly left to task-90847011). Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
