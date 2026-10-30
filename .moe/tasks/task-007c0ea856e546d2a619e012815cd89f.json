@@ -13,45 +13,73 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nPrerequisite: task-6fc0096b is DONE and landed (c8a2a173 on moe/work-2026-10-24). Edit its landed bytes. Re-read first:\n- MoeMessageDispatcher.kt, the STATE_SNAPSHOT branch;\n- MoeProjectService.kt: the onProjectMismatch lambda, openClient, and onMessage's retired-client check;\n- MoeDaemonSupervisor.kt: the companion's isSameProject, and deleteDaemonInfoIfUnchanged;\n- the fixtures in MoeProjectForeignDaemonTest.kt, MoeProjectConnectionTest.kt and MoeMessageDispatcherAccountsTest.kt.\nIf a landed name differs from this plan, use the landed one. Never add a second path normalizer or deleter.\n\nDraft the file in /mnt/d/moe-scratch/task-007c0ea8/. Copy it into the tree only once you hold the jetbrains-gradle lease (step 4.1), and keep the lease until step 3 is green, so no peer's gate compiles your red file (mem:gotcha-jetbrains-shared-tree-gate-peer-red).\n\nNew file moe-jetbrains/src/test/kotlin/com/moe/services/MoeSnapshotProjectCheckTest.kt, JUnit 4. The paths below are values, not Kotlin literals.\n\nA. Dispatcher rows. Build MoeMessageDispatcher as MoeMessageDispatcherAccountsTest does (invokeLater = { it() }). Use a Proxy fake Project whose getBasePath returns the row's base, an onProjectMismatch that counts its calls, and an updateState that records the state. Each row sends one STATE_SNAPSHOT frame whose payload.project has id, name and rootPath, with the path Gson-encoded.\n- S1, this project in any spelling. A literal table. Every row is equal under comparableProjectPath, so the new code touches no file system or network on any host. The names cannot exist on a real disk, because today's code (the red run) canonicalizes and deletes under them.\n  - Base D:/moe-snapshot-proj (IntelliJ's own Windows spelling): D:\\moe-snapshot-proj, D:/moe-snapshot-proj, d:\\MOE-SNAPSHOT-PROJ\\, D:/moe-snapshot-proj/sub/.., /mnt/d/moe-snapshot-proj, /mnt/d/moe-snapshot-proj/, //wsl$/Ubuntu/mnt/d/moe-snapshot-proj, \\\\wsl.localhost\\Ubuntu\\mnt\\d\\moe-snapshot-proj.\n  - Base //wsl$/Ubuntu/home/moe-test/proj (a project opened through the WSL share): /home/moe-test/proj, \\\\wsl$\\Ubuntu\\home\\moe-test\\proj, //wsl.localhost/Ubuntu/home/moe-test/proj/.\n  - Base /home/moe-test/proj: //wsl$/Ubuntu/home/moe-test/proj.\n  Each row, with a message naming it: zero mismatch calls, and the recorded state's project.rootPath equals the row's rootPath.\n- S2, another project. Real temp folders: A is the base, with a .moe/daemon.json written; B is the other project. The rows are B's absolutePath, and B in its other-side spelling from a local helper like MoeProjectForeignDaemonTest.wslSpelling (D:\\x gives /mnt/d/x, and /x gives //wsl$/Ubuntu/x). Each row: exactly one mismatch call, updateState never called, and A's daemon.json still exists byte for byte, because the dispatcher never deletes. These rows reach the canonicalPath fallback, so they use real folders, never a literal drive the host may lack.\n\nB. Service rows over a loopback WebSocket server. The fixture has:\n- a temp project dir P with .moe/;\n- MoeProjectService(fakeProject(P.absolutePath)) { it() };\n- its daemonSupervisor field replaced by reflection with MoeDaemonSupervisor(basePath, \"Test\", processStarter = { error(\"must not spawn\") }), as MoeProjectForeignDaemonTest's connect-and-retry row does, so a reconnect that fires before dispose never starts a real daemon;\n- an org.java_websocket WebSocketServer on 127.0.0.1:0, like MoeProjectConnectionTest's, whose onOpen sends the row's STATE_SNAPSHOT;\n- daemon.json written as DaemonInfo(server.port, 4242, \"S1\", basePath) through Gson;\n- the client opened through the private openClient(DaemonInfo) by reflection, so no /health probe runs (MoeProjectForeignDaemonTest owns that path).\nEvery wait is a bounded poll (5 s) with a failure message: getState() != null for C1, and the reconnectFuture field != null for C2 and C3. close() disposes the service, closes the clients, stops the server and deletes the temp dirs. Clear MoeProjectRegistry ref counts before and after.\n- C1, this project in its other-side spelling. Derive it from the EXACT basePath string given to the fake project, never from canonicalPath: Windows TEMP may hold 8.3 names (mem:gotcha-jetbrains-read-daemon-info-deletes). Expect:\n  - getState()!!.project.rootPath equals that spelling;\n  - isConnected(), and the wsClient field is non-null;\n  - reconnectFuture is null;\n  - the daemon.json bytes are unchanged.\n- C2, another project (a second temp dir). Expect: reconnectFuture non-null; not connected; wsClient null; getState() null, because the foreign state never applies; daemon.json removed.\n- C3, daemon.json changed in one field since connect. One fresh fixture for each of pid, port, startedAt and projectPath (the other temp dir's path): write the read info, overwrite daemon.json with the one-field replacement BEFORE opening the client, then open the client with the read info. Expect: it still disconnects and schedules the reconnect, and daemon.json equals the replacement text byte for byte.\n\nRed proof, under the lease: run step 4's gate command with --tests com.moe.services.MoeSnapshotProjectCheckTest. On today's code expect red from S1's /mnt and WSL-share rows, S2 (today's dispatcher deletes A's daemon.json), C1 and C3. C2 may pass: it pins today's reconnect. Record which rows failed and why. A compile error is not red proof.\n\nError handling in the tests: no row starts or signals a real process, every wait is bounded, and every server, client, service and temp dir is closed in finally. Kotlin note: write arrayOf<Any>(...) for mixed arrays (mem:gotcha-jetbrains-gate-snapshot).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeSnapshotProjectCheckTest.kt"
       ],
-      "startedAt": "2026-10-30T11:02:16.608Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeSnapshotProjectCheckTest.kt"
+      ],
+      "note": "Test file MoeSnapshotProjectCheckTest.kt added (S1 table, S2, C1, C2, C3). Red proof on unmodified production code under the jetbrains-gradle lease: 5 tests, 4 failed — S1 (line 39: /mnt and WSL-share rows give a mismatch), S2 (line 61: dispatcher deletes A's daemon.json), C1 (line 135: snapshot never applies, client reconnects), C3 (line 117: the one-field replacement is deleted). C2 passes (pins today's reconnect + delete of an unchanged file). Compiled clean; failures are assertions, not compile errors. 52 other dirty paths in the checkout are peers'/pre-existing; none under moe-jetbrains.",
+      "startedAt": "2026-10-30T11:02:16.608Z",
+      "completedAt": "2026-10-30T11:26:22.013Z"
     },
     {
       "stepId": "step-2",
       "description": "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt, the STATE_SNAPSHOT branch only.\n- Keep the guard: a non-null basePath and a non-empty rootPath.\n- Replace the two File(...).canonicalPath lines and their comparison with !MoeDaemonSupervisor.isSameProject(rootPath, basePath). That is task-6fc0096b's internal companion helper: comparableProjectPath first, canonicalPath as the fallback. Do not add another normalizer.\n- On a mismatch: log.warn naming both raw paths, call onProjectMismatch(), and return.\n- Delete the File(basePath, \".moe/daemon.json\").delete() line. The dispatcher holds no supervisor and must never touch .moe/; MoeProjectService removes the file in step 3.\n- Keep the java.io.IOException catch, because the canonical fallback can throw. As today, it skips the check.\n- Drop the java.io.File import, which is now unused.\nNothing else in the file changes. The constructor and handle() signatures stay as they are, so every existing test that passes onProjectMismatch = {} compiles unchanged.\n\nError handling: unchanged. A null basePath, an empty rootPath or a canonical IOException skips the check and applies the state, as today.\n\nRun the focused class. S1, S2, C1 and C3 go green. C2 stays red until step 3, because nothing removes the file yet.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt"
+      ],
+      "note": "STATE_SNAPSHOT branch now judges rootPath with MoeDaemonSupervisor.isSameProject(rootPath, basePath); the unconditional daemon.json delete and the unused java.io.File import are gone; IOException catch and null/empty guards kept. Focused class under the lease: S1, S2, C1, C3 green; C2 red as planned (nothing removes daemon.json until step 3).",
+      "startedAt": "2026-10-30T11:26:25.073Z",
+      "completedAt": "2026-10-30T11:26:44.334Z"
     },
     {
       "stepId": "step-3",
       "description": "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt: remove daemon.json only through the compare-delete, against the DaemonInfo the client connected with.\n1. Add `@Volatile private var clientDaemonInfo: DaemonInfo? = null` next to wsClient, with a one-line comment: the DaemonInfo the current wsClient was opened with.\n2. In openClient, assign clientDaemonInfo = daemonInfo in the same wsLock block, on the line after wsClient = newClient. Nothing else writes it. It always belongs to the client that delivers a snapshot: onMessage drops a retired client's messages (wsClient !== this), and doConnect refuses while connected or connecting.\n3. The constructor's onProjectMismatch lambda, in this order:\n   - val info = clientDaemonInfo, read first;\n   - disconnect(), as today;\n   - when info != null, daemonSupervisor.deleteDaemonInfoIfUnchanged(info). Log \"Removed daemon.json naming the daemon on port <port>: it serves another project\" when it returns true, and otherwise \"Kept daemon.json: it no longer names that daemon\", in handleForeignDaemon's style. Never File.delete, and never readDaemonInfo;\n   - wsLock.withLock { isManualDisconnect = false } and scheduleReconnect(), as today.\n4. Leave restartDaemon untouched (CQ-RF04 owns its post-stop delete and now dependsOn this task). Also leave handleForeignDaemon, connect, connectWithRetry and doConnect untouched.\n\nError handling: deleteDaemonInfoIfUnchanged never throws. It returns false on any IO, parse or delete failure, and on a blank base. A null info (no client was ever opened) deletes nothing and still reconnects. onProjectMismatch runs on the client's read thread, so keep disconnect()'s non-blocking close and never call closeBlocking there.\n\nRun the focused class until S1, S2, C1, C2 and C3 all pass. Then run MoeProjectForeignDaemonTest and MoeProjectConnectionTest focused.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "note": "MoeProjectService: @Volatile clientDaemonInfo assigned in openClient's wsLock block after wsClient = newClient; onProjectMismatch reads it first, disconnect(), then daemonSupervisor.deleteDaemonInfoIfUnchanged(info) (logs removed/kept; null info deletes nothing), then clears isManualDisconnect and scheduleReconnect as before. No File.delete or readDaemonInfo added. One addition beyond the plan: daemonSupervisor got an explicit type (MoeDaemonSupervisor) because the new reference inside the messageDispatcher initializer made Kotlin report a recursive-type error (compile failed at first try; fixed). restartDaemon/handleForeignDaemon/connect untouched. Focused run under the lease: MoeSnapshotProjectCheckTest 5/5, MoeProjectForeignDaemonTest 10/10, MoeProjectConnectionTest 5/5, 0 failures/errors/skips (XML-confirmed).",
+      "startedAt": "2026-10-30T11:26:54.257Z",
+      "completedAt": "2026-10-30T11:27:35.110Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh. Edit only what this step's findings need, and report it in modifiedFiles.\n1. Hold the jetbrains-gradle lease for every Gradle run (mem:convention-jetbrains-gradle-lease): moe.acquire_resource {resourceId: 'jetbrains-gradle', taskId, workerId, note}. If it is busy, call moe.report_blocked with resourceId 'jetbrains-gradle' and a reason that names no task id, because ids in a reason are parsed as blockers. Release the lease afterwards, even on failure.\n2. Mutants, in a git-archive copy and never in the shared tree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy):\n   - Run git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/task-007c0ea8/repo.\n   - Overlay this task's 3 files and cmp-verify them.\n   - Apply one mutant at a time with an exact-anchor replace, then run cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\task-007c0ea8\\repo\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeSnapshotProjectCheckTest --rerun\".\n   - Restore the file and cmp it.\n   Each mutant must fail an assertion in the named rows; a compile error does not count.\n   - M1, the dispatcher compares canonicalPath only (today's rule): S1's /mnt and WSL-share rows, and C1.\n   - M2, the dispatcher's unconditional daemon.json delete is put back: S2 and C3.\n   - M3, onProjectMismatch removes the file with File(basePath, \".moe/daemon.json\").delete() instead of the compare-delete: C3.\n   - M4, onProjectMismatch skips the removal: C2.\n   - M5, onProjectMismatch drops scheduleReconnect(): C2 and C3.\n   - M6, the dispatcher applies the state after onProjectMismatch (no return): S2 and C2.\n3. The gate, on the shared tree, with the task's exact command:\n   cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n   - It must exit 0.\n   - Count from the build/test-results/test/TEST-*.xml files dated after the gate start, not from the console. Report the totals with zero failures, errors and skips, and the counts for MoeSnapshotProjectCheckTest, MoeProjectForeignDaemonTest, MoeProjectConnectionTest, MoeDaemonSupervisorTest and both MoeMessageDispatcher test classes.\n   - If a peer's red file or unresolved merge breaks the shared tree, follow mem:gotcha-jetbrains-shared-tree-gate-peer-red: get backup evidence from an archive copy with only this task's 3 files overlaid, then run the exact command on the shared tree once the peer is green. Never touch a peer's files.\n   - If it exits 1 with 'Could not receive a message from the daemon', see mem:gotcha-jetbrains-gradle-client-oom: check the Gradle daemon log, then rerun.\n4. git diff --check over the two edited files must be clean, and the new test file must have no trailing whitespace. No git add, commit, stash or revert: the wrapper lands.\n5. complete_task verification: that command, exit code 0 and the output tail, reported truthfully as Windows evidence. The summary maps DoD 1 to S1 and C1, DoD 2 to S2, C2 and C3, and DoD 3 to this gate. S1 is host-independent, and S2 and C1 derive their spellings from the host's own basePath, so CI's Linux run needs no change. Say that only Windows was run.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Windows evidence only (cmd.exe gradlew.bat under the jetbrains-gradle lease). Mutants M1-M6 in a git-archive copy (/mnt/d/moe-scratch/task-007c0ea8/repo, 3 task files overlaid and cmp-verified, each restored and cmp-verified): all six died on assertions in the named rows — M1 canonical-only: S1,C1; M2 dispatcher delete back: S2,C3; M3 File.delete in service: C3; M4 skip removal: C2; M5 no scheduleReconnect: C2,C3; M6 no return after mismatch: S2,C2 (also C3). Gate on the shared tree, exact task command, exit 0 (BUILD SUCCESSFUL 22s); counted from build/test-results/test/TEST-*.xml, all dated after Windows gate start 2026-10-30T11:29:47Z: 27 classes, 432 tests, 0 failures/errors/skips. MoeSnapshotProjectCheckTest 5, MoeProjectForeignDaemonTest 10, MoeProjectConnectionTest 5, MoeDaemonSupervisorTest 57, MoeMessageDispatcherAccountsTest 5, MoeMessageDispatcherErrorTest 5. git diff --check clean, no trailing whitespace in the new test, tracked JetBrains hashes stable across the gate. Evidence: /mnt/d/moe-scratch/task-007c0ea8/ (mutations.json, gate.log, M*.log). No source edits in this step.",
+      "startedAt": "2026-10-30T11:27:40.283Z",
+      "completedAt": "2026-10-30T11:30:32.385Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the 3-file diff two ways: as a user whose IDE and daemon sit on opposite sides of the Windows/WSL boundary, and as an attacker who controls .moe/daemon.json.\n- Can a same-project rootPath in any spelling still reach a disconnect or a delete? Try drive letters, backslashes, forward slashes, case, a trailing separator, dot segments, /mnt/<d>, //wsl$ and //wsl.localhost.\n- Does a same-project WSL-share spelling reach canonicalPath, which does network IO on Windows? It must not: comparableProjectPath decides first.\n- Is daemon.json removed anywhere except through deleteDaemonInfoIfUnchanged against the client's DaemonInfo? Grep the diff for .delete( and readDaemonInfo.\n- Concurrency:\n  - a snapshot that arrives while disconnect() runs;\n  - a second snapshot from the same client after the first mismatch (onMessage must drop it as retired);\n  - a mismatch during Restart Daemon (the accepted race in planningNotes risks).\n- A null basePath, an empty rootPath and a canonical IOException still skip the check, as today.\n- Rails:\n  - no .moe edits;\n  - no Git writes;\n  - none of the global rails' forbidden patterns;\n  - error handling on every IO path, and a test for every behavior change.\n- Would I be embarrassed if this shipped?\nFix any finding, then rerun step 4's gate fresh before complete_task.\n\nThen write the Serena memory 'task-task-007c0ea856e546d2a619e012815cd89f-handoff' with the landed names, the rows, the mutants and the evidence. Update mem:gotcha-jetbrains-read-daemon-info-deletes: the dispatcher deleter is gone, and RF04's restart delete is the last unconditional one.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeSnapshotProjectCheckTest.kt"
+      ],
+      "note": "Self-review of the 3-file diff, no code change needed. Same-project spellings (drive, slash direction, case, trailing sep, dot segments, /mnt/<d>, //wsl$, //wsl.localhost) are decided by comparableProjectPath first (S1 table), so they never reach canonicalPath/network IO; only genuinely different paths fall through to canonicalPath, as before. Deleters: grep of .delete( in dispatcher is empty; MoeProjectService has only the removal via deleteDaemonInfoIfUnchanged(clientDaemonInfo) plus restartDaemon's pre-existing post-stop delete (line ~728, RF04's, out of scope and untouched). Concurrency: a second snapshot after the mismatch is dropped by onMessage (wsClient was nulled by disconnect()); clientDaemonInfo is written in the same wsLock block as wsClient and read before disconnect(); accepted race = a retired client's read thread stalled across a whole Restart Daemon would read the new client's DaemonInfo (needs a stall across a restart; the compare-delete is best-effort TOCTOU, same class as before). Null basePath / empty rootPath / canonical IOException still skip the check. Attacker-controlled daemon.json: removal is bounded read + four-field equality, never an arbitrary path. No .moe edits, no git writes, no forbidden patterns. Lease released (granted to the queued QA). Memory written: task-...-handoff, gotcha-kotlin-recursive-type-service-field, edited gotcha-jetbrains-read-daemon-info-deletes.",
+      "startedAt": "2026-10-30T11:30:34.919Z",
+      "completedAt": "2026-10-30T11:31:11.466Z"
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
-  "assignedWorkerId": "worker-5ebbf433",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -69,11 +97,17 @@
       "author": "governor-693b7073",
       "content": "@worker-5ebbf433 FYI from the governor (11:03Z): RF04 (task-de91373a, worker-73c29a03) is live too. It was claimed before its new dependsOn on this row existed. Its steps 1-2 touch only MoeDaemonSupervisor.kt and its test, so there's no overlap with you. Its step 3 edits MoeProjectService.kt, and I've asked it to stop at step 3 and report_blocked on this row until this row is DONE. You own MoeProjectService.kt until you land. If `git status` ever shows foreign hunks in it, don't edit over them; ping me.",
       "timestamp": "2026-10-30T11:02:20.824Z"
+    },
+    {
+      "id": "comment-4579d8dd17d44c71b7e795c648074552",
+      "author": "governor-693b7073",
+      "content": "@worker-5ebbf433 Governor note (11:31Z), no action needed unless you were about to touch restartDaemon. RF04 (de91373a) has already landed its MoeProjectService.kt hunk in 7e996666. That hunk is in restartDaemon at about L705: stopDaemonForRestart(info) now runs even when info is null.\n\nYour in-flight diff is based on blob 939173ae, which already includes that hunk. Your edits are in the onProjectMismatch lambda, clientDaemonInfo and openClient, and they leave restartDaemon alone. Keep it that way: preserve RF04's restartDaemon hunk byte-for-byte, and keep its post-stop daemon.json delete, which architect-bd1eb82d's sequencing note leaves to RF04.\n\nThe edge \"RF04 dependsOn 007c0ea8\" stays as the file-lane guard. If QA rejects RF04, its fix round waits for this row to land.",
+      "timestamp": "2026-10-30T11:30:52.968Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:17:28.429Z",
-  "updatedAt": "2026-10-30T11:04:26.411Z",
+  "updatedAt": "2026-10-30T11:31:20.199Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T10:45:00.336Z",
@@ -82,7 +116,8 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T10:45:13.585Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -92,7 +127,13 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T11:01:49.933Z",
   "executionContract": {
@@ -160,8 +201,48 @@
   "planApprovedAt": "2026-10-30T11:01:49.961Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T11:02:16.609Z",
-  "blockedReason": "Waiting for the shared jetbrains-gradle lease, held by another worker's red/green and gate runs. Step 1's test file is drafted in /mnt/d/moe-scratch/task-007c0ea8 and cannot enter the shared tree or run until the lease is mine.",
-  "blockedResourceId": "jetbrains-gradle",
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T11:04:26.411Z"
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "11400590754a246746829d8647724693e0724f90",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T11:01:55Z",
+      "paths": [
+        ".moe/tasks/task-007c0ea856e546d2a619e012815cd89f.json",
+        ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T11:04:42.463Z",
+      "treeId": "bb17f4e1413c611a4dc356cae030e211c65fd97b",
+      "status": "BLOCKED",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeSnapshotProjectCheckTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-5ebbf433@2026-10-30T11:01:55Z",
+    "at": "2026-10-30T11:04:42.463Z"
+  },
+  "blockedOnTaskIds": null,
+  "reviewStartedAt": "2026-10-30T11:31:20.197Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :composedJar UP-TO-DATE\n> Task :prepareTestSandbox UP-TO-DATE\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 22s\n11 actionable tasks: 2 executed, 9 up-to-date\n\nTEST-*.xml dated after Windows gate start 2026-10-30T11:29:47Z: 27 classes, 432 tests, 0 failures, 0 errors, 0 skipped (MoeSnapshotProjectCheckTest 5, MoeProjectForeignDaemonTest 10, MoeProjectConnectionTest 5, MoeDaemonSupervisorTest 57, MoeMessageDispatcherAccountsTest 5, MoeMessageDispatcherErrorTest 5).",
+    "reportedAt": "2026-10-30T11:31:20.197Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "DoD1 (S1, C1): the STATE_SNAPSHOT check now uses MoeDaemonSupervisor.isSameProject (comparableProjectPath first, canonicalPath fallback). A rootPath naming this project in a drive, backslash/forward-slash, case, trailing-separator, dot-segment, /mnt/<d>, //wsl$ or //wsl.localhost spelling gives no mismatch, no disconnect and no reconnect, and applies the state. A live loopback client given the other-side spelling stays connected with daemon.json unchanged. DoD2 (S2, C2, C3): another project's rootPath (native and other-side spelling) gives exactly one onProjectMismatch, applies no state, and the dispatcher no longer touches .moe/. MoeProjectService.onProjectMismatch removes daemon.json only via deleteDaemonInfoIfUnchanged(clientDaemonInfo), the DaemonInfo the current client was opened with, then disconnects and schedules the reconnect as before. A daemon.json changed in pid, port, startedAt or projectPath since connect survives byte for byte. DoD3: the exact Windows gate (cmd.exe gradlew.bat test --rerun, jetbrains-gradle lease) exits 0 with 27 classes / 432 tests, 0 failures/errors/skips, counted from TEST-*.xml dated after the gate start (MoeSnapshotProjectCheckTest 5, MoeProjectForeignDaemonTest 10, MoeProjectConnectionTest 5, MoeDaemonSupervisorTest 57, both MoeMessageDispatcher classes 5+5). Red proof on old code: S1, S2, C1, C3 failed. Mutants M1-M6 (canonical-only, dispatcher delete back, File.delete in service, skip removal, no scheduleReconnect, no return) each died on assertions in the named rows in an archive copy. Files: MoeMessageDispatcher.kt, MoeProjectService.kt (adds clientDaemonInfo plus an explicit type on daemonSupervisor, needed to break a Kotlin recursive-type error), new MoeSnapshotProjectCheckTest.kt. Windows evidence only; no native Linux/UI run (S1 is host-independent, S2/C1 derive spellings from the host basePath). restartDaemon's post-stop delete is untouched (RF04). Evidence: D:/moe-scratch/task-007c0ea8/."
 }

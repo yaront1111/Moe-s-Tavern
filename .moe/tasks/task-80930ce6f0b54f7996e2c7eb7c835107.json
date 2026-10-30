@@ -117,7 +117,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:52:38.398Z",
-  "updatedAt": "2026-10-30T11:30:54.490Z",
+  "updatedAt": "2026-10-30T11:31:22.677Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:59:30.687Z",
@@ -233,7 +233,8 @@
     "packages/moe-daemon/src/index.ts",
     "docs/ARCHITECTURE.md",
     ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
-    ".moe/tasks/task-f0abb6d69bd8466982d7bbb6543e31bc.json"
+    ".moe/tasks/task-f0abb6d69bd8466982d7bbb6543e31bc.json",
+    ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json"
   ],
   "completionSummary": "Plain-HTTP GET /health now answers only no Host, localhost, 127/8 or [::1], or the IP literal of the arrival address (req.socket.localAddress, ::ffff: stripped); every other Host gets 403 text/plain 'Forbidden' with no body fields. New server/healthHost.ts (pure, total, 49 lines); index.ts imports it and calls it as the FIRST statement of the /health branch (+7); the 200/503 and 426 paths are unchanged; no Host is echoed or logged.\nDoD 1: real spawned `_run --host 127.0.0.1` rows: 127.0.0.1, localhost and absent Host (HTTP/1.0) answer 200 with status/projectPath/pid/version/uptime/stats/checks; a foreign name, a foreign IP and 'localhost.evil.example' answer 403 with no JSON; probeDaemonHealth is still true; /other and an absolute-form target still answer 426. Clients: the daemon CLI probe, doctor, JetBrains DaemonIdentity, moe-agent.ps1 and the local runner send 127.0.0.1; the Docker HEALTHCHECK sends localhost; moe-agent.sh and the proxy send the host they were given (127.0.0.1 or the WSL gateway IP, which is the connection's arrival address); the proxy maps a 403 to 'unknown' and still connects.\nDoD 2: table A, 44 rows: absent, localhost, 127/8, ::1, gateway IP equal to the local address (also ::ffff: dual-stack) allowed; names, foreign IPs and malformed values refused.\nDoD 3: one Security Notes bullet in docs/ARCHITECTURE.md.\nEvidence: red proof first (missing module; accept-all stub fails 27 table rows and the 3 real 403 rows); 12 mutants killed by real rows, restored and cmp-checked; fresh gate EXIT 0, 208 files, 5915 passed / 16 skipped; adversarial probes over real Node HTTP. Filed task-f0abb6d6 (--host <DNS name> CLI probe). Residuals: NAT or port-forward Host IPs; a link-local arrival address with a zone id. Part B rows skip win32.",
   "commits": [
@@ -262,6 +263,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "2053926793418b6bddb984b8b9865570d0d7745c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T11:28:28Z",
+      "paths": [
+        ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+        ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T11:31:22.677Z",
+      "treeId": "207718e8d9e6b3374ec74379a91bea5a506867a0",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -273,9 +290,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e60b90bd@2026-10-30T11:16:55Z",
-    "at": "2026-10-30T11:26:16.446Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T11:28:28Z",
+    "at": "2026-10-30T11:31:22.677Z"
   },
   "completedAt": "2026-10-30T11:30:54.490Z",
   "reviewCompletedAt": "2026-10-30T11:30:54.490Z",

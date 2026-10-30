@@ -32,7 +32,7 @@ class MoeProjectService @JvmOverloads constructor(
     private val invokeLaterForTests: ((() -> Unit) -> Unit)? = null
 ) : Disposable {
     private val log = Logger.getInstance(MoeProjectService::class.java)
-    private val daemonSupervisor = MoeDaemonSupervisor(
+    private val daemonSupervisor: MoeDaemonSupervisor = MoeDaemonSupervisor(
         basePath = project.basePath.orEmpty(),
         projectName = project.name,
         onStatus = ::publishStatus,
@@ -41,6 +41,8 @@ class MoeProjectService @JvmOverloads constructor(
     private val wsLock = ReentrantLock()
     private val messageQueue = ConcurrentLinkedQueue<String>()
     @Volatile private var wsClient: WebSocketClient? = null
+    /** The DaemonInfo the current [wsClient] was opened with. */
+    @Volatile private var clientDaemonInfo: DaemonInfo? = null
     @Volatile private var connected = false
     @Volatile private var state: MoeState? = null
     @Volatile private var connecting = false
@@ -52,7 +54,15 @@ class MoeProjectService @JvmOverloads constructor(
         currentState = { state },
         updateState = { state = it },
         onProjectMismatch = {
+            val info = clientDaemonInfo
             disconnect()
+            if (info != null) {
+                if (daemonSupervisor.deleteDaemonInfoIfUnchanged(info)) {
+                    log.info("Removed daemon.json naming the daemon on port ${info.port}: it serves another project")
+                } else {
+                    log.info("Kept daemon.json: it no longer names that daemon")
+                }
+            }
             wsLock.withLock { isManualDisconnect = false }
             scheduleReconnect()
         },
@@ -392,6 +402,7 @@ class MoeProjectService @JvmOverloads constructor(
                 }
             }
             wsClient = newClient
+            clientDaemonInfo = daemonInfo
         }
 
         try {

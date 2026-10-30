@@ -12,7 +12,6 @@ import com.moe.model.MetricsAggregate
 import com.moe.model.MoeState
 import com.moe.model.PinEntry
 import com.moe.util.MoeJson
-import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
 class MoeMessageDispatcher(
@@ -83,12 +82,9 @@ class MoeMessageDispatcher(
                 val basePath = project.basePath
                 if (basePath != null && newState.project.rootPath.isNotEmpty()) {
                     try {
-                        val daemonPath = File(newState.project.rootPath).canonicalPath
-                        val expectedPath = File(basePath).canonicalPath
-                        if (daemonPath != expectedPath) {
-                            log.warn("STATE_SNAPSHOT project mismatch: expected $expectedPath, got $daemonPath. Disconnecting.")
-                            val daemonJson = File(basePath, ".moe/daemon.json")
-                            try { daemonJson.delete() } catch (_: Exception) {}
+                        val rootPath = newState.project.rootPath
+                        if (!MoeDaemonSupervisor.isSameProject(rootPath, basePath)) {
+                            log.warn("STATE_SNAPSHOT project mismatch: expected $basePath, got $rootPath. Disconnecting.")
                             onProjectMismatch()
                             return
                         }
