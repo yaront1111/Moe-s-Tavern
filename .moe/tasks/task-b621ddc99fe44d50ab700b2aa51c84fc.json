@@ -114,11 +114,17 @@
       "author": "architect-4ae016fb",
       "content": "Addendum to comment-ebcd8110, from efbf1742's QA (qa-ba3f4f35, 2026-10-30). This is a PRE-ACTIVATION requirement for verified-local, now owned explicitly by this row. It does not block efbf1742.\n\nThe residual is an opaque protected wrapper. Counterexample:\n- The def is `{id:'arch', command:'bash scripts/lint.sh', scripts:['scripts/lint.sh']}`.\n- lint.sh runs `node packages/moe-daemon/dist/index.js check-architecture --rules arch.json`.\n- The candidate edits only packages/moe-daemon/src/context/repositorySource.ts.\n- Under verified-local, evaluateDeliveryEvidence answers `{satisfied:true, missingEvidence:[]}`. QA log: /tmp/qa-efbf-opaque.log.\n\nefbf1742's classifier (requiredChecks.ts untrustedArchitectureChecks) is pure. It sees only the command text and the protected-path suffixes, never wrapper bytes.\n\nGeneral class: a protected entry that executes unprotected candidate code. That includes a dist built from candidate sources, an unprotected helper script, and an unprotected package.json script. This is a V01 protection-completeness limit, not a classifier bug.\n\nBefore verified-local is enabled, this row (or whoever certifies activation) must:\n(1) Make the binding control a check guest in which candidate-built daemon code cannot serve as the checker. `moe-daemon` must resolve only to the trusted install built at the base revision, with no workspace, '.' or node_modules/.bin entries on PATH.\n(2) Optionally add defense in depth: an approval-time scan of the protected wrapper bytes at the approved revision, applying efbf1742's mention signal (/check-?architecture/i) to them, plus a submit_plan message.\n(3) Have the docs sweep state the V01 limit: protection covers only the entries the approver names. It must also list the `required-check-untrusted-checker:<id>` token.\n\nNot exploitable today: verified-local is off and nothing dispatches checks.",
       "timestamp": "2026-10-30T08:33:02.471Z"
+    },
+    {
+      "id": "comment-9087830c119c43178e16e1437794d791",
+      "author": "worker-093a65d0",
+      "content": "Docs-sweep delta from efbf1742 round 2 (worker-093a65d0), adding to comment-ebcd8110 and comment-bde17873. These apply to verified-local only.\n\n- The untrusted-checker token has two forms. `required-check-untrusted-checker:<id>` names an approved definition. `required-check-untrusted-checker:(qualityGate)` names settings.qualityGate when the owed gate runs the checker in a form other than the installed one. The owed gate is the live gate, or requiredCheckAtDone once the task is DONE. No definition id can take the `(qualityGate)` label.\n- \"Architecture check\" is now wider. The command can name the checker or its engine (/check-?architecture|architecture-?rules/i). Or the definition protects checkArchitecture.ts or architectureRules.ts, either by listing the path or through a listed directory. A listed directory is read from the approved snapshot's measured entries under that definition's own roots.\n- Known false refusals, which fail closed:\n  - unit-test commands that name checkArchitecture or architectureRules;\n  - definitions whose directory covers the checker sources.\n- An activation residual not yet listed: the installed form's `--rules` file needs configs protection, or the candidate can weaken the rules. The gate protects no files at all.",
+      "timestamp": "2026-10-30T09:00:48.814Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:14.370Z",
-  "updatedAt": "2026-10-30T08:33:02.471Z",
+  "updatedAt": "2026-10-30T09:00:48.814Z",
   "dependsOn": [
     "task-af83018e892149a1a18cd6a946edeba5",
     "task-e493ed19006d4be4a96e3ca2f80a5ab4",
