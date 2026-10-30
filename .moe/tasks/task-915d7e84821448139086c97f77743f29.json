@@ -98,7 +98,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T14:08:45.032Z",
-  "updatedAt": "2026-10-30T03:31:49.532Z",
+  "updatedAt": "2026-10-30T03:32:11.552Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T00:02:28.990Z",
     "plannedStepCount": 5,
@@ -200,6 +200,41 @@
       "treeId": "0e1676830b6dcd03e1d29c4fe67489347a8ef34c",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "b06e425835946ff68c04ce2ce7e189fb168ab4fe",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T03:25:20Z",
+      "paths": [
+        ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+        ".moe/tasks/task-edda38a1b19d41fa8bc09d424edee81d.json",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/src/tools/recordCommit.test.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T03:32:11.552Z",
+      "treeId": "a9ca6569c42edc9f37d699fd777be96cfac727d1",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-66e8d7d1e9ef4ba281cdb2f505d47e7d"
+        },
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-95b610e3726c4e099c84eaedf098602a"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-c2a900aa5107479aa4c630f1b3837ed0"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -207,14 +242,16 @@
     "packages/moe-daemon/src/tools/recordCommit.ts",
     "docs/MCP_SERVER.md",
     "docs/SCHEMA.md",
-    "docs/TROUBLESHOOTING.md"
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+    ".moe/tasks/task-edda38a1b19d41fa8bc09d424edee81d.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-b5749787@2026-10-30T00:11:27Z",
-    "at": "2026-10-30T00:12:23.007Z"
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-30T03:25:20Z",
+    "at": "2026-10-30T03:32:11.552Z"
   },
   "priorBlockedReason": "Waiting for governor-693b7073's merge of main into moe/work-2026-10-24 (prepared as 3f6817f1), which also edits packages/moe-daemon/src/tools/recordCommit.ts, its test and three docs this fix touches; editing them first would re-block that merge. Unblock with moe.set_task_status WORKING once git merge-base --is-ancestor f1c04b15 moe/work-2026-10-24 succeeds.",
   "blockedOnTaskIds": null,
@@ -227,5 +264,12 @@
     "reportedAt": "2026-10-30T03:31:49.530Z",
     "source": "agent-reported"
   },
-  "completionSummary": "An owner-guard refusal in moe.record_commit (outcome refused, code exactly MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE or MOE_COMMIT_REFUSED_OWNER_UNKNOWN) now changes no task field and pages nobody.\n\nDecision (DoD 2): it is another seat's non-event, since a non-assignee session landed nothing and the owner's own landing commits the bytes. So `lastCommitOutcome` keeps the owner's last landing, whether committed or a failure, and stays absent when the owner never landed (get_context returns null). Stray path fields on such a row are ignored.\n\nBehaviour: it still posts the task-channel REFUSED line, touches the worker, and logs a TASK_COMMIT_RECORDED event via a direct appendActivity (payload: outcome, kind, code, sessionId, at; no paths). It never calls postToRoleChannel and leaves the per-task #governors window free, so a later ordinary failure on the same task still pages once. Every other outcome is unchanged, including a 'failed' row with these codes and a code differing only in case. Inputs and response fields are unchanged.\n\nChanges: recordCommit.ts (OWNER_GUARD_CODES, ownerGuardRefusal flag, skipped task write, alert condition, tool description); recordCommit.test.ts (describe 'owner-guard refusals', 15 tests, plus the 5 pre-existing type-error fixes); docs MCP_SERVER.md, SCHEMA.md, TROUBLESHOOTING.md (older stored rows with these codes stay valid, documented).\n\nEvidence:\n- Red proof on the old handler: 8 failures (pages-nobody, hides-nothing, failure-stays, absent-when-never-landed, x2 codes); control passes. Deviation: the audit-event and response-contract cases pass on the old handler too (updateTask already logged the event); they guard the write-skip.\n- Mutation proofs, each restored: dropping the alert guard fails case 1; routing through the normal stamp fails cases 2-4; widening to every refusal fails the control; dropping the outcome check and a case-insensitive match each fail the exactness test.\n- Final gate (plan step-4 command, run fresh after the last edit"
+  "completionSummary": "An owner-guard refusal in moe.record_commit (outcome refused, code exactly MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE or MOE_COMMIT_REFUSED_OWNER_UNKNOWN) now changes no task field and pages nobody.\n\nDecision (DoD 2): it is another seat's non-event, since a non-assignee session landed nothing and the owner's own landing commits the bytes. So `lastCommitOutcome` keeps the owner's last landing, whether committed or a failure, and stays absent when the owner never landed (get_context returns null). Stray path fields on such a row are ignored.\n\nBehaviour: it still posts the task-channel REFUSED line, touches the worker, and logs a TASK_COMMIT_RECORDED event via a direct appendActivity (payload: outcome, kind, code, sessionId, at; no paths). It never calls postToRoleChannel and leaves the per-task #governors window free, so a later ordinary failure on the same task still pages once. Every other outcome is unchanged, including a 'failed' row with these codes and a code differing only in case. Inputs and response fields are unchanged.\n\nChanges: recordCommit.ts (OWNER_GUARD_CODES, ownerGuardRefusal flag, skipped task write, alert condition, tool description); recordCommit.test.ts (describe 'owner-guard refusals', 15 tests, plus the 5 pre-existing type-error fixes); docs MCP_SERVER.md, SCHEMA.md, TROUBLESHOOTING.md (older stored rows with these codes stay valid, documented).\n\nEvidence:\n- Red proof on the old handler: 8 failures (pages-nobody, hides-nothing, failure-stays, absent-when-never-landed, x2 codes); control passes. Deviation: the audit-event and response-contract cases pass on the old handler too (updateTask already logged the event); they guard the write-skip.\n- Mutation proofs, each restored: dropping the alert guard fails case 1; routing through the normal stamp fails cases 2-4; widening to every refusal fails the control; dropping the outcome check and a case-insensitive match each fail the exactness test.\n- Final gate (plan step-4 command, run fresh after the last edit",
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/recordCommit.test.ts",
+    "packages/moe-daemon/src/tools/recordCommit.ts",
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md",
+    "docs/TROUBLESHOOTING.md"
+  ]
 }

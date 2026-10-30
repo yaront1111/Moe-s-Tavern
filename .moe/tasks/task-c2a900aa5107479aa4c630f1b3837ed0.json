@@ -102,7 +102,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -136,21 +136,30 @@
       "author": "governor-693b7073",
       "content": "@worker-73c29a03 CORRECTION to my earlier status ping: disregard the AG1 failure I reported. My combined-tree snapshot of your scripts/moe-agent.sh was taken at 23:09:07Z, 10 seconds before your 23:09:17Z edit added the srec trailer filter. It tested a stale copy. Your current working files on a clean git archive of tip c7ac1ff (Linux, MOE_POSTFLIGHT_TIMEOUT_SEC=180) give `PASS postflight.sh`: 39 commit-scope scenarios, AG included, plus frozen candidate 74 and owner guard 12. Nothing for you to fix there. Carry on with gate2 and land normally.",
       "timestamp": "2026-10-30T01:55:22.112Z"
+    },
+    {
+      "id": "comment-3df58bd37fa54440a600e1a262d4c90a",
+      "author": "worker-73c29a03",
+      "content": "Answer to the governor's 00:12Z docs question, recorded here for QA. docs/CONFIGURATION.md (+7/-4) and docs/TROUBLESHOOTING.md (+2/-2) are this task's own edits, made in step 4's doc sweep, and step 4's modifiedFiles lists them. They landed in completion f5d3c7e. TROUBLESHOOTING.md carries a Moe-Contested trailer for task-915d7e84, and its landed diff is only this task's two contested-table rows. I re-read the docs wording against the wrappers' MOE_CONTESTED_HELD remedy text (moe-agent.sh:4228-4230, moe-agent.ps1:3758-3760) and recordCommit.ts HELD_REMEDY_* (lines 24-26); it is consistent. The AG1 failure in the governor's 23:54Z ping came from a stale snapshot, and the governor retracted it at 01:55Z. Scenario AG passes in the recorded gate on Git Bash, PS 5.1 and pwsh.",
+      "timestamp": "2026-10-30T03:23:06.925Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T09:26:34.130Z",
-  "updatedAt": "2026-10-30T03:11:23.286Z",
+  "updatedAt": "2026-10-30T03:40:46.587Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:48:52.707Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T03:40:46.587Z",
+    "wallClockMs": 301913880
   },
   "contextFetchedBy": [
     "architect-1520cc31",
     "worker-0062feec",
-    "worker-73c29a03"
+    "worker-73c29a03",
+    "qa-952969be"
   ],
   "dependsOn": [
     "task-cfa0b48ba83e4f3f813a80504f62bdb9",
@@ -206,6 +215,38 @@
       "treeId": "7bbbd41c7ac3cede3f77164d5bb2360d2b193bc0",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "f5d3c7ed3efdf53ef6e4ad0b90e7cc821a0d5d38",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-29T22:18:26Z",
+      "paths": [
+        ".moe/tasks/task-649edbbbb9c046548017d6acf413a9f9.json",
+        ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
+        ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json",
+        ".moe/tasks/task-b64659ca3ddf4f629975f9f472c24c3c.json",
+        ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T03:12:19.732Z",
+      "treeId": "3b4c25d6db304d17058315e2a4b7b7302b978815",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-915d7e84821448139086c97f77743f29"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -215,14 +256,19 @@
     "scripts/moe-agent.ps1",
     "scripts/CLAUDE.md",
     "docs/CONFIGURATION.md",
-    "docs/TROUBLESHOOTING.md"
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-649edbbbb9c046548017d6acf413a9f9.json",
+    ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
+    ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json",
+    ".moe/tasks/task-b64659ca3ddf4f629975f9f472c24c3c.json",
+    ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-0062feec@2026-10-29T20:26:53Z",
-    "at": "2026-10-29T20:30:39.221Z"
+    "kind": "completion",
+    "sessionId": "worker-73c29a03@2026-10-29T22:18:26Z",
+    "at": "2026-10-30T03:12:19.732Z"
   },
   "priorBlockedReason": "Shared checkout /mnt/d/projexts/moes is mid-merge: `git merge main` into moe/work-2026-10-24 (MERGE_HEAD 2c306fb, MERGE_MSG 'Merge branch refs/heads/main', started 2026-10-29 19:06Z; the conflicted files have not changed since then). 14 paths are unmerged (UU). They include ALL FIVE files this task owns: scripts/moe-agent.sh (5 conflict hunks; one at line 2542 is in the session-ended held= branch this task edits), scripts/moe-agent.ps1 (5961), scripts/tests/postflight.sh (108, 4668, 5118), scripts/tests/postflight.ps1 (88, 3895) and scripts/CLAUDE.md (15). Also recordCommit.test.ts and initFiles.ts from the landed producer. Live scripts/moe-agent.sh fails `bash -n` (syntax error at 2542 '<<<<<<< HEAD'), so the plan's verification gate cannot run, and a fresh wrapper launch from disk would die. Why I stopped instead of working around it: edits to these files would mix with the merge resolution, and the wrapper's landing of modifiedFiles could commit conflict markers to the branch. Resolving another actor's merge is out of scope, and no rail authorizes isolated-clone delivery. No bytes edited. Resume at step-1 (read-only explore) once `git diff --name-only --diff-filter=U` is empty and `bash -n scripts/moe-agent.sh` passes. Unblock with set_task_status or unblock_worker resolveBlocks:true.",
   "blockedOnTaskIds": null,
@@ -238,5 +284,18 @@
     "reportedAt": "2026-10-30T03:11:23.284Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Option B: the contested-attribution predicate is unchanged.\n\nBoth wrappers now append ONE byte-identical `MOE_CONTESTED_HELD remedy:` sentence after the session-ended held= list, chosen from the skip codes:\n- skip-untouched: verify the bytes and coordinate any live peer, then have the assignee session edit each path with a wrapper-observed editing tool, or complete or archive the stale peer task.\n- skip: only the peer route works.\nBoth say that declare_files, unblocking or a shell touch alone does not release a hold.\n\nThe step-6 review also fixed false held trailers. `Moe-Contested:` commit trailers now name only landed contested paths (sh filters against $LAND_STAGED_FILE, ps1 against $landed). The ledger's `contested` field is unchanged.\n\nNew postflight.{sh,ps1} scenario AG covers six declared paths that are dirty at pre-flight, including 'held é.txt', across four runs: idle, live, unknown peerActive, and contested=skip. It asserts:\n- the paths are held and stay dirty;\n- the record_commit skipped codes;\n- the bounded held= list plus exactly one remedy, without the other policy's remedy;\n- the trailers.\nAF1 asserts that a contested path which lands gets no remedy.\n\nDocs updated: scripts/CLAUDE.md (CONTESTED tier; declare_files qualified), docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md. governor.md was verified accurate.\n\nFollow-up filed: task-a2f243a1 (ps1 unchanged-tree `nothing` record_commit omits skipped/contested, a pre-existing parity gap)."
+  "completionSummary": "Option B: the contested-attribution predicate is unchanged.\n\nBoth wrappers now append ONE byte-identical `MOE_CONTESTED_HELD remedy:` sentence after the session-ended held= list, chosen from the skip codes:\n- skip-untouched: verify the bytes and coordinate any live peer, then have the assignee session edit each path with a wrapper-observed editing tool, or complete or archive the stale peer task.\n- skip: only the peer route works.\nBoth say that declare_files, unblocking or a shell touch alone does not release a hold.\n\nThe step-6 review also fixed false held trailers. `Moe-Contested:` commit trailers now name only landed contested paths (sh filters against $LAND_STAGED_FILE, ps1 against $landed). The ledger's `contested` field is unchanged.\n\nNew postflight.{sh,ps1} scenario AG covers six declared paths that are dirty at pre-flight, including 'held é.txt', across four runs: idle, live, unknown peerActive, and contested=skip. It asserts:\n- the paths are held and stay dirty;\n- the record_commit skipped codes;\n- the bounded held= list plus exactly one remedy, without the other policy's remedy;\n- the trailers.\nAF1 asserts that a contested path which lands gets no remedy.\n\nDocs updated: scripts/CLAUDE.md (CONTESTED tier; declare_files qualified), docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md. governor.md was verified accurate.\n\nFollow-up filed: task-a2f243a1 (ps1 unchanged-tree `nothing` record_commit omits skipped/contested, a pre-existing parity gap).",
+  "touchedFiles": [
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/CONFIGURATION.md",
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completedAt": "2026-10-30T03:40:46.587Z",
+  "reviewCompletedAt": "2026-10-30T03:40:46.587Z",
+  "reviewSummary": "APPROVED completion f5d3c7e (pushed, on moe/work-2026-10-24). Non-board diff +213/-24, net 189 LOC.\nRe-run on clean archives of f5d3c7e (sha256 matches the worker's):\n- Linux bash (env -i, default signals): bash -n OK; postflight.sh PASS (frozen 74, owner guard 12, W/AF/AG ok, 39 scope scenarios incl. AD-link/AE); parity-check.sh PASS.\n- pwsh 7.6.9 + PS 5.1 (Windows): ParseFile 0 errors, postflight.ps1 + parity-check.ps1 PASS (AG ok, 38 scenarios).\n- Daemon vitest env -i: 189 files / 5276 passed. node --test hook-isolation-bash 8, importee-guard-bash 40, taskless-handoff 44 all pass. lint OK.\n- Not re-run: Git Bash, proxy, plugin, JetBrains. The diff touches none of their inputs; the worker's gate covers them.\n- First W fail = my launch ignored SIGINT; first vitest fails = my seat's MOE_* env. Both passed clean.\nRed proof: AF+AG fail vs c7ac1ff's wrapper (trailer assertion) and vs a remedy-text mutant (remedy assertion).\nDoD:\n1. Option B recorded. One MOE_CONTESTED_HELD remedy, picked by skip code, only when held is non-empty. The skip-untouched remedy works: TOOL lands a pre-flight-dirty path; strict skip holds (AG4).\n2. Predicate unchanged; live (AG2) and unknown (AG3) peers held.\n3. Remedy strings byte-identical sh/ps1; trailer filter twinned (LAND_STAGED_FILE / $landed.Path). AG covers declared+dirty+idle, a non-ASCII path, +N more and ledger codes.\n4. scripts/CLAUDE.md, CONFIGURATION.md, TROUBLESHOOTING.md updated; governor.md (from cfa0b48b) accurate.\nThe TROUBLESHOOTING.md Moe-Contested trailer (task-915d7e84) covers only this task's two rows. No complexity findings. Pre-existing ps1 gap filed as task-a2f243a1.",
+  "requiredCheckAtDone": null
 }
