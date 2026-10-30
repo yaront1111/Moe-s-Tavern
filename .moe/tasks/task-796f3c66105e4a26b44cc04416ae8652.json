@@ -86,7 +86,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:24:18.022Z",
-  "updatedAt": "2026-10-30T06:41:47.688Z",
+  "updatedAt": "2026-10-30T06:42:15.274Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:27:17.977Z",
     "plannedStepCount": 4,
@@ -172,7 +172,44 @@
   },
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+    ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+    ".moe/tasks/task-b799056d744749ba8ca9e4888f3452c4.json",
+    ".moe/tasks/task-b8b8faba152a4d7fae09d9388407f707.json"
+  ],
+  "completionSummary": "CQ-R10d3a: guest-supervisor.py gains the root, copy-only 'agents' mode. 2 files, +212/-11 = 223 changed lines (cap 400).\n\nRuntime (+91/-11):\n- install_agents(in_fd, out_fd, agents=AGENTS, owner=(0, 0)):\n  - agents: mkdir 0755, then a WALK (O_NOFOLLOW|O_DIRECTORY) open and own 0755. A symlink or a file at that path is 74.\n  - Staging: a dir_fd-relative 0700 '.staging-<hex>' inside agents.\n  - Per header, exact keys, then: cli is a str FIRST, then a JOBS key, then an explicit duplicate check; size is an int (not bool) in 1..MAX_AGENT_BYTES; sha256 is DIGEST.\n  - Each binary: O_EXCL|O_NOFOLLOW 0600, then copy_data, then the hash compare, own 0555 and fsync.\n  - After end, with nothing after it and at least one agent: renameat each binary onto agents/<cli> in header order, rmdir staging, fsync the dir, then one {kind:'installed', count}.\n  - Exit codes: 65 for ValueError/RecursionError, 74 for OSError. The finally unlinks staged files, rmdirs staging and closes every fd.\n- copy_data was extracted from receive() and is shared with materialize; M1-M4 stay green.\n- AGENTS and MAX_AGENT_BYTES (2**30, mirroring agent-cache.mjs) sit beside JOBS.\n- main accepts ['agents'] (77 when not root, 64 for any other argv). The header comment documents the mode.\n\nTests (+121), AI1-AI5 in local-runner.test.mjs:\n- AI1: routing, the constant pins and the default owner (0, 0).\n- AI2: a clean 2-binary install.\n- AI3: replace by rename; a hard link keeps the old bytes, and the dir is forced to 0755.\n- AI4: 25 one-rule-broken streams exit 65 with state unchanged; both stream orders install.\n- AI5: a symlink, a file, and injected fsync or rename failures exit 74.\n\nVerification (fresh; the command run was `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`):\n- Exit 0: 247 tests, 246 pass, 0 fail, 1 skip (the pre-existing opt-in macOS smoke).\n- Neighbour local-runner-bridge.test.mjs: 55/55 pass.\n- No __pyc",
+  "commits": [
+    {
+      "sha": "4f2692a7b157632b4ae4af2e12edfaf65feeda3d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T06:31:48Z",
+      "paths": [
+        ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+        ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+        ".moe/tasks/task-b799056d744749ba8ca9e4888f3452c4.json",
+        ".moe/tasks/task-b8b8faba152a4d7fae09d9388407f707.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T06:42:15.273Z",
+      "treeId": "f14cf73f8e44fe98605e3d305c75ce69c50a56cc",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-supervisor.py"
   ],
-  "completionSummary": "CQ-R10d3a: guest-supervisor.py gains the root, copy-only 'agents' mode. 2 files, +212/-11 = 223 changed lines (cap 400).\n\nRuntime (+91/-11):\n- install_agents(in_fd, out_fd, agents=AGENTS, owner=(0, 0)):\n  - agents: mkdir 0755, then a WALK (O_NOFOLLOW|O_DIRECTORY) open and own 0755. A symlink or a file at that path is 74.\n  - Staging: a dir_fd-relative 0700 '.staging-<hex>' inside agents.\n  - Per header, exact keys, then: cli is a str FIRST, then a JOBS key, then an explicit duplicate check; size is an int (not bool) in 1..MAX_AGENT_BYTES; sha256 is DIGEST.\n  - Each binary: O_EXCL|O_NOFOLLOW 0600, then copy_data, then the hash compare, own 0555 and fsync.\n  - After end, with nothing after it and at least one agent: renameat each binary onto agents/<cli> in header order, rmdir staging, fsync the dir, then one {kind:'installed', count}.\n  - Exit codes: 65 for ValueError/RecursionError, 74 for OSError. The finally unlinks staged files, rmdirs staging and closes every fd.\n- copy_data was extracted from receive() and is shared with materialize; M1-M4 stay green.\n- AGENTS and MAX_AGENT_BYTES (2**30, mirroring agent-cache.mjs) sit beside JOBS.\n- main accepts ['agents'] (77 when not root, 64 for any other argv). The header comment documents the mode.\n\nTests (+121), AI1-AI5 in local-runner.test.mjs:\n- AI1: routing, the constant pins and the default owner (0, 0).\n- AI2: a clean 2-binary install.\n- AI3: replace by rename; a hard link keeps the old bytes, and the dir is forced to 0755.\n- AI4: 25 one-rule-broken streams exit 65 with state unchanged; both stream orders install.\n- AI5: a symlink, a file, and injected fsync or rename failures exit 74.\n\nVerification (fresh; the command run was `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`):\n- Exit 0: 247 tests, 246 pass, 0 fail, 1 skip (the pre-existing opt-in macOS smoke).\n- Neighbour local-runner-bridge.test.mjs: 55/55 pass.\n- No __pyc"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-e60b90bd@2026-10-30T06:31:48Z",
+    "at": "2026-10-30T06:42:15.273Z"
+  }
 }

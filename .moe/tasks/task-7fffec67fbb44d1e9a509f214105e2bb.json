@@ -12,9 +12,44 @@
   "taskRails": [
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "scripts/tests/local-runner-bridge.test.mjs, row H4 (QA qa-6fa5d758 on CQ-R08). Edit the LANDED bytes: CQ-R10d is the last planned editor of this file and lands first, so re-read the row.\n\nReplace `const late = Promise.withResolvers();` (~line 812) with a manual resolver:\n  let finish;\n  const late = new Promise(resolve => { finish = resolve; });\nThen adapt its two uses:\n- `answer: () => late.promise` becomes `answer: () => late`;\n- `late.resolve({ content: [] })` becomes `finish({ content: [] })`.\nKeep the comment `// too late: never written`. Change nothing else in the row.\n\nRun both of these:\n- `env -i HOME=\"$HOME\" PATH=\"/usr/local/bin:/usr/bin:/bin\" /usr/local/bin/node --test --test-name-pattern='^H4 ' scripts/tests/local-runner-bridge.test.mjs`. That binary is Node v20.18.0. Before this change the row fails with 'Promise.withResolvers is not a function', the only failure, as measured at planning.\n- the same pattern under the nvm Node 24 bin.\nBoth must report H4 ok (pass 1, fail 0). Keep the two outputs for complete_task.\n\nIf the Node 20 run exposes any other Node 22+ API in H4, replace it the same minimal way and name it in the step note.\n\nError handling: the resolver keeps the row's semantics exactly. The late reply still resolves after SESSION_TIMEOUT and must never be written.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/tests/local-runner-check.test.mjs, row C5's 'close before EOF' entry (QA qa-952969be, comment-997358d583ff4f2b9c0f9c779df7172f on task-53daa94f). Edit the LANDED bytes: CQ-R11e is the last planned editor, so re-read the C5 rows table.\n\nToday the entry is:\n  ['close before EOF', proc => { proc.send(HELLO, OBS); proc.emit('close', 0, null); }]\nIt emits close synchronously, before the PassThrough delivers the frames. So it is infra-failure through !s.opened, which masks outcomeOf's `|| !s.ended` guard.\n\nChange it to defer the close:\n  ['close before EOF', proc => { proc.send(HELLO, OBS); setImmediate(() => proc.emit('close', 0, null)); }]\nThe frames then parse first, and close 0 arrives while stdout is still open.\n- The expected value stays the default ended('infra-failure').\n- The per-row kills assertion stays [].\n- Change no other row.\n\nIf step 3's mutant A survives (the frames were not yet delivered at close), defer instead with proc.stdout.once('data', () => setImmediate(() => proc.emit('close', 0, null))) and say so in the step note.\n\nRun `node --test --test-name-pattern='^C5 ' scripts/tests/local-runner-check.test.mjs` (nvm Node 24, env -i). It must pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "MUTATION PROOF, in a scratch copy and NEVER in the working tree.\n\nThe working tree is shared, and the wrapper lands every session exit. A mutant left in scripts/local-runner/check-session.mjs could be checkpoint-committed. Mutating a copy proves the same thing, and the original is never touched.\n\n1. Build the copy.\n   - Run S=$(mktemp -d), then `git archive HEAD | tar -x -C \"$S\"`. These are read-only git commands only.\n   - Overlay this task's two edited test files: cp scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs \"$S/scripts/tests/\".\n2. Control: `node --test --test-name-pattern='^C5 ' \"$S/scripts/tests/local-runner-check.test.mjs\"` passes.\n3. Mutant A, the EOF guard. In \"$S/scripts/local-runner/check-session.mjs\", replace the exact text `if (s.failed || s.killed || !s.written || !s.ended) return 'infra-failure';` with `if (s.failed || s.killed || !s.written) return 'infra-failure';`.\n   - Confirm the replacement happened: grep -c of the mutated line is 1.\n   - Run C5. It must FAIL on the 'close before EOF' label, getting 'passed' instead of 'infra-failure'.\n4. Mutant B, stop-after-settle, the mutant the row was added for. Restore A by re-extracting the file: `git show HEAD:scripts/local-runner/check-session.mjs > \"$S/scripts/local-runner/check-session.mjs\"`. Then replace `if (s.closing || s.settled) return;` with `if (s.closing) return;`.\n   - Run C5. It must FAIL on the final kill-count assertion, at the 'close before EOF' index, with 1 instead of 0.\n5. Clean up: rm -rf \"$S\".\n6. Prove the working tree is untouched: `git diff --quiet -- scripts/local-runner/check-session.mjs` exits 0.\n\nRecord in the complete_step note, for each of the control, A, B and the git diff: the command, its exit code and the failing assertion's label or line.\n\nError handling: if the copy cannot be built (git archive fails), STOP and report it. Never fall back to mutating the working tree.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh.\n\n1. `env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\" node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs` must exit 0. Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. Run `env -i HOME=\"$HOME\" PATH=\"/usr/local/bin:/usr/bin:/bin\" /usr/local/bin/node --test --test-name-pattern='^H4 ' scripts/tests/local-runner-bridge.test.mjs` and report its exit code, which must be 0.\n3. `git diff --check -- scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs` is clean.\n4. A read-only `git status --short` shows that this task changed only those two test files. No runtime file changed, and docs/DEVELOPMENT.md still says 'Node.js 18+'. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in the test, never in a runtime file.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the two-hunk diff as an attacker:\n- Did either edit weaken an assertion, change an expected value or drop a row?\n- Does H4's late reply still arrive only after SESSION_TIMEOUT and stay unwritten?\n- Does the deferred close leave a pending timer or an unhandled event after the test ends? setImmediate fires once; check the run for leaked handles or a slow exit.\n- Do the mutation runs truly isolate one mutant each? A was restored from HEAD before B.\n- Is the working tree's check-session.mjs byte-identical to HEAD?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 4's commands fresh before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -31,5 +66,39 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:03:16.380Z",
-  "updatedAt": "2026-10-30T06:03:16.380Z"
+  "updatedAt": "2026-10-30T06:42:21.049Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:39:59.978Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:42:21.025Z",
+  "planningNotes": {
+    "approachesConsidered": "- Mutating check-session.mjs in place (as the description words it) versus in a git-archive scratch copy: the copy was chosen. The checkout is shared, and the wrappers land every session exit, so a crash mid-mutant could checkpoint-commit the mutant. The copy proves the same kill, and `git diff --quiet` proves the original untouched. This satisfies DoD 2's 'restored unchanged' without ever editing the file.\n- Mutant B (stop-after-settle) is run too. The description requires that the deferred row still kills it: settle with closing false, then the late 'error' calls stop. Only the guard keeps a SIGKILL from following.\n- One setImmediate (QA's suggestion) versus waiting for stdout's first 'data': the setImmediate goes first. Mutant A surviving is the signal to switch to the data-gated close.",
+    "codebaseInsights": "- Measured at planning: /usr/local/bin/node is v20.18.0, and H4 fails there ONLY on 'Promise.withResolvers is not a function' (bridge test line ~812). nvm has 18.20.8, 20.20.2, 22.23.4 and 24.21.0.\n- In check-session.mjs:\n  - outcomeOf's first guard is `if (s.failed || s.killed || !s.written || !s.ended)`;\n  - stop() opens with `if (s.closing || s.settled) return;`.\n- C5's loop asserts per-row kills, then emits a late 'error' on every proc and checks the kill counts after 1.1 s. That is what kills mutant B on the 'close before EOF' row, because close settles there without stdout end, so closing is still false.\n- The local-runner tests use only node built-ins, so the archive copy needs no npm install.",
+    "risks": "- CQ-R10d and CQ-R11e land edits in these files first. Re-locate the rows by label, not by line number.\n- If HEAD's check-session.mjs drifted from the strings quoted in step 3, find the equivalent guards and quote them in the note. If a guard is gone, report it.\n- This plan is tests only. No runtime or docs file changes.",
+    "keyFiles": [
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/tests/local-runner-check.test.mjs",
+      "scripts/local-runner/check-session.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:42:21.049Z",
+  "approvedPlanRevision": 1
 }

@@ -77,7 +77,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -103,7 +103,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T23:30:26.694Z",
-  "updatedAt": "2026-10-30T06:26:05.482Z",
+  "updatedAt": "2026-10-30T06:43:35.994Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T05:55:40.120Z",
@@ -113,11 +113,14 @@
     "firstClaimAt": "2026-10-30T05:56:22.283Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T06:43:35.993Z",
+    "wallClockMs": 2833710
   },
   "contextFetchedBy": [
     "architect-32ff5555",
-    "worker-093a65d0"
+    "worker-093a65d0",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -276,5 +279,9 @@
     "kind": "completion",
     "sessionId": "worker-093a65d0@2026-10-30T06:16:18Z",
     "at": "2026-10-30T06:22:38.180Z"
-  }
+  },
+  "completedAt": "2026-10-30T06:43:35.993Z",
+  "reviewCompletedAt": "2026-10-30T06:43:35.993Z",
+  "reviewSummary": "Reviewed recorded completion e67ca0e (on moe/work-2026-10-24, pushed). Own bytes ~+221/-14 (net ~207), under the 400 cap.\n\nRe-run by me in Linux-native snapshots (env -i, node v24.21.0, native npm ci):\n- HEAD 294e4ec, owned files cmp-identical to e67ca0e: `cd packages/moe-daemon && npm test` exit 0, 198 files, 5518 passed | 16 skipped.\n- Focused list (5 files): 107 passed.\n- Mutants, restored after: M1 always-join_team 10 red; M3 governor-as-seat 1 red (T7); M5 reason names join_team 6 red.\n\nCaveat, not this task's defect: e67ca0e alone fails 1 test (taskTimeBudgetDocs 'documents no tool that getTools() does not register'). The wrapper swept CQ-V03's docs/MCP_SERVER.md sections (record_check_dispatch/observation, ~+99 lines, Moe-Contested) into it four minutes before CQ-V03's cd2160e registered those tools. The worker flagged those hunks. HEAD is green.\n\nDoD 1: architect/worker/qa refusal carries sessionHandoff END_SESSION, no nextAction, no moe.* tool named. The 14-case test file is exact (toEqual, named-minus-visible == [], no assignment, no team join) and covers claim and wait per role, a tools/list premise, the pure function, and governor/role-less controls.\nDoD 2: git diff e67ca0e..HEAD leaves teamMembershipHeal.test.ts, claimNextTask.test.ts, claimNextTask.ts and toolAudience.test.ts untouched; index.ts differs only by CQ-V03's registration. waitForTask.test.ts changes only the 2 authorised remedy assertions plus comments; waitForTask.ts is comments only; heal/resolve/tombstone functions untouched.\nDoD 3: npm test exit 0.\n\nAdversarial: all 3 producers (claimNextTask.ts:712, waitForTask.ts:312, :443) use the pure noTeamMembershipRefusal. The mod needs only top-level END_SESSION addressed to the seat. Both wrappers key only on code. Docs match code. Governor and role-less callers keep the byte-identical join_team object.\n\nResidual: the wake-path producer (:443) is not driven end to end; T8 pins the shared function, per plan.",
+  "requiredCheckAtDone": null
 }
