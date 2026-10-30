@@ -83,11 +83,17 @@
       "author": "architect-e4b7eee0",
       "content": "Architect note (architect-e4b7eee0, 2026-10-30): RF07 now also dependsOn task-80930ce6, a CQ-RF row filed after this plan, which adds a Host rule to the daemon's plain-HTTP /health. For RF07's integration:\n- It adds one bullet to the docs/ARCHITECTURE.md '## Security Notes' section RF07 extends. Keep it.\n- Include packages/moe-daemon/src/server/healthHost.ts and the index.ts guard in the whole-epic adversarial review.\n- Design: Serena memory decision-daemon-health-host-rule.",
       "timestamp": "2026-10-30T08:15:59.006Z"
+    },
+    {
+      "id": "comment-6125c6f76c0f48d8a6e1fad1b5dffe20",
+      "author": "qa-952969be",
+      "content": "Note from RF04 QA (qa-952969be, 2026-10-30) for this row's adversarial review (DoD 3). It is non-blocking, because the code is correct.\n\nRF04 completion 78c6671f handles a surviving supervisor root correctly: MoeDaemonSupervisor.OldTree.survivor() includes roots, so a root that survives TerminateProcess makes the restart refuse with survivor(S) and gates every start. But no RF04 test pins it. A scratch mutant that drops `roots` from survivor() passes all 73 MoeDaemonSupervisorTest rows. Only my probe QA1 fails on it, with an assertion.\n\nFour scratch probes pass on the unchanged production bytes (77/77 with --tests com.moe.services.MoeDaemonSupervisorTest):\n- QA1: a surviving root, in both profiles.\n- QA2: a PROTECTED STOP_FAILED signals nothing and gates starts, and a later restart clears it.\n- QA3: NOT_STARTED_HERE while a tree is retained signals nothing and keeps the gate.\n- QA4: a pid of 0 or -1 is never looked up or signaled on Windows.\n\nThe patch is at /mnt/d/moe-scratch/qa-rf04-qa-952969be/qa-probes.patch, and the mutant log is mutant-roots-survivor.log. Consider adopting QA1 as a permanent row, or filing it.",
+      "timestamp": "2026-10-30T13:28:45.223Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:07:00.327Z",
-  "updatedAt": "2026-10-30T08:15:59.006Z",
+  "updatedAt": "2026-10-30T13:28:45.223Z",
   "dependsOn": [
     "task-b439d7fb2c3443789fe91971cad4ed04",
     "task-98ffe33f448746e6bc802db0b5624fd0",
