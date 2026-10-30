@@ -5319,7 +5319,8 @@ receipt_ledger_send() {
     row=$($PYTHON_CMD - "$1" "$2" "$WORKER_ID" <<'PY' 2>/dev/null
 import json,sys
 f,sha,worker=sys.argv[1:]; d=json.load(open(f,encoding='utf-8')); l=d['ledger']; push=d.get('pushResult')
-row=dict(taskId=d['taskId'],outcome='committed',kind='completion',sha=sha,ref=d['target'],role=l['role'],sessionId=l['sessionId'],workerId=worker)
+t=d['target']; p='refs/heads/'; ref=t[len(p):] if t.startswith(p) and len(t)>len(p) else t
+row=dict(taskId=d['taskId'],outcome='committed',kind='completion',sha=sha,ref=ref,role=l['role'],sessionId=l['sessionId'],workerId=worker)
 if l.get('status'): row['status']=l['status']
 if push is None or str(push).startswith('push failed: '): row['pushed']=False
 elif str(push).startswith('pushed '): row['pushed']=True

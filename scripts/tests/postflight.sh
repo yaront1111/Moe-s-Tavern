@@ -566,7 +566,7 @@ exit "$rc"
     const {log2,rpc2}=replay(args),owed=ledgerRows();
     assert.equal(owed.length,1,'the replay records the owed ledger row once\n'+log2);
     assert.deepEqual([owed[0].taskId,owed[0].sha,owed[0].ref,owed[0].role,owed[0].sessionId,owed[0].status,owed[0].pushed],
-      ['task-postflight',after,'refs/heads/moe/frozen','worker',sid(after),'REVIEW',false],log2);
+      ['task-postflight',after,'moe/frozen','worker',sid(after),'REVIEW',false],log2);
     const receipts=replayed(rpc2,log2,reflog),c=candidates.at(-1).args,
       row=rpc2.find(r=>r.tool==='record_commit'&&r.args.outcome==='committed'&&r.args.kind==='completion');
     assert.equal(receipts.length,1,log2);

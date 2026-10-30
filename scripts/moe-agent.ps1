@@ -1836,7 +1836,9 @@ function Find-MoeJournaledLanding([string]$Top, $Journal) {
 # moe.record_commit acknowledged it. Twin: receipt_ledger_send.
 function Send-MoeOwedLedgerRow($Journal, [string]$Sha) {
     $l = $Journal.ledger; $push = $Journal.pushResult
-    $row = @{ taskId=[string]$Journal.taskId; outcome='committed'; kind='completion'; sha=$Sha; ref=[string]$Journal.target
+    $t = [string]$Journal.target; $p = 'refs/heads/'
+    $ownedRef = if ($t.StartsWith($p, [StringComparison]::Ordinal) -and $t.Length -gt $p.Length) { $t.Substring($p.Length) } else { $t }
+    $row = @{ taskId=[string]$Journal.taskId; outcome='committed'; kind='completion'; sha=$Sha; ref=$ownedRef
         role=[string]$l.role; sessionId=[string]$l.sessionId; workerId=$WorkerId }
     if ($l.status) { $row.status = [string]$l.status }
     if ($null -eq $push -or "$push" -clike 'push failed: *') { $row.pushed = $false } elseif ("$push" -clike 'pushed *') { $row.pushed = $true }
@@ -4923,7 +4925,7 @@ function Invoke-MoeLanding {
         # filters them too. Truncation is computed daemon-side. Every path list
         # goes back ROOT-relative (REL stripped), like record_commit_rpc.
         $recArgs = @{
-            taskId = $TaskId; outcome = 'committed'; kind = $Kind; sha = $sha; treeId = $treeId; ref = "refs/heads/$branch"
+            taskId = $TaskId; outcome = 'committed'; kind = $Kind; sha = $sha; treeId = $treeId; ref = $branch
             status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed
             paths = @($landedPaths | Select-Object -First 500 | ForEach-Object { ConvertTo-MoeRootRelative $_ $Git.Rel })
             inferredPaths = @($inferredPaths | Select-Object -First 500 | ForEach-Object { ConvertTo-MoeRootRelative $_ $Git.Rel })
@@ -4947,7 +4949,7 @@ function Invoke-MoeLanding {
         Write-Host "[WARN] landing failed for task $($TaskId): $_; baseline kept." -ForegroundColor Yellow
         if ($casOk) {
             $res.Outcome='committed'; $res.Sha=$new
-            Send-MoeRecordCommit @{taskId=$TaskId;outcome='committed';kind=$Kind;sha=$new;ref="refs/heads/$branch";
+            Send-MoeRecordCommit @{taskId=$TaskId;outcome='committed';kind=$Kind;sha=$new;ref=$branch;
                 workerId=$WorkerId;role=$Role;sessionId=$Sid;status=$Status} | Out-Null
             $recorded=$true
         } else { $res.Outcome='failed'; $res.Code='MOE_COMMIT_FAILED' }
@@ -4966,7 +4968,7 @@ function Invoke-MoeLanding {
                 # Interrupted after the CAS, in the push or the ledger record.
                 # The commit is on the branch: re-send its ledger row (the daemon
                 # is idempotent by sha) and never park it on a rescue ref.
-                Send-MoeRecordCommit @{taskId=$TaskId;outcome='committed';kind=$Kind;sha=$res.Sha;ref="refs/heads/$branch";
+                Send-MoeRecordCommit @{taskId=$TaskId;outcome='committed';kind=$Kind;sha=$res.Sha;ref=$branch;
                     workerId=$WorkerId;role=$Role;sessionId=$Sid;status=$Status} | Out-Null
                 $recorded=$true
             }
