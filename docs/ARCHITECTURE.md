@@ -302,6 +302,12 @@ and the wrapper side (gate, rescue refs, receipts): `docs/CONFIGURATION.md`.
   repository.
 - Accepted gaps: the daemon.json port↔pid binding, and the CQ-R08 per-request re-check window. The record
   lists the open follow-ups.
+- Plain HTTP `GET /health` answers only a request with no Host header, or one whose Host (port optional) is
+  `localhost`, a loopback IP literal, or the IP literal of the address the connection arrived on (for example
+  the WSL gateway, or an explicit bind address). Any other Host, every DNS name included, gets 403 with no
+  body fields, so a page that points a name at the daemon cannot read it (`server/healthHost.ts`). WebSocket
+  upgrades rely on the Origin rule instead. Clients that reach `/health` (`MOE_DAEMON_HOST`, curl) must use an
+  IP literal or `localhost`.
 
 ---
 

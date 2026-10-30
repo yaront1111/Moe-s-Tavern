@@ -13,52 +13,85 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nPrerequisites: task-2f2484b4 and task-2cf1c6be are DONE (dependsOn). Both edit the same /health handler in index.ts, so read their landed bytes first. Also read:\n- the governor's comment on this row;\n- mem:decision-daemon-health-host-rule (this row's design);\n- docs/design/protected-profile-threat-model.md ('Found while deciding': /health).\n\nCreate packages/moe-daemon/src/server/healthHost.test.ts, using vitest and exact toBe/toEqual.\n\nA. A pure table for isAllowedHealthHost(host, localAddress), imported from './healthHost.js'.\n\nAllowed (true):\n- host undefined (no Host header), with localAddress '127.0.0.1' and with undefined;\n- 'localhost', 'localhost:9876' and 'LocalHost:1';\n- '127.0.0.1', '127.0.0.1:9876' and '127.255.0.9:80' (all of 127/8);\n- '[::1]', '[::1]:9876' and '[0:0:0:0:0:0:0:1]:9876';\n- the WSL gateway case the governor asked for: '172.26.208.1:9876' and '172.26.208.1', with localAddress '172.26.208.1' and with '::ffff:172.26.208.1' (a dual-stack socket);\n- an explicit IPv6 bind: '[fd00::5]:9876' with localAddress 'fd00::5'.\n\nRefused (false):\n- names:\n  - 'evil.example' and 'evil.example:9876';\n  - 'localhost.evil.example' and '127.0.0.1.nip.io:9876';\n  - 'localhost.', 'sub.localhost' and 'LOCALHOST.:9876';\n- IP literals that are neither loopback nor the connection's own address:\n  - '10.0.0.5:9876' with localAddress '127.0.0.1';\n  - '172.26.208.1:9876' with localAddress '127.0.0.1';\n  - '[fd00::5]' with localAddress '::1';\n  - '10.0.0.5' with localAddress undefined;\n- malformed:\n  - '' and ' ';\n  - '127.0.0.1:', '127.0.0.1:abc', '127.0.0.1:0' and '127.0.0.1:65536';\n  - 'user@127.0.0.1' and '127.0.0.1/x';\n  - '::1' (unbracketed), '[::1' and '[::1]x';\n  - '127.1', '0x7f.0.0.1' and '2130706433';\n  - '[fe80::1%eth0]'.\n\nB. The real handler. One describe spawns the REAL `_run` with `--host 127.0.0.1` on a free port. Spawn it through the tsx CLI with an isolated env (MOE_* stripped; HOME, USERPROFILE and TEMP redirected), the way delivery/acceptance.test.ts startDaemonChild does, including its fixture project setup and its daemon.json-plus-/health readiness wait. task-2f2484b4's bindHosts.test.ts spawned rows are the newer example. Never use port 9876.\n\nRaw requests to 127.0.0.1:<port>:\n- Host '127.0.0.1:<port>', Host 'localhost:<port>', and an absent Host (a raw 'GET /health HTTP/1.0\\r\\n\\r\\n' over net.connect) each answer 200. The JSON still carries status 'healthy', projectPath, pid, version, uptime, stats and checks. Assert those keys as a subset, so the row does not depend on the additive bindHost field.\n- Host 'evil.example:<port>', '10.0.0.5:<port>' and 'localhost.evil.example' each answer 403, Content-Type text/plain, body exactly 'Forbidden': no JSON, no pid, no projectPath.\n- The exported probeDaemonHealth(info, projectPath) still resolves true for the spawned daemon (the daemon CLI probe).\n- GET /other still answers 426.\n\nerror handling in tests:\n- every request and socket has a bounded timeout and is destroyed on it;\n- the spawned daemon is killed in afterAll even when a row fails;\n- every wait is bounded.\n\nRed proof: on the pristine sources, `npx vitest run src/server/healthHost.test.ts` fails. Record:\n- the import error from the missing module;\n- with the table temporarily skipped, the 403 rows answering 200.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/server/healthHost.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/healthHost.test.ts"
+      ],
+      "note": "Created healthHost.test.ts (207 lines, 54 rows): A = pure table (17 allowed incl. WSL gateway + dual-stack ::ffff, 27 refused); B = one spawned real `_run --host 127.0.0.1` on a free non-9876 port (HTTP/1.1 chunked decode, HTTP/1.0 absent-Host row, 403 rows, probeDaemonHealth, /other 426 incl. absolute-form target), POSIX-only, child killed in afterAll with process-group SIGKILL fallback, every wait bounded. RED proof (Linux snapshot /tmp/moe-80930-gate.*, native npm ci, node 24.21.0): pristine -> 'Cannot find module ./healthHost.js' (Tests no tests); with the import stubbed to accept-all -> table 27 refused rows fail, real-daemon 3 foreign-Host rows fail 'expected 200 to be 403'. Shared checkout dirty paths of other sessions untouched.",
+      "startedAt": "2026-10-30T11:17:28.594Z",
+      "completedAt": "2026-10-30T11:19:22.114Z"
     },
     {
       "stepId": "step-2",
       "description": "Create packages/moe-daemon/src/server/healthHost.ts: one pure export, with no I/O and no daemon-state imports.\n\n`export function isAllowedHealthHost(host: string | undefined, localAddress: string | undefined): boolean`\n\n1. host undefined → true. A browser always sends Host; a request without one cannot come from a page.\n2. host must match one bracketed IPv6 literal, or one token with no whitespace and none of ':/?#@[]', optionally followed by ':' and 1-5 digits whose value is 1-65535. Anything else → false.\n   - The port is never compared with the daemon's port, so port forwarding keeps working.\n3. Lowercase the name. A plain name equal to 'localhost' → true. Any other plain name that is not a dotted-quad IPv4 (net.isIPv4) → false. That covers every DNS name, which is what a rebinding page needs.\n4. An IPv4 literal in 127.0.0.0/8 → true. A bracketed IPv6 literal (net.isIPv6 of the inner text) whose canonical form is '::1' → true. Canonicalize IPv6 with `new URL('http://[' + inner + ']').hostname`; if that throws (zone ids and the like) → false.\n5. Otherwise the literal must equal the canonical localAddress → true. Before comparing:\n   - strip a '::ffff:' prefix in front of a dotted IPv4;\n   - canonicalize IPv6 the same way.\n   This is the daemon's own bind address as the connection actually arrived on it: the WSL gateway (the Windows vEthernet adapter), an explicit --host address, or the interface a wildcard bind answered on. No interface enumeration.\n6. Else → false.\n\nerror handling: the whole body is wrapped so that any throw returns false (refuse). Never log the Host value.\n\nThe header comment says:\n- this is the DNS-rebinding guard for plain-HTTP GET /health;\n- WebSocket upgrades are covered by the Origin rule (WebSocketServer.ts verifyClient) instead;\n- 'any IP literal' was not used because the DoD refuses an IP that is not the daemon's own.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/server/healthHost.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/healthHost.ts"
+      ],
+      "note": "Created server/healthHost.ts: pure isAllowedHealthHost(host, localAddress) using net.isIPv4/isIPv6 + WHATWG URL IPv6 canonicalization; whole body in try/catch -> false; no logging of Host. GREEN for the pure table in the Linux snapshot: 44 passed (17 allowed + 27 refused), 10 real-daemon rows still skipped by -t filter until step 3 wires the guard.",
+      "startedAt": "2026-10-30T11:19:40.515Z",
+      "completedAt": "2026-10-30T11:19:56.006Z"
     },
     {
       "stepId": "step-3",
       "description": "Wire the guard into packages/moe-daemon/src/index.ts.\n\nThis is a shared hot file: task-2f2484b4 hoisted the /health handler and task-2cf1c6be added bindHost to it. Before editing:\n- run `git status --porcelain -- packages/moe-daemon/src/index.ts`;\n- if another live session's hunks are present, do not edit over them. Comment on that task, then call moe.report_blocked naming it.\n- Edit with the Edit tool, so the wrapper records a TOOL witness.\n\nChange:\n- Import isAllowedHealthHost from './server/healthHost.js'.\n- Make this the FIRST statement of the GET /health branch, before any check or getStats():\n  `if (!isAllowedHealthHost(req.headers.host, req.socket.localAddress)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); res.end('Forbidden'); return; }`\n- Add a one-line comment pointing at healthHost.ts.\n- The 200/503 JSON path and the 426 path stay byte-identical. Every listener shares the one handler, so the loopback and WSL-adapter listeners are both covered.\n\nerror handling: none new. The guard is pure and never throws, and the response is a fixed literal that never echoes the Host.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "Pre-edit `git status --porcelain -- packages/moe-daemon/src/index.ts docs/ARCHITECTURE.md` was empty (no peer hunks). Two Edit-tool changes in index.ts: the healthHost import, and the guard as the FIRST statement of the GET /health branch (403 text/plain 'Forbidden', before any check/getStats, no Host echoed). 200/503 JSON path and 426 path untouched. GREEN in the Linux snapshot: healthHost.test.ts 54/54 (table + real `_run` rows), `npx tsc --noEmit` exit 0. Other sessions' ~59 dirty paths untouched.",
+      "startedAt": "2026-10-30T11:19:57.934Z",
+      "completedAt": "2026-10-30T11:20:15.818Z"
     },
     {
       "stepId": "step-4",
       "description": "Docs: docs/ARCHITECTURE.md, the '## Security Notes' section added by CQ-RF05.\n\nThe section is also planned by CQ-RF07, CQ-R13 and CQ-V12. Before editing:\n- run `git status --porcelain -- docs/ARCHITECTURE.md`;\n- if a live peer's hunks are present, do not edit over them: comment on that task, then call moe.report_blocked.\n- Edit with the Edit tool.\n\nAdd ONE bullet, at problem-class level with no exploit steps:\n- Plain HTTP `GET /health` answers only a request with no Host header, or one whose Host (port optional) is `localhost`, a loopback IP literal, or the IP literal of the address the connection arrived on (for example the WSL gateway, or an explicit bind address).\n- Any other Host, every DNS name included, gets 403 with no body fields, so a page that points a name at the daemon cannot read it.\n- WebSocket upgrades rely on the Origin rule instead.\n- Clients that reach /health (MOE_DAEMON_HOST, curl) must use an IP literal or localhost.\n\nChange no other line.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/ARCHITECTURE.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Pre-edit `git status --porcelain -- docs/ARCHITECTURE.md` was empty (no peer hunks). Added ONE bullet (+6 lines, LF, no other line changed) to '## Security Notes' via the Edit tool: Host rule (no Host / localhost / loopback IP literal / arrival-address IP literal, port optional), every other Host incl. DNS names gets 403 with no body fields, WebSocket upgrades rely on the Origin rule, MOE_DAEMON_HOST/curl must use an IP literal or localhost. Problem-class level, no exploit steps.",
+      "startedAt": "2026-10-30T11:20:16.924Z",
+      "completedAt": "2026-10-30T11:20:30.328Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each one to a scratch copy, restore it, then cmp. A kill counts only when real rows fail; name the row that kills each.\n   a. Accept any name.\n   b. Accept any IP literal (the '10.0.0.5' rows must fail).\n   c. Drop the localAddress compare (the gateway rows must fail).\n   d. Drop the '::ffff:' normalization (the dual-stack gateway row must fail).\n   e. Refuse an absent Host (the absent rows must fail).\n   f. Drop the port check (the malformed rows must fail).\n   g. Remove the guard from index.ts (the real-handler 403 rows must fail).\n\n2. GATE, in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate):\n   - `git archive HEAD` of the WHOLE repo;\n   - overlay ONLY this task's 4 files, and cmp them;\n   - a native `npm ci --no-audit --no-fund` under env -i with nvm node v24.21.0;\n   - run `cd packages/moe-daemon && npx tsc --noEmit && npm test`. It must EXIT 0. Use NO_COLOR=1 and grep -a.\n   - Also type-check the new test file with a scratch tsconfig: extends ./tsconfig.json, types ['node'], include only that test.\n\n3. complete_task:\n   - verification: that command, exit code 0, and the output tail;\n   - summary, mapped to the DoD:\n     - DoD 1: the real-handler rows (403 with no body fields; loopback, localhost and absent Host answer 200; probeDaemonHealth passes) plus the table's gateway and own-address rows. Name each existing client and the Host it sends:\n       - the daemon CLI probe, doctor, JetBrains DaemonIdentity and the local runner send 127.0.0.1;\n       - the Docker HEALTHCHECK sends localhost;\n       - the launcher's WSL probe and the proxy send the gateway IP, which is the connection's local address.\n     - DoD 2: table section A.\n     - DoD 3: the ARCHITECTURE.md bullet.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/healthHost.test.ts"
+      ],
+      "note": "MUTANTS (scratch snapshot copy, each restored + cmp=True; kill = real failing rows): a accept-any-name -> 12 fail (real-daemon 'foreign name' + 'localhost.evil.example' rows, table '127.1','0x7f.0.0.1','2130706433','127.0.0.1.nip.io'); b accept-any-IPv4 -> 5 fail ('10.0.0.5' rows, real-daemon 'foreign IP literal'); b2 any-IPv6 -> 1 fail ('[fd00::5]' on ::1); c drop localAddress compare v4 -> 4 fail (gateway rows), v6 -> 2 fail; d drop ::ffff: normalization -> 2 fail (dual-stack gateway rows); e refuse absent Host -> 3 fail (2 table + real HTTP/1.0 row); f drop port check -> 2 fail ('127.0.0.1:0', ':65536'); g guard removed from index.ts -> 3 real-daemon 403 rows fail; extras h case-sensitive -> 'LocalHost:1' fails, k drop ::1 -> 2 fail, m allow unbracketed colon -> 7 fail. GATE: fresh `git archive HEAD` (5dabc010) of the whole repo, overlay of exactly 4 files (healthHost.ts, healthHost.test.ts, index.ts, docs/ARCHITECTURE.md; cmp ok; `git diff HEAD` shows only my +7/+6 hunks in the shared files), native `npm ci` under env -i node v24.21.0, `npx tsc --noEmit && npm test` EXIT 0: 208 files, 5915 passed / 16 skipped; healthHost.test.ts 54/54. Scratch-tsconfig type-check of the test found TS2345 at the socket 'data' push (string|Buffer); fixed with Buffer.from(chunk) and re-ran type-check (exit 0) + the full gate (exit 0, same counts).",
+      "startedAt": "2026-10-30T11:20:31.350Z",
+      "completedAt": "2026-10-30T11:23:30.330Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a web page that controls a DNS name, and as an unlucky WSL or Docker user.\n\n- Can any name reach the JSON? Check:\n  - case variants;\n  - a trailing dot;\n  - '*.localhost';\n  - IDN or punycode;\n  - percent-encoding;\n  - userinfo;\n  - whitespace;\n  - two Host headers (Node keeps the first);\n  - an absolute-form request target such as 'GET http://evil/health'. req.url then is not '/health', so the request gets 426; confirm it.\n- Can an IP Host that is neither loopback nor the arrival address pass? Check the IPv4-mapped, zone-id and non-canonical IPv6 forms.\n- Is every legitimate client still answered: the CLI probe, doctor, JetBrains DaemonIdentity, the local-runner probe, the Docker HEALTHCHECK on localhost, and the launcher and proxy over the WSL gateway?\n- Does the proxy classify a 403 as 'unknown' and so keep connecting?\n- Is the guard the first statement, so a refused request costs nothing? Is no Host echoed or logged?\n- Rails:\n  - tests are present;\n  - no MCP contract change;\n  - .moe state stays backward-compatible;\n  - no .moe edits and no Git writes;\n  - none of the forbidden patterns;\n  - no exploit walkthrough in comments, docs or summaries.\n- Would I be embarrassed if this shipped?\n\nFix any finding and re-run step 5's gate fresh. Then overwrite the Serena memory 'task-task-80930ce6f0b54f7996e2c7eb7c835107-handoff' with the landed rule and names, for CQ-RF07's docs sweep and review.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review: no code change needed; step-5 gate stays valid (no byte changed after it). PROBED over real Node http (scratch /tmp probe, guard mirrored + the real isAllowedHealthHost): refused/426 for case variants (table), trailing dot ('localhost.', '127.0.0.1.'), '*.localhost', punycode, fullwidth IDN, percent-encoding (l%6fcalhost, localhost%2e), userinfo both orders, empty Host, whitespace/tab padding (valid OWS is trimmed by Node -> 'localhost:1' passes, as intended), obs-fold (Node 400), absolute-form 'GET http://evil/health' -> 426 in both shapes, '[::ffff:127.0.0.1]' and zone-id literals -> 403. Duplicate Host: Node keeps the FIRST value; the guard judges exactly that value, and a browser page cannot send two (theoretical, noted). Dual-stack: a '::' socket reports localAddress '::ffff:a.b.c.d'; Host=arrival IP -> 200, Host=other IP -> 403, Host=127.0.0.1 -> 200; '[::1]' -> 200. Node's client sends 'Host: [::1]:port' for host ::1, '127.0.0.1:port', 'localhost:port'. CLIENTS: CLI probe/doctor/baselineRun/JetBrains DaemonIdentity/moe-agent.ps1 send 127.0.0.1; Docker HEALTHCHECK sends localhost; moe-agent.sh (urllib) and moe-proxy daemonIdentity send the host they were given (127.0.0.1 or the WSL gateway IP = the connection's arrival address); local-runner guest-session sends 127.0.0.1 or ::1. Proxy classify() treats any status outside {200,503} as UNKNOWN (HEALTH_STATUS_CODES, daemonIdentity.ts:33,59), so a 403 keeps connecting. Guard is the first statement of the branch; response is a fixed literal; Host never echoed or logged; healthHost.ts is pure and total, regex is linear. Rails: forbidden-pattern grep none, daemonGitDocs-phrase grep none, no .moe edits, no Git writes, no MCP/WS change. FINDING (out of scope, filed): a daemon started with `--host <DNS name>` has its own CLI probe send that name as Host, which the approved 'every DNS name is refused' rule now 403s -> filed bug task-f0abb6d6 (dependsOn this row). Residuals noted: NAT/port-forward clients whose Host IP differs from the arrival address, and a link-local arrival address with a zone id, are refused (documented in the design note). Embarrassment test: passes.",
+      "startedAt": "2026-10-30T11:23:31.541Z",
+      "completedAt": "2026-10-30T11:25:22.332Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -84,7 +117,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:52:38.398Z",
-  "updatedAt": "2026-10-30T08:15:58.976Z",
+  "updatedAt": "2026-10-30T11:25:55.415Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:59:30.687Z",
@@ -93,10 +126,12 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T08:07:14.847Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-e60b90bd"
   ],
   "dependsOn": [
     "task-2f2484b426ef42aaa0566323da2d550e",
@@ -106,7 +141,14 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T08:15:34.693Z",
   "executionContract": {
@@ -166,5 +208,27 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T08:15:34.721Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T11:17:28.594Z",
+  "declaredFiles": [
+    "packages/moe-daemon/src/server/healthHost.ts",
+    "packages/moe-daemon/src/server/healthHost.test.ts",
+    "packages/moe-daemon/src/index.ts",
+    "docs/ARCHITECTURE.md"
+  ],
+  "reviewStartedAt": "2026-10-30T11:25:55.413Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx tsc --noEmit && npm test",
+    "exitCode": 0,
+    "outputTail": " ✓ src/server/healthHost.test.ts (54 tests) 1779ms\n ✓ src/util/qaCommitPolicy.test.ts (8 tests) 5ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 5ms\n\n Test Files  208 passed (208)\n      Tests  5915 passed | 16 skipped (5931)\n   Start at  13:22:56\n   Duration  29.57s\n(Linux-native snapshot: git archive HEAD 5dabc010 of the whole repo + overlay of exactly the 4 task files, cmp-verified equal to the working tree; native npm ci under env -i, node v24.21.0; tsc --noEmit exit 0; scratch-tsconfig type-check of healthHost.test.ts exit 0.)",
+    "reportedAt": "2026-10-30T11:25:55.413Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/server/healthHost.test.ts",
+    "packages/moe-daemon/src/server/healthHost.ts",
+    "packages/moe-daemon/src/index.ts",
+    "docs/ARCHITECTURE.md"
+  ],
+  "completionSummary": "Plain-HTTP GET /health now answers only no Host, localhost, 127/8 or [::1], or the IP literal of the arrival address (req.socket.localAddress, ::ffff: stripped); every other Host gets 403 text/plain 'Forbidden' with no body fields. New server/healthHost.ts (pure, total, 49 lines); index.ts imports it and calls it as the FIRST statement of the /health branch (+7); the 200/503 and 426 paths are unchanged; no Host is echoed or logged.\nDoD 1: real spawned `_run --host 127.0.0.1` rows: 127.0.0.1, localhost and absent Host (HTTP/1.0) answer 200 with status/projectPath/pid/version/uptime/stats/checks; a foreign name, a foreign IP and 'localhost.evil.example' answer 403 with no JSON; probeDaemonHealth is still true; /other and an absolute-form target still answer 426. Clients: the daemon CLI probe, doctor, JetBrains DaemonIdentity, moe-agent.ps1 and the local runner send 127.0.0.1; the Docker HEALTHCHECK sends localhost; moe-agent.sh and the proxy send the host they were given (127.0.0.1 or the WSL gateway IP, which is the connection's arrival address); the proxy maps a 403 to 'unknown' and still connects.\nDoD 2: table A, 44 rows: absent, localhost, 127/8, ::1, gateway IP equal to the local address (also ::ffff: dual-stack) allowed; names, foreign IPs and malformed values refused.\nDoD 3: one Security Notes bullet in docs/ARCHITECTURE.md.\nEvidence: red proof first (missing module; accept-all stub fails 27 table rows and the 3 real 403 rows); 12 mutants killed by real rows, restored and cmp-checked; fresh gate EXIT 0, 208 files, 5915 passed / 16 skipped; adversarial probes over real Node HTTP. Filed task-f0abb6d6 (--host <DNS name> CLI probe). Residuals: NAT or port-forward Host IPs; a link-local arrival address with a zone id. Part B rows skip win32."
 }

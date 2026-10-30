@@ -18,6 +18,7 @@ import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { ensureRunnerKey } from './server/runnerChannel.js';
 import { WSL_BIND_HOST, resolveBindHosts, listenOnHosts } from './server/bindHosts.js';
+import { isAllowedHealthHost } from './server/healthHost.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
 import { reconcileRunningAttempts } from './state/attemptStore.js';
 import { runDoctor } from './commands/doctor.js';
@@ -680,6 +681,12 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   // Create HTTP server for health endpoint
   const handler: http.RequestListener = (req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
+      // DNS-rebinding guard, before any check or stats work: see server/healthHost.ts.
+      if (!isAllowedHealthHost(req.headers.host, req.socket.localAddress)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end('Forbidden');
+        return;
+      }
       // Perform health checks
       const checks: { name: string; healthy: boolean; message?: string }[] = [];
 
