@@ -75,7 +75,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -100,14 +100,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T10:43:25.554Z",
-  "updatedAt": "2026-10-30T04:04:08.279Z",
+  "updatedAt": "2026-10-30T04:09:16.502Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T16:07:37.010Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T04:09:16.502Z",
+    "wallClockMs": 302499492
   },
   "contextFetchedBy": [
     "worker-093a65d0",
@@ -164,7 +166,9 @@
     "docs/MCP_SERVER.md",
     "packages/moe-daemon/src/types/schema.ts",
     "scripts/moe-agent.sh",
-    "scripts/moe-agent.ps1"
+    "scripts/moe-agent.ps1",
+    ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+    ".moe/tasks/task-bc8410afe7144ddda804b60af000864d.json"
   ],
   "completionSummary": "Round 2 fixes QA's landing-only reject. No new edits.\n- docs/MCP_SERVER.md is the only unlanded owned path. `git diff HEAD --numstat` = 7 3, the hunk QA measured: the requiredChecks listing and \"eight-field\" changed to \"nine-field\".\n- The other 4 owned files are at HEAD (2fb7264) and cmp-equal to the worktree. The launchers do not change this round, so this round triggers no wrapper hot reload.\nLanding:\n- The former contestant task-915d7e84 is DONE.\n- Live get_commit_scope lists docs/MCP_SERVER.md under asserted, with no peerDeclared entry. The WORKING CQ-V/C11a/M06 rows that plan the path wait on this task, so getCommitScope does not count them as peers.\n- declare_files recorded for the path.\n- After landing, expect `git show HEAD:docs/MCP_SERVER.md | grep -c nine-field` to equal 1.\nRED/GREEN on a pure HEAD f49c8fc archive with native node_modules under env -i: executionContractDocs.test.ts fails 3 of 17, the same 3 cases QA named. With only the docs hunk overlaid: 17/17.\nFresh full gate: EXIT 0 (see verification).\nStatement 3 traced to state/validators.ts:\n- MAX_REQUIRED_CHECKS = 20;\n- id and command required;\n- configs/scripts/assertionRoots optional, each at most MAX_REQUIRED_CHECK_PATHS = 50;\n- checkRefs stays a string list.\nGate env notes:\n- ParseFile cannot open a \\\\wsl.localhost path, so the PS segment parsed the cmp-equal D: twin.\n- The proxy npm ci left HEAD's lock unchanged, but npm skipped the optional @rolldown/binding-linux-x64-gnu. I added 1.2.15 via npm pack; its integrity matches the lock.\nHandoff: mem task-task-bc8410afe7144ddda804b60af000864d-handoff and gotcha-gate-snapshot-psparse-and-proxy-rolldown.",
   "commits": [
@@ -193,17 +197,33 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "138e1f96fe509e968c0cfaf71c6a1d9779893e03",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T03:50:18Z",
+      "paths": [
+        ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+        ".moe/tasks/task-bc8410afe7144ddda804b60af000864d.json",
+        "docs/MCP_SERVER.md"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T04:04:30.917Z",
+      "treeId": "3161355c05b3b16c859adfc353189ebc453ae451",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "refused",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
-    "sessionId": "qa-952969be@2026-10-30T03:47:18Z",
-    "at": "2026-10-30T03:50:41.512Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-093a65d0@2026-10-30T03:50:18Z",
+    "at": "2026-10-30T04:04:30.917Z"
   },
-  "reviewCompletedAt": "2026-10-30T03:50:16.199Z",
+  "reviewCompletedAt": "2026-10-30T04:09:16.502Z",
   "rejectionDetails": {
     "failedDodItems": [
       "The three stale statements match the code at HEAD",
@@ -251,5 +271,8 @@
   ],
   "declaredFiles": [
     "docs/MCP_SERVER.md"
-  ]
+  ],
+  "completedAt": "2026-10-30T04:09:16.502Z",
+  "reviewSummary": "Round 2 approve; the round-1 landing gap is closed.\n\nDelivery: completion 138e1f9 is HEAD of moe/work-2026-10-24 (`git branch --contains` confirms). It lands docs/MCP_SERVER.md +7/-3 plus 2 board JSONs. With 2fb7264 the row is 5 code/doc files, +83/-12 (net 71). At HEAD: nine-field=1, eight-field=0. `git diff HEAD` is empty for all 5 owned paths.\n\nDoD 1, all three statements match HEAD:\n(1) The schema.ts approvedPlanRevision comment is comment-only. It no longer claims an omitted-token approval; omission is refused INVALID_INPUT.\n(2) Both launchers' comment-only hunks match proxy utils.ts:321-322: get_context gets session; start_step/complete_step/complete_task get attempt+session.\n(3) The submit_plan listing adds requiredChecks {id, command, configs?/scripts?/assertionRoots?}, matching validators.ts: at most 20 definitions, at most 50 per path list, nine EXECUTION_CONTRACT_FIELDS. checkRefs stays a string list.\n\nDoD 2: I re-ran the gate on a pure `git archive HEAD` under env -i with a Linux-only PATH and native node_modules whose locks hash-match. PowerShell parsed the D: worktree copy, which cmp confirms equals HEAD.\n- docs drift test: 17/17\n- bash -n: 0\n- ParseFile: 0 errors\n- parity: PASS\n- prompt-cache-launcher: 28/0/1 skip\n- lint: OK\n- tsc: 0\n- daemon: 190 files, 5320 passed / 16 skipped\n- proxy: 176 passed\n\nThese match the worker's verification. No scope creep.",
+  "requiredCheckAtDone": null
 }
