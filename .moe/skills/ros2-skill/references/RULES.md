@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=e378737f55dd -->
+<!-- moe-generated: sha=398d3a15e7bb -->
 
 # ROS 2 Skill: Agent Rules & Decision Frameworks
 
@@ -11,7 +11,7 @@
 
 | File | Load when... | Key rules |
 |---|---|---|
-| [RULES-CORE.md](RULES-CORE.md) | **Always** — these rules apply to every command | Rules 0.5, 1, 2, 4, 5, 6, 10, 11, 12, 13; Quick Decision Card; mandatory compliance preamble |
+| [RULES-CORE.md](RULES-CORE.md) | **Always** — these rules apply to every command | Rules 0.5, 1, 2, 4, 5, 6, 10, 11, 12, 13, 14 (Path A antipatterns); Quick Decision Card; mandatory compliance preamble |
 | [RULES-PREFLIGHT.md](RULES-PREFLIGHT.md) | Before **any** action, at session start | Rule 0 (pre-flight introspection + velocity limit sources), Rule 0.1 (session-start steps 0–6), Rule 14 (lifecycle), Rule 15 (publisher/QoS), Rule 19 (QoS pre-flight for publish-until) |
 | [RULES-MOTION.md](RULES-MOTION.md) | Any **motion** request | Rule 3 (movement algorithm), Rule 9 (pre-motion check + Nav2 preemption), Rule 17 (REP-103/REP-105), Rule 18 (estop after publish-until), Rules 20–25 (decel zone, timeout recovery, command limits, sequencing, proximity scan); Action Preemption table |
 | [RULES-DIAGNOSTICS.md](RULES-DIAGNOSTICS.md) | When something **fails or needs verification** | Rule 7 (failure diagnosis + log-level elevation + executor starvation), Rule 8 (post-action verification table), Rule 16 (multi-step sequencing); Error Recovery Protocols |
@@ -54,7 +54,8 @@ Launch a file         → RULES-REFERENCE.md (Launch Commands & Workflow)
 | 11 | RULES-CORE.md | Use discovered names verbatim |
 | 12 | RULES-CORE.md | Run independent discovery in parallel |
 | 13 | RULES-CORE.md | Never reuse stale session state |
-| 14 | RULES-PREFLIGHT.md | Lifecycle state before using managed nodes |
+| 14 (core) | RULES-CORE.md | Path A antipatterns — forbidden static-discovery commands |
+| 14 (preflight) | RULES-PREFLIGHT.md | Lifecycle state before using managed nodes |
 | 15 | RULES-PREFLIGHT.md | Publisher/subscriber counts before subscribing |
 | 16 | RULES-DIAGNOSTICS.md | Multi-step: complete and verify each step |
 | 17 | RULES-MOTION.md | REP-103 (units) + REP-105 (frames) |

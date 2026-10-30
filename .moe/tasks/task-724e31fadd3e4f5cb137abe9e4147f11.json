@@ -66,11 +66,23 @@
       "author": "governor-693b7073",
       "content": "Governor lane edge (11:39Z): this row now also dependsOn task-01f37ac6. That puts it after 5998f871 as well, since 01f37ac6 already waits on 5998f871.\n\nWhy: step 1 edits scripts/moe-agent.sh. Until the worktree epic (epic-dce3a64f) ships, rows that edit the wrappers run one at a time. The lane is e7f4026a → 5998f871 → 01f37ac6 → 9d277494 → 4fdc7590.\n- Without this edge, e7f4026a reaching DONE (it's in QA now) would make this row claimable together with 5998f871. 5998f871 fixes the self-restart that hot-loads a peer's uncommitted moe-agent.sh into every idle seat.\n- 01f37ac6 (CRITICAL) rewrites contested landing itself.\n- This row is a docs and wording sweep with no dependents: its siblings 801272c4, 2f2484b4 and 0c72d59a already landed the security behavior. So waiting costs little.\n\nBefore 01f37ac6 lands, the governor re-checks this row against 9d277494, which also edits moe-agent.sh.\nUndo: moe.set_task_dependencies { taskId: \"task-724e31fadd3e4f5cb137abe9e4147f11\", removeDependsOn: [\"task-01f37ac63316409ab581f5a189002cb8\"] }.",
       "timestamp": "2026-10-30T11:39:24.103Z"
+    },
+    {
+      "id": "comment-395442b86a0642908a6e69c3c71276c0",
+      "author": "governor-693b7073",
+      "content": "Governor edge, 13:27Z: this row now dependsOn WT-01 6cf120a3. Both rows edit packages/moe-daemon/src/types/schema.ts.\n- WT-01's plan checks that this row is seatless before WT-01 starts, but nothing covered the reverse: this row being claimed while WT-01 is mid-flight.\n- By my timing that window is real. WT-01 runs once WT-S lands. This row becomes claimable once 01f37ac6 lands, which is behind f31d415d and b1aecb54.\n- The edge only adds order in the safe direction. WT-01 is never stalled by it.\n- If WT-01 is still not DONE when 01f37ac6 reaches DONE, a governor revisits this. Undo: removeDependsOn [\"task-6cf120a38b344e72b7bab8b9faf806f1\"].",
+      "timestamp": "2026-10-30T13:24:42.299Z"
+    },
+    {
+      "id": "comment-17b86af9c26a43e8a5395b110d9c20d6",
+      "author": "governor-693b7073",
+      "content": "Governor edge, 13:29Z: this row now also dependsOn 25ba449a, the daemon/proxy path-comparison fix, which is in flight on worker-5ebbf433.\n- Both rows edit packages/moe-proxy/src/utils.ts (collision alert at 13:26Z).\n- This row is already gated on 01f37ac6 and WT-01, so the edge should cost nothing.\n- Undo: removeDependsOn [\"task-25ba449ab87d4039a283426f07302cbc\"].",
+      "timestamp": "2026-10-30T13:26:26.305Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:25:24.849Z",
-  "updatedAt": "2026-10-30T11:39:24.103Z",
+  "updatedAt": "2026-10-30T13:26:26.305Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:25:36.985Z",
     "plannedStepCount": 4,
@@ -86,7 +98,9 @@
     "task-0c72d59aad37467fb49e5ad699692d78",
     "task-86093c3efd8645748f460db870073392",
     "task-e7f4026abc0c4a8bb7632c8178ea7d70",
-    "task-01f37ac63316409ab581f5a189002cb8"
+    "task-01f37ac63316409ab581f5a189002cb8",
+    "task-6cf120a38b344e72b7bab8b9faf806f1",
+    "task-25ba449ab87d4039a283426f07302cbc"
   ],
   "tier": "heavy",
   "effort": "xhigh",

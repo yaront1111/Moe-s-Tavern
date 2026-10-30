@@ -1601,6 +1601,63 @@ for reload_mode in deferred unverifiable; do
   echo "[hot reload $reload_mode] ok: $reload_edits deferrals, $reload_restarts restarts"
 done
 
+# --- Stale offset: bash parses incrementally, so the loop and its own tail
+# must be one group. No ps1 twin: PowerShell parses the whole file up front.
+echo "[stale offset] a single-shot seat keeps its own tail after an in-place edit"
+RELOAD_DIR="$TMP_DIR/stale-offset"
+RELOAD_PROJECT="$RELOAD_DIR/project"
+RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
+mkdir -p "$RELOAD_PROJECT/.moe/messages"
+cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
+chmod +x "$RELOAD_WRAPPER"
+reload_repo
+printf '{"id":"proj-stale-offset","name":"postflight-stale-offset","settings":{"autoCommit":false}}\n' > "$RELOAD_PROJECT/.moe/project.json"
+: > "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl"
+printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
+cat > "$TMP_DIR/stale-offset.cjs" <<'JS'
+const fs = require('fs');
+const [wrapper, marker] = process.argv.slice(2);
+const inode = fs.statSync(wrapper).ino;
+const source = fs.readFileSync(wrapper, 'utf8');
+const afterShebang = source.indexOf('\n') + 1;
+fs.writeFileSync(wrapper, source.slice(0, afterShebang) + '#\n' + source.slice(afterShebang)
+  + '\necho MOE_TEST_FOREIGN_TAIL_RAN; exit 97\n');
+if (fs.statSync(wrapper).ino !== inode) throw new Error('wrapper edit replaced the inode');
+fs.writeFileSync(marker, 'same-inode edit landed\n');
+JS
+cat > "$TMP_DIR/stale-offset-cli" <<EOF
+#!/usr/bin/env bash
+exec "$NODE_FOR_TEST" "$TMP_DIR/stale-offset.cjs" "$RELOAD_WRAPPER" "$TMP_DIR/stale-offset-edited"
+EOF
+chmod +x "$TMP_DIR/stale-offset-cli"
+set +e
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume MOE_DISABLE_HEARTBEAT=1 \
+  timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$RELOAD_WRAPPER" --project "$RELOAD_PROJECT" \
+  --worker-id qa-stale-offset --role qa --no-start-daemon --command "$TMP_DIR/stale-offset-cli" --no-loop --poll-interval 0 \
+  > "$TMP_DIR/wrapper-stale-offset.out" 2>&1
+stale_offset_code=$?
+reload_git diff --quiet -- moe-agent.sh
+stale_offset_diff=$?
+set -e
+stale_offset_fail() {
+  cat "$TMP_DIR/wrapper-stale-offset.out" >&2 || true
+  echo "STALE OFFSET FAILED: $1" >&2
+  exit 1
+}
+[ -f "$TMP_DIR/stale-offset-edited" ] || stale_offset_fail 'same-inode edit marker missing'
+grep -Fq MOE_TEST_FOREIGN_TAIL_RAN "$RELOAD_WRAPPER" || stale_offset_fail 'edit did not land'
+[ "$stale_offset_diff" -eq 1 ] || stale_offset_fail "expected uncommitted edit, got diff exit $stale_offset_diff"
+[ "$stale_offset_code" -eq 0 ] || stale_offset_fail "seat exited $stale_offset_code instead of 0"
+if grep -Eq 'command not found|syntax error|MOE_TEST_FOREIGN_TAIL_RAN' "$TMP_DIR/wrapper-stale-offset.out"; then
+  stale_offset_fail 'seat read foreign bytes after its loop'
+fi
+grep -Fq 'qa session ended: task=task-resume (CLI exit=0)' "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl" \
+  || stale_offset_fail 'post-flight line missing'
+if grep -Fq 'restarting to load it' "$TMP_DIR/wrapper-stale-offset.out"; then
+  stale_offset_fail 'seat restarted on uncommitted bytes'
+fi
+echo "[stale offset] ok: same-inode edit, own tail and exit 0, post-flight posted"
+
 # --- Quality gate (settings.qualityGate): the post-flight runs the configured
 # command before auto-commit. Failing gate => no commit, PUSH-BLOCKED chat
 # message; passing gate => commit lands; MOE_DISABLE_QUALITY_GATE=1 => gate

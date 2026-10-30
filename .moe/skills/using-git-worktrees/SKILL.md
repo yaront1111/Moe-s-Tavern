@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=eb580ac2110e
+# moe-generated: sha=23d00b56f5e5
 name: using-git-worktrees
 description: Use when starting feature work that needs isolation from current workspace or before executing implementation plans - creates isolated git worktrees with smart directory selection and safety verification
 ---
@@ -196,7 +196,7 @@ Ready to implement <feature-name>
 
 **Do not use this skill on your own initiative inside a Moe fleet.** It is human-directed only (the skill manifest scopes it to architects for that reason).
 
-- The agent wrapper's post-flight — the only thing that commits your work — runs **only against the project root**. Edits made inside a `.worktrees/` (or any other) checkout are invisible to it: they never land as a completion or checkpoint commit, surface as `MOE_COMMIT_REFUSED_OWNED_PATH_MISSING`, and have stranded whole review branches before (two `codex/direct-review-fixes*` worktrees, 11–12 commits ahead, never merged).
+- The agent wrapper's post-flight — the only thing that commits your work — runs **only against the project root**. Edits made inside a `.worktrees/` (or any other) checkout are invisible to it: they never land as a completion or checkpoint commit and surface as `MOE_COMMIT_REFUSED_OWNED_PATH_MISSING`.
 - The wrapper's pre-flight creates **no** branch per task; the post-flight peels onto the shared `moe/work-<date>` (or the literal `consolidationBranch`) and stages only paths attributed to the task. There is no branch-cleanup step.
 - `.worktrees/**` and `.moe-worktree*` are on the wrapper's DENY list — nothing under them is ever staged.
 - If a human explicitly asks for a worktree: do the work there, then **you** merge or cherry-pick it back into the project root before the session ends, `git worktree remove <path>`, and report the paths in `complete_step.modifiedFiles` so the post-flight lands them. Never worktree `.moe/` — the daemon owns it at the project root.

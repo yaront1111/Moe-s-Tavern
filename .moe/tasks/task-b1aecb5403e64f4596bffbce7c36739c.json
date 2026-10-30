@@ -9,10 +9,66 @@
     "The moe.propose_rail section of docs/MCP_SERVER.md documents the workerId input, and `cd packages/moe-daemon && npm test` exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix caller attribution with test-first regression coverage (DoD 1–2). Load test-driven-development; reuse ToolTestHarness and existing beforeEach/afterEach cleanup. Add a schema assertion that workerId is type string, is not required, and additionalProperties remains false. Add compact parameterized cases for governor-1, qa-1 and architect-1 differing from assigned worker-1; explicit caller on an unassigned task; omitted caller with assigned worker-1; omitted caller with null assignee yielding 'unknown'; and empty-string caller retaining the same legacy fallback. For each case seed with h.createTask({ assignedWorkerId: assignee }); await h.state.load(); invoke ADD_RAIL/GLOBAL with the optional caller field only when supplied, assert the created proposal's workerId using the returned proposalId, then reload and assert the exact same value. Also assert the task assignee is unchanged. Example core assertion:\n```ts\nconst result = await proposeRailTool(h.state).handler({ taskId: 'task-1', proposalType: 'ADD_RAIL', targetScope: 'GLOBAL', proposedValue: 'test rail', reason: 'test attribution', workerId: 'governor-1' }, h.state) as { proposalId: string };\nexpect(h.state.proposals.get(result.proposalId)?.workerId).toBe('governor-1');\nawait h.state.load();\nexpect(h.state.proposals.get(result.proposalId)?.workerId).toBe('governor-1');\nexpect(h.state.getTask('task-1')?.assignedWorkerId).toBe('worker-1');\n```\nRetain the existing MODIFY_RAIL fallback test and invalid-task/rail/length coverage unchanged. Preserve existing error handling and cover persistence failure with vi.spyOn(h.state, 'writeEntity').mockRejectedValueOnce(new Error('disk full')); a valid caller-bearing invocation must reject with 'disk full' and leave proposals.size zero, rather than report success. Implement only these changes in proposeRail.ts:\n```ts\n// inputSchema.properties (not required):\nworkerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }\n// handler params type:\nworkerId?: string;\n// proposal construction:\nworkerId: params.workerId || task.assignedWorkerId || 'unknown',\n```\nDo not trim supplied IDs, add role checks, change the return shape, replace existing validation, or catch/swallow createProposal errors. No hand-edits to repository .moe state; harness fixtures are isolated temporary data.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/proposeRail.ts",
+        "packages/moe-daemon/src/tools/proposeRail.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/proposeRail.ts",
+        "packages/moe-daemon/src/tools/proposeRail.test.ts"
+      ],
+      "note": "Added optional workerId schema/type and caller || assignee || unknown attribution. Regression schema, 9 persisted identity/fallback cases (including verbatim ID), assignment invariance and write-failure tests. Native Windows focused RED: 6 expected assertion failures/27 pass; GREEN: 33 pass, exit 0. WSL startup fails because installed rolldown binding is Windows-only; used existing Windows Node via cmd.exe without changing dependencies. Existing test file already 300 lines; retained its suite structure as planned (now 351). Shared unrelated dirty paths preserved; no staging/commits.",
+      "startedAt": "2026-10-30T13:23:13.012Z",
+      "completedAt": "2026-10-30T13:24:14.480Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Document the additive input and stored meaning (DoD 3). In the moe.propose_rail Parameters block add workerId?: string with 'Caller worker ID (auto-injected by proxy)'. Explain that a supplied nonempty caller ID is recorded as proposal.workerId even when it differs from the task assignee; omitted/empty caller uses the assignee, then 'unknown' if unassigned. In docs/SCHEMA.md's RailProposal Source comment/prose identify workerId as the proposing caller, with this legacy fallback. Explicitly note no rewrite of existing proposal records. Keep the stored shape and tool response unchanged and limit edits to these two local sections; do not change approval documentation or unrelated peer-owned hunks.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Documented additive optional caller input, verbatim nonempty caller precedence, empty/omitted legacy assignee/unknown fallback, and no historical rewrite. Only propose_rail parameter/prose and RailProposal comment/prose changed; stored shape, response, approval docs and peer dirt untouched.",
+      "startedAt": "2026-10-30T13:24:14.501Z",
+      "completedAt": "2026-10-30T13:24:14.565Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Single end-of-task verification gate (DoD 1–3): from the repository root run exactly `cd packages/moe-daemon && npm test`. Expect exit 0 with all daemon suites, including proposeRail.test.ts, passing. This full daemon regression is required by the DoD and the MCP input-schema change even though this is a mid-epic bug fix. Load regression-check and verification-before-completion. Preserve the fresh command, exitCode, and outputTail for complete_task.verification; do not substitute a focused run or an old successful log. If it fails, diagnose and fix task-caused defects within scope; report unrelated failures accurately without modifying peer work or claiming green.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/proposeRail.ts",
+        "packages/moe-daemon/src/tools/proposeRail.test.ts",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "startedAt": "2026-10-30T13:24:21.780Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review of this task's own diff, once. Load adversarial-self-review. Check that restoring the old assignee-only expression would fail the explicit-caller tests; removing either fallback would fail a distinct regression; and schema optionality is independently asserted. Review empty/omitted IDs, unassigned tasks, caller IDs not registered locally, unchanged rail rejections and persistence failures. Confirm consecutive/concurrent proposals use their own arguments (no shared mutable identity), existing serialized dispatch/persistence are preserved, and no historical proposal, approval, proxy, UI, or task assignment is rewritten. Check both docs match the expression and there is no line-ending churn or unrelated dirt. If review requires changes, refresh the same verification gate before completion. Complete through Moe with all actual modified paths reported and the fresh gate evidence; leave git staging/committing to the wrapper.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/proposeRail.ts",
+        "packages/moe-daemon/src/tools/proposeRail.test.ts",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-55e6716a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -31,10 +87,50 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:43:48.172Z",
-  "updatedAt": "2026-10-30T13:16:45.437Z",
+  "updatedAt": "2026-10-30T13:24:21.780Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:47.690Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:18:51.455Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-76a2c8bb",
+    "worker-55e6716a"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:22:19.465Z",
+  "planningNotes": {
+    "approachesConsidered": "# Rail proposal caller attribution\nGoal: persist the actual caller as the proposer while preserving caller-less compatibility. Architecture: add the optional identity field to the existing daemon tool and use caller → assignee → unknown when building the proposal. Reuse the existing proxy injection, proposal persistence, and test harness; no new helper, identity lookup, authorization gate, migration, or proxy/IDE change. Tech stack: TypeScript/Node.js, Vitest, Markdown.",
+    "codebaseInsights": "Verified proposeRailTool in src/tools/proposeRail.ts and its getTools registration. The handler currently ignores args.workerId and records only task.assignedWorkerId. Contrary to the ticket's schema-dependent injection premise, moe-proxy/src/utils.ts injectWorkerId already stamps all ordinary tools/call arguments that omit workerId (except query-filter tools); no proxy edit is needed. Existing proposeRail.test.ts has the assigned-worker fallback test and comprehensive rail-error/boundary coverage. StateManager.createProposal awaits writeEntity before publishing to memory/events. docs/SCHEMA.md explicitly documents RailProposal.workerId, so its attribution comment also needs the requested update.",
+    "risks": "Four edited files are justified by the explicitly requested tool, regression tests, and two contract docs; one narrow deliverable, approximately 30 minutes, well below plan limits. All four paths were clean during exploration, but checkout has unrelated peer dirt: preserve it and recheck ownership before editing. No platform-specific logic changes: use the existing Node fs/path temporary harness and repository-relative paths; run the gate in bash/WSL/Git Bash (or PowerShell 7), not PowerShell 5's unsupported && syntax. Attribution is not authentication; retain supplied nonempty IDs verbatim and do not add role/registration checks. Existing persisted proposals, approval, and UI remain untouched.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/proposeRail.ts",
+      "packages/moe-daemon/src/tools/proposeRail.test.ts",
+      "docs/MCP_SERVER.md",
+      "docs/SCHEMA.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:22:19.492Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T13:23:13.012Z"
 }

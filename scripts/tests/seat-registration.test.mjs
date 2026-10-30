@@ -83,7 +83,7 @@ const SEGMENTS = {
     mentions: between(sh, '        # Filter unread messages for ones routed at THIS worker.', '\n    fi\n    # -------- End pre-flight --------'),
     decide: between(sh, '    MOE_SKIP_LAUNCH=false\n', '    if [ "$MOE_SKIP_LAUNCH" != true ] && { [ "$CLI_TYPE" = claude ]'),
     outcome: between(sh, '    if [ "$MOE_SKIP_LAUNCH" = true ]; then\n', '    elif [ "$CLI_TYPE" = "codex" ]; then') + '    fi\n',
-    tail: sh.slice(sh.lastIndexOf('\ndone\n') + 6),
+    tail: between(sh.slice(sh.lastIndexOf('\ndone\n') + 6), '\n# A one-shot run that ends teamless', '\n}\n'),
   },
   ps1: {
     funcs: between(ps, 'function Invoke-MoeRpcRaw {', '\nif ($Team) {')

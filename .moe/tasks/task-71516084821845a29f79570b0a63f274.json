@@ -24,9 +24,9 @@
       "modifiedFiles": [
         "scripts/tests/local-runner.test.mjs"
       ],
-      "note": "Added MD1-MD3 + TD1-TD3, reusing existing fixtures; all prior rows untouched. Fresh env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs exited 1: exactly six new rows fail because dependencies mode/function and installDependencies export are absent. Other rows pass (existing opt-in smoke skip). Pre-existing 75 dirty paths preserved; scoped files were initially clean. Both prerequisite epicSiblings entries landed=true.",
-      "startedAt": "2026-10-30T13:13:03.787Z",
-      "completedAt": "2026-10-30T13:14:50.441Z"
+      "note": "QA reopen 1 repair. Landed bytes (b364044c) re-verified by hash before editing. Extended TD2 only (+11 lines) with the provider-error boundary QA asked for: info ENOENT (0 spawns), malformed info stdout 'bad json' (0 spawns), and post-stream mountinfo ENOENT (1 spawn). Each must reject with fixed TRANSFER_MOUNTS_UNKNOWN, a sanitized message (transferRefused), and only own key 'code'. RED confirmed: TD focused run 3 tests, 2 pass, 1 fail; TD2 actual = PROVIDER_NOT_FOUND ('Multipass executable was not found…'). M/T/MD/TD1/TD3 rows unedited. Unrelated dirty paths untouched.",
+      "startedAt": "2026-10-30T13:23:40.496Z",
+      "completedAt": "2026-10-30T13:24:37.378Z"
     },
     {
       "stepId": "step-2",
@@ -35,12 +35,9 @@
       "affectedFiles": [
         "scripts/local-runner/guest-supervisor.py"
       ],
-      "modifiedFiles": [
-        "scripts/local-runner/guest-supervisor.py"
-      ],
-      "note": "Reused materialize with final mode=0700 by default, basename-derived staging prefix (unchanged .workspace-), new dependencies wrapper/default root owner and fixed CLI route. Header documents codes. Focused MD1-MD3 + unchanged M1-M4: 7/7 pass, exit 0, under clean nvm Node24 environment. No scope growth or peer edits.",
-      "startedAt": "2026-10-30T13:14:50.465Z",
-      "completedAt": "2026-10-30T13:15:01.004Z"
+      "note": "No change this round. The supervisor dependencies mode landed in b364044c (DEPENDENCIES constants, dependencies() wrapper with owner (0,0) and mode 0o755, materialize mode keyword, main() routing, header). The working-tree hash matches the completion (19e1ca2d…). QA's rejection does not touch this file, and MD1-MD3 passed in QA's rerun.",
+      "startedAt": "2026-10-30T13:24:38.137Z",
+      "completedAt": "2026-10-30T13:24:44.310Z"
     },
     {
       "stepId": "step-3",
@@ -52,40 +49,31 @@
       "modifiedFiles": [
         "scripts/local-runner/snapshot-transfer.mjs"
       ],
-      "note": "Added dependencies mode and installDependencies, validating every entry before I/O and returning frozen executionReady:false result. Reused R11e2 transfer mount sandwich and extracted materializedFrame shared with materializeSnapshot. Focused TD1-TD3 and unchanged T1-T7 all 10/10 pass, exit 0, clean nvm Node24 environment. No new stream format or dependency.",
-      "startedAt": "2026-10-30T13:15:01.030Z",
-      "completedAt": "2026-10-30T13:15:32.334Z"
+      "note": "QA fix at the installDependencies API boundary only. The transfer() call is wrapped: a known TRANSFER_* code (a string own key of MESSAGES) is re-issued through transferError, so its fixed message and only key 'code' are kept. Anything else becomes the fixed TRANSFER_MOUNTS_UNKNOWN ('The guest mounts could not be established.'). Only the pre/post assertNoMounts calls can throw non-TRANSFER errors there (PROVIDER_*/LIFECYCLE_*/BOOTSTRAP_* from readGuestInfo/runGuestProbe); supervise and the acceptor already reject only with transferError. The shared transfer(), assertNoMounts and materializeSnapshot are unchanged, so R11e2's ruled helper passthrough and the T rows are preserved. JSDoc names the mapping. GREEN: focused TD+T1-T7 10/10 pass.",
+      "startedAt": "2026-10-30T13:24:45.013Z",
+      "completedAt": "2026-10-30T13:25:44.943Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh.\n\n1. Run `node --test scripts/tests/local-runner.test.mjs`. On WSL, run it under env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\", so Windows Node is never used.\n   - It must exit 0, with the MD and TD rows run, not skipped, on Linux, and every M, T, TC and TT row still passing.\n   - Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. `git diff --check -- scripts/local-runner/guest-supervisor.py scripts/local-runner/snapshot-transfer.mjs scripts/tests/local-runner.test.mjs` is clean.\n3. A read-only `git status --short` shows that only those three files changed, and no __pycache__ appeared. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code, never by editing an M or T row.",
-      "status": "COMPLETED",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
-      "note": "Fresh plan gate: env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs -> exit 0, 271 tests/270 pass/0 fail/1 existing opt-in macOS smoke skip, 37442.6ms (/tmp/r11e4-green.log). MD/TD all run; unchanged M/T/TC/TT green. Scoped diff --check clean, no __pycache__. Read-only status comparison shows only the three scoped source/test files newly dirty; concurrent wrapper/daemon board changes and pre-existing dirty paths preserved. No edits this step.",
-      "startedAt": "2026-10-30T13:15:32.359Z",
-      "completedAt": "2026-10-30T13:16:31.871Z"
+      "startedAt": "2026-10-30T13:25:45.801Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the three-file diff as an attacker:\n- Did the mode keyword or the staging prefix change anything for the workspace path? Check the root mode 0700, the prefix and the owner default.\n- Can any job identity write the dependency tree, its parent directories or the manifest? Root ownership, 0755 directories, 0644 files and a 0600 manifest must rule it out.\n- Can a tree be accepted without the guest-derived digest matching? A buffer changed after sealing, or a duplicate or colliding path, must be refused by receive().\n- Is the host's tree validation done before any provider call? Is it bounded? validateImport caps files and bytes, and the guest mirrors those caps.\n- If two installs race on one VM, R06's job lease serializes per VM, as for materialize; rename never replaces a non-empty tree.\n- Is materializeSnapshot's behavior byte-for-byte the same after the acceptor extraction?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 4's command fresh before complete_task.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "modifiedFiles": [
-        "scripts/local-runner/snapshot-transfer.mjs",
-        "scripts/tests/local-runner.test.mjs"
-      ],
-      "note": "Adversarial review completed over all three scoped diffs. Fixed null-options TypeError in new API using existing installToolchain normalization pattern; TD2 regression observed red then green. Added TD3 mutation-after-sealing proof: guest exits65/no tree, manifest or staging; restored buffer installs, next copy exits73 untouched. Root defaults, 0755/0644/0600 and pre/post mounts covered; workspace retains 0700/.workspace-/agent owner and shared acceptor semantics. Existing test file byte-identical outside inserted R11e4 block. Concurrency retains R06 per-VM lease and trusted root-owned parent assumptions; expected validateImport-sealed inputs and guest mirror enforce bounds. Fresh full plan gate after repair: exit0,271 tests/270 pass/0 fail/1 existing opt-in skip,35918.6ms (/tmp/r11e4-final.log). Scoped diff --check clean, no __pycache__, hashes unchanged across verification. Scope is three files +188/-15 (203 lines). No isolation/verified-local claim.",
-      "startedAt": "2026-10-30T13:16:31.896Z",
-      "completedAt": "2026-10-30T13:18:55.039Z"
+      "status": "PENDING",
+      "affectedFiles": []
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-fe18a9a9",
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD 2 fails: installDependencies does not ensure every failure has a fixed TRANSFER_* code. Reviewed recorded completion b364044cf5eab32649ced0e0844e1986153ce530 with git show and confirmed containment on moe/work-2026-10-24. Reproduced on its archive with valid validateImport-sealed input: provider.run throwing ENOENT rejects with PROVIDER_NOT_FOUND; returning {stdout:'bad json'} rejects with PROVIDER_INFO_INVALID. No recorded contract exception; worker confirmed not to assume one. Exact task.verification command rerun under clean Node 24 PATH: 271 tests, 270 passed, 0 failed, 1 existing optional smoke skip, exit 0 (/tmp/qa-r11e4-b364044c.log). Initial extraction omitted resourceStore.ts, causing one infrastructure-only failure; restoring committed daemon source yielded the passing full rerun. git diff b364044c^ b364044c --check passed. Scoped source/test diff +188/-15 (203 changed lines), plus daemon-generated board updates in completion. MD/TD and unchanged M/T/TC/TT pass. No source edits or Git-write commands. Tests omit the provider-error boundary.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
   "dependsOn": [
@@ -104,29 +92,34 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:53:09.580Z",
-  "updatedAt": "2026-10-30T13:19:09.778Z",
+  "updatedAt": "2026-10-30T13:25:45.801Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T23:01:14.250Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 8,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0",
-    "worker-c2da129d"
+    "worker-fe18a9a9"
   ],
-  "tier": "standard",
-  "effort": "high",
-  "model": "claude-sonnet-5-5",
-  "codexModel": "gpt-6.1-sol",
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3",
-    "step-4",
-    "step-5"
+    "step-3"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "installDependencies streams only the sealed tree, checks mounts before and after, and accepts only the matching materialized frame. Every failure is a fixed TRANSFER_* code. Shown by tests with a fake provider.",
+      "rejectedAt": "2026-10-30T13:22:33.274Z",
+      "rejectedBy": "qa-ba3f4f35"
+    }
+  ],
   "planSubmittedAt": "2026-10-29T23:02:50.950Z",
   "planningNotes": {
     "approachesConsidered": "- A new stream format for the dependency tree: rejected. CQ-R11e3 seals the tree with validateImport, so R09c's hostFrames, receive() and the SNAPSHOT_DIGEST_TAG framing already carry and verify it. The new mode is a five-line wrapper.\n- Making the tree owned by the check identity, so npm could write into it: rejected. A job identity could then edit its own inputs. The tree is root-owned and read-only, and CQ-R11e3's end-to-end row proves npm works from a read-only cache.\n- Passing the lockfile dir list in a new header field: rejected. It is the digest-bound `moe-dependencies.json` inside the tree, which CQ-R11e5 reads.\n- Re-sealing the tree on the host before streaming: dropped. The guest derives the digest from the received bytes and refuses a mismatch, and the host compares the guest's digest with tree.digest.",
@@ -159,7 +152,75 @@
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-supervisor.py",
-    "scripts/local-runner/snapshot-transfer.mjs"
+    "scripts/local-runner/snapshot-transfer.mjs",
+    ".moe/tasks/task-3def080415d3495a8557b514d6a0ab2a.json",
+    ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+    ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
+    ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
+    ".moe/tasks/task-9d27749421b045c18a6c6eb99694236d.json"
   ],
-  "completionSummary": "Delivered CQ-R11e4 in three scoped files (+188/-15): root-only dependencies CLI reuses materialize with root-owned0755 tree/private0600 manifest; installDependencies validates and streams the sealed cache through shared framing/acceptor and pre/post mount checks, returning frozen executionReady:false. MD1-MD3/TD1-TD3 cover ownership/modes, unchanged installs/symlinks, malformed/digest/EOF refusals, input/frame/mount/exit handling and real-supervisor round trip. Review repaired null-options raw TypeError with red/green TD2; TD3 proves mutated sealed bytes produce65/no leftovers, restored bytes install, repeat73 preserves first. Existing test file byte-identical outside inserted block. Fresh full plan gate:271 tests,270 pass,0 fail,1 existing opt-in smoke skip; scoped diff --check clean, no __pycache__, source hashes stable. All steps complete; Serena handoff/gotcha saved. Unrelated dirty paths preserved, no Git writes/direct .moe edits, no isolation/verified-local claim. Wrapper owns landing."
+  "completionSummary": "Delivered CQ-R11e4 in three scoped files (+188/-15): root-only dependencies CLI reuses materialize with root-owned0755 tree/private0600 manifest; installDependencies validates and streams the sealed cache through shared framing/acceptor and pre/post mount checks, returning frozen executionReady:false. MD1-MD3/TD1-TD3 cover ownership/modes, unchanged installs/symlinks, malformed/digest/EOF refusals, input/frame/mount/exit handling and real-supervisor round trip. Review repaired null-options raw TypeError with red/green TD2; TD3 proves mutated sealed bytes produce65/no leftovers, restored bytes install, repeat73 preserves first. Existing test file byte-identical outside inserted block. Fresh full plan gate:271 tests,270 pass,0 fail,1 existing opt-in smoke skip; scoped diff --check clean, no __pycache__, source hashes stable. All steps complete; Serena handoff/gotcha saved. Unrelated dirty paths preserved, no Git writes/direct .moe edits, no isolation/verified-local claim. Wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "b364044cf5eab32649ced0e0844e1986153ce530",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T13:12:18Z",
+      "paths": [
+        ".moe/tasks/task-3def080415d3495a8557b514d6a0ab2a.json",
+        ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+        ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
+        ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
+        ".moe/tasks/task-9d27749421b045c18a6c6eb99694236d.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/local-runner/snapshot-transfer.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T13:19:27.712Z",
+      "treeId": "dc0c8222543dd6e593381272d1efad0757ddc746",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c2da129d@2026-10-30T13:12:18Z",
+    "at": "2026-10-30T13:19:27.712Z"
+  },
+  "reviewCompletedAt": "2026-10-30T13:22:33.274Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "installDependencies streams only the sealed tree, checks mounts before and after, and accepts only the matching materialized frame. Every failure is a fixed TRANSFER_* code. Shown by tests with a fake provider."
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "file": "scripts/local-runner/snapshot-transfer.mjs",
+        "line": 230,
+        "description": "Pre/post assertNoMounts errors escape installDependencies as PROVIDER_* instead of the promised TRANSFER_* codes. Normalize failures at this API boundary, preserving existing TRANSFER_* refusals and materializeSnapshot behavior. Extend TD2 with ENOENT, malformed info output, and post-stream probe failure; assert fixed TRANSFER_* codes and sanitized messages. Re-run the named full gate."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 2 fails: installDependencies does not ensure every failure has a fixed TRANSFER_* code. Reviewed recorded completion b364044cf5eab32649ced0e0844e1986153ce530 with git show and confirmed containment on moe/work-2026-10-24. Reproduced on its archive with valid validateImport-sealed input: provider.run throwing ENOENT rejects with PROVIDER_NOT_FOUND; returning {stdout:'bad json'} rejects with PROVIDER_INFO_INVALID. No recorded contract exception; worker confirmed not to assume one. Exact task.verification command rerun under clean Node 24 PATH: 271 tests, 270 passed, 0 failed, 1 existing optional smoke skip, exit 0 (/tmp/qa-r11e4-b364044c.log). Initial extraction omitted resourceStore.ts, causing one infrastructure-only failure; restoring committed daemon source yielded the passing full rerun. git diff b364044c^ b364044c --check passed. Scoped source/test diff +188/-15 (203 changed lines), plus daemon-generated board updates in completion. MD/TD and unchanged M/T/TC/TT pass. No source edits or Git-write commands. Tests omit the provider-error boundary.",
+      "rejectedAt": "2026-10-30T13:22:33.274Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "installDependencies streams only the sealed tree, checks mounts before and after, and accepts only the matching materialized frame. Every failure is a fixed TRANSFER_* code. Shown by tests with a fake provider."
+      ],
+      "issues": [
+        {
+          "type": "missing_feature",
+          "file": "scripts/local-runner/snapshot-transfer.mjs",
+          "line": 230,
+          "description": "Pre/post assertNoMounts errors escape installDependencies as PROVIDER_* instead of the promised TRANSFER_* codes. Normalize failures at this API boundary, preserving existing TRANSFER_* refusals and materializeSnapshot behavior. Extend TD2 with ENOENT, malformed info output, and post-stream probe failure; assert fixed TRANSFER_* codes and sanitized messages. Re-run the named full gate."
+        }
+      ]
+    }
+  ]
 }

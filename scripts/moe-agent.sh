@@ -6499,6 +6499,11 @@ if [ -f "$MOE_WRAPPER_PATH" ]; then
     MOE_WRAPPER_LAUNCH_HASH="$(sha256sum "$MOE_WRAPPER_PATH" 2>/dev/null | cut -d' ' -f1 || true)"
 fi
 
+# Bash reads scripts incrementally from a saved file offset. An in-place save
+# (same inode: editor/apply_patch) could end the loop on NEW bytes at the OLD
+# offset ("e: command not found", task-f31d415d). Parse the loop and tail as one
+# group before running; exit prevents any later file read. No re-indent by design.
+{
 while [ "$LOOP_RUNNING" = true ]; do
     # Receipt metadata belongs to one actual CLI launch, never a prior task.
     unset MOE_USAGE_RECEIPT_FILE MOE_USAGE_CONTEXT_JSON
@@ -9031,3 +9036,5 @@ if [ "$LOOP_ENABLED" = false ] && [ "${MOE_SKIP_LAUNCH:-}" = true ] && seat_is_t
     echo "MOE_SEAT_UNREGISTERED worker=$WORKER_ID team=$TEAM - this one-shot run ends without a team (moe.join_team: $TEAM_JOIN_LAST_ERROR); exit 1."
     exit 1
 fi
+exit
+}

@@ -1739,7 +1739,7 @@ interface RailProposal {
   id: string;                    // "prop-abc123"
   
   // Source
-  workerId: string;              // Who proposed it
+  workerId: string;              // Proposing caller; legacy fallback described below
   taskId: string;                // Context
   
   // The proposal
@@ -1769,6 +1769,8 @@ type ProposalStatus =
   | 'APPROVED'
   | 'REJECTED';
 ```
+
+`workerId` records the supplied nonempty caller ID, even when different from the task assignee. For legacy calls with an omitted or empty caller ID, it falls back to the task assignee, then `'unknown'` if unassigned. Existing proposal records are not rewritten; the stored shape is unchanged.
 
 **Example:**
 

@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=b0ef035a319f -->
+<!-- moe-generated: sha=7642fd40403b -->
 
 # Worker — Reference
 
@@ -82,7 +82,7 @@ Practical rules:
 - A prerequisite has landed iff `get_context.epicSiblings[*].landed` is true (or `git log <branch> --grep 'Moe-Task: <sibling>'` finds it) — and its evidence (`verification { command, exitCode }`, `reviewSummary`, `completionSummary`) rides on the same `epicSiblings` entry, so read what it delivered from the board, never via HEAD greps. Your task's `dependsOn` targets appear there too, regardless of order. Uncommitted files in a peer's checkout are not a prerequisite; a `report_blocked` on a missing prerequisite passes the sibling id(s) in `blockedOnTaskIds` — the daemon auto-unblocks the task the moment they are all DONE/ARCHIVED, and a non-resource block you report on your own task frees your seat (worker → IDLE, `nextAction` → `claim_next_task`) so you take other work instead of idling on the wall. If every id you name is ALREADY DONE/ARCHIVED the task is not blocked at all (`dependenciesSatisfied:true`, `nextAction` → `get_context`): read their evidence from `epicSiblings` and continue — re-file only if something else blocks you, with a reason that names the real blocker. An id that already waits on your task (a dependency cycle) is dropped with a `DEPENDENCY_CYCLE` warning — page the architect, one side needs a re-plan. Resource blocks (`resourceId`) keep the seat parked — the grant path returns the task to you by design.
 - Banners you may see in `#general`: `PUSH-BLOCKED:` (gate failed or status lookup failed — your bytes are in a rescue ref / `status=UNKNOWN` checkpoint; on a gate failure the loop stopped), `PUSH FAILED … do not review until pushed` (committed locally only), `CHECKPOINT-UNPUSHED task=<id>` (checkpoint local only), `MOE_RESCUE_REF task=<id> ref=… reason=…`. Refusals: `MOE_COMMIT_REFUSED_NO_OWNED_PATHS` (nothing attributable — declare paths), `MOE_COMMIT_REFUSED_OWNED_PATH_MISSING` (asserted paths gone from disk and HEAD), `MOE_COMMIT_NOTHING_TO_COMMIT` (already in HEAD; harmless).
 - A RESUME prompt that lists rescue refs means an earlier session's landing failed: `git show <ref> --stat` / `git checkout <ref> -- <path>` before redoing work. A lingering baseline is landed automatically before your CLI starts (`MOE_CHECKPOINT_RECOVERED`).
-- `moe.record_commit` and `moe.get_commit_scope` are wrapper-called — do not call them yourself. `moe.declare_files { taskId, paths }` is yours to use when you know a path is your edit but it was not reported.
+- `moe.get_commit_scope` and normal root-delivery `moe.record_commit` are wrapper-called. Exception: rail-authorized isolated-clone delivery must be recorded by its worker before REVIEW. After commit+push, use a fresh remote fetch to verify each delivered SHA is contained in the intended branch, then `moe.record_commit` with actual taskId, outcome=committed, kind=completion, sha/treeId/ref/paths, role and truthful sessionId provenance; pushed=true only after remote confirmation. Never invent delivery or a Moe-Session trailer, and never re-land already-pushed bytes in the shared tree. Record errors as ledger gaps with the real SHA, not duplicate commits. `moe.declare_files { taskId, paths }` remains yours for owned edits not otherwise reported.
 - Git hooks do not run on wrapper commits unless the project sets `commitHooks: true`; `settings.qualityGate` is the sanctioned gate.
 
 ## Shared resources (exclusive infra)
@@ -92,6 +92,15 @@ When a step needs exclusive-use infrastructure (a benchmark box, a staging DB, a
 1. **Acquire before you touch it**: `moe.acquire_resource { resourceId, taskId, workerId, note }`. Granted → do the work. Undeclared ids auto-create (capacity 1, 24h lease cap); leases are keyed by task, so a CLI respawn or daemon restart doesn't lose yours — re-acquiring just renews it.
 2. **Busy → park, never poll**: follow the returned `nextAction` — `moe.report_blocked` with the same `resourceId`. Your task flips to BLOCKED, the wrapper stops relaunching sessions, and the daemon auto-unblocks the task (back to its pre-block status) the moment the lease is granted. Do NOT sit in a loop re-calling `acquire_resource`. For a short wait inside a live session, `moe.wait_for_resource` (blocking, ≤10 min per call) is acceptable; anything longer is report_blocked + end the session.
 3. **Release when done**: `moe.release_resource { resourceId, workerId }` — the next waiter unparks immediately. The 24h `maxLeaseMs` auto-expiry is a crash bound, not a substitute for releasing.
+
+## Claude account switch
+
+Some machines run claude seats across several Claude subscription accounts. The wrapper picks the account before every launch. Once a usage window on yours reaches the switch percent (90% by default), or the account hits its limit, is signed out or is removed, the daemon moves you at the next step boundary:
+
+- `moe.complete_step` adds `accountSwitch { from, to, fromPeakPercent, switchAtPercent, reason, instruction }`. The step you just finished is saved. Do not start the next step. End the turn, even though `nextAction` still names `moe.start_step`.
+- `moe.start_step` refuses with `NOT_ALLOWED` and a reason starting `ACCOUNT-SWITCH:`. The step stays `PENDING`. End the turn; do not retry it in this session.
+
+The wrapper lands your work as usual, relaunches the same task on the next account, and the new session starts the pending step. A switch is not a failure: report nothing, block nothing, and do not call `release_task`. If you are mid-step when the account fills up, finish the step first. The switch only ever happens at a step boundary.
 
 ## Quality memory
 
@@ -108,9 +117,7 @@ Prefer `edit_memory` to append to an existing topic file over creating a near-du
 Acknowledge ONCE. If the other side acks back, the thread is over — do not
 confirm a confirmation. A closure that needs restating was not a closure. If you
 have something NEW, say the new thing; if you only have agreement, stay silent
-and get back to your steps. Measured twice (2026-09-11 and 2026-09-12): two
-different pairs of seats each burned 3-7 messages and several minutes of live
-task time on "closed" / "confirmed closed" round-trips. The Loop Guard caps
+and get back to your steps. Ack round-trips burn live task time. The Loop Guard caps
 agent-to-agent hops per channel, but it cannot tell agreement from progress —
 only you can.
 

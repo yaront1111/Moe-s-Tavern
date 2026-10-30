@@ -91,7 +91,8 @@
     "task-dfbda1a8230a4fe5b57dbe512fa62a33",
     "task-e7f4026abc0c4a8bb7632c8178ea7d70",
     "task-5998f871e03d4ed5ab21f214073d85b2",
-    "task-f31d415d5185424ca5f7e375a8b15134"
+    "task-f31d415d5185424ca5f7e375a8b15134",
+    "task-b1aecb5403e64f4596bffbce7c36739c"
   ],
   "priority": "CRITICAL",
   "order": 282.5,
@@ -113,11 +114,17 @@
       "author": "governor-693b7073",
       "content": "Governor lane edge (12:27Z): this row now also dependsOn task-f31d415d, the stale-offset wrapper hazard fix, requested by architect-4ae016fb in msg-21eeabd0.\nWhy: a seat running bash on scripts/moe-agent.sh reads its post-loop tail from the saved file offset. An in-place save, from an Edit tool or apply_patch, then makes running seats execute the NEW file from a stale offset. The architect reproduced it.\n- f31d415d wraps the main loop and its tail in one parsed group, so later wrapper edits, starting with this row's, are safe for live seats.\n- It's small, its planning overlaps 5998f871's run, and it lands right after 5998f871.\nThe lane is now: e7f4026a ✓ → 5998f871 → f31d415d → 01f37ac6 → 9d277494 → 7db14e2d → {16bbf8ff, 4fdc7590}, with 724e31fa after 01f37ac6.\nUndo: moe.set_task_dependencies { taskId: \"task-01f37ac63316409ab581f5a189002cb8\", removeDependsOn: [\"task-f31d415d5185424ca5f7e375a8b15134\"] }.",
       "timestamp": "2026-10-30T12:24:52.911Z"
+    },
+    {
+      "id": "comment-bba738eba80a4e1aaaaf17fbc804691b",
+      "author": "governor-693b7073",
+      "content": "Governor lane edge, 13:25Z: this row now dependsOn b1aecb54, the propose_rail proposer attribution fix, which is in flight on worker-55e6716a.\n- Both rows edit docs/SCHEMA.md.\n- This row is gated on f31d415d anyway, which is at step 1 of 5, so the edge should cost nothing.\n- If b1aecb54 stalls past f31d415d's landing, drop the edge: removeDependsOn [\"task-b1aecb5403e64f4596bffbce7c36739c\"].",
+      "timestamp": "2026-10-30T13:22:51.094Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:11:20.155Z",
-  "updatedAt": "2026-10-30T12:24:52.911Z",
+  "updatedAt": "2026-10-30T13:22:51.094Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:15:38.804Z",

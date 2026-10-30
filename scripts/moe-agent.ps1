@@ -5949,6 +5949,9 @@ try {
     $script:MoeWrapperLaunchHash = $null
 }
 
+# PowerShell parses this whole file before running it: an in-place save cannot
+# shift a running seat onto a stale offset, so no grouping is needed here.
+# The sh twin groups its main loop and tail as { ... exit } (task-f31d415d).
 try {
 do {
     # Receipt metadata belongs to one actual CLI launch, never a prior task.

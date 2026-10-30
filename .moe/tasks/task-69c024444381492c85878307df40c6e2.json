@@ -20,7 +20,8 @@
   "dependsOn": [
     "task-5998f871e03d4ed5ab21f214073d85b2",
     "task-f31d415d5185424ca5f7e375a8b15134",
-    "task-01f37ac63316409ab581f5a189002cb8"
+    "task-01f37ac63316409ab581f5a189002cb8",
+    "task-aa85ff13a8894913ae34242dbab6f395"
   ],
   "priority": "MEDIUM",
   "order": 5,
@@ -30,11 +31,17 @@
       "author": "governor-693b7073",
       "content": "Governor (12:50Z). Lane edges: this row now also dependsOn f31d415d (the stale-offset fix) and 01f37ac6 (CRITICAL). It edits the wrappers, which run one at a time until the worktree epic ships. It is a MEDIUM residual race, so it stays behind the CRITICAL lane.\nIt stays in BACKLOG as a non-CQ bug, human-gated. At promotion, an architect has to replace the placeholder DoD (\"Task completed as described\") with checkable items. For example: a postflight arm where a write lands right after the committed check, which must NOT reload uncommitted bytes, RED pre-fix. And both twins.\nBefore 01f37ac6 lands, the governor re-checks its order against 9d277494 and 724e31fa.\nUndo: removeDependsOn [\"task-f31d415d5185424ca5f7e375a8b15134\",\"task-01f37ac63316409ab581f5a189002cb8\"].",
       "timestamp": "2026-10-30T12:47:31.024Z"
+    },
+    {
+      "id": "comment-3f4c3c9fd3b54f1596520992707f883e",
+      "author": "governor-693b7073",
+      "content": "Governor wrapper-lane edge, 13:19Z: this row now dependsOn aa85ff13.\n- This row will edit scripts/moe-agent.sh, so it runs after the CQ V-chain wrapper rows (V07 → V08 → V08b → V04c → R13c2 → aa85ff13), which are HIGH.\n- It runs ahead of the LOW tail (4fdc7590, then 414eae5a).\n- Planning is unaffected, because dependsOn gates only WORKING claims.\n- Undo: removeDependsOn [\"task-aa85ff13a8894913ae34242dbab6f395\"].",
+      "timestamp": "2026-10-30T13:19:33.232Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-10-30T12:55:50.810Z",
+  "updatedAt": "2026-10-30T13:19:33.232Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",

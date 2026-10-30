@@ -17,7 +17,8 @@ export function proposeRailTool(_state: StateManager): ToolDefinition {
         targetScope: { type: 'string', enum: ['GLOBAL', 'EPIC', 'TASK'], description: 'Which rail list the change applies to' },
         currentValue: { type: 'string', description: 'The existing rail text (for MODIFY_RAIL / REMOVE_RAIL)' },
         proposedValue: { type: 'string', description: `The new rail text. For EPIC ADD_RAIL/MODIFY_RAIL it must be a single line of at most ${MAX_EPIC_RAIL_CHARS} characters; longer text is refused, never truncated` },
-        reason: { type: 'string', description: 'Why the rail should change' }
+        reason: { type: 'string', description: 'Why the rail should change' },
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
       },
       required: ['taskId', 'proposalType', 'targetScope', 'proposedValue', 'reason'],
       additionalProperties: false
@@ -30,6 +31,7 @@ export function proposeRailTool(_state: StateManager): ToolDefinition {
         currentValue?: string;
         proposedValue: string;
         reason: string;
+        workerId?: string;
       };
 
       const validProposalTypes = ['ADD_RAIL', 'MODIFY_RAIL', 'REMOVE_RAIL'];
@@ -64,7 +66,7 @@ export function proposeRailTool(_state: StateManager): ToolDefinition {
 
       const proposal = {
         id: proposalId,
-        workerId: task.assignedWorkerId || 'unknown',
+        workerId: params.workerId || task.assignedWorkerId || 'unknown',
         taskId: task.id,
         proposalType: params.proposalType,
         targetScope: params.targetScope,

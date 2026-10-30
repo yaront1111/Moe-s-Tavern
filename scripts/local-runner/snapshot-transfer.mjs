@@ -212,7 +212,8 @@ export async function materializeSnapshot({ name, snapshot, provider = {}, timeo
 }
 
 /** Copies a validateImport-sealed offline dependency tree into the root-owned guest cache between two no-mount
- * checks. The guest re-derives its digest: bytes mutated after sealing are refused (65), never installed. */
+ * checks. The guest re-derives its digest: bytes mutated after sealing are refused (65), never installed. Every
+ * failure is a fixed TRANSFER_* code: a mount check's provider or lifecycle error becomes TRANSFER_MOUNTS_UNKNOWN. */
 export async function installDependencies(input = {}) {
   const { name, tree, provider = {}, timeoutMs = 300_000 } = isRecord(input) ? input : {};
   let bytes = 0;
@@ -227,7 +228,12 @@ export async function installDependencies(input = {}) {
   } catch { throw transferError('TRANSFER_INPUT_INVALID'); }
   const { onFrame, delivered } = materializedFrame(tree.digest);
   const options = streamOptions({ name, mode: 'dependencies', provider, timeoutMs, input: hostFrames(tree), onFrame });
-  await transfer(name, provider, options, delivered);
+  try {
+    await transfer(name, provider, options, delivered);
+  } catch (error) {
+    const code = error?.code;
+    throw transferError(typeof code === 'string' && Object.hasOwn(MESSAGES, code) ? code : 'TRANSFER_MOUNTS_UNKNOWN');
+  }
   return Object.freeze({ instance: name, digest: tree.digest, files: tree.entries.length, bytes, executionReady: false });
 }
 

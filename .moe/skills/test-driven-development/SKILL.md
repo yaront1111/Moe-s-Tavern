@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=4a2e6afdfd9f
+# moe-generated: sha=0d5b0a810c7c
 name: test-driven-development
 description: Use when implementing any feature or bugfix, before writing implementation code
 ---
@@ -12,7 +12,7 @@ description: Use when implementing any feature or bugfix, before writing impleme
 NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
 ```
 
-If you wrote code first, delete it and start over. Don't keep it as "reference" — you'll adapt it, which is testing-after, which is not TDD.
+If the implementation already exists (you wrote it first, or a resumed session did), don't delete it: write the test, then prove it fails without the change (temporarily break the guarded line) before trusting it.
 
 ## Red-Green-Refactor
 
@@ -53,7 +53,7 @@ Bug found → write a failing test that reproduces it → run → see it fail �
 - [ ] All tests pass and output is pristine.
 - [ ] Edge cases and errors covered.
 
-If you can't tick all boxes, you skipped TDD — start over.
+Any unticked box is a gap to close before `complete_step`.
 
 ## When Stuck
 
@@ -69,5 +69,5 @@ If you can't tick all boxes, you skipped TDD — start over.
 ## Moe integration
 
 - Apply this discipline within each `moe.start_step` → implement → `moe.complete_step` cycle on test-touching steps.
-- The architect should plan the failing test as a separate step before the implementation step (see `moe-planning` Phase 3).
+- The architect plans each step as the implementation plus the tests for what it changed (see `moe-planning` "Where the gate goes"); RED → GREEN happens inside that step.
 - Before `moe.complete_task`, pair with `verification-before-completion` — capture the actual test-run output (count + pass/fail) in your `complete_step` summary so QA has evidence rather than a claim.

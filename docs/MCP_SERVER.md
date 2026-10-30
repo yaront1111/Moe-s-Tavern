@@ -1267,9 +1267,12 @@ Create a rail change proposal and store it in `.moe/proposals/`.
   targetScope: "GLOBAL" | "EPIC" | "TASK",
   currentValue?: string,
   proposedValue: string,
-  reason: string
+  reason: string,
+  workerId?: string // Caller worker ID (auto-injected by proxy)
 }
 ```
+
+A supplied nonempty `workerId` is recorded as `proposal.workerId`, even when it differs from the task assignee. An omitted or empty caller ID falls back to the task assignee, then `'unknown'` if unassigned. Existing proposal records are not rewritten.
 
 **Returns:**
 ```typescript

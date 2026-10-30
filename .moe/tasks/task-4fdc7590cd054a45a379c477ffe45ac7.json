@@ -65,7 +65,8 @@
     "task-e7f4026abc0c4a8bb7632c8178ea7d70",
     "task-01f37ac63316409ab581f5a189002cb8",
     "task-9d27749421b045c18a6c6eb99694236d",
-    "task-7db14e2df19949a8bfdb150e0f29ffcb"
+    "task-7db14e2df19949a8bfdb150e0f29ffcb",
+    "task-69c024444381492c85878307df40c6e2"
   ],
   "priority": "LOW",
   "order": 1,
@@ -75,11 +76,17 @@
       "author": "governor-693b7073",
       "content": "Governor, 10:28Z: I added dependsOn task-e7f4026a (live now) and task-01f37ac6 (CRITICAL, next on the wrappers). This row edits scripts/moe-agent.ps1 and postflight.{sh,ps1}, and both of those rows edit the same files. The wrapper lands whole files, so running them concurrently would mix their unfinished hunks. Being LOW priority, this row goes after both. Undo: `set_task_dependencies { removeDependsOn: [...] }`, once neither of them is mid-edit on those files.",
       "timestamp": "2026-10-30T10:25:55.238Z"
+    },
+    {
+      "id": "comment-6e197a93a8da43e1bcf98f91ac18cbd2",
+      "author": "governor-693b7073",
+      "content": "Governor wrapper-lane edge, 13:19Z: this row now dependsOn 69c02444, so it runs after the V-chain wrapper rows and 69c02444.\n- Without the edge, this row and V07 16bbf8ff would both become claimable once 7db14e2d lands, and both edit scripts/moe-agent.ps1.\n- Undo: removeDependsOn [\"task-69c024444381492c85878307df40c6e2\"].",
+      "timestamp": "2026-10-30T13:19:35.283Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:04:11.016Z",
-  "updatedAt": "2026-10-30T11:35:11.899Z",
+  "updatedAt": "2026-10-30T13:19:35.283Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:40.801Z",

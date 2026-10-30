@@ -17,6 +17,57 @@ describe('moe.propose_rail', () => {
     await h.state.load();
   });
 
+  it('advertises an optional caller workerId without allowing extra properties', () => {
+    const schema = proposeRailTool(h.state).inputSchema;
+    expect(schema).toMatchObject({
+      properties: { workerId: { type: 'string' } },
+      additionalProperties: false,
+    });
+    expect(schema.required).not.toContain('workerId');
+  });
+
+  it.each([
+    ['governor-1', 'worker-1', 'governor-1'],
+    ['qa-1', 'worker-1', 'qa-1'],
+    ['architect-1', 'worker-1', 'architect-1'],
+    ['governor-1', null, 'governor-1'],
+    [' caller-1 ', 'worker-1', ' caller-1 '],
+    [undefined, 'worker-1', 'worker-1'],
+    [undefined, null, 'unknown'],
+    ['', 'worker-1', 'worker-1'],
+    ['', null, 'unknown'],
+  ])('persists caller %j with assignee %j as %j', async (caller, assignee, expected) => {
+    h.createTask({ assignedWorkerId: assignee });
+    await h.state.load();
+    const result = await proposeRailTool(h.state).handler({
+      taskId: 'task-1',
+      proposalType: 'ADD_RAIL',
+      targetScope: 'GLOBAL',
+      proposedValue: 'test rail',
+      reason: 'test attribution',
+      ...(caller === undefined ? {} : { workerId: caller }),
+    }, h.state) as { proposalId: string };
+
+    expect(h.state.proposals.get(result.proposalId)?.workerId).toBe(expected);
+    expect(h.state.getTask('task-1')?.assignedWorkerId).toBe(assignee);
+    await h.state.load();
+    expect(h.state.proposals.get(result.proposalId)?.workerId).toBe(expected);
+    expect(h.state.getTask('task-1')?.assignedWorkerId).toBe(assignee);
+  });
+
+  it('propagates a caller-bearing proposal persistence failure without publishing it', async () => {
+    vi.spyOn(h.state, 'writeEntity').mockRejectedValueOnce(new Error('disk full'));
+    await expect(proposeRailTool(h.state).handler({
+      taskId: 'task-1',
+      proposalType: 'ADD_RAIL',
+      targetScope: 'GLOBAL',
+      proposedValue: 'test rail',
+      reason: 'test attribution',
+      workerId: 'governor-1',
+    }, h.state)).rejects.toThrow('disk full');
+    expect(h.state.proposals.size).toBe(0);
+  });
+
   it('creates a rail proposal', async () => {
     const tool = proposeRailTool(h.state);
     const result = await tool.handler({

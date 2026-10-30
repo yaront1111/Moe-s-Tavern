@@ -3397,6 +3397,16 @@ test('TD2 installDependencies rejects invalid input before I/O and refuses untru
     await assert.rejects(dependencyTransfer.installDependencies({ name: GUEST, tree, provider: p.provider }), transferRefused('TRANSFER_MOUNTS_PRESENT'));
     assert.equal(p.proc.calls.length, Array.isArray(info) ? 1 : 0);
   }
+  // A provider failure in either mount check surfaces as the fixed TRANSFER_MOUNTS_UNKNOWN, never a PROVIDER_* code.
+  const missing = { error: failWith({ code: 'ENOENT' }) };
+  for (const [label, guestOptions, run, spawned] of [['missing provider', { info: missing }, null, 0],
+    ['malformed info', undefined, async () => ({ stdout: 'bad json', stderr: '' }), 0],
+    ['post-stream probe failure', { answers: healthy({ mountinfo: [mountinfo(), missing] }) }, null, 1]]) {
+    const p = transferProvider(guestOptions);
+    await assert.rejects(dependencyTransfer.installDependencies({ name: GUEST, tree, provider: run ? { ...p.provider, run } : p.provider }),
+      error => transferRefused('TRANSFER_MOUNTS_UNKNOWN')(error) && Object.keys(error).join() === 'code', label);
+    assert.equal(p.proc.calls.length, spawned, label);
+  }
 });
 
 test('TD3 installDependencies installs through the real supervisor and refuses a second copy', { skip: NOT_POSIX, timeout: 60_000 }, async t => {
