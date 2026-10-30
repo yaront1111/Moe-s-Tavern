@@ -119,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:33:13.822Z",
-  "updatedAt": "2026-10-30T14:41:07.816Z",
+  "updatedAt": "2026-10-30T14:41:53.011Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:33:21.826Z",
@@ -193,7 +193,9 @@
     "docs/MCP_SERVER.md",
     "packages/moe-daemon/src/generated/initFiles.ts",
     "docs/roles/worker.md",
-    "docs/roles/worker.reference.md"
+    "docs/roles/worker.reference.md",
+    ".moe/tasks/task-032c973941bc41d9b051eedacb7de0b6.json",
+    ".moe/tasks/task-a4ca766a67184630842d4a6d12338cf8.json"
   ],
   "completionSummary": "Delivery-only rework for QA reopen 1 (DoD 3). No source, test or role-doc changes: reportBlocked.ts, its test and docs/roles/worker*.md stay as landed in c5f1e8ea and are clean at HEAD.\n1) docs/MCP_SERVER.md: this row's +11/-6 report_blocked hunks are kept byte-identical (sha256 2ced4137…, before = after), and the diff holds only report_blocked hunks. This Claude session made an Edit-tool round trip in the Input provenance bullet, so the wrapper has a TOOL witness. The path is contested again: b621ddc9 [CQ-V12] and ced85748 [CQ-M06] plan it in PENDING steps, do not depend on this row, and are unassigned (no EDITING hold). Under skip-untouched the witness should land it with a Moe-Contested trailer. Verify with `git show --numstat` plus a blob sha256.\n2) packages/moe-daemon/src/generated/initFiles.ts: regenerated in a `git clone --shared` with history (npm ci + generate-init-files, env -i, node v24.21.0) and copied back, followed by an Edit round trip for a witness. cmp matches the clone output, sha256 e68eda8f…. The diff is exactly +6/-6: the worker.md and worker.reference.md marker shas (a936b3d0bc20→a5557290ca4a, 2345e537ca85→67ee4edbcc31), their body lines and their shipped-body sha lists. Declared via declare_files.\nTargeted tests (targetedContextGuidance, qaCommitPolicy, initFiles, initProject, reportBlocked) passed: 87/87. The full gate passed fresh in the isolated clone: exit 0, 208 files, 6017 passed / 19 skipped, docs lint green. The unconditional-parsing mutant fails 7 of 56 tests; restored, 56/56 pass. Total task non-board net is about 95 lines.\nPost-landing check (this session exits before the wrapper lands): `git show --stat <completion>` should list both files, `git diff -- docs/MCP_SERVER.md` should be empty, and no held= should appear. If the path is held, the governor asked to be pinged.",
   "commits": [
@@ -290,14 +292,32 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "6e15af271aa97927f5947981a45f49b927bbcfdc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T14:32:59Z",
+      "paths": [
+        ".moe/tasks/task-032c973941bc41d9b051eedacb7de0b6.json",
+        ".moe/tasks/task-a4ca766a67184630842d4a6d12338cf8.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T14:41:53.011Z",
+      "treeId": "cacf0dfa4046d2e7ddf300f9bb06b1d3a3ca69fb",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-c2da129d@2026-10-30T14:28:41Z",
-    "at": "2026-10-30T14:31:56.804Z"
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-30T14:32:59Z",
+    "at": "2026-10-30T14:41:53.011Z"
   },
   "reviewCompletedAt": "2026-10-30T14:25:23.678Z",
   "rejectionDetails": {
@@ -348,5 +368,9 @@
   "declaredFiles": [
     "packages/moe-daemon/src/generated/initFiles.ts",
     "docs/MCP_SERVER.md"
+  ],
+  "touchedFiles": [
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/generated/initFiles.ts"
   ]
 }

@@ -4,6 +4,7 @@ import { MoeError, MoeErrorCode, notFound, invalidState } from '../util/errors.j
 import { assertWorkerHoldsTask, assertAllStepsCompleted, assertVerificationEvidence } from '../util/enforcement.js';
 import { describeBranchPolicyFailure, matchesBranchPattern } from '../util/branchPolicy.js';
 import { currentAttempt, setAttemptPhase } from '../state/attemptStore.js';
+import { resolveAttemptWorkspace } from '../state/validators.js';
 import { assertCompletionEvidenceEligible, assertExecutionAuthorized } from '../util/executionAuthorization.js';
 import { assertExecutionProfileReady, resolveTaskExecutionProfile } from '../delivery/executionProfile.js';
 import type { ExecutionAttempt } from '../types/schema.js';
@@ -73,11 +74,44 @@ interface BranchPolicyOutcome {
   warning?: string;
 }
 
+/** Exact task-branch policy; keep shared-mode diagnostics and matching untouched. */
+async function checkWorktreeBranchPolicy(
+  state: StateManager, taskId: string, pattern: string, workspacePath: string, currentBranch?: string
+): Promise<BranchPolicyOutcome> {
+  const branch = typeof currentBranch === 'string' ? currentBranch.trim() : '';
+  if (!branch) {
+    const warning = 'currentBranch not reported — branch policy not enforced for this completion';
+    const nowMs = Date.now();
+    if (branchWarningAt === undefined || nowMs - branchWarningAt >= BRANCH_WARNING_WINDOW_MS) {
+      branchWarningAt = nowMs;
+      try {
+        await state.postToRoleChannel(
+          'governors',
+          `⚠️ Branch policy not enforced on ${taskId}: no currentBranch reported (expected "${pattern}"). ` +
+            'Every completion without a branch carries this warning in its result; this channel hears it again after 24 h.'
+        );
+      } catch { /* never block a completion on a chat post */ }
+    }
+    return { pattern, matched: null, warning };
+  }
+  if (branch !== pattern) {
+    throw new MoeError(
+      MoeErrorCode.CONSTRAINT_VIOLATION,
+      `BRANCH-POLICY-FAIL: Reported branch "${branch}" must equal "${pattern}". ` +
+        `This attempt runs in worktree mode at "${workspacePath}"; complete from its task branch.`,
+      { currentBranch: branch, expectedPattern: pattern },
+      'CONSTRAINT_VIOLATION'
+    );
+  }
+  return { pattern, currentBranch: branch, matched: true };
+}
+
 /**
- * Enforce `settings.consolidationBranch` for one completion.
+ * Enforce the owning worktree attempt's exact task branch, otherwise
+ * `settings.consolidationBranch` for one shared-mode completion.
  *
- * Returns null when no policy is configured (unconfigured projects are wholly
- * unaffected), throws on a real mismatch, and only WARNS when the caller
+ * Returns null for shared attempts when no policy is configured; worktree
+ * attempts always check their task branch. Throws on a real mismatch and only WARNS when the caller
  * reported no branch — the agent wrappers do not send `currentBranch` yet, so
  * blocking on its absence would break every completion on rollout. The
  * warning rides every result; #governors sees one line per
@@ -88,6 +122,11 @@ async function checkBranchPolicy(
   taskId: string,
   currentBranch?: string
 ): Promise<BranchPolicyOutcome | null> {
+  const attempt = currentAttempt(state, taskId);
+  const workspace = attempt ? resolveAttemptWorkspace(attempt, state.project?.settings) : null;
+  if (workspace?.mode === 'worktree' && workspace.branch !== null) {
+    return checkWorktreeBranchPolicy(state, taskId, workspace.branch, workspace.path, currentBranch);
+  }
   // A hand-edited project.json bypasses validateSettingsUpdate, so the type
   // guard here is the real error handling — a non-string setting must disable
   // the check, not throw out of complete_task.
@@ -145,7 +184,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         },
         prLink: { type: 'string', description: 'Optional pull/merge request URL recorded on the task' },
         summary: { type: 'string', description: 'What was delivered — persisted as task.completionSummary (capped at 2000 chars) and surfaced to QA and dependent tasks via get_context.' },
-        currentBranch: { type: 'string', description: 'Branch the worker is on; enables the consolidationBranch policy check' },
+        currentBranch: { type: 'string', description: 'Branch the worker is on; must equal the owning worktree attempt’s task branch, otherwise enables the consolidationBranch policy check' },
         workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' },
         attemptId: { type: 'string', maxLength: 128, description: 'The attemptId moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
         generation: { type: 'integer', minimum: 1, description: 'The generation moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },

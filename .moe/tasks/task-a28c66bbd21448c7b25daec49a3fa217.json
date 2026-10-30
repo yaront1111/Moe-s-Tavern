@@ -1,0 +1,32 @@
+{
+  "id": "task-a28c66bbd21448c7b25daec49a3fa217",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-18b] bug: QA's empty-ledger self-landing fallback and moe-epic-breakdown's same-file rule ignore worktree mode",
+  "description": "QA (qa-952969be, comment-67363154 on WT-19 task-b1ca54f2) found two worktree-mode gaps in the WT-S round-2 review. They are docs that the §7.6 sweep misses: WT-17 and WT-18 own that sweep, but neither owns these files. WT-19's rev-2 planner filed this row rather than folding the files into WT-18, which is already at the 5-file cap.\n\n1. What breaks.\n- QA fallback: docs/roles/qa.md:15, docs/roles/qa.reference.md:42 and docs/skills/moe-qa-loop/SKILL.md:26 tell QA to land a REVIEW row itself from the shared working tree when the ledger stays empty.\n  - In worktree mode that tree is the control checkout on moe/control.\n  - A QA commit there moves moe/control off main, which raises MOE_CONTROL_CHECKOUT_DIVERGED (design §6) and contradicts §3.6/§3.7, under which control seats land nothing.\n  - A nothing-to-commit landing (§2.9) can reach this path.\n- Same-file rule: docs/skills/moe-epic-breakdown/SKILL.md:78 says that two tasks touching the same file is \"a sequencing decision\". In worktree mode that rule keeps creating the file-only dependsOn edges that epic goal 5 retires.\n\n2. Why it matters. Other projects get role docs and skills from the daemon's vendored copies (generated initFiles.ts and skillFiles.ts). So this fix must ship in the same daemon build as WT-19's default flip, and WT-19 depends on this row.\n\n3. Fix direction.\n- Scope the QA fallback to shared mode. In worktree mode, meaning the control checkout's HEAD is exactly refs/heads/moe/control (§7.2):\n  - QA never commits in the control checkout;\n  - an empty ledger means the landing did not happen, so it is a qa_reject citing landing.lastCommitOutcome or the unlanded route (§2.5), never a self-land.\n- Scope the same-file sequencing rule to shared mode. In worktree mode, add dependsOn only when B produces something A names (design §8's rule), never for a shared existing file alone.\n- Regenerate packages/moe-daemon/src/generated/initFiles.ts and skillFiles.ts in a history-bearing clone (mem:convention-role-doc-edits-regenerate-initfiles).\n- Keep qa.md within the 40-line lint cap.\n\n4. Evidence.\n- comment-67363154 (QA) and comment-fc1f9afb (governor) on task-b1ca54f2.\n- docs/plans/2026-10-30-per-task-worktrees.md §2.9, §3.6/§3.7, §6, §7.2 and §8.\n\nFiles (6): docs/roles/qa.md, docs/roles/qa.reference.md, docs/skills/moe-qa-loop/SKILL.md, docs/skills/moe-epic-breakdown/SKILL.md, packages/moe-daemon/src/generated/initFiles.ts, packages/moe-daemon/src/generated/skillFiles.ts.\n\ndependsOn WT-18 (task-1b2e6fe3), because both rows regenerate initFiles.ts. That edge also covers WT-13's moe/control contract transitively.",
+  "definitionOfDone": [
+    "docs/roles/qa.md, docs/roles/qa.reference.md and docs/skills/moe-qa-loop/SKILL.md limit the empty-ledger self-landing fallback to shared mode. They state that in worktree mode (the control checkout's HEAD is exactly refs/heads/moe/control) QA never commits in the control checkout, and that an empty ledger is a qa_reject citing the landing evidence.",
+    "docs/skills/moe-epic-breakdown/SKILL.md keeps the same-file sequencing rule for shared mode only. For worktree mode it states design §8's rule: add dependsOn only when B produces something A names, never for a shared existing file alone.",
+    "packages/moe-daemon/src/generated/initFiles.ts and skillFiles.ts are regenerated from the edited docs in a history-bearing clone, and a fresh regeneration cmp-matches the committed files.",
+    "npm run lint passes, with qa.md within the 40-line cap, and `cd packages/moe-daemon && npm test` passes, including src/util/targetedContextGuidance.test.ts and src/util/qaCommitPolicy.test.ts."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-1b2e6fe3ba1343c8ab02271510131155"
+  ],
+  "priority": "MEDIUM",
+  "order": 26.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T14:42:58.849Z",
+  "updatedAt": "2026-10-30T14:42:58.849Z"
+}

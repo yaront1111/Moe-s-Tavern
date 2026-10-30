@@ -8,7 +8,81 @@ import { getTools } from './index.js';
 import { updateEpicTool } from './updateEpic.js';
 import { setTaskStatusTool } from './setTaskStatus.js';
 import { createTaskTool } from './createTask.js';
+import { claimNextTaskTool } from './claimNextTask.js';
+import { closeOpenAttempts, currentAttempt, openAttempt } from '../state/attemptStore.js';
+import type { ExecutionPolicySnapshot } from '../types/schema.js';
 import type { Task, TaskCommit, TaskVerification } from '../types/schema.js';
+
+describe('moe.get_context workspace', () => {
+  const h = new ToolTestHarness();
+  beforeEach(async () => {
+    h.init(); h.setupMoeFolder(); h.createEpic(); h.createTask({ status: 'WORKING' });
+    await h.state.load();
+  });
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  async function read(args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    return await getContextTool(h.state).handler({ taskId: 'task-1', ...args }, h.state) as Record<string, unknown>;
+  }
+
+  async function claim(): Promise<Record<string, unknown>> {
+    return await claimNextTaskTool(h.state).handler(
+      { statuses: ['WORKING'], workerId: 'worker-1' }, h.state) as Record<string, unknown>;
+  }
+
+  it.each([undefined, 'full'] as const)('returns the claim workspace with pinned mode (view %s)', async (view) => {
+    await h.state.updateSettings({ worktreeMode: 'on', consolidationBranch: 'trunk' });
+    const claimed = await claim();
+    const attempt = currentAttempt(h.state, 'task-1')!;
+    expect(attempt.workspace).toBe(path.join(h.state.projectPath, '.worktrees', 'task-1'));
+    expect(attempt.workspace).not.toBe(h.state.projectPath);
+    const ctx = await read({ view });
+    expect(ctx.workspace).toStrictEqual(claimed.workspace);
+    expect(ctx.workspace).toStrictEqual({ mode: 'worktree', path: attempt.workspace, branch: 'moe/task/task-1', target: 'trunk' });
+    h.state.project!.settings.worktreeMode = 'off';
+    expect((await read({ view })).workspace).toStrictEqual(claimed.workspace);
+    // A hand-edited live mode must not be decoded by a read of the pinned attempt.
+    Object.assign(h.state.project!.settings, { worktreeMode: 'invalid' });
+    expect((await read({ view })).workspace).toStrictEqual(claimed.workspace);
+  });
+
+  it('returns the shared claim workspace when the setting is absent', async () => {
+    const claimed = await claim();
+    const ctx = await read();
+    expect(ctx.workspace).toStrictEqual(claimed.workspace);
+    expect(ctx.workspace).toStrictEqual({ mode: 'shared', path: h.state.projectPath, branch: null, target: null });
+  });
+
+  it('reads an attempt without workspaceMode as shared', async () => {
+    await openAttempt(h.state, { taskId: 'task-1', workerId: 'worker-1', runnerId: 'worker-1', workspace: h.state.projectPath });
+    expect((await read()).workspace).toStrictEqual({ mode: 'shared', path: h.state.projectPath, branch: null, target: null });
+  });
+
+  it('omits workspace before any claim', async () => {
+    expect(await read()).not.toHaveProperty('workspace');
+  });
+
+  it('omits workspace when every attempt is closed', async () => {
+    await claim();
+    await closeOpenAttempts(h.state, 'task-1');
+    expect(await read()).not.toHaveProperty('workspace');
+  });
+
+  it('omits workspace without a task', async () => {
+    expect(await read({ taskId: undefined })).not.toHaveProperty('workspace');
+  });
+
+  it('omits workspace when copying a corrupt attempt overflows', async () => {
+    const claimed = await claim();
+    const attempt = h.state.attempts.get(String(claimed.attemptId))!;
+    let snapshot: unknown = {};
+    for (let i = 0; i < 20000; i++) snapshot = { nested: snapshot };
+    attempt.executionPolicySnapshot = snapshot as ExecutionPolicySnapshot;
+    const ctx = await read();
+    expect(ctx).not.toHaveProperty('workspace');
+    expect(ctx.servedContext).toMatchObject({ receiptStatus: 'identity-unreadable' });
+  });
+});
 
 describe('moe.get_context', () => {
   const h = new ToolTestHarness();

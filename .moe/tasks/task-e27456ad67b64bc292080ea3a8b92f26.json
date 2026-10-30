@@ -14,11 +14,18 @@
     {
       "stepId": "step-1",
       "description": "get_context: serve the open attempt's workspace (design doc docs/plans/2026-10-30-per-task-worktrees.md §7.2).\n\nThis builds on WT-01 (task-6cf120a38b344e72b7bab8b9faf806f1), which must be DONE before this row is claimable. Read its landed code first: ExecutionAttempt.workspaceMode in types/schema.ts, plus the claim response's `workspace` in tools/claimNextTask.ts and the ONE pure builder that produces it. The agreed name is `attemptWorkspace(attempt, settings)`, exported from tools/claimNextTask.ts. It returns { mode, path, branch, target }, and a record with no workspaceMode reads as 'shared'. If WT-01 landed different names, use WT-01's. Never write a second copy of the rule.\n\ngetContext.ts:\n- Add a top-level `workspace` key to `body`, beside currentCandidate and executionPolicy. It must be inside `body`, so the packetManifest and the packetId digest cover it.\n- Its value is the claim's builder applied to currentAttempt(state, task.id) and state.project.settings. Do NOT re-derive mode, branch or target in this file.\n- Error handling: read the attempt under the file's existing `decoded(...)` guard, as executionPolicyContext does. If the record cannot be read, omit the field and never throw; servedContext already reports identity-unreadable for that case.\n- No task, or no open attempt (none at all, or only closed ones): no `workspace` key. Omit it, never null, following the currentCandidate precedent.\n- Serve it to every role in both the default and full views: do not add it to ROLE_OMITTED. view:'status' (contextStatus) stays unchanged.\n\ngetContext.test.ts: add a new describe block. Claim through the real claim (claimNextTaskTool with statuses ['WORKING'] and workerId 'worker-1' on a WORKING task), so the assertions compare against the claim's own output:\n(a) settings.worktreeMode 'on' plus consolidationBranch 'trunk'. Assert ctx.workspace toStrictEqual(claim.workspace) AND toStrictEqual({ mode: 'worktree', path: <the open attempt's stored workspace>, branch: 'moe/task/task-1', target: 'trunk' }). Also assert that path differs from projectPath. Then set the live setting to 'off' (in memory is fine) and read again: mode must still be 'worktree', because it comes from the attempt, not the setting.\n(b) setting absent: ctx.workspace toStrictEqual(claim.workspace) and toStrictEqual({ mode: 'shared', path: h.state.projectPath, branch: null, target: null }).\n(c) an attempt opened with openAttempt WITHOUT workspaceMode (a pre-WT-01 record) reads as mode 'shared'.\n(d) no open attempt: test both a WORKING row that was never claimed and a row whose only attempt was closed (release_task or closeOpenAttempts). Assert expect(ctx).not.toHaveProperty('workspace').\nBuild every path with path.join or take it from the stored attempt; never hand-write a slash string. Existing tests stay unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getContext.ts",
         "packages/moe-daemon/src/tools/getContext.test.ts"
       ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContext.test.ts"
+      ],
+      "note": "Implemented guarded attempt workspace inside body with WT-01 resolveAttemptWorkspace, absent without a readable open attempt. Added real-claim default/full, pinned/corrupt-live-mode, shared/legacy, closed/no-task and corrupt-attempt coverage. RED 4 expected failures (workspace absent); GREEN getContext.test.ts 55/55. Verification in HEAD Linux snapshot /tmp/wt02-gate.* with lock-matching hardlinked native dependencies and docs; only task files overlaid. Pre-existing/peer dirty paths untouched.",
+      "startedAt": "2026-10-30T14:37:09.477Z",
+      "completedAt": "2026-10-30T14:38:34.358Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -33,11 +40,18 @@
     {
       "stepId": "step-2",
       "description": "complete_task: worktree branch policy keyed on the owning attempt (design doc §2.8).\n\ncompleteTask.ts checkBranchPolicy:\n- Keep its call site and order: it runs before setAttemptPhase('finalizing') and updateTask, so a refusal leaves the task WORKING with no verification and the attempt 'running'.\n- Pass in, or read, the task's open attempt with currentAttempt (already imported). Get its workspace from WT-01's builder (see step 1).\n- When the mode is 'worktree', expected = the builder's branch (moe/task/<taskId>). This arm runs BEFORE the consolidationBranch read and its `if (!pattern) return null`: it applies whether or not consolidationBranch is set, and it never consults that pattern.\n- Error handling for the worktree arm:\n  - Missing, blank or non-string currentBranch: today's warning path, unchanged. Same warning text, same rate-limited #governors post (which now names the expected branch, and whose failure never blocks the completion); return { pattern: expected, matched: null, warning }.\n  - Trimmed currentBranch !== expected, compared by exact case-sensitive string equality (NOT matchesBranchPattern, no prefix test): throw new MoeError(MoeErrorCode.CONSTRAINT_VIOLATION, 'BRANCH-POLICY-FAIL: ...', { currentBranch, expectedPattern: expected }, 'CONSTRAINT_VIOLATION'). That is the same code, codeName and context keys as the shared refusal, so existing parsers read both.\n  - The message names the reported branch, \"moe/task/<taskId>\" and the attempt's worktree path, and says the attempt runs in worktree mode. Do NOT reuse describeBranchPolicyFailure: its advice to peel onto moe/work-<YYYY-MM-DD> is wrong in worktree mode.\n  - Match: return { pattern: expected, currentBranch, matched: true }.\n- Every other attempt (workspaceMode 'shared', absent on a pre-WT-01 record, any unknown value, or no attempt at all) takes today's path, with identical behavior: same pattern source, same glob matcher, same message and context.\n- Update checkBranchPolicy's doc comment and the inputSchema currentBranch description to state the worktree rule.\n\ncompleteTask.test.ts: add a new describe block next to 'consolidationBranch policy'. Reuse its setupMoe/writeEpic/writeTask/boot helpers and VERIFICATION, and call resetBranchPolicyGovernorRateLimit in beforeEach. Open the attempt after boot with openAttempt(state, { taskId: 'task-1', workerId: 'worker-a', runnerId: 'worker-a', workspace: path.join(testDir, '.worktrees', 'task-1'), workspaceMode: 'worktree' }). WT-01 adds workspaceMode to OpenAttemptParams; only if it did not, write that attempt JSON into .moe/attempts/ before state.load(). Cases:\n1. consolidationBranch 'moe/work-*', currentBranch 'moe/task/task-1': status REVIEW; branchPolicy toEqual { pattern: 'moe/task/task-1', currentBranch: 'moe/task/task-1', matched: true }.\n2. consolidationBranch 'moe/work-*', currentBranch 'moe/work-2026-07-31' (a branch the shared check accepts): refused.\n   - CONSTRAINT_VIOLATION; the message contains 'BRANCH-POLICY-FAIL' and 'moe/task/task-1' and does not contain 'moe/work-<YYYY-MM-DD>'.\n   - context toEqual { currentBranch: 'moe/work-2026-07-31', expectedPattern: 'moe/task/task-1' }.\n   - The task is still WORKING with no verification, and the attempt phase is still 'running'.\n3. No consolidationBranch, currentBranch 'main': refused, naming moe/task/task-1.\n4. it.each near misses, each refused the same way: 'moe/task/task-2', 'moe/task/task-10', 'moe/task/*', 'Moe/task/task-1'.\n5. No currentBranch: REVIEW, matched null, warning contains 'not enforced', and exactly one #governors post, containing 'moe/task/task-1'.\n6. Two attempts under consolidationBranch 'moe/work-*' with currentBranch 'moe/task/task-1', one with workspaceMode 'shared' and one opened without workspaceMode. Both are refused with the shared context { currentBranch: 'moe/task/task-1', expectedPattern: 'moe/work-*' }.\nDo not edit any existing test's body or assertions (DoD 3). Only add tests, and imports if needed.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/completeTask.ts",
         "packages/moe-daemon/src/tools/completeTask.test.ts"
       ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/completeTask.test.ts"
+      ],
+      "note": "Added exact owning-attempt worktree branch arm before the shared consolidation check; reuses WT-01 builder, trim, warning text and global governor rate window. Shared arm remains textually intact. Dedicated helper intentionally preserves that compatibility arm (existing 300-line monolithic file now 341 lines); new helpers <=50 lines. RED 11 expected failures; GREEN completeTask.test.ts 73/73. Added trimmed match, near-miss/glob/case rejection, no-policy rejection, disk-byte no-write checks, missing/blank/non-string warnings, warning-post failure, absent/unknown/shared mode checks. Existing assertions unchanged.",
+      "startedAt": "2026-10-30T14:38:34.389Z",
+      "completedAt": "2026-10-30T14:41:13.094Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -52,19 +66,28 @@
     {
       "stepId": "step-3",
       "description": "Verification: run this command once, fresh, from the repo root. It must exit 0, and its output tail is the complete_task evidence:\n(cd packages/moe-daemon && npm run build && npx vitest run src/tools/getContext.test.ts src/tools/completeTask.test.ts src/tools/getContextDelta.test.ts src/tools/getContextPacket.test.ts src/tools/getContextReceipt.test.ts src/tools/getContextStatus.test.ts src/tools/getContextGovernance.test.ts) && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)\n\nWhat it covers:\n- It is a superset of the description's command: it adds the get_context sibling suites the new field rides through (packet digest, delta, receipt, status), plus epic rail 2's parity-check on a HEAD snapshot.\n- At HEAD 9a5426ac all 7 files passed (226 tests), and so did parity-check.\n\nEnvironment notes:\n- In WSL, the shared checkout's node_modules is the Windows install, so rolldown's native binding fails at startup. Run the command from a snapshot with a Linux node_modules (Serena memory gotcha-linux-vitest-reuse-native-node-modules) or natively on Windows.\n- The snapshot must include docs/, because getContext.test.ts reads docs/roles.\n- Copy only this task's 4 files over the snapshot, and cmp them back against the checkout.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Approved full verification command ran fresh, foreground-polled to exit 0: npm run build; 7 focused suites, 249/249 tests; PASS parity-check.sh on committed HEAD scripts. Exact task files cmp-match snapshot /tmp/wt02-gate.SaoFMd before/after. Snapshot includes docs and lock-matching Linux node_modules; env -i removes ambient worker routing. Read-only git commands forwarded to real repo to allow named git archive HEAD scripts from snapshot root. Verification log/exit saved there. No checkout files modified by verification; peer landings/dirty paths untouched.",
+      "startedAt": "2026-10-30T14:41:13.119Z",
+      "completedAt": "2026-10-30T14:42:36.312Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this task's own diff. Load the adversarial-self-review skill. Check each of the following, and fix anything that fails:\n1. Shared mode is unchanged:\n   - The consolidationBranch arm's statements, describeBranchPolicyFailure and the glob matcher behave exactly as before.\n   - `git diff -U0 -- packages/moe-daemon/src/tools/completeTask.test.ts packages/moe-daemon/src/tools/getContext.test.ts` shows only added lines, apart from import lines; no existing assertion changed.\n2. Refusal before any write: a refused completion leaves the task WORKING with no verification and the attempt 'running'.\n3. The worktree comparison is exact: no glob, no startsWith, case-sensitive, applied after the same trim as today.\n4. The mode comes from the attempt, never the live setting:\n   - An absent or unknown workspaceMode, or no attempt, takes the shared path.\n   - Neither file re-derives branch or target; the claim's builder is the one definition. grep both files for 'moe/task/'.\n5. get_context error handling:\n   - No `workspace` key without an open attempt.\n   - The attempt read is guarded and never throws.\n   - The field sits inside `body`, so packetId covers it.\n   - The status view is unchanged, and the field is not role-trimmed.\n6. The refusal message names moe/task/<taskId> and never advises a moe/work-<date> peel.\n7. Concurrency: tool calls are serialized under the state mutex, so the only await between the attempt read and the check is the existing governors post.\n8. Cross-platform: paths come from the stored attempt or path.join, never a hand-written slash string.\nIf this step changed any byte, re-run step 3's command and submit THAT fresh output to complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getContext.ts",
         "packages/moe-daemon/src/tools/getContext.test.ts",
         "packages/moe-daemon/src/tools/completeTask.ts",
         "packages/moe-daemon/src/tools/completeTask.test.ts"
       ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts"
+      ],
+      "note": "Completed full hostile-diff checklist. Programmatically proved shared consolidation arm byte-identical and existing test source only gains additions; canonical builder only, no local branch derivation/live mode decoder; status early-return and role trims unchanged, workspace inside digested body. Mismatch preserves in-memory and on-disk task/attempt bytes; case/glob/prefix attacks covered; primitive trim guards and swallowed governor failure retained. MCP/WS state mutex serializes check/write, no new IO or writes. Stored/native paths only. Corrected doc comment to clarify worktree policy applies without consolidation setting, then reran exact approved command fresh: build PASS, 7 suites/249 tests PASS, parity PASS, exit 0. Final source cmp matches /tmp/wt02-gate.SaoFMd; diff-check clean. No outside-scope fixes.",
+      "startedAt": "2026-10-30T14:42:36.339Z",
+      "completedAt": "2026-10-30T14:44:27.489Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -78,7 +101,7 @@
     }
   ],
   "planRevision": 4,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -108,7 +131,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:47:54.623Z",
-  "updatedAt": "2026-10-30T14:13:46.647Z",
+  "updatedAt": "2026-10-30T14:44:41.205Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:54.950Z",
@@ -117,16 +140,23 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T12:56:23.026Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-bc59d28a"
+    "architect-bc59d28a",
+    "worker-262588d0"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:11:19.696Z",
   "executionContract": {
@@ -208,7 +238,10 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-a4ca766a67184630842d4a6d12338cf8.json"
+    "packages/moe-daemon/src/tools/getContext.ts",
+    "packages/moe-daemon/src/tools/getContext.test.ts",
+    "packages/moe-daemon/src/tools/completeTask.ts",
+    "packages/moe-daemon/src/tools/completeTask.test.ts"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -216,5 +249,15 @@
     "kind": "checkpoint",
     "sessionId": "architect-bc59d28a@2026-10-30T12:56:23Z",
     "at": "2026-10-30T14:13:46.647Z"
-  }
+  },
+  "workStartedAt": "2026-10-30T14:37:09.477Z",
+  "reviewStartedAt": "2026-10-30T14:44:41.203Z",
+  "verification": {
+    "command": "(cd packages/moe-daemon && npm run build && npx vitest run src/tools/getContext.test.ts src/tools/completeTask.test.ts src/tools/getContextDelta.test.ts src/tools/getContextPacket.test.ts src/tools/getContextReceipt.test.ts src/tools/getContextStatus.test.ts src/tools/getContextGovernance.test.ts) && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)",
+    "exitCode": 0,
+    "outputTail": "npm run build: PASS\nTest Files  7 passed (7)\n     Tests  249 passed (249)\n  Start at  16:43:12\n  Duration  2.79s\n\nPASS parity-check.sh\nFinal verification exit=0; four task files cmp-match /tmp/wt02-gate.SaoFMd. Log: verification-final.log (source HEAD 6e15af271aa97927f5947981a45f49b927bbcfdc).",
+    "reportedAt": "2026-10-30T14:44:41.203Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Implemented WT-02 in the four approved files (+208/-4). get_context returns canonical attempt workspace inside the packet digest, guarded against unreadable attempts, omitted without an open attempt, and unaffected by live mode changes. complete_task enforces exact trimmed worktree task branch before shared policy, preserves warning/rate-limit behavior and error shape, and leaves refused task/attempt bytes untouched. Shared consolidation arm remains byte-identical; all existing test source/assertions unchanged. Added 23 tests (real-claim equality, default/full, shared/legacy, pinned/corrupt mode, absent/closed/unreadable attempts, exact/mismatch/near-miss branch and warning paths). TDD RED/GREEN verified. Fresh build and seven suites passed 249/249; committed-script parity passed. Verified in plan-authorized Linux snapshot /tmp/wt02-gate.SaoFMd with matched native dependencies, docs, and before/after source cmp. Full command rerun after final doc-comment correction. Adversarial checklist and diff-check clean. Serena handoff and context-attempt-copy gotcha recorded. Peer changes untouched; wrapper owns landing."
 }

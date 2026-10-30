@@ -14,6 +14,7 @@ import { resolveWorkerRole } from '../util/workerRole.js';
 import { routingInfo } from '../util/routing.js';
 import { currentAttempt, readContextSessionId, recordContextReceipt } from '../state/attemptStore.js';
 import { decodeStoredPlanRevision } from '../state/taskStore.js';
+import { resolveAttemptWorkspace } from '../state/validators.js';
 import { readRequiredCheckSnapshot } from '../delivery/requiredChecks.js';
 import { isEpicFinalTask } from '../delivery/policy.js';
 import {
@@ -547,6 +548,9 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       const taskCandidates = task ? listCandidatesForTask(state, task.id) : [];
       const currentCandidate = taskCandidates.length > 0 ? taskCandidates[taskCandidates.length - 1] : undefined;
       const executionPolicy = task ? executionPolicyContext(state, task) : undefined;
+      // A malformed stored attempt must not break context reads or re-derive its pinned mode.
+      const attempt = task ? decoded([], 'attempt', () => currentAttempt(state, task.id)) : null;
+      const workspace = attempt ? resolveAttemptWorkspace(attempt, state.project.settings) : undefined;
       // The approved protected-check overlay; readRequiredCheckSnapshot never throws
       // and answers null for a stale, forged or malformed snapshot, which is omitted.
       const requiredCheckSnapshot = task ? readRequiredCheckSnapshot(task) : null;
@@ -680,6 +684,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
         // Omitted entirely (not null) when the task has no candidate, so a
         // project that has never recorded one sees a byte-identical payload.
         ...(currentCandidate ? { currentCandidate } : {}),
+        ...(workspace ? { workspace } : {}),
         // Omitted entirely when no profile data exists (see executionPolicyContext).
         ...(executionPolicy ? { executionPolicy } : {}),
         worker: assignedWorker
