@@ -67,7 +67,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -80,16 +80,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:03:25.896Z",
-  "updatedAt": "2026-10-30T06:13:57.501Z",
+  "updatedAt": "2026-10-30T06:23:59.404Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:09:56.736Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T06:23:59.404Z",
+    "wallClockMs": 842668
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-093a65d0"
+    "worker-093a65d0",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -168,5 +171,9 @@
     "kind": "completion",
     "sessionId": "worker-093a65d0@2026-10-30T06:11:38Z",
     "at": "2026-10-30T06:13:57.501Z"
-  }
+  },
+  "completedAt": "2026-10-30T06:23:59.404Z",
+  "reviewCompletedAt": "2026-10-30T06:23:59.404Z",
+  "reviewSummary": "Reviewed completion commit 71092fa on moe/work-2026-10-24. Source diff is small: TerminalAgentLauncher.kt +10/-1, RuntimeSelectionPolicyTest.kt +5/-3, TerminalAgentLauncherTest.kt +38, plus the task's own board JSONs. Re-ran the verification command (cmd.exe gradlew.bat test --rerun in moe-jetbrains): BUILD SUCCESSFUL. Fresh TEST-*.xml show 341 tests, 0 failures/errors/skipped (RuntimeSelectionPolicyTest 29, TerminalAgentLauncherTest 26), matching the worker's evidence.\nDoD 1: selectProtectedAgentRuntime sets env[MOE_RUNTIME_PROTECTED]=\"1\" after both installed paths are accepted, just before Selected(...). L1 asserts exact Selected equality across the windows/preferBash matrix; L3 asserts keys == {MOE_DAEMON_PATH, MOE_PROXY_PATH, MOE_RUNTIME_PROTECTED}, marker \"1\".\nDoD 2: every Refused return precedes the marker line (code-checked); L2 also asserts Refused is never Selected. Legacy path uses resolveAgentEnvOverrides (only private->internal); a new row asserts no ScriptSource result contains the key, and legacy WSL-bash/PowerShell renderings carry no marker.\nDoD 3: verification evidence supplied and reproduced.\nAlso checked: the only resolveContext consumer reads selected?.env, so every role/team/WSL launch gets the marker; it renders as MOE_RUNTIME_PROTECTED='1' in WSL bash and $env:MOE_RUNTIME_PROTECTED='1' in PowerShell; the isWithin loop iterates only the two paths plus the script. No tests deleted or weakened; assertions are exact. Scope matches plan (no wrapper, VS Code or .moe edits). The IDE-inherited-marker fail-closed caveat is documented in the constant's comment. I ran no mutation probe on the shared tree. Not verified here: CQ-R13c2's wrapper consumption (separate task).",
+  "requiredCheckAtDone": null
 }
