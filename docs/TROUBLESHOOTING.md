@@ -438,11 +438,14 @@ git for-each-ref refs/moe/rescue/task-<id>/
 - **`{ outcome: "refused", code: "MOE_COMMIT_REFUSED_OWNED_PATH_MISSING" }`** — every asserted path is
   absent from disk and from HEAD (renamed, deleted, or edited inside a `.worktrees/` checkout the
   post-flight cannot see). Move the edits into the project root and re-declare.
-- **`{ outcome: "refused", code: "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE" | "MOE_COMMIT_REFUSED_OWNER_UNKNOWN" }`**
-  — expected, nothing lost: the exiting session was not the task's assignee (an architect or QA seat
-  whose task moved on), and the owner was live or held an open attempt, another seat's attempt was still
-  finalizing (ACTIVE), or ownership could not be confirmed (UNKNOWN: daemon unreachable, older daemon).
-  It moved nothing; the owner's own landing commits those bytes. See **Owner guard** in `scripts/CLAUDE.md`.
+- **`MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE` | `MOE_COMMIT_REFUSED_OWNER_UNKNOWN`** (not a
+  `lastCommitOutcome` value) — expected, nothing lost: the exiting session was not the task's assignee
+  (an architect or QA seat whose task moved on), and the owner was live or held an open attempt, another
+  seat's attempt was still finalizing (ACTIVE), or ownership could not be confirmed (UNKNOWN: daemon
+  unreachable, older daemon). It moved nothing; the owner's own landing commits those bytes. See
+  **Owner guard** in `scripts/CLAUDE.md`. `lastCommitOutcome` keeps the owner's own last landing (only a
+  row recorded by an older daemon can still show one of these codes); the refusal shows only in the task
+  channel (`⛔ … landing REFUSED …`) and on the refusing seat's session-ended line.
 - **`{ outcome: "nothing", code: "MOE_COMMIT_NOTHING_TO_COMMIT" }`** — the candidates were already in
   HEAD (a resume relaunch after a successful landing, or the agent committed mid-session). Nothing lost.
 - **`{ outcome: "failed", code: … }`** — `MOE_COMMIT_FAILED_REF_CONTENTION` (three CAS losses to

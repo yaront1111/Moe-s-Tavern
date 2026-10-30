@@ -26,6 +26,8 @@ const HELD_REMEDY_STRICT = 'MOE_ATTR_CONTESTED (attribution.contested=skip) hold
 const HELD_REMEDY_NEVER = 'declare_files, unblocking or a shell touch alone does not release a hold; never change the policy as the fix.';
 /** #governors gets at most one commit alert per task per window; the task channel gets every line. */
 const GOVERNOR_ALERT_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** The wrappers' owner guard (scripts/CLAUDE.md): a session that is not the task's assignee landed nothing. Another seat's non-event, so it changes no task field and pages nobody. */
+const OWNER_GUARD_CODES: ReadonlySet<string> = new Set(['MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE', 'MOE_COMMIT_REFUSED_OWNER_UNKNOWN']);
 /**
  * An unexpanded shell reference: `${NAME…}`, `$(…)` or `$NAME` (PowerShell's
  * `$env:NAME` too). MCP arguments are never shell-expanded, so a seat that
@@ -165,7 +167,7 @@ function sameSha(a: string, b: string): boolean {
 export function recordCommitTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.record_commit',
-    description: 'Record the outcome of the agent wrapper\'s git landing for a task — a completion commit (feat|fix on the shared branch), a wip checkpoint, or a rescue ref (refs/moe/rescue/<taskId>/<ts>) — including refused/failed/nothing outcomes. On committed: appends task.commits (idempotent by sha and kind, capped, newest kept), unions the non-inferred paths into task.filesModified, and keeps task.inferredPaths / touchedFiles / unattributedPaths current; every outcome stamps task.lastCommitOutcome. Guard-exempt (runs after complete_task when QA may already own the REVIEW task, and on unassigned BLOCKED tasks) and allowed in every status. Posts one line to the task channel and a rate-limited #governors alert on unattributed paths, held contested paths (MOE_CONTESTED_HELD, from the skipped codes), rescue refs, or refused/failed outcomes.',
+    description: 'Record the outcome of the agent wrapper\'s git landing for a task — a completion commit (feat|fix on the shared branch), a wip checkpoint, or a rescue ref (refs/moe/rescue/<taskId>/<ts>) — including refused/failed/nothing outcomes. On committed: appends task.commits (idempotent by sha and kind, capped, newest kept), unions the non-inferred paths into task.filesModified, and keeps task.inferredPaths / touchedFiles / unattributedPaths current; every outcome stamps task.lastCommitOutcome except an owner-guard refusal (MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE / MOE_COMMIT_REFUSED_OWNER_UNKNOWN: a non-assignee session landed nothing), which changes no task field. Guard-exempt (runs after complete_task when QA may already own the REVIEW task, and on unassigned BLOCKED tasks) and allowed in every status. Posts one line to the task channel and a rate-limited #governors alert on unattributed paths, held contested paths (MOE_CONTESTED_HELD, from the skipped codes), rescue refs, or refused/failed outcomes other than an owner-guard refusal.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -252,6 +254,8 @@ export function recordCommitTool(_state: StateManager): ToolDefinition {
       }
       const status = readOptionalString(params.status, 'status', 32);
       const code = readOptionalString(params.code, 'code', 128);
+      // Exact, case-sensitive match on the trimmed code; a 'failed' row with one of these codes is an ordinary failure.
+      const ownerGuardRefusal = outcome === 'refused' && code !== undefined && OWNER_GUARD_CODES.has(code);
       const message = readOptionalString(params.message, 'message', MAX_MESSAGE_CHARS, { truncate: true });
       const recoveredBy = readOptionalString(params.recoveredBy, 'recoveredBy', 128);
       if (params.cliExitCode !== undefined && params.cliExitCode !== null
@@ -337,22 +341,32 @@ export function recordCommitTool(_state: StateManager): ToolDefinition {
         }
       }
 
-      if (touchedRead.paths.length > 0) {
+      if (!ownerGuardRefusal && touchedRead.paths.length > 0) {
         const touchedUnion = unionPaths(task.touchedFiles, touchedRead.paths);
         if (touchedUnion.added.length > 0) updates.touchedFiles = touchedUnion.merged;
       }
-      if (unattributedRead !== null) {
+      if (!ownerGuardRefusal && unattributedRead !== null) {
         updates.unattributedPaths = unattributedRead.paths;
       }
-      updates.lastCommitOutcome = {
-        outcome,
-        kind,
-        ...(code !== undefined ? { code } : {}),
-        sessionId,
-        at: now,
-      };
 
-      const updated = await state.updateTask(task.id, updates, 'TASK_COMMIT_RECORDED');
+      let updated: Task = task;
+      if (ownerGuardRefusal) {
+        // Audit trail only: the owner's own landing owns lastCommitOutcome and the path sets.
+        state.appendActivity(
+          'TASK_COMMIT_RECORDED',
+          { ownerGuardRefusal: { outcome, kind, code, sessionId, at: now } },
+          task, undefined, undefined, undefined, params.workerId
+        );
+      } else {
+        updates.lastCommitOutcome = {
+          outcome,
+          kind,
+          ...(code !== undefined ? { code } : {}),
+          sessionId,
+          at: now,
+        };
+        updated = await state.updateTask(task.id, updates, 'TASK_COMMIT_RECORDED');
+      }
       if (params.workerId) {
         await state.touchWorker(params.workerId);
       }
@@ -370,7 +384,7 @@ export function recordCommitTool(_state: StateManager): ToolDefinition {
       if (pathsRead.truncated) warnings.push(`paths truncated to ${MAX_PATHS}`);
 
       // ---- chat --------------------------------------------------------------
-      const unattributed = unattributedRead?.paths ?? [];
+      const unattributed = ownerGuardRefusal ? [] : unattributedRead?.paths ?? [];
       const lines: string[] = [];
       const shortSha = sha ? sha.slice(0, 12) : 'none';
       const pushedNote = pushed === false ? ', NOT pushed' : pushed === true ? ', pushed' : '';
@@ -402,8 +416,8 @@ export function recordCommitTool(_state: StateManager): ToolDefinition {
       if (held.length > 0) lines.push(heldContestedLine(task.id, held));
       try { await state.postSystemMessage(task.id, lines.join('\n')); } catch { /* never block tool */ }
 
-      const alertGovernors = unattributed.length > 0 || rescueLanded || held.length > 0
-        || (outcome !== 'committed' && outcome !== 'nothing');
+      const alertGovernors = !ownerGuardRefusal
+        && (unattributed.length > 0 || rescueLanded || held.length > 0 || (outcome !== 'committed' && outcome !== 'nothing'));
       if (alertGovernors) {
         const nowMs = Date.now();
         const last = governorAlertAt.get(task.id);

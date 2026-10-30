@@ -13,49 +13,81 @@
     {
       "stepId": "step-1",
       "description": "GATES, DECISION, then the tests, red first. Never revert, stash or stage peers' dirty paths.\n\nA. Merge gate. governor-693b7073's pending merge of main (3f6817f1) also edits this task's files: record_commit's sessionId shell-template refusal and its tests, plus docs/MCP_SERVER.md, docs/SCHEMA.md and docs/TROUBLESHOOTING.md.\n- `git merge-base --is-ancestor f1c04b15 HEAD` must exit 0.\n- If it doesn't, make no edit. Call moe.report_blocked with exactly this reason (no task ids): \"Waiting for governor-693b7073's merge of main into moe/work-2026-10-24 (prepared as 3f6817f1), which also edits packages/moe-daemon/src/tools/recordCommit.ts, its test and three docs this fix touches; editing them first would re-block that merge. Unblock with moe.set_task_status WORKING once git merge-base --is-ancestor f1c04b15 moe/work-2026-10-24 succeeds.\" Then end the session.\n\nB. Peer gate. `git status --porcelain=v1 -- packages/moe-daemon/src/tools/recordCommit.ts packages/moe-daemon/src/tools/recordCommit.test.ts docs/MCP_SERVER.md docs/SCHEMA.md docs/TROUBLESHOOTING.md` must print nothing. If it prints anything, call moe.get_commit_scope { taskId } and look each dirty path up in peerDeclared:\n- dirty paths declared by nonterminal peers: moe.report_blocked with blockedOnTaskIds = those ids, naming the paths;\n- any undeclared dirty path: moe.report_blocked naming the paths, no ids.\nMake no edit in either case. Idle CQ rows (V03, V04, V05b, V12, C11a, M06) and bc8410af declare the docs; that alone is fine, only dirt blocks.\n\nC. Decision (DoD 2). An owner-guard refusal is outcome 'refused' with code MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE or MOE_COMMIT_REFUSED_OWNER_UNKNOWN. It is another seat's non-event: the wrappers' owner guard (scripts/CLAUDE.md, Owner guard) sends it from a session that is not the task's assignee. Nothing is lost; the owner's own landing commits the bytes. So it changes NO task field:\n- lastCommitOutcome keeps the owner's last landing, whatever it was: committed, or a failure QA and governors still need to see.\n- lastCommitOutcome stays absent when the owner never landed, so \"the wrapper never got here\" stays true.\n- Stray path fields on such a row are ignored.\nIt still posts its task-channel line and is logged as a TASK_COMMIT_RECORDED activity event. It never pages #governors and never uses up the per-task #governors window. Every other outcome, including every other refusal code, behaves exactly as today.\n\nD. Tests (DoD 3). In packages/moe-daemon/src/tools/recordCommit.test.ts, add `describe('owner-guard refusals', ...)` inside describe('moe.record_commit') so it reuses `seed`/`record`.\n- The row: `{ outcome: 'refused', kind: 'checkpoint', sha: undefined, ref: undefined, role: 'architect', workerId: 'architect-1', sessionId: 'architect-1@2026-08-28T11:00:00.000Z', code, message: 'it is assigned to worker-1, a live seat or one holding an open attempt' }`.\n- Cases 1-6 run for both codes (it.each).\n1. Pages nobody, keeps the line. Spy postSystemMessage and postToRoleChannel. The task channel gets `checkpoint landing REFUSED for task-1: <code>`, and postToRoleChannel is never called. Then an ordinary failure on the same task (`outcome: 'failed', code: 'MOE_COMMIT_FAILED_REF_CONTENTION'`) pages #governors exactly once: the window was not used up.\n2. Hides nothing. After a committed completion (the base row), take `structuredClone(h.state.getTask('task-1'))`. Record the refusal with stray `unattributedPaths: []` and `touchedPaths: ['src/x.ts']`. `h.state.getTask('task-1')` must deep-equal the clone, including lastCommitOutcome, commits, unattributedPaths, touchedFiles and updatedAt. `getContextTool(h.state).handler({ taskId: 'task-1' }, h.state)` must return task.lastCommitOutcome matching `{ outcome: 'committed', kind: 'completion', sessionId: base.sessionId }`.\n3. A failure stays visible. After `{ outcome: 'failed', kind: 'completion', sha: undefined, ref: undefined, code: 'MOE_COMMIT_FAILED_REF_CONTENTION' }`, the refusal leaves lastCommitOutcome on that failure.\n4. No landing yet. The refusal leaves lastCommitOutcome undefined, and get_context returns null for it.\n5. Audit. After `await h.state.flushActivityLog()`, call getActivityLogTool with `{ eventTypes: ['TASK_COMMIT_RECORDED'], maxPayloadChars: 0 }`. It must find a task-1 event whose payload carries the refusal's code and sessionId.\n6. Response. success true, outcome 'refused', and commitCount and filesModifiedCount equal to the stored task's.\n7. Control, not exempt. An ordinary refusal `MOE_COMMIT_REFUSED_NO_OWNED_PATHS` after a committed completion DOES replace lastCommitOutcome and pages #governors once.\n- Also fix exactly the 5 type errors this file already has, at HEAD and in the merge, so step 4's test-file type check can exit 0:\n  - TS2551 at the `result.filesModifiedCount` assertion: the RecordResult interface's stale `filesModified: string[]` becomes `filesModifiedCount: number`.\n  - TS7006 in the held-contested describe: give explicit parameter types to the four implicit-any callbacks (`sys.mock.calls.map((c) => ...)` and three `.find((l) => ...)`).\n  - Change nothing else in the existing tests.\n- Red proof: before step 2, run this file in step 4's snapshot (`npx vitest run src/tools/recordCommit.test.ts`). Cases 1-6 must fail on today's handler, which pages and stamps; case 7 must pass. Quote the result.\nUse the Edit tool. Report the test file in complete_step.modifiedFiles.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCommit.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.test.ts"
+      ],
+      "note": "Gate A: git merge-base --is-ancestor f1c04b15 HEAD exit 0. Gate B: porcelain on the five files printed nothing. Added describe('owner-guard refusals') (13 tests: 6 behaviours x 2 codes via it.each, plus the ordinary-refusal control) and fixed the 5 type errors (RecordResult.filesModifiedCount; 4 explicit callback types). Red proof, step-4-style Linux snapshot (HEAD + test file, npm ci, env -i): 8 failures on today's handler — pages-nobody, hides-nothing, failure-stays, absent-when-never-landed, each x2 codes. Control (ordinary refusal pages+stamps) passes. Deviation from the plan's \"cases 1-6 must fail\": the audit-event (5) and response-contract (6) cases PASS on today's handler, because updateTask already logs TASK_COMMIT_RECORDED and the response fields are unchanged; they stay as guards that step 2's write-skip must not lose the audit trail or change the response. 740 other dirty paths in the shared tree belong to other sessions; untouched.",
+      "startedAt": "2026-10-30T03:25:52.937Z",
+      "completedAt": "2026-10-30T03:27:03.832Z"
     },
     {
       "stepId": "step-2",
       "description": "IMPLEMENT the decision in packages/moe-daemon/src/tools/recordCommit.ts.\n- Next to the other constants:\n  /** The wrappers' owner guard (scripts/CLAUDE.md): a session that is not the task's assignee landed nothing. Another seat's non-event, so it changes no task field and pages nobody. */\n  const OWNER_GUARD_CODES: ReadonlySet<string> = new Set(['MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE', 'MOE_COMMIT_REFUSED_OWNER_UNKNOWN']);\n- In the handler, after `code` is read: `const ownerGuardRefusal = outcome === 'refused' && code !== undefined && OWNER_GUARD_CODES.has(code);`. This is an exact, case-sensitive match on the already-trimmed code. A 'failed' row with one of these codes is NOT exempt.\n- Writes:\n  - For an owner-guard refusal, build no `updates` and skip `state.updateTask`. Instead call `state.appendActivity('TASK_COMMIT_RECORDED', { ownerGuardRefusal: { outcome, kind, code, sessionId, at: now } }, task, undefined, undefined, undefined, params.workerId)`. That keeps the audit trail without writing the row.\n  - The response's `updated` is then the unchanged `task`; commitCount and filesModifiedCount read from it.\n  - touchWorker still runs.\n  - Every other outcome keeps today's path unchanged: the touched/unattributed unions, the lastCommitOutcome stamp and the updateTask call.\n- Alert: `const alertGovernors = !ownerGuardRefusal && (unattributed.length > 0 || rescueLanded || held.length > 0 || (outcome !== 'committed' && outcome !== 'nothing'));`. governorAlertAt is set only when an alert goes out, so the refusal leaves the window free.\n- The task-channel line is unchanged: `⛔ <kind> landing REFUSED for <task>: <code> — <message>`.\n- Tool description:\n  - change 'every outcome stamps task.lastCommitOutcome' to say every outcome does so except an owner-guard refusal (MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE / MOE_COMMIT_REFUSED_OWNER_UNKNOWN: a non-assignee session landed nothing), which changes no task field;\n  - say the #governors alert covers refused/failed outcomes other than an owner-guard refusal.\n- Error handling: a chat or activity failure must never fail the record. Keep the existing try/catch around both chat posts. appendActivity is the same synchronous call qaReject and submitPlan make.\n- Comments must not use the phrases util/daemonGitDocs.test.ts rejects in daemon source, such as \"never runs git\", \"runs no git\" or \"does not run git\".\nUse the Edit tool. Report recordCommit.ts in complete_step.modifiedFiles.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCommit.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.ts"
+      ],
+      "note": "Added OWNER_GUARD_CODES and the ownerGuardRefusal flag (outcome==='refused' and exact code match). For such a row: no updateTask, no lastCommitOutcome stamp, stray touchedPaths/unattributedPaths ignored (also not echoed as MOE_ATTRIBUTION_UNRESOLVED), a direct state.appendActivity('TASK_COMMIT_RECORDED', { ownerGuardRefusal: { outcome, kind, code, sessionId, at } }, task, ..., params.workerId); alertGovernors gated on !ownerGuardRefusal so the per-task window stays free; task-channel line and touchWorker unchanged; response reads commitCount/filesModifiedCount from the unchanged task. Tool description updated for both clauses. Snapshot check (HEAD + 2 files, Linux, env -i): recordCommit.test.ts 56/56 pass, npx tsc --noEmit exit 0.",
+      "startedAt": "2026-10-30T03:27:05.504Z",
+      "completedAt": "2026-10-30T03:27:43.326Z"
     },
     {
       "stepId": "step-3",
       "description": "DOCS: the contract change, kept to these lines. Use the Edit tool.\n- docs/MCP_SERVER.md, record_commit Notes:\n  - The bullet \"Every outcome — including `nothing`, `refused` and `failed` — sets `task.lastCommitOutcome` ...\": add the exception. An owner-guard refusal (the two codes) comes from a session that is not the task's assignee. It records the task-channel line and a `TASK_COMMIT_RECORDED` activity event and changes no task field, so `lastCommitOutcome` keeps the owner's last landing, or stays unset when the owner never landed.\n  - The Chat bullet's \"`outcome` is not `committed`/`nothing`\": add \"and the row is not an owner-guard refusal\".\n- docs/SCHEMA.md:\n  - the lastCommitOutcome comment \"Every landing attempt, including refused/failed/nothing\" gains \"except an owner-guard refusal\";\n  - the `TASK_COMMIT_RECORDED` activity-event comment notes that an owner-guard refusal is logged with no task change.\n- docs/TROUBLESHOOTING.md, \"Read `lastCommitOutcome` first\": rewrite the ACTIVE_ASSIGNEE / OWNER_UNKNOWN bullet.\n  - These codes no longer appear in lastCommitOutcome, which keeps the owner's own last landing. Only a row recorded by an older daemon still shows one.\n  - They show only in the task channel (`⛔ ... landing REFUSED ...`) and on the refusing seat's session-ended line.\n  - Keep the existing \"expected, nothing lost\" explanation and the scripts/CLAUDE.md pointer.\nReport the three docs in complete_step.modifiedFiles.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md",
         "docs/SCHEMA.md",
         "docs/TROUBLESHOOTING.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "MCP_SERVER.md record_commit Notes: lastCommitOutcome bullet gains the owner-guard exception (task-channel line + TASK_COMMIT_RECORDED event, no task field, path fields ignored, older rows may carry the codes); Chat bullet gains \"and the row is not an owner-guard refusal\". SCHEMA.md: lastCommitOutcome comment and the TASK_COMMIT_RECORDED comment. TROUBLESHOOTING.md \"Read lastCommitOutcome first\": the ACTIVE_ASSIGNEE/OWNER_UNKNOWN bullet rewritten (the first draft left the old `{ outcome: refused, code }` heading, which contradicted the new text) — now headed as \"not a lastCommitOutcome value\", keeps the expected/nothing-lost text and the scripts/CLAUDE.md pointer. Peer gate was clean at step 1 for all three docs.",
+      "startedAt": "2026-10-30T03:27:45.073Z",
+      "completedAt": "2026-10-30T03:28:10.603Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY in a Linux-native snapshot. The shared tree's packages/moe-daemon/node_modules is Windows-native, so vitest fails at startup under WSL. The snapshot is HEAD plus this task's five files, with MOE_* unset. Run from the repo root. This is the task's one verification command; use it as complete_task.verification:\n\nNB=$(dirname \"$(command -v node)\"); SNAP=$(mktemp -d /tmp/moe-915d-XXXX) && mkdir -p \"$SNAP/repo\" && git archive HEAD | tar -x -C \"$SNAP/repo\" && for f in packages/moe-daemon/src/tools/recordCommit.ts packages/moe-daemon/src/tools/recordCommit.test.ts docs/MCP_SERVER.md docs/SCHEMA.md docs/TROUBLESHOOTING.md; do cp \"$f\" \"$SNAP/repo/$f\"; done && cd \"$SNAP/repo/packages/moe-daemon\" && printf '{ \"extends\": \"./tsconfig.json\", \"compilerOptions\": { \"noEmit\": true, \"incremental\": false, \"types\": [\"node\"] }, \"include\": [\"src/tools/recordCommit.test.ts\"], \"exclude\": [] }\\n' > tsconfig.test-check.json && env -i HOME=\"$HOME\" PATH=\"$NB:/usr/local/bin:/usr/bin:/bin\" npm ci --no-audit --no-fund >/dev/null 2>&1 && env -i HOME=\"$HOME\" PATH=\"$NB:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 npx vitest run && env -i HOME=\"$HOME\" PATH=\"$NB:/usr/local/bin:/usr/bin:/bin\" npx tsc --noEmit && env -i HOME=\"$HOME\" PATH=\"$NB:/usr/local/bin:/usr/bin:/bin\" npx tsc -p tsconfig.test-check.json; rc=$?; cd /mnt/d/projexts/moes; rm -rf \"$SNAP\"; echo \"GATE_EXIT=$rc\"; [ \"$rc\" -eq 0 ]\n\nExpected: GATE_EXIT=0, with every vitest file passing.\n- On a pure HEAD snapshot at planning: 187 files, 5250 passed, 16 skipped, about 36 s with npm ci. The merge changes the counts; yours adds this task's new cases.\n- The package tsc and the test-file type check both exit 0.\n- If a file outside this task fails, rerun the same command without the cp overlay (pure HEAD). If it fails there too, it is pre-existing: quote both runs and proceed. Otherwise fix it.\n- vitest logs can hold NUL bytes, so grep the summary with `grep -a`.\nQuote the `Test Files` / `Tests` lines and GATE_EXIT in complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.test.ts"
+      ],
+      "note": "Plan's exact step-4 command, run fresh in the foreground. First run: vitest 190 files / 5313 passed / 16 skipped and package tsc exit 0, but the test-file type check flagged my own new test (TS18048 stored.filesModified possibly undefined) -> GATE_EXIT=1; fixed with (stored.filesModified ?? []).length. Rerun: Test Files 190 passed (190); Tests 5313 passed | 16 skipped (5329); package tsc and tsconfig.test-check.json both exit 0; GATE_EXIT=0. No outside-task failures, so no pure-HEAD rerun needed.",
+      "startedAt": "2026-10-30T03:28:12.751Z",
+      "completedAt": "2026-10-30T03:29:37.201Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW of this task's diff.\n1. Scope. `git diff --stat HEAD -- <the five files>` shows only:\n   - the OWNER_GUARD_CODES flag, the write skip and activity call, the alert condition and the description;\n   - the new describe plus the 5 type-error fixes;\n   - the doc lines named in step 3.\n   If foreign hunks appear in any of the five files, don't complete. Post to #governors naming the paths, and follow the governor's direction. Never revert them.\n2. Mutation proof, in step 4's snapshot. Make each change, run `npx vitest run src/tools/recordCommit.test.ts`, see it red, then restore:\n   (a) Drop `!ownerGuardRefusal &&` from alertGovernors. Case 1 must fail.\n   (b) Route owner-guard refusals through the normal stamp and updateTask. Cases 2, 3 and 4 must fail.\n   (c) Widen the exemption to every refusal (`outcome === 'refused'`). Case 7 must fail.\n   Quote each failing assertion.\n3. Checklist:\n   - Concurrency: the owner's committed row and an architect's refusal can arrive in either order. The state mutex serializes tools, and the refusal never writes the row, so the owner's outcome always survives.\n   - A code differing only in case is an ordinary refusal. So is a 'failed' row with one of the two codes.\n   - Wire contract unchanged: same inputs, same response fields. lastCommitOutcome values stored before this change stay valid.\n   - The activity payload holds only the five scalar fields, no paths.\n   - No comment uses a phrase util/daemonGitDocs.test.ts rejects; the full suite in step 4 covers it.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.test.ts"
+      ],
+      "note": "Scope: git diff --stat HEAD on the five files = 127 ins / 28 del, only this task's hunks (constant, flag, write-skip + appendActivity, alert condition, description; new describe + 5 type fixes; the named doc lines). Mutation proofs in the Linux snapshot, each restored and cmp'd to the worktree: (a) drop !ownerGuardRefusal from alertGovernors -> case 1 fails x2 (\"expected postToRoleChannel to not be called at all, but actually been called 1 times\"); (b) route through the normal stamp+updateTask -> cases 2,3,4 fail x6 (deep-equal of the stored task; \"expected { outcome: 'refused' ...} to match { outcome: 'failed' ...}\"; \"...to be undefined\"); (c) widen to every refusal -> control (ordinary refusal) fails, plus 2 older tests. The review found a gap: nothing pinned the exact match, so I added an it.each negative test (a 'failed' row with an owner-guard code, and a lower-cased code, are ordinary rows that stamp and page); mutations (d) drop the outcome check and (e) case-insensitive match both fail it. Checklist: concurrency — tools are serialized by the state mutex and the guard row never writes the task, so the owner's outcome survives either arrival order; the per-task #governors window is untouched by a guard row; activity payload is the five scalars (outcome, kind, code, sessionId, at), no paths; response fields and inputs unchanged; stray path fields on a guard row ignored (no store write, no MOE_ATTRIBUTION_UNRESOLVED line); older stored rows with these codes remain valid and are documented as such; no daemonGitDocs-rejected phrasing (full suite covers it). Final fresh gate after the last edit: Test Files 190 passed (190); Tests 5315 passed | 16 skipped (5331); both tsc exit 0; GATE_EXIT=0.",
+      "startedAt": "2026-10-30T03:29:39.137Z",
+      "completedAt": "2026-10-30T03:31:18.193Z"
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Main merge landed: 8f4dc6e7 (parents f5d3c7ed, 2c306fbf) is HEAD of moe/work-2026-10-24, and f1c04b15 is an ancestor. main's recordCommit.ts, its test, MCP_SERVER.md, SCHEMA.md and TROUBLESHOOTING.md are on the branch. c2a900aa's TROUBLESHOOTING.md edit also landed (f5d3c7ed), so the peer gate's dirty file is clean.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -66,21 +98,29 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T14:08:45.032Z",
-  "updatedAt": "2026-10-30T00:12:23.007Z",
+  "updatedAt": "2026-10-30T03:31:49.532Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T00:02:28.990Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-b5749787"
+    "worker-b5749787",
+    "worker-fe18a9a9"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T00:11:25.530Z",
   "executionContract": {
@@ -141,10 +181,10 @@
   },
   "planApprovedAt": "2026-10-30T00:11:25.624Z",
   "approvedPlanRevision": 1,
-  "blockedReason": "Waiting for governor-693b7073's merge of main into moe/work-2026-10-24 (prepared as 3f6817f1), which also edits packages/moe-daemon/src/tools/recordCommit.ts, its test and three docs this fix touches; editing them first would re-block that merge. Unblock with moe.set_task_status WORKING once git merge-base --is-ancestor f1c04b15 moe/work-2026-10-24 succeeds.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T00:11:59.666Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "2534badc3da0de903f4ac685576f929a8e4b1d6b",
@@ -163,7 +203,11 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-915d7e84821448139086c97f77743f29.json"
+    "packages/moe-daemon/src/tools/recordCommit.test.ts",
+    "packages/moe-daemon/src/tools/recordCommit.ts",
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md",
+    "docs/TROUBLESHOOTING.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -171,5 +215,17 @@
     "kind": "checkpoint",
     "sessionId": "worker-b5749787@2026-10-30T00:11:27Z",
     "at": "2026-10-30T00:12:23.007Z"
-  }
+  },
+  "priorBlockedReason": "Waiting for governor-693b7073's merge of main into moe/work-2026-10-24 (prepared as 3f6817f1), which also edits packages/moe-daemon/src/tools/recordCommit.ts, its test and three docs this fix touches; editing them first would re-block that merge. Unblock with moe.set_task_status WORKING once git merge-base --is-ancestor f1c04b15 moe/work-2026-10-24 succeeds.",
+  "blockedOnTaskIds": null,
+  "workStartedAt": "2026-10-30T03:25:52.937Z",
+  "reviewStartedAt": "2026-10-30T03:31:49.530Z",
+  "verification": {
+    "command": "plan step-4 gate, Linux snapshot (git archive HEAD + the task's 5 files, npm ci, env -i, MOE_* unset): npx vitest run && npx tsc --noEmit && npx tsc -p tsconfig.test-check.json (scratch config: src/tools/recordCommit.test.ts only); echo GATE_EXIT=$rc",
+    "exitCode": 0,
+    "outputTail": " Test Files  190 passed (190)\n      Tests  5315 passed | 16 skipped (5331)\nnpm notice run 'tsc' --noEmit  (exit 0)\nnpm notice run 'tsc' -p tsconfig.test-check.json  (exit 0)\nGATE_EXIT=0",
+    "reportedAt": "2026-10-30T03:31:49.530Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "An owner-guard refusal in moe.record_commit (outcome refused, code exactly MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE or MOE_COMMIT_REFUSED_OWNER_UNKNOWN) now changes no task field and pages nobody.\n\nDecision (DoD 2): it is another seat's non-event, since a non-assignee session landed nothing and the owner's own landing commits the bytes. So `lastCommitOutcome` keeps the owner's last landing, whether committed or a failure, and stays absent when the owner never landed (get_context returns null). Stray path fields on such a row are ignored.\n\nBehaviour: it still posts the task-channel REFUSED line, touches the worker, and logs a TASK_COMMIT_RECORDED event via a direct appendActivity (payload: outcome, kind, code, sessionId, at; no paths). It never calls postToRoleChannel and leaves the per-task #governors window free, so a later ordinary failure on the same task still pages once. Every other outcome is unchanged, including a 'failed' row with these codes and a code differing only in case. Inputs and response fields are unchanged.\n\nChanges: recordCommit.ts (OWNER_GUARD_CODES, ownerGuardRefusal flag, skipped task write, alert condition, tool description); recordCommit.test.ts (describe 'owner-guard refusals', 15 tests, plus the 5 pre-existing type-error fixes); docs MCP_SERVER.md, SCHEMA.md, TROUBLESHOOTING.md (older stored rows with these codes stay valid, documented).\n\nEvidence:\n- Red proof on the old handler: 8 failures (pages-nobody, hides-nothing, failure-stays, absent-when-never-landed, x2 codes); control passes. Deviation: the audit-event and response-contract cases pass on the old handler too (updateTask already logged the event); they guard the write-skip.\n- Mutation proofs, each restored: dropping the alert guard fails case 1; routing through the normal stamp fails cases 2-4; widening to every refusal fails the control; dropping the outcome check and a case-insensitive match each fail the exactness test.\n- Final gate (plan step-4 command, run fresh after the last edit"
 }

@@ -522,7 +522,7 @@ interface Task {
   touchedFiles?: string[];       // Tool-write harvest (stream-json Edit/Write paths), unioned across sessions (ASSERTED tier)
   inferredPaths?: string[];      // MEASURED-tier paths the wrapper landed — PLANNED tier next session, never promoted
   unattributedPaths?: string[];  // Changed paths the last landing could not attribute (replaced each landing; never staged)
-  lastCommitOutcome?: {          // Every landing attempt, including refused/failed/nothing
+  lastCommitOutcome?: {          // Every landing attempt, including refused/failed/nothing, except an owner-guard refusal (older daemons stored those too)
     outcome: 'committed' | 'nothing' | 'refused' | 'failed';
     kind: 'completion' | 'checkpoint' | 'rescue';
     code?: string;               // MOE_COMMIT_* code on refused/failed
@@ -1771,7 +1771,7 @@ type ActivityEventType =
   | 'TASK_UNBLOCKED'     // Block cleared: resource grant, dependency auto-unblock (all blockedOnTaskIds
                          // DONE/ARCHIVED — event-driven or sweep backstop), moe.unblock_worker { resolveBlocks: true }, or set_task_status
   | 'TASK_BLOCK_PARKED'    // reserved: deferred unassigned-BLOCKED park sweep (settings.parkUnassignedBlocked), never emitted yet
-  | 'TASK_COMMIT_RECORDED' // moe.record_commit persisted a landing outcome (commit appended, or refused/failed/nothing recorded)
+  | 'TASK_COMMIT_RECORDED' // moe.record_commit persisted a landing outcome (commit appended, or refused/failed/nothing recorded); an owner-guard refusal is logged with no task change
   | 'TASK_FILES_DECLARED'  // moe.declare_files unioned paths into task.declaredFiles
   | 'TASK_DEPENDENCIES_SET' // moe.set_task_dependencies replaced or edited task.dependsOn (a no-op edit records nothing)
   | 'TASK_PRIORITY_SET'    // moe.set_task_priority changed task.priority
