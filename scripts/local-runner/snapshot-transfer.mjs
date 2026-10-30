@@ -13,7 +13,7 @@ import { validateImport } from './source-snapshot.mjs';
 
 // Raw bytes per data frame: base64 makes 1,398,104 characters, inside MAX_HOST_FRAME_BYTES with its JSON envelope.
 export const SNAPSHOT_CHUNK_BYTES = 1_048_576;
-const MODES = ['materialize', 'export'];
+const MODES = ['materialize', 'export', 'verify'];
 const MAX_TIMEOUT_MS = 600_000;
 const CONTROL = /[\x00-\x1f\x7f]/;
 // Fixed text only: a message never carries a path, guest text or snapshot byte.
@@ -190,4 +190,26 @@ export async function materializeSnapshot({ name, snapshot, provider = {}, timeo
   await assertNoMounts(name, provider);
   const bytes = manifest.entries.reduce((sum, entry) => sum + entry.size, 0);
   return Object.freeze({ instance: name, digest: manifest.digest, files: manifest.entries.length, bytes, executionReady: false });
+}
+
+/**
+ * After a check session, while its VM still runs (CQ-R11f): whether the owned guest's workspace still holds every file of
+ * its root-only manifest, which this run's materializeSnapshot wrote, with its bytes and exec bit. Sends no input, refuses
+ * unless the guest shows no mount before and after, and accepts only one {kind:'verified', changed} frame: changed 0
+ * resolves 'intact', any other count 'changed'. It sees the workspace as the job left it, never a change the job undid
+ * before it exited.
+ */
+export async function verifyWorkspace({ name, provider = {}, timeoutMs } = {}) {
+  let changed = null;
+  const onFrame = frame => {
+    if (changed !== null || frame.kind !== 'verified' || Object.keys(frame).sort().join() !== 'changed,kind'
+      || !Number.isSafeInteger(frame.changed) || frame.changed < 0) throw transferError('TRANSFER_FRAME_INVALID');
+    changed = frame.changed;
+  };
+  const options = streamOptions({ name, mode: 'verify', provider, timeoutMs, input: [], onFrame });
+  await assertNoMounts(name, provider);
+  await supervise(options);
+  if (changed === null) throw transferError('TRANSFER_FRAME_INVALID');
+  await assertNoMounts(name, provider);
+  return changed === 0 ? 'intact' : 'changed';
 }

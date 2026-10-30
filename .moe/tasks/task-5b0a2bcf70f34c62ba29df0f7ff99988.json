@@ -18,45 +18,79 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development. Everything goes in scripts/tests/local-runner.test.mjs and reuses its existing harnesses: the CQ-R09c/R09 supervisor rows (about line 2874) load the real guest-supervisor.py under `python3 -I -B` with importlib (PY_LOAD, PY_SUPERVISOR) and call module functions with temp workspace and manifest paths; the T rows fake materializeSnapshot's stream; the CJ rows come from CQ-R11 (task-07951125).\n\nVR rows, through the REAL supervisor. Build a workspace with the module's own materialize(), then call m.verify(out_fd, workspace, manifest):\n- VR1: an untouched tree gives exactly one frame, deep-equal to {kind:'verified', changed:0}, and exit 0.\n- VR2 (DoD 1): each of these alone gives changed:1 (and all four together changed:4): one file's bytes changed; one file deleted; one file's exec bit flipped; one file replaced by a symlink to an identical copy. Separately, an ancestor directory replaced by a symlink to an identical tree changes every file under it. The links are never followed.\n- VR3 (DoD 2): a new file, a new directory, a mode-000 file and a mode-000 directory, all outside the manifest, leave changed:0. Non-manifest names are never opened.\n- VR4 (DoD 3), read-only: every path's lstat (mode, uid, size, mtime_ns) and every byte is identical before and after verify. No frame carries a path or file byte (assert the exact key set). A hard-linked manifest file (nlink > 1) counts as changed.\n- VR5: a missing or malformed manifest, or a missing workspace, exits 65 with no frame; a forced read error exits 74 with no frame.\n- VR6: main(['verify']) with geteuid 1000 is EX_NOPERM, unknown argv is still EX_USAGE, and the routing reaches verify.\n\nVH rows, host verifyWorkspace with a faked supervisor stream like the T rows:\n- changed 0 gives 'intact', and changed > 0 gives 'changed';\n- two frames, an extra key, a negative, fractional or non-number changed, no frame, mounts before or after, a provider failure or a timeout each REJECT with a fixed TRANSFER_* code;\n- a non-owned name is refused before any spawn.\n\nCJ9 (DoD 4), runCheckJob:\n- a 'passed' session calls verify AFTER the session and BEFORE remove (order log), and result.workspace is its value;\n- a verify rejection gives 'unverified';\n- a non-passed outcome never calls verify, and stays 'unverified'.\n\nRun `node --test scripts/tests/local-runner.test.mjs` and confirm the new rows fail for the missing mode or function.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "RED. Added the CQ-R11f section at the end of scripts/tests/local-runner.test.mjs: VR1-VR6 (real supervisor verify(): intact; JOB_EDITS bytes/same-size/delete/chmod ±x/symlink copy/ancestor symlink/hard link/dir/FIFO/four-at-once; non-root unreadable dir; open recorder proving only manifest names opened, O_NOFOLLOW, read-only flags; mutator-refusing + bigint lstat/ctime/sha before==after; 65 for missing/malformed manifest, '..'/'.'/''/'/abs'/'//' manifest paths, missing/symlinked workspace; 74 gone host; CLI 64/77/routing), VH1-VH2 (host stream shapes, mounts, provider/spawn failure, input refusals), CJ9 (order session→verify→verified→remove, rejections/junk → unverified, non-passed never verified), CJ10 (runCheckJob with the DEFAULT verifyWorkspace over the real supervisor: no edit/new 0600 files intact, every JOB_EDIT changed). Harness: checkHarness gains a logged verify step (default 'intact'); FULL_LOG includes 'verify', new UNVERIFIED_LOG for non-passed; ranWith workspace follows outcome; CJ5/CJ6 logs and CJ8 deps updated. Red run on a /tmp copy with a stub export (env -i, Node 24.21.0): 13 fail (CJ2/6/8 + all new rows), 5 pass — failures are the missing mode/export/lifecycle call. Shared tree has 738 peers' dirty paths; untouched.",
+      "startedAt": "2026-10-30T00:12:54.298Z",
+      "completedAt": "2026-10-30T00:18:36.261Z"
     },
     {
       "stepId": "step-2",
       "description": "scripts/local-runner/guest-supervisor.py: the 'verify' mode.\n\n- Add file_identity(root, path) beside R11b's blob_oid (about line 889), with the same safe walk: every parent opened through its parent's fd with WALK, the file with READ, so no symlink is ever followed. It returns (executable, size, sha256) for a regular file with nlink == 1 whose size is stable (the trailing os.read(fd, 1) must be empty, as in blob_oid). Any OSError, including ENOENT, ENOTDIR, ELOOP and EACCES, returns None.\n- Add verify(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST):\n  - read_manifest(manifest), the root-only manifest this run's materialize wrote, and open the workspace root with WALK. Either failing exits os.EX_DATAERR (65) with no frame, exactly as export does.\n  - Then changed = the number of manifest paths whose file_identity(root, path) != tuple(row) (row is [executable, size, sha256]), visited in byte order. A name outside the manifest is never visited, so new files cannot affect it.\n  - write_frame(out_fd, {'kind': 'verified', 'changed': changed}) and return 0.\n  - An OSError outside file_identity is EX_IOERR (74); a ValueError or RecursionError is 65.\n  - It never writes, chowns or chmods. It runs as the invoking root, which is safe: every component is opened O_NOFOLLOW, only manifest paths are opened, and only a count leaves the guest.\n- main(): add ['verify'] to the accepted argv after the euid check: `if argv == ['verify']: return verify(1)`.\n- Update the module header's mode list and exit-code lines.\n\nError handling: fixed exit codes only; nothing reaches stdout but the one frame. The export, materialize, bridge and check modes are unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/guest-supervisor.py"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "note": "guest-supervisor.py: file_identity(root, path, size) + verify(out_fd, workspace, manifest) placed before main() as the CQ-R11f section; main accepts ['verify'] and routes verify(1) after the euid check; header gains the verify mode line. Export/materialize/bridge/check bytes untouched. Deviations from plan text: (1) file_identity takes the manifest row's size and returns None (changed) for another size WITHOUT reading it, so hashing never exceeds the manifest's own bytes (bounded by MAX_SNAPSHOT_BYTES) even if a job grows files; (2) a manifest path with an empty, '.' or '..' segment raises ValueError -> 65 (defence in depth: '../workspace/a.txt' would otherwise reach a file outside the root's subtree); (3) iterates the manifest in its stored order, which materialize wrote in UTF-8 byte order, no re-sort. Focused run (env -i, Node 24.21.0, /tmp copy with a stub host export): VR1-VR6, M1, X1 all pass (8/8).",
+      "startedAt": "2026-10-30T00:18:37.240Z",
+      "completedAt": "2026-10-30T00:19:49.057Z"
     },
     {
       "stepId": "step-3",
       "description": "Host side.\n\n(a) scripts/local-runner/snapshot-transfer.mjs:\n- MODES becomes ['materialize', 'export', 'verify'].\n- Export verifyWorkspace({ name, provider = {}, timeoutMs } = {}), modeled on materializeSnapshot:\n  - snapshotArgv(name, 'verify') refuses a non-owned name before any spawn;\n  - assertNoMounts before and after;\n  - runSupervisorStream with input [] and an onFrame that accepts exactly ONE frame with exact keys {changed, kind}, kind 'verified', and changed a non-negative safe integer. Anything else throws TRANSFER_FRAME_INVALID, as materializeSnapshot's onFrame does. No frame also throws TRANSFER_FRAME_INVALID.\n  - Resolve 'intact' when changed is 0, else 'changed'.\n- No snapshot argument: the guest compares against its own root-only manifest, written by this run's materialize, which the host already checked by digest.\n\n(b) scripts/local-runner/check-lifecycle.mjs, created by CQ-R11 (task-07951125); edit its LANDED bytes:\n- runCheckJob's dependency argument gains verify = verifyWorkspace;\n- after the session and BEFORE remove, and only when session.outcome === 'passed', set workspace = await verify({ name, provider, timeoutMs });\n- a rejection, or any value other than 'intact' or 'changed', leaves 'unverified';\n- every other path keeps 'unverified';\n- update its header comment, which said workspace is always 'unverified'.\nThe delete-before-settle and every other R11 rule are unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/snapshot-transfer.mjs"
       ],
       "newFiles": [
         "scripts/local-runner/check-lifecycle.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/snapshot-transfer.mjs",
+        "scripts/local-runner/check-lifecycle.mjs"
+      ],
+      "note": "(a) snapshot-transfer.mjs: MODES gains 'verify'; new export verifyWorkspace({name, provider = {}, timeoutMs} = {}) = streamOptions (owned name, provider, timeout checked before any call) -> assertNoMounts -> supervise(input []) with an onFrame accepting exactly one frame of keys {changed, kind}, kind 'verified', changed a non-negative safe integer (else TRANSFER_FRAME_INVALID) -> no frame is TRANSFER_FRAME_INVALID -> assertNoMounts -> 'intact' | 'changed'. (b) check-lifecycle.mjs: deps gain verify = verifyWorkspace; run.workspace starts 'unverified'; inside checkJob, after run.observed is set and only when outcome === 'passed', run.workspace = verify({name, provider, timeoutMs: o.timeoutMs}) mapped through WORKSPACES ['intact','changed'], any rejection/other value -> 'unverified'. Runs before the finally's deleteOwned, so delete-before-settle unchanged; header + JSDoc updated. Focused rows on the shared tree (env -i, Node 24.21.0): T1-T7, M1-M4, X1-X7, VR1-VR6, VH1-VH2, CJ1-CJ10 = 36/36 pass.",
+      "startedAt": "2026-10-30T00:19:49.920Z",
+      "completedAt": "2026-10-30T00:20:50.884Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh.\n\n1. Run the DoD command, `node --test scripts/tests/local-runner.test.mjs`. It must exit 0; supply its command, exit code and output tail to complete_task. On WSL, run it as `env -i HOME=\"$HOME\" PATH=\"<linux node bin>:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs` with python3 on PATH and no MOE_* set. The VR rows need POSIX python3: on Windows they skip by the file's existing NOT_POSIX rule, so report where they ran.\n2. ALSO run `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-snapshot.test.mjs` and report it.\n3. Mutants, on scratch copies only; restore and cmp afterwards:\n   (i) follow links (drop O_NOFOLLOW from READ inside file_identity, or use os.stat): VR2's symlink rows;\n   (ii) walk the whole tree instead of the manifest paths: VR3's mode-000 rows;\n   (iii) ignore the exec bit: VR2;\n   (iv) accept a second frame: VH;\n   (v) verify after remove: CJ9's order;\n   (vi) report 'intact' on a verify rejection: CJ9.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "VERIFY (shared tree, WSL Linux, env -i HOME PATH=Node v24.21.0 + /usr/local/bin:/usr/bin:/bin, python3 /usr/bin, no MOE_*): (1) DoD `node --test scripts/tests/local-runner.test.mjs` exit 0: 242 tests, 241 pass, 0 fail, 1 pre-existing skip (macOS native smoke); VR1-VR6 and CJ10 ran on Linux POSIX python3. (2) `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-snapshot.test.mjs` exit 0: 57 tests, 56 pass, 1 pre-existing skip (K9 needs root). (3) Mutants on /tmp scratch copies only (harness /tmp/r11f-tools/mutate.py, ephemeral; originals never touched, no /tmp/r11f-mut-* left): 15/15 killed: i-a file followed, i-b parent followed (VR2); ii whole-tree walk (VR3); iii exec bit ignored (VR2); iv second frame (VH2); v verify moved after the delete (CJ9); vi intact on rejection (CJ9); vii hard link accepted, viii trailing growth check removed (VR2); ix '..' path accepted (VR5); x junk state accepted, xi non-passed verified (CJ9); xii negative count (VH2); xiii no mount check after (VH); xiv main route missing (VR6). Test fix during this step: VR2 gained a row for a file that grows while being hashed; its first draft fired on the manifest read (chunks is shared), so it now grows a.txt only after a.txt's own read, and kills viii. Equivalent (not run): dropping file_identity's size short-circuit changes no count, only the hashing bound. Size so far: check-lifecycle +20/-11, supervisor +57/-1, transfer +23/-1, tests +218/-10 = 341.",
+      "startedAt": "2026-10-30T00:20:51.764Z",
+      "completedAt": "2026-10-30T00:24:27.379Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a check job trying to make a modified workspace look intact. Check:\n- symlinks, hard links, FIFOs, sockets or devices at a manifest path or an ancestor;\n- an unreadable (000) directory, which must be changed, never an error that hides a modification;\n- a file growing while it is hashed;\n- TOCTOU between lstat and open, through the fd fstat;\n- a manifest path the job deleted and then recreated as a directory;\n- a huge manifest, bounded by read_manifest's MAX_MANIFEST_BYTES and the materialize limits.\nAlso confirm:\n- no path or byte ever leaves the guest;\n- the host never trusts a frame shape beyond {kind, changed};\n- the other modes are byte-for-byte unchanged;\n- the R11 cleanup ordering still deletes before settling;\n- executionReady stays false and verified-local is untouched.\nThe guarantee is the workspace state at session end. A change the job restored before exiting is out of reach, as in R11b's unchanged(); document that limit in the module comment, never over-claim. Report every path in complete_step.modifiedFiles, and write the Serena handoff memory 'task-task-5b0a2bcf70f34c62ba29df0f7ff99988-handoff' for V04b (task-340a07b3) and R13 (task-f4811a72).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/local-runner/snapshot-transfer.mjs",
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "ADVERSARIAL SELF-REVIEW of this task's 4-file diff, read as a check job hiding a change. No new code changes in this step.\n- Symlink at a manifest path or an ancestor: refused by O_NOFOLLOW, so the path counts as changed (VR2, mutants i-a and i-b).\n- Hard link: nlink != 1 counts as changed (vii).\n- FIFO or socket: READ carries O_NONBLOCK, so the open never blocks; not S_ISREG counts as changed. moe-check cannot mknod devices.\n- Directory recreated at a manifest path: an O_RDONLY open succeeds, S_ISDIR counts as changed (VR2).\n- Mode-000 directory: guest root reads through it and compares normally. Any EACCES is changed, never an error.\n- Growth while hashing: caught by the trailing read (viii). Shrink: chunks raises OSError, so changed.\n- TOCTOU: there is no lstat. Every check runs on the fd's own fstat, through fd-relative opens.\n- Huge input: the manifest is capped at 16 MiB, root-written and digest-checked. The size short-circuit keeps hashing within the manifest's bytes (at most 256 MiB).\n- Manifest path with ''/'.'/'..', or a NUL: exits 65 (ix); no fd leak, since the finally closes them.\n- Only {kind, changed} leaves the guest; the host checks the exact key set, so a __proto__ key is refused.\n- Mounts are checked before and after. A timeout, spawn failure or provider failure gives 'unverified'.\n- The R11 order holds: verify runs inside checkJob, before the finally's delete (mutant v).\n- export, materialize, bridge and check bodies are byte-identical; main only gains the route.\n- executionReady stays false; verified-local is untouched; nothing is written under .moe.\nTHEORETICAL (for QA):\n(a) verify ignores o.signal. An abort during it waits up to timeoutMs (at most 60 s) before the delete.\n(b) A job process that escaped teardown could change files during verify. The guarantee is the state at session end, documented, and CQ-R13's to certify.\n(c) A pass whose delete fails is 'inconclusive' but may still carry workspace 'intact'.\n(d) Only the owner exec bit is compared, which matches git and export semantics.\nSerena handoff written: task-task-5b0a2bcf70f34c62ba29df0f7ff99988-handoff.",
+      "startedAt": "2026-10-30T00:24:28.365Z",
+      "completedAt": "2026-10-30T00:25:44.505Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -80,20 +114,28 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:20:36.992Z",
-  "updatedAt": "2026-10-29T22:31:27.343Z",
+  "updatedAt": "2026-10-30T00:26:32.786Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:23:16.834Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-fe18a9a9"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T22:26:11.929Z",
   "executionContract": {
@@ -154,5 +196,21 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T22:26:12.033Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T00:12:54.298Z",
+  "reviewStartedAt": "2026-10-30T00:26:32.784Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ VR1 an untouched workspace verifies as exactly one {kind: verified, changed: 0} frame\n✔ VR2 a changed, deleted, chmod-flipped, linked or replaced manifest file counts once, and no link is followed\n✔ VR3 only manifest names are opened, each without following a link, so new files, directories and mode-000 entries leave it intact\n✔ VR4 verify writes, chowns and chmods nothing, and its one frame carries only kind and changed\n✔ VR5 a missing or malformed manifest or workspace exits 65, and a gone host 74, each with no frame\n✔ VR6 the supervisor CLI takes exactly verify, only as root, and routes it to verify(1)\n✔ VH1 verifyWorkspace sends no input and maps its one frame to intact or changed, between two mount checks\n✔ VH2 any other stream, mount state, provider failure or input is a fixed refusal\n✔ CJ9 only a passed session is verified, after it and before the delete, and a refused verify leaves the workspace unverified\n✔ CJ10 end to end, the real supervisor verify reports a passed job's edits as changed, and its own new files as intact\n﹣ opt-in native provider smoke on real macOS hardware establishes support # native provider smoke not run\nℹ tests 242\nℹ suites 0\nℹ pass 241\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 29168.454366",
+    "reportedAt": "2026-10-30T00:26:32.784Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/local-runner/snapshot-transfer.mjs",
+    "scripts/local-runner/check-lifecycle.mjs"
+  ],
+  "completionSummary": "CQ-R11f guest workspace integrity mode. 4 files, about 345 changed lines.\n- guest-supervisor.py adds a root, read-only 'verify' mode (main(['verify']) -> verify(1)).\n  - file_identity(root, path, size) uses blob_oid's walk: WALK parents, READ file, O_NOFOLLOW at every component.\n  - It returns (exec, size, sha256), or None for: not regular, nlink != 1, a size other than the manifest's (never read, so hashing stays within the manifest's bytes), growth while read, or any OSError.\n  - A manifest path with an ''/'.'/'..' segment exits 65.\n  - It emits one {kind:'verified', changed}. Exit 65: manifest or workspace root missing or malformed. Exit 74: gone host. No frame on either.\n  - Only manifest names are opened.\n- snapshot-transfer.mjs: MODES gains 'verify'. verifyWorkspace({name, provider, timeoutMs}) checks no mounts before and after, sends no input, and accepts exactly one well-formed frame. It returns 'intact' or 'changed'; anything else is a fixed TRANSFER_* code.\n- check-lifecycle.mjs: deps gain verify = verifyWorkspace. It runs only after a 'passed' session, before the finally delete; any failure leaves 'unverified'.\n- Tests: VR1-VR6 run the real supervisor, plus VH1-VH2, CJ9, and CJ10 (end to end through the default verifyWorkspace and the real supervisor).\n  - The CJ harness gained a logged verify step: FULL_LOG and UNVERIFIED_LOG, and CJ5/6/8 were adjusted.\n- Verification, fresh, WSL Linux, env -i, Node 24.21.0:\n  - DoD: exit 0. 242 tests, 241 pass, 1 pre-existing skip (macOS smoke). The VR rows ran on POSIX python3.\n  - check + snapshot suites: exit 0. 57 tests, 56 pass, 1 skip (K9, needs root).\n- Mutants: 15/15 killed on scratch copies (follow-link x2, whole-tree walk, exec ignored, second frame, verify after delete, intact on reject, hard link, growth, '..', junk state, non-pass verified, negative count, no after-mount check, missing route).\n- Theoretical:\n  - verify ignores the abort signal (bounded by timeoutMs, at most 60 s).\n  - It sees state at sessi"
 }

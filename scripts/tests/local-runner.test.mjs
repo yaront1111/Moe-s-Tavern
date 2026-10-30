@@ -3875,7 +3875,8 @@ const CHECK_SNAPSHOT = snapshotOf([fileOf('tests/a.py', 'pass\n')], [fileOf('src
 const identityOf = ({ source = SOURCE.sha256, image = PROVIDER_HASH, supervisor = BOOTSTRAP.supervisorSha256 } = {}) =>
   checkEnvironment({ sourceImageSha256: source, providerImageHash: image, supervisorSha256: supervisor, resources: GUEST_RESOURCES });
 const PASSED_RUN = { outcome: 'passed', exitCode: 0, signal: null, outputTail: 'ok\n' };
-const FULL_LOG = ['provision', 'reserve', 'materialize', 'onReady', 'session', 'remove', 'removed'];
+const FULL_LOG = ['provision', 'reserve', 'materialize', 'onReady', 'session', 'verify', 'remove', 'removed'];
+const UNVERIFIED_LOG = FULL_LOG.filter(name => name !== 'verify'); // only a passed session is verified (CQ-R11f)
 const readyGuest = (changes = {}) => ({ provisioned: true, instance: GUEST, bootstrapReady: true, executionReady: false, prerequisites: READY_ITEMS,
   image: { source: SOURCE, provider: { imageHash: PROVIDER_HASH, imageRelease: '24.04 LTS' } }, supervisorSha256: BOOTSTRAP.supervisorSha256, failures: [], ...changes });
 // A provision step that reserves through the ledger it was given, then resolves value, or throws it when it is an Error.
@@ -3883,15 +3884,17 @@ const reserving = value => async ({ ledger, owner: who }) => { await ledger.rese
 const checkRefused = code => error => error?.code === code && error.message === `Check job failed: ${code}.`;
 const stopped = (failure, changes = {}) => ({ outcome: 'infra-failure', exitCode: null, signal: null, outputTail: '', environment: null,
   workspace: 'unverified', instance: GUEST, vm: 'deleted', failure, executionReady: false, ...changes });
-const ranWith = (run, changes = {}) => ({ ...run, environment: identityOf(), workspace: 'unverified', instance: GUEST, vm: 'deleted', failure: null,
+// The harness verify answers 'intact', and only a passed session is verified.
+const ranWith = (run, changes = {}) => ({ ...run, environment: identityOf(), workspace: run.outcome === 'passed' ? 'intact' : 'unverified', instance: GUEST, vm: 'deleted', failure: null,
   executionReady: false, ...changes });
 
-function checkHarness({ provision = reserving(readyGuest()), materialize = () => {}, onReady = () => {}, session = () => PASSED_RUN, remove = () => 'deleted' } = {}) {
+function checkHarness({ provision = reserving(readyGuest()), materialize = () => {}, onReady = () => {}, session = () => PASSED_RUN, verify = () => 'intact',
+  remove = () => 'deleted' } = {}) {
   const h = { log: [], seen: {} };
   const step = (name, behave) => async options => { h.log.push(name); h.seen[name] = options; return behave(options); };
   h.ledger = { read: async () => assert.fail('read'), update: async () => assert.fail('update'), recordImage: async () => assert.fail('recordImage'),
     reserve: async who => { h.log.push('reserve'); h.seen.reserve = who; return { instance: GUEST }; } };
-  h.deps = { provision: step('provision', provision), materialize: step('materialize', materialize), session: step('session', session),
+  h.deps = { provision: step('provision', provision), materialize: step('materialize', materialize), session: step('session', session), verify: step('verify', verify),
     remove: step('remove', async options => { await wait(1); try { return await remove(options); } finally { h.log.push('removed'); } }) };
   h.input = { platform: onWindows(), ledger: h.ledger, owner, cacheDir: '/var/cache/moe', supervisor: SUPERVISOR, credential: CREDENTIAL,
     snapshot: CHECK_SNAPSHOT, check: CHECK, budgetMs: 60_000, provider: { run: async () => assert.fail('provider') }, timeoutMs: 1_000,
@@ -3977,7 +3980,7 @@ test('CJ4 a refused no-mount materialization stops the run before the hook and t
 });
 
 test('CJ5 the onReady hook gates the session; its error, a timeout or an abort settles only after the delete', async () => {
-  const gated = FULL_LOG.filter(name => name !== 'session');
+  const gated = UNVERIFIED_LOG.filter(name => name !== 'session');
   const boom = new Error('caller hook');
   for (const [hook, thrown] of [[() => { throw boom; }, boom], [() => Promise.reject(boom), boom], [() => { throw 'not an error'; }, 'not an error']]) {
     const h = checkHarness({ onReady: hook });
@@ -4005,15 +4008,15 @@ test('CJ6 outcomes pass through after the delete, the approved protected list re
   for (const run of [failed, ...['timeout', 'skipped', 'infra-failure'].map(outcome => ({ outcome, exitCode: null, signal: null, outputTail: 'x' })),
     { outcome: 'inconclusive', exitCode: 0, signal: null, outputTail: 'ok\n' }]) {
     const h = checkHarness({ session: () => run });
-    assert.deepEqual([await runCheckJob(h.input, h.deps), h.log], [ranWith(run), FULL_LOG], run.outcome);
+    assert.deepEqual([await runCheckJob(h.input, h.deps), h.log], [ranWith(run), UNVERIFIED_LOG], run.outcome);
   }
-  for (const [session, remove, expected] of [[() => PASSED_RUN, () => { throw failWith({ code: 'LIFECYCLE_STATE_UNKNOWN' }); }, undeleted('delete-failed')],
-    [() => PASSED_RUN, () => 'gone', undeleted('delete-failed')], [() => PASSED_RUN, () => 'not-launched', undeleted('not-launched')],
+  for (const [session, remove, expected, log = UNVERIFIED_LOG] of [[() => PASSED_RUN, () => { throw failWith({ code: 'LIFECYCLE_STATE_UNKNOWN' }); }, undeleted('delete-failed'), FULL_LOG],
+    [() => PASSED_RUN, () => 'gone', undeleted('delete-failed'), FULL_LOG], [() => PASSED_RUN, () => 'not-launched', undeleted('not-launched'), FULL_LOG],
     [() => failed, () => { throw new Error('x'); }, ranWith(failed, { vm: 'delete-failed', failure: 'CHECK_VM_DELETE_FAILED' })],
     [() => { throw failWith({ code: 'CHECK_SESSION_INPUT_INVALID' }); }, () => 'deleted', stopped('CHECK_SESSION_FAILED', { environment: identityOf() })],
     [() => ({ ...PASSED_RUN, outcome: 'pass' }), () => 'deleted', stopped('CHECK_SESSION_FAILED', { environment: identityOf() })]]) {
     const h = checkHarness({ session, remove });
-    assert.deepEqual([await runCheckJob(h.input, h.deps), h.log], [expected, FULL_LOG]);
+    assert.deepEqual([await runCheckJob(h.input, h.deps), h.log], [expected, log]);
   }
   // The real runCheckSession over a fake supervisor: the frame is the approved check even when the caller edits its object
   // during onReady, and supervisor exits 79 and 80 classify as skipped and inconclusive.
@@ -4071,9 +4074,214 @@ test('CJ8 the real provisionGuest and deleteOwned purge exactly the VM this run 
       : Promise.resolve(purged.push(args[2]) && h.fake.present.delete(args[2]) && { stdout: '', stderr: '' }));
     const result = await runCheckJob({ ...checkHarness().input, ledger: h.ledger, cacheDir: h.cacheDir, provider: { run }, onReady: () => {} }, {
       provision: options => provisionGuest({ ...options, fetch: h.download.fetch, digest: h.digest, sleep: async () => {} }),
-      materialize: async () => {}, session: async () => PASSED_RUN });
+      materialize: async () => {}, session: async () => PASSED_RUN, verify: async () => 'intact' });
     const records = Object.fromEntries((await h.ledger.list()).records.map(record => [record.instance, record.phase]));
     assert.deepEqual([result, purged.filter(name => name !== GUEST), records, [GUEST, nameAt(0xa1), nameAt(0xa2)].map(name => h.fake.present.has(name))],
       [expected, [], { [nameAt(0xa1)]: 'owned', [nameAt(0xa2)]: 'collision', [GUEST]: taken ? 'collision' : 'deleted' }, [taken, true, true]], label);
   }
 });
+
+// CQ-R11f workspace integrity: VR rows run the real supervisor's verify() over a workspace materialize() built (EXPORT_BASE:
+// a.txt, bin/run +x, src/main.c, src/util.c), changed as a check job would; VH rows fake its stream; CJ9/CJ10 runCheckJob.
+import { linkSync } from 'node:fs';
+import { verifyWorkspace } from '../local-runner/snapshot-transfer.mjs';
+
+const VERIFIED = changed => ({ kind: 'verified', changed });
+function verifyIn(paths, setup = '', out = '1') {
+  const code = `${PY_LOAD}${setup}\nsys.exit(m.verify(${out}, sys.argv[2], sys.argv[3]))`;
+  return spawnSync('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, paths.workspace, paths.manifest], { timeout: 60_000 });
+}
+const verified = run => [run.status, createFrameDecoder().push(run.stdout)];
+// The name moved aside and replaced by a relative symlink to that identical copy.
+const twin = (at, name) => { renameSync(at(name), at(`${name}.real`)); symlinkSync(`${path.basename(name)}.real`, at(name)); };
+const JOB_EDITS = [
+  ['new bytes', at => writeFileSync(at('src/main.c'), 'int main(void);\n'), 1], ['same-size bytes', at => writeFileSync(at('src/util.c'), 'v'), 1],
+  ['a delete', at => rmSync(at('src/util.c')), 1], ['a chmod +x', at => chmodSync(at('a.txt'), 0o755), 1],
+  ['a chmod -x', at => chmodSync(at('bin/run'), 0o644), 1], ['a symlink to an identical copy', at => twin(at, 'a.txt'), 1],
+  ['an ancestor symlinked to an identical tree', at => twin(at, 'src'), 2], ['a hard link', at => linkSync(at('a.txt'), at('alias')), 1],
+  ['a directory in its place', at => { rmSync(at('a.txt')); mkdirSync(at('a.txt')); }, 1],
+  ['a FIFO in its place', at => { rmSync(at('a.txt')); mkfifo(at('a.txt')); }, 1],
+  ['four at once', at => { writeFileSync(at('src/main.c'), 'x'); rmSync(at('src/util.c')); chmodSync(at('a.txt'), 0o700); twin(at, 'bin/run'); }, 4],
+];
+// Each os.open as [name, O_NOFOLLOW set, read-only flags], on stderr at exit.
+const OPEN_RECORDER = `import atexit, json
+opened, real = [], os.open
+os.open = lambda name, flags, mode=0o777, *, dir_fd=None: opened.append([os.fsdecode(name), flags & os.O_NOFOLLOW != 0,
+    flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND) == 0]) or real(name, flags, mode, dir_fd=dir_fd)
+atexit.register(lambda: sys.stderr.write(json.dumps(opened)))`;
+
+test('VR1 an untouched workspace verifies as exactly one {kind: verified, changed: 0} frame', { skip: NOT_POSIX }, t => {
+  const run = verifyIn(workspaceIn(t));
+  assert.deepEqual(verified(run), [0, [VERIFIED(0)]], String(run.stderr));
+});
+
+test('VR2 a changed, deleted, chmod-flipped, linked or replaced manifest file counts once, and no link is followed', { skip: NOT_POSIX }, t => {
+  for (const [label, edit, changed] of JOB_EDITS) {
+    const paths = workspaceIn(t);
+    edit(name => path.join(paths.workspace, name));
+    const run = verifyIn(paths);
+    assert.deepEqual(verified(run), [0, [VERIFIED(changed)]], `${label} ${run.stderr}`);
+  }
+  // a.txt grows by a byte once its manifest size is hashed: chunks reads the manifest first, then a.txt.
+  const grow = `real, reads = m.chunks, []\ndef chunks(fd, size):\n    yield from real(fd, size)\n    reads.append(fd)
+    if len(reads) == 2:\n        with open(sys.argv[2] + '/a.txt', 'ab') as file:\n            file.write(b'+')\nm.chunks = chunks`;
+  const grown = verifyIn(workspaceIn(t), grow);
+  assert.deepEqual(verified(grown), [0, [VERIFIED(1)]], String(grown.stderr));
+  if (process.getuid() !== 0) { // an unreadable directory hides its files, so they count as changed; the guest's root reads through
+    const paths = workspaceIn(t);
+    chmodSync(path.join(paths.workspace, 'src'), 0);
+    const run = verifyIn(paths);
+    chmodSync(path.join(paths.workspace, 'src'), 0o755);
+    assert.deepEqual(verified(run), [0, [VERIFIED(2)]], String(run.stderr));
+  }
+});
+
+test('VR3 only manifest names are opened, each without following a link, so new files, directories and mode-000 entries leave it intact',
+  { skip: NOT_POSIX }, t => {
+    const paths = workspaceIn(t);
+    const at = name => path.join(paths.workspace, name);
+    mkdirSync(at('out/deep'), { recursive: true, mode: 0o700 });
+    writeFileSync(at('out/deep/report.log'), 'r', { mode: 0o600 });
+    writeFileSync(at('src/added.c'), '');
+    writeFileSync(at('locked'), 'L', { mode: 0 });
+    mkdirSync(at('sealed'));
+    writeFileSync(at('sealed/in'), 'S');
+    chmodSync(at('sealed'), 0);
+    const run = verifyIn(paths, OPEN_RECORDER);
+    chmodSync(at('sealed'), 0o700);
+    const opened = [paths.manifest, paths.workspace, 'a.txt', 'bin', 'run', 'src', 'main.c', 'src', 'util.c'].map(name => [name, true, true]);
+    assert.deepEqual([...verified(run), JSON.parse(run.stderr)], [0, [VERIFIED(0)], opened]);
+  });
+
+test('VR4 verify writes, chowns and chmods nothing, and its one frame carries only kind and changed', { skip: NOT_POSIX }, t => {
+  const paths = workspaceIn(t);
+  const at = name => path.join(paths.workspace, name);
+  writeFileSync(at('src/main.c'), 'int main(void);\n');
+  chmodSync(at('a.txt'), 0o755);
+  linkSync(at('bin/run'), at('bin/alias'));
+  writeFileSync(at('new.txt'), 'N', { mode: 0o600 });
+  const stateOf = () => readdirSync(paths.lib, { recursive: true }).sort().map(name => {
+    const file = path.join(paths.lib, name);
+    const info = lstatSync(file, { bigint: true });
+    return [name, info.mode, info.uid, info.nlink, info.size, info.mtimeNs, info.ctimeNs, info.isFile() ? sha(readFileSync(file)) : null];
+  });
+  const before = stateOf();
+  const refuse = `def refuse(*args, **kwargs):\n    raise AssertionError('verify changed the filesystem')
+for call in ('chmod', 'fchmod', 'chown', 'fchown', 'lchown', 'unlink', 'rename', 'replace', 'mkdir', 'rmdir', 'symlink', 'link', 'utime',
+             'truncate', 'ftruncate'):
+    setattr(os, call, refuse)
+real_write = os.write
+os.write = lambda fd, data: real_write(fd, data) if fd == 1 else refuse()`;
+  const run = verifyIn(paths, refuse);
+  assert.deepEqual([...verified(run), stateOf()], [0, [VERIFIED(3)], before], String(run.stderr));
+  assert.deepEqual(Object.keys(createFrameDecoder().push(run.stdout)[0]).sort(), ['changed', 'kind']);
+});
+
+test('VR5 a missing or malformed manifest or workspace exits 65, and a gone host 74, each with no frame', { skip: NOT_POSIX }, t => {
+  const rewrite = edit => paths => writeFileSync(paths.manifest, JSON.stringify(edit(JSON.parse(readFileSync(paths.manifest, 'utf8')))));
+  const extra = name => rewrite(stored => ({ ...stored, files: { ...stored.files, [name]: stored.files['a.txt'] } }));
+  for (const [label, change] of [['a missing manifest', paths => rmSync(paths.manifest)], ['not JSON', paths => writeFileSync(paths.manifest, '{')],
+    ['a short row', rewrite(stored => ({ ...stored, files: { 'a.txt': stored.files['a.txt'].slice(1) } }))],
+    // '../workspace/a.txt' is a.txt itself, reached from outside the workspace root.
+    ...['../workspace/a.txt', 'src/../a.txt', './a.txt', '/a.txt', 'src//main.c', ''].map(name => [JSON.stringify(name), extra(name)]),
+    ['a missing workspace', paths => rmSync(paths.workspace, { recursive: true })],
+    ['a symlinked workspace', paths => { renameSync(paths.workspace, `${paths.workspace}.real`); symlinkSync(`${paths.workspace}.real`, paths.workspace); }],
+  ]) {
+    const paths = workspaceIn(t);
+    change(paths);
+    const run = verifyIn(paths);
+    assert.deepEqual([run.status, run.stdout.length], [65, 0], `${label} ${run.stderr}`);
+  }
+  const gone = verifyIn(workspaceIn(t), 'out, gone = os.pipe()\nos.close(out)', 'gone');
+  assert.deepEqual([gone.status, gone.stdout.length], [74, 0], String(gone.stderr));
+});
+
+test('VR6 the supervisor CLI takes exactly verify, only as root, and routes it to verify(1)', { skip: NOT_POSIX }, () => {
+  for (const args of [['verify', 'x'], ['VERIFY']]) {
+    const run = spawnSync('python3', ['-I', '-B', PY_SUPERVISOR, ...args]);
+    assert.deepEqual([run.status, run.stdout.length], [64, 0], `${args} ${run.stderr}`);
+  }
+  const run = spawnSync('python3', ['-I', '-B', '-c', `${PY_LOAD}sys.exit(m.main(['verify'], geteuid=lambda: 1000))`, PY_SUPERVISOR]);
+  assert.deepEqual([run.status, run.stdout.length], [77, 0], String(run.stderr));
+  const routed = `${PY_LOAD}m.verify = lambda *a, **k: sys.stderr.write(repr((a, k))) and 42\nsys.exit(m.main(['verify'], geteuid=lambda: 0))`;
+  const root = spawnSync('python3', ['-I', '-B', '-c', routed, PY_SUPERVISOR]);
+  assert.deepEqual([root.status, String(root.stderr), root.stdout.length], [42, '((1,), {})', 0]);
+});
+
+test('VH1 verifyWorkspace sends no input and maps its one frame to intact or changed, between two mount checks', async () => {
+  for (const [changed, expected] of [[0, 'intact'], [1, 'changed'], [10_000, 'changed']]) {
+    const t = transferProvider(undefined, proc => proc.reply(VERIFIED(changed)));
+    assert.equal(await verifyWorkspace({ name: GUEST, provider: t.provider, timeoutMs: 5_000 }), expected);
+    assert.deepEqual([t.proc.before, t.guest.ids(), t.guest.unexpected, t.proc.calls, t.proc.written, t.proc.kills],
+      [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], [], [['multipass', snapshotArgv(GUEST, 'verify'), PIPES]], [], []]);
+  }
+});
+
+test('VH2 any other stream, mount state, provider failure or input is a fixed refusal', async () => {
+  const done = VERIFIED(0);
+  for (const [label, respond, code, kills = ['SIGKILL']] of [
+    ['no frame', proc => proc.reply([]), 'TRANSFER_FRAME_INVALID', []], ['two frames', proc => proc.reply([done, done]), 'TRANSFER_FRAME_INVALID'],
+    ['a path key', proc => proc.reply({ ...done, path: 'a.txt' }), 'TRANSFER_FRAME_INVALID'],
+    ['no count', proc => proc.reply({ kind: 'verified' }), 'TRANSFER_FRAME_INVALID'],
+    ['another kind', proc => proc.reply({ ...done, kind: 'materialized' }), 'TRANSFER_FRAME_INVALID'],
+    ...[-1, 1.5, '0', null, true, 2 ** 53].map(changed => [`changed ${changed}`, proc => proc.reply({ ...done, changed }), 'TRANSFER_FRAME_INVALID']),
+    ['a nonzero exit', proc => proc.reply(done, 74), 'TRANSFER_EXIT_FAILED'], ['a hang', () => {}, 'TRANSFER_TIMEOUT'],
+  ]) {
+    const t = transferProvider(undefined, respond);
+    await assert.rejects(verifyWorkspace({ name: GUEST, provider: t.provider, timeoutMs: label === 'a hang' ? 50 : 5_000 }), transferRefused(code), label);
+    assert.deepEqual([t.proc.kills, t.proc.calls.length], [kills, 1], label);
+  }
+  for (const [label, options, code, spawned] of [['a provider mount', { info: guestDetail({ mounts: HOST_MOUNT }) }, 'TRANSFER_MOUNTS_PRESENT', 0],
+    ['unknown mounts', { answers: healthy({ mountinfo: { code: 0, stdout: '' } }) }, 'TRANSFER_MOUNTS_UNKNOWN', 0],
+    ['a provider failure', { info: { error: failWith({ code: 'ENOENT' }) } }, 'PROVIDER_NOT_FOUND', 0],
+    ['a late mount', { answers: healthy({ mountinfo: [mountinfo(), mountinfo([...MOUNTS, SHARED_LINE('virtiofs')])] }) }, 'TRANSFER_MOUNTS_PRESENT', 1]]) {
+    const t = transferProvider(options, proc => proc.reply(done));
+    await assert.rejects(verifyWorkspace({ name: GUEST, provider: t.provider }), transferRefused(code), label);
+    assert.equal(t.proc.calls.length, spawned, label);
+  }
+  const guest = fakeGuest();
+  await assert.rejects(verifyWorkspace({ name: GUEST, provider: { run: guest.run, spawn: () => { throw new Error('/private/secret'); } } }),
+    transferRefused('TRANSFER_SPAWN_FAILED'));
+  for (const [label, options] of [['no options', undefined], ['primary', { name: 'primary' }], ['timeout', { timeoutMs: 600_001 }],
+    ['spawn', { provider: { run: guest.run, spawn: 'spawn' } }], ['provider', { provider: null }]]) {
+    const t = transferProvider(undefined, proc => proc.reply(done));
+    await assert.rejects(verifyWorkspace(options && { name: GUEST, provider: t.provider, ...options }), transferRefused('TRANSFER_INPUT_INVALID'), label);
+    assert.deepEqual([t.guest.calls, t.proc.calls], [[], []], label);
+  }
+});
+
+test('CJ9 only a passed session is verified, after it and before the delete, and a refused verify leaves the workspace unverified', async () => {
+  for (const state of ['intact', 'changed']) {
+    const h = checkHarness({ verify: async () => { await wait(2); h.log.push('verified'); return state; } });
+    assert.deepEqual([await runCheckJob(h.input, h.deps), h.log, h.seen.verify],
+      [ranWith(PASSED_RUN, { workspace: state }), [...UNVERIFIED_LOG.slice(0, -2), 'verify', 'verified', 'remove', 'removed'],
+        { name: GUEST, provider: h.input.provider, timeoutMs: 1_000 }], state);
+  }
+  for (const verify of [() => { throw transferError('TRANSFER_MOUNTS_PRESENT'); }, () => Promise.reject(new Error('/private/secret')), () => { throw 'x'; },
+    ...['INTACT', 'unverified', undefined, { state: 'intact' }].map(value => () => value)]) {
+    const h = checkHarness({ verify });
+    assert.deepEqual([await runCheckJob(h.input, h.deps), h.log], [ranWith(PASSED_RUN, { workspace: 'unverified' }), FULL_LOG]);
+  }
+  for (const outcome of ['code-failure', 'timeout', 'skipped', 'infra-failure', 'inconclusive']) {
+    const h = checkHarness({ session: () => ({ ...PASSED_RUN, outcome }), verify: () => assert.fail('verify') });
+    assert.deepEqual([(await runCheckJob(h.input, h.deps)).workspace, h.log], ['unverified', UNVERIFIED_LOG], outcome);
+  }
+});
+
+test('CJ10 end to end, the real supervisor verify reports a passed job\'s edits as changed, and its own new files as intact',
+  { skip: NOT_POSIX, timeout: 120_000 }, async t => {
+    const guest = fakeGuest();
+    const created = at => { mkdirSync(at('out/deep'), { recursive: true, mode: 0o700 }); writeFileSync(at('out/deep/r.log'), 'r', { mode: 0o600 }); };
+    for (const [label, edit, expected] of [['no edit', () => {}, 'intact'], ['new 0600 files under 0700 directories', created, 'intact'],
+      ...JOB_EDITS.map(([name, change]) => [name, change, 'changed'])]) {
+      const paths = workspaceIn(t);
+      // A spawn that keeps only the argv's final mode and runs that real supervisor function on the child's stdio.
+      const spawn = (executable, argv, options) => spawnChild('python3', ['-I', '-B', '-c',
+        `${PY_LOAD}sys.exit(m.${argv.at(-1)}(1, sys.argv[2], sys.argv[3]))`, PY_SUPERVISOR, paths.workspace, paths.manifest], options);
+      const h = checkHarness({ session: () => { edit(name => path.join(paths.workspace, name)); return PASSED_RUN; } });
+      const { verify, ...deps } = h.deps; // the default, verifyWorkspace
+      const result = await runCheckJob({ ...h.input, provider: { run: guest.run, spawn }, timeoutMs: 30_000 }, deps);
+      assert.deepEqual([result.outcome, result.workspace, result.vm, typeof verify], ['passed', expected, 'deleted', 'function'], label);
+    }
+    assert.deepEqual(guest.unexpected, []);
+  });

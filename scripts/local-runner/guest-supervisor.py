@@ -21,6 +21,9 @@
 # missing, not a regular file, reached through a symlink, or holds another git blob oid, so the candidate does not carry
 # the approved bytes. It adds 80, written after the observation frame: a protected path no longer holds its approved
 # blob once the job is reaped; CQ-R11c classifies the run as inconclusive.
+# Mode 'verify' (CQ-R11f): reads no stdin and writes one {kind: 'verified', changed} frame, the count of manifest paths no
+# longer holding their materialized bytes and exec bit; 65 a missing or malformed manifest or workspace root, 74 a gone
+# host, each with no frame.
 import base64
 import hashlib
 import json
@@ -1056,11 +1059,62 @@ def check_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=No
     return PROTECTED_CHANGED if code == 0 and paths and not unchanged(workspace, frame['protected']) else code
 
 
+def file_identity(root, path, size):
+    # (executable, size, sha256) of the regular, singly linked file at a manifest path under the root fd, or None, by
+    # blob_oid's walk: WALK for every parent and READ for the file, so no symlink is ever followed. A file that is gone,
+    # replaced, hard-linked, unreadable, not of the manifest's size (never read, so hashing stays within the manifest's
+    # bytes), or grows or shrinks while it is read is None; a path materialize would have refused is a ValueError.
+    parts = path.split('/')
+    if any(part in ('', '.', '..') for part in parts):
+        raise ValueError('not a relative manifest path')
+    *parents, name = parts
+    fds = []
+    try:
+        for part in parents:
+            fds.append(os.open(part, WALK, dir_fd=fds[-1] if fds else root))
+        fds.append(os.open(name, READ, dir_fd=fds[-1] if fds else root))
+        info = os.fstat(fds[-1])
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != size:
+            return None
+        digest = hashlib.sha256()
+        for chunk in chunks(fds[-1], size):
+            digest.update(chunk)
+        return None if os.read(fds[-1], 1) else (bool(info.st_mode & 0o100), size, digest.hexdigest())
+    except OSError:
+        return None
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+# CQ-R11f verify, after a check session while its fresh check VM still runs. It counts the manifest paths that no longer
+# hold their materialized bytes and exec bit, in the manifest's (byte) order, and writes only that count. It runs as
+# root and read-only, which is safe: only manifest paths are opened, each component O_NOFOLLOW, so a name the job added
+# is never read and a link never followed. It sees the workspace as the job left it, never a change the job restored
+# before it exited. A missing or malformed manifest or workspace root exits 65 and a gone host 74, each with no frame.
+def verify(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST):
+    try:
+        known = read_manifest(manifest)
+        root = os.open(workspace, WALK)
+    except (OSError, ValueError, RecursionError):  # JSON and UTF-8 errors are ValueErrors
+        return os.EX_DATAERR
+    try:
+        changed = sum(file_identity(root, path, row[1]) != tuple(row) for path, row in known.items())
+        write_frame(out_fd, {'kind': 'verified', 'changed': changed})
+        return 0
+    except ValueError:
+        return os.EX_DATAERR
+    except OSError:
+        return os.EX_IOERR  # a gone host
+    finally:
+        os.close(root)
+
+
 # geteuid and the keywords (seams) of start_job or check_job are injectable from Python only (tests), never from argv or
 # the environment. No refusal writes to stdout.
 def main(argv, geteuid=os.geteuid, **seams):
     # bridgeArgv and snapshotArgv pass exactly these, and CQ-R11c's checkArgv will pass ['check'].
-    if argv not in (['bridge'], ['check'], ['materialize'], ['export']):
+    if argv not in (['bridge'], ['check'], ['materialize'], ['export'], ['verify']):
         return os.EX_USAGE
     if geteuid() != 0:
         return os.EX_NOPERM
@@ -1068,6 +1122,8 @@ def main(argv, geteuid=os.geteuid, **seams):
         return materialize(0, 1)
     if argv == ['export']:
         return export(1)
+    if argv == ['verify']:
+        return verify(1)
     if argv == ['check']:
         return check_job(0, 1, **seams)
     return start_job(0, 1, **seams)

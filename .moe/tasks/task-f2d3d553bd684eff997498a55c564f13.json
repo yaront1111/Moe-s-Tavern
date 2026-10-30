@@ -113,7 +113,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:33:55.625Z",
-  "updatedAt": "2026-10-30T00:24:37.107Z",
+  "updatedAt": "2026-10-30T00:25:19.288Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:52:30.571Z",
     "plannedStepCount": 5,
@@ -206,7 +206,10 @@
     "moe-vscode/media/planReview.js",
     ".moe/tasks/task-5e816f2cafe8490596af56d9a5108efe.json",
     ".moe/tasks/task-3287014af13b4d1dbaac5622de4c1fc6.json",
-    ".moe/tasks/task-f2d3d553bd684eff997498a55c564f13.json"
+    ".moe/tasks/task-f2d3d553bd684eff997498a55c564f13.json",
+    ".moe/tasks/task-649edbbbb9c046548017d6acf413a9f9.json",
+    ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+    ".moe/tasks/task-a2a55bc6059048e78174e551c32a6e73.json"
   ],
   "completionSummary": "CQ-I06b round 2, fixing the QA reject (latched vs rearmed).\n\n1. Probes are identical in both clients. 'latched' is checked in this order: Approve unusable; an AA probe at `rendered` must not re-arm it, and a click sends nothing; then a WORKING probe must not confirm. The AA probe runs first because a WORKING frame ends the review in both clients. Changed: ClientVerdictCorpusTest.kt (+4/-1) and plan-review.test.cjs section L (+6). Sections A-K are unchanged.\n2. Fix-forward in media/planReview.js (+14/-6, 8 net; closes task-3287014a). The page latches on taskRemoved, and on any updateTask whose token is null: the task left AA, or its stamp is unreadable. A latch with no notice yet gets NOT_APPROVABLE_NOTICE. No imports. RED: with only the probe, exactly A23 and A24 failed. GREEN after the fix.\n\nEvidence (scratch copies, restored, cmp-verified, deleted):\n- Full flip matrix, all 25 approval rows rotated +1/+2/+3: 25/25 rows fail in every rotation in BOTH clients. This covers QF1-QF8 and MC1.\n- VS Code mutants: MV1 A07; MV2 A24; MV3 A18; MV4 V11; MV5 V05; QM1 A15 (and H); MP1 (no latch on null token) A23; MP2 (no latch on taskRemoved) A24.\n- JetBrains MJA (INVALIDATED re-arms on an AA return): the round-1 test passed every row; the round-2 test fails all 12 latched rows.\n\nPushback (task comment): QM1 cannot fail A14. Its AA \"5\" frame latches both clients before the error arrives, so the stale flag is unobservable there. A15 pins stale vs non-stale.\n\nFiled: task-5e816f2c (LOW, dependsOn this task). The VS Code panel keeps a pending approval through a PLANNING frame, so a later WORKING@4 says 'Plan approved', while JetBrains latches. It fails only in VS Code with scratch rows A26/A27.\n\nGate as above. Size: 366 net over 6 files (round 2: 17 net).",
   "commits": [
@@ -252,6 +255,24 @@
       "treeId": "29a53a41d399bcc2e3e889d1a5b4d2f4c4de9791",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "ec6b8124b6b8436dbaddd475391e03d59097922a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T00:11:41Z",
+      "paths": [
+        ".moe/tasks/task-649edbbbb9c046548017d6acf413a9f9.json",
+        ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+        ".moe/tasks/task-a2a55bc6059048e78174e551c32a6e73.json",
+        ".moe/tasks/task-f2d3d553bd684eff997498a55c564f13.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T00:25:19.288Z",
+      "treeId": "77e094d332e69fd1ffe821dcc36eb6e6f7434d58",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -264,9 +285,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5ebbf433@2026-10-29T23:34:57Z",
-    "at": "2026-10-29T23:54:14.747Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T00:11:41Z",
+    "at": "2026-10-30T00:25:19.288Z"
   },
   "reviewCompletedAt": "2026-10-30T00:24:37.106Z",
   "rejectionDetails": {

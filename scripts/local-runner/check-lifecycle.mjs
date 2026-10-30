@@ -1,21 +1,23 @@
 // Host side of one isolated check (CQ-R11), one fresh owned VM per run: provisioning plus R07 readiness, whose probes deny
 // every job identity the supervisor credential; a no-mount materialization; the environment identity to onReady before the
 // session; the approved check once, in the R11a/R11b guest check mode (runCheckSession); and the VM deleted before the run
-// settles, on every path. Inputs are trusted host-controller inputs; every guest byte is untrusted. This is not isolation
-// certification (CQ-R13): executionReady is always false and workspace stays 'unverified' until CQ-R11f.
+// settles, on every path. A passed session's workspace is verified in the still-running VM before that delete (CQ-R11f).
+// Inputs are trusted host-controller inputs; every guest byte is untrusted. This is not isolation certification (CQ-R13):
+// executionReady is always false.
 import { checkEnvironment } from './check-evidence.mjs';
 import { MAX_BUDGET_MS, runCheckSession } from './check-session.mjs';
 import { GUEST_RESOURCES } from './guest-bootstrap.mjs';
 import { checkFrame } from './guest-bridge.mjs';
 import { deleteOwned, validOwner } from './lifecycle.mjs';
 import { provisionGuest } from './provision.mjs';
-import { materializeSnapshot, workspaceEntries } from './snapshot-transfer.mjs';
+import { materializeSnapshot, verifyWorkspace, workspaceEntries } from './snapshot-transfer.mjs';
 
 const KEYS = ['platform', 'ledger', 'owner', 'cacheDir', 'supervisor', 'credential', 'snapshot', 'check', 'budgetMs', 'onReady', 'provider', 'signal', 'timeoutMs'];
 const OPTIONAL = ['provider', 'signal', 'timeoutMs'];
 const PROVISION_CODE = /^(?:PROVISION|BOOTSTRAP|LIFECYCLE|LEDGER|PROVIDER|IMAGE|PRIMARY)_[A-Z0-9_]{1,60}$/;
 const TRANSFER_CODE = /^TRANSFER_[A-Z0-9_]{1,60}$/;
 const OUTCOMES = ['passed', 'code-failure', 'infra-failure', 'timeout', 'skipped', 'inconclusive'];
+const WORKSPACES = ['intact', 'changed'];
 const ABORTED = Symbol('aborted');
 // Only internal code literals reach here: a message never carries the credential, a path, a guest byte or upstream text.
 const checkError = code => Object.assign(new Error(`Check job failed: ${code}.`), { code });
@@ -50,23 +52,25 @@ function parse(input) {
 
 /**
  * Runs one approved check in one fresh owned VM. Once the delete has settled, resolves a frozen {outcome, exitCode, signal,
- * outputTail, environment, workspace: 'unverified', instance, vm, failure, executionReady: false}: outcome is 'infra-failure'
- * when a step stopped the run before the session (failure names it), else the session's CheckOutcome, but a pass without a
- * verified delete is 'inconclusive'. vm is 'deleted', 'not-launched', 'delete-failed' or 'none' (nothing reserved). Rejects
+ * outputTail, environment, workspace, instance, vm, failure, executionReady: false}: outcome is 'infra-failure' when a step
+ * stopped the run before the session (failure names it), else the session's CheckOutcome, but a pass without a verified
+ * delete is 'inconclusive'. workspace is verify's 'intact' or 'changed' for a passed session, else, or when verify fails,
+ * 'unverified'. vm is 'deleted', 'not-launched', 'delete-failed' or 'none' (nothing reserved). Rejects
  * CHECK_JOB_INPUT_INVALID or CHECK_ABORTED before any call, and after the delete, onReady's own error unchanged or
  * CHECK_READY_TIMEOUT. The second argument injects the steps.
  */
-export async function runCheckJob(input, { provision = provisionGuest, materialize = materializeSnapshot, session = runCheckSession, remove = deleteOwned } = {}) {
+export async function runCheckJob(input, { provision = provisionGuest, materialize = materializeSnapshot, session = runCheckSession, verify = verifyWorkspace,
+  remove = deleteOwned } = {}) {
   const o = parse(input);
   if (!o) throw checkError('CHECK_JOB_INPUT_INVALID');
   if (o.signal?.aborted) throw checkError('CHECK_ABORTED');
-  const run = { name: null, environment: null, observed: null };
+  const run = { name: null, environment: null, observed: null, workspace: 'unverified' };
   // Provisioning gets this wrapper, never the owner's ledger: it captures this run's own reservation to delete, even after a throw.
   const ledger = { ...o.ledger, reserve: async who => { const record = await o.ledger.reserve(who); run.name = record?.instance ?? null; return record; } };
   let failure;
   let vm = 'none';
   try {
-    failure = await checkJob(o, run, ledger, { provision, materialize, session });
+    failure = await checkJob(o, run, ledger, { provision, materialize, session, verify });
   } finally { // 'not-launched': reserved, never launched by this run, so nothing of ours is left to delete.
     if (run.name !== null) vm = await Promise.resolve().then(() => remove({ ledger, name: run.name, owner: o.owner, provider: o.provider }))
       .then(gone => (gone === 'deleted' || gone === 'not-launched' ? gone : 'delete-failed'), () => 'delete-failed');
@@ -75,12 +79,12 @@ export async function runCheckJob(input, { provision = provisionGuest, materiali
   const observed = failure === null ? run.observed : { outcome: 'infra-failure', exitCode: null, signal: null, outputTail: '' };
   // CHECK_BOUNDARIES.process.vm is 'deleted-after-run': a pass without a verified delete is not a pass.
   return Object.freeze({ ...observed, outcome: observed.outcome === 'passed' && !deleted ? 'inconclusive' : observed.outcome,
-    environment: run.environment, workspace: 'unverified', instance: run.name, vm,
+    environment: run.environment, workspace: run.workspace, instance: run.name, vm,
     failure: failure ?? (deleted ? null : 'CHECK_VM_DELETE_FAILED'), executionReady: false });
 }
 
 // Each step passes or ends the run with one fixed code (null once the session ran): the session needs every step before it.
-async function checkJob(o, run, ledger, { provision, materialize, session }) {
+async function checkJob(o, run, ledger, { provision, materialize, session, verify }) {
   const { platform, owner, cacheDir, supervisor, credential, provider, signal } = o;
   let guest;
   try { guest = await provision({ platform, ledger, owner, cacheDir, supervisor, credential, provider }); } catch (error) {
@@ -106,6 +110,11 @@ async function checkJob(o, run, ledger, { provision, materialize, session }) {
     if (!OUTCOMES.includes(outcome)) return 'CHECK_SESSION_FAILED';
     run.observed = { outcome, exitCode, signal: ended, outputTail };
   } catch { return 'CHECK_SESSION_FAILED'; }
+  // Only a pass is worth verifying (V04b downgrades nothing else); any verify failure leaves the workspace 'unverified'.
+  if (run.observed.outcome === 'passed') {
+    run.workspace = await Promise.resolve().then(() => verify({ name: run.name, provider, timeoutMs: o.timeoutMs }))
+      .then(state => (WORKSPACES.includes(state) ? state : 'unverified'), () => 'unverified');
+  }
   return null;
 }
 

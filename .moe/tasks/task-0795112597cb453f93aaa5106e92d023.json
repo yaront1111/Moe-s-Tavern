@@ -120,7 +120,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:17.777Z",
-  "updatedAt": "2026-10-30T00:10:32.506Z",
+  "updatedAt": "2026-10-30T00:11:07.806Z",
   "dependsOn": [
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
     "task-23a5563cea384d56abb8da1551435455",
@@ -254,7 +254,8 @@
     ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
     ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
     ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
-    ".moe/tasks/task-f18eef7acc5140cdbe6f545a7f82434d.json"
+    ".moe/tasks/task-f18eef7acc5140cdbe6f545a7f82434d.json",
+    ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json"
   ],
   "completionSummary": "CQ-R11: one isolated check per fresh owned VM. 396 changed lines.\n- NEW scripts/local-runner/check-lifecycle.mjs runCheckJob(input, deps). Its steps:\n  - provisionGuest, through a ledger wrapper that captures this run's reserved name;\n  - a clean R07 gate (provisioned, instance === reserved, bootstrapReady, no failures);\n  - checkEnvironment from the guest's image hashes, the supervisor hash it verified, and GUEST_RESOURCES;\n  - no-mount materializeSnapshot;\n  - onReady(environment), bounded by timeoutMs and the signal;\n  - runCheckSession with a check frozen at parse.\n  Then deleteOwned runs in finally, before the run settles.\n- Result: frozen {outcome, exitCode, signal, outputTail, environment, workspace:'unverified', instance, vm, failure, executionReady:false}.\n  - Every pre-session stop is infra-failure with a fixed code.\n  - A pass without a verified delete becomes inconclusive with failure CHECK_VM_DELETE_FAILED.\n  - onReady's error, or CHECK_READY_TIMEOUT, is rethrown after the delete.\n- lifecycle.mjs: exports validOwner, and adds deleteOwned. deleteOwned checks the owner, deletes by exact name, is idempotent, and returns 'not-launched' for a reserved or collision record.\n- provision.mjs: the result carries supervisorSha256.\n- Deviations from the plan text:\n  - PRIMARY_* codes pass through;\n  - a session throw or unknown outcome gives CHECK_SESSION_FAILED;\n  - all non-optional keys are required;\n  - vm can also be 'not-launched';\n  - an extra abort check runs before materialize;\n  - an instance mismatch gives CHECK_PROVISION_FAILED.\n- Tests: the deleteOwned test plus CJ1-CJ8 (CJ8 uses the real provisionGuest and deleteOwned with foreign records).\n- Verification:\n  - DoD: exit 0, 231 pass, 1 pre-existing skip.\n  - check/vm-control/snapshot suites: exit 0, 58 pass, 1 pre-existing root-only skip (K9).\n  - Mutants i-viii, on a /tmp copy, were all killed by their named rows.\n- Theoretical, for QA:\n  (a) when onReady's error is rethrown, vm is hidden from the call",
   "commits": [
@@ -313,6 +314,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "4d0f623e8a0812d5504456438dbd1fa6983c2b72",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T00:06:05Z",
+      "paths": [
+        ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+        ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T00:11:07.806Z",
+      "treeId": "3ca267df61d0641deace3aa23e820f2824f52070",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -322,8 +339,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-952969be@2026-10-29T22:46:55Z",
-    "at": "2026-10-29T22:55:12.048Z"
+    "sessionId": "qa-952969be@2026-10-30T00:06:05Z",
+    "at": "2026-10-30T00:11:07.806Z"
   },
   "completedAt": "2026-10-30T00:10:32.506Z",
   "reviewCompletedAt": "2026-10-30T00:10:32.506Z",
