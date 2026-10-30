@@ -99,18 +99,25 @@
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW of this task's own diff, the last step (load adversarial-self-review). This task is epic-final only by the highest-order fallback: epic-be924fb8 has no finalTaskId and every sibling had its own QA. So also re-read how this diff meets a2f243a1 and dfbda1a8 (Get-MoeRecordHeldFields sends) and f943b687 (getCommitScope.ts, and recordCommit.ts CONTESTED_EDITING_RE). Check and note each item:\n\n(1) Only adds holds. No path that HEAD's wrapper landed under skip, commit or declare_files changes fate unless a peer is mid-step on it. Diff every branch of the contested block in both wrappers.\n\n(2) Legacy parity. A scope without taskIds or editingTaskIds, or a hand-built ps1 entry @{Path;TaskId}, gives exactly today's candidates, skips, contested rows, trailers and held= text. AK3, importee-guard.ps1 and importee-guard-bash.test.mjs show it.\n\n(3) Error handling. Feed each parser junk by hand:\n- null entries;\n- taskIds as a string or a number;\n- editingTaskIds with a null element;\n- a peer record whose implementationPlan is an object;\n- a step whose affectedFiles is a string.\nNo exception may reach the landing, and the disk fallback must never degrade to the empty last-resort scope.\n\n(4) PowerShell list handling:\n- one-element and empty lists in the RPC parse are read raw;\n- no `@($null)` row or empty-id hold is possible.\n\n(5) Trailers group exactly one path per line. Rows of different paths are never merged, and one path's rows are never split. The ids appear in taskIds order with the entry's taskId first.\n\n(6) The editing code carries a task id that record_commit's CONTESTED_EDITING_RE (task-[A-Za-z0-9_-]+) accepts. A malformed id still holds the path; it only raises no alert.\n\n(7) Disk fallback:\n- DONE and ARCHIVED records are still skipped;\n- editing only marks paths the task contributes;\n- fails closed with no activity data.\n\n(8) EDIT, UNTOUCHED and NEVER are byte-identical across the 2 wrappers and 2 harnesses. Parity checks are green, and moe-agent.ps1 still has its BOM.\n\n(9) Two landings at once: the attribution is still a pure function of scope plus snapshot, with no new shared state.\n\n(10) The docs agree with docs/MCP_SERVER.md.\n\nIn the completion summary, report:\n- the net non-board LOC, which must be under 400;\n- whether each doc was clean before its edit, and the carrying sha if a peer's landing took a doc hunk;\n- the AK RED/GREEN evidence;\n- the snapshot gate result.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Self-review done; one fix found, applied before the green step-5 gate. This session re-read both wrapper diffs from scratch and found nothing new.\n\nFIX (item 2, legacy parity): two same-key entries can occur only under case folding. The second entry's bare taskId was being added to the id list, which for an older daemon gave an extra ledger row and a two-id trailer. Both wrappers now take only ids from each entry's taskIds list, after the first entry's taskId. Verified on PS 5.1 (folds case): peers `tool-written.txt:task-peer,TOOL-WRITTEN.TXT:task-other` with no fields give one row and `(task-peer)`, as on HEAD.\n\nItems:\n1. Only adds holds. The EDITING check needs policy == skip-untouched, sits after 'skip', and only adds a `continue`. AK5 (skip) and AK6 (commit) pass. The declare_files, TOOL and idle checks are unchanged.\n2. Legacy parity. AK3 (fields absent), importee-guard.ps1 48/0 on both engines (hand-built @{Path;TaskId}), and importee-guard-bash plus usage-attribution 44/44 all pass unchanged.\n3. Junk input, via scratch harnesses x-junk.{sh,ps1}. Cases:\n   - taskIds as a string, a number or null;\n   - editingTaskIds [null,\"task-peer\",5], {}, \"str\" or [null];\n   - a dict plan, a string affectedFiles, null/5/\"x\" steps;\n   - DONE, array and numeric-id records.\n   Result: no exception, no MOE_COMMIT_FAILED, and the fallback never drops to the printf scope. RPC results are identical in sh and ps1.\n   Disk-fallback junk differs by design: ps1 holds more, because Get-MoeStringList treats a scalar as a list, while sh's PS.addall and steps() ignore non-lists. Fail closed either way.\n4. ps1 lists are read raw (PSObject.Properties + -is [array]). Get-MoeStringList drops null and non-string ids, and `$null -ne` is tested before @(), so no @($null) row or empty-id hold.\n5. Trailers: a path's rows are appended once, inside the sorted snapshot loop, so they are adjacent. Grouping is by exact path (sh =, ps1 -ceq), first claimant first. AK4, AK7 and J3 pass.\n6. Daemon ids match CONTESTED_EDITING_RE. A malformed id still holds; only the alert is lost.\n7. The disk fallback still skips DONE and ARCHIVED (D1). Editing only marks paths the task contributes. Any IN_PROGRESS step counts (no activity data, fail closed).\n8. The EDIT and NEVER strings are byte-identical in all 4 files (counted again this session). parity-check.sh PASS, bash -n ok, ps1 BOM ef bb bf, 0 CR.\n9. Attribution is still a pure function of scope plus snapshot; no new shared state.\n10. The docs agree with docs/MCP_SERVER.md (editingTaskIds, MOE_ATTR_CONTESTED_EDITING). MCP_SERVER.md itself was not touched.\n\nTheoretical only: a task id containing a TAB would corrupt the skipped record; taskId already has that exposure. A scope with taskIds but no taskId gives a \"(, a, b)\" trailer; a real daemon always sends taskId.",
+      "startedAt": "2026-10-30T15:21:26.348Z",
+      "completedAt": "2026-10-30T15:21:43.957Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-73c29a03",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -156,7 +163,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:11:20.155Z",
-  "updatedAt": "2026-10-30T15:17:56.168Z",
+  "updatedAt": "2026-10-30T15:22:18.316Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:15:38.804Z",
@@ -166,7 +173,7 @@
     "firstClaimAt": "2026-10-30T07:15:58.635Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 9,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-32ff5555",
@@ -185,7 +192,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T07:39:01.385Z",
@@ -271,22 +279,70 @@
       "treeId": "e17f5a1155ed7cabf1f60fb4932b237f86aa729e",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "d74ce96702697aac81cdca952fcf25e5504d9ad4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T14:00:04Z",
+      "paths": [
+        ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
+        ".moe/tasks/task-7ee53957b90e459fb636948e5cecfa2a.json",
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T15:18:45.379Z",
+      "treeId": "d8ccb55c0bccfe7edd76e3297f78f9ded99b0513",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
-    ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
-    ".moe/tasks/task-30066ccdeb6042c3b5c89a7a31833d14.json",
-    ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
-    ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
-    ".moe/tasks/task-f31d415d5185424ca5f7e375a8b15134.json"
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/CONFIGURATION.md",
+    "docs/TROUBLESHOOTING.md",
+    "docs/SCHEMA.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
     "sessionId": "worker-73c29a03@2026-10-30T14:00:04Z",
-    "at": "2026-10-30T14:00:22.141Z"
+    "at": "2026-10-30T15:18:45.379Z"
   },
-  "workStartedAt": "2026-10-30T14:01:04.975Z"
+  "workStartedAt": "2026-10-30T14:01:04.975Z",
+  "touchedFiles": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/CONFIGURATION.md",
+    "docs/TROUBLESHOOTING.md",
+    "docs/SCHEMA.md"
+  ],
+  "reviewStartedAt": "2026-10-30T15:22:18.314Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && W=$(mktemp -d /mnt/d/moe-scratch/t01f3-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$W/$f\" && cmp \"$f\" \"$W/$f\" || exit 1; done && cd \"$W\" && env $(env | sed -n 's/^\\(\\(MOE\\|CLAUDE\\)[A-Za-z0-9_]*\\)=.*/-u \\1/p') bash -c 'set -e; bash -n scripts/moe-agent.sh; bash scripts/tests/parity-check.sh; node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs scripts/tests/postflight-owner-scope.test.mjs; MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh; for ps in powershell.exe pwsh.exe; do for t in parity-check importee-guard postflight; do WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"$ps\" -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$PWD/scripts/tests/$t.ps1\")\"; done; done'",
+    "exitCode": 0,
+    "outputTail": "Snapshot /mnt/d/moe-scratch/t01f3-5ssO = HEAD 543b1d08 + the 5 task script files (cmp-checked; still cmp-equal to the working files and HEAD d74ce967 at completion). Log /tmp/t01f3-gate.log.\nbash -n ok; PASS parity-check.sh; node --test 57/57 pass\npostflight.sh PASS: frozen 74, owner 16, [scenario AK] ok, commit-scope scenarios run: 43\npowershell.exe 5.1: PASS parity-check.ps1; importee-guard 48 pass/0 fail; postflight.ps1 PASS (frozen 74, owner 16, AK ok, commit-scope 42; AD link variant and AE skipped: host cannot create symlinks)\npwsh.exe 7.6.9: PASS parity-check.ps1; importee-guard 48/0; postflight.ps1 tail:\n[scenario AJ] ok\n[scenario AK] a contesting peer mid-step holds a witnessed path, and every contesting task is named\n[scenario AK] ok\ncommit-scope scenarios run: 42\n[team join] ok\n[team heal] ok\nPASS postflight.ps1\nGATE_EXIT=0",
+    "reportedAt": "2026-10-30T15:22:18.314Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Contested landing now consumes get_commit_scope's taskIds/editingTaskIds (sh + ps1, string parity kept, BOM kept).\n- New hold, skip-untouched only: an own contested path with non-empty editingTaskIds is held as MOE_ATTR_CONTESTED_EDITING(<first editing id>), even when TOOL-witnessed. The check sits after 'skip' and before the idle and TOOL checks. skip keeps MOE_ATTR_CONTESTED; commit still lands.\n- Every contesting task is named: one contested ledger/record_commit row per (task, path), the first claimant first; one `Moe-Contested: <path> (<a>, <b>)` trailer per landed path; held=<path>(<peer>).\n- attr_held_list/Get-MoeHeldList: the remedy is `MOE_CONTESTED_HELD remedy:` + [UNTOUCHED] + [EDIT] + NEVER. An untouched-only line is byte-identical to before.\n- The disk fallback builds per-path taskIds (every open contributor) and editingTaskIds (any IN_PROGRESS step, fail closed).\n- Legacy parity: missing or non-list fields give [taskId] and []. ps1 reads the lists raw. New parsing never raises (isinstance guards, Get-MoeStringList).\n- Fake proxy: FAKE_SCOPE_PEER_FIELDS, FAKE_SCOPE_FAIL. Scenario AK1-AK7 in postflight.{sh,ps1}. Docs: scripts/CLAUDE.md, CONFIGURATION.md, TROUBLESHOOTING.md, SCHEMA.md; each was clean before its edit, and no peer landing carried a doc hunk.\nRED on HEAD's wrappers (bash, PS 5.1, pwsh 7): AK1, AK4 and AK7 fail; AK2, AK3, AK5 and AK6 pass, which is the legacy-parity evidence. GREEN on all three.\nGate GATE_EXIT=0: sh postflight 43 scope scenarios; PS 5.1 and pwsh 42 each (no symlinks here); importee-guard 48/0 on both engines; node 57/57; both parity checks pass.\nSelf-review fix: an older daemon's second same-key entry (case-folded) no longer adds its bare taskId. Junk-input harness: no throw, no MOE_COMMIT_FAILED, no empty fallback scope.\nSize: net non-board LOC 338 (+383/-45 over the 9 files), under the 400 cap."
 }
