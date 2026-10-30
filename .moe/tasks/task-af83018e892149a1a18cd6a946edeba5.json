@@ -128,13 +128,20 @@
       "author": "architect-6fc3dd5c",
       "content": "Architect note for step 5 (plan rev 2): the peer daemon-gate failure has a fix row now. At 87a1e939, providerDescriptor.contract.test.ts is red because 447281cf (task-c4cd6dce) changed scripts/moe-agent.ps1's codex launch to Invoke-MoeGuardedCommand. task-5b0e90fe108f430b8aa02451e7f8915a (\"codexDescriptor PowerShell emitter literals still pin `& $Command`…\") tracks the fix. If it is still the ONLY failure when you run the gate, report_blocked with blockedOnTaskIds [\"task-5b0e90fe108f430b8aa02451e7f8915a\"] rather than editing scripts or the descriptor. Nothing else in the prototype run failed (6070 passed / 20 skipped).",
       "timestamp": "2026-10-30T18:11:09.077Z"
+    },
+    {
+      "id": "comment-51c7a5ca98114a48812c8c07526c5eae",
+      "author": "governor-693b7073",
+      "content": "Governor, 18:12Z: I added dependsOn task-5b0e90fe (the codexDescriptor literal fix for 447281cf's regression).\n\nWhy: this row's BLOCKED state auto-clears when c4cd6dce is DONE, but the red gate only clears when 5b0e90fe lands. 5b0e90fe dependsOn c4cd6dce, so it starts at exactly that moment. Without this edge, the next claimer would rerun a still-red step-5 gate and block again.\n\nResume point for the next worker: steps 1-4 are COMPLETED (worker-c2da129d: V09 focused 45/45, strong 83/83, tsc exit 0). Resume step 5 (fresh full gate in a whole-HEAD Linux snapshot), then step 6 (adversarial review and mutants). Handoff and gotcha memories are recorded.\n\nUndo: set_task_dependencies { taskId: af83018e, removeDependsOn: [task-5b0e90fe108f430b8aa02451e7f8915a] }.",
+      "timestamp": "2026-10-30T18:11:49.347Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:02.918Z",
-  "updatedAt": "2026-10-30T18:11:09.077Z",
+  "updatedAt": "2026-10-30T18:11:49.347Z",
   "dependsOn": [
-    "task-a4ca766a67184630842d4a6d12338cf8"
+    "task-a4ca766a67184630842d4a6d12338cf8",
+    "task-5b0e90fe108f430b8aa02451e7f8915a"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-29T16:58:05.289Z",
@@ -204,18 +211,54 @@
       "treeId": "e661fe6c15acaa8e767f8c9b8966c04fe5c73b55",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "ddc1f35cead8a84a009b8c342c5445ddc44dab78",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T18:03:47Z",
+      "paths": [
+        ".moe/tasks/task-57bbd302b69241f1986accbe2d170fa3.json",
+        ".moe/tasks/task-5b0e90fe108f430b8aa02451e7f8915a.json",
+        ".moe/tasks/task-af83018e892149a1a18cd6a946edeba5.json",
+        ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
+        ".moe/tasks/task-d00dafdf2dde4a41bf5983b1f7d495de.json",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+        "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/setTaskDependencies.ts"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T18:11:20.241Z",
+      "treeId": "7638878a11c9d8825248fe3ccb96cd16a52b2b02",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "filesModified": [
     ".moe/tasks/task-af83018e892149a1a18cd6a946edeba5.json",
-    ".moe/tasks/task-d00dafdf2dde4a41bf5983b1f7d495de.json"
+    ".moe/tasks/task-d00dafdf2dde4a41bf5983b1f7d495de.json",
+    ".moe/tasks/task-57bbd302b69241f1986accbe2d170fa3.json",
+    ".moe/tasks/task-5b0e90fe108f430b8aa02451e7f8915a.json",
+    ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+    "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts",
+    "packages/moe-daemon/src/state/dependencyUnblock.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/reportBlocked.ts",
+    "packages/moe-daemon/src/tools/setTaskDependencies.ts"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-6e57c4f8@2026-10-30T17:36:12Z",
-    "at": "2026-10-30T17:39:06.526Z"
+    "sessionId": "worker-c2da129d@2026-10-30T18:03:47Z",
+    "at": "2026-10-30T18:11:20.241Z"
   },
   "priorBlockedReason": "Approved plan conflicts with existing contract. Step 1 requires a strict local-branch v2 snapshot consumer plus a legacy v2 snapshot prerequisite; step 2 resolves both via resolveTaskDeliveryPolicy. Actual delivery/policy.ts:171 ignores captured deliveryPolicy for legacy/observe, returning the SAME live project policy for both; verified-local throws NOT_READY. Thus the required mixed-policy fixture and strict legacy-delivery branch are unreachable. Changing selector semantics violates the epic's live-policy preservation and expands beyond approved scope. Reproduced at cd522777 in /tmp/moe-v09-policy.eGaN6X: consumer/prerequisite resolve legacy/legacy under live legacy and local-branch/local-branch under live local-branch. Fresh existing Q5 policy tests: 22 passed, 92 filtered skips, exit 0. Need approved definition of historical legacy delivery evidence versus current consumer strictness. V08 is NOT a dependency blocker (governor removed it). Step 1 started; no source/test edits or Git writes; full gate not run. Handoff and gotcha memories recorded.",
   "blockedOnTaskIds": [
