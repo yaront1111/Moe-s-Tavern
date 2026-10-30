@@ -81,7 +81,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -119,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:33:13.822Z",
-  "updatedAt": "2026-10-30T14:41:53.011Z",
+  "updatedAt": "2026-10-30T14:55:31.112Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:33:21.826Z",
@@ -131,7 +131,9 @@
     "plannedDistinctFileCount": 5,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T14:55:31.112Z",
+    "wallClockMs": 3244065
   },
   "contextFetchedBy": [
     "worker-6e57c4f8",
@@ -319,7 +321,7 @@
     "sessionId": "worker-fe18a9a9@2026-10-30T14:32:59Z",
     "at": "2026-10-30T14:41:53.011Z"
   },
-  "reviewCompletedAt": "2026-10-30T14:25:23.678Z",
+  "reviewCompletedAt": "2026-10-30T14:55:31.112Z",
   "rejectionDetails": {
     "failedDodItems": [
       "The tool description, docs/MCP_SERVER.md and the worker role guidance describe the explicit-list-wins rule, and the daemon test suite passes."
@@ -372,5 +374,8 @@
   "touchedFiles": [
     "docs/MCP_SERVER.md",
     "packages/moe-daemon/src/generated/initFiles.ts"
-  ]
+  ],
+  "completedAt": "2026-10-30T14:55:31.112Z",
+  "reviewSummary": "Reopen-1 delivery-only rework verified. Commits: c5f1e8ea (source, tests, role docs; unchanged since, `git log 6e15af27..HEAD` on owned paths is empty) and 6e15af27 (docs/MCP_SERVER.md +11/-6, initFiles.ts +6/-6). Both are ancestors of origin/moe/work-2026-10-24. Blob sha256 is the same at 6e15af27, at HEAD and in the shared tree: MCP_SERVER.md 2ced4137, initFiles.ts e68eda8f. The owned paths are porcelain-clean, so no bytes are stranded, and the session-ended line has no held=.\nQA re-ran the gate in a git clone --shared detached at 6e15af27 (env -i, node v24.21.0, native npm ci): `(cd packages/moe-daemon && npm run build && npm test) && npm run docs:lint` -> exit 0, 208/208 files, 6017 passed / 19 skipped, role lint OK. Prebuild regenerated initFiles.ts and skillFiles.ts and the clone stayed clean, so the vendored ROLE_DOCS are fresh.\nMutants in reportBlocked.test.ts: unconditional parsing 7 fail / 49 pass; never-parse 5 fail / 51 pass (legacy omission, boundary, backfill, cycle and satisfied cases); restored 56/56.\nDoD1 ok: explicit ids are recorded exactly, stored ids are kept on repeats, and reason-only ids are ignored. Tests cover the explicit list, explicit [] and the auto-unblock while the filed bug stays WORKING.\nDoD2 ok: omission still parses, with case, dedupe and boundary tests.\nDoD3 ok: tool and param descriptions (reportBlocked.ts:38/51), MCP_SERVER.md semantics, params and both response shapes, worker.md:30, worker.reference.md:62/80, the vendored copy; suite green.\nSize: non-board +133/-43 (net 90). Rails: regression tests present, additive response fields only, no state change, no forbidden patterns. Ponytail: no findings.\nNote: 6e15af27 also carries peer board record task-032c9739.json (commitBoardState) and has no Moe-Contested trailer.",
+  "requiredCheckAtDone": null
 }
