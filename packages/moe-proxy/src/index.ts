@@ -5,6 +5,7 @@
 // =============================================================================
 
 import WebSocket from 'ws';
+import { displayServedPath, probeDaemonIdentity } from './daemonIdentity.js';
 import {
   getDaemonHost,
   getProjectPath,
@@ -385,10 +386,39 @@ function connect(projectPath: string): void {
     return;
   }
 
+  // daemon.json only proves which project wrote it; a stale one names a port
+  // another project's daemon may now hold. Ask the daemon which project it
+  // serves before opening /mcp, on every connect and reconnect. The probe never
+  // rejects, and 'unknown' (older daemon, daemon mid-restart) proceeds as before.
+  // The stdin reader is installed by openDaemonSocket, after this check, so a
+  // foreign daemon consumes no input and a one-shot caller's request (written,
+  // then stdin closed) is still queued behind an /mcp socket that does open.
+  probeDaemonIdentity(getDaemonHost(), info.port, projectPath).then((identity) => {
+    // gracefulShutdown owns the exit; it also cleared the reconnect timer, so
+    // opening a socket here would only outlive it.
+    if (shuttingDown) return;
+    if (identity.kind === 'foreign') {
+      const message = `Daemon on port ${info.port} serves project ${displayServedPath(identity.projectPath)}, not ${projectPath}: ` +
+        `this project's .moe/daemon.json is stale. Restart this project's Moe daemon (it takes the next free port).`;
+      writeLog(message);
+      writeError(message);
+      process.exit(1);
+      return;
+    }
+    openDaemonSocket(projectPath, info.port);
+  }).catch((err) => {
+    // Only openDaemonSocket can throw here (the probe never rejects). Fail the
+    // way main().catch does for a synchronous connect(); never open a second socket.
+    writeError(err instanceof Error ? err.message : 'Unknown error');
+    process.exit(1);
+  });
+}
+
+function openDaemonSocket(projectPath: string, port: number): void {
   // Ensure any lingering socket and handlers are torn down before reconnecting.
   closeWebSocket();
 
-  const ws = new WebSocket(`ws://${getDaemonHost()}:${info.port}/mcp`);
+  const ws = new WebSocket(`ws://${getDaemonHost()}:${port}/mcp`);
   currentWebSocket = ws;
 
   ws.on('open', () => {
