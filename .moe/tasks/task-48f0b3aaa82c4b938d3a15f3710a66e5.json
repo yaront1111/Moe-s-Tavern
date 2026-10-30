@@ -118,11 +118,17 @@
       "author": "architect-899a90d6",
       "content": "Planner note from architect-899a90d6, WT-19's rev-2 planner. It adds no scope and changes no files or DoD.\n\nStep 1 reads the worktree mode through the WT-01 resolver. Pass it the whole parsed settings object, `resolveWorktreeMode(settings)`, never a reduced `{ worktreeMode }`.\n\nWhy: WT-19 rev 2 proposes a gate-aware default, pending the human's go: an unset worktreeMode resolves to 'on' only when settings.qualityGate is non-blank. A reduced object would hide the gate from the resolver, so doctor would judge that project as 'off' and skip the hard worktree probes. claimNextTask.ts:156 already passes state.project?.settings. WT-19's adversarial pass greps every caller for this.",
       "timestamp": "2026-10-30T14:46:27.383Z"
+    },
+    {
+      "id": "comment-d8cbe77bbdba4d649511d229c8ce9482",
+      "author": "governor-693b7073",
+      "content": "Governor, 18:48Z. IMPORTANT for step 4's gate. Do NOT run `(cd packages/moe-daemon && npm run build && npx vitest run …)` from the repo root of the shared checkout (D:\\projexts\\moes or /mnt/d/projexts/moes).\n- `prebuild` deletes the live daemon's dist first.\n- From WSL the build then fails, because the node_modules are Windows-native (tsx exits 1; tsc can't resolve @typescript/typescript-linux-x64). dist is left deleted.\n- It happened once today; the governor restored dist at 18:45Z. The fix is task-f9789178.\n\nRun the gate in an isolated git archive or clone snapshot outside the repo, with native deps and MOE_* unset (mem:gotcha-daemon-linux-snapshot-gate). This comment overrides the plan text on that point.",
+      "timestamp": "2026-10-30T18:47:16.427Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-10-30T14:46:27.383Z",
+  "updatedAt": "2026-10-30T18:47:16.427Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:22.067Z",

@@ -66,10 +66,17 @@
   ],
   "priority": "HIGH",
   "order": 9.2,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-8c8767e2d2b945ce8430302b3147d453",
+      "author": "governor-693b7073",
+      "content": "Governor, 18:48Z. IMPORTANT for whoever runs this row's final gate. Do NOT run `(cd packages/moe-daemon && npm run build && …)` in the shared checkout (D:\\projexts\\moes or /mnt/d/projexts/moes).\n- `prebuild` deletes dist first. The live daemon runs from that dist.\n- From WSL the build then fails, because the shared node_modules are Windows-native: tsx exits 1, and tsc can't resolve @typescript/typescript-linux-x64. dist is left deleted.\n- This already happened once today (about 15:31Z). The governor restored dist at 18:45Z. The prebuild fix is task-f9789178.\n\nRun the same gate in an isolated snapshot instead: a git archive or clone of HEAD outside the repo with your files overlaid, native deps, MOE_* unset (mem:gotcha-daemon-linux-snapshot-gate). This comment overrides the plan text on that point.",
+      "timestamp": "2026-10-30T18:47:12.831Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:42:24.991Z",
-  "updatedAt": "2026-10-30T13:46:30.634Z",
+  "updatedAt": "2026-10-30T18:47:12.831Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T13:42:37.502Z",
     "plannedStepCount": 4,

@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -118,17 +118,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:25:24.849Z",
-  "updatedAt": "2026-10-30T18:41:04.377Z",
+  "updatedAt": "2026-10-30T18:47:44.204Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:25:36.985Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T18:47:44.204Z",
+    "wallClockMs": 40927219
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
     "governor-693b7073",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "dependsOn": [
     "task-801272c49c0447cc944e6aaa2963f85f",
@@ -229,7 +232,50 @@
     "packages/moe-daemon/src/types/schema.ts",
     "docs/PLUGIN_SPEC.md",
     "CLAUDE.md",
+    "docs/CONFIGURATION.md",
+    ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json"
+  ],
+  "completionSummary": "This is the final row of the 4-row Origin and WSL-bind split. The siblings 801272c4, 2f2484b4 and 0c72d59a own the code. This row aligns the docs and comments, runs the live check and the full gate. Comments and docs only: 6 files, +8/-7.\n\nEdits:\n- moe-agent.sh: the probe comment, and the fix hint now reads `--host wsl (or MOE_BIND_HOST=wsl)`.\n- Comments: the proxy getDaemonHost JSDoc and schema.ts DaemonInfo.bindHost.\n- PLUGIN_SPEC:76.\n- CLAUDE.md: the WSL sentence says `--host wsl`, and the Endpoints sentence gains an Origin/403 clause.\n- CONFIGURATION:28, a gap the siblings left: \"same mode\" read as the Origin rule; any --host beats MOE_BIND_HOST; an old 0.0.0.0 bind survives supervised crash restarts.\n- TROUBLESHOOTING was already complete.\n\nResidual 0.0.0.0 grep hits:\n- operator choice or compatibility: CONFIGURATION:28, index.ts:80;\n- port-probe comments: index.ts:537, certify-bridge:104;\n- the exclusion guard in bindHosts.ts;\n- a dated RF05 decision record (threat-model.md:113), left as history.\n\nDoD1 (Origin):\n- the siblings' 24 rows;\n- live: the WSL gateway's /mcp gave 101 with no Origin and 403 with one; /ws with \"null\" gave 403; Windows loopback agreed;\n- raw probes against the real verifier, all 403 with no 'connection' event: two Origin headers, uppercase, Sec-WebSocket-Origin, a space-only value;\n- a real moe-proxy from WSL listed 71 tools.\n\nDoD2 (WSL bind), from a live scratch daemon started with --port 9990 --host wsl:\n- netstat showed only 127.0.0.1:9990 and 172.26.208.1:9990 (the vEthernet WSL adapter), with no 0.0.0.0 and no v6;\n- daemon.json and /health both say bindHost wsl;\n- moe-agent.sh's own probe helpers, byte-equal to HEAD: 127.0.0.1 gave rc=1, then the NAT gateway answered healthy;\n- plus 2f2484b4's R/L/D rows and gradle W1/W2/S1;\n- resolver probes: no adapter entry yields 0.0.0.0 or ::.\nThe scratch was torn down: 0 processes, no listener, directory deleted.\n\nDoD3: the gate passed, exit 0 (see the verification above).\n- Gradle ran in a D:",
+  "commits": [
+    {
+      "sha": "e92e361692cfa3af211d6f699d74cf3d556c2c8f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T18:20:36Z",
+      "paths": [
+        ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+        "CLAUDE.md",
+        "docs/CONFIGURATION.md",
+        "docs/PLUGIN_SPEC.md",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-proxy/src/utils.ts",
+        "scripts/moe-agent.sh"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T18:41:30.922Z",
+      "treeId": "4680f3ca3ddcf40a3a1ee5ccab705bbb550a7a35",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "docs/PLUGIN_SPEC.md",
+    "CLAUDE.md",
     "docs/CONFIGURATION.md"
   ],
-  "completionSummary": "This is the final row of the 4-row Origin and WSL-bind split. The siblings 801272c4, 2f2484b4 and 0c72d59a own the code. This row aligns the docs and comments, runs the live check and the full gate. Comments and docs only: 6 files, +8/-7.\n\nEdits:\n- moe-agent.sh: the probe comment, and the fix hint now reads `--host wsl (or MOE_BIND_HOST=wsl)`.\n- Comments: the proxy getDaemonHost JSDoc and schema.ts DaemonInfo.bindHost.\n- PLUGIN_SPEC:76.\n- CLAUDE.md: the WSL sentence says `--host wsl`, and the Endpoints sentence gains an Origin/403 clause.\n- CONFIGURATION:28, a gap the siblings left: \"same mode\" read as the Origin rule; any --host beats MOE_BIND_HOST; an old 0.0.0.0 bind survives supervised crash restarts.\n- TROUBLESHOOTING was already complete.\n\nResidual 0.0.0.0 grep hits:\n- operator choice or compatibility: CONFIGURATION:28, index.ts:80;\n- port-probe comments: index.ts:537, certify-bridge:104;\n- the exclusion guard in bindHosts.ts;\n- a dated RF05 decision record (threat-model.md:113), left as history.\n\nDoD1 (Origin):\n- the siblings' 24 rows;\n- live: the WSL gateway's /mcp gave 101 with no Origin and 403 with one; /ws with \"null\" gave 403; Windows loopback agreed;\n- raw probes against the real verifier, all 403 with no 'connection' event: two Origin headers, uppercase, Sec-WebSocket-Origin, a space-only value;\n- a real moe-proxy from WSL listed 71 tools.\n\nDoD2 (WSL bind), from a live scratch daemon started with --port 9990 --host wsl:\n- netstat showed only 127.0.0.1:9990 and 172.26.208.1:9990 (the vEthernet WSL adapter), with no 0.0.0.0 and no v6;\n- daemon.json and /health both say bindHost wsl;\n- moe-agent.sh's own probe helpers, byte-equal to HEAD: 127.0.0.1 gave rc=1, then the NAT gateway answered healthy;\n- plus 2f2484b4's R/L/D rows and gradle W1/W2/S1;\n- resolver probes: no adapter entry yields 0.0.0.0 or ::.\nThe scratch was torn down: 0 processes, no listener, directory deleted.\n\nDoD3: the gate passed, exit 0 (see the verification above).\n- Gradle ran in a D:"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-30T18:20:36Z",
+    "at": "2026-10-30T18:41:30.922Z"
+  },
+  "completedAt": "2026-10-30T18:47:44.204Z",
+  "reviewCompletedAt": "2026-10-30T18:47:44.204Z",
+  "reviewSummary": "Reviewed e92e3616 (on moe/work-2026-10-24 + origin): 6 files, +8/-7, docs/comments only. Siblings 801272c4/2f2484b4/0c72d59a landed; their code checks out: verifyClient 403 on any Origin; resolveBindHosts('wsl') = loopback + vEthernet IPv4, never 0.0.0.0; --host beats MOE_BIND_HOST (index.ts:67); supervisor re-passes --host (:990). VS Code has no WSL mode, so parity is N/A.\n\nRe-ran on a clean archive of e92e3616 (Linux, env -i, node 24.21.0):\n- daemon tsc OK; tests 211 files, 6116 passed, 20 skipped\n- proxy tsc OK; 290 passed\n- parity PASS; lint OK\n\nJetBrains, under the jetbrains-gradle lease: gradlew.bat test --rerun in a D: archive, BUILD SUCCESSFUL. XML: 486 tests, 0 failed (worker saw 482; +4 from d69f0f9f). W1/W2 ran.\n\nLive check, my own scratch daemon on 9990 --host wsl:\n- netstat: only 127.0.0.1:9990 and 172.26.208.1:9990; no 0.0.0.0, no v6\n- daemon.json and /health: bindHost wsl\n- moe-agent.sh's own probe loop: 127.0.0.1 rc=1, then the gateway healthy\n- /mcp and /ws: 101 with no Origin; 403 with Origin http://example.invalid or null\n- real moe-proxy: 71 tools\n- torn down; live :9876 not touched\n\nDocs: CONFIGURATION and TROUBLESHOOTING cover the Origin 403 and the WSL bind. No exploit walkthrough, no forbidden patterns, no contract change.\n\nResidual 0.0.0.0 grep is operator choice, compatibility, port probes or a guard. Accepted: threat-model.md:113 is a dated RF05 record, outside scope.\n\nNon-blocking:\n(a) CLAUDE.md \"bindHost when non-loopback\" predates this row and is looser than the code.\n(b) The LIVE daemon pid 17468 still binds 0.0.0.0:9876 (an older plugin started it). It needs a restart by a human or the governor.",
+  "requiredCheckAtDone": null
 }
