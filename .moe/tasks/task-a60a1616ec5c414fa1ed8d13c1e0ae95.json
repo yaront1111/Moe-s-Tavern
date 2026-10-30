@@ -61,7 +61,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -74,7 +74,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T16:47:48.719Z",
-  "updatedAt": "2026-10-30T00:10:29.181Z",
+  "updatedAt": "2026-10-30T01:14:49.624Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T17:00:24.524Z",
@@ -86,7 +86,9 @@
     "plannedDistinctFileCount": 2,
     "executedStepCount": 8,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T01:14:49.624Z",
+    "wallClockMs": 6479662
   },
   "contextFetchedBy": [
     "worker-0062feec",
@@ -222,7 +224,7 @@
     "sessionId": "worker-0062feec@2026-10-29T23:51:35Z",
     "at": "2026-10-30T00:10:29.181Z"
   },
-  "reviewCompletedAt": "2026-10-29T23:51:26.650Z",
+  "reviewCompletedAt": "2026-10-30T01:14:49.624Z",
   "rejectionDetails": {
     "failedDodItems": [
       "`status` (and any other non-stop CLI path) never deletes .moe/daemon.json or other lifecycle files unless the recorded daemon is proven gone by a check that is valid on this platform. A daemon.json owned by the other side of WSL/Windows is reported, not removed."
@@ -287,5 +289,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T01:14:49.624Z",
+  "reviewSummary": "QA r2 APPROVE. Reviewed 1d13729 on moe/work-2026-10-24 (tree fcdcba6d, in origin). Round 2: index.ts +9/-6, test +43 (adds only; X1-X8 unchanged). Task total vs ddce8a3: 337 net LOC.\n\nGate, fresh Linux snapshot of HEAD b9ea011 (task files cmp-equal), EXIT 0:\n- tsc clean; index 31/31; suite 189 files, 5276 passed, 16 skipped.\n- Native Windows node 24.16: index 28 passed, 3 skipped (X9 and X11 by design, plus /dev/zero). X10 passes.\n\nFix, checked by my tsx replay (cwd=/mnt/d/fake, live pid, real /health):\n- HEAD: validate('.') valid. start blocked, files kept. status keeps them. stop sends SIGTERM.\n- 65e4866 control: start and stop delete both files.\n\nTest strength: X9-X11 fail on 65e4866, and my two win32/resolve mutants are caught.\n\nDoD:\n1. All deleters guarded (status, stop, start/_run/init, lock-wait, staleLockReason); doctor is read-only.\n2. X1 both orders, plus X9 and X10.\n3. X4 keeps the foreign file and lock, exit 0.\n\nRails hold: no MCP change; canonicalProjectPath unchanged.\n\nNon-blocking: isForeignDaemonInfo calls a Linux '//home/x' path foreign. That is conservative, never deletes, and launchers never pass '//'.",
+  "requiredCheckAtDone": null
 }

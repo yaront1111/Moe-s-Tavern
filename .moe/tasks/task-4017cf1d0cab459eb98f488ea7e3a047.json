@@ -88,7 +88,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:04.014Z",
-  "updatedAt": "2026-10-30T01:12:51.167Z",
+  "updatedAt": "2026-10-30T01:13:15.677Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:26:25.711Z",
     "plannedStepCount": 5,
@@ -184,7 +184,9 @@
     "source": "agent-reported"
   },
   "filesModified": [
-    "scripts/tests/local-runner-bundle.test.mjs"
+    "scripts/tests/local-runner-bundle.test.mjs",
+    ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json",
+    ".moe/tasks/task-5b0a2bcf70f34c62ba29df0f7ff99988.json"
   ],
   "completionSummary": "CQ-R10d2 reopen 1, size-only QA reject. No code change, as QA asked (no re-slice): the 4 source files are byte-equal to completion baa52df at HEAD b9ea011 and in the shared tree.\n\nQA fix items:\n1. Filed prop-1d021909fe024d5ba7586cab816d91c9, an EPIC ADD_RAIL of 845 chars on one line. It is a CQ-R10d2 size exception for baa52df: at most 576 changed lines (+575/-1 numstat) across exactly agent-cache.mjs +275, agent-binaries.json +21, local-runner-agents.test.mjs +273 and local-runner-bundle.test.mjs +6/-1.\n   - It grows only by QA-required defect fixes and waives size only: every DoD item, AB1-AB11, fresh verification and fail-closed behavior still apply, and verified-local stays unavailable.\n   - Status: PENDING.\n2. Posted the id in #governors (msg-f602fd88).\n3. Fresh verification, below.\n\nEvidence (env -i, Node 24.21.0):\n- DoD command: exit 0, 32/32 in the shared tree; 32/32 again on a pure git archive of HEAD.\n- local-runner.test.mjs (archive): exit 0, 241 pass, 1 skipped (pre-existing macOS smoke).\n- Red check: with agent-cache.mjs and the manifest removed, the agents file fails with ERR_MODULE_NOT_FOUND and the bundle row fails.\n- Pins against vendor metadata: claude 2.1.308 manifest.json (linux-x64/arm64) and the codex rust-v0.166.0 GitHub asset digests (x86_64/aarch64). All 4 MATCH.\n- Real network, shipped manifest:\n  - claude x64: 1 fetch;\n  - codex x64 and arm64: 2 fetches each (302);\n  - member sha and size equal the pins, files are 0600 in a 0700 dir, and repeat calls made 0 fetches.\n- Plan mutants on archive copies, 5/5 killed:\n  - (i) redirect follow, by AB4;\n  - (ii) verify after rename, by AB5;\n  - (iii) symlink member, by AB7;\n  - (iv) no re-verify on a hit, by AB8;\n  - (v) unvalidated seam, by AB2.\n- Self-review: no real risk. 6 theoretical notes are in the step-5 note (path reopen inside the private cacheDir, mkdir not tightening an existing dir, a SIGKILL .part, a benign concurrent-repair race, null options, Windows O_NOFOLLOW).\n\nApprove once the ra",
   "commits": [
@@ -207,6 +209,22 @@
       "treeId": "468589b247d7c8c8c4cb404231cecba99bfd786e",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "6b62196d72e6f37b6f6df6b3ef513505baea827c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T01:01:36Z",
+      "paths": [
+        ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json",
+        ".moe/tasks/task-5b0a2bcf70f34c62ba29df0f7ff99988.json"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T01:13:15.677Z",
+      "treeId": "5686bdd4751a4c267a3d2d87fcf414ec8485b870",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -217,11 +235,10 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "refused",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
-    "sessionId": "qa-952969be@2026-10-30T00:55:30Z",
-    "at": "2026-10-30T01:02:08.531Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-e60b90bd@2026-10-30T01:01:36Z",
+    "at": "2026-10-30T01:13:15.677Z"
   },
   "reviewCompletedAt": "2026-10-30T01:01:35.021Z",
   "rejectionDetails": {
