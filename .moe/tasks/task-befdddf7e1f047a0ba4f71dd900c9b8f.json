@@ -1,0 +1,34 @@
+{
+  "id": "task-befdddf7e1f047a0ba4f71dd900c9b8f",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-14] Wrappers: worktree removal at DONE and the orphan sweep",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §1.7, §1.9 and §1.10.\n\nObjective: worktrees do not pile up. Removal never deletes an unlanded commit without a rescue ref, and never recurses through a junction into the control checkout's .serena/memories or .claude/skills.\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins:\n- QA post-flight: after qa_approve leaves the task DONE, and only if task_branch_landed / Test-MoeTaskBranchLanded (from WT-04) is true, remove W and `git branch -D moe/task/<taskId>`.\n- Orphan sweep at any wrapper's loop top:\n  - at most once per MOE_WORKTREE_SWEEP_INTERVAL_SEC (default 3600), under the mkdir lock <gitdir>/moe/worktree/sweep.lock (older than 2 h counts as stale and is broken; a held lock skips the pass), at most 5 worktrees per pass;\n  - candidates: registered worktrees under .worktrees/ whose task is DONE, ARCHIVED or unknown, with no open attempt;\n  - per candidate: commit dirty non-DENY bytes to a rescue ref (reason worktree-orphan); rescue the branch tip if it is not fully landed; then unlink, unlock, `git worktree remove --force --force`, and `git branch -D`.\n- Unlinking: every path in <gitdir>/moe/worktree/<taskId>.links is unlinked first (sh `rm -- <link>`, ps1 `cmd /c rmdir <link>`) and verified gone; then the manifest and the .control-dirt file are deleted. Any unlink or remove failure gives MOE_WORKTREE_REMOVE_REFUSED: W stays, and the next pass retries.\n- A directory under .worktrees/ that git does not list is never deleted: MOE_WORKTREE_UNREGISTERED, one #general alert per path per day.\n- Cases in scripts/tests/postflight.sh and postflight.ps1. Depends on WT-13 (task-fbe8e3880ddf47dfa8546f220acea770).\n\nNOT in scope: pruning grok trusted_folders entries; removing worktrees of non-terminal tasks; docs (WT-18).\n\nVerification: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh (and on a Windows seat: node scripts/tests/postflight-safe.mjs powershell)",
+  "definitionOfDone": [
+    "postflight case (both harnesses): a QA approval of a fully landed task removes .worktrees/<taskId> and deletes moe/task/<taskId>; the control checkout's .serena/memories and .claude/skills still exist with their contents.",
+    "postflight case: the sweep removes a DONE task's worktree whose branch has an unlanded commit only after creating refs/moe/rescue/<taskId>/<ts> (reason worktree-orphan) at that commit; dirty W bytes are on a rescue ref too.",
+    "postflight case: a worktree whose task has an open attempt or is WORKING is never touched; a held sweep.lock skips the pass; at most 5 removals per pass.",
+    "postflight case: an unregistered directory under .worktrees/ prints MOE_WORKTREE_UNREGISTERED and is left on disk; a forced unlink failure prints MOE_WORKTREE_REMOVE_REFUSED and leaves W registered.",
+    "Existing postflight and worktree-landing cases pass unchanged; both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes; the verification command exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-fbe8e3880ddf47dfa8546f220acea770"
+  ],
+  "priority": "MEDIUM",
+  "order": 16,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:56:29.664Z",
+  "updatedAt": "2026-10-30T11:56:29.664Z"
+}

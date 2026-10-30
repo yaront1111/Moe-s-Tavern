@@ -1,0 +1,28 @@
+{
+  "id": "task-7ee53957b90e459fb636948e5cecfa2a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: .moe/pins/ (chat pins, daemon runtime) is not gitignored, so every landing sees it as unattributed dirt",
+  "description": "Observed on 2026-10-30 at 11:53Z. qa-ba3f4f35's landing for task-4b0609d1 refused with MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE: \"refusing to land 47 unattributed shared dirty path(s)\". One of them is `?? .moe/pins/`. It is untracked and stays that way: it held chan-15c8e232.json from 00:22Z and chan-b6d8273b.json from 13:48Z.\n\nCause: StateManager's chat store (packages/moe-daemon/src/state/chatStore.ts writePins, ~L477) writes `.moe/pins/<channelId>.json`, and init_project creates the `pins` dir (tools/initProject.ts:63). Neither ignore file covers it:\n- The repo root .gitignore lists .moe/messages/, workers/, teams/ and the other runtime dirs (lines ~68-79), but not .moe/pins/.\n- The generated GITIGNORE_CONTENT for other projects' .moe/.gitignore (packages/moe-daemon/src/generated/initFiles.ts ~L838-850) lists daemon.json, daemon.lock, workers/, proposals/ and the delivery record dirs, but not pins/.\nPins point at message ids that live only in the gitignored messages/, so committed pins would dangle.\n\nFix:\n- Add `.moe/pins/` to the root .gitignore beside .moe/messages/.\n- Add `pins/` to the generator's runtime list. Edit the source the prebuild stamps from, never initFiles.ts by hand. Through the existing header-guarded migration, already-initialized projects then pick it up.\n- Update CLAUDE.md's \"Only the runtime subset (...) is gitignored\" sentence and docs/ARCHITECTURE.md's .moe tree.\n\nOut of scope: messages/ in other projects' generated .gitignore, and existing committed history.",
+  "definitionOfDone": [
+    "`git check-ignore .moe/pins/chan-x.json` matches in this repo, and a freshly init_project'd project's .moe/.gitignore lists pins/. Shown by a daemon test over the generated gitignore content.",
+    "An already-initialized project whose .moe/.gitignore carries the Moe runtime header gains pins/ through the existing migration, with nothing else changed. Shown by a test.",
+    "CLAUDE.md and docs/ARCHITECTURE.md name pins/ as runtime, and `cd packages/moe-daemon && npm test` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 294.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:55:57.486Z",
+  "updatedAt": "2026-10-30T11:55:57.486Z"
+}

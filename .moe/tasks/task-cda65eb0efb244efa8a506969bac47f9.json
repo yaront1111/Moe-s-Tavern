@@ -1,0 +1,36 @@
+{
+  "id": "task-cda65eb0efb244efa8a506969bac47f9",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-17] Docs: worktree-mode contracts in MCP_SERVER, SCHEMA and CONFIGURATION",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §2, §4 and §7 (every 'Assumed interfaces' list).\n\nObjective: every contract the epic added is documented exactly once, in the reference docs agents and humans read, with the spelling the code uses. This is half of the epic's docs sweep, split from WT-18 for the 5-file cap.\n\nDeliverable:\n- docs/MCP_SERVER.md:\n  - claim_next_task and get_context `workspace: { mode, path, branch, target }`;\n  - complete_task's worktree branch policy (moe/task/<taskId>);\n  - finalize_attempt outcome 'unlanded' with unlandedReason / conflictPaths / rescueRef, and the REVIEW to WORKING/BLOCKED routing.\n- docs/SCHEMA.md: ProjectSettings.worktreeMode, ExecutionAttempt.workspaceMode and workspace, Task.landingRetry.\n- docs/CONFIGURATION.md:\n  - settings.worktreeMode (default 'off'; WT-19 flips it) and commitBoardState's worktree meaning;\n  - the git-land-<target> resource declaration;\n  - env MOE_WORKTREE_PATH, MOE_TASK_BRANCH, MOE_LAND_TARGET, MOE_LAND_LEASE_WAIT_SEC, MOE_WORKTREE_SWEEP_INTERVAL_SEC;\n  - refs/moe/board and moe/control;\n  - the new log codes with one-line meanings;\n  - a pointer to the TROUBLESHOOTING runbook (WT-16).\nRead the landed code, not the design doc, for final spellings. Any drift between the two gets a moe.add_comment on the slice that drifted.\n\nNOT in scope: CLAUDE.md, scripts/CLAUDE.md, ARCHITECTURE.md and role docs (WT-18); code changes.\n\nVerification: npm run lint && for k in worktreeMode workspaceMode landingRetry unlanded MOE_WORKTREE_PATH MOE_LAND_LEASE_WAIT_SEC MOE_WORKTREE_SWEEP_INTERVAL_SEC refs/moe/board moe/control; do grep -q \"$k\" docs/MCP_SERVER.md docs/SCHEMA.md docs/CONFIGURATION.md || { echo \"missing $k\"; exit 1; }; done",
+  "definitionOfDone": [
+    "docs/MCP_SERVER.md documents `workspace` on claim_next_task and get_context, the complete_task worktree branch rule, and finalize_attempt 'unlanded' with its three params and routing.",
+    "docs/SCHEMA.md documents ProjectSettings.worktreeMode, ExecutionAttempt.workspaceMode/workspace and Task.landingRetry with field types matching types/schema.ts.",
+    "docs/CONFIGURATION.md documents worktreeMode (default off), the five env vars, the git-land-<target> resource, refs/moe/board, moe/control and every new MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ code found by grep in scripts/moe-agent.sh.",
+    "Every name in those docs matches the landed code (a grep of each documented code in scripts/moe-agent.sh and moe-agent.ps1 finds it).",
+    "The verification command exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-befdddf7e1f047a0ba4f71dd900c9b8f",
+    "task-fad5ef971b0941b590621aa40702ad4b",
+    "task-48f0b3aaa82c4b938d3a15f3710a66e5"
+  ],
+  "priority": "MEDIUM",
+  "order": 19,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:57:50.521Z",
+  "updatedAt": "2026-10-30T11:57:50.521Z"
+}

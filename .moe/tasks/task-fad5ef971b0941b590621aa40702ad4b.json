@@ -1,0 +1,32 @@
+{
+  "id": "task-fad5ef971b0941b590621aa40702ad4b",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-15] JetBrains: exclude .worktrees from the IDE project model",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §7.5.\n\nObjective: with per-task worktrees under <project>/.worktrees/, the JetBrains IDE must neither index N copies of the repository nor prompt about each worktree as an unregistered VCS root. JetBrains is the primary IDE.\n\nDeliverable: on project open, the plugin marks <project>/.worktrees as an excluded folder of the content root that contains it. It does this in every mode, because the folder is reserved, and idempotently. It also adds the folder to the ignored unregistered VCS roots if the exclusion alone does not suppress the prompt. Prefer a NEW file (e.g. moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt, registered in META-INF/plugin.xml) over editing MoeProjectService.kt, which other sessions are editing. Add a JUnit 4 test for the pure path/idempotence logic.\n\nNOT in scope: VS Code (no code change, per §7.5; the docs line is WT-18); any wrapper or daemon change; showing worktrees in the board UI.\n\nVerification: cd moe-jetbrains && ./gradlew test (Windows path; WSL has no JDK; take the jetbrains-gradle lease via moe.acquire_resource first)",
+  "definitionOfDone": [
+    "A JUnit 4 test proves the exclusion logic: the excluded URL is <contentRoot>/.worktrees, a second run adds no duplicate, and a project without a matching content root is a no-op.",
+    "The exclusion runs on project open (registered in plugin.xml) without touching MoeProjectService.kt.",
+    "Manual or sandbox check noted in the step note: after `./gradlew runIde` on a project with .worktrees/<id>, the folder shows as excluded and no unregistered-VCS-root notification names it.",
+    "cd moe-jetbrains && ./gradlew test exits 0 (run under the jetbrains-gradle lease)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14"
+  ],
+  "priority": "MEDIUM",
+  "order": 17,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:56:38.299Z",
+  "updatedAt": "2026-10-30T11:56:38.299Z"
+}

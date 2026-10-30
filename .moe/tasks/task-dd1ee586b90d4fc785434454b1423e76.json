@@ -1,0 +1,36 @@
+{
+  "id": "task-dd1ee586b90d4fc785434454b1423e76",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-11] Wrappers: unlanded route and conflict resume inside the task worktree",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §2.5 and §2.6.\n\nObjective: a landing that cannot reach the target parks its bytes on a rescue ref and sends the task back through the daemon (WT-03). That covers a true conflict, lost contention, a failed gate, a diverged target and a lease timeout. The next worker resolves the conflict inside W. Nothing is ever resolved automatically or silently overwritten.\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins:\n- On each unlanded cause:\n  - record_commit failed with its code (MOE_COMMIT_FAILED_CONFLICT, MOE_COMMIT_FAILED_REF_CONTENTION, MOE_COMMIT_FAILED_GATE, MOE_LAND_TARGET_DIVERGED; MOE_COMMIT_FAILED_LAND_LEASE maps to reason contention);\n  - a rescue ref refs/moe/rescue/<taskId>/<ts> at T (reason conflict|contention|gate|diverged);\n  - `finalize_attempt { outcome:'unlanded', landedRevision:null, unlandedReason, conflictPaths, rescueRef }` (WT-03, task-9a39bf6a2c4444b4b0799cd16dc2a9f1).\n- The next worker pre-flight with task.landingRetry set runs `git -C W -c core.hooksPath=<empty dir> merge --no-commit --no-ff refs/heads/<target>` and starts the prompt with `LANDING-CONFLICT: <paths>` or `LANDING-RETRY: <reason>`. The prompt tells the worker to edit files only, re-run verification and call complete_task.\n- Marker check before a completion's L2 when MERGE_HEAD is set: lines starting '<<<<<<< ' or '>>>>>>> ', or equal to '=======', in landingRetry.paths plus `git diff --name-only --diff-filter=U` give MOE_WORKTREE_UNRESOLVED_CONFLICT and the unlanded route again. A clean scan commits with MERGE_HEAD as the second parent, then `git -C W merge --quit`.\n- A checkpoint during a pending merge commits with one parent and keeps MERGE_HEAD.\n- Teardown: a signal before L9 abandons the landing; during L9-L12 it is deferred until L12 returns. A REVIEW task whose attempt is still finalizing re-runs L4-L12 at the next pre-flight, or replays the receipt journal.\n- Cases in scripts/tests/postflight.sh and postflight.ps1. Depends on WT-10 (task-5c2e6cdf2494412ca0c2bc40e26d9da3) and WT-03.\n\nNOT in scope: daemon routing (WT-03); board snapshot (WT-12); removal (WT-14); docs (WT-17/WT-18).\n\nVerification: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh (and on a Windows seat: node scripts/tests/postflight-safe.mjs powershell)",
+  "definitionOfDone": [
+    "postflight case (both harnesses): a same-line conflict leaves main unchanged, creates refs/moe/rescue/<taskId>/<ts> at T, and the fake proxy receives finalize_attempt outcome 'unlanded' with reason 'conflict' and the conflicting path.",
+    "postflight case: the next session with landingRetry set gets markers in W and MERGE_HEAD, and its prompt starts with 'LANDING-CONFLICT:'; a contention or gate retry merges cleanly and gets 'LANDING-RETRY:'.",
+    "postflight case: a completion with markers still present prints MOE_WORKTREE_UNRESOLVED_CONFLICT and lands nothing; after the markers are removed it lands C on main and the task-branch commit has MERGE_HEAD as its second parent; MERGE_HEAD is gone afterwards.",
+    "postflight case: a checkpoint during the pending merge has exactly one parent and MERGE_HEAD survives it.",
+    "bash scripts/tests/worktree-landing.sh passes unchanged; existing postflight cases pass; both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes.",
+    "The verification command exits 0; postflight.ps1 passes on a Windows seat."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
+    "task-9a39bf6a2c4444b4b0799cd16dc2a9f1"
+  ],
+  "priority": "HIGH",
+  "order": 13,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:54:37.672Z",
+  "updatedAt": "2026-10-30T11:54:37.672Z"
+}

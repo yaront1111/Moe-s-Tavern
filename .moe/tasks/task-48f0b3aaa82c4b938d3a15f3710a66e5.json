@@ -1,0 +1,34 @@
+{
+  "id": "task-48f0b3aaa82c4b938d3a15f3710a66e5",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-16] Daemon: doctor probes for worktree mode, plus the flip runbook",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §7.3 and §7.4.\n\nObjective: an operator can tell offline whether a project is ready for worktree mode, and has a written stop-the-world runbook to turn it on and to roll it back. A human performs the flip; no Moe seat ever merges moe/work-* into main.\n\nDeliverable:\n- commands/doctor.ts gains worktree probes. They are reported as info when resolveWorktreeMode(settings) (WT-01, task-6cf120a38b344e72b7bab8b9faf806f1) is 'off', and as hard checks when it is 'on':\n  - git >= 2.38;\n  - the project is its repository's top level;\n  - the control checkout's HEAD is refs/heads/moe/control;\n  - the target (literal consolidationBranch, else main) exists and is not checked out in any worktree;\n  - a soft warning for registered .worktrees/* whose task is DONE or ARCHIVED for more than 24 h (the sweep falling behind).\n- Tests in commands/doctor.test.ts.\n- docs/TROUBLESHOOTING.md gains a 'Worktree mode: flip on / roll back' section with the §7.3 and §7.4 runbooks verbatim in substance: drain, the rescue-ref check, the human merge of moe/work-2026-10-24 into main, `git switch -c moe/control main`, the settings (worktreeMode, consolidationBranch main, the git-land-main resource with releaseOnDeregister true), doctor, restart; and rollback.\n\nNOT in scope: changing the default (WT-19); wrapper changes; other docs (WT-17/WT-18).\n\nVerification: cd packages/moe-daemon && npm run build && npx vitest run src/commands/doctor.test.ts",
+  "definitionOfDone": [
+    "doctor.test.ts: with worktreeMode 'on', each failing condition (old git via stub, nested project, control not on moe/control, target checked out) makes doctor exit 1 naming the probe; all passing exits 0.",
+    "doctor.test.ts: with worktreeMode 'off' the same conditions are reported as info and doctor's exit code is unaffected.",
+    "doctor.test.ts: a registered .worktrees/<id> whose task is DONE for over 24 h yields a soft warning, not a failure.",
+    "docs/TROUBLESHOOTING.md has a 'Worktree mode' section containing both runbooks, naming moe/control, `git switch -c moe/control main`, the settings keys and the human-only merge step.",
+    "The verification command exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-6cf120a38b344e72b7bab8b9faf806f1"
+  ],
+  "priority": "MEDIUM",
+  "order": 18,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:57:13.954Z",
+  "updatedAt": "2026-10-30T11:57:13.954Z"
+}

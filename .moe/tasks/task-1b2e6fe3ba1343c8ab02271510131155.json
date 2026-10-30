@@ -1,0 +1,36 @@
+{
+  "id": "task-1b2e6fe3ba1343c8ab02271510131155",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-18] Docs: worktree mode in the narrative guides and the worker role docs",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §0, §2, §3, §6 and §7.6.\n\nObjective: agents and humans reading the guides learn the worktree delivery path, and the worker role doc stops telling workers never to use .worktrees/. This is the other half of the docs sweep, split from WT-17 for the 5-file cap.\n\nDeliverable:\n- Root CLAUDE.md, 'Working in this repo' and Landing: the worktree mode summary (per-task W on moe/task/<id>, landing to main by merge-tree + CAS, board history on refs/moe/board, control checkout on moe/control) and the settings key list.\n- scripts/CLAUDE.md, 'Land on every exit': a worktree-mode arm covering L0-L14, the unlanded route, DENY in W, the control-seat no-op, removal and sweep. Keep the shared-mode text intact.\n- docs/ARCHITECTURE.md, 'Delivery Path': the worktree variant; the daemon stays state-only.\n- docs/roles/worker.md line 13 ('work in the project root ... never a .worktrees/ checkout') becomes mode-aware: in worktree mode the wrapper has already put you in your task worktree. Keep the role doc within the 40-line lint cap.\n- docs/roles/worker.reference.md: the using-git-worktrees row and the attribution paragraph gain the worktree-mode behaviour.\n- A VS Code note (no code change) goes in CLAUDE.md's package table row.\nRead the landed code for spellings.\n\nNOT in scope: MCP_SERVER, SCHEMA and CONFIGURATION (WT-17); TROUBLESHOOTING (WT-16); code; .moe/roles copies (the plugins sync them).\n\nVerification: npm run lint && grep -q 'moe/task/' CLAUDE.md && grep -q 'worktree' scripts/CLAUDE.md && grep -qi 'worktree' docs/ARCHITECTURE.md && grep -qi 'worktree mode' docs/roles/worker.md",
+  "definitionOfDone": [
+    "Root CLAUDE.md describes worktree mode (moe/task/<id>, landing to main, refs/moe/board, moe/control, settings.worktreeMode) and mentions the VS Code no-change note.",
+    "scripts/CLAUDE.md 'Land on every exit' has a worktree-mode arm naming the L-steps' codes and the unlanded route, with the shared-mode text unchanged.",
+    "docs/ARCHITECTURE.md Delivery Path describes the worktree variant and keeps 'the daemon is state-only'.",
+    "docs/roles/worker.md and worker.reference.md are mode-aware about .worktrees/, and npm run lint (40-line cap) passes.",
+    "The verification command exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-befdddf7e1f047a0ba4f71dd900c9b8f",
+    "task-fad5ef971b0941b590621aa40702ad4b",
+    "task-48f0b3aaa82c4b938d3a15f3710a66e5"
+  ],
+  "priority": "MEDIUM",
+  "order": 20,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:58:01.619Z",
+  "updatedAt": "2026-10-30T11:58:01.619Z"
+}
