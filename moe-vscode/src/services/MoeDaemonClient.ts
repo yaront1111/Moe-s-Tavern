@@ -110,22 +110,135 @@ const MAX_DAEMON_JSON_BYTES = 64 * 1024;
 
 /** Read daemon.json through one descriptor, at most cap + 1 bytes; a larger file throws like an unparseable one. */
 export function readDaemonJsonText(filePath: string): string {
+    return readCappedText(filePath, MAX_DAEMON_JSON_BYTES, 'daemon.json is larger than 64 KiB');
+}
+
+function readCappedText(filePath: string, cap: number, tooLarge: string): string {
     const fd = fs.openSync(filePath, 'r');
     try {
-        const buf = Buffer.alloc(MAX_DAEMON_JSON_BYTES + 1);
+        const buf = Buffer.alloc(cap + 1);
         let total = 0;
         while (total < buf.length) {
             const n = fs.readSync(fd, buf, total, buf.length - total, null);
             if (n === 0) { break; }
             total += n;
         }
-        if (total > MAX_DAEMON_JSON_BYTES) {
-            throw new Error('daemon.json is larger than 64 KiB');
+        if (total > cap) {
+            throw new Error(tooLarge);
         }
         return buf.toString('utf8', 0, total);
     } finally {
         fs.closeSync(fd);
     }
+}
+
+// ---- Protected runtime selection: a mirror of JetBrains RuntimeSelectionPolicy (CQ-R01) ----
+// Nothing here throws to its callers. Errors are compared by `code`, never instanceof (cross-realm safe).
+
+export type RuntimeProfile = 'legacy' | 'protected';
+export type ArtifactSelection = { accepted: string } | { rejected: string };
+
+const MAX_PROJECT_JSON_BYTES = 1024 * 1024;
+const DEVICE_PREFIX = /^\/\/[?.]\/(unc\/)?/i;
+const DRIVE_ROOT = /^[A-Za-z]:\/$/;
+// Projects an explicit verified-local read pinned for this extension-host session.
+const pinnedProjects = new Set<string>();
+
+export const defaultFoldCase = process.platform === 'win32' || process.platform === 'darwin';
+
+const errorCode = (err: unknown): unknown => (err as { code?: unknown } | null | undefined)?.code;
+const errorText = (err: unknown): string => String((err as { message?: unknown } | null | undefined)?.message ?? err);
+
+function realPathOrNull(p: string): string | null {
+    try { return fs.realpathSync.native(p); } catch { return null; }
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
+
+/** `\` becomes `/`, a `//?/` or `//./` device prefix goes (`//?/UNC/x` becomes `//x`), trailing `/` goes except on a root. */
+export function comparablePath(p: string, foldCase: boolean): string {
+    let value = p.replace(/\\/g, '/').replace(DEVICE_PREFIX, (_match, unc: string | undefined) => (unc ? '//' : ''));
+    while (value.length > 1 && value.endsWith('/') && !DRIVE_ROOT.test(value)) { value = value.slice(0, -1); }
+    return foldCase ? value.toUpperCase().toLowerCase() : value;
+}
+
+/** `child` is `parent` or under it on a segment boundary; both already in comparable form. */
+export function isWithin(child: string, parent: string): boolean {
+    return child === parent || child.startsWith(parent.endsWith('/') ? parent : `${parent}/`);
+}
+
+/** The only place protected selection takes the wrapper, daemon and proxy from (bundle-assets.mjs). */
+export function installedRoot(extensionPath: string): string {
+    return path.join(extensionPath, 'bundled');
+}
+
+/** Never throws: an unreadable or untrusted `.moe/project.json` answers 'protected'. */
+export function runtimeProfile(basePath: string): RuntimeProfile {
+    try {
+        if (basePath.trim() === '') { return 'legacy'; }
+        const key = comparablePath(realPathOrNull(basePath) ?? path.resolve(basePath), defaultFoldCase);
+        if (pinnedProjects.has(key)) { return 'protected'; }
+        if (!declaresVerifiedLocal(path.join(basePath, '.moe', 'project.json'))) { return 'legacy'; }
+        pinnedProjects.add(key);
+        return 'protected';
+    } catch (err) {
+        log(`Moe runtime selection fails closed to the protected profile: ${errorText(err)}`);
+        return 'protected';
+    }
+}
+
+/** True for exactly "verified-local", false for absent/legacy/observe; throws for anything else. */
+function declaresVerifiedLocal(file: string): boolean {
+    try { fs.lstatSync(file); } catch (err) { if (errorCode(err) === 'ENOENT') { return false; } throw err; }
+    // Checked before open: opening a FIFO or device would block the extension host.
+    if (!fs.statSync(file).isFile()) { throw new Error('project.json is not a regular file'); }
+    const text = readCappedText(file, MAX_PROJECT_JSON_BYTES, 'project.json is larger than 1 MiB');
+    // Buffer#toString keeps a byte order mark, which the daemon's JSON.parse would reject.
+    if (text.startsWith('\uFEFF')) { throw new Error('project.json starts with a byte order mark'); }
+    const root: unknown = JSON.parse(text);
+    if (!isPlainObject(root)) { throw new Error('project.json is not a JSON object'); }
+    if (!hasOwn(root, 'settings')) { return false; }
+    const settings = root.settings;
+    if (!isPlainObject(settings)) { throw new Error('settings is not a JSON object'); }
+    if (!hasOwn(settings, 'executionProfile')) { return false; }
+    const profile = settings.executionProfile;
+    if (profile === 'legacy' || profile === 'observe') { return false; }
+    if (profile === 'verified-local') { return true; }
+    throw new Error('executionProfile is not legacy, observe or verified-local');
+}
+
+/**
+ * `relative` under `root`, accepted as its real file only inside the real root (exact
+ * comparison) and outside the real project (folded where the file system folds case).
+ * The reason reaches the UI; the absolute path only the log.
+ */
+export function installedArtifact(root: string, relative: string, basePath: string, foldCase = defaultFoldCase): ArtifactSelection {
+    const label = `installed ${relative}`;
+    const realRoot = realPathOrNull(root);
+    if (realRoot === null) { return { rejected: 'installed Moe runtime not found' }; }
+    const project = realPathOrNull(basePath);
+    if (project === null) { return { rejected: 'the project directory cannot be resolved' }; }
+    const rejected = (reason: string, detail: string): ArtifactSelection => {
+        log(`Moe protected runtime selection refused: ${reason} (${detail})`);
+        return { rejected: reason };
+    };
+    let real: string;
+    try {
+        real = fs.realpathSync.native(path.join(root, relative));
+        if (!fs.statSync(real).isFile()) { return rejected(`${label} is not a regular file`, real); }
+    } catch (err) {
+        return rejected(errorCode(err) === 'ENOENT' ? `${label} not found` : `${label} cannot be resolved`, errorText(err));
+    }
+    if (!isWithin(comparablePath(real, false), comparablePath(realRoot, false))) {
+        return rejected(`${label} resolves outside the installed Moe runtime`, real);
+    }
+    if (isWithin(comparablePath(real, foldCase), comparablePath(project, foldCase))) {
+        return rejected(`${label} resolves inside the project`, real);
+    }
+    return { accepted: real };
 }
 
 export class MoeDaemonClient implements vscode.Disposable {
