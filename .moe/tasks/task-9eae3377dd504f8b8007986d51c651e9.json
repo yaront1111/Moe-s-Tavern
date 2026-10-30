@@ -13,46 +13,72 @@
     {
       "stepId": "step-1",
       "description": "1. Protect the board boundary with tests first (DoD 1). After WT-03 lands, use its real LandingRetry type/shape in the existing /ws harness; no `any` stand-in or schema edit. Add a compact parameterized test beside the UPDATE_TASK evidence-strip tests covering stored retry + incoming forged object, stored retry + incoming null, and stored null + incoming stale retry object. Seed before installing spies; send each mixed update with an allowed title change using connectAndCollect and consume STATE_SNAPSHOT. Assert title applied in the TASK_UPDATED response and state, stored/disk landingRetry equals its pre-request value, and the retry object is never passed into state.updateTask at all (spy on forwarded updates, not only the final state). For example:\n```ts\nconst update = vi.spyOn(state, 'updateTask');\nws.send(JSON.stringify({ type: 'UPDATE_TASK', payload: { taskId: 'task-1', updates: { title: 'Allowed edit', landingRetry: forged } } }));\nawait nextTaskUpdated(nextMessage);\nexpect(update.mock.calls.find(([id]) => id === 'task-1')?.[1]).not.toHaveProperty('landingRetry');\nexpect(state.getTask('task-1')?.landingRetry).toEqual(stored);\n```\nClose socket/restore spy in finally. Add only `'landingRetry'` to UPDATE_TASK_DENYLIST with a short comment that finalize_attempt owns it and board echoes cannot restore/clear/forge it. Retain existing stripping behavior, not whole-message rejection, so allowed fields still apply. Existing invalid-envelope/error handling must remain unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/server/WebSocketServer.ts",
         "packages/moe-daemon/src/server/WebSocketServer.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Added typed three-row board-echo coverage (forged object, null clear, stale restore) asserting allowed title, forwarded-key absence, memory and disk preservation with finally cleanup; denylisted landingRetry at the transport boundary. TDD in /tmp/wt03b-dev.Ru68LN: new tests failed 3/3 on forwarded-key assertion before guard (/tmp/wt03b-ws-red.log); full WS suite passed 115/115 after guard (/tmp/wt03b-ws-green.log). Task comment's snapshot override honored: native npm ci and env -i, no shared build/dependency writes. Existing peer dirty scripts/board paths untouched; wrapper owns landing.",
+      "startedAt": "2026-10-30T19:00:52.284Z",
+      "completedAt": "2026-10-30T19:02:02.749Z"
     },
     {
       "stepId": "step-2",
       "description": "2. Keep unlanded retries claimable by workers, with tests first (DoD 2). In releaseTask.test.ts reuse writeTask/writeWorker/state fixtures. Parameterize real releaseTaskTool.handler calls for WORKING tasks whose nonempty plan is all COMPLETED: non-null landingRetry => WORKING/unassigned; null and omitted landingRetry => REVIEW/unassigned. Cover both an assigned worker-a and the already-unassigned repair path; assert retry metadata and completed steps persist unchanged in memory and task JSON, and the assigned worker is freed/IDLE where applicable. Use a valid producer-shaped retry, e.g. reason conflict, paths ['src/a.ts'], rescueRef 'refs/moe/rescue/task-1/20261030T120000Z', targetTip null, count 1, valid ISO at. Also exercise exported releaseWorkerTasks(state,'worker-a','test park','park') on a retry task and assert BACKLOG/unassigned with retry metadata intact. Preserve existing incomplete-plan, terminal, missing-task and release-failure tests. Implement the minimal shared rule:\n```ts\n// nextStatusForRelease parameter:\ntask: Pick<Task, 'status' | 'implementationPlan' | 'landingRetry'>\n// WORKING case, after existing park early return:\nif (task.landingRetry != null) return 'WORKING';\nreturn allStepsCompleted(task) ? 'REVIEW' : 'WORKING';\n```\nUpdate this function's local routing comment to explain the retry exception. Verify all current callers in workerStore.ts, sweeps.ts, taskStore.ts, releaseTask.ts, unblockWorker.ts and releaseWorkerTasks pass the full Task; these are read-only inspection paths, not additional edits. Do not alter BLOCKED/REVIEW/terminal routing, clear retry data, reopen steps, change counters, or duplicate logic at individual release callers.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/workerLifecycle.ts",
         "packages/moe-daemon/src/tools/releaseTask.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ],
+      "note": "Widened the common release guard to include landingRetry: WORKING retries remain WORKING after requeue; park early-return still wins. Added 6 assigned/unassigned completed-plan cases for object/null/omitted retry plus direct releaseWorkerTasks park regression; task memory/disk metadata, completed plan, reopenCount and seat cleanup asserted. TDD snapshot: 2 expected REVIEW-vs-WORKING failures + 5 controls passed before fix; releaseTask/workerStore suites now 75/75 pass. Inspected all actual callers in workerStore (delete/purge), sweeps (requeue/park), taskStore.isNewProgression, releaseTask (repair/release/park), unblockWorker and releaseWorkerTasks: each passes full Task, so no extra edits. No peers modified.",
+      "startedAt": "2026-10-30T19:02:02.768Z",
+      "completedAt": "2026-10-30T19:05:22.087Z"
     },
     {
       "stepId": "step-3",
       "description": "3. Single final verification gate (DoD 3 plus epic parity and shared-lifecycle regression). From root run exactly `(cd packages/moe-daemon && npm run build && npx vitest run src/server/WebSocketServer.test.ts src/tools/releaseTask.test.ts src/state/workerStore.test.ts && npm test) && bash scripts/tests/parity-check.sh`. This executes the task-description command, then full daemon regression for the shared signature/routing change, then mandatory parity; expect exit 0 throughout. Use bash/WSL/Git Bash for this command; no Windows-specific code changes. Load regression-check and verification-before-completion. Capture fresh command/exitCode/outputTail for complete_task; do not claim success from focused tests alone or old logs. Build regenerates derived init artifacts: do not hand-edit or sweep unrelated generated/peer changes into this task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/server/WebSocketServer.ts",
         "packages/moe-daemon/src/server/WebSocketServer.test.ts",
         "packages/moe-daemon/src/state/workerLifecycle.ts",
         "packages/moe-daemon/src/tools/releaseTask.test.ts"
-      ]
+      ],
+      "note": "Fresh final gate completed exit 0 in /tmp/wt03b-gate.tOugoa: native npm ci, npm run build, named three-suite command (190 tests), full daemon npm test (213 suites, 6214 passed/20 skipped), then PASS parity-check.sh. Used whole HEAD archive plus only four owned-file overlays, env -i clears MOE_*; owned-source cmp before/after and git diff --check passed. This follows governor comment overriding shared-checkout build; shared daemon dist/deps untouched. Archive prebuild emits expected missing-git-history fallback warnings but build succeeds; generated artifacts kept only in snapshot. No repository paths changed during verification.",
+      "startedAt": "2026-10-30T19:05:22.106Z",
+      "completedAt": "2026-10-30T19:06:52.837Z"
     },
     {
       "stepId": "step-4",
       "description": "4. Final adversarial self-review, once. Load adversarial-self-review. Check stale full-task board echoes both before and after daemon clearing, malicious object/null overwrite, and a mixed allowed+denied update. Removing the denylist entry must fail the forwarded-key assertion even if a downstream sanitizer protects the final state. Check release after all steps complete but before successful landing, both assigned and unassigned, with null/absent retry and park, and confirm an explicit retry always remains WORKING on requeue but never overrides park. Preserve non-WORKING status routing, retry count/metadata, state persistence/error handling, and complete_task/finalize_attempt ownership. Ensure source edits stay at the two common guards and no peer work/held-out test is modified. Rerun the same gate if review causes fixes; complete through Moe with actual modifiedFiles and fresh evidence, leaving git writes to the wrapper.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/server/WebSocketServer.ts",
         "packages/moe-daemon/src/server/WebSocketServer.test.ts",
         "packages/moe-daemon/src/state/workerLifecycle.ts",
         "packages/moe-daemon/src/tools/releaseTask.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ],
+      "note": "Final adversarial self-review complete; no additional source changes (modifiedFiles is cumulative ownership). Read the four-file diff as hostile reviewer: transport strips retry independent of null/object/content and existing mutex avoids stale merges; assigned and unassigned release repair share full-Task guard; null/absent retains REVIEW, park precedes retry, other status branches and retry metadata/steps/counters untouched. No new IO/error paths beyond tests; socket/spy cleanup is in finally. TDD already killed missing denylist (3 failures) and missing retry guard (2 failures); extra scratch park-order mutant killed with exactly 1 expected BACKLOG-vs-WORKING failure. Final verified snapshot remains byte-identical to owned files. Gate unchanged: build, focused 190, full 213 suites/6214 passed/20 skipped, parity PASS, exit 0. Four files +101/-4, net +97; no peers or held-out tests touched.",
+      "startedAt": "2026-10-30T19:06:52.862Z",
+      "completedAt": "2026-10-30T19:08:02.588Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -76,20 +102,27 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:42:24.991Z",
-  "updatedAt": "2026-10-30T18:47:12.831Z",
+  "updatedAt": "2026-10-30T19:08:13.251Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T13:42:37.502Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-76a2c8bb"
+    "architect-76a2c8bb",
+    "worker-681f4f22"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:46:30.608Z",
   "planningNotes": {
@@ -110,5 +143,21 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T13:46:30.634Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T19:00:52.284Z",
+  "reviewStartedAt": "2026-10-30T19:08:13.249Z",
+  "verification": {
+    "command": "set -euo pipefail\ncd /mnt/d/projexts/moes\nS=$(mktemp -d /tmp/wt03b-gate.XXXXXX)\nprintf '%s\\n' \"$S\" > /tmp/wt03b-final-snapshot-path\ngit archive HEAD | tar -x -C \"$S\"\nFILES=(\n  packages/moe-daemon/src/server/WebSocketServer.ts\n  packages/moe-daemon/src/server/WebSocketServer.test.ts\n  packages/moe-daemon/src/state/workerLifecycle.ts\n  packages/moe-daemon/src/tools/releaseTask.test.ts\n)\nfor f in \"${FILES[@]}\"; do cp \"$f\" \"$S/$f\"; cmp \"$f\" \"$S/$f\"; done\nprintf 'Verified owned-source overlay: %s\\n' \"$S\"\nenv -i HOME=\"$HOME\" PATH=\"/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c '\n  set -euo pipefail\n  cd \"$1\"\n  (cd packages/moe-daemon && npm ci --no-audit --no-fund)\n  (cd packages/moe-daemon && npm run build && npx vitest run src/server/WebSocketServer.test.ts src/tools/releaseTask.test.ts src/state/workerStore.test.ts && npm test) && bash scripts/tests/parity-check.sh\n' _ \"$S\"\nfor f in \"${FILES[@]}\"; do cmp \"$f\" \"$S/$f\"; done\ngit diff --check -- \"${FILES[@]}\"\necho OWNED-SOURCE-CMP-OK",
+    "exitCode": 0,
+    "outputTail": " hook files when enableClaudeHook is true 365ms\n ✓ src/index.version.test.ts (3 tests) 1577ms\n   ✓ daemon version CLI (3)\n     ✓ --version prints only the package version without initializing a project 1033ms\n ✓ src/state/FileWatcher.test.ts (19 tests) 8473ms\n   ✓ FileWatcher (19)\n     ✓ detects file changes with debouncing 605ms\n     ✓ coalesces rapid changes into single event 605ms\n     ✓ delivers JSON add, change and unlink for project.json 816ms\n     ✓ delivers JSON add, change and unlink for tasks/lifecycle.json 811ms\n     ✓ watches JSON in workers when created after start 310ms\n     ✓ watches JSON in proposals when created after start 306ms\n     ✓ watches JSON in channels when created after start 307ms\n     ✓ ignores non-JSON, nested and unrelated paths without hiding entity JSON 1063ms\n     ✓ handles onChange errors gracefully 605ms\n     ✓ handles async onChange callback 703ms\n     ✓ detects file deletions 604ms\n     ✓ watches correct file patterns 602ms\n     ✓ ignores file changes after stop (B32) 604ms\n ✓ src/util/heartbeatStop.test.ts (9 tests | 3 skipped) 12822ms\n   ✓ heartbeat cleanup cannot strand the wrapper after the CLI exits (9)\n     ✓ bounds a ignore TERM-resistant owned helper without killing a peer 2255ms\n     ✓ bounds a stopped TERM-resistant owned helper without killing a peer 2271ms\n     ✓ retains ownership and refuses a duplicate when even KILL cannot finish the helper 8275ms\n\n Test Files  213 passed (213)\n      Tests  6214 passed | 20 skipped (6234)\n   Start at  21:05:52\n   Duration  37.59s (tests 94%, import 4%, transform 2%)\n\nPASS parity-check.sh\n",
+    "reportedAt": "2026-10-30T19:08:13.249Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+    "packages/moe-daemon/src/state/workerLifecycle.ts",
+    "packages/moe-daemon/src/tools/releaseTask.test.ts"
+  ],
+  "completionSummary": "Hardened landingRetry at both common boundaries in the four approved files (+101/-4, net +97). Board UPDATE_TASK now strips daemon-owned retry objects/null echoes before forwarding while allowed title edits apply. Requeue keeps completed-step WORKING retries WORKING/unassigned; null/absent still REVIEW; park remains BACKLOG. Added 10 typed integration regressions checking forwarded keys, task memory/disk preservation, completed steps, retry metadata and seat cleanup. All callers pass full Task. TDD observed 3 WS and 2 release failures before minimal fixes; park-order mutation caught exactly one expected failure. Final adversarial review clean. Fresh governor-authorized Linux HEAD snapshot gate: native build passed, focused 190 tests, full daemon 213 suites/6214 passed/20 skipped, parity PASS, owned-source cmp/diff-check clean, exit 0. Shared live daemon dist/Windows deps and peer dirty paths untouched; wrapper owns landing. Serena handoff/gotcha saved."
 }

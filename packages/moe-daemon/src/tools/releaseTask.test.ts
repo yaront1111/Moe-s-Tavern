@@ -8,11 +8,12 @@ import { claimNextTaskTool } from './claimNextTask.js';
 import { deregisterWorkerTool } from './deregisterWorker.js';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
+import { releaseWorkerTasks } from '../state/workerLifecycle.js';
 import { UNIDENTIFIED_RELEASER } from '../util/claimGuards.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
 import { MoeError } from '../util/errors.js';
 import type {
-  Project, Epic, ExecutionAttempt, ExecutionAttemptPhase, HandoffNote, ImplementationStep, Task, Worker,
+  Project, Epic, ExecutionAttempt, ExecutionAttemptPhase, HandoffNote, ImplementationStep, LandingRetry, Task, Worker,
 } from '../types/schema.js';
 
 // The helper shells out to git; these suites only care about the wiring, so the
@@ -122,6 +123,59 @@ describe('moe.release_task', () => {
     const worker = state.getWorker('worker-a')!;
     expect(worker.currentTaskId).toBeNull();
     expect(worker.status).toBe('IDLE');
+  });
+
+  const landingRetry: LandingRetry = {
+    reason: 'conflict', paths: ['src/a.ts'],
+    rescueRef: 'refs/moe/rescue/task-1/20261030T120000Z', targetTip: null,
+    count: 1, at: '2026-10-30T12:00:00.000Z',
+  };
+  const completedPlan: ImplementationStep[] = [
+    { stepId: 's1', description: 'done', status: 'COMPLETED', affectedFiles: ['src/a.ts'] },
+  ];
+
+  describe.each(['worker-a', null])('completed-plan release with owner %s', (assignedWorkerId) => {
+    it.each([
+      { name: 'pending', retryFields: { landingRetry }, expectedStatus: 'WORKING' },
+      { name: 'cleared', retryFields: { landingRetry: null }, expectedStatus: 'REVIEW' },
+      { name: 'omitted', retryFields: {}, expectedStatus: 'REVIEW' },
+    ])('preserves $name landingRetry and routes to $expectedStatus', async ({ retryFields, expectedStatus }) => {
+      writeTask({ assignedWorkerId, implementationPlan: completedPlan, ...retryFields });
+      if (assignedWorkerId) writeWorker();
+      await state.load();
+
+      const result = await releaseTaskTool(state).handler({ taskId: 'task-1' }, state);
+
+      expect(result).toMatchObject({ success: true, status: expectedStatus, previousWorkerId: assignedWorkerId });
+      const disk = JSON.parse(fs.readFileSync(path.join(moePath, 'tasks', 'task-1.json'), 'utf8')) as Task;
+      for (const stored of [state.getTask('task-1'), disk]) {
+        expect(stored).toMatchObject({
+          status: expectedStatus, assignedWorkerId: null, implementationPlan: completedPlan, reopenCount: 0,
+        });
+        expect(stored?.landingRetry).toEqual(retryFields.landingRetry);
+      }
+      if (assignedWorkerId) {
+        expect(state.getWorker(assignedWorkerId)).toMatchObject({ status: 'IDLE', currentTaskId: null });
+      }
+    });
+  });
+
+  it('parks a completed-plan landingRetry in BACKLOG without clearing retry metadata', async () => {
+    writeTask({ implementationPlan: completedPlan, landingRetry });
+    writeWorker();
+    await state.load();
+
+    expect(await releaseWorkerTasks(state, 'worker-a', 'test park', 'park')).toEqual([
+      { taskId: 'task-1', previousStatus: 'WORKING', newStatus: 'BACKLOG' },
+    ]);
+
+    const disk = JSON.parse(fs.readFileSync(path.join(moePath, 'tasks', 'task-1.json'), 'utf8')) as Task;
+    for (const stored of [state.getTask('task-1'), disk]) {
+      expect(stored).toMatchObject({
+        status: 'BACKLOG', assignedWorkerId: null, landingRetry,
+        implementationPlan: completedPlan, reopenCount: 0,
+      });
+    }
   });
 
   it('does not modify a worker whose currentTaskId is a different task', async () => {

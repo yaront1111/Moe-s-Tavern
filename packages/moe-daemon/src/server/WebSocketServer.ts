@@ -92,6 +92,8 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   'blockedOnTaskIds',
   'blockedFromStatus',
   'blockedAt',
+  // finalize_attempt owns retries; board echoes must not restore, clear or forge them.
+  'landingRetry',
   // Dependency declarations are owned by create_task / moe.set_task_dependencies
   // — a full-task board echo carrying a stale array must not clobber a newer
   // set_task_dependencies edit.

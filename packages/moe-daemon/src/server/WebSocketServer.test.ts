@@ -11,7 +11,7 @@ import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
 import * as speedMode from '../tools/submitPlan.js';
 import { decodeClientHello } from './clientCapabilities.js';
-import type { RailProposal, TaskExecutionContract } from '../types/schema.js';
+import type { LandingRetry, RailProposal, TaskExecutionContract } from '../types/schema.js';
 
 describe('MoeWebSocketServer Integration', () => {
   let testDir: string;
@@ -816,6 +816,44 @@ describe('MoeWebSocketServer Integration', () => {
       expect(state.getTask('task-1')!.deliveryEvidence).toEqual(label);
 
       ws.close();
+    });
+
+    const landingRetry: LandingRetry = {
+      reason: 'conflict', paths: ['src/a.ts'],
+      rescueRef: 'refs/moe/rescue/task-1/20261030T120000Z', targetTip: null,
+      count: 1, at: '2026-10-30T12:00:00.000Z',
+    };
+    const forgedRetry: LandingRetry = { ...landingRetry, reason: 'diverged', count: 99 };
+
+    it.each([
+      { name: 'forge a pending retry', stored: landingRetry, incoming: forgedRetry },
+      { name: 'clear a pending retry', stored: landingRetry, incoming: null },
+      { name: 'restore a cleared retry', stored: null, incoming: landingRetry },
+    ])('UPDATE_TASK cannot $name through landingRetry', async ({ stored, incoming }) => {
+      await state.updateTask('task-1', { landingRetry: stored });
+      const update = vi.spyOn(state, 'updateTask');
+      const { ws, ready, nextMessage } = connectAndCollect();
+      try {
+        await ready;
+        expect(JSON.parse(await nextMessage()).type).toBe('STATE_SNAPSHOT');
+        ws.send(JSON.stringify({
+          type: 'UPDATE_TASK',
+          payload: { taskId: 'task-1', updates: { title: 'Allowed edit', landingRetry: incoming } },
+        }));
+
+        const reply = await nextTaskUpdated(nextMessage);
+        expect(reply.payload.title).toBe('Allowed edit');
+        const forwarded = update.mock.calls.filter(([id]) => id === 'task-1');
+        expect(forwarded).toHaveLength(1);
+        expect(forwarded[0][1]).not.toHaveProperty('landingRetry');
+        expect(state.getTask('task-1')?.title).toBe('Allowed edit');
+        expect(state.getTask('task-1')?.landingRetry).toEqual(stored);
+        const disk = JSON.parse(fs.readFileSync(path.join(moePath, 'tasks', 'task-1.json'), 'utf8'));
+        expect(disk.landingRetry).toEqual(stored);
+      } finally {
+        ws.close();
+        update.mockRestore();
+      }
     });
 
     it('UPDATE_TASK strips requiredCheckAtDone, so a board client cannot wipe the check a DONE task owes', async () => {
