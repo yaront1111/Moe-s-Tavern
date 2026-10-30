@@ -208,6 +208,7 @@ type LockInfo = {
   pid: number | null;
   projectPath: string | null;
   createdAtMs: number;
+  empty?: boolean;
 };
 
 function readLockInfo(projectPath: string): LockInfo | null {
@@ -215,7 +216,7 @@ function readLockInfo(projectPath: string): LockInfo | null {
   try {
     const stat = fs.statSync(lockPath);
     const raw = fs.readFileSync(lockPath, 'utf-8').trim();
-    if (!raw) return null;
+    if (!raw) return { pid: null, projectPath: null, createdAtMs: stat.mtimeMs, empty: true };
     if (/^\d+$/.test(raw)) {
       return { pid: Number(raw), projectPath: null, createdAtMs: stat.mtimeMs };
     }
@@ -234,6 +235,8 @@ function readLockInfo(projectPath: string): LockInfo | null {
 
 function staleLockReason(projectPath: string): string | null {
   const info = readLockInfo(projectPath);
+  // O_EXCL creates the file one syscall before its JSON write: a young empty lock has a live owner mid-write.
+  if (info?.empty) return Date.now() - info.createdAtMs > LOCK_STALE_TIMEOUT_MS ? 'malformed lock' : null;
   if (!info || !info.pid || !Number.isFinite(info.createdAtMs)) return 'malformed lock';
   // Its owner's pid is in another pid namespace: never judge it stale from here.
   if (info.projectPath && isForeignDaemonInfo({ projectPath: info.projectPath })) return null;
@@ -264,11 +267,18 @@ function acquireLock(projectPath: string): boolean {
     try {
       // O_EXCL ensures atomic creation - fails if file exists
       const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-      fs.writeSync(fd, escapeJsonForFile(JSON.stringify({
-        pid: process.pid,
-        projectPath: canonicalProjectPath(projectPath),
-        createdAt: new Date().toISOString(),
-      })));
+      try {
+        fs.writeSync(fd, escapeJsonForFile(JSON.stringify({
+          pid: process.pid,
+          projectPath: canonicalProjectPath(projectPath),
+          createdAt: new Date().toISOString(),
+        })));
+      } catch (error) {
+        try { fs.closeSync(fd); } catch { /* best-effort close before unlink on Windows */ }
+        try { fs.unlinkSync(lockPath); } catch { /* best-effort cleanup of our failed write */ }
+        logger.warn({ error }, 'Failed to write daemon lock; removed it');
+        return false;
+      }
       fs.closeSync(fd);
       return true;
     } catch (err: any) {

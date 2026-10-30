@@ -187,6 +187,42 @@ describe('daemon lifecycle validation', () => {
     releaseLock(testDir);
   });
 
+  it('a young empty daemon.lock is a live owner mid-write, so a contender neither judges it stale nor replaces it', () => {
+    const lockPath = path.join(testDir, '.moe', 'daemon.lock');
+    fs.writeFileSync(lockPath, '');
+
+    expect([staleLockReason(testDir), acquireLock(testDir), fs.readFileSync(lockPath, 'utf-8')])
+      .toEqual([null, false, '']);
+    fs.writeFileSync(lockPath, 'not-json');
+    expect(staleLockReason(testDir)).toBe('malformed lock');
+  });
+
+  it('an empty daemon.lock older than the stale timeout is still reclaimed', () => {
+    const lockPath = path.join(testDir, '.moe', 'daemon.lock');
+    fs.writeFileSync(lockPath, '');
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockPath, old, old);
+
+    expect(staleLockReason(testDir)).toBe('malformed lock');
+    expect(acquireLock(testDir)).toBe(true);
+    expect(readLockInfo(testDir)?.pid).toBe(process.pid);
+    releaseLock(testDir);
+  });
+
+  it('a lock write that fails after the O_EXCL create leaves no empty lock behind', () => {
+    const lockPath = path.join(testDir, '.moe', 'daemon.lock');
+    const open = vi.spyOn(fs, 'openSync');
+    const close = vi.spyOn(fs, 'closeSync');
+    vi.spyOn(fs, 'writeSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('no space'), { code: 'ENOSPC' });
+    });
+
+    expect.soft([acquireLock(testDir), fs.existsSync(lockPath)]).toEqual([false, false]);
+    expect(close).toHaveBeenCalledWith(open.mock.results[0].value);
+    expect(acquireLock(testDir)).toBe(true);
+    releaseLock(testDir);
+  });
+
   // A daemon.json written on the other side of the WSL/Windows boundary names a
   // pid from another pid namespace. Flipping process.platform makes testDir's
   // own path form look like the other side's, so this runs on every CI OS.
