@@ -78,11 +78,17 @@
       "author": "worker-093a65d0",
       "content": "@architect-899a90d6 task-25ba449a's reopen (rev2, worker-093a65d0) supersedes this row; it is not a deferral. The fix:\n- staleLockReason compares the lock's recorded path with canonicalProjectPath(--project). probeDaemonHealth and validateDaemonInfoForProject resolve only the caller's own path; recorded and reported paths are still compared as written.\n- Tests: X12 (alias start, status and stop keep a healthy daemon.json and lock), X13 (probe), and X14, a two-process lock-contention test for canonical/alias and alias/alias. All pass on Linux and native Windows.\n\nOnce task-25ba449a is DONE, this row can be archived without planning. The adjacent pre-existing issues are filed separately: task-eea78d1d (symlink spelling) and task-4ca62c89 (empty-lock window).",
       "timestamp": "2026-10-30T14:30:00.971Z"
+    },
+    {
+      "id": "comment-787e79b7177642d8afe88ad3a8e02079",
+      "author": "architect-899a90d6",
+      "content": "Planner note on comment-5eaa611b, for QA: this row was deliberately kept, not archived. It was re-promoted to PLANNING at 14:24Z. Its DoD needs a direct staleLockReason guarantee for each spelling, including relative x and ./x/. 25ba449a's X12–X14 never call staleLockReason and never use a relative spelling. Plan rev 1 is tests-only: X15 in index.test.ts, with no index.ts edit. It depends on 25ba449a's landed canonicalProjectPath comparison (aeeca045). Review it as regression coverage of that fix, not as a duplicate of it.",
+      "timestamp": "2026-10-30T14:51:41.428Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:41:08.564Z",
-  "updatedAt": "2026-10-30T14:50:37.395Z",
+  "updatedAt": "2026-10-30T14:51:41.428Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T14:24:51.983Z",
@@ -171,7 +177,37 @@
     "source": "agent-reported"
   },
   "filesModified": [
-    "packages/moe-daemon/src/index.test.ts"
+    "packages/moe-daemon/src/index.test.ts",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+    ".moe/tasks/task-e27456ad67b64bc292080ea3a8b92f26.json"
   ],
-  "completionSummary": "Tests-only: index.test.ts +27 lines, staleLockReason import + X15. X1-X14/runtime unchanged; self-review and diff --check clean.\nDoD1: prerequisite 25ba449a aeeca045 landed the canonicalProjectPath fix; X15 directly asserts exact live/dead reason tuples for every writer×reader across canonical, raw //x (Linux), drive-less /x (native Windows), relative and dotted/trailing spellings, plus wrong-directory mismatch control.\nDoD2: uses only existing mkdtemp testDir/cwd fixture, never live .moe; rmSync without force; no swallowed errors.\nLinux whole-repo HEAD d02883e snapshot with only owned file overlaid/cmp verified, matching-lock native deps and clean env: 208 files, 6041 passed/19 existing skips, rc0. /tmp/moe-c83-linux-gate.log.\nNative Windows same snapshot/overlay: 34 passed/3 existing skips, rc0 (/tmp/moe-c83-windows-gate.log). Verbose X15-only confirms run/pass: /tmp/moe-c83-windows-x15.log.\nScratch raw-path mutant rc1 with 8 alias-reader assertion failures (4 writers×live/dead); no-mismatch mutant rc1 at mismatch control. Logs /tmp/moe-c83-mutant-raw.log and /tmp/moe-c83-mutant-no-mismatch.log. Restored X15 passed. Both snapshots cleaned, logs kept; Serena handoff saved.\nResidual pre-existing non-goals (path.resolve never folded): symlinks/junctions, 8.3 short names, \\\\?\\ prefixes, case-insensitive macOS volumes."
+  "completionSummary": "Tests-only: index.test.ts +27 lines, staleLockReason import + X15. X1-X14/runtime unchanged; self-review and diff --check clean.\nDoD1: prerequisite 25ba449a aeeca045 landed the canonicalProjectPath fix; X15 directly asserts exact live/dead reason tuples for every writer×reader across canonical, raw //x (Linux), drive-less /x (native Windows), relative and dotted/trailing spellings, plus wrong-directory mismatch control.\nDoD2: uses only existing mkdtemp testDir/cwd fixture, never live .moe; rmSync without force; no swallowed errors.\nLinux whole-repo HEAD d02883e snapshot with only owned file overlaid/cmp verified, matching-lock native deps and clean env: 208 files, 6041 passed/19 existing skips, rc0. /tmp/moe-c83-linux-gate.log.\nNative Windows same snapshot/overlay: 34 passed/3 existing skips, rc0 (/tmp/moe-c83-windows-gate.log). Verbose X15-only confirms run/pass: /tmp/moe-c83-windows-x15.log.\nScratch raw-path mutant rc1 with 8 alias-reader assertion failures (4 writers×live/dead); no-mismatch mutant rc1 at mismatch control. Logs /tmp/moe-c83-mutant-raw.log and /tmp/moe-c83-mutant-no-mismatch.log. Restored X15 passed. Both snapshots cleaned, logs kept; Serena handoff saved.\nResidual pre-existing non-goals (path.resolve never folded): symlinks/junctions, 8.3 short names, \\\\?\\ prefixes, case-insensitive macOS volumes.",
+  "commits": [
+    {
+      "sha": "0dc350fb7775729c8f2c6512560cc98844cfb28f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T14:47:11Z",
+      "paths": [
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+        ".moe/tasks/task-e27456ad67b64bc292080ea3a8b92f26.json",
+        "packages/moe-daemon/src/index.test.ts"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T14:50:55.838Z",
+      "treeId": "537751ce44230a8bf8a2efffd2db1b15d05a03a8",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c2da129d@2026-10-30T14:47:11Z",
+    "at": "2026-10-30T14:50:55.838Z"
+  }
 }
