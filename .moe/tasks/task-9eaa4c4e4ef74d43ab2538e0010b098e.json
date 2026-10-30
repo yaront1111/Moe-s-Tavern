@@ -7,9 +7,32 @@
     "AI4 and AI5 pass under both umask 077 and umask 022, with the existing production-mode assertions unchanged."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Pre-check and RED. scripts/tests/local-runner.test.mjs is a contested file. Many nonterminal tasks declare it (the CQ-R11e*/R13* rows, task-2cf1c6be), and the wrapper lands whole paths, not hunks.\n\n(1) Run `git diff --quiet HEAD -- scripts/tests/local-runner.test.mjs`. It must succeed, meaning the file holds no uncommitted hunks.\n- If it fails, another session's hunks are present. At planning time these were task-2cf1c6be's fake-/health server (AGENT_PROJECT/agentHealth); this task now dependsOn that task for that reason.\n- Do NOT edit on top of foreign hunks, and never stash, revert or commit them.\n- Name the owner from git log and the board, call moe.report_blocked with blockedOnTaskIds=[owner], and end the session. A landing would otherwise sweep the peer's hunks into this task's commit.\n\n(2) RED: run the step-3 verification command against the unmodified file. Expected:\n- umask 077: 'not ok 4 - AI4' and 'not ok 5 - AI5', loop exit 1. seededAgents writes the old claude with { mode: 0o555 }, the umask masks it to 0500, and OLD_AGENTS expects 0555.\n- umask 022: 5/5 ok.\nThe architect reproduced exactly this on HEAD (node v24.21.0).\n\nKeep the RED output for the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix the test fixture only. In scripts/tests/local-runner.test.mjs seededAgents(t), add one line right after `writeFileSync(path.join(dir, 'agents', 'claude'), 'old', { mode: 0o555 });`:\n`chmodSync(path.join(dir, 'agents', 'claude'), 0o555);`\n\nAdd a one-line why-comment: a creation mode is masked by the process umask, while chmodSync is not. This mirrors the existing mkdirSync + chmodSync(0o755) pair for the agents directory.\n\nchmodSync is already imported in that module (AI3 uses it). It throws on failure, which fails the test loudly; that is the right error handling for a fixture, so add no try/catch.\n\nDo NOT change:\n- OLD_AGENTS or agentsState;\n- any AI1-AI5 assertion (the production-mode assertions: installed binaries 0555, agents dir 0755);\n- scripts/local-runner/supervisor.py or any production file.\nThe finding is fixture-only.\n\nEdit with the Claude Edit tool. Its TOOL witness lets the default attribution.contested=skip-untouched land this contested path; never use sed/python on the tracked file.\n\nThe architect's prototype of exactly this line passed AI1-AI5 under both umask 077 and 022.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification and adversarial self-review (final step). Run this ONE command fresh; its output is the complete_task evidence and QA re-runs it verbatim. It prints this task's diff, snapshots HEAD's scripts/ plus this file into a temp dir (isolated from peers' uncommitted runtime edits), and runs the AI group under both umasks.\n\nPass means:\n- each umask prints 5 'ok N - AI1..AI5' lines with '# fail 0';\n- the command ends with VERIFY-OK and exit 0.\n\nThe name filter IS this task's approved verification: seededAgents is used only by AI3-AI5, and the DoD names AI4/AI5 under the two umasks. Do not substitute any other filter.\n\nSelf-review checklist:\n(a) The printed `git diff HEAD` holds ONLY this task's hunk. If a peer's hunks appeared meanwhile, do not complete: report_blocked on their owner, because the landing would commit them.\n(b) No assertion, OLD_AGENTS row or production file changed.\n(c) The fix uses an absolute mode (chmodSync), never an umask-dependent one. Running twice or in parallel is safe: each test row gets its own scratch dir.\n\nCOMMAND:\ncd /mnt/d/projexts/moes && S=$(mktemp -d) && git rev-parse HEAD && git diff HEAD -- scripts/tests/local-runner.test.mjs && git archive HEAD scripts | tar -x -C \"$S\" && cp scripts/tests/local-runner.test.mjs \"$S/scripts/tests/local-runner.test.mjs\" && cd \"$S\" && for m in 077 022; do ( for v in $(compgen -e | grep -E '^(MOE_|CLAUDE|FAKE_)'); do unset \"$v\"; done; umask $m && node --test --test-reporter=tap --test-name-pattern='AI[1-5] ' scripts/tests/local-runner.test.mjs ) > \"$S/ai-$m.log\" 2>&1; rc=$?; echo \"umask $m exit=$rc\"; grep -E '^(not )?ok [0-9]+ - AI[1-5] |^# (tests|pass|fail) ' \"$S/ai-$m.log\" | cut -c1-70; [ \"$rc\" -eq 0 ] && [ \"$(grep -cE '^ok [0-9]+ - AI[1-5] ' \"$S/ai-$m.log\")\" -eq 5 ] || exit 1; done; echo VERIFY-OK",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -22,10 +45,72 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:46:23.428Z",
-  "updatedAt": "2026-10-30T09:54:45.272Z",
+  "updatedAt": "2026-10-30T10:21:39.235Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:45.272Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T10:17:27.241Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "dependsOn": [
+    "task-2cf1c6bee5814ed98eb3d069d97b32b3"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T10:21:39.211Z",
+  "executionContract": {
+    "intendedBehavior": "The local-runner AI test fixture seededAgents sets the seeded old claude binary to 0555 with an absolute chmod, so AI4 and AI5 compare against OLD_AGENTS whatever the process umask is. Production install_agents behavior and every production-mode assertion are unchanged.",
+    "acceptanceCriteria": [
+      "Under umask 077, node --test --test-name-pattern='AI[1-5] ' on scripts/tests/local-runner.test.mjs reports 5 ok with # fail 0.",
+      "Under umask 022, the same run reports 5 ok with # fail 0.",
+      "OLD_AGENTS, agentsState and every AI1-AI5 assertion are byte-identical to HEAD; only seededAgents gains the chmodSync line and its comment."
+    ],
+    "invariants": [
+      "No production file changes (scripts/local-runner/**).",
+      "No other session's uncommitted hunk in scripts/tests/local-runner.test.mjs is edited, reverted or landed by this task."
+    ],
+    "compatibility": [
+      "The test-only change has no runtime, wire or .moe/ state impact."
+    ],
+    "approvedScope": [
+      "seededAgents(t) in scripts/tests/local-runner.test.mjs"
+    ],
+    "reuse": [
+      "The existing chmodSync import and the mkdirSync + chmodSync(0o755) pattern already used for the agents directory in seededAgents."
+    ],
+    "sourceAssumptions": [
+      "scripts/tests/local-runner.test.mjs seededAgents writes the claude file with writeFileSync(..., 'old', { mode: 0o555 }). The creation mode is masked by the umask, so under umask 077 it is 0500.",
+      "OLD_AGENTS = [['claude', Buffer.from('old'), 0o555]] is asserted by AI4 (exit 65 rows) and AI5 (fsync/rename failure rows).",
+      "Architect repro on a HEAD snapshot (node v24.21.0): umask 077 gave AI4 and AI5 not ok (3/5); umask 022 gave 5/5. With the chmodSync line, both umasks gave 5/5."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Set process.umask in the test. Rejected: it is global state shared by every row in the file, and it is deprecated in worker threads.\n2) Drop the { mode } option and rely only on chmodSync. That is equivalent; keeping the option plus an explicit chmod is the smallest diff and mirrors the dir's mkdirSync+chmodSync pair.\n3) Relax OLD_AGENTS to accept 0500. Rejected: the DoD keeps the production-mode assertions unchanged, and the 0555 seed is what makes 'installs nothing' observable.",
+    "codebaseInsights": "seededAgents is used only by AI3, AI4 and AI5. AI3 never asserts the seeded file's mode, which is why it passes under 077.\n\nmkdtemp (scratch) creates 0700 regardless of umask, so AI5's modeOf(outside)=0o700 is umask-safe.\n\nThe supervisor's install_agents sets its own modes, so AI2/AI3 and the AI4 success rows pass under 077.",
+    "risks": "Contention is the only real risk:\n- local-runner.test.mjs currently carries task-2cf1c6be's uncommitted fake-/health hunks.\n- About 10 nonterminal CQ-R tasks declare the file.\n\nThe dependsOn on task-2cf1c6be gates the claim until its hunks land. The step-1 check and the step-3 review catch any other peer's hunks, and the remedy is report_blocked on the owner.\n\nUse only the Claude Edit tool (TOOL witness), or the default skip-untouched policy holds the path.\n\nThe snapshot run isolates the check from peers' uncommitted runtime edits under scripts/local-runner/.",
+    "keyFiles": [
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/local-runner/supervisor.py"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T10:21:39.235Z",
+  "approvedPlanRevision": 1
 }
