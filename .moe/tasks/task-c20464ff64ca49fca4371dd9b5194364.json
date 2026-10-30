@@ -90,7 +90,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -136,7 +136,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:49:26.469Z",
-  "updatedAt": "2026-10-30T21:53:33.486Z",
+  "updatedAt": "2026-10-30T22:38:49.028Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:59.143Z",
@@ -148,11 +148,14 @@
     "plannedDistinctFileCount": 6,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T22:38:49.028Z",
+    "wallClockMs": 34663810
   },
   "contextFetchedBy": [
     "qa-b29f7b3d",
-    "worker-632cd3f0"
+    "worker-632cd3f0",
+    "qa-4b0c6c8e"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -369,7 +372,7 @@
     "scripts/tests/postflight.ps1",
     "scripts/moe-agent.ps1"
   ],
-  "reviewCompletedAt": "2026-10-30T20:34:33.023Z",
+  "reviewCompletedAt": "2026-10-30T22:38:49.028Z",
   "rejectionDetails": {
     "failedDodItems": [
       "postflight case: a second session of the same task reuses W (no new worktree add, its dirt intact); with the branch present but W missing, W is re-added on that branch without -b.",
@@ -456,5 +459,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T22:38:49.028Z",
+  "reviewSummary": "Approved WT-04 reopen 1. Reviewed b3b53625 (on moe/work-2026-10-24, pushed); code files byte-identical at HEAD 3a393e4a. Both qa-b29f7b3d defects fixed in both twins:\n1. Reuse finishes W only when its index file is missing.\n2. A failed path-budget probe refuses with CREATE_FAILED.\nSize: round +184/-10; task-wide 536 net, within the 560 waiver (prop-ae80ddc8). Overage is only the fixes plus their regression sections; earlier checkpoints are board-only. Harness changes are pure additions. Held-out cjs and fake proxy identical to e28e4886.\n\nRe-ran task.verification verbatim 22:07-22:38Z (HEAD 3a393e4a, snapshot v-c20464ff.8fymjQ): EXIT 0. DoD 5 diff empty, parity PASS, node 44/44, bash and PS 5.1 engines both exit 0 with failureClass NONE.\n\nIndependent (qa-c20464ff-r2.Wnnxai):\n- Held-out suite, Linux bash: 12 ok, 0 failed (path-long n/a).\n- Prior QA probes extra.cjs and deleted.cjs pass on Git Bash and PS 5.1.\n- Mutation: reverting either hunk turns its new [worktree reuse] case RED on bash and PS 5.1; the unmodified snapshot is GREEN on both.\n\nNot blocking, not caused by this round: if W's index file was deleted, the sparse read-tree in the finish path overwrites edited tracked files and exits 0 (git 2.43 and 2.54). The wrapper prints \"reused\" and the edit is lost; 5657d186 did the same. Step 6's \"read-tree refuses to overwrite\" claim is wrong for sparse worktrees. Filed BACKLOG task-c7ee939a and corrected the Serena gotcha. No exposure before WT-05.\n\nNot run: pwsh 7 (not in DoD; task-44b817f9). Complexity pass: fixes minimal.",
+  "requiredCheckAtDone": null
 }
