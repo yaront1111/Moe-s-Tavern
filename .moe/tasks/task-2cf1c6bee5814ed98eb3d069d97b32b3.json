@@ -101,7 +101,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -179,18 +179,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:42:05.249Z",
-  "updatedAt": "2026-10-30T10:59:36.733Z",
+  "updatedAt": "2026-10-30T11:16:35.327Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:42:56.107Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 10,
     "executedStepCount": 21,
     "rejectCount": 2,
-    "reopenCount": 2
+    "reopenCount": 2,
+    "doneAt": "2026-10-30T11:16:35.326Z",
+    "wallClockMs": 12819219
   },
   "contextFetchedBy": [
     "worker-55e6716a",
-    "qa-ba3f4f35"
+    "qa-ba3f4f35",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -461,6 +464,25 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "bb2f846a3eff42866fbff90ffd98295ce611476b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T10:54:31Z",
+      "paths": [
+        ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+        ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+        ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+        ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json",
+        ".moe/tasks/task-dc833bfb10984e23a94ee047ae187c90.json"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T10:59:54.964Z",
+      "treeId": "c743af7a1a4cc7f3f978eaa3cde7e72c951fe35f",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -468,14 +490,19 @@
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-session.mjs",
     "scripts/local-runner/vm-control.mjs",
-    "scripts/local-runner/runner-client.mjs"
+    "scripts/local-runner/runner-client.mjs",
+    ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+    ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+    ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+    ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json",
+    ".moe/tasks/task-dc833bfb10984e23a94ee047ae187c90.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-55e6716a@2026-10-30T10:43:14Z",
-    "at": "2026-10-30T10:53:58.136Z"
+    "kind": "completion",
+    "sessionId": "worker-55e6716a@2026-10-30T10:54:31Z",
+    "at": "2026-10-30T10:59:54.964Z"
   },
   "workStartedAt": "2026-10-30T08:27:28.625Z",
   "touchedFiles": [
@@ -505,7 +532,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "QA retry delivered in checkpoint 57075f7e2cf0db092c219f816bf42ea994269f2f atop 95c5a8e8. Captured AGENT_TMP_ROOT before test registration; AGENT_PROJECT uses it. Assertions and readiness/cleanup hooks retained. Independently verified committed/shared hash, branch containment, and actual session-ended line with no held=. No source edits in this resume session; completion may carry only board files.\nDoD1: fresh DB2-DB4 pass for guest start/per-forward, runner and vm-control admission. DoD2: DB1/failure-kind rows/DB5 pass, including bounded failures and file-only refusals. DoD3: fresh build and exact full gate pass: daemon 207 files, 5855 pass/16 skip, bindHosts 23/23; Node 479 pass/3 skip/0 fail. Windows DB 7/7 including IPv6. QA isolation filters freshly pass: A1 1/1, mixed A1+AJ3 2/2, AJ 6/6, A6 1/1. All 10 task files cmp-equal to tested snapshot after tests; cumulative net392. Adversarial review revalidated without new findings. Prior completed mutation evidence retained, not claimed fresh. Evidence /tmp/moe-2cf1-resume.wnzfqs; Serena handoff updated.",
-  "reviewCompletedAt": "2026-10-30T10:43:11.370Z",
+  "reviewCompletedAt": "2026-10-30T11:16:35.326Z",
   "rejectionDetails": {
     "failedDodItems": [
       "executionContract acceptance: The existing local-runner suites pass with their fixtures moved onto a fake /health, with unchanged row names and codes."
@@ -561,5 +588,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T11:16:35.326Z",
+  "reviewSummary": "APPROVE r3. Reopen-2 fixture isolation fixed and attributable; all 3 DoD items verified fresh.\nDelivery: fix at checkpoint 57075f7e (local-runner.test.mjs +2/-1, AGENT_TMP_ROOT captured before first test(); no assertion/hook/name change), on 95c5a8e8's +14/-2. Completion bb2f846a = 5 board files only (governor protocol). All on local+origin moe/work-2026-10-24; bb2f846a ancestor of HEAD 35eaae3b; 10 task files unchanged. Contested trailers carry only own hunks. Own non-board size +469/-77 = net392. Governor checks: (a) porcelain empty; (b) 57075f7e on the branch.\nGate: exact task.verification, git archive bb2f846a (10 files cmp-equal), npm ci, env -i, Node 24.21.0, umask 022: EXIT 0. Daemon 207 files, 5855 pass/16 skip, bindHosts 23/23. Node 479 pass/3 env-gated skips/0 fail.\nFilters: A1 1/1, A1+AJ3 2/2, AJ 6/6, A6 1/1. Control with 95c5a8e8's file: A1 0/1, A1+AJ3 0/2.\nWindows node.exe 24.16.0: DB 7/7 incl ::1; bridge 22/40 skip/0 fail (no hang); vm-control 10/2/0; local-runner 219/41/0; A1, A1+AJ3, AJ pass.\nMutants (10/10 killed by real assertions): absent report bindHost (DB1-4), no project compare (DB1-4), file projectPath trusted (DB2), idle-timeout deadline (DB1 trickle), no body cap (DB1-4), no per-forward probe (DB2), key read before probe (DB3/5), mcp always v4 (DB4), file bindHost ignored (DB1/5), /health omits bindHost (4 D rows).\nDoD1: DB2 start+forward, DB3, DB4 refuse 0.0.0.0/wsl reports with no file bindHost. DoD2: DB1 table, 8 failure kinds x 3 modules, DB5 (no request). DoD3: bindHosts D rows (default 127.0.0.1, wsl flag/env, exact key set, existing consumers accept) and full gate.\nRails: no forbidden patterns or exploit text, nothing persisted, no new codes, /health additive. Accepted residuals: local TOCTOU; pre-change daemon refused until restart.\nComplexity: Lean already. net: -0 lines possible.\nEvidence: /tmp/moe-2cf1-qa-r3.livFKd/*.log",
+  "requiredCheckAtDone": null
 }
