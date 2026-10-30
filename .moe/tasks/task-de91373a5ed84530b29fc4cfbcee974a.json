@@ -11,9 +11,49 @@
   "taskRails": [
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red), plus the platform seam. Load test-driven-development.\n\nEdit the LANDED bytes. CQ-RF01, CQ-RF02 and CQ-RF03 are dependencies and land first. RF03 lands the installed-CLI stop that this task reuses:\n- stopCommandOrNull(basePath);\n- the runStop seam (an exit code, or null when its bound ran out);\n- the sleep seam;\n- EXIT_TIMEOUT_MS and POLL_MS;\n- its test harness: Proxy ProcessHandle fakes, a recording runStop, a no-op counting sleep and small bounds.\nRe-read MoeDaemonSupervisor.kt, MoeDaemonSupervisorTest.kt and RuntimeSelectionPolicyTest.kt (R1-R4 and supervisorFor) first. If RF03 landed other names, use those. Never add a second stop runner, resolver, poll loop or bound.\n\nmoe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt gets the seam only, with no behavior yet:\n- Append the constructor param `windowsRestart: () -> Boolean = ::isWindowsHost`.\n- The companion gets `internal fun isWindowsHost()`, which is today's os.name check. The instance isWindows() delegates to it and is unchanged everywhere else.\n- `stopDaemonForRestart(info: DaemonInfo?)`: for now a null info returns null first. The non-null body is unchanged.\n\nmoe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt: supervisorFor passes `windowsRestart = { false }`. This keeps R1-R4 pinning the cross-platform restart contract, because the gate runs on a Windows host (gradlew.bat). Nothing else in that file changes.\n\nmoe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt extends RF03's harness.\n- A tree fake, `TreeHandle(pid, start: Instant, survives = false)`. It is a ProcessHandle with:\n  - a settable parent and a mutable children list;\n  - an alive flag, and info().startInstant() = start;\n  - destroy/destroyForcibly append \"kill:<pid>\" to one shared event log; alive stays true when survives is set;\n  - parent()/children()/descendants() append \"read:<pid>\", so a row can prove nothing was read.\n- A Process fake whose toHandle() returns a given TreeHandle. It is set as the IDE's own spawned supervisor through the same reflection the file uses for daemonSpawnAttempts.\n- runStop appends \"stop\" to the log; each row decides its exit code and side effect.\n\nRows use windowsRestart = { true } unless named N:\n- W1, own tree, clean stop. Own supervisor S; daemon.json names R, a child of S. runStop returns 0 and marks R and S dead. Expect: result null, \"stop\" is the first event (before any kill), and the stop command is RF03's installed `stop --project <basePath>`.\n- W2, respawn after capture. runStop returns 0 and kills R, while S (alive, mid-backoff) gains a NEW child R2. Expect: result null, kill:S precedes kill:R2 (root before children), and R2 is killed even though it did not exist at capture.\n- W3, survivor. A descendant has survives = true. The result equals the fixed survivor refusal naming its pid, and sleep's poll count stops at RF03's bound.\n- W4, LEGACY failed stop. runStop returns 1, then null (timed out), then throws. Each time the tree is still killed top-down (kill:S before kill:R) and the result is null.\n- W5, PROTECTED failed stop, with daemon.json naming a live verified daemon (verified the way RF03's RP4 verifies). The result equals today's STOP_FAILED refusal text, and there is no kill event.\n- W6, PROTECTED unverified daemon: today's NOT_STARTED_HERE refusal, runStop never runs, and there is no kill event.\n- W7, LEGACY foreign parent P: genuine (started before R) but not the IDE's own. P never appears in a kill event.\n  - (a) runStop marks R and P dead: null.\n  - (b) runStop returns 1 and P stays alive, so it would respawn: the survivor refusal names P.\n- W8, pid reuse. R.parent() is a process that started AFTER R. It is neither killed nor waited on, and the result is null once R is dead.\n- W9, no daemon.json (info null).\n  - Own S with child R: the events are stop, then kill:S, then kill:R; the result is null.\n  - No own supervisor: null, and runStop never runs.\n- N1, windowsRestart = { false }, LEGACY: R is destroyed exactly once, with no \"stop\" and no \"read:\" event, and the result is null. stopDaemonForRestart(null) gives null and touches nothing.\n- N2, windowsRestart = { false }, PROTECTED verified: exactly today's single destroy, and null.\n\nRed proof: run step 4's command with --tests com.moe.services.MoeDaemonSupervisorTest. The W rows fail for the expected reason; N1, N2, RF03's rows and R1-R4 pass. Record it.\n\nError handling in the tests: no row starts or signals a real process. The fakes record every call, and the assertions name exact texts.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt: the Windows restart path.\n\nstopDaemonForRestart(info: DaemonInfo?) starts with `if (windowsRestart()) return stopWindowsRestart(info)`. Below that line, the null check and today's body stay byte-for-byte, so Linux and macOS are unchanged.\n\nstopWindowsRestart(info) runs these steps in order. Steps 4-6 share one fixed bound: RF03's EXIT_TIMEOUT_MS, polled every POLL_MS through sleep.\n\n1. The daemon.json process, with today's guards.\n   - run = null for a null info, a pid <= 0 (never signaled in either profile), a pid isProcessAlive denies, or a vanished lookup.\n   - A lookup that throws: PROTECTED refuses with today's STOP_FAILED text; LEGACY sets run = null.\n   - Under PROTECTED, a non-null run whose activationRefusal(info) != null refuses with today's NOT_STARTED_HERE text, before anything else.\n2. Capture without signaling.\n   - own: the IDE's spawned supervisor (spawnedDaemonProcess?.toHandle()), when alive. A Process without a handle (test fakes) or a throw counts as none.\n   - parent: run.parent(), kept only when both start instants are present and the parent's is not after run's. A reused pid is never a parent.\n   - roots: own, plus parent when the profile is PROTECTED (provenance passed in step 1) or parent is own (same pid and same start instant). Deduplicate by pid. Signal authority never reaches a process this IDE neither started nor verified.\n   - watched: parent when it is not a root. It is never signaled, but it must exit by itself.\n   - tree: every descendant of every root, walked top-down (breadth-first over children(), each process before its own children, with a visited set by pid).\n   - If run is null and there are no roots, return null: there is nothing to stop, which is today's behavior.\n3. The installed CLI's stop, through RF03's stopCommandOrNull and runStop. Success is exit code exactly 0. A null command, a non-zero or null exit, or a throw is a failed stop.\n   - PROTECTED with a live run: return today's STOP_FAILED refusal, having signaled nothing.\n   - Otherwise (LEGACY, or no live daemon.json process): log at warn level and continue. The stop's sentinel is what makes a supervisor exit instead of respawning.\n4. destroyForcibly each root, then poll until the roots are dead or the bound runs out. A root must die before its children, so it cannot respawn them.\n5. Walk the roots' descendants again and add them to tree. This catches a `_run` respawned after the capture: on Windows, children() still lists an orphan of a dead root. Then destroyForcibly each tree process top-down, then run.\n6. Poll until run, the roots, the tree and watched are all dead, or the bound runs out. An isAlive that throws counts as alive. If anything survives, return the fixed refusal naming the first survivor:\n   \"Restart Daemon did not start a new Moe daemon: pid <pid> is still running after the stop, and it could restart the old one. Check what that process is and stop it yourself, then use Restart Daemon.\"\n   A repository-named pid is never called a Moe daemon.\n7. Return null. MoeProjectService then deletes daemon.json and starts the new daemon.\n\nError handling:\n- stopWindowsRestart never throws.\n- A destroy that throws is logged at debug level, and the confirm decides. A process that did not die is a survivor, so PROTECTED's 'any failure refuses' holds.\n- Every wait is bounded, and nothing is persisted.\n\nUpdate stopDaemonForRestart's KDoc: on Windows it stops through the installed CLI and then the old supervisor tree. It blocks up to RF03's stop and exit bounds, so it must never be called on the EDT.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Callers.\n\n1. moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt, restartDaemon():\n   - Call daemonSupervisor.stopDaemonForRestart(info) even when info is null. The refusal branch is unchanged.\n   - Delete daemon.json only when info != null.\n   - On Linux and macOS a null info returns null, so nothing changes there.\n   - On Windows the IDE's own supervisor is now stopped even with no daemon.json, for example mid-startup or in crash backoff.\n2. moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt:\n   - The Windows-only 'Run Agents in WSL' toggle calls service.restartDaemon() on the EDT inside doClick.\n   - Move that call to ApplicationManager.getApplication().executeOnPooledThread { service.restartDaemon() }, exactly as the Restart Daemon menu item does. Otherwise the new bounded waits could freeze the UI for up to the stop plus exit bounds.\n\nNothing else in either file changes.\n\nError handling is unchanged: a refusal is still logged and published, and the pooled call keeps restartDaemon's own handling.\n\nNo new test is added here; the supervisor rows cover the behavior. These two single-call moves are verified by QA reading the diff and by the gate compiling them.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then cmp. Each must fail the named row:\n   - children killed before the root: W2's order check;\n   - no second walk: W2, because R2 survives;\n   - the installed stop skipped: W1 ('stop' first) and W5;\n   - LEGACY authority on a foreign parent: W7, because P is killed;\n   - the start-instant check dropped: W8;\n   - watched left out of the confirm: W7(b);\n   - windowsRestart ignored: N1;\n   - an early return for a null info on Windows: W9;\n   - the provenance check moved after the stop: W6;\n   - an unbounded or missing poll: W3's count.\n2. Hold the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease).\n   - Take it with moe.acquire_resource {resourceId: 'jetbrains-gradle'}.\n   - If it is busy, call moe.report_blocked with that resourceId.\n   - Release it afterwards, even on failure.\n3. Run the task's command from WSL:\n   cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n   - It must exit 0.\n   - Count tests from build/test-results/test/TEST-com.moe.services.MoeDaemonSupervisorTest.xml and TEST-com.moe.util.RuntimeSelectionPolicyTest.xml, not from the console.\n   - If a peer's unresolved merge breaks the shared tree, gate in a snapshot instead (mem:gotcha-jetbrains-gate-snapshot): overlay only this task's 5 files and cmp-verify them.\n4. git diff --check over the 5 files must be clean.\n5. complete_task verification: that command, exit code 0 and the output tail, reported truthfully as Windows evidence. The summary maps DoD 1 to W1-W9, and DoD 2 to N1, N2 and R1-R4.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the 5-file diff as an attacker who controls .moe/daemon.json, and as an unlucky user:\n- Can any process be signaled that is outside this IDE's own spawn tree and outside a PROTECTED-verified tree? Try:\n  - a forged pid whose parent is the IDE JVM, explorer or a shell;\n  - a reused pid;\n  - a pid <= 0;\n  - a dead pid.\n- Can a supervisor respawn a `_run` after the confirm? Try:\n  - a respawn between capture and kill;\n  - an orphan of a killed root;\n  - a foreign supervisor after a failed stop.\n- Is every wait bounded, and does none of it run on the EDT?\n- Are Linux and macOS unchanged byte-for-byte, and do R1-R4 still pin that?\n- Are the refusal texts fixed, and do they avoid calling a repository pid a Moe daemon?\n- Rails:\n  - no .moe edits;\n  - no Git writes;\n  - nothing persisted;\n  - none of the global rails' forbidden patterns;\n  - verified-local stays unavailable.\n- Would I be embarrassed if this shipped?\n\nFix any finding, then re-run step 4's gate fresh before complete_task.\n\nThen write the Serena memory 'task-task-de91373a5ed84530b29fc4cfbcee974a-handoff' with the landed names, the rows and the evidence.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,13 +66,90 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:39.223Z",
-  "updatedAt": "2026-10-30T06:52:09.735Z",
+  "updatedAt": "2026-10-30T07:25:15.248Z",
   "dependsOn": [
-    "task-ec64165c85f246088a7224cf70b04670"
+    "task-ec64165c85f246088a7224cf70b04670",
+    "task-f3485ac9d4384664870d88db876ddd54"
   ],
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T06:52:09.735Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:10:49.087Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:25:15.226Z",
+  "executionContract": {
+    "intendedBehavior": "On Windows, Restart Daemon leaves no old supervisor that can respawn its `_run`.\n1. It first stops the daemon through the installed CLI's `stop`, reusing RF03's runner. The stop sentinel makes a supervisor exit instead of respawning.\n2. It then terminates the old supervisor trees this IDE may signal. These are its own spawned supervisor, and the daemon.json `_run`'s parent: under PROTECTED once provenance passed, under LEGACY only when that parent is the IDE's own. Each root is killed before its descendants, and the tree is walked again after the roots die.\n3. It confirms, within a fixed bound, that the daemon.json process, every root and descendant, and any unsignaled genuine parent have exited. Otherwise it refuses with a fixed message and starts nothing.\n4. Linux and macOS behave exactly as today.",
+    "acceptanceCriteria": [
+      "The installed `stop --project <basePath>` runs before any kill. The roots die before their children, and a `_run` respawned after the capture is still killed.",
+      "A process that survives the bound yields the fixed survivor refusal naming its pid. No new daemon is started, and daemon.json is kept.",
+      "PROTECTED keeps today's NOT_STARTED_HERE and STOP_FAILED refusals with their exact texts. LEGACY continues after a failed stop.",
+      "A foreign (LEGACY, not own) or reused-pid parent is never signaled. A genuine foreign parent that stays alive refuses.",
+      "With no daemon.json, Windows still stops the IDE's own supervisor tree. With windowsRestart false, every path equals today's, and R1-R4 pass unchanged."
+    ],
+    "invariants": [
+      "Signal authority reaches only this IDE's own spawn tree or a PROTECTED-verified tree. A pid <= 0, a dead pid or a reused pid is never signaled.",
+      "Every wait is bounded by RF03's bounds, and none of it runs on the EDT.",
+      "Nothing is persisted, and refusal texts never call a repository pid a Moe daemon."
+    ],
+    "compatibility": [
+      "The stopDaemonForRestart(info) callers keep compiling; the nullable parameter accepts the old non-null calls.",
+      "Non-Windows restart is byte-identical in behavior, and RuntimeSelectionPolicyTest R1-R4 pin it through windowsRestart = { false }."
+    ],
+    "approvedScope": [
+      "MoeDaemonSupervisor: the windowsRestart seam, isWindowsHost, stopDaemonForRestart(DaemonInfo?), stopWindowsRestart, the survivor refusal and the KDoc.",
+      "MoeProjectService.restartDaemon: a null info reaches the supervisor, and daemon.json is deleted only when present.",
+      "MoeToolWindowPanel: the WSL toggle's restartDaemon call moves off the EDT.",
+      "Tests: the MoeDaemonSupervisorTest W1-W9 and N1-N2 rows with a TreeHandle fake, and the RuntimeSelectionPolicyTest supervisorFor pin."
+    ],
+    "reuse": [
+      "RF03's installed-CLI stop (command builder, runner, sleep, bounds) is reused; there is no second runner.",
+      "Today's restartRefusal texts and activationRefusal are reused unchanged."
+    ],
+    "sourceAssumptions": [
+      "MoeDaemonSupervisor.stopDaemonForRestart captures processLookup(pid) once. Under PROTECTED it requires activationRefusal(info) == null before destroy, and LEGACY is best-effort (R01 design, mem:decision-protected-runtime-selection).",
+      "The daemon CLI stopDaemon (packages/moe-daemon/src/index.ts) writes .moe/daemon.stop, then signals `_run`. superviseDaemon exits on child exit when it consumes the sentinel, and otherwise respawns with backoff of up to 30 s.",
+      "On Windows, Process.destroy and ProcessHandle.destroy are TerminateProcess, and Node's process.kill is abrupt, so the daemon's own cleanup does not run.",
+      "RF03 (task-ec64165c) lands stopCommandOrNull, runStop, sleep, EXIT_TIMEOUT_MS and POLL_MS, and leaves stopDaemonForRestart to RF04.",
+      "MoeToolWindowPanel's WSL toggle (Windows only) calls service.restartDaemon() inside doClick on the EDT. The Restart Daemon menu item already uses executeOnPooledThread."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Signal the daemon.json `_run`'s parent tree under LEGACY too. Rejected: daemon.json is repository content. A forged pid whose parent is the IDE JVM or a shell would make Restart Daemon kill the IDE's own process tree. Under LEGACY only the IDE's own spawned supervisor is a signal root; a foreign genuine parent is watched, not signaled.\n- Tree-kill without the installed stop. Rejected, for two reasons: the task requires stop first, and the stop sentinel is the only thing that makes a FOREIGN supervisor exit instead of respawning.\n- Wait with onExit futures. Rejected in favour of polling through RF03's sleep seam and bounds, which keeps the rows deterministic with no-op sleep and keeps one bound.\n- Refuse on the EDT. Rejected: that would break the Windows WSL toggle. Its EDT call moves to a pooled thread instead, as the Restart Daemon menu item already does.\n- Leave a null daemon.json untouched. Rejected: the DoD requires the old supervisor stopped before any new start, and the IDE's own supervisor can be alive mid-startup or in crash backoff with no daemon.json.",
+    "codebaseInsights": "- Why Windows only: on POSIX, ProcessHandle.destroy sends SIGTERM, `_run` exits 0, and the supervisor exits cleanly.\n- The Windows race:\n  - TerminateProcess gives exit code 1, so the supervisor treats it as a crash and respawns after a 1 s backoff;\n  - ensureDaemonRunning starts the new process first and destroyForcibly's the old supervisor second, which kills only the supervisor and orphans a respawned `_run`.\n- verifyProvenance records a verified `_run` child (supervisor=false), and only a supervisor record vouches for a child.\n- RuntimeSelectionPolicyTest R1-R4 drive the real MoeProjectService.restartDaemon through supervisorFor with SignalSpy handles. Those spies support only pid, isAlive and destroy, so on a Windows host they must stay on the non-Windows path: hence the pin.\n- Kotlin tests run from WSL through cmd.exe gradlew.bat under the jetbrains-gradle lease.",
+    "risks": "- RF03's names may differ from its plan. Use the landed names, and never duplicate the runner or the bounds.\n- JDK children() of a dead handle: on Windows it filters by start time, and an orphan keeps its ppid, so the second walk finds it. The fakes model this.\n- Under LEGACY, a foreign supervisor with a failed stop gives a refusal, by design: the alternative is a duplicate daemon.\n- A genuine parent that is a plain shell (a hand-run `_run`) makes the restart refuse until the user stops it. The message says so.\n- Peers' dirty bytes: overlay only these 5 files when gating in a snapshot.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:25:15.248Z",
+  "approvedPlanRevision": 1
 }

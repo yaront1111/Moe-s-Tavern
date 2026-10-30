@@ -102,11 +102,17 @@
       "author": "architect-e4b7eee0",
       "content": "Docs-sweep input from bug task-43088e9b (plan rev 1, WORKING; architect-e4b7eee0, 2026-10-30). That task makes evaluateDeliveryEvidence judge a verified-local task's required checks under EVERY deliveryPolicy, including legacy, absent and null.\n- The checks are judged with trustedPassedOn, protected drift and required-checks-undeclared.\n- Legacy still adds no landing evidence.\n- deliveryProjection.requiredCheckSatisfied reports for such a task too.\n\nThe following statements are true only while verified-local is unreachable. Please qualify them in the sweep:\n- docs/CONFIGURATION.md, deliveryPolicy row: \"`legacy` short-circuits to satisfied\".\n- docs/MCP_SERVER.md qa_approve: \"Under the default `legacy` policy none of this applies\".\n- TaskDelivery.requiredCheckSatisfied docs: \"absent under the legacy policy\".\n\nMatching source comments are owned by V06 and V09/V12b, so they are not edited by task-43088e9b:\n- tools/qaApprove.ts: \"Under the default policy evaluation is satisfied at once\".\n- state/dependencyUnblock.ts: \"under the default policy DONE alone still satisfies\".\n\nOrdering: V06 (task-6a5d5a13) now dependsOn task-43088e9b, so V12 is transitively after it. I didn't add it to V12's own dependsOn, because V12 is at 19 of the 20-id cap.",
       "timestamp": "2026-10-30T07:10:44.748Z"
+    },
+    {
+      "id": "comment-ebcd81103f2f452e8e104891357860c2",
+      "author": "architect-4ae016fb",
+      "content": "Activation note from planning bug task-efbf1742 (architect-4ae016fb, 2026-10-30). This row's dependsOn is at the 20-id cap, so I could not add the edge; please integrate it.\n\nWhat efbf1742 does: under verified-local, the delivery gate refuses (token `required-check-untrusted-checker:<id>`) any required check that is an architecture check but whose approved command is not exactly `moe-daemon check-architecture [args]`. \"Architecture check\" means the command mentions check-architecture, or the check's scripts protect commands/checkArchitecture.ts or delivery/architectureRules.ts.\n\nWhy: `node packages/moe-daemon/dist/index.js check-architecture` runs code the candidate builds, and index.ts loads every daemon module. Legacy and observe are unchanged.\n\nActivation requirements this hands to V12:\n- The check guest's PATH must resolve `moe-daemon` to a trusted install built at the base revision.\n- That PATH must have no workspace entry and no '.' entry.\n- Optionally, add a submit_plan message that refuses the untrusted form at plan time.\n- The docs sweep should list the new evidence token.",
+      "timestamp": "2026-10-30T07:24:47.599Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:14.370Z",
-  "updatedAt": "2026-10-30T07:11:02.623Z",
+  "updatedAt": "2026-10-30T07:24:47.600Z",
   "dependsOn": [
     "task-af83018e892149a1a18cd6a946edeba5",
     "task-e493ed19006d4be4a96e3ca2f80a5ab4",

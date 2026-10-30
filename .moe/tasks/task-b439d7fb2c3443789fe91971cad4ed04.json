@@ -57,12 +57,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "PLANNING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Human-approved re-plan (governor REPL, 2026-10-30). The worker's step-1 premise check (comment-4bef8984) disproved the planned Open Point 2 claim with a reproduced counterexample. Under PROTECTED with WSL agents on, the daemon binds 0.0.0.0 (MoeDaemonSupervisor.kt:222). guest-session.mjs daemonRefusal trusts bindHost from .moe/daemon.json, and repository content can replace that file on a pull. The plan also missed browser origins as an attacker class: /ws and /mcp have no Origin check. Re-decide using options (a)-(d) in comment-4bef8984. The Origin and wildcard-bind exposure itself is now a separate HIGH bug row.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -77,11 +77,11 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:45.773Z",
-  "updatedAt": "2026-10-30T07:21:59.953Z",
+  "updatedAt": "2026-10-30T07:25:12.923Z",
   "planningEntry": {
-    "from": "BACKLOG",
-    "at": "2026-10-30T06:52:10.852Z",
-    "seq": 1
+    "from": "BLOCKED",
+    "at": "2026-10-30T07:25:12.923Z",
+    "seq": 2
   },
   "metrics": {
     "firstClaimAt": "2026-10-30T07:13:22.778Z",
@@ -90,7 +90,8 @@
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-0062feec"
+    "worker-0062feec",
+    "governor-693b7073"
   ],
   "tier": "standard",
   "effort": "high",
@@ -123,8 +124,45 @@
   "planApprovedAt": "2026-10-30T07:16:54.662Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T07:18:39.191Z",
-  "blockedReason": "Step-1 premise check failed, so per the plan's stop rule the planned decision was not written. In-model repository content can rewrite .moe/daemon.json: it is gitignored, and `git pull` silently overwrites an ignored file that upstream force-added (reproduced). Under PROTECTED with WSL agents on, the daemon binds 0.0.0.0 (MoeDaemonSupervisor.kt:222). A pulled daemon.json without bindHost then defeats guest-session.mjs daemonRefusal, and guest code could reach the unauthenticated /mcp through the host interface. This contradicts Open Point 2's claim that only a same-user host writer can change daemon.json. Also, /ws and /mcp have no Origin check, so browser pages are an unlisted attacker class. The architect must re-decide; the options are in comment-4bef8984.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T07:21:59.953Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "a1e77438c523cc6b8d403b074a8c98c091d9111b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T07:18:09Z",
+      "paths": [
+        ".moe/tasks/task-032c973941bc41d9b051eedacb7de0b6.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+        ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+        ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T07:22:33.346Z",
+      "treeId": "52acd28721d6b36a95fbb1594c8305d1b5b2dd81",
+      "status": "BLOCKED",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-032c973941bc41d9b051eedacb7de0b6.json",
+    ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+    ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+    ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-0062feec@2026-10-30T07:18:09Z",
+    "at": "2026-10-30T07:22:33.346Z"
+  },
+  "priorBlockedReason": "Step-1 premise check failed, so per the plan's stop rule the planned decision was not written. In-model repository content can rewrite .moe/daemon.json: it is gitignored, and `git pull` silently overwrites an ignored file that upstream force-added (reproduced). Under PROTECTED with WSL agents on, the daemon binds 0.0.0.0 (MoeDaemonSupervisor.kt:222). A pulled daemon.json without bindHost then defeats guest-session.mjs daemonRefusal, and guest code could reach the unauthenticated /mcp through the host interface. This contradicts Open Point 2's claim that only a same-user host writer can change daemon.json. Also, /ws and /mcp have no Origin check, so browser pages are an unlisted attacker class. The architect must re-decide; the options are in comment-4bef8984.",
+  "blockedOnTaskIds": null
 }
