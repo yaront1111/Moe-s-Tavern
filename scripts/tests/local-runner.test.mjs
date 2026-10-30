@@ -4285,3 +4285,124 @@ test('CJ10 end to end, the real supervisor verify reports a passed job\'s edits 
     }
     assert.deepEqual(guest.unexpected, []);
   });
+
+// CQ-R10d3a agents install rows: the real supervisor's install_agents() into <dir>/agents, owned by the test user (the owner seam).
+import { MAX_AGENT_BINARY_BYTES } from '../local-runner/agent-cache.mjs';
+
+function agentsIn(dir, input, setup = '', ...extra) {
+  const agents = path.join(dir, 'agents');
+  const code = `${PY_LOAD}${setup}\nsys.exit(m.install_agents(0, 1, sys.argv[2], (os.getuid(), os.getgid())))`;
+  return Object.assign(spawnSync('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, agents, ...extra],
+    { input, maxBuffer: 64 << 20, timeout: 60_000 }), { agents });
+}
+const agentOf = (cli, bytes, changes = {}) => ({ kind: 'agent', cli, size: bytes.length, sha256: sha(bytes), ...changes });
+const binaryOf = (cli, bytes) => [agentOf(cli, bytes), ...dataFrames(bytes)];
+const AGENTS_END = { kind: 'end' };
+// <agents> as sorted [name, bytes or 'dir', mode] rows, staging directories included.
+const agentsState = agents => readdirSync(agents).sort().map(name => {
+  const file = path.join(agents, name);
+  return [name, statSync(file).isDirectory() ? 'dir' : readFileSync(file), modeOf(file)];
+});
+// A 0755 agents directory already holding an older 0555 claude, so 'installs nothing' is observable.
+const OLD_AGENTS = [['claude', Buffer.from('old'), 0o555]];
+function seededAgents(t) {
+  const dir = scratch(t);
+  mkdirSync(path.join(dir, 'agents'));
+  chmodSync(path.join(dir, 'agents'), 0o755);
+  writeFileSync(path.join(dir, 'agents', 'claude'), 'old', { mode: 0o555 });
+  return dir;
+}
+
+test('AI1 the supervisor CLI takes exactly agents, only as root, and routes it to install_agents(0, 1) with root /opt/moe/agents defaults', { skip: NOT_POSIX }, () => {
+  for (const args of [['agents', 'x'], ['AGENTS']]) {
+    const run = spawnSync('python3', ['-I', '-B', PY_SUPERVISOR, ...args]);
+    assert.deepEqual([run.status, run.stdout.length], [64, 0], `${args} ${run.stderr}`);
+  }
+  const run = spawnSync('python3', ['-I', '-B', '-c', `${PY_LOAD}sys.exit(m.main(['agents'], geteuid=lambda: 1000))`, PY_SUPERVISOR]);
+  assert.deepEqual([run.status, run.stdout.length], [77, 0], String(run.stderr));
+  const routed = `${PY_LOAD}m.install_agents = lambda *a, **k: sys.stderr.write(repr((a, k))) and 42\nsys.exit(m.main(['agents'], geteuid=lambda: 0))`;
+  const root = spawnSync('python3', ['-I', '-B', '-c', routed, PY_SUPERVISOR]);
+  assert.deepEqual([root.status, String(root.stderr), root.stdout.length], [42, '((0, 1), {})', 0]);
+  // Every JOBS executable lives in AGENTS, the size cap mirrors agent-cache.mjs, and production installs are root:root.
+  const pins = `${PY_LOAD}import inspect, json
+p = inspect.signature(m.install_agents).parameters
+print(json.dumps([m.AGENTS, sorted({os.path.dirname(job[0]) for job in m.JOBS.values()}), m.MAX_AGENT_BYTES, p['agents'].default, repr(p['owner'].default)]))`;
+  const pinned = spawnSync('python3', ['-I', '-B', '-c', pins, PY_SUPERVISOR]);
+  assert.equal(pinned.status, 0, String(pinned.stderr));
+  assert.deepEqual(JSON.parse(pinned.stdout), ['/opt/moe/agents', ['/opt/moe/agents'], MAX_AGENT_BINARY_BYTES, '/opt/moe/agents', '(0, 0)']);
+});
+
+test('AI2 a clean stream installs each binary at <agents>/<cli> as 0555 with its exact bytes in a 0755 dir, and answers once', { skip: NOT_POSIX }, t => {
+  const claude = BIG.subarray(0, SNAPSHOT_CHUNK_BYTES + 3); // two data frames
+  const codex = Buffer.from('#!/bin/sh\ncodex\n');
+  const run = agentsIn(scratch(t), framesOf([...binaryOf('claude', claude), ...binaryOf('codex', codex), AGENTS_END]));
+  assert.equal(run.status, 0, String(run.stderr));
+  assert.deepEqual(createFrameDecoder().push(run.stdout), [{ kind: 'installed', count: 2 }]);
+  assert.deepEqual(agentsState(run.agents), [['claude', claude, 0o555], ['codex', codex, 0o555]]); // no staging left
+  const uids = ['claude', 'codex'].map(cli => statSync(path.join(run.agents, cli)).uid);
+  assert.deepEqual([modeOf(run.agents), uids], [0o755, [process.getuid(), process.getuid()]]);
+});
+
+test('AI3 a reinstall replaces an older binary by rename, never in place, and forces the agents dir to 0755', { skip: NOT_POSIX }, t => {
+  const dir = seededAgents(t);
+  const agents = path.join(dir, 'agents');
+  chmodSync(agents, 0o777);
+  linkSync(path.join(agents, 'claude'), path.join(dir, 'kept')); // an in-place write would show through this link
+  const fresh = Buffer.from('new claude');
+  const run = agentsIn(dir, framesOf([...binaryOf('claude', fresh), AGENTS_END]));
+  assert.equal(run.status, 0, String(run.stderr));
+  assert.deepEqual(createFrameDecoder().push(run.stdout), [{ kind: 'installed', count: 1 }]);
+  assert.deepEqual([agentsState(agents), modeOf(agents), String(readFileSync(path.join(dir, 'kept')))], [[['claude', fresh, 0o555]], 0o755, 'old']);
+});
+
+test('AI4 a malformed, mismatched or partial stream exits 65 with no frame and installs nothing', { skip: NOT_POSIX }, t => {
+  const claude = Buffer.from('claude!');
+  const codex = Buffer.from('codex');
+  const data = bytes => ({ kind: 'data', data: Buffer.from(bytes).toString('base64') });
+  const C = agentOf('claude', claude);
+  const X = data(claude);
+  const one = (header, ...frames) => [header, ...(frames.length ? frames : [X]), AGENTS_END];
+  const both = [C, X, agentOf('codex', codex), data(codex), AGENTS_END];
+  for (const [label, frames] of [
+    ['an unknown cli', one({ ...C, cli: 'gemini' })], ...[['claude'], 7, null].map(cli => [`cli ${JSON.stringify(cli)}`, one({ ...C, cli })]),
+    ['a duplicate cli', [C, X, C, X, AGENTS_END]],
+    ...[0, MAX_AGENT_BINARY_BYTES + 1, true].map(size => [`size ${size}`, one({ ...C, size })]),
+    ...[C.sha256.toUpperCase(), C.sha256.slice(1), 7].map(sha256 => [`sha256 ${sha256}`, one({ ...C, sha256 })]),
+    ['a wrong hash', one({ ...C, sha256: sha(Buffer.from('claude?')) })],
+    ['short data', one(C, data('cla'))], ['a chunk past the size', one(C, data('cla'), data('ude!x'))],
+    ['an empty data frame', one(C, data(''), X)], ['non-canonical base64', one(agentOf('claude', Buffer.from('A')), { kind: 'data', data: 'QR==' })],
+    ['a non-string data', one(C, { kind: 'data', data: 7 })],
+    ['an extra header key', one({ ...C, mode: 365 })], ['an extra data key', one(C, { ...X, size: 7 })],
+    ['data before a header', [X, C, X, AGENTS_END]], ['a zero-byte stream', []], ['an end before any agent', [AGENTS_END]],
+    ['EOF before end', [C, X]], ['a second end', [...one(C), AGENTS_END]],
+    ['a partial frame after end', [...one(C), encodeFrame(AGENTS_END).subarray(0, 5)]],
+    ['a valid claude then a bad codex', [C, X, agentOf('codex', codex, { sha256: sha(claude) }), data(codex), AGENTS_END]],
+  ]) {
+    const run = agentsIn(seededAgents(t), framesOf(frames));
+    assert.deepEqual([run.status, run.stdout.length, agentsState(run.agents), modeOf(run.agents)], [65, 0, OLD_AGENTS, 0o755], `${label} ${run.stderr}`);
+  }
+  // Each row breaks exactly one rule: the base streams install, in either order.
+  for (const frames of [both, [...both.slice(2, 4), ...both.slice(0, 2), AGENTS_END]]) {
+    const run = agentsIn(seededAgents(t), framesOf(frames));
+    assert.deepEqual([run.status, agentsState(run.agents)], [0, [['claude', claude, 0o555], ['codex', codex, 0o555]]], String(run.stderr));
+  }
+});
+
+test('AI5 an agents path that is a symlink or a file, or a failed fsync or rename, exits 74 with no frame and installs nothing', { skip: NOT_POSIX }, t => {
+  const frames = framesOf([...binaryOf('claude', Buffer.from('new')), ...binaryOf('codex', Buffer.from('codex')), AGENTS_END]);
+  const outside = scratch(t); // mkdtemp's 0700: a followed link would be forced to 0755
+  const linked = scratch(t);
+  symlinkSync(outside, path.join(linked, 'agents'));
+  const viaLink = agentsIn(linked, frames);
+  assert.deepEqual([viaLink.status, viaLink.stdout.length, lstatSync(viaLink.agents).isSymbolicLink(), readdirSync(outside), modeOf(outside)],
+    [74, 0, true, [], 0o700], String(viaLink.stderr));
+  const filed = scratch(t);
+  writeFileSync(path.join(filed, 'agents'), 'a file');
+  const viaFile = agentsIn(filed, frames);
+  assert.deepEqual([viaFile.status, viaFile.stdout.length, readdirSync(filed), String(readFileSync(viaFile.agents))],
+    [74, 0, ['agents'], 'a file'], String(viaFile.stderr));
+  for (const call of ['fsync', 'rename']) {
+    const failed = agentsIn(seededAgents(t), frames, `def fail(*args, **kwargs):\n    raise OSError(5, 'injected')\nos.${call} = fail`);
+    assert.deepEqual([failed.status, failed.stdout.length, agentsState(failed.agents)], [74, 0, OLD_AGENTS], `${call} ${failed.stderr}`);
+  }
+});

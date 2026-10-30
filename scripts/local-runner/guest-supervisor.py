@@ -24,7 +24,11 @@
 # Mode 'verify' (CQ-R11f): reads no stdin and writes one {kind: 'verified', changed} frame, the count of manifest paths no
 # longer holding their materialized bytes and exec bit; 65 a missing or malformed manifest or workspace root, 74 a gone
 # host, each with no frame.
+# Mode 'agents' (CQ-R10d3a): the pinned agent CLIs from host frames on stdin into AGENTS as root:root 0555, then one
+# {kind: 'installed', count} frame and 0; 65 a malformed, mismatched or empty stream, 74 an I/O failure or an AGENTS path
+# that is a symlink or a file, 77 not root, 64 any other argv. No refusal writes a frame.
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -520,6 +524,21 @@ def create(root, path, executable, owner):
     return fd
 
 
+# Writes exactly size bytes from the data frames that follow, each a non-empty canonical base64 chunk within what is left,
+# and returns their running sha256.
+def copy_data(frames, fd, size):
+    sha, left = hashlib.sha256(), size
+    while left:
+        text = expect(next(frames, None), 'data', 'data')['data']
+        chunk = base64.b64decode(text, validate=True) if type(text) is str else b''
+        if not chunk or len(chunk) > left or base64.b64encode(chunk).decode('ascii') != text:
+            raise ValueError('a malformed data frame')
+        write_all(fd, chunk)
+        sha.update(chunk)
+        left -= len(chunk)
+    return sha
+
+
 def receive(frames, root, owner):
     head = expect(next(frames, None), 'snapshot', 'version', 'files', 'bytes', 'digest')
     count, total, digest = head['files'], head['bytes'], head['digest']
@@ -533,16 +552,9 @@ def receive(frames, root, owner):
         if type(executable) is not bool or type(size) is not int or not 0 <= size <= left_total:
             raise ValueError('a malformed file frame')
         left_total -= size
-        fd, sha, left = create(root, path, executable, owner), hashlib.sha256(), size
+        fd = create(root, path, executable, owner)
         try:
-            while left:
-                text = expect(next(frames, None), 'data', 'data')['data']
-                chunk = base64.b64decode(text, validate=True) if type(text) is str else b''
-                if not chunk or len(chunk) > left or base64.b64encode(chunk).decode('ascii') != text:
-                    raise ValueError('a malformed data frame')
-                write_all(fd, chunk)
-                sha.update(chunk)
-                left -= len(chunk)
+            sha = copy_data(frames, fd, size)
         finally:
             os.close(fd)
         rows.append((path.encode('utf-8'), path, executable, size, sha.digest()))
@@ -766,6 +778,8 @@ def export(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, drop=drop_t
 # the executable alone; CQ-R10d installs the CLIs and owns their flags, prompt and MCP wiring.
 JOBS = {'claude': ('/opt/moe/agents/claude', ('ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN')),
         'codex': ('/opt/moe/agents/codex', ('OPENAI_API_KEY', 'CODEX_API_KEY'))}
+AGENTS = '/opt/moe/agents'  # CQ-R10d3a installs every JOBS executable here
+MAX_AGENT_BYTES = 1073741824  # 2**30, mirrors agent-cache.mjs MAX_AGENT_BINARY_BYTES
 JOB_ROLES = ('worker', 'qa')
 JOB_PATH = '/usr/local/bin:/usr/bin:/bin'
 SESSIONS = '/var/lib/moe/sessions'
@@ -1110,16 +1124,82 @@ def verify(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST):
         os.close(root)
 
 
+# CQ-R10d3a agents. Each binary is staged root-only in a 0700 directory INSIDE agents (dir_fd-relative, so a swapped
+# agents path cannot redirect it) and checked against its header. Only after the end frame, with nothing after it, is
+# each renamed onto agents/<cli>: a whole-file replacement of any older install, never a write in place. A handled
+# refusal installs nothing, leaves no staging and writes no frame; a crash can leave only the staging directory. Each
+# rename is atomic but the set is not: an I/O failure between two (74) can leave old and new binaries side by side, each
+# whole, which the readiness pinned-hash probe refuses. Callers serialize per VM through R06's job lease.
+def install_agents(in_fd, out_fd, agents=AGENTS, owner=(0, 0)):
+    name, root, staging, staged = '.staging-' + os.urandom(8).hex(), None, None, []
+    try:
+        try:
+            os.mkdir(agents, 0o755)
+        except FileExistsError:
+            pass  # a symlink or a file there fails the O_NOFOLLOW|O_DIRECTORY open
+        root = os.open(agents, WALK)
+        own(root, owner, 0o755)
+        os.mkdir(name, 0o700, dir_fd=root)
+        staging = os.open(name, WALK, dir_fd=root)
+        own(staging, owner, 0o700)
+        frames = snapshot_frames(in_fd)
+        frame = next(frames, None)
+        while type(frame) is dict and frame.get('kind') == 'agent':
+            head = expect(frame, 'agent', 'cli', 'size', 'sha256')
+            cli, size, digest = head['cli'], head['size'], head['sha256']
+            # The type first, since an unhashable cli raises TypeError in `in JOBS`; and duplicates explicitly, since
+            # O_EXCL would report one as an I/O failure.
+            if not (type(cli) is str and cli in JOBS and cli not in staged and type(size) is int
+                    and 1 <= size <= MAX_AGENT_BYTES and type(digest) is str and DIGEST.fullmatch(digest)):
+                raise ValueError('a malformed agent header')
+            fd = os.open(cli, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=staging)
+            staged.append(cli)
+            try:
+                if copy_data(frames, fd, size).hexdigest() != digest:
+                    raise ValueError('an agent binary does not match its sha256')
+                own(fd, owner, 0o555)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            frame = next(frames, None)
+        expect(frame, 'end')
+        if not staged or next(frames, None) is not None:
+            raise ValueError('an empty stream or a frame after end')
+        for cli in staged:
+            os.rename(cli, cli, src_dir_fd=staging, dst_dir_fd=root)
+        count, staged = len(staged), []
+        os.rmdir(name, dir_fd=root)
+        os.fsync(root)
+        write_frame(out_fd, {'kind': 'installed', 'count': count})
+        return 0
+    except (ValueError, RecursionError):  # binascii.Error, JSON and UTF-8 errors are ValueErrors
+        return os.EX_DATAERR
+    except OSError:
+        return os.EX_IOERR
+    finally:
+        for cli in staged:  # best effort, never masking the first error; one already renamed is gone
+            with contextlib.suppress(OSError):
+                os.unlink(cli, dir_fd=staging)
+        if staging is not None:
+            os.close(staging)
+            with contextlib.suppress(OSError):
+                os.rmdir(name, dir_fd=root)
+        if root is not None:
+            os.close(root)
+
+
 # geteuid and the keywords (seams) of start_job or check_job are injectable from Python only (tests), never from argv or
 # the environment. No refusal writes to stdout.
 def main(argv, geteuid=os.geteuid, **seams):
-    # bridgeArgv and snapshotArgv pass exactly these, and CQ-R11c's checkArgv will pass ['check'].
-    if argv not in (['bridge'], ['check'], ['materialize'], ['export'], ['verify']):
+    # bridgeArgv and snapshotArgv pass exactly these, CQ-R11c's checkArgv passes ['check'] and CQ-R10d3 ['agents'].
+    if argv not in (['bridge'], ['check'], ['materialize'], ['export'], ['verify'], ['agents']):
         return os.EX_USAGE
     if geteuid() != 0:
         return os.EX_NOPERM
     if argv == ['materialize']:
         return materialize(0, 1)
+    if argv == ['agents']:
+        return install_agents(0, 1)
     if argv == ['export']:
         return export(1)
     if argv == ['verify']:

@@ -13,9 +13,60 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red), scripts/tests/local-runner.test.mjs. Load test-driven-development.\n\nAppend a new section at the end of the file:\n`// CQ-R10d3a agents install rows: the real supervisor's install_agents() into <dir>/agents, owned by the test user (the owner seam).`\nReuse PY_LOAD, PY_SUPERVISOR, NOT_POSIX, framesOf, modeOf, scratch, encodeFrame and createFrameDecoder. Every row gets `{ skip: NOT_POSIX }`. ESM import bindings are file-global, so import only names the file does not import yet (e.g. linkSync); a second import of the same name is a SyntaxError. Size budget: about 140 test lines (see planningNotes).\n\nHelper agentsIn(dir, input, setup = '', ...extra), modelled on materializeIn:\n- run `${PY_LOAD}${setup}\\nsys.exit(m.install_agents(0, 1, sys.argv[2], (os.getuid(), os.getgid())))` under python3 -I -B;\n- argv[2] is path.join(dir, 'agents'); pass input, maxBuffer and timeout as M rows do;\n- frame builders: agent(cli, bytes) = {kind:'agent', cli, size: bytes.length, sha256: sha256 hex}; data(chunk) = {kind:'data', data: base64}; END = {kind:'end'};\n- a state(dir) helper lists <dir>/agents as sorted [name, bytes-or-'dir', mode] rows.\n\nRows (AI is an unused prefix):\n\nAI1: CLI routing and pins.\n- ['agents','x'] and ['AGENTS'] exit 64 with no stdout.\n- main(['agents'], geteuid=lambda: 1000) exits 77.\n- As root, with install_agents replaced by a stderr-repr lambda, the result is [42, '((0, 1), {})', 0], copying the VR6 pattern.\n- The Python constants: m.AGENTS == '/opt/moe/agents'; os.path.dirname of every JOBS executable == m.AGENTS; m.MAX_AGENT_BYTES equals MAX_AGENT_BINARY_BYTES imported from ../local-runner/agent-cache.mjs; inspect.signature(m.install_agents) defaults agents=m.AGENTS and owner=(0, 0).\n\nAI2: a clean install.\n- Stream claude (SNAPSHOT_CHUNK_BYTES + 3 bytes, in two data frames) and codex (a few bytes) into a dir with no agents yet.\n- Exit 0, and stdout decodes to exactly [{kind:'installed', count:2}].\n- agents/claude and agents/codex hold exactly the streamed bytes, mode 0o555, uid = process.getuid().\n- The agents dir is mode 0o755, and its listing is exactly ['claude','codex'], with no staging left.\n\nAI3: an older install is replaced, never overwritten in place.\n- Pre-create agents (mode 0o777), holding an old claude, plus a hard link to that old file outside agents.\n- Install a new claude: agents/claude has the new bytes at 0o555, the hard link still has the old bytes, the agents dir is forced to 0o755, and no staging is left.\n\nAI4: each stream breaks exactly one rule, exits 65, writes no stdout and leaves state(dir) equal to its before-value. Pre-create agents with an old claude, so 'installs nothing' is observable. Rows:\n- the cli is 'gemini';\n- the cli is ['claude'], 7 or null (type checked before the JOBS lookup, so no TypeError);\n- a duplicate claude;\n- size 0, size MAX+1 or size true;\n- sha256 that is uppercase, 63 chars or not a string;\n- the right size but a wrong hash;\n- short data before end, or a data chunk longer than what is left;\n- an empty data frame, non-canonical base64 'QR==', or a non-string data;\n- an extra key in the agent header, or in a data frame;\n- a data frame before any header;\n- a zero-byte stream;\n- an end before any agent (this plan defines it as an empty stream);\n- EOF before end;\n- a second end after end;\n- a partial frame after end;\n- a valid claude followed by a bad codex (wrong hash).\nAlso: the valid base stream exits 0, and the same streams with claude and codex in either order exit 0.\n\nAI5: I/O, each with no stdout.\n- agents is a symlink to an outside dir: exit 74, and the link and the outside dir are untouched.\n- agents is a regular file: exit 74, and the file is unchanged.\n- With os.fsync or os.rename injected to raise OSError(5) (M4's setup pattern): exit 74, and state(dir) is unchanged (the old claude intact, no codex, no staging).\n\nRED proof: `node --test --test-name-pattern='^AI[0-9]' scripts/tests/local-runner.test.mjs` with the env -i PATH from step 3. Every AI row fails on HEAD (no install_agents, and 'agents' is 64). Record it in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Appended the CQ-R10d3a section (AI1-AI5) at the end of scripts/tests/local-runner.test.mjs via the Edit tool. Reuses PY_LOAD, PY_SUPERVISOR, NOT_POSIX, framesOf, modeOf, scratch, sha, dataFrames, BIG, SNAPSHOT_CHUNK_BYTES, encodeFrame, createFrameDecoder, linkSync, chmodSync, symlinkSync, lstatSync (all already imported; linkSync was already imported at L4086, so no re-import). Only new import: MAX_AGENT_BINARY_BYTES from ../local-runner/agent-cache.mjs. Helpers: agentsIn, agentOf, binaryOf, AGENTS_END, agentsState, OLD_AGENTS, seededAgents. RED proof: `env -i HOME=$HOME PATH=<nvm v24.21.0>:/usr/local/bin:/usr/bin:/bin node --test --test-reporter=spec --test-name-pattern='^AI[0-9]' scripts/tests/local-runner.test.mjs` → tests 5, pass 0, fail 5 (AI1: [64,0] vs [77,0]; AI2-AI5: AttributeError module has no attribute 'install_agents'). Coordination: R10d3 (task-b8e7ad92) also plans AI1-AI3 in this file; left a comment on that task asking its architect to rename them (e.g. AH). Shared checkout has ~790 dirty peer paths; untouched.",
+      "startedAt": "2026-10-30T06:33:57.484Z",
+      "completedAt": "2026-10-30T06:36:48.099Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN, scripts/local-runner/guest-supervisor.py. Stdlib only, and the same style as materialize.\n\n1. Constants, beside JOBS:\n   - AGENTS = '/opt/moe/agents';\n   - MAX_AGENT_BYTES = 1073741824, with the comment '2**30, mirrors agent-cache.mjs MAX_AGENT_BINARY_BYTES'.\n2. Extract receive()'s data-frame loop into a helper, e.g. copy_data(frames, fd, size), returning the hashlib.sha256 object.\n   - Each data frame must be an exact {kind:'data', data} with a str, non-empty, strictly validated, canonical base64 chunk no longer than the bytes left.\n   - Call it from both receive() and install_agents. M2-M4 must stay green.\n3. install_agents(in_fd, out_fd, agents=AGENTS, owner=(0, 0)):\n   a. Create agents with mkdir(0o755) when missing (FileExistsError is fine). Open it with WALK (O_NOFOLLOW|O_DIRECTORY), then own(fd, owner, 0o755). A symlink or a file therefore fails in os.open: OSError, exit 74.\n   b. The staging dir is created dir_fd-relative inside agents: name '.staging-' plus os.urandom(8).hex(), mkdir 0o700 via dir_fd, opened with WALK via dir_fd, then own(staging, owner, 0o700). No path-based tempfile, so a swapped agents path cannot redirect it.\n   c. Loop over the frames from snapshot_frames(in_fd), until an 'end' frame:\n      - expect(frame, 'agent', 'cli', 'size', 'sha256');\n      - cli: type str FIRST, then a JOBS key, then not already seen. Check duplicates explicitly, because O_EXCL's FileExistsError would surface as 74, not 65;\n      - size: type(size) is int (so no bool), and 1 <= size <= MAX_AGENT_BYTES;\n      - sha256: type str and DIGEST.fullmatch;\n      - os.open(cli, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0o600, dir_fd=staging);\n      - copy_data; the hexdigest must equal the header's;\n      - own(fd, owner, 0o555), then os.fsync, then close in a finally.\n   d. expect(frame, 'end'). Refuse an end before any agent as the empty stream. Then `next(frames, None) is not None` is a frame after end, refused. snapshot_frames already refuses a partial frame at EOF.\n   e. Only then: os.rename(cli, cli, src_dir_fd=staging, dst_dir_fd=root) for each binary, in header order. That atomically replaces any older file, never writing in place. Then rmdir the staging dir via dir_fd, then os.fsync(root).\n   f. write_frame(out_fd, {'kind': 'installed', 'count': n}) and return 0.\n   g. Exits: (ValueError, RecursionError) is os.EX_DATAERR (65); OSError is os.EX_IOERR (74). The finally block, best-effort and swallowing OSError, unlinks any file still in staging, removes the staging dir and closes every fd. No refusal writes a frame.\n4. main: accept ['agents'] in the argv tuple. After the root check (77), `if argv == ['agents']: return install_agents(0, 1)`. Anything else stays 64.\n5. Header comment: add the 'agents' mode (CQ-R10d3a) to the Modes paragraph, with its codes (0, 64, 65, 74, 77) and 'no refusal writes a frame'.\n\nError handling: every OSError path, including cleanup, is bounded and never masks the first error's exit code. A crash can leave only the root 0700 staging dir. Mid-rename I/O failures are documented in a comment (per-file atomic; see planningNotes.risks).\n\nRun the focused rows, `--test-name-pattern='^(AI|M)[0-9]'`: all green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "note": "guest-supervisor.py (Edit tool): header Modes paragraph gains 'agents' (CQ-R10d3a) with 0/64/65/74/77 and 'No refusal writes a frame'; `import contextlib` (stdlib, for best-effort cleanup); copy_data(frames, fd, size) extracted from receive() (identical rules: exact {kind,data}, str, strict b64decode, non-empty, <= left, canonical) and called by both receive() and install_agents; AGENTS='/opt/moe/agents' and MAX_AGENT_BYTES=1073741824 beside JOBS (JOBS itself untouched — R10d4's); install_agents(in_fd, out_fd, agents=AGENTS, owner=(0, 0)) per plan: mkdir 0755 (FileExistsError ok) → WALK open → own 0755; dir_fd-relative '.staging-<16 hex>' 0700 inside agents; per header: exact keys, cli type str first then JOBS then explicit duplicate, size type int 1..MAX, DIGEST.fullmatch; O_EXCL|O_NOFOLLOW 0600 in staging; copy_data; hexdigest compare; own 0555; fsync; after end: refuse empty (no agent) and any frame after end; renameat each staging→agents in header order; rmdir staging; fsync(root); one {kind:'installed', count}. (ValueError, RecursionError)→65, OSError→74; finally unlinks still-staged names (suppressing OSError; renamed ones are already gone), rmdirs staging only if this call opened it (never a foreign name), closes fds. Mid-rename non-atomicity documented in the function comment. main accepts ['agents'] → install_agents(0, 1) after the 77 check. Focused run: `node --test --test-name-pattern='^(AI|M)[0-9]'` (env -i, node v24.21.0) → tests 9, pass 9, fail 0.",
+      "startedAt": "2026-10-30T06:36:48.978Z",
+      "completedAt": "2026-10-30T06:37:56.635Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh.\n1. The DoD command, on WSL under a clean env: `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`. It must exit 0 with zero failures. complete_task gets { command: 'node --test scripts/tests/local-runner.test.mjs', exitCode, outputTail }, and the summary names the env -i form.\n2. Neighbour check, because the supervisor changed: `node --test scripts/tests/local-runner-bridge.test.mjs`, under the same env. It also loads guest-supervisor.py. Report it in the summary.\n3. No bytecode left behind: `git status --porcelain scripts/local-runner` shows no __pycache__ (every python3 run uses -B).\n4. Size: `git diff --numstat HEAD -- scripts/local-runner/guest-supervisor.py scripts/tests/local-runner.test.mjs` must total 400 changed lines or fewer. Report it.\nA failure is diagnosed and fixed, never retried into green. Never weaken an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh, under `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\"`: (1) `node --test scripts/tests/local-runner.test.mjs` → exit 0; tests 247, pass 246, fail 0, skipped 1 (pre-existing: opt-in native macOS provider smoke). (2) Neighbour `node --test scripts/tests/local-runner-bridge.test.mjs` → exit 0; tests 55, pass 55, fail 0. (3) `git status --porcelain --ignored scripts/local-runner | grep -i pycache` → nothing. (4) `git diff --numstat HEAD -- scripts/local-runner/guest-supervisor.py scripts/tests/local-runner.test.mjs` → supervisor +91/-11, tests +121/-0 = 223 changed lines (≤400).",
+      "startedAt": "2026-10-30T06:37:57.553Z",
+      "completedAt": "2026-10-30T06:38:56.197Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a host or agent trying to land bytes it should not.\n\n1. Mutants. Apply each to a scratch copy of guest-supervisor.py, loaded by the tests through a temporary PY_SUPERVISOR override in a scratch copy of the test file; never edit the shared files. Each must turn the named row red:\n   (a) skip the sha256 compare: AI4 wrong hash;\n   (b) a JOBS lookup before the type check: AI4 list cli (a TypeError escapes);\n   (c) rename each binary as soon as it is verified, before end: AI4 'valid claude then bad codex';\n   (d) open agents without O_NOFOLLOW: AI5 symlink;\n   (e) write the target in place instead of renaming: AI3 hard link;\n   (f) default owner AGENT_IDENTITY, or mode 0o755 for binaries: AI1 or AI2;\n   (g) accept an end with no agents: AI4 end-first;\n   (h) drop the duplicate check: AI4 duplicate (it would exit 74 through O_EXCL);\n   (i) no cleanup on refusal: AI4 state (staging left).\n   Afterwards restore, cmp, and rerun green.\n2. Fds: every fd is closed on every path; no path-based call follows a name the agent could swap; staging is never created outside agents.\n3. Bounds: no unbounded read (frames are capped by MAX_HOST_FRAME_BYTES, binaries by MAX_AGENT_BYTES, and the agent count by JOBS).\n4. Concurrency: a concurrent second install. Each run gets its own staging name, and renames are per-file atomic, so the last writer wins whole files. Callers serialize per VM (R06 job lease).\n5. Scope: no host stream, readiness or argv changes (those belong to CQ-R10d3/R10d4).\n\nRecord the findings and fixes in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Adversarial self-review, no code changes needed.\n\n1. Mutants were applied to a scratch copy (/tmp sandbox holding a copy of scripts/local-runner plus the test file, with packages symlinked). Each was run with `--test-name-pattern='^AI[0-9]'`. All 10 were killed:\n- (a) skipping the sha compare turned AI4 red at 'a wrong hash'.\n- (b) a JOBS lookup before the type check turned AI4 red at 'cli [\"claude\"]' (TypeError: unhashable list, exit 1).\n- (c) renaming each binary as soon as it is verified turned AI4 red, first at 'a duplicate cli' because the first claude was already installed. The later 'valid claude then bad codex' row breaks the same way.\n- (d) opening agents without O_NOFOLLOW turned AI5 red.\n- (e) a TRUNC write in place in agents, with no rename, turned AI3 (the hard link) and AI4 red.\n- (f1) a default owner of AGENT_IDENTITY turned AI1 red.\n- (f2) a binary mode of 0o755 turned AI2, AI3 and AI4 red.\n- (g) accepting an end with no agents turned AI4 red at 'an end before any agent'.\n- (h) dropping the duplicate check turned AI4 red at 'a duplicate cli' (O_EXCL gives 74).\n- (i) no cleanup turned AI4 red at 'an unknown cli' (staging left) and AI5 red.\nThe scratch copy was restored and cmp'd identical, and the sandbox was deleted. The shared files were never edited.\n\n2. Fds: root, staging and each binary fd are closed on every path, through the finally blocks. Staging is rmdir'd only when this call opened it, so a colliding foreign name is never removed. Only two calls are path-based: os.mkdir(agents) and os.open(agents, WALK), the latter O_NOFOLLOW on the last component. Everything else is relative to a dir_fd, so staging is always inside the opened agents fd.\n\n3. Bounds:\n- each frame is capped by snapshot_frames/MAX_HOST_FRAME_BYTES;\n- each binary is at most MAX_AGENT_BYTES, enforced through copy_data's per-chunk `<= left`;\n- the binary count is at most len(JOBS)=2, because of the duplicate check;\n- after end, only one more frame is read.\n\n4. Concurrency: each run gets its own random staging name, and renameat is atomic per file, so the last writer wins whole files. R06's job lease serializes callers.\n\n5. Scope: only the 2 approved files. JOBS argv, the host stream and readiness are untouched.\n\nTheoretical, noted for QA: an fsync(root) or write_frame failure AFTER the renames exits 74 with the new binaries already installed. That is the same class as a failure between two renames, which the function comment documents and R10d3's readiness hash probe fails closed on. It is not a stream refusal, so 'a handled refusal installs nothing' still holds.",
+      "startedAt": "2026-10-30T06:38:57.087Z",
+      "completedAt": "2026-10-30T06:40:37.773Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,8 +76,103 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 252.25,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-d8e505b96e124ab187e4cb3bf9023f71",
+      "author": "architect-bd1eb82d",
+      "content": "@architect-4ae016fb, contract note from architect-bd1eb82d, 2026-10-30. I created this row by splitting CQ-R10d3. CQ-R10d3 (task-b8e7ad92) is now planned at revision 1 and depends on this row. Its AI3 end-to-end row and its host stream rely on the following, so please keep them in your plan, or tell me and I'll amend R10d3:\n\n- **Python entry point:** `install_agents(in_fd, out_fd, agents=AGENTS, owner=(0, 0))`, with `AGENTS = '/opt/moe/agents'`. R10d3's AI3 calls it through PY_LOAD as `m.install_agents(0, 1, <scratch agents dir>, (os.getuid(), os.getgid()))`, the way T7 calls materialize. main(['agents']) runs `install_agents(0, 1)`.\n- **Frames in:**\n  - per binary, `{kind:'agent', cli, size, sha256}` with exactly those keys, then base64 `{kind:'data', data}` frames (canonical, non-empty, never past size, any chunk size up to the remaining size);\n  - then `{kind:'end'}`.\n  The host sends both AGENT_CLIS in order (claude, codex) in 1 MiB chunks, and closes stdin right after end.\n- **Frame out:** exactly one `{kind:'installed', count}` on success. The host requires count === the number of binaries sent.\n- **Files:** each CLI is renamed onto `<agents>/<cli>` at mode 0555, and nothing else is left in `<agents>`; AI3 asserts readdirSync is exactly ['claude', 'codex']. Re-install replaces an older file atomically.\n- **Constant:** MAX_AGENT_BYTES = 1073741824, mirroring agent-cache.mjs MAX_AGENT_BINARY_BYTES. A one-line equality row against the JS export would pin it.\n- **Overlap:** CQ-R10d3 appends its rows to scripts/tests/local-runner.test.mjs after your AG rows. CQ-R10d4 and CQ-R11e2 edit guest-supervisor.py after you (main's argv list and the header lines).\n\nSizing: I estimated about 60 runtime lines and 50 test lines, well under QA's 400 cap.",
+      "timestamp": "2026-10-30T06:29:13.396Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:24:18.022Z",
-  "updatedAt": "2026-10-30T06:24:18.022Z"
+  "updatedAt": "2026-10-30T06:41:47.688Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:27:17.977Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-e60b90bd"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:31:40.160Z",
+  "executionContract": {
+    "intendedBehavior": "guest-supervisor.py gains a root, copy-only 'agents' mode: install_agents(0, 1) reads {kind:'agent', cli, size, sha256} headers, each followed by its base64 data frames, then {kind:'end'}. It verifies every binary in a root 0700 staging dir inside /opt/moe/agents. Only after end, with no frame after it, does it rename each binary onto /opt/moe/agents/<cli> as root:root 0555, then fsyncs the dir and answers one {kind:'installed', count} frame. Refusals write no frame and leave no install and no staging: 65 for data errors, 74 for I/O (including a symlinked or file agents path), 77 when not root, 64 for other argv.",
+    "acceptanceCriteria": [
+      "AI1: argv routing (64/77/route), AGENTS and JOBS consistency, MAX_AGENT_BYTES == MAX_AGENT_BINARY_BYTES, and the default owner (0, 0).",
+      "AI2: a clean two-binary install gives exact bytes, 0555, the test uid, a 0755 dir, one installed frame and no staging.",
+      "AI3: an older install is replaced by rename, never written in place; a pre-existing dir mode is forced to 0755.",
+      "AI4: every listed malformed or mismatched stream exits 65 with no frame and leaves state unchanged.",
+      "AI5: a symlink or file agents path, and injected fsync or rename failures, exit 74 with no frame and state unchanged."
+    ],
+    "invariants": [
+      "Production installs are root:root 0555 and never agent-writable.",
+      "No refusal writes a frame; a handled refusal before the renames installs nothing and leaves no staging.",
+      "materialize behavior and the M rows are unchanged.",
+      "Standard library only."
+    ],
+    "compatibility": [
+      "The existing modes and argv (bridge, check, materialize, export, verify) are unchanged."
+    ],
+    "approvedScope": [
+      "guest-supervisor.py: AGENTS, MAX_AGENT_BYTES, the copy_data extraction from receive(), install_agents, main routing and the header comment",
+      "local-runner.test.mjs: the AI1-AI5 section"
+    ],
+    "reuse": [
+      "snapshot_frames, expect, own, WALK, DIGEST and write_frame from guest-supervisor.py; the materializeIn/VR6 test patterns."
+    ],
+    "sourceAssumptions": [
+      "guest-supervisor.py materialize/receive/snapshot_frames/main as at HEAD",
+      "agent-cache.mjs exports MAX_AGENT_BINARY_BYTES = 2 ** 30",
+      "JOBS executables live in /opt/moe/agents"
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: a new install_agents() modelled on materialize(): frames from snapshot_frames, a root 0700 staging dir, verify everything, then rename.\n- Staging is created dir_fd-relative INSIDE the agents dir, so each rename is a same-directory-tree renameat onto /opt/moe/agents/<cli>. That is atomic per file, and a swapped path cannot redirect it.\n\nRejected:\n- tempfile.mkdtemp(dir=agents): it is path-based, so a symlink swapped in after the O_NOFOLLOW open could redirect staging.\n- Renaming each binary right after its verification: a later bad frame would leave a partial install, which the contract forbids.\n- Swapping a whole versioned directory or a symlink for all-or-nothing installs: the JOBS executables are fixed paths, and the contract makes a symlinked agents dir an I/O refusal.\n- Duplicating receive()'s data loop: extracting copy_data keeps one canonical base64 and bounds rule for materialize and agents.\n\nDecision recorded for CQ-R10d3's host: an end frame before any agent header counts as the empty stream (65). The host must send at least one binary.",
+    "codebaseInsights": "- guest-supervisor.py: snapshot_frames(in_fd) yields host frames capped at MAX_HOST_FRAME_BYTES and raises ValueError on a partial frame at EOF.\n- expect(frame, kind, *keys) enforces exact keys. own(fd, owner, mode) does fchown + fchmod. WALK = O_RDONLY|O_DIRECTORY|O_NOFOLLOW. DIGEST = [0-9a-f]{64}.\n- receive() holds the data-frame rules: str, strict b64decode, non-empty, len <= left, canonical re-encode.\n- materialize returns EX_DATAERR for (ValueError, RecursionError) and EX_IOERR for OSError, and cleans up in a finally.\n- main(argv, geteuid=os.geteuid, **seams) checks the argv tuple, then root (77), then routes.\n- JOBS = {'claude': ('/opt/moe/agents/claude', ...), 'codex': ('/opt/moe/agents/codex', ...)}.\n- Tests: M1-M4 and VR6 load the real file with importlib under python3 -I -B and pass the owner seam (os.getuid(), os.getgid()). Refusals assert [status, stdout.length, listing].\n- agent-cache.mjs exports MAX_AGENT_BINARY_BYTES = 2 ** 30.\n- Ordering: no nonterminal peer edits these two files ahead of this row. CQ-R10d3 depends on it, and R10d4, R11e2, R11e4, R11e5, R11e, R13a, R13d and R13 are all downstream.",
+    "risks": "1) Renames are per-file atomic, not set-atomic. An I/O failure between two renames (74) leaves each binary whole but possibly mixed old and new. CQ-R10d3's readiness pin-hash probe fails closed on that. Document it in a comment; AI5 covers a failure on the first rename (nothing installed).\n2) O_EXCL on a duplicate cli raises FileExistsError (an OSError), so it would exit 74. Check duplicates explicitly, for 65.\n3) An unhashable cli (list or dict) raises TypeError on `in JOBS` and escapes both handlers. Check the type first.\n4) A bool is an int subclass, so check `type(size) is int`.\n5) Tests run as a normal user: the owner seam is (uid, gid), and fchown to self works. The production default must stay (0, 0); AI1 pins it.\n6) ESM imports are file-global in the 4.3k-line test file, so duplicate import names are a SyntaxError.\n7) Every python3 run uses -B, so no __pycache__ ships in the IDE bundles.\n8) QA cap: keep the total at 400 changed lines or fewer. Target about 80 runtime and about 140 test lines.",
+    "keyFiles": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/local-runner/agent-cache.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:31:40.182Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:33:57.484Z",
+  "reviewStartedAt": "2026-10-30T06:41:47.686Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ AI1 the supervisor CLI takes exactly agents, only as root, and routes it to install_agents(0, 1) with root /opt/moe/agents defaults\n✔ AI2 a clean stream installs each binary at <agents>/<cli> as 0555 with its exact bytes in a 0755 dir, and answers once\n✔ AI3 a reinstall replaces an older binary by rename, never in place, and forces the agents dir to 0755\n✔ AI4 a malformed, mismatched or partial stream exits 65 with no frame and installs nothing\n✔ AI5 an agents path that is a symlink or a file, or a failed fsync or rename, exits 74 with no frame and installs nothing (199.376364ms)\nℹ tests 247\nℹ suites 0\nℹ pass 246\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 34613.894941",
+    "reportedAt": "2026-10-30T06:41:47.686Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-supervisor.py"
+  ],
+  "completionSummary": "CQ-R10d3a: guest-supervisor.py gains the root, copy-only 'agents' mode. 2 files, +212/-11 = 223 changed lines (cap 400).\n\nRuntime (+91/-11):\n- install_agents(in_fd, out_fd, agents=AGENTS, owner=(0, 0)):\n  - agents: mkdir 0755, then a WALK (O_NOFOLLOW|O_DIRECTORY) open and own 0755. A symlink or a file at that path is 74.\n  - Staging: a dir_fd-relative 0700 '.staging-<hex>' inside agents.\n  - Per header, exact keys, then: cli is a str FIRST, then a JOBS key, then an explicit duplicate check; size is an int (not bool) in 1..MAX_AGENT_BYTES; sha256 is DIGEST.\n  - Each binary: O_EXCL|O_NOFOLLOW 0600, then copy_data, then the hash compare, own 0555 and fsync.\n  - After end, with nothing after it and at least one agent: renameat each binary onto agents/<cli> in header order, rmdir staging, fsync the dir, then one {kind:'installed', count}.\n  - Exit codes: 65 for ValueError/RecursionError, 74 for OSError. The finally unlinks staged files, rmdirs staging and closes every fd.\n- copy_data was extracted from receive() and is shared with materialize; M1-M4 stay green.\n- AGENTS and MAX_AGENT_BYTES (2**30, mirroring agent-cache.mjs) sit beside JOBS.\n- main accepts ['agents'] (77 when not root, 64 for any other argv). The header comment documents the mode.\n\nTests (+121), AI1-AI5 in local-runner.test.mjs:\n- AI1: routing, the constant pins and the default owner (0, 0).\n- AI2: a clean 2-binary install.\n- AI3: replace by rename; a hard link keeps the old bytes, and the dir is forced to 0755.\n- AI4: 25 one-rule-broken streams exit 65 with state unchanged; both stream orders install.\n- AI5: a symlink, a file, and injected fsync or rename failures exit 74.\n\nVerification (fresh; the command run was `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`):\n- Exit 0: 247 tests, 246 pass, 0 fail, 1 skip (the pre-existing opt-in macOS smoke).\n- Neighbour local-runner-bridge.test.mjs: 55/55 pass.\n- No __pyc"
 }

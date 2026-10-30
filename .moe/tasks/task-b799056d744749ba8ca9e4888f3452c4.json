@@ -138,7 +138,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:37:06.800Z",
-  "updatedAt": "2026-10-30T06:39:13.561Z",
+  "updatedAt": "2026-10-30T06:39:39.573Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:55:00.461Z",
     "plannedStepCount": 6,
@@ -259,7 +259,8 @@
     ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json",
     ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
     ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
-    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-b29d022e7d9e4698b40517340f48e31c.json"
   ],
   "completionSummary": "CQ-R11e1 delivered: a host cache for the pinned Node toolchain.\n- Pins in scripts/local-runner/toolchain.json: Node 24.22.2 (CI's line, per the human decision), linux-x64 and linux-arm64 .tar.xz from nodejs.org.\n  - x64: sha256 48cc0e21…aaf75, size 32039312. arm64: sha256 eb187837…d9ba8, size 30968168.\n  - Both were hashed from downloaded bytes and match nodejs.org SHASUMS256.txt.\n- toolchain-cache.mjs exports fetchNodeToolchain, which returns a frozen {file, sha256, size, version} at <cacheDir>/<sha256>.tar.xz.\n  - Fixed TOOLCHAIN_* codes; no URL, path or body ever appears in a message.\n  - The module-relative manifest is validated strictly: exact keys, one version, the fixed URL template, size bound 128 MiB.\n  - Input is validated before any fetch or mkdir.\n- agent-cache.mjs now exports fetchPinnedFile, with neutral PINNED_* codes and a sha256 or sha512 digest. An exact size, or size null with a maxBytes bound, is for CQ-R11e3.\n  - fetchAgentBinary routes through it and maps PINNED_* to AGENT_BINARY_* one to one.\n  - AB1-AB11 are unedited and green.\n- Tests: TC1-TC7 were added to local-runner-check.test.mjs. The bundle test ships toolchain.json and toolchain-cache.mjs; the VS Code bundle deep-equals the manifest.\n  - Deviation: they are added to `shipped`, not `required`, because nothing wires them yet.\n- Live check: 1 fetch, then a cache hit with 0 fetches.\n- Mutation: 20 mutants probed.\n  - iv-b (holdsPin ignoring maxBytes on a hit) survived and is now killed by a new TC6 row.\n  - xv is equivalent on POSIX because O_NOFOLLOW also refuses.\n- Fresh run: 73 tests, 72 pass, 1 skip (the pre-existing K9 root-only skip), exit 0.\n- Size: 465 changed lines (+428/-37), runtime and manifest 195, tests 270. This is over the 400 cap. Waiver pre-filed as prop-d975cf4e82a64baba646abba431068c3 (EPIC ADD_RAIL, PENDING); #governors notified.\n- Disclosure: during step 5 I ran `git add -N` on my two new files to read numstat, then `git reset -q` on those same paths. No other index ",
   "commits": [
@@ -307,6 +308,23 @@
       "treeId": "263f157d2af0be00876d782b56e32b23585a4b56",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "294e4ec03dce5dcb84a0c507452b38c6387cf230",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T06:37:14Z",
+      "paths": [
+        ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+        ".moe/tasks/task-b29d022e7d9e4698b40517340f48e31c.json",
+        ".moe/tasks/task-b799056d744749ba8ca9e4888f3452c4.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T06:39:39.573Z",
+      "treeId": "75266566dae152c648050cb16fb7c3e42a0ceca3",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -318,8 +336,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-952969be@2026-10-30T06:25:02Z",
-    "at": "2026-10-30T06:31:07.316Z"
+    "sessionId": "qa-952969be@2026-10-30T06:37:14Z",
+    "at": "2026-10-30T06:39:39.573Z"
   },
   "blockedReason": null,
   "blockedResourceId": null,
