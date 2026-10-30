@@ -705,13 +705,14 @@ class MoeProjectService @JvmOverloads constructor(
         val base = project.basePath
         if (base != null) {
             val info = daemonSupervisor.readDaemonInfo()
+            // A refusal keeps daemon.json and starts nothing: the user must identify and stop that process first.
+            // On Windows a null info still stops the supervisor this IDE spawned (mid-startup or in crash backoff).
+            daemonSupervisor.stopDaemonForRestart(info)?.let {
+                log.warn(it)
+                publishStatus(false, it)
+                return
+            }
             if (info != null) {
-                // A refusal keeps daemon.json and starts nothing: the user must identify and stop that process first.
-                daemonSupervisor.stopDaemonForRestart(info)?.let {
-                    log.warn(it)
-                    publishStatus(false, it)
-                    return
-                }
                 try {
                     File(base, ".moe/daemon.json").delete()
                 } catch (_: Exception) {}

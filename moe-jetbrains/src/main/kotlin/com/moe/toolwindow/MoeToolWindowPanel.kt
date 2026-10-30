@@ -188,7 +188,9 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                                         NotificationType.INFORMATION
                                     )
                                     .notify(project)
-                                service.restartDaemon()
+                                // restartDaemon() waits for the old daemon tree to exit: keep it off the EDT.
+                                com.intellij.openapi.application.ApplicationManager.getApplication()
+                                    .executeOnPooledThread { service.restartDaemon() }
                             }
                         }
                         popup.add(wslCheckbox)

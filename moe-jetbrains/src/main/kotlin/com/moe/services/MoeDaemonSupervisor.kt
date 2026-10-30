@@ -18,6 +18,7 @@ import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.file.Files
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -42,7 +43,8 @@ class MoeDaemonSupervisor(
     private val runStop: (ProcessBuilder) -> Int? = { runStopProcess(it, processStarter) },
     private val onDispatchThread: () -> Boolean = { ApplicationManager.getApplication()?.isDispatchThread == true },
     private val sleep: (Long) -> Unit = Thread::sleep,
-    private val exitTimeoutMs: Long = EXIT_TIMEOUT_MS
+    private val exitTimeoutMs: Long = EXIT_TIMEOUT_MS,
+    private val windowsRestart: () -> Boolean = ::isWindowsHost
 ) {
     private val log = Logger.getInstance(MoeDaemonSupervisor::class.java)
     private val gson = Gson()
@@ -53,6 +55,8 @@ class MoeDaemonSupervisor(
     private val daemonStartCooldownMs = 10_000L
     @Volatile private var selectionRefusal: String? = null
     private val replacementInFlight = AtomicBoolean()
+    // Held while a Windows restart stops the old tree: a daemon spawned meanwhile would be orphaned by the next spawn.
+    private val windowsRestartInFlight = AtomicBoolean()
     private var pendingReplacement: ReplacementTarget? = null
 
     private data class ReplacementTarget(val target: ProcessHandle, val parent: ProcessHandle?, val refusal: String) {
@@ -98,6 +102,7 @@ class MoeDaemonSupervisor(
     }
 
     fun ensureDaemonRunning(): Boolean {
+        if (windowsRestartInFlight.get()) return false
         if (profile() != RuntimeProfile.PROTECTED) return ensureDaemonRunningImpl()
         // Cover the fall-through spawn too: stop may remove metadata before the old processes exit.
         if (!replacementInFlight.compareAndSet(false, true)) return false
@@ -245,15 +250,22 @@ class MoeDaemonSupervisor(
         }
     }
 
-    private fun waitForReplacementExit(captured: ReplacementTarget): Boolean {
-        var remaining = exitTimeoutMs.coerceIn(0, EXIT_TIMEOUT_MS)
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remaining)
-        while (true) {
-            if (!captured.alive() && replacementMetadataCleared()) return true
-            if (remaining <= 0 || System.nanoTime() >= deadline) return false
-            val delay = minOf(POLL_MS, remaining)
-            sleep(delay)
-            remaining -= delay
+    private fun waitForReplacementExit(captured: ReplacementTarget): Boolean =
+        ExitBound().await { !captured.alive() && replacementMetadataCleared() }
+
+    /** One exit budget, [exitTimeoutMs] capped at EXIT_TIMEOUT_MS, polled every POLL_MS; successive waits share it. */
+    private inner class ExitBound {
+        private var remaining = exitTimeoutMs.coerceIn(0, EXIT_TIMEOUT_MS)
+        private val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remaining)
+
+        fun await(done: () -> Boolean): Boolean {
+            while (true) {
+                if (done()) return true
+                if (remaining <= 0 || System.nanoTime() >= deadline) return false
+                val delay = minOf(POLL_MS, remaining)
+                sleep(delay)
+                remaining -= delay
+            }
         }
     }
 
@@ -289,13 +301,19 @@ class MoeDaemonSupervisor(
      * on, else the refusal to show. daemon.json is repository content, so its pid is no authority to signal
      * a process: under PROTECTED only a process activation would accept is stopped, and any failure refuses.
      * LEGACY keeps the historical best-effort signal.
+     *
+     * On Windows a signal is TerminateProcess, which the old supervisor takes for a crash of its `_run` and
+     * respawns, so [stopWindowsRestart] stops through the installed CLI and then the old supervisor tree, even
+     * with no [info]. It blocks up to the CLI's stop bound and then the exit bound: never call it on the EDT.
      */
-    fun stopDaemonForRestart(info: DaemonInfo): String? {
-        if (isOtherSideOfWsl(info.projectPath, isWindows())) {
+    fun stopDaemonForRestart(info: DaemonInfo?): String? {
+        if (info != null && isOtherSideOfWsl(info.projectPath, isWindows())) {
             return "Restart Daemon did not stop pid ${info.pid}, which .moe/daemon.json names on the other side of the Windows/WSL boundary: " +
                 "this IDE can neither see nor signal processes there. Check what that process is and stop it there yourself if it is a Moe daemon, " +
                 "then use Restart Daemon."
         }
+        if (windowsRestart()) return stopWindowsRestart(info)
+        if (info == null) return null
         // An absent pid reads as 0, and kill(2) takes 0 and -1 as process groups: neither names a daemon.
         if (info.pid <= 0 || !isProcessAlive(info.pid)) return null
         val isProtected = profile() == RuntimeProfile.PROTECTED
@@ -308,17 +326,170 @@ class MoeDaemonSupervisor(
                 return null
             }
             when {
-                activationRefusal(info) != null -> restartRefusal(info.pid, "this IDE did not start it from the installed Moe runtime")
+                activationRefusal(info) != null -> restartRefusal(info.pid, NOT_STARTED_HERE)
                 target.destroy() -> null
-                else -> restartRefusal(info.pid, "the stop request failed")
+                else -> restartRefusal(info.pid, STOP_FAILED)
             }
         } catch (ex: Exception) {
             log.warn("Restart Daemon could not stop pid ${info.pid}: ${ex.message}")
-            if (isProtected) restartRefusal(info.pid, "the stop request failed") else null
+            if (isProtected) restartRefusal(info.pid, STOP_FAILED) else null
         }
     }
 
-    // The pid comes from the repository, so the refusal never calls that process a Moe daemon.
+    // Today's guards pick the daemon.json process; signals then reach only this IDE's spawn tree or a PROTECTED-verified one.
+    private fun stopWindowsRestart(info: DaemonInfo?): String? {
+        if (!windowsRestartInFlight.compareAndSet(false, true)) return RESTART_IN_PROGRESS
+        val isProtected = profile() == RuntimeProfile.PROTECTED
+        return try {
+            // An absent pid reads as 0; a dead pid may be reused: neither is ever signaled.
+            val pid = info?.pid?.takeIf { it > 0 && isProcessAlive(it) }
+            val run = try {
+                pid?.let { processLookup(it.toLong()) }
+            } catch (ex: Exception) {
+                log.warn("Restart Daemon could not look up pid $pid: ${ex.message}")
+                if (isProtected && pid != null) return restartRefusal(pid, STOP_FAILED)
+                null
+            }
+            if (isProtected && info != null && run != null && activationRefusal(info) != null) {
+                return restartRefusal(info.pid, NOT_STARTED_HERE)
+            }
+            stopOldTree(info, run?.takeUnless(::isIdeOrAncestor), isProtected)
+        } catch (ex: Exception) {
+            log.warn("Restart Daemon could not confirm the old Moe daemon stopped: ${ex.message}")
+            if (ex is InterruptedException) Thread.currentThread().interrupt()
+            INCOMPLETE_RESTART
+        } finally {
+            windowsRestartInFlight.set(false)
+        }
+    }
+
+    private fun stopOldTree(info: DaemonInfo?, run: ProcessHandle?, isProtected: Boolean): String? {
+        val own = ownSupervisor()
+        val parent = run?.let(::genuineParent)?.takeUnless(::isIdeOrAncestor)
+        // A foreign parent is only watched: daemon.json is repository content, and LEGACY never verified it.
+        val roots = listOfNotNull(own, parent?.takeIf { isProtected || sameProcess(it, own) }).distinctBy { it.pid() }
+        if (run == null && roots.isEmpty()) return null
+        val old = OldTree(run, roots, parent?.takeIf { p -> roots.none { it.pid() == p.pid() } })
+        old.walk()
+        if (!installedStop()) {
+            if (isProtected && info != null && run != null) return restartRefusal(info.pid, STOP_FAILED)
+            log.warn("Restart Daemon: the installed stop failed; terminating the old supervisor tree")
+        }
+        val bound = ExitBound()
+        // Roots first and dead before their children are signaled, so none can respawn a `_run`.
+        roots.forEach(::terminate)
+        bound.await { roots.none(::running) }
+        // Done only when a walk made after every known process died finds no new one: a dead process spawns nothing.
+        bound.await {
+            old.terminateDescendants()
+            val settled = old.survivor() == null
+            !old.walk() && settled
+        }
+        val survivor = old.survivor() ?: return null
+        log.warn("Restart Daemon: pid ${survivor.pid()} is still running after the stop")
+        return survivorRefusal(survivor.pid())
+    }
+
+    /** What one Windows restart may signal (roots, their descendants, run) and what must exit by itself (watched). */
+    private inner class OldTree(val run: ProcessHandle?, val roots: List<ProcessHandle>, val watched: ProcessHandle?) {
+        private val tree = LinkedHashMap<Long, ProcessHandle>()
+        private val deadSince = HashMap<Long, Instant>()
+
+        // Breadth-first, each process before its children; true when it found a new one. A dead process keeps listing
+        // its orphans (a `_run` respawned after the capture), but a child started after it was seen dead is a pid reuser's.
+        fun walk(): Boolean {
+            val known = tree.size
+            val seen = roots.mapTo(HashSet()) { it.pid() }
+            val queue = ArrayDeque(roots)
+            while (queue.isNotEmpty()) {
+                val next = queue.removeFirst()
+                val limit = if (running(next)) null else deadSince.getOrPut(next.pid()) { Instant.now() }
+                children(next)
+                    .filter { seen.add(it.pid()) && startOf(it)?.let { start -> limit == null || !start.isAfter(limit) } == true }
+                    .forEach { tree.putIfAbsent(it.pid(), it); queue += it }
+            }
+            return tree.size > known
+        }
+
+        fun terminateDescendants() = (tree.values + listOfNotNull(run)).forEach(::terminate)
+
+        fun survivor(): ProcessHandle? = (listOfNotNull(run) + roots + tree.values + listOfNotNull(watched)).firstOrNull(::running)
+    }
+
+    // The supervisor this IDE spawned, while it lives; a Process without a handle has none.
+    private fun ownSupervisor(): ProcessHandle? = try {
+        spawnedDaemonProcess?.toHandle()?.takeIf { it.isAlive }
+    } catch (ex: Exception) {
+        log.debug("No handle for the spawned Moe daemon: ${ex.message}")
+        null
+    }
+
+    // A pid is reused once its process exits, so only a process started no later than [run] can be its parent.
+    private fun genuineParent(run: ProcessHandle): ProcessHandle? = try {
+        val parent = run.parent().orElse(null)
+        val parentStart = parent?.let(::startOf)
+        val runStart = startOf(run)
+        parent?.takeIf { parentStart != null && runStart != null && !parentStart.isAfter(runStart) }
+    } catch (ex: Exception) {
+        log.debug("Cannot read the parent of pid ${run.pid()}: ${ex.message}")
+        null
+    }
+
+    private fun sameProcess(a: ProcessHandle, b: ProcessHandle?): Boolean =
+        b != null && a.pid() == b.pid() && startOf(a)?.let { it == startOf(b) } == true
+
+    // The IDE and whatever launched it are no old supervisor, whatever .moe/daemon.json names.
+    private fun isIdeOrAncestor(handle: ProcessHandle): Boolean = try {
+        val start = startOf(handle)
+        generateSequence(ProcessHandle.current()) { it.parent().orElse(null) }.take(MAX_ANCESTORS)
+            .any { it.pid() == handle.pid() && startOf(it) == start }
+    } catch (ex: Exception) {
+        log.debug("Cannot compare pid ${handle.pid()} with this IDE: ${ex.message}")
+        true
+    }
+
+    private fun startOf(handle: ProcessHandle): Instant? = try {
+        handle.info().startInstant().orElse(null)
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun children(handle: ProcessHandle): List<ProcessHandle> = try {
+        handle.children().toList()
+    } catch (ex: Exception) {
+        log.debug("Cannot list the children of pid ${handle.pid()}: ${ex.message}")
+        emptyList()
+    }
+
+    // An isAlive that throws counts as alive: the restart then refuses rather than start a second daemon.
+    private fun running(handle: ProcessHandle): Boolean = try {
+        handle.isAlive
+    } catch (_: Exception) {
+        true
+    }
+
+    // Never a dead process, whose pid may already be reused; whether it died is the confirm's to decide.
+    private fun terminate(handle: ProcessHandle) {
+        try {
+            if (handle.isAlive) handle.destroyForcibly()
+        } catch (ex: Exception) {
+            log.debug("Cannot terminate pid ${handle.pid()}: ${ex.message}")
+        }
+    }
+
+    // RF03's installed stop: its sentinel makes a supervisor exit instead of respawning `_run`. Only exit 0 succeeds.
+    private fun installedStop(): Boolean = try {
+        stopCommandOrNull(basePath)?.let { runStop(stopBuilder(it)) } == 0
+    } catch (ex: Exception) {
+        log.warn("Restart Daemon: the installed stop failed: ${ex.message}")
+        if (ex is InterruptedException) Thread.currentThread().interrupt()
+        false
+    }
+
+    // The pid comes from the repository, so neither refusal calls that process a Moe daemon.
+    private fun survivorRefusal(pid: Long) = "Restart Daemon did not start a new Moe daemon: pid $pid is still running after the stop, " +
+        "and it could restart the old one. Check what that process is and stop it yourself, then use Restart Daemon."
+
     private fun restartRefusal(pid: Int, reason: String) =
         "Protected execution profile: Restart Daemon did not stop pid $pid, which .moe/daemon.json names: $reason. " +
             "Check what that process is and stop it yourself if it is a Moe daemon, then use Restart Daemon."
@@ -675,9 +846,7 @@ class MoeDaemonSupervisor(
         return null
     }
 
-    private fun isWindows(): Boolean {
-        return System.getProperty("os.name").lowercase().contains("win")
-    }
+    private fun isWindows(): Boolean = isWindowsHost()
 
     fun isProcessAlive(pid: Int): Boolean = try {
         processAliveProbe(pid)
@@ -738,6 +907,8 @@ class MoeDaemonSupervisor(
     }
 
     companion object {
+        internal fun isWindowsHost(): Boolean = System.getProperty("os.name").lowercase().contains("win")
+
         internal fun isOtherSideOfWsl(projectPath: String, windows: Boolean): Boolean =
             (if (windows) Regex("""^/(?![\\/])""") else Regex("""^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])"""))
                 .containsMatchIn(projectPath)
@@ -746,6 +917,12 @@ class MoeDaemonSupervisor(
             DaemonIdentityProbe.comparableProjectPath(path) == DaemonIdentityProbe.comparableProjectPath(base) ||
                 File(path).canonicalPath == File(base).canonicalPath
         private const val STOP_TIMEOUT_MS = 20_000L
+        private const val NOT_STARTED_HERE = "this IDE did not start it from the installed Moe runtime"
+        private const val STOP_FAILED = "the stop request failed"
+        private const val INCOMPLETE_RESTART = "Restart Daemon did not start a new Moe daemon: it could not confirm that the old one stopped. " +
+            "Use Restart Daemon again."
+        private const val RESTART_IN_PROGRESS = "Restart Daemon is already stopping the old Moe daemon. Wait for it to finish."
+        private const val MAX_ANCESTORS = 64
         private const val EXIT_TIMEOUT_MS = 15_000L
         private const val POLL_MS = 250L
 

@@ -1291,7 +1291,9 @@ class RuntimeSelectionPolicyTest {
         lookup: (Long) -> ProcessHandle? = { null }
     ) = MoeDaemonSupervisor(
         project.path, "Test Project", { connected, message -> statuses += connected to message }, { _, _ -> false }, alive,
-        { pb -> started += pb.command().toList(); dirs += pb.directory(); IdleProcess() }, { wsl }, profile, root, node, lookup
+        { pb -> started += pb.command().toList(); dirs += pb.directory(); IdleProcess() }, { wsl }, profile, root, node, lookup,
+        // R1-R4 pin the cross-platform restart; the Windows tree stop has its own rows in MoeDaemonSupervisorTest.
+        windowsRestart = { false }
     )
 
     /** A started process that never runs; without [handle] it has none, so it is never recorded. */

@@ -23,8 +23,12 @@ import java.lang.reflect.Proxy
 import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
+import java.time.Duration
+import java.time.Instant
 import java.util.Optional
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
+import java.util.stream.Stream
 
 class MoeDaemonSupervisorTest {
     @get:Rule
@@ -247,7 +251,7 @@ class MoeDaemonSupervisorTest {
     fun `restart refuses other-side metadata without touching any process under either profile`() {
         val root = temporaryFolder.newFolder("other-side-restart")
         val remote = DaemonInfo(9876, 42, "now", otherSideSpelling(root.canonicalPath))
-        for (profile in RuntimeProfile.values()) {
+        for (profile in RuntimeProfile.values()) for (windows in listOf(false, true)) {
             val probes = mutableListOf<Int>()
             val lookups = mutableListOf<Long>()
             var destroys = 0
@@ -255,14 +259,14 @@ class MoeDaemonSupervisorTest {
                 if (method.name == "destroy") { destroys++; true } else error("unexpected ${method.name}")
             } as ProcessHandle
             val service = MoeDaemonSupervisor(root.canonicalPath, "Test", profile = { profile },
-                processAliveProbe = { probes += it; true }, processLookup = { lookups += it; handle })
+                processAliveProbe = { probes += it; true }, processLookup = { lookups += it; handle }, windowsRestart = { windows })
             assertEquals("Restart Daemon did not stop pid 42, which .moe/daemon.json names on the other side of the Windows/WSL boundary: " +
                 "this IDE can neither see nor signal processes there. Check what that process is and stop it there yourself if it is a Moe daemon, " +
                 "then use Restart Daemon.", service.stopDaemonForRestart(remote))
             assertTrue(probes.isEmpty())
             assertTrue(lookups.isEmpty())
             assertEquals(0, destroys)
-            if (profile == RuntimeProfile.LEGACY) {
+            if (profile == RuntimeProfile.LEGACY && !windows) {
                 assertNull(service.stopDaemonForRestart(remote.copy(projectPath = root.canonicalPath)))
                 assertEquals(listOf(42), probes)
                 assertEquals(listOf(42L), lookups)
@@ -681,6 +685,355 @@ class MoeDaemonSupervisorTest {
         }
     }
 
+    @Test
+    fun `W1 Windows restart runs the installed stop before any signal`() {
+        for (profile in RuntimeProfile.values()) WinRestart(profile).use { f ->
+            f.verified()
+            val s = f.proc(S)
+            val r = f.proc(f.self, s, 1)
+            f.own(s)
+            f.stop = { r.alive = false; s.alive = false; 0 }
+            assertNull(profile.name, f.restart(f.self))
+            assertEquals(profile.name, listOf("stop"), f.signals())
+            assertEquals(listOf(f.node.canonicalPath, f.daemon.canonicalPath, "stop", "--project", f.root.path), f.stops.single())
+        }
+    }
+
+    @Test
+    fun `W2 Windows restart kills the old supervisor before a _run it respawned after the capture`() = WinRestart().use { f ->
+        val s = f.proc(S)
+        val r = f.proc(f.self, s, 1)
+        f.own(s)
+        f.stop = { r.alive = false; f.proc(R2, s, 2); 0 }
+        assertNull(f.restart(f.self))
+        assertEquals(listOf("stop", "kill:$S", "kill:$R2"), f.signals())
+        assertFalse(f.handles.getValue(R2).alive)
+    }
+
+    @Test(timeout = 10_000)
+    fun `W3 a process alive after the bound refuses the restart`() {
+        WinRestart().use { f ->
+            val s = f.proc(S)
+            val r = f.proc(f.self, s, 1)
+            f.proc(D, s, 2, survives = true)
+            f.own(s)
+            f.stop = { r.alive = false; 0 }
+            f.onSleep = { assertTrue("the wait is bounded", f.polls <= 4) }
+            assertEquals(survivor(D), f.restart(f.self))
+            assertEquals("a 1 s bound polled every 250 ms", 4, f.polls)
+            assertEquals(listOf("stop", "kill:$S", "kill:$D"), f.signals().take(3))
+        }
+        WinRestart().use { f ->
+            f.proc(D, f.proc(S).also { f.own(it) }, 1, survives = true)
+            f.onSleep = { throw InterruptedException() }
+            assertEquals(INCOMPLETE, f.restart(null))
+            assertTrue("the interrupt is kept", Thread.interrupted())
+        }
+    }
+
+    @Test
+    fun `W4 a failed legacy stop still kills the old tree top-down and publishes nothing`() {
+        for (mode in listOf("nonzero", "timeout", "throw", "unresolved")) WinRestart().use { f ->
+            val s = f.proc(S)
+            f.proc(f.self, s, 1)
+            f.own(s)
+            if (mode == "unresolved") f.nodePath = null
+            f.stop = { when (mode) { "nonzero" -> 1; "timeout" -> null; else -> error("stop failed") } }
+            assertNull(mode, f.restart(f.self))
+            val stop = if (mode == "unresolved") emptyList() else listOf("stop")
+            assertEquals(mode, stop + listOf("kill:$S", "kill:${f.self}"), f.signals())
+            assertTrue(mode, f.statuses.isEmpty())
+            assertNull(mode, MoeDaemonSupervisor::class.java.getDeclaredField("selectionRefusal").apply { isAccessible = true }.get(f.service))
+        }
+    }
+
+    @Test
+    fun `W5 a failed protected stop of a verified daemon refuses before any signal`() {
+        for (mode in listOf("nonzero", "timeout", "throw", "unresolved")) WinRestart(RuntimeProfile.PROTECTED).use { f ->
+            f.verified()
+            val s = f.proc(S)
+            f.proc(f.self, s, 1)
+            f.own(s)
+            if (mode == "unresolved") f.nodePath = null
+            f.stop = { when (mode) { "nonzero" -> 1; "timeout" -> null; else -> error("stop failed") } }
+            assertEquals(mode, restartRefusal(f.self, STOP_FAILED), f.restart(f.self))
+            assertTrue(mode, f.signals().none { it.startsWith("kill:") })
+        }
+    }
+
+    @Test
+    fun `W6 an unverified protected daemon or a failed lookup refuses before the stop`() {
+        WinRestart(RuntimeProfile.PROTECTED).use { f ->
+            f.proc(f.self, f.proc(S).also { f.own(it) }, 1)
+            assertEquals(restartRefusal(f.self, NOT_STARTED_HERE), f.restart(f.self))
+            assertEquals(emptyList<String>(), f.events)
+        }
+        for (profile in RuntimeProfile.values()) WinRestart(profile).use { f ->
+            f.verified()
+            f.proc(f.self, f.proc(S).also { f.own(it) }, 1)
+            f.lookup = { throw SecurityException("lookup") }
+            if (profile == RuntimeProfile.PROTECTED) {
+                assertEquals(restartRefusal(f.self, STOP_FAILED), f.restart(f.self))
+                assertEquals(emptyList<String>(), f.events)
+            } else {
+                assertNull(f.restart(f.self))
+                assertEquals(listOf("stop", "kill:$S", "kill:${f.self}"), f.signals())
+            }
+        }
+    }
+
+    @Test
+    fun `W7 a legacy foreign parent is never signaled and must exit by itself`() {
+        for (exits in listOf(true, false)) WinRestart().use { f ->
+            val p = f.proc(P, startSec = -1)
+            val r = f.proc(f.self, p, 1)
+            f.stop = { if (exits) { r.alive = false; p.alive = false; 0 } else 1 }
+            assertEquals("exits=$exits", if (exits) null else survivor(P), f.restart(f.self))
+            assertEquals("exits=$exits", 0, p.kills)
+            assertEquals("exits=$exits", if (exits) listOf("stop") else listOf("stop", "kill:${f.self}"), f.signals())
+        }
+    }
+
+    @Test
+    fun `W8 a parent that started after the daemon is a reused pid, neither signaled nor awaited`() {
+        for (profile in RuntimeProfile.values()) WinRestart(profile).use { f ->
+            f.verified()
+            val q = f.proc(Q, startSec = 5, survives = true)
+            val r = f.proc(f.self, q, 1)
+            f.stop = { r.alive = false; 0 }
+            assertNull(profile.name, f.restart(f.self))
+            assertEquals(profile.name, 0, q.kills)
+            assertEquals(profile.name, listOf("stop"), f.signals())
+        }
+    }
+
+    @Test
+    fun `W9 without daemon json Windows still stops this IDE's own supervisor tree`() {
+        for (profile in RuntimeProfile.values()) {
+            WinRestart(profile).use { f ->
+                val s = f.proc(S)
+                f.proc(R, s, 1)
+                f.own(s)
+                assertNull(profile.name, f.restart(null))
+                assertEquals(profile.name, listOf("stop", "kill:$S", "kill:$R"), f.signals())
+            }
+            WinRestart(profile).use { f ->
+                assertNull(profile.name, f.restart(null))
+                assertEquals(profile.name, emptyList<String>(), f.events)
+                assertTrue(profile.name, f.stops.isEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun `W10 the IDE and its ancestors are never signaled or awaited as an old supervisor`() {
+        val current = ProcessHandle.current()
+        val ide = listOfNotNull(current, current.parent().orElse(null))
+            .mapNotNull { h -> h.info().startInstant().orElse(null)?.let { h.pid() to it } }
+        assertTrue("the test JVM reports its start", ide.isNotEmpty())
+        for (profile in RuntimeProfile.values()) for ((pid, start) in ide) WinRestart(profile).use { f ->
+            f.verified()
+            val impostor = TreeHandle(pid, start, f.events, survives = true)
+            val r = TreeHandle(f.self, start.plusSeconds(1), f.events).also { it.parentHandle = impostor; f.handles[f.self] = it }
+            f.stop = { r.alive = false; 0 }
+            assertNull("$profile parent $pid", f.restart(f.self))
+            assertEquals("$profile parent $pid", 0, impostor.kills)
+        }
+        WinRestart().use { f ->
+            val ideAsDaemon = TreeHandle(f.self, ide.first().second, f.events, survives = true).also { f.handles[f.self] = it }
+            assertNull(f.restart(f.self))
+            assertEquals(0, ideAsDaemon.kills)
+            assertTrue(f.stops.isEmpty())
+        }
+    }
+
+    @Test
+    fun `W11 a child started after its parent was seen dead belongs to a pid reuser and is never signaled`() = WinRestart().use { f ->
+        val s = f.proc(S)
+        val r = f.proc(f.self, s, 1)
+        f.own(s)
+        f.stop = { r.alive = false; 0 }
+        val reuser = TreeHandle(R2, Instant.now().plusSeconds(3_600), f.events, survives = true)
+        s.onKill = { s.kids += reuser }
+        assertNull(f.restart(f.self))
+        assertEquals(0, reuser.kills)
+        assertEquals(listOf("stop", "kill:$S"), f.signals())
+    }
+
+    @Test
+    fun `W12 a protected verified daemon's supervisor from an earlier session dies before its _run`() =
+        WinRestart(RuntimeProfile.PROTECTED).use { f ->
+            f.verified()
+            val p = f.proc(P, startSec = -1)
+            f.proc(f.self, p, 1)
+            f.stop = { 0 }
+            assertNull(f.restart(f.self))
+            assertEquals(listOf("stop", "kill:$P", "kill:${f.self}"), f.signals())
+        }
+
+    @Test
+    fun `W13 a child spawned as a known process dies is found by a later walk and signaled`() = WinRestart().use { f ->
+        val s = f.proc(S)
+        val x = f.proc(D, s, 1)
+        f.own(s)
+        f.stop = { 0 }
+        x.onKill = { f.proc(R2, x, 2) }
+        assertNull(f.restart(null))
+        assertEquals(listOf("stop", "kill:$S", "kill:$D", "kill:$R2"), f.signals())
+        assertFalse(f.handles.getValue(R2).alive)
+    }
+
+    @Test
+    fun `W14 a restart in flight refuses a second restart and any daemon start until it returns`() {
+        WinRestart().use { f ->
+            f.own(f.proc(S))
+            var inner: String? = "unset"
+            var ensured: Any? = null
+            var depth = 0
+            f.stop = {
+                if (depth++ == 0) {
+                    inner = f.service.stopDaemonForRestart(null)
+                    ensured = runCatching { f.service.ensureDaemonRunning() }.getOrElse { it }
+                }
+                0
+            }
+            assertNull(f.restart(null))
+            assertEquals(IN_PROGRESS, inner)
+            assertEquals(false, ensured)
+            assertEquals("no daemon start while the old tree stops", 0, f.starts)
+            assertEquals(listOf("stop", "kill:$S"), f.signals())
+            f.own(f.proc(Q))
+            f.stop = { 0 }
+            assertNull("the guard clears after a restart", f.restart(null))
+            assertEquals(2, f.stops.size)
+        }
+        WinRestart().use { f ->
+            f.proc(D, f.proc(S).also { f.own(it) }, 1, survives = true)
+            f.onSleep = { throw InterruptedException() }
+            assertEquals(INCOMPLETE, f.restart(null))
+            Thread.interrupted()
+            f.onSleep = {}
+            f.own(f.proc(Q))
+            f.stop = { 0 }
+            assertNull("the guard clears after a failed restart", f.restart(null))
+            assertEquals(2, f.stops.size)
+        }
+    }
+
+    @Test
+    fun `N1 off Windows a legacy restart signals the daemon json pid once and reads no tree`() = WinRestart(windows = false).use { f ->
+        val s = f.proc(S)
+        f.proc(f.self, s, 1)
+        f.own(s)
+        assertNull(f.restart(f.self))
+        assertEquals(listOf("kill:${f.self}"), f.events)
+        assertNull(f.restart(null))
+        assertEquals(listOf("kill:${f.self}"), f.events)
+        assertTrue(f.stops.isEmpty())
+    }
+
+    @Test
+    fun `N2 off Windows a protected restart destroys the verified daemon exactly once`() =
+        WinRestart(RuntimeProfile.PROTECTED, windows = false).use { f ->
+            f.verified()
+            val s = f.proc(S)
+            f.proc(f.self, s, 1)
+            f.own(s)
+            assertNull(f.restart(f.self))
+            assertEquals(listOf("kill:${f.self}"), f.events)
+            assertTrue(f.stops.isEmpty())
+        }
+
+    /** Restart Daemon over [TreeHandle] fakes: every installed stop, signal and tree read lands in [events]. */
+    private inner class WinRestart(val profile: RuntimeProfile = RuntimeProfile.LEGACY, windows: Boolean = true) : AutoCloseable {
+        val root = temporaryFolder.newFolder().also { File(it, ".moe").mkdirs() }
+        private val installed = temporaryFolder.newFolder()
+        val daemon = File(installed, "daemon/index.js").apply { parentFile.mkdirs(); writeText("installed") }
+        val node = File(installed, "node").apply { writeText("node") }
+        private val store = ProtectedStateStore(temporaryFolder.newFolder().toPath().resolve("moe/state"))
+        // daemon.json names this JVM's pid, so a recorded spawn of this JVM verifies it under PROTECTED.
+        val self: Long = ProcessHandle.current().pid()
+        val events = mutableListOf<String>()
+        val handles = mutableMapOf<Long, TreeHandle>()
+        val stops = mutableListOf<List<String>>()
+        val statuses = mutableListOf<String>()
+        var starts = 0
+        var nodePath: String? = node.path
+        var lookup: (Long) -> ProcessHandle? = { handles[it] }
+        var stop: () -> Int? = { 1 }
+        var onSleep: () -> Unit = {}
+        var polls = 0
+        init {
+            RuntimeSelectionPolicy.resetForTest()
+            RuntimeSelectionPolicy.store = { store }
+        }
+        val service by lazy {
+            MoeDaemonSupervisor(root.path, "Test Project", onStatus = { _, text -> statuses += text },
+                processAliveProbe = { handles[it.toLong()]?.alive == true }, processStarter = { starts++; error("must not start") },
+                profile = { profile }, installedRoot = { installed }, nodeExecutable = { nodePath },
+                processLookup = { lookup(it) }, runStop = { stops += it.command().toList(); events += "stop"; stop() },
+                onDispatchThread = { false }, sleep = { polls++; onSleep() }, exitTimeoutMs = 1_000, windowsRestart = { windows })
+        }
+        fun proc(pid: Long, parent: TreeHandle? = null, startSec: Long = 0, survives: Boolean = false): TreeHandle =
+            TreeHandle(pid, T0.plusSeconds(startSec), events, survives).also { h ->
+                handles[pid] = h
+                parent?.let { h.parentHandle = it; it.kids += h }
+            }
+        fun own(supervisor: TreeHandle) = MoeDaemonSupervisor::class.java.getDeclaredField("spawnedDaemonProcess")
+            .apply { isAccessible = true }.set(service, FakeProcess(supervisor))
+        fun verified() {
+            if (profile == RuntimeProfile.PROTECTED) RuntimeSelectionPolicy.recordProtectedSpawn(root.path, ProcessHandle.current(), daemon)
+        }
+        fun restart(pid: Long?): String? = service.stopDaemonForRestart(pid?.let { DaemonInfo(9876, it.toInt(), "now", root.canonicalPath) })
+        fun signals(): List<String> = events.filterNot { it.startsWith("read:") }
+        override fun close() = RuntimeSelectionPolicy.resetForTest()
+    }
+
+    /** One process of a fake tree: its parent, children and descendants reads and every signal are logged. */
+    private class TreeHandle(
+        private val id: Long, private val start: Instant?, private val events: MutableList<String>, private val survives: Boolean = false
+    ) : ProcessHandle {
+        var alive = true
+        var parentHandle: ProcessHandle? = null
+        val kids = mutableListOf<ProcessHandle>()
+        var kills = 0
+            private set
+        var onKill: () -> Unit = {}
+        override fun pid(): Long = id
+        override fun parent(): Optional<ProcessHandle> = Optional.ofNullable(parentHandle).also { events += "read:$id" }
+        override fun children(): Stream<ProcessHandle> = kids.toList().stream().also { events += "read:$id" }
+        override fun descendants(): Stream<ProcessHandle> =
+            kids.toList().stream().flatMap { Stream.concat(Stream.of(it), it.descendants()) }.also { events += "read:$id" }
+        override fun info(): ProcessHandle.Info = object : ProcessHandle.Info {
+            override fun command(): Optional<String> = Optional.empty()
+            override fun commandLine(): Optional<String> = Optional.empty()
+            override fun arguments(): Optional<Array<String>> = Optional.empty()
+            override fun startInstant(): Optional<Instant> = Optional.ofNullable(start)
+            override fun totalCpuDuration(): Optional<Duration> = Optional.empty()
+            override fun user(): Optional<String> = Optional.empty()
+        }
+        override fun onExit(): CompletableFuture<ProcessHandle> = error("unexpected onExit")
+        override fun supportsNormalTermination(): Boolean = false
+        override fun destroy(): Boolean = kill()
+        override fun destroyForcibly(): Boolean = kill()
+        override fun isAlive(): Boolean = alive
+        override fun compareTo(other: ProcessHandle): Int = id.compareTo(other.pid())
+        private fun kill(): Boolean {
+            events += "kill:$id"
+            kills++
+            if (!survives) alive = false
+            onKill()
+            return true
+        }
+    }
+
+    private fun restartRefusal(pid: Long, reason: String) =
+        "Protected execution profile: Restart Daemon did not stop pid $pid, which .moe/daemon.json names: $reason. " +
+            "Check what that process is and stop it yourself if it is a Moe daemon, then use Restart Daemon."
+
+    private fun survivor(pid: Long) = "Restart Daemon did not start a new Moe daemon: pid $pid is still running after the stop, " +
+        "and it could restart the old one. Check what that process is and stop it yourself, then use Restart Daemon."
+
     private inner class ReplacementFixture : AutoCloseable {
         val root = temporaryFolder.newFolder().also { File(it, ".moe").mkdirs() }
         var installed: File? = temporaryFolder.newFolder()
@@ -803,5 +1156,21 @@ class MoeDaemonSupervisorTest {
             return this
         }
         override fun isAlive(): Boolean = alive
+    }
+
+    private companion object {
+        // Fake pids above Linux's pid_max, so none is this JVM.
+        const val S = 7_000_001L
+        const val R = 7_000_002L
+        const val R2 = 7_000_003L
+        const val D = 7_000_004L
+        const val P = 7_000_005L
+        const val Q = 7_000_006L
+        val T0: Instant = Instant.parse("2020-01-01T00:00:00Z")
+        const val STOP_FAILED = "the stop request failed"
+        const val NOT_STARTED_HERE = "this IDE did not start it from the installed Moe runtime"
+        const val INCOMPLETE = "Restart Daemon did not start a new Moe daemon: it could not confirm that the old one stopped. " +
+            "Use Restart Daemon again."
+        const val IN_PROGRESS = "Restart Daemon is already stopping the old Moe daemon. Wait for it to finish."
     }
 }
