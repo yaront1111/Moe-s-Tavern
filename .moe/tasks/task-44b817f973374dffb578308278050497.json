@@ -1,0 +1,26 @@
+{
+  "id": "task-44b817f973374dffb578308278050497",
+  "epicId": "epic-be924fb8",
+  "title": "bug: agent Git guard fails closed when moe-agent.ps1 runs under PowerShell 7, because its powershell.exe Set-Acl child inherits pwsh's PSModulePath and cannot load Get-Acl",
+  "description": "Repro: native Windows (pwsh 7, Git 2.54, node 24.16). In a git-archive snapshot of 04a3e180, `npx vitest run src/delivery/acceptance.test.ts` fails 'lands once, crashes before the receipt…': the pwsh wrapper stops with MOE_AGENT_GIT_GUARD_FAILED. It fails the same way on HEAD's own bytes. Surfacing the swallowed error shows the guard program's ACL step (moe-agent.ps1, `cp.spawnSync('powershell.exe', … Get-Acl/Set-Acl)`) exiting 1 with \"The 'Get-Acl' command was found in the module 'Microsoft.PowerShell.Security', but the module could not be loaded\". That is the known PS7→PS5.1 PSModulePath inheritance. Candidate fix: drop PSModulePath from that child's env. Check the sh twin and the other powershell.exe spawns too. Found by task-f33bf7af's Windows gate.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 317.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T20:58:12.787Z",
+  "updatedAt": "2026-10-30T20:58:12.787Z"
+}

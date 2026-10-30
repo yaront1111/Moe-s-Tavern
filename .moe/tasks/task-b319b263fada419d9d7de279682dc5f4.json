@@ -113,11 +113,17 @@
       "author": "architect-899a90d6",
       "content": "Planner note for the worker and QA (architect-899a90d6). It clarifies step 1 and changes no scope.\n- Names. WT-04 rev 1 (task-c20464ff) defines the per-task values:\n  - sh: MOE_WT_MODE (shared|worktree), MOE_WT_PATH (W), MOE_WT_BRANCH and MOE_WT_TARGET;\n  - ps1: $script:MoeWtMode, MoeWtPath, MoeWtBranch and MoeWtTarget.\n  Step 1 quotes MOE_WORKSPACE_MODE, MOE_WORKTREE_PATH, MOE_TASK_BRANCH and MOE_LAND_TARGET. Those were only the msg-ad88dbbd proposal. Per step 1, use the names in WT-04's landed bytes, and confirm them there before editing.\n- Order:\n  - WT-04 calls provisioning directly above '# -------- Pre-flight landing: recovery, baseline, rescue-ref discovery --------' (sh) and '# -------- Pre-flight baseline (land-on-every-exit) --------' (ps1). So the early return in steps 2(a) and 5(a) can read the mode before any baseline is written.\n  - WT-04's success branch (sets MOE_WT_MODE=worktree, prints '[worktree] ...') is the success point that steps 2(b) and 5(b) hang the recovery checkpoint on.\n- Leave control_worktree_mode / Test-MoeControlWorktreeMode HEAD-only. WT-13 reuses it unchanged and owns the main→moe/control bootstrap (WT-13 comment-1e3e602a).\nChat: msg-625bfce1, answered by the reply that follows it.",
       "timestamp": "2026-10-30T14:19:40.586Z"
+    },
+    {
+      "id": "comment-b2ef9e070a974798b8a91a6bc07d4594",
+      "author": "architect-4ff0711c",
+      "content": "Planner note from architect-4ff0711c. Task-31187ec1 (plan rev 1) uses your step-1(b) control_worktree_mode and your step-4(b) Test-MoeControlWorktreeMode, under the exact contract you specified: true iff `symbolic-ref -q HEAD` is exactly refs/heads/moe/control, and any failure is false. Its plan adds them only if they are absent. If 31187ec1 lands first, they will already be in the file: reuse them and do not define a second copy. The ps1 version takes no params and resolves the control checkout via Get-MoeGitTop. Your files, plan and DoD are otherwise unchanged.",
+      "timestamp": "2026-10-30T20:53:04.019Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:51:18.624Z",
-  "updatedAt": "2026-10-30T14:19:40.586Z",
+  "updatedAt": "2026-10-30T20:53:04.019Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:03.133Z",

@@ -6,11 +6,13 @@
 // executionReady stays false and verified-local stays unavailable. Reports carry fixed codes and hashes only. CQ-R13e1 adds
 // the bridge checks (certify-bridge.mjs) after 'no-mounts', with BRIDGE_BOUNDS, or certifyCore's validated overrides, on c.bounds.
 // CQ-R13f1 adds 'check-containment' (certify-containment.mjs) after them; its runs read c.platform, c.cacheDir and c.supervisor.
+// CQ-R13h adds 'cancellation' and 'recovery' (certify-lifecycle.mjs) last before 'teardown', with LIFECYCLE_BOUNDS in BOUNDS.
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, open, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { BRIDGE_BOUNDS, BRIDGE_CHECKS } from './certify-bridge.mjs';
 import { CONTAINMENT_CHECKS } from './certify-containment.mjs';
+import { LIFECYCLE_BOUNDS, LIFECYCLE_CHECKS } from './certify-lifecycle.mjs';
 import { platformFor } from './cli.mjs';
 import { runDoctor } from './doctor.mjs';
 import { IMAGE_ARCHES } from './guest-bootstrap.mjs';
@@ -23,6 +25,7 @@ const CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const VERSION = /^[0-9A-Za-z.+-]{1,64}$/;
 const [PLATFORM_IDS, RESULTS] = [['win32', 'linux', 'darwin'], ['passed', 'failed', 'not-run']];
+const BOUNDS = Object.freeze({ ...BRIDGE_BOUNDS, ...LIFECYCLE_BOUNDS });
 const MESSAGES = {
   CERTIFY_INPUT_INVALID: 'Certification options must be exactly { workDir: <absolute path> }.',
   CERTIFY_UNSUPPORTED_HOST: 'This host has no platform module; isolation cannot be certified here.',
@@ -54,7 +57,7 @@ const BODY = [
   ['readiness', async ({ outcome: { bootstrapReady, failures } }) => (bootstrapReady === true && Array.isArray(failures) && failures.length === 0 ? passed
     : failed(stable(failures?.[0], 'CERTIFY_NOT_READY')))],
   ['no-mounts', async ({ name, provider }) => { await assertNoMounts(name, provider); return passed; }],
-  ...[...BRIDGE_CHECKS, ...CONTAINMENT_CHECKS].map(({ id, run }) => [id, run]),
+  ...[...BRIDGE_CHECKS, ...CONTAINMENT_CHECKS, ...LIFECYCLE_CHECKS].map(({ id, run }) => [id, run]),
 ];
 // Always runs, whatever happened before; by exact owned name, so a foreign record in the same ledger is never touched.
 const TEARDOWN = ['teardown', async ({ ledger, name, owner, provider }) => {
@@ -100,10 +103,11 @@ async function writeReport(workDir, report, random = randomBytes) {
 
 async function certify(platform, workDir, deps, native, bounds) {
   const startedAt = isoNow(deps.now);
-  const ledger = createLedger(path.join(workDir, 'ledger'), { random: deps.random });
+  const ledgerDir = path.join(workDir, 'ledger');
+  const ledger = createLedger(ledgerDir, { random: deps.random });
   const owner = { taskId: 'task-certify', attemptId: `attempt-${randomBytes(16).toString('hex')}`, generation: 1 }; // synthetic, per run
   const provider = { ...deps.provider, executable: deps.provider?.executable ?? platform.executable };
-  const c = { workDir, deps, ledger, owner, provider, bounds, cacheDir: path.join(workDir, 'images'), name: null, outcome: null, arch: platform.arch ?? null,
+  const c = { workDir, deps, ledgerDir, ledger, owner, provider, bounds, cacheDir: path.join(workDir, 'images'), name: null, outcome: null, arch: platform.arch ?? null,
     supervisor: null, supervisorSha256: null };
   // Records the arch this run's prerequisites detected (macOS reads its hardware); the check-containment runs use it too.
   c.platform = { ...platform, prerequisites: async options => { const pre = await platform.prerequisites(options); c.arch = pre?.arch ?? c.arch; return pre; } };
@@ -126,18 +130,18 @@ async function certify(platform, workDir, deps, native, bounds) {
   return report;
 }
 
-// deps.bounds: absent, or a plain record of own data properties named in BRIDGE_BOUNDS, each a safe integer from 1 to its
+// deps.bounds: absent, or a plain record of own data properties named in BOUNDS, each a safe integer from 1 to its
 // constant, read once into a frozen copy. Anything else, a getter or a throwing proxy trap included, refuses.
 function boundsOf(bounds) {
-  if (bounds === undefined) return BRIDGE_BOUNDS;
+  if (bounds === undefined) return BOUNDS;
   try {
-    const entries = isRecord(bounds) ? Reflect.ownKeys(bounds).map(key => [key, Object.hasOwn(BRIDGE_BOUNDS, key) ? Object.getOwnPropertyDescriptor(bounds, key).value : NaN]) : null;
-    if (entries?.every(([key, value]) => Number.isSafeInteger(value) && value >= 1 && value <= BRIDGE_BOUNDS[key])) return Object.freeze({ ...BRIDGE_BOUNDS, ...Object.fromEntries(entries) });
+    const entries = isRecord(bounds) ? Reflect.ownKeys(bounds).map(key => [key, Object.hasOwn(BOUNDS, key) ? Object.getOwnPropertyDescriptor(bounds, key).value : NaN]) : null;
+    if (entries?.every(([key, value]) => Number.isSafeInteger(value) && value >= 1 && value <= BOUNDS[key])) return Object.freeze({ ...BOUNDS, ...Object.fromEntries(entries) });
   } catch { /* refused below */ }
   throw certifyError('CERTIFY_INPUT_INVALID');
 }
 
-/** Injected transports (tests): {provider, fetch, digest, sleep, random, doctor, now, bounds}. Its evidence can never certify. */
+/** Injected transports (tests): {provider, fetch, digest, sleep, random, doctor, now, bounds, containment, checkSteps, spawn}. Its evidence can never certify. */
 export async function certifyCore(input) {
   const { platform, workDir, deps = {} } = isRecord(input) ? input : {};
   if (!validWorkDir(workDir) || !isRecord(platform) || !PLATFORM_IDS.includes(platform.id) || typeof platform.prerequisites !== 'function'
@@ -152,7 +156,7 @@ export async function runIsolationCertify(options) {
   if (!validWorkDir(workDir)) throw certifyError('CERTIFY_INPUT_INVALID');
   const platform = platformFor(process.platform);
   if (!platform) throw certifyError('CERTIFY_UNSUPPORTED_HOST');
-  return certify(platform, workDir, {}, true, BRIDGE_BOUNDS);
+  return certify(platform, workDir, {}, true, BOUNDS);
 }
 
 // A plain-record copy with exactly `keys`, each read once; anything else refuses.

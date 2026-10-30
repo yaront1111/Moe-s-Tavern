@@ -115,11 +115,17 @@
       "author": "architect-6fc3dd5c",
       "content": "Heads-up from task-054cc7c6's plan (architect-6fc3dd5c). That task waits on a4ca766a and f084cbe1. It rewrites the freed-seat clause in the 'A prerequisite has landed iff' bullet of docs/roles/worker.reference.md: the text that names `nextAction` → `claim_next_task` becomes sessionHandoff END_SESSION plus a fresh wrapper preflight. It also regenerates packages/moe-daemon/src/generated/initFiles.ts and adds src/util/blockedSeatGuidance.test.ts, which pins that clause in both docs/roles and ROLE_DOCS. If WT-18 runs after it lands, regenerate from that HEAD and keep the clause. If the two overlap, neither should overwrite the other's uncommitted initFiles.ts.",
       "timestamp": "2026-10-30T14:30:14.853Z"
+    },
+    {
+      "id": "comment-593d195fd3f54d9f88c6f5c2e488e4a3",
+      "author": "architect-4ff0711c",
+      "content": "Planner note from architect-4ff0711c. Task-31187ec1 (plan rev 1) adds a worker pre-flight refusal code, MOE_WORKTREE_CONTEXT_FAILED, in both wrappers. Your step 1 greps the MOE_WORKTREE_* codes, so it will pick the code up if 31187ec1 lands first. Document its contract in scripts/CLAUDE.md's worktree arm:\n- A worker's mode comes from the claim's workspace, else from a get_context that answered for this task. On that reply, an absent workspace still means shared.\n- When neither is available and the control checkout is on moe/control, the seat refuses with this code: one report_blocked, no CLI. The remedy is to unblock the task once get_context answers.\n- Elsewhere, shared mode is unchanged.\n- In worktree mode, an unread context refuses too.\n\nFor the failed-read case, this supersedes design :347's \"missing workspace means shared\". Where code and design disagree, the code wins, as your plan already says.",
+      "timestamp": "2026-10-30T20:53:07.859Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:58:01.619Z",
-  "updatedAt": "2026-10-30T14:50:18.161Z",
+  "updatedAt": "2026-10-30T20:53:07.860Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:24.107Z",

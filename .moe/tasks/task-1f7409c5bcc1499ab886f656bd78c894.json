@@ -1,0 +1,29 @@
+{
+  "id": "task-1f7409c5bcc1499ab886f656bd78c894",
+  "epicId": "epic-be924fb8",
+  "title": "bug: local runner compares its own projectPath unresolved, so a native alias (//x on POSIX, /x on Windows) refuses its own daemon",
+  "description": "scripts/local-runner/guest-session.mjs loopbackDaemonHost and vm-control.mjs readDaemonInfo compare canonicalProjectPath(own) without path.resolve, and runner-client.mjs discover uses an exact `info.projectPath !== projectPath`. A native alias of the project therefore reads its own daemon as foreign. That is the same class as task-f33bf7af's proxy and doctor fix (non-destructive refusal; callers usually pass canonical paths). guest-session.mjs:82 also still names the twin as index.ts; the twin now lives in packages/moe-daemon/src/util/projectPath.ts (index.ts re-exports it). Confirm first whether runner-client's exact match is deliberate.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-f33bf7aff4d245d3b8bb1d8c8a6ceedf"
+  ],
+  "priority": "LOW",
+  "order": 318.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T21:01:54.988Z",
+  "updatedAt": "2026-10-30T21:01:54.988Z"
+}

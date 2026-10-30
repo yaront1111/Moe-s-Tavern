@@ -2773,8 +2773,10 @@ if (typeof answer === 'string') process.stdout.write(answer); else process.exitC
 import { CERTIFY_CHECKS, certifyCore, runIsolationCertify, validateCertificationReport } from '../local-runner/certify.mjs';
 
 const REAL_SUPERVISOR_SHA256 = createHash('sha256').update(readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url))).digest('hex');
-const CERTIFY_IDS = ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'guest-network', 'check-containment', 'teardown'];
-const BRIDGE_NOT_RUN = [['bridge-framing', 'not-run'], ['bridge-eof', 'not-run'], ['guest-network', 'not-run'], ['check-containment', 'not-run']];
+const CERTIFY_IDS = ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'guest-network', 'check-containment', 'cancellation', 'recovery', 'teardown'];
+const CERTIFY_DELETES = [nameAt(2), nameAt(4), GUEST].map(name => ['delete', '--purge', name]); // cancellation, recovery child, then teardown
+const BRIDGE_NOT_RUN = [['bridge-framing', 'not-run'], ['bridge-eof', 'not-run'], ['guest-network', 'not-run'], ['check-containment', 'not-run'], ['cancellation', 'not-run'],
+  ['recovery', 'not-run']];
 // CQ-R13f1 check-containment: deps.containment's fake runCheckJob records each call and resolves runCheckJob's frozen result,
 // call i's defaults merged with runs[i]. The integrity call (1) drives given.session, the real runCheckSession over the harness
 // router, as runCheckJob would; {session: false} skips it and {reject: code} rejects with that code.
@@ -2800,27 +2802,69 @@ const DEFAULT_ROUTE = 'default via 10.20.30.1 dev eth0 proto dhcp src 10.20.30.4
 const NETWORK_ANSWERS = { gateway: async () => ({ stdout: DEFAULT_ROUTE, stderr: '' }), agent: async () => ({ stdout: 'closed\n', stderr: '' }) };
 const networkProbe = args => (args[0] !== 'exec' ? null : args[4] === 'ip' ? 'gateway' : args[4] === 'sudo' && args[8] === 'python3' ? 'agent' : null);
 
+// CQ-R13h: a recovery child. Once stdin ends it runs onInput(input, proc, kit), by default the child's provisioning through the
+// ledger API up to 'owned'; kill() logs the signal with the record's phase on disk then and, unless hang, closes `delay` ms after
+// that work settles. close() emits once.
+function recoveryChild(kit, { onInput = provisions, hang = false, delay = 0 } = {}) {
+  const proc = Object.assign(new EventEmitter(), { written: [], kills: [], log: [], closed: false, work: Promise.resolve() });
+  proc.stdin = new Writable({ write(chunk, encoding, done) { proc.written.push(chunk); done(); }, final(done) {
+    proc.work = Promise.resolve().then(() => onInput(JSON.parse(Buffer.concat(proc.written)), proc, kit)).catch(() => proc.log.push('input-failed'));
+    done();
+  } });
+  proc.close = (code, signal = null) => { if (!proc.closed) { proc.closed = true; proc.log.push('close'); proc.emit('close', code, signal); } };
+  proc.kill = signal => (proc.kills.push(signal), proc.log.push(`kill:${signal}:${proc.record && JSON.parse(readFileSync(proc.record, 'utf8')).phase}`),
+    hang || proc.work.then(() => setTimeout(() => proc.close(null, signal), delay)), true);
+  return proc;
+}
+async function provisions({ ledgerDir, owner: who }, proc, { fake, random }) {
+  const ledger = createLedger(ledgerDir, { random });
+  const record = await seed(ledger, 'launching', 1, who);
+  fake.present.set(record.instance, 'Running');
+  proc.record = path.join(ledgerDir, `${record.instance}.json`);
+  await ledger.update(record, { phase: 'owned' });
+}
+const TOOLCHAIN_STUB = Object.freeze({ file: '/cache/node-v24.tar.xz', sha256: 'e'.repeat(64), size: 1, version: 'v24.0.0' });
+
 /** smokeHarness whose guest holds the REAL supervisor (R07 checks its hash), with an injected doctor and clock; `run` wraps the provider,
- * `bridge` configures the CQ-R13e1 spawn router (bridgeRouter) and `network` overrides NETWORK_ANSWERS, each recorded in `probes`. */
-function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run, random = sequence(), bridge, network = {}, containment, change, ...fakeOptions } = {}) {
+ * `bridge` configures the CQ-R13e1 spawn router (bridgeRouter) and `network` overrides NETWORK_ANSWERS, each recorded in `probes`.
+ * CQ-R13h: deps.checkSteps runs the cancellation's real runCheckJob here with no Node download (`checkSteps` overrides a step);
+ * deps.spawn hands out recoveryChild(`child`) fakes, recorded in `children`; deps.bounds keeps the lifecycle waits short. */
+function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run, random = sequence(), bridge, network = {}, containment, change, checkSteps, child,
+  ...fakeOptions } = {}) {
   const workDir = scratch(t);
   const [rig, changes] = [containmentRig(containment), []];
   const fake = fakeVm({ ...fakeOptions, answers: healthy({ supervisorHash: { code: 0, stdout: `${REAL_SUPERVISOR_SHA256}  /opt/moe/bin/moe-supervisor\n` }, ...guest }) });
   const [download, deletes, probes] = [fakeFetch(), [], []];
+  // CQ-R13h: every other VM this run launched answers as a clone of the fake guest, under its own name.
+  const clone = (executable, args, options) => {
+    const name = args.find(arg => arg !== GUEST && fake.present.has(arg));
+    return name === undefined ? fake.run(executable, args, options) : fake.run(executable, args.map(arg => (arg === name ? GUEST : arg)), options)
+      .then(({ stdout, stderr }) => ({ stdout: stdout.replaceAll(GUEST, name), stderr }));
+  };
   const run = wrap((executable, args, options) => {
     if (isChange(args)) { changes.push([[...args], options]); return (change ?? answering(''))(args); }
     const probe = networkProbe(args);
     if (probe) { probes.push([probe, [...args], options]); return (network[probe] ?? NETWORK_ANSWERS[probe])(args); }
-    if (args[0] !== 'delete') return fake.run(executable, args, options);
+    if (args[0] !== 'delete') return clone(executable, args, options);
     deletes.push([...args]);
     if (deleteFails) return Promise.reject(failWith({ code: 1 }));
     fake.present.delete(args[2]);
     return Promise.resolve({ stdout: '', stderr: '' });
   });
-  const router = bridgeRouter(bridge);
+  const [router, children] = [bridgeRouter(bridge), []];
+  const spawn = (...args) => {
+    if (child?.throws) throw failWith({ code: 'EACCES' });
+    const proc = recoveryChild({ fake, random }, child);
+    children.push({ args, proc });
+    return proc;
+  };
+  t.after(() => children.forEach(({ proc }) => proc.close(null, 'SIGKILL')));
   const deps = { provider: { run, spawn: router.spawn }, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {}, random,
-    doctor: async () => ({ providerReady: true, version: '1.17.0' }), now: () => new Date(STARTED), containment: rig.containment };
-  return { workDir, fake, download, deletes, probes, changes, rig, deps, router, certify: (platform = onWindows()) => certifyCore({ platform, workDir, deps }) };
+    doctor: async () => ({ providerReady: true, version: '1.17.0' }), now: () => new Date(STARTED), containment: rig.containment, spawn,
+    bounds: { cancelBudgetMs: 5_000, launchMs: 1_000, pollMs: 1, reapMs: 1_000 }, checkSteps: { toolchain: async () => TOOLCHAIN_STUB,
+      installToolchain: async () => {}, provision: input => provisionGuest({ ...input, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {} }), ...checkSteps } };
+  return { workDir, fake, download, deletes, probes, changes, rig, deps, router, children,
+    certify: (platform = onWindows()) => certifyCore({ platform, workDir, deps }) };
 }
 const checksOf = (...rows) => rows.map(([id, result, code = null]) => ({ id, result, code }));
 const certification = changes => ({
@@ -2835,7 +2879,7 @@ test('CF1 an injected certification passes every check in registry order and sti
   assert.equal(Object.isFrozen(CERTIFY_CHECKS) && CERTIFY_CHECKS.every(check => Object.isFrozen(check) && typeof check.run === 'function'), true);
   const h = certifyHarness(t);
   const report = await h.certify();
-  assert.deepEqual([report, deepFrozen(report), h.deletes], [certification(), true, [['delete', '--purge', GUEST]]]);
+  assert.deepEqual([report, deepFrozen(report), h.deletes], [certification(), true, CERTIFY_DELETES]);
   assert.equal((await createLedger(path.join(h.workDir, 'ledger')).read(GUEST)).phase, 'deleted');
 });
 
@@ -2872,8 +2916,9 @@ test('CF3 a provision refusal or a codeless throw fails only its own check; tear
   assert.deepEqual([await thrower.certify(), thrower.deletes], [certification({ checks: threw }), [['delete', '--purge', GUEST]]]);
   const stuck = certifyHarness(t, { deleteFails: true });
   const undeleted = checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'], ['bridge-framing', 'passed'], ['bridge-eof', 'passed'],
-    ['guest-network', 'passed'], ['check-containment', 'passed'], ['teardown', 'failed', 'CERTIFY_TEARDOWN_FAILED']);
-  assert.deepEqual([await stuck.certify(), stuck.deletes], [certification({ checks: undeleted }), [['delete', '--purge', GUEST]]]);
+    ['guest-network', 'passed'], ['check-containment', 'passed'], ['cancellation', 'failed', 'CERTIFY_CANCEL_VM_NOT_DELETED'], ['recovery', 'not-run'],
+    ['teardown', 'failed', 'CERTIFY_TEARDOWN_FAILED']);
+  assert.deepEqual([await stuck.certify(), stuck.deletes], [certification({ checks: undeleted }), [nameAt(2), GUEST].map(name => ['delete', '--purge', name])]);
 });
 
 test('CF4 the report carries no host path, credential or diagnostic text, and only stable codes', async t => {
@@ -3001,6 +3046,7 @@ const cbOut = bytes => ({ kind: 'output', stream: 'stdout', data: Buffer.from(by
 const payloadFrames = bytes => Array.from({ length: Math.ceil(bytes.length / 65_521) }, (_, at) => cbOut(bytes.subarray(at * 65_521, (at + 1) * 65_521)));
 const framingSends = (bytes, code = 0, head = []) => ({ scripts: { 'certify-framing': proc => { proc.send(...head, CB_HELLO, ...payloadFrames(bytes), cbExit(code)); proc.exit(0); } } });
 const BRIDGE_SCRIPTS = { ...framingSends(EXPECTED_PAYLOAD).scripts, 'certify-eof': proc => proc.send(CB_HELLO, cbOut('ready\n')),
+  'certify-cancel': proc => proc.send(CB_HELLO, cbOut('ready\n')),
   'certify-network': proc => { proc.send(CB_HELLO, cbOut('closed\n'), cbExit(0)); proc.exit(0); },
   'certify-integrity': proc => { proc.send(CB_HELLO); setImmediate(() => { proc.send(cbExit(0)); proc.exit(80); }); } };
 
@@ -3044,7 +3090,7 @@ test('CB1 the payload, generated snapshot, bounds and bridge registry are fixed 
   assert.notEqual(certifySnapshot(), certifySnapshot());
   assert.deepEqual([BRIDGE_BOUNDS, Object.isFrozen(BRIDGE_BOUNDS)], [{ sessionMs: 120_000, exitMs: 30_000, transferMs: 120_000 }, true]);
   assert.deepEqual([BRIDGE_CHECKS.map(check => check.id), Object.isFrozen(BRIDGE_CHECKS) && BRIDGE_CHECKS.every(Object.isFrozen)], [['bridge-framing', 'bridge-eof', 'guest-network'], true]);
-  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id), ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'guest-network', 'check-containment', 'teardown']);
+  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id), CERTIFY_IDS);
 });
 
 test('CB2 bridge-framing materializes the generated snapshot, then streams the 2 MiB payload back through a fixed argv and frame', async () => {
@@ -3146,7 +3192,7 @@ test('CB6 certifyCore validates deps.bounds before any provider call; a bridge f
     }
   }
   const failedBridge = code => certification({ checks: checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'],
-    ['bridge-framing', 'failed', code], ['bridge-eof', 'not-run'], ['guest-network', 'not-run'], ['check-containment', 'not-run'], ['teardown', 'passed']) });
+    ['bridge-framing', 'failed', code], ...BRIDGE_NOT_RUN.slice(1), ['teardown', 'passed']) });
   const mismatch = certifyHarness(t, { bridge: { materialize: proc => proc.reply({ kind: 'materialized', digest: 'f'.repeat(64) }) } });
   assert.deepEqual([await mismatch.certify(), mismatch.deletes, mismatch.router.calls.length], [failedBridge('TRANSFER_DIGEST_MISMATCH'), [['delete', '--purge', GUEST]], 1]);
   // A silent session ends only through the overridden 50 ms budget.
@@ -3181,7 +3227,7 @@ const refusesConnect = port => new Promise(resolve => {
 // A real connect, as a slirp-like gateway-to-loopback map would make; it settles once the listener has destroyed the socket.
 const connects = port => new Promise(resolve => net.connect({ host: '127.0.0.1', port }).on('error', () => {}).once('close', resolve));
 const networkFailed = code => certification({ checks: checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'],
-  ['bridge-framing', 'passed'], ['bridge-eof', 'passed'], ['guest-network', 'failed', code], ['check-containment', 'not-run'], ['teardown', 'passed']) });
+  ['bridge-framing', 'passed'], ['bridge-eof', 'passed'], ['guest-network', 'failed', code], ...BRIDGE_NOT_RUN.slice(3), ['teardown', 'passed']) });
 
 test('GN1 the connect probe is one fixed literal; the gateway, check-identity and agent-identity probes have exact argv, in that order', async t => {
   assert.deepEqual([CONNECT_PROBE, /['\x00-\x1f\x7f]/.test(CONNECT_PROBE)], [PROBE_LITERAL, false]);
@@ -3267,11 +3313,10 @@ test('GN4 a confirmed connect is REACHABLE, anything short of two exact closed a
 });
 
 test('GN5 guest-network runs after bridge-eof and before teardown; a bridge-eof failure leaves it not-run with no probe', async t => {
-  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(-5), ['bridge-framing', 'bridge-eof', 'guest-network', 'check-containment', 'teardown']);
+  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(-7), [...BRIDGE_NOT_RUN.map(([id]) => id), 'teardown']);
   const h = certifyHarness(t, { bridge: { onEof: proc => proc.exit(0) } });
   assert.deepEqual([await h.certify(), h.deletes, h.probes], [certification({ checks: checksOf(['provision', 'passed'], ['readiness', 'passed'],
-    ['no-mounts', 'passed'], ['bridge-framing', 'passed'], ['bridge-eof', 'failed', 'CERTIFY_BRIDGE_EOF_EXIT'], ['guest-network', 'not-run'], ['check-containment', 'not-run'],
-    ['teardown', 'passed']) }),
+    ['no-mounts', 'passed'], ['bridge-framing', 'passed'], ['bridge-eof', 'failed', 'CERTIFY_BRIDGE_EOF_EXIT'], ...BRIDGE_NOT_RUN.slice(2), ['teardown', 'passed']) }),
   [['delete', '--purge', GUEST]], []]);
 });
 
@@ -3306,11 +3351,12 @@ const CC_ENTRY = { path: 'moe-certify/protected.txt', oid: 'c847a247be38418490ff
 const CC_COMMANDS = ['python3 -I -B moe-certify/probe.py', 'printf x 2>/dev/null >moe-certify/protected.txt && exit 3; i=0; while [ -s moe-certify/protected.txt ] && '
   + '[ "$i" -lt 60 ]; do sleep 1; i=$((i+1)); done; [ ! -s moe-certify/protected.txt ]', 'echo edited >>moe-certify/tracked.txt'];
 const CC_IDS = ['certify-probe', 'certify-integrity', 'certify-edit'];
-// check-containment failed with code: the checks before it passed, later body checks not-run, teardown passed.
-const ccFailed = code => certification({ checks: CERTIFY_IDS.map((id, at, ids) => {
-  const own = ids.indexOf('check-containment');
+// `failing` failed with code: the checks before it passed, later body checks not-run, teardown passed.
+const failedAt = (failing, code) => certification({ checks: CERTIFY_IDS.map((id, at, ids) => {
+  const own = ids.indexOf(failing);
   return { id, result: at === own ? 'failed' : at < own || id === 'teardown' ? 'passed' : 'not-run', code: at === own ? code : null };
 }) });
+const ccFailed = code => failedAt('check-containment', code);
 // The probe with its guest primitives stubbed; s names each errno, null meaning the call succeeds.
 const PROBE_STUB = `import builtins, errno, json, resource, socket, sys, tempfile
 s = json.loads(sys.argv[1])
@@ -3366,7 +3412,7 @@ test('CC2 the probe exits 0 only when every refusal holds, else 10-14 for the fi
 test('CC3 check-containment runs probe, integrity and edit, each on the one snapshot with its exact frame and the context\'s own inputs', async t => {
   const [h, platform] = [certifyHarness(t), onWindows()];
   h.deps.bounds = { sessionMs: 60_000 };
-  assert.deepEqual([await h.certify(platform), h.deletes], [certification(), [['delete', '--purge', GUEST]]]);
+  assert.deepEqual([await h.certify(platform), h.deletes], [certification(), CERTIFY_DELETES]);
   const inputs = h.rig.calls.map(({ input }) => input);
   const main = await createLedger(path.join(h.workDir, 'ledger')).read(GUEST);
   assert.deepEqual(inputs.map(input => [Object.keys(input), input.check, input.dependencies, input.budgetMs, input.owner.taskId, input.owner.generation, validOwner(input.owner)]),
@@ -3427,10 +3473,116 @@ test('CC6 the runs get certify\'s base ledger, never its capturing one, and a gu
   const h = certifyHarness(t);
   const runCheckJob = h.deps.containment.runCheckJob;
   h.deps.containment = { runCheckJob: async (input, given) => { await input.ledger.reserve(input.owner); return runCheckJob(input, given); } };
-  assert.deepEqual([await h.certify(), h.deletes], [certification(), [['delete', '--purge', GUEST]]]);
+  assert.deepEqual([await h.certify(), h.deletes], [certification(), [nameAt(5), nameAt(7), GUEST].map(name => ['delete', '--purge', name])]);
   assert.equal((await createLedger(path.join(h.workDir, 'ledger')).read(GUEST)).phase, 'deleted');
   const gone = certifyHarness(t, { network: { agent: probeExit(2, '') } });
   assert.deepEqual([await gone.certify(), gone.rig.calls.length, gone.changes], [networkFailed('CERTIFY_GUEST_NETWORK_UNKNOWN'), 0, []]);
+});
+
+// CQ-R13h cancellation and recovery: the cancellation's real runCheckJob, materialize and runCheckSession run on the harness provider;
+// recovery's controller child is a recoveryChild fake. The real child module is spawned only on bad input; the native run is operator-only.
+const RECOVERY_ARGV = [process.execPath, [fileURLToPath(new URL('../local-runner/certify-recovery-child.mjs', import.meta.url))],
+  { shell: false, windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] }];
+const recordsOf = async h => (await createLedger(path.join(h.workDir, 'ledger')).list()).records.map(({ instance, phase }) => [instance, phase]).sort();
+
+test('LC1 cancellation aborts its own check VM\'s session at its first stdout bytes; the run resolves infra-failure with that VM and record deleted', async t => {
+  const [log, seen] = [[], []];
+  const h = certifyHarness(t, {
+    bridge: { scripts: { 'certify-cancel': proc => { log.push('stdout'); proc.send(CB_HELLO, cbOut('ready\n')); } },
+      onEof: proc => { if (proc.frame.id === 'certify-cancel') log.push('eof'); proc.exit(74); } },
+    checkSteps: { job: (input, steps) => runCheckJob(input, steps).then(async result => seen.push([input, result, (await input.ledger.read(GUEST)).phase]) && result) } });
+  assert.deepEqual(await h.certify(), certification());
+  const sessions = h.router.calls.filter(({ proc }) => proc.frame?.id === 'certify-cancel');
+  assert.deepEqual([sessions.length, sessions[0].args, sessions[0].proc.frame, sessions[0].proc.stdin.destroyed, sessions[0].proc.kills, log],
+    [1, ['multipass', checkArgv(nameAt(2)), PIPES], checkOf('certify-cancel', CB_EOF), true, [], ['stdout', 'eof']]);
+  const [[input, result, main]] = seen;
+  assert.deepEqual([seen.length, result.outcome, result.vm, result.instance, main, input.signal.aborted, input.check, input.dependencies, input.budgetMs, validOwner(input.owner)],
+    [1, 'infra-failure', 'deleted', nameAt(2), 'owned', true, { id: 'certify-cancel', command: CB_EOF, protected: [] }, [], 5_000, true]);
+  assert.equal((await createLedger(path.join(h.workDir, 'ledger')).read(nameAt(2))).phase, 'deleted');
+});
+
+test('LC2 cancellation fails with one fixed code unless its session started, did not pass, and its VM and record were deleted', async t => {
+  const started = outcome => async input => {
+    input.provider.spawn('multipass', checkArgv(input.name), PIPES).stdout.write('x');
+    await new Promise(setImmediate);
+    return { outcome, exitCode: outcome === 'passed' ? 0 : null, signal: null, outputTail: '' };
+  };
+  for (const [checkSteps, code] of [[{ session: async () => ({ outcome: 'infra-failure', exitCode: null, signal: null, outputTail: '' }) }, 'CERTIFY_CANCEL_NOT_STARTED'],
+    [{ session: started('passed'), verify: async () => 'intact' }, 'CERTIFY_CANCEL_PASSED'], [{ session: started('timeout') }, 'CERTIFY_CANCEL_TIMED_OUT'],
+    [{ remove: async () => { throw failWith({ code: 1 }); } }, 'CERTIFY_CANCEL_VM_NOT_DELETED'], [{ remove: async () => 'deleted' }, 'CERTIFY_CANCEL_RECORD_LIVE'],
+    [{ job: async () => { throw failWith({ code: 'CHECK_READY_TIMEOUT' }); } }, 'CHECK_READY_TIMEOUT']]) {
+    const h = certifyHarness(t, { checkSteps });
+    assert.deepEqual([await h.certify(), h.children, h.deletes.at(-1)], [failedAt('cancellation', code), [], ['delete', '--purge', GUEST]], code);
+  }
+});
+
+test('LC3 recovery SIGKILLs its controller child once its VM is owned, awaits close, then deletes exactly that VM; a foreign record survives', async t => {
+  const h = certifyHarness(t, { child: { delay: 20 } });
+  const [run, named] = [h.deps.provider.run, []];
+  h.deps.provider.run = (executable, args, options) => { named.push([args[0] === 'delete' ? args[2] : args[1], h.children[0]?.proc.closed]); return run(executable, args, options); };
+  assert.deepEqual(await h.certify(), certification());
+  const [{ proc }] = h.children;
+  assert.deepEqual([proc.kills, proc.log, h.deletes, await recordsOf(h)], [['SIGKILL'], ['kill:SIGKILL:owned', 'close'], CERTIFY_DELETES,
+    [[GUEST, 'deleted'], [nameAt(2), 'deleted'], [nameAt(3), 'absent'], [nameAt(4), 'deleted']]]);
+  const calls = named.filter(([name]) => name === nameAt(4));
+  assert.deepEqual([calls.length > 0, calls.every(([, closed]) => closed === true)], [true, true]);
+});
+
+test('LC4 the recovery child is spawned once, with no shell and a fixed argv, and gets exactly one JSON line on stdin, then EOF', async t => {
+  const h = certifyHarness(t);
+  await h.certify();
+  const [{ args, proc }] = h.children;
+  const line = Buffer.concat(proc.written).toString('utf8');
+  const [input, main] = [JSON.parse(line), await createLedger(path.join(h.workDir, 'ledger')).read(GUEST)];
+  assert.deepEqual([h.children.length, args, proc.written.length, line.indexOf('\n'), proc.stdin.writableFinished, Object.keys(input)],
+    [1, RECOVERY_ARGV, 1, line.length - 1, true, ['ledgerDir', 'cacheDir', 'owner']]);
+  assert.deepEqual([input.ledgerDir, input.cacheDir, Object.keys(input.owner), validOwner(input.owner), input.owner.attemptId === main.attemptId],
+    [path.join(h.workDir, 'ledger'), path.join(h.workDir, 'images'), ['taskId', 'attemptId', 'generation'], true, false]);
+});
+
+test('LC5 recovery fails with one fixed code when its child exits early, never launches, outlives its kill, cannot spawn or is not cleaned up', async t => {
+  const launchingOnly = async ({ ledgerDir, owner: who }, proc, { fake, random }) => fake.present.set((await seed(createLedger(ledgerDir, { random }), 'launching', 1, who)).instance, 'Running');
+  const failsOnce = ({ deps: { provider } }, run = provider.run, failed = []) => { // the child's VM's first delete fails
+    provider.run = (executable, args, options) => (args[0] === 'delete' && args[2] === nameAt(4) && failed.push(1) === 1 ? Promise.reject(failWith({ code: 1 })) : run(executable, args, options));
+  };
+  for (const [child, bounds, code, kills, setup = () => {}] of [
+    [{ onInput: (input, proc) => proc.close(70) }, {}, 'CERTIFY_RECOVERY_CHILD_EXITED', [[]]],
+    [{ onInput: launchingOnly }, { launchMs: 20 }, 'CERTIFY_RECOVERY_NOT_LAUNCHED', [['SIGKILL']]],
+    [{ hang: true }, { reapMs: 20 }, 'CERTIFY_RECOVERY_NOT_REAPED', [['SIGKILL', 'SIGKILL']]],
+    [{ throws: true }, {}, 'CERTIFY_RECOVERY_SPAWN_FAILED', []],
+    [{ onInput: (input, proc) => { proc.emit('error', failWith({ code: 'ENOENT' })); proc.close(-2); } }, {}, 'CERTIFY_RECOVERY_SPAWN_FAILED', [[]]],
+    [{}, {}, 'CERTIFY_RECOVERY_CLEANUP_FAILED', [['SIGKILL']], failsOnce]]) {
+    const h = certifyHarness(t, { child });
+    Object.assign(h.deps.bounds, bounds);
+    setup(h);
+    assert.deepEqual([await h.certify(), h.children.map(({ proc }) => proc.kills)], [failedAt('recovery', code), kills], code);
+    assert.deepEqual([h.children.map(({ proc }) => proc.closed), [...h.fake.present.keys()], (await recordsOf(h)).filter(([name, phase]) => name === nameAt(4) && phase !== 'deleted')],
+      [kills.map(() => code !== 'CERTIFY_RECOVERY_NOT_REAPED'), [], []], code);
+  }
+});
+
+test('LC6 the real recovery child exits 64 with no output on any bad stdin, before any ledger or provider call', t => {
+  const dir = scratch(t);
+  const good = { ledgerDir: path.join(dir, 'ledger'), cacheDir: path.join(dir, 'images'), owner };
+  for (const input of ['', 'x', '{}', JSON.stringify({ ...good, extra: 1 }), JSON.stringify({ ...good, ledgerDir: 'ledger' }), JSON.stringify({ ...good, cacheDir: `${dir}\u0001` }),
+    JSON.stringify({ ...good, owner: { ...owner, generation: 0 } }), JSON.stringify(good).padEnd(4_097, ' ')]) {
+    const run = spawnSync(RECOVERY_ARGV[0], RECOVERY_ARGV[1], { input, encoding: 'utf8', timeout: 10_000, shell: false, windowsHide: true });
+    assert.deepEqual([run.status, run.stdout, run.stderr], [64, '', ''], input.slice(0, 60));
+  }
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test('LC7 cancellation and recovery run after check-containment, before teardown; each lifecycle bound outside 1..its constant refuses before any call', async t => {
+  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(-4), ['check-containment', 'cancellation', 'recovery', 'teardown']);
+  for (const bounds of [{ cancelBudgetMs: 0 }, { cancelBudgetMs: 300_001 }, { launchMs: 900_001 }, { pollMs: 1_001 }, { pollMs: 0.5 }, { reapMs: 30_001 }, { reapMs: '1' }]) {
+    const h = certifyHarness(t);
+    await assert.rejects(certifyCore({ platform: onWindows(), workDir: h.workDir, deps: { ...h.deps, bounds } }), error => assertSanitized(error, 'CERTIFY_INPUT_INVALID'));
+    assert.deepEqual([h.fake.commands(), h.router.calls, h.children, readdirSync(h.workDir)], [[], [], [], []], JSON.stringify(bounds));
+  }
+  for (const [key, max] of Object.entries({ cancelBudgetMs: 300_000, launchMs: 900_000, pollMs: 1_000, reapMs: 30_000 })) {
+    const h = certifyHarness(t);
+    assert.deepEqual(await certifyCore({ platform: onWindows(), workDir: h.workDir, deps: { ...h.deps, bounds: { [key]: max } } }), certification(), key);
+  }
 });
 
 // CQ-R09c copy-only snapshot materialization
