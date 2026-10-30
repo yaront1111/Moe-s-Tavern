@@ -1,0 +1,30 @@
+{
+  "id": "task-c83d78475cf443688b571d4d508fde8e",
+  "epicId": "epic-be924fb8",
+  "title": "bug: staleLockReason compares the lock's resolved projectPath with the raw --project, so `--project //x` (Linux) or `/x` (native Windows) reads a live lock as 'projectPath mismatch'",
+  "description": "After task-25ba449a, comparableProjectPath reads raw `//x` as UNC (Linux) and raw `/x` as POSIX (win32). The lock records path.resolve(projectPath) instead ('/x', 'C:\\x'), so staleLockReason (packages/moe-daemon/src/index.ts) says 'projectPath mismatch' and removeStaleLock may delete a LIVE lock. This is reachable only in a start race before daemon.json exists; a daemon.json carrying those raw spellings is already foreign under isForeignDaemonInfo. Likely fix: compare against canonicalProjectPath(projectPath) in staleLockReason, with a regression row for each spelling.",
+  "definitionOfDone": [
+    "staleLockReason never reports 'projectPath mismatch' for a lock written by the same --project spelling (raw //x on Linux, /x on native Windows, relative paths).",
+    "A regression test covers each spelling without touching the live .moe."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-25ba449ab87d4039a283426f07302cbc"
+  ],
+  "priority": "LOW",
+  "order": 302.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:41:08.564Z",
+  "updatedAt": "2026-10-30T13:41:08.564Z"
+}

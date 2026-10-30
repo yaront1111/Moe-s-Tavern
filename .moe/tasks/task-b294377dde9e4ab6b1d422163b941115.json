@@ -49,7 +49,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -62,7 +62,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:22:42.895Z",
-  "updatedAt": "2026-10-30T13:36:54.063Z",
+  "updatedAt": "2026-10-30T13:41:23.534Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:42.451Z",
@@ -72,11 +72,14 @@
     "firstClaimAt": "2026-10-30T10:10:46.024Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-30T13:41:23.534Z",
+    "wallClockMs": 12637510
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-73c29a03"
+    "worker-73c29a03",
+    "qa-ba3f4f35"
   ],
   "dependsOn": [
     "task-2cf1c6bee5814ed98eb3d069d97b32b3",
@@ -155,7 +158,52 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+    ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
+    ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
+    ".moe/tasks/task-b294377dde9e4ab6b1d422163b941115.json",
+    ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
+    ".moe/tasks/task-c4cd6dce82bf49648dafdd9c538ff328.json",
+    ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json"
+  ],
+  "completionSummary": "A1 (scripts/tests/local-runner.test.mjs) now chdirs to the test file's own directory (restored in t.after), so its relative-git row stays relative and resolvable under any cwd on Windows node.exe. Cause: Windows path.relative across drive/UNC roots yields an absolute path, so admission ran an absolute non-git file and refused with the checkout-root error. This was a test portability gap; admission.mjs is unchanged. RED on pristine HEAD (Windows node.exe from C:\\Windows\\Temp): not ok 228 A1. GREEN: A1 ok on both OSes; Linux 271 tests/270 pass/0 fail/1 skip; Windows 267/221 pass/0 fail/46 skip. A scratch mutant dropping path.isAbsolute(git) still fails A1 on the relative-git row.",
+  "commits": [
+    {
+      "sha": "291c74620107f740b361ae16bd7dd3986da7b752",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T13:34:31Z",
+      "paths": [
+        ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+        ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
+        ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
+        ".moe/tasks/task-b294377dde9e4ab6b1d422163b941115.json",
+        ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
+        ".moe/tasks/task-c4cd6dce82bf49648dafdd9c538ff328.json",
+        ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T13:37:11.460Z",
+      "treeId": "c511237837375c35fd48ab15a194d393229bf679",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "scripts/tests/local-runner.test.mjs"
   ],
-  "completionSummary": "A1 (scripts/tests/local-runner.test.mjs) now chdirs to the test file's own directory (restored in t.after), so its relative-git row stays relative and resolvable under any cwd on Windows node.exe. Cause: Windows path.relative across drive/UNC roots yields an absolute path, so admission ran an absolute non-git file and refused with the checkout-root error. This was a test portability gap; admission.mjs is unchanged. RED on pristine HEAD (Windows node.exe from C:\\Windows\\Temp): not ok 228 A1. GREEN: A1 ok on both OSes; Linux 271 tests/270 pass/0 fail/1 skip; Windows 267/221 pass/0 fail/46 skip. A scratch mutant dropping path.isAbsolute(git) still fails A1 on the relative-git row."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-73c29a03@2026-10-30T13:34:31Z",
+    "at": "2026-10-30T13:37:11.460Z"
+  },
+  "completedAt": "2026-10-30T13:41:23.534Z",
+  "reviewCompletedAt": "2026-10-30T13:41:23.534Z",
+  "reviewSummary": "Verified DoD and execution contract against completion 291c74620107f740b361ae16bd7dd3986da7b752 (tree c511237837375c35fd48ab15a194d393229bf679), using git show, git branch -a --contains, and scoped git diff --check. Only non-board change is the planned A1 cwd fix, +6/-0; entire landing including daemon BOARD records is +387/-34 (net353). Existing A1 rows/assertions and product admission.mjs are unchanged. Cwd restoration is registered with t.after before chdir; serial test execution and absolute scratch paths preserve cleanup on both exit paths. No docs/config/migration needed; complexity pass found no issues. Reran plan step-2 bash gate verbatim at completion HEAD: git archive HEAD + clean test-file overlay; (cd /mnt/c/Windows/Temp && node.exe --test-reporter=tap <file>); (cd / && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test --test-reporter=tap <file>); grep A1/counts; cmp. Exit0, logs /tmp/moe-b294-gate.INJSZC: Windows Node24.16.0 267 tests/221 pass/0 fail/46 skips; Linux Node24.21.0 271/270/0/1; A1 ok228 both. Independently reproduced RED with parent test in a pinned completion snapshot: Windows exit1, sole failure A1 checkout-root error. Scratch readInput mutant removing path.isAbsolute(git) exits1 on Linux, sole failure A1 with git:\"local-runner.test.mjs\"; mutant restored. Evidence /tmp/moe-b294-qa-adversarial.Bw38Vj. No shared source edits; peer dirty paths untouched. Reusable portability note saved; task handoff updated for retirement.",
+  "requiredCheckAtDone": null
 }

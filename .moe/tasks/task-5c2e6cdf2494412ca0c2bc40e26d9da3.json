@@ -11,9 +11,79 @@
     "Both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes; the verification command exits 0 and postflight.ps1 passes on a Windows seat."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Bind the landed producer interfaces and add deterministic lease fixtures. Re-read WT-S comments, WT-09 landing rounds, WT-10G and WT-10P source/hand-offs after their structural dependencies are satisfied; do not write a second landing engine or emulate missing prerequisites. G's declared contract is `run_frozen_gate worktree` / `Invoke-MoeFrozenGate ... -WorktreeMode`; P's new wrapper-only contract is absolute Unix-ms MOE_PROXY_ONESHOT_DEADLINE_MS bounding the entire one-shot proxy call, including connect/EOF. Confirm the selected built proxy contains that fix before testing a queued wait. Preserve shared-mode default call signatures. In the existing fake proxy, add narrowly opt-in worktree lease scenarios and log acquire_resource/wait_for_resource/release_resource in order together with existing candidate/check/ledger events. Model granted with lease identity, queued then granted, repeated timedOut, daemon refusal/malformed response, withheld reply until proxy deadline, and release failure once then success. Validate caller taskId/workerId and exact resource id; default fixture modes must not change. No test may pretend granted:false is success. Use persisted fixture counters per temp project, not process-local counters (every RPC gets a fresh process).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Implement L3 acquire/wait in both worktree completion arms, with tests first (DoD 2–3). Separate raw configured qualityGate from the scope-filtered command. A configured gate means take the lease even on a mid-epic/scope-skipped completion; absent/blank gate means no lease RPC. Checkpoints/shared mode make no new lease calls. Introduce acquire_land_lease / Acquire-MoeLandLease (new helpers) and per-landing resource/attempted/granted/lease-generation state. Resource identity is the complete `git-land-` + target string with every character outside ASCII [A-Za-z0-9._-] replaced by '-', then truncated to 64 total characters; test slash, Unicode and long targets. Parse MOE_LAND_LEASE_WAIT_SEC as a positive bounded numeric duration, default 1800 when unset; invalid/zero/negative/overflow input fails closed with MOE_COMMIT_FAILED_LAND_LEASE before a resource RPC. Establish one overall deadline before acquire. Supply the actual landing task and worker, never create a synthetic task or use report_blocked during finalization. Call acquire_resource; only literal granted:true admits L4. For granted:false, call wait_for_resource repeatedly with timeoutMs=min(600000, remaining budget), never request below its 1000ms minimum (expire instead). Continue only a genuine timedOut response while budget remains; cancelled/error/malformed/RPC failure fails closed. Set P's one-shot deadline env to the same overall deadline for each call and restore it afterward (PS try/finally, Bash per-call env), so a hung/not-connected proxy cannot exceed the configured bound. A grant returned after the deadline is not admission: release it and fail. Example invariant:\n```text\nif !configuredGate: return admitted_without_lease\nattempted = true\nreply = acquire(resource, realTask, realWorker, absoluteDeadline)\nwhile reply.granted !== true and reply is queued/timedOut and remaining >= 1000ms:\n    reply = wait(resource, realTask, realWorker, min(600000, remaining), absoluteDeadline)\nif reply.granted !== true or deadline_expired: LAND_CODE=MOE_COMMIT_FAILED_LAND_LEASE; fail\n```\nBoth postflight harnesses must show acquire before any gate/publication, queued grant after a delay greater than the old two-second proxy cutoff, scope-skipped gate still acquires, no configured gate makes no lease call, timeout/non-answer/refusal prints the code with main unchanged and no candidate/gate/push, and no successful completion row is recorded. Use short test budgets and fake replies, not a real 30-minute wait.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Implement L14 cleanup and failure-safe resource ownership (DoD 2–3). Introduce idempotent release_land_lease / Release-MoeLandLease and invoke it after every worktree completion return path plus cleanup_temp/PowerShell outer finally, before deregistration and before clearing the landing identity. Mark acquisition attempted before sending the RPC so an ambiguous reply still cancels this task's queue/lease. Release only this resource + original task + worker, never force and never another task; when the granted lease's acquiredAt is known, use the existing release preconditions to avoid releasing a later lease generation. Queue-only cleanup uses the existing task-scoped release behavior. Give cleanup its own short bounded proxy deadline (5 seconds), restoring the environment afterward. Clear ownership state only after an acknowledged release; a failed release warns MOE_LAND_LEASE_RELEASE_FAILED and remains eligible for one exit-trap retry. Cleanup failure must not overwrite a known published/failed landing outcome or rerun a publication; daemon lease expiry/releaseOnDeregister remains a backstop, not a successful-release claim. Preserve existing signal deferral across publication/recording from WT-08/09; a handled exit before publication releases and preserves T. Mirrored tests assert release after passing and failing gate, after lease timeout/ambiguous acquire, after merge/publication failure, and on a handled exit while queued/gating; never publish on a missing grant. Test release failure then cleanup retry without a duplicate committed ledger row. SIGKILL cannot run a trap: do not claim otherwise.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Insert L6 on each fresh merged candidate and enforce round budgets (DoD 1,4). Consume WT-09's existing round after L5/L5b and before L7/L8/L9. Keep T fixed, derive fresh B/M each round, and call `freeze_candidate \"$B\" \"$M\"` then `run_frozen_gate worktree`; PS uses `New-MoeFrozenCandidate $Git $M $B`, existing Send-MoeCandidate, then `Invoke-MoeFrozenGate $Git $Frozen $command -WorktreeMode`. Candidate/check and journal must name this exact M and parent B, never pre-merge task T or control HEAD. Preserve evidence-refusal error handling: freeze/evidence/gate/sparse/integrity failure is MOE_COMMIT_FAILED_GATE, retains the existing failed+rescue path, releases, and never publishes. WT-11 later adds outcome unlanded/reason gate/contention; do not implement it here. If the effective gate runs, allow at most TWO L4-L9 rounds under one lease and rerun the gate for the new merged pair on every retry, with no stale result reuse. If scope skips the gate, preserve THREE ungated rounds but still lease when a gate is configured; if none is configured preserve the existing no-lease three-round behavior. Keep remote unknown-outcome/journal and non-forced push rules unchanged. Do not let MOE_DISABLE_QUALITY_GATE bypass an applicable worktree-mode configured gate: refuse safely before publication; shared-mode opt-out is unchanged. Twin tests use non-overlapping peer/task hunks to prove frozen HEAD^{tree}=M and HEAD^=B, published C^{tree}=M and C^=B; a gate reads both hunks and no .moe. A failing gate and a gate creating .moe/x leave main unchanged and release; the latter includes MOE_WORKTREE_GATE_INTEGRITY. Force one target race: second gate sees new B/M, then succeeds; force two losses: contention failure with exactly two gate runs and no task publication. Existing shared gate and WT-08T tests remain unchanged.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "5. Single final verification gate. From root run exactly `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh`. Require safe-harness failureClass NONE, held-out landing cases green, parity PASS and exit 0. On a native Windows seat additionally run `node scripts/tests/postflight-safe.mjs powershell` against the same revision (PS5.1, not a skipped or substituted Linux pwsh result). Compare the sorted grep -oE `MOE_(WORKTREE|LAND|CONTROL|BOARD|MIGRATION)_[A-Z0-9_]+` sets of the two wrappers; sets must match, including introduced lease/integrity codes. Permanent parity-script expansion stays with WT-19. Verify held-out scripts against their WT-08T landed version with a read-only diff; never edit them to make this gate pass. Load regression-check/verification-before-completion. Capture fresh command, exitCode and safe outputTail for complete_task, plus native Windows evidence. Keep raw postflight fixture output out of chat/artifacts; postflight-safe exists for that reason. If dependencies' files or native Windows evidence are unavailable, report that honestly rather than fabricate green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "6. Final adversarial self-review, once, task-scoped. Load adversarial-self-review and inspect literal grant checks, a lease granted just as the deadline expires, lost acquire/release replies, a waiter becoming holder before cleanup, signal/exception before and after publication, release retries, and scoped-but-configured gates. Confirm a no-answer proxy cannot wait past the caller deadline, no global env leaks, no other task's lease is released, and no cleanup rewrites a confirmed remote publication as failure. Check exactly M/B are frozen/gated/journaled/published, two gated versus three ungated rounds, re-gating after contention, .moe never materialized by the selected gate runner, no shared-mode changes and no held-out test weakening. Preserve BOM/line endings and owned-only atomic Bash saves; don't stage peer dirt. Keep source/test diff <=400 net LOC through prerequisite reuse, not by omitting cases. Refresh the same verification gate after any fix, complete through Moe with accurate modifiedFiles and fresh evidence; wrappers own Git writes. Documentation/resource declaration and migration flags remain their named later tasks.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,7 +93,10 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
-    "task-0921d6d76a6b40a685077245b19ac639"
+    "task-0921d6d76a6b40a685077245b19ac639",
+    "task-19cbba2272ee4a1c9f0a9c933f339f59",
+    "task-b5a176355a7c443d98952466b409f941",
+    "task-c4e076cd306f4f84a4aa08bf2a4682b2"
   ],
   "priority": "HIGH",
   "order": 17,
@@ -39,14 +112,55 @@
       "author": "worker-0062feec",
       "content": "Follow-up to the WT-S revision comment above. It narrows that comment's item 1 so it matches this row's DoD2 (definitionOfDone is human-owned). Revised §2.2 L3 and §2.3 now say the same:\n- While `settings.qualityGate` is set, take the land lease on every completion landing, whether or not this landing's `qualityGateScope` runs the gate. This stops an ungated peer from publishing while a gated landing is gating.\n- With no `qualityGate` set, make no lease call, exactly as DoD2 says.\n- Safety never depends on the lease. The local CAS or the non-forced push decides, and WT-08T's race case runs with no gate.\nAdd a case: when the qualityGate is scoped so this landing does not run it, the landing still takes the lease and releases it.\nAlso extend your parity grep to cover `MOE_MIGRATION_`.",
       "timestamp": "2026-10-30T13:12:00.126Z"
+    },
+    {
+      "id": "comment-4894f327869a4d3c9a1ef8e30df5119f",
+      "author": "architect-76a2c8bb",
+      "content": "SPIDR Interface sizing after the revised comments: WT-10 remains the task-bound L3/L6/L14 integration, exact merged-tree gate and bounded rounds, with its existing 5 DoD items unchanged. Created prerequisite WT-10G task-19cbba2272ee4a1c9f0a9c933f339f59 for the sparse frozen-gate callable arm, and WT-10P task-b5a176355a7c443d98952466b409f941 for a verified source defect: both wrappers close one-shot stdin and proxy gracefulShutdown cancels queued wait_for_resource after 2 seconds. Both are structural dependencies. Created downstream WT-10M task-253884005a59471fb7c59ef38e1f3cc1 for comment item 3 (--land-branch migration), as explicitly permitted; WT-16 now depends on it, so WT-19 covers all new slices transitively without exceeding its 20-direct-dependency cap. Migration's taskless lease identity requires a WT-S decision before that child is planned (asked in #architects). New rows are BACKLOG, human-gated. The create_task 'gate/hardening' warnings are lexical false positives: G and M each add production behavior, not separate audit/evidence passes; WT-19 remains the sole full-epic hardening row.",
+      "timestamp": "2026-10-30T13:35:43.842Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:53:57.865Z",
-  "updatedAt": "2026-10-30T13:12:00.126Z",
+  "updatedAt": "2026-10-30T13:41:42.129Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:03.609Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:27:46.029Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-76a2c8bb"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:41:42.089Z",
+  "planningNotes": {
+    "approachesConsidered": "# WT-10 task-bound lease and merged-tree gate\nGoal: gate exactly the merged candidate that may publish, while serializing this daemon's configured-gate landers and releasing the lease on all exits. Architecture: extend the prerequisite WT-09 worktree completion round; use daemon resource APIs for L3/L14 and the existing frozen candidate/evidence flow for L6. Shared checkout behavior stays byte-for-byte equivalent. Tech: Bash/Python, Windows PowerShell 5.1, Node proxy, Git plumbing.\nSPIDR Interface splits are explicit structural prerequisites: WT-10G task-19cbba2272ee4a1c9f0a9c933f339f59 produces the optional sparse gate runner; WT-10P task-b5a176355a7c443d98952466b409f941 fixes one-shot EOF drain and produces MOE_PROXY_ONESHOT_DEADLINE_MS. Migration comment item 3 moved to WT-10M task-253884005a59471fb7c59ef38e1f3cc1, on which WT-16 now depends. This parent retains all five original DoD items. WT-19 remains the only full-epic hardening task and covers new slices transitively.",
+    "codebaseInsights": "Verified current shared functions: run_landing, freeze_candidate(old,tree), run_frozen_gate, gate_integrity, cleanup_temp/cleanup_gate_workspace; PS Invoke-MoeLanding, New-MoeFrozenCandidate(Git,Tree,Base), Send-MoeCandidate, Invoke-MoeFrozenGate, Remove-MoeGateWorkspace. Bash QUALITY_GATE is cleared when scope defers it, so preserve a separate configured-gate flag before that clearing. Current gate runner materializes .moe and current proxy EOF ends waits at 2s: do not reuse either unchanged in worktree mode; producers G/P fix them. wait_for_resource timeoutMs clamps to 1000..600000 and replies granted or timedOut; resource APIs require real task/worker identity. release_resource can remove both owned lease and queue. WT-08 plan owns local round/publication/journal and WT-09 owns remote round/reconciliation; neither landed at planning time. Their code must be read once dependencies land, not guessed or reimplemented. Held-out worktree-landing scripts will be created by WT-08T; they do not exist in current checkout and are verification inputs only.",
+    "risks": "Main publication and failure classification are data-loss-critical: heavy/max. After splitting, this parent is one integration slice, five files, target <=60 min and <=400 net non-board LOC; reuse prerequisite helpers and compact twin tests. No new file, no daemon/proxy edits here, no held-out edits. Respect native PS5.1 BOM/CRLF, explicit native exit-code checks and env restoration. Save Bash through a syntax-checked same-filesystem temporary file plus atomic rename because older running seats may read stale offsets. Use safe postflight output filtering. Read mem:gotcha-worktree-gate-runtime-exclusion, mem:gotcha-worktree-push-first-offline-divergence, mem:gotcha-resource-acquire-conditional-exec and mem:gotcha-moe-proxy-oneshot-kills-blocking-longpolls. New G/M creation warnings on 'gate' were lexical false positives, not evidence-only tasks.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/postflight-fake-proxy.js"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:41:42.129Z",
+  "approvedPlanRevision": 1
 }
