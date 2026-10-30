@@ -19,7 +19,17 @@
       "status": "PENDING",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. CQ-RF01 (task-fd653cfb) lands first. Re-read RuntimeSelectionPolicy.kt, ProtectedStateStore.kt and RF01's P and S6 rows in RuntimeSelectionPolicyTest.kt before writing anything.\n\nRF01's API, as its approved plan defines it. Use the landed names if they differ, and never write a second owner-only implementation:\n- `class ProtectedStateStore internal constructor(val root: Path)`, with:\n  - `forIde()`, which returns null when there is no Application, as in plain JUnit;\n  - `usableFor(basePath)`, which is false for a root inside the project;\n  - `read(name): String?`: null when the file is absent; throws Untrusted when the file or its root is not owner-only, is not a regular file (links included), or is over 64 KiB;\n  - `write(name, text)`: atomic and owner-only;\n  - `delete(name)`.\n  - Every name must match `[0-9a-f]{64}\\.json`.\n- `RuntimeSelectionPolicy.store: () -> ProtectedStateStore?` is the seam. resetForTest() restores its default, which is null in JUnit, so every existing row keeps running without a store.\n- `RuntimeSelectionPolicy.forgetSessionForTest()` clears only pinned and spawns. It simulates an IDE restart; use it, and add no second restart hook.\n\nSEAMS this step's rows need, added in step 2:\n- `RuntimeSelectionPolicy.confirmer`: an internal, volatile DowngradeConfirmer. resetForTest() sets one that never answers.\n- `RuntimeSelectionPolicy.profileRecordName(basePath)`: the record's file name, for assertions through `ProtectedStateStore(root).read(name)`.\n- A RecordingConfirmer in the test file. It records every basePath it is asked about and keeps each answer callback, so a row can answer true, false, or never.\n\nEach D row sets `RuntimeSelectionPolicy.store = { ProtectedStateStore(<a TemporaryFolder dir outside the project>) }`.\n\nROWS (new, prefix D):\n- D1, persistence across restarts (DoD 1). For one project:\n  1. verified-local gives PROTECTED. The record, read through the store, parses to exactly {\"version\":1,\"project\":<the key>,\"profile\":\"protected\"}. Its name is not RF01's spawn file name for the same project. Nothing was asked.\n  2. Rewrite project.json to legacy, then call forgetSessionForTest(). The answer is PROTECTED, and the confirmer was asked exactly once, with this basePath. Eight more calls, run in parallel, stay PROTECTED and ask nothing more.\n  3. Never answer (a dismiss). After forgetSessionForTest(): PROTECTED, asked once more.\n  4. Answer false (a decline). After forgetSessionForTest(): PROTECTED, asked once more. The record still says protected.\n  5. Answer true (a confirm). The record now says legacy, but this session stays PROTECTED. After forgetSessionForTest(): LEGACY, and nothing was asked.\n  Then for a second project: verified-local, then observe after a restart, gives PROTECTED with an ask. The same holds for settings {}, where executionProfile is absent.\n- D2, upgrades need no confirmation, and there is no store:\n  - A 'legacy' record plus a verified-local read gives PROTECTED, the record goes back to 'protected', and nothing is asked.\n  - A project with no record and a legacy read gives LEGACY. Nothing is asked and no record is written.\n  - With store answering null (the plain-JUnit default), and with a store whose root is inside the project, the sequence verified-local, forgetSessionForTest(), legacy gives LEGACY. Nothing is asked and nothing is written. That is R01's session-only behaviour: such a store is unavailable, not untrusted.\n- D3, an untrusted record fails closed (DoD 2). Each record below, with project.json legacy and after a restart, gives PROTECTED and one ask:\n  - not JSON;\n  - lenient JSON;\n  - a byte order mark;\n  - an extra key, or a missing key;\n  - version 2, or version \"1\" as a string;\n  - the project of another key;\n  - profile 'verified-local', 'PROTECTED' or null;\n  - a directory at the record path;\n  - a record loosened the way RF01's step 1 (b) does it: on POSIX, chmod 644; on Windows, an extra ALLOW entry for Everyone, with assumeTrue when lookup fails.\n  In the first case, answering true replaces the record with a valid 'legacy' one, and a restart then gives LEGACY.\n- D4, failures never escape:\n  - A confirmer that throws gives PROTECTED, and the record is unchanged.\n  - With a confirmer that answers twice (true then false, or false then true), only the first answer counts.\n  - With the store unwritable (its root replaced by a regular file), a verified-local read still gives PROTECTED for the session, and profile never throws.\n  - A failed project.json read (malformed) writes no record and asks nothing.\n- D5, the production confirmer:\n  - ProfileDowngradeDialog.confirmed(choice) is true only for 1 (Allow Downgrade); 0, -1 and 2 are false.\n  - With no IntelliJ Application (plain JUnit), ask answers false at once and shows nothing.\n\nThe existing rows, RF01's included, stay unchanged and green.\n\nRED proof: run the step-5 command. The D rows fail to compile, or fail for the expected reason; every other row passes. Record it.\n\nSize budget: 200 test lines or fewer, table-driven where possible.\n\nError handling in the tests:\n- No row touches the real IDE system directory.\n- Every row that sets store restores it with resetForTest() in a finally block (resetForTest also runs in @After).\n- The loosened row restores access in a finally block, so TemporaryFolder can delete it.",
+          "reason": "CQ-RF01's approved plan (task-fd653cfb, submitted 07:02Z) fixed the shared store API: ProtectedStateStore, the RuntimeSelectionPolicy.store seam, forgetSessionForTest(), and names matching [0-9a-f]{64}\\.json. This step now uses those names instead of the ones proposed before RF01 was planned.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-30T07:05:55.273Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-2",
@@ -27,7 +37,17 @@
       "status": "PENDING",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "RuntimeSelectionPolicy.kt: the persisted profile record and the confirmer seam. EDIT the bytes CQ-R01 and CQ-RF01 landed. Reuse RF01's ProtectedStateStore, its `store` seam, its sha256Hex helper and its labelled parseStrict.\n\n1. Add `fun interface DowngradeConfirmer { fun ask(basePath: String, answer: (Boolean) -> Unit) }`. Its KDoc says that it never blocks the caller, and that only an explicit human confirmation answers true. Add `@Volatile internal var confirmer: DowngradeConfirmer = ProfileDowngradeDialog`.\n2. The record name is `sha256Hex(\"profile:\" + projectKey(basePath)) + \".json\"`. That matches the store's `[0-9a-f]{64}\\.json` rule, and it never equals RF01's spawn file name for the same project, which is sha256Hex(projectKey) + \".json\". Expose it as `internal fun profileRecordName(basePath)`.\n   - Its content is exactly {\"version\":1,\"project\":<key>,\"profile\":\"protected\"|\"legacy\"}.\n   - Write it with Gson from a fixed-order map.\n3. storedProfile(basePath, key) answers ABSENT, LEGACY, PROTECTED or UNTRUSTED:\n   - store() is null, or the store is not usableFor(basePath): ABSENT. That is R01's session-only behaviour: the store is unavailable (plain JUnit, or a system dir inside the project), not untrusted, and nothing is ever written there.\n   - The store's read answers null: ABSENT.\n   - Each of these is UNTRUSTED:\n     - read throws;\n     - the text fails parseStrict (labelled for the profile record);\n     - the root is not an object with exactly the keys version, project and profile;\n     - version is not the number 1;\n     - project is not exactly key;\n     - profile is not 'protected' or 'legacy'.\n   - Each UNTRUSTED answer logs a warning that names the broken rule, never the contents.\n4. persist(basePath, key, value) writes the record through the store only when the store is non-null and usableFor(basePath). It never throws: a failure logs a warning, and the caller's answer stands.\n5. resetForTest() also resets confirmer to one that never answers. forgetSessionForTest() needs no change, because the asked-once state is pinned itself (see step 3).\n\nError handling: every store or parse failure becomes UNTRUSTED or a logged write failure, never an exception from profile().",
+          "reason": "This step is aligned to CQ-RF01's approved store API. Store names must match [0-9a-f]{64}\\.json, so the record name is now a sha-256 that differs from RF01's spawn file. A null or unusable store means R01's session-only behaviour. forgetSessionForTest() replaces the proposed restartForTest().",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-30T07:05:55.338Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-3",
@@ -65,7 +85,7 @@
       ]
     }
   ],
-  "planRevision": 1,
+  "planRevision": 3,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -79,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:25.972Z",
-  "updatedAt": "2026-10-30T07:04:02.826Z",
+  "updatedAt": "2026-10-30T07:05:55.339Z",
   "dependsOn": [
     "task-fd653cfbaea541c39569dfed9452cf5c"
   ],
