@@ -101,7 +101,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -145,7 +145,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:48:04.472Z",
-  "updatedAt": "2026-10-30T18:55:50.775Z",
+  "updatedAt": "2026-10-30T19:00:07.604Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:55.760Z",
@@ -155,13 +155,16 @@
     "firstClaimAt": "2026-10-30T12:56:53.988Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T19:00:07.604Z",
+    "wallClockMs": 21793616
   },
   "contextFetchedBy": [
     "architect-899a90d6",
     "architect-eb7de546",
     "architect-76a2c8bb",
-    "worker-681f4f22"
+    "worker-681f4f22",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -319,5 +322,9 @@
     "reportedAt": "2026-10-30T18:55:31.907Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Implemented WT-03 in 4 approved files (+317/-21, net +296). Worktree-only unlanded finalize validates metadata, closes the attempt, then atomically updates retry/comment/routing without resetting completed steps or reopenCount. Includes remote reason, WORKING-unassigned retries, BLOCKED for diverged/third failure with WORKING unblock provenance, retry clearing on landed/nothing-to-commit, and conditional get_context exposure. Attempt record shape and existing test assertions unchanged. Added 40 cases (63 finalize/QA tests total), including refusal byte pins, concurrent replay, cross-runner fencing, persistence failure, path bounds and retry reset. TDD red/green observed. Final adversarial pass complete; production file 299 lines. Fresh final verification in plan-authorized Linux snapshot /tmp/wt03-gate.X8oSVR: parity PASS, build passed, 7 suites/239 tests passed, owned-source cmp before/after and diff-check clean. Handoff/gotcha saved in Serena. Peer dirty paths untouched; wrapper owns landing. WT-19 retains full regression and preplanned lifecycle/WS hardening."
+  "completionSummary": "Implemented WT-03 in 4 approved files (+317/-21, net +296). Worktree-only unlanded finalize validates metadata, closes the attempt, then atomically updates retry/comment/routing without resetting completed steps or reopenCount. Includes remote reason, WORKING-unassigned retries, BLOCKED for diverged/third failure with WORKING unblock provenance, retry clearing on landed/nothing-to-commit, and conditional get_context exposure. Attempt record shape and existing test assertions unchanged. Added 40 cases (63 finalize/QA tests total), including refusal byte pins, concurrent replay, cross-runner fencing, persistence failure, path bounds and retry reset. TDD red/green observed. Final adversarial pass complete; production file 299 lines. Fresh final verification in plan-authorized Linux snapshot /tmp/wt03-gate.X8oSVR: parity PASS, build passed, 7 suites/239 tests passed, owned-source cmp before/after and diff-check clean. Handoff/gotcha saved in Serena. Peer dirty paths untouched; wrapper owns landing. WT-19 retains full regression and preplanned lifecycle/WS hardening.",
+  "completedAt": "2026-10-30T19:00:07.604Z",
+  "reviewCompletedAt": "2026-10-30T19:00:07.604Z",
+  "reviewSummary": "Reviewed completion commit c2b628d7 (moe/work-2026-10-24, ancestor of HEAD; owned files byte-identical to HEAD). Non-board diff +296 net in the 4 approved files, under the 400 cap.\n\nRe-ran in a fresh git-archive HEAD snapshot with lock-matching native deps: parity-check PASS; build + tsc --noEmit exit 0; finalizeAttempt + getContext vitest 7 files/239 passed; FULL daemon suite (shared Task type changed) 213 files, 6204 passed, 20 skipped, 0 failed.\n\nDoD 1-5 verified against tests and code: conflict routes REVIEW to WORKING unassigned with reopenCount/steps unchanged, landingRetry set in memory and on disk, one moe-daemon comment; diverged and 3rd consecutive go BLOCKED (blockedFromStatus WORKING, field set matches reportBlocked), 2nd stays WORKING; contention/gate/remote route like conflict; landed/nothing-to-commit clear the retry; shared/legacy attempts and malformed params refused (-32602) before any write with task bytes identical; existing tests add-only.\n\nAlso checked: replays route once, non-REVIEW row keeps status, garbage counts safe, paths capped, get_context key only while set. Mutation probes (threshold, worktree guard, clear-on-landed) each caught by new tests.\n\nNon-blocking: attempt-then-task write is non-transactional by plan (fail-safe). WT-19 owns WS denylist/nextStatusForRelease for retry rows; WT-11 wrapper; WT-17 docs.",
+  "requiredCheckAtDone": null
 }
