@@ -4163,13 +4163,124 @@ try {
                 $scopeScenariosRun++
                 Write-Host '[scenario AJ] ok'
 
+                # Scenario AK -- get_commit_scope's per-path peer lists
+                # (task-01f37ac6; twin: postflight.sh, same runs and strings).
+                # A peerDeclared entry may carry taskIds (every contesting
+                # task) and editingTaskIds (those mid-step on the path with a
+                # live session). Under skip-untouched an editing peer holds
+                # even the TOOL-witnessed tool-written.txt as
+                # MOE_ATTR_CONTESTED_EDITING; every contesting task gets a
+                # ledger row and is named in the path's ONE trailer.
+                #   AK1  editing [task-peer]        -> held, editing remedy
+                #   AK2  editing []                 -> lands, as before
+                #   AK3  no fields (older daemon)   -> lands, as before
+                #   AK4  taskIds [task-a, task-b]   -> lands, one trailer naming both
+                #   AK5  contested=skip, as AK1     -> strict MOE_ATTR_CONTESTED
+                #   AK6  contested=commit, as AK1   -> lands
+                #   AK7  disk fallback: an IN_PROGRESS peer step holds its path
+                #        as EDITING, a PENDING-only path lands naming both
+                #        contributors, a declared pre-flight-dirty path is held UNTOUCHED
+                Write-Host '[scenario AK] a contesting peer mid-step holds a witnessed path, and every contesting task is named'
+                $akUntouched = "verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task."
+                $akEdit = "the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have this task's assignee session re-edit the path with a wrapper-observed editing tool, or let the peer's own landing carry the bytes."
+                $akNever = 'declare_files, unblocking or a shell touch alone does not release a hold.'
+                $akUtf8 = New-Object System.Text.UTF8Encoding($false)
+                # postflight.sh's scope_ak_check, reading its expectations from
+                # a file: PS 5.1 strips the quotes of a JSON native argument.
+                $akCheck = Join-Path $tempRoot 'scope-ak-check.cjs'
+                [System.IO.File]::WriteAllText($akCheck, @'
+const [dir,out,wantFile]=process.argv.slice(2),assert=require("assert"),fs=require("fs"),path=require("path");
+const {skipped,contested,held}=JSON.parse(fs.readFileSync(wantFile,"utf8"));
+const rows=fs.readFileSync(path.join(dir,".moe/record_commit.jsonl"),"utf8").trim().split("\n").map(JSON.parse),r=rows[rows.length-1];
+const line=fs.readFileSync(path.join(dir,".moe/messages/chan-general.jsonl"),"utf8").trim().split("\n").map(l=>String(JSON.parse(l).content)).filter(s=>s.includes("worker session ended: task=task-postflight")).pop()||"";
+const status=require("child_process").execFileSync("git",["-C",dir,"status","--porcelain"],{encoding:"utf8"}).split("\n"),text=fs.readFileSync(out,"utf8");
+try {
+  assert.deepStrictEqual((r.skipped||[]).filter(s=>String(s.code).startsWith("MOE_ATTR_CONTESTED")),skipped,"skipped");
+  assert.deepStrictEqual(r.contested||[],contested,"contested");
+  assert.strictEqual(line.includes(" held=")?line.slice(line.indexOf(" held=")):"",held,"held=");
+  for (const s of skipped) {
+    assert.ok(text.includes("[skip] "+s.path+" "+s.code),"console [skip] "+s.path+" "+s.code);
+    assert.ok(status.includes("?? "+s.path),s.path+" must stay untracked");
+    assert.strictEqual(fs.readFileSync(path.join(dir,s.path),"utf8").trim(),s.path==="held.txt"?"pre":"tool",s.path+" bytes");
+  }
+} catch (e) { console.error(e.message+"\nrow: "+JSON.stringify(r)+"\nline: "+line); process.exit(1); }
+'@, $akUtf8)
+                foreach ($akRun in 1..7) {
+                    $akName = "AK$akRun"
+                    $akDir = Join-Path $tempRoot "scope-ak$akRun"
+                    $akOut = Join-Path $tempRoot "scope-ak$akRun.out"
+                    $akSettings = $null; $akPeers = 'tool-written.txt:task-peer'; $akFail = $null
+                    $akFields = '{"taskIds":["task-peer"],"editingTaskIds":["task-peer"]}'
+                    $akRows = '{"path":"tool-written.txt","taskId":"task-peer"}'
+                    $akFiles = 'tool-edited.txt'; $akTrailer = ''
+                    $akSkips = '[{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED_EDITING(task-peer)"}]'
+                    $akHeld = " held=tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $akEdit $akNever"
+                    if ($akRun -in 2, 3, 4, 6) {
+                        $akFiles = 'tool-edited.txt tool-written.txt'; $akTrailer = 'Moe-Contested: tool-written.txt (task-peer)'
+                        $akSkips = '[]'; $akHeld = ''
+                    }
+                    switch ($akRun) {
+                        2 { $akFields = '{"taskIds":["task-peer"],"editingTaskIds":[]}' }
+                        3 { $akFields = $null }
+                        4 {
+                            $akPeers = 'tool-written.txt:task-a'; $akFields = '{"taskIds":["task-a","task-b"],"editingTaskIds":[]}'
+                            $akTrailer = 'Moe-Contested: tool-written.txt (task-a, task-b)'
+                            $akRows = '{"path":"tool-written.txt","taskId":"task-a"},{"path":"tool-written.txt","taskId":"task-b"}'
+                        }
+                        5 {
+                            $akSettings = @{ attribution = @{ contested = 'skip' } }
+                            $akSkips = '[{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED"}]'
+                            $akHeld = " held=tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. $akNever"
+                        }
+                        6 { $akSettings = @{ attribution = @{ contested = 'commit' } } }
+                        7 {
+                            $akPeers = $null; $akFields = $null; $akFail = '1'
+                            $akTrailer = 'Moe-Contested: tool-edited.txt (task-peer, task-peer2)'
+                            $akSkips = '[{"path":"held.txt","code":"MOE_ATTR_CONTESTED_UNTOUCHED(task-peer2)"},{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED_EDITING(task-peer)"}]'
+                            $akRows = '{"path":"held.txt","taskId":"task-peer2"},{"path":"tool-edited.txt","taskId":"task-peer"},{"path":"tool-edited.txt","taskId":"task-peer2"},' + $akRows
+                            $akHeld = " held=held.txt(task-peer2),tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $akUntouched $akEdit $akNever"
+                        }
+                    }
+                    New-ScopeProject $akDir @('tool-written.txt') -Settings $akSettings
+                    if ($akRun -eq 7) {
+                        # The fallback owner guard lands only a task the record
+                        # assigns to this seat. Literal JSON: PS 5.1's
+                        # ConvertTo-Json unwraps one-element arrays.
+                        $akTasks = Join-Path $akDir '.moe\tasks'
+                        [System.IO.File]::WriteAllText((Join-Path $akTasks 'task-postflight.json'), '{"id":"task-postflight","title":"Postflight smoke","status":"REVIEW","assignedWorkerId":"worker-gate","filesModified":["tool-written.txt"],"declaredFiles":["held.txt"]}', $akUtf8)
+                        [System.IO.File]::WriteAllText((Join-Path $akTasks 'task-peer.json'), '{"id":"task-peer","status":"WORKING","implementationPlan":[{"status":"IN_PROGRESS","affectedFiles":["tool-written.txt"]},{"status":"PENDING","affectedFiles":["tool-edited.txt"]}]}', $akUtf8)
+                        [System.IO.File]::WriteAllText((Join-Path $akTasks 'task-peer2.json'), '{"id":"task-peer2","status":"WORKING","implementationPlan":[{"status":"PENDING","affectedFiles":["tool-edited.txt","held.txt"]}]}', $akUtf8)
+                        & git -C $akDir add .moe/tasks 2>$null | Out-Null
+                        & git -C $akDir commit -qm ak-records 2>$null | Out-Null
+                        [System.IO.File]::WriteAllText((Join-Path $akDir 'held.txt'), "pre`n", $akUtf8)
+                    }
+                    $akEnv = @{ FAKE_SCOPE_DECLARED_FIELD = '1'; FAKE_SCOPE_PEERS_ACTIVE = '1'; FAKE_SCOPE_PEER_ACTIVE = '1'
+                        FAKE_SCOPE_PEER_DECLARED = $akPeers; FAKE_SCOPE_PEER_FIELDS = $akFields; FAKE_SCOPE_FAIL = $akFail }
+                    foreach ($v in $akEnv.Keys) { if ($akEnv[$v]) { Set-Item -Path "Env:$v" -Value $akEnv[$v] } }
+                    try {
+                        Assert-ScopeRun $akName (Invoke-GateWrapper $akDir $akOut -Command $streamJsonCmd) $akOut
+                    } finally {
+                        foreach ($v in $akEnv.Keys) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $akText = Get-Content -Raw -Path $akOut
+                    if ((Get-CommittedPaths $akDir) -ne $akFiles) { Write-Host $akText; throw "SCENARIO $akName FAILED: expected [$akFiles] committed; got [$(Get-CommittedPaths $akDir)]" }
+                    $akGot = (@(& git -C $akDir log -1 --format=%B 2>$null) | Where-Object { $_ -like 'Moe-Contested:*' }) -join '|'
+                    if ($akGot -ne $akTrailer) { Write-Host $akText; throw "SCENARIO $akName FAILED: expected the trailers [$akTrailer]; got [$akGot]" }
+                    $akWant = Join-Path $tempRoot "scope-ak$akRun.want.json"
+                    [System.IO.File]::WriteAllText($akWant, ('{"skipped":' + $akSkips + ',"contested":[' + $akRows + '],"held":' + (ConvertTo-Json $akHeld) + '}'), $akUtf8)
+                    & node $akCheck $akDir $akOut $akWant
+                    if ($LASTEXITCODE -ne 0) { Write-Host $akText; throw "SCENARIO $akName FAILED: ledger, held= line or held paths differ" }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AK] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                $scopeExpectedRuns = 41
-                if ($symlinksOk) { $scopeExpectedRuns = 42 }
+                $scopeExpectedRuns = 42
+                if ($symlinksOk) { $scopeExpectedRuns = 43 }
                 if ($scopeScenariosRun -ne $scopeExpectedRuns) {
-                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ); ran $scopeScenariosRun"
+                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

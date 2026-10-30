@@ -18,51 +18,83 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (load test-driven-development). Add scenario AK to scripts/tests/postflight.sh and its twin to scripts/tests/postflight.ps1.\n- Place each right after the last scope scenario's ok line. That is AJ once task-dfbda1a8 has landed (this task now depends on it).\n- Keep both letters equal.\n- Bump each harness's expected commit-scope count by 1 and add AK to its list text.\n\n(a) scripts/tests/postflight-fake-proxy.js, get_commit_scope: add two knobs and document them in the knob comment block.\n- FAKE_SCOPE_PEER_FIELDS=<JSON object>: Object.assign it into every peerDeclared entry, after FAKE_SCOPE_PEER_DECLARED and FAKE_SCOPE_PEER_ACTIVE apply. Unset serves neither field, as a daemon before task-f943b687 does. JSON.parse throws on a typo, as the other knobs do. Use one JSON knob, not CSV knobs: PowerShell deletes a variable set to '', so [] needs a non-empty spelling anyway.\n- FAKE_SCOPE_FAIL=1: answer {} (no taskId), so both wrappers take their disk-fallback scope.\n\n(b) Fixture: AG's shape.\n- `make_scope_project DIR '[\"tool-written.txt\"]' REVIEW '[]' <settings>`.\n- The stream CLI: sh STREAM_CLI, ps1 stream-json.cmd.\n- FAKE_SCOPE_DECLARED_FIELD=1, FAKE_SCOPE_PEERS_ACTIVE=1, FAKE_SCOPE_PEER_ACTIVE=1, FAKE_SCOPE_PEER_DECLARED='tool-written.txt:task-peer'.\n- X is the second witnessed file: sh tool-written-abs.txt, ps1 tool-edited.txt.\n- Write one case table with shared assertions.\n\nRuns:\n- AK1, skip-untouched, FIELDS {\"taskIds\":[\"task-peer\"],\"editingTaskIds\":[\"task-peer\"]}:\n  - only X is committed;\n  - tool-written.txt stays untracked with the CLI's bytes;\n  - console shows `[skip] tool-written.txt MOE_ATTR_CONTESTED_EDITING(task-peer)`;\n  - no Moe-Contested trailer;\n  - the session-ended line ends with ` held=tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: <EDIT> <NEVER>` and contains neither the UNTOUCHED nor the strict clause.\n- AK2, skip-untouched, FIELDS {\"taskIds\":[\"task-peer\"],\"editingTaskIds\":[]}:\n  - X and tool-written.txt are committed;\n  - the trailers are exactly `Moe-Contested: tool-written.txt (task-peer)`;\n  - the line has no ` held=`.\n- AK3, skip-untouched, FIELDS unset (an older daemon): exactly AK2's expectations.\n- AK4, skip-untouched, PEER_DECLARED='tool-written.txt:task-a', FIELDS {\"taskIds\":[\"task-a\",\"task-b\"],\"editingTaskIds\":[]}: both land, and the trailers are exactly ONE line, `Moe-Contested: tool-written.txt (task-a, task-b)`.\n- AK5, contested=skip, FIELDS as AK1: tool-written.txt is held as MOE_ATTR_CONTESTED (strict, not EDITING) with the strict remedy; only X is committed.\n- AK6, contested=commit, FIELDS as AK1: both land, with the trailer `Moe-Contested: tool-written.txt (task-peer)`.\n- AK7, the disk fallback, FAKE_SCOPE_FAIL=1 with no PEER or FIELDS knobs.\n  - Setup:\n    - Rewrite the own record as literal JSON with assignedWorkerId set to the harness seat (sh worker-scope, ps1 worker-gate). The fallback owner guard refuses any other owner, and an absent key.\n    - The own record also has filesModified [\"tool-written.txt\"] and declaredFiles [\"held.txt\"]. Commit it.\n    - Write and commit two peer records: task-peer, WORKING, steps [{status IN_PROGRESS, affectedFiles [tool-written.txt]}, {status PENDING, affectedFiles [X]}]; and task-peer2, WORKING, [{status PENDING, affectedFiles [X, held.txt]}].\n    - Write held.txt ('pre') before the run.\n  - Expect:\n    - only X is committed;\n    - the trailers are exactly `Moe-Contested: X (task-peer, task-peer2)`;\n    - console shows `[skip] tool-written.txt MOE_ATTR_CONTESTED_EDITING(task-peer)` and `[skip] held.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer2)`, and both paths stay untracked;\n    - the line ends with ` held=held.txt(task-peer2),tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: <UNTOUCHED> <EDIT> <NEVER>`.\n\nLedger check: one node or ConvertFrom-Json check per run on the last record_commit.jsonl row, with exact deepStrictEqual on its MOE_ATTR_CONTESTED* skipped entries and on its whole contested array.\n- AK1, AK2, AK3, AK5 and AK6: [{tool-written.txt, task-peer}].\n- AK4: [{tool-written.txt, task-a}, {tool-written.txt, task-b}].\n- AK7: [{held.txt, task-peer2}, {X, task-peer}, {X, task-peer2}, {tool-written.txt, task-peer}], in path order.\n\n(c) Exact strings, identical in both wrappers and both harnesses:\n- NEVER = `declare_files, unblocking or a shell touch alone does not release a hold.`\n- UNTOUCHED = today's clause `verify the bytes are this task's ... or complete or archive the stale peer task.` It is AG's untouched remedy minus its `MOE_CONTESTED_HELD remedy: ` prefix and its NEVER tail.\n- EDIT = `the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have this task's assignee session re-edit the path with a wrapper-observed editing tool, or let the peer's own landing carry the bytes.`\n\n(d) RED: run AK alone through the trimmed scratch harness (mem:convention-postflight-scratch-harness), on both engines, against HEAD's wrappers.\n- AK1, AK4 and AK7 must fail.\n- AK2, AK3, AK5 and AK6 must already pass. That is the legacy-parity evidence; note it in the step note.\n- ps1 gotchas: write task records as literal JSON (PS 5.1's ConvertTo-Json unwraps one-element arrays), and remove every FAKE_* env var in a finally.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-fake-proxy.js",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "RED tests added. Fake proxy: FAKE_SCOPE_PEER_FIELDS (JSON merged into every peerDeclared entry) and FAKE_SCOPE_FAIL=1 (answers {}, so the wrappers use the disk fallback). Scenario AK (AK1-AK7) after AJ in postflight.sh and postflight.ps1. Each run uses one table plus a shared node checker that asserts: the last ledger row's MOE_ATTR_CONTESTED* skips and its whole contested list, the held= tail of the session-ended line, and each held path's [skip] line, untracked status and bytes. Expected scope counts: sh 43/42, ps1 42/43. ps1 passes the checker's expectations through a want file, because PS 5.1 strips quotes from JSON native arguments. RED on HEAD's wrappers via trimmed scratch harnesses in /mnt/d/moe-scratch/t01f3-red-1sYq, on bash, PS 5.1.26100 and pwsh 7.6.9: AK1, AK4 and AK7 fail; AK2, AK3, AK5 and AK6 already pass, which is the legacy-parity evidence. AK7 confirmed the fallback path runs: held.txt is held UNTOUCHED(task-peer2) on HEAD, and tool-written.txt lands. Not mine and left untouched: docs/CONFIGURATION.md has a peer's dirty hunk (MOE_BLOCKING_TIMEOUT_MS rows, the moe-proxy task); packages/moe-proxy/*; .moe/tasks/* board records.",
+      "startedAt": "2026-10-30T14:01:04.975Z",
+      "completedAt": "2026-10-30T14:13:27.856Z"
     },
     {
       "stepId": "step-2",
       "description": "GREEN, bash, in scripts/moe-agent.sh. Edit with the Edit tool: these files are planned by open peers, so a shell write is held at landing.\n\n(a) resolve_attribution, the peerDeclared loop (~3629):\n- Keep PEER (the first entry's taskId) and PEER_IDLE exactly as they are.\n- Add PEER_IDS[k]: per key, the entry's own taskId first (as today, whatever its value), then its taskIds when that is a JSON list (str elements only). Dedupe in first-seen order and union over every entry for k.\n- Add PEER_EDITING[k]: the union of each entry's editingTaskIds when that is a list (non-empty str elements only), otherwise nothing.\n- So an entry without the fields gives [taskId] and [], which is today's landing.\n\n(b) The contested branch (~3758):\n- Append one contested row per id in PEER_IDS[pk]. Rows of one path stay adjacent and in that order.\n- After the 'skip' branch and BEFORE idle_clean and the TOOL test: if contested_policy == 'skip-untouched' and PEER_EDITING.get(pk), append ('MOE_ATTR_CONTESTED_EDITING(%s)' % PEER_EDITING[pk][0], p) to skipped and continue. A TOOL witness does not release it.\n- 'skip' keeps MOE_ATTR_CONTESTED, and 'commit' never reaches the check.\n- Add one comment line on why: completion e67ca0e swept a mid-step peer's hunks; this hold only adds holds.\n\n(c) write_commit_message (~4466): write one `Moe-Contested: <path> (<id1>, <id2>)` line per staged contested path.\n- Group a path's adjacent rows. Bash 3.2 has no associative arrays, so track the previous path.\n- Keep the existing LAND_STAGED_FILE test.\n- A one-id path prints exactly today's line.\n\n(d) attr_held_list (~4224):\n- Add `\"MOE_ATTR_CONTESTED_EDITING(\"*\")\"`, taking the peer from the code as UNTOUCHED does, and flag untouched and editing holds.\n- The strict branch is unchanged.\n- Otherwise the remedy is `MOE_CONTESTED_HELD remedy:`, then ` <UNTOUCHED>` if any untouched hold, then ` <EDIT>` if any editing hold, then ` <NEVER>`. It stays byte-identical to today when only untouched holds exist.\n- Update the header comment.\n\n(e) commit_scope's disk-fallback python (~3398): replace the first-claimant-only entries with one entry per path.\n- taskId: the first claimant, unchanged.\n- taskIds: every contributing open task, in record-file (id) order.\n- editingTaskIds: the contributors whose IN_PROGRESS plan step names the path (affectedFiles ∪ newFiles ∪ modifiedFiles, through the fallback's own norm() and key()).\n- The fallback has no activity data, so any IN_PROGRESS step counts (fail closed). Use a dict keyed by key(n) instead of the `seen` set.\n- The printf last-resort JSON is unchanged.\n\nError handling: none of the new parsing may raise, because both failure paths are worse than the bug being fixed.\n- An exception in resolve_attribution fails the whole landing as MOE_COMMIT_FAILED_ATTRIBUTION.\n- An exception in the fallback python drops to the printf last-resort JSON, whose peerDeclared is [], and that loses EVERY contested hold.\n- So guard with isinstance: dict entries, list fields, str ids. A step that is not a dict, a non-list implementationPlan or file list, or a non-string or absolute path is skipped, as steps() and norm() already do.\n- Add no bare try/except that swallows a real bug.\n\nCheck before moving on:\n- `bash -n` passes.\n- The sh AK run is green in the scratch harness, and AF, AG and AI stay green.\n- `node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs` passes unchanged. Both feed legacy scopes, without the new fields, to the extracted python.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh GREEN. Changes in scripts/moe-agent.sh:\n(a) resolve_attribution gains PEER_IDS[k] and PEER_EDITING[k]. PEER_IDS starts with the first entry's taskId (that is PEER[k], unchanged), then adds every entry's non-empty taskId and taskIds strings in first-seen order. PEER_EDITING is the union of each entry's editingTaskIds strings. id_list() returns [] for a non-list, so a legacy entry gives exactly [taskId] and [].\n(b) The contested branch writes one row per PEER_IDS id. The skip-untouched MOE_ATTR_CONTESTED_EDITING(<first editing>) hold sits after 'skip' and before idle_clean and TOOL.\n(c) write_commit_message groups a path's adjacent rows into one `Moe-Contested: <path> (<id1>, <id2>)` line. Bash 3.2-safe (prev/ids/staged); a one-id path prints today's line.\n(d) attr_held_list flags untouched and editing holds. The remedy is `MOE_CONTESTED_HELD remedy:` + [UNTOUCHED] + [EDIT] + NEVER, and an untouched-only line is byte-identical. The strict branch is unchanged.\n(e) The disk-fallback python builds one entry per path through a by_key dict plus an ordered list. taskId is the first claimant, taskIds are contributors in sorted record-file order, and editingTaskIds are contributors with an IN_PROGRESS step naming the path (PS.addall ignores a non-list). The printf last resort is unchanged.\nChecks: bash -n ok. Scratch harness (/mnt/d/moe-scratch/t01f3-red-1sYq, x-green.sh) with the new wrapper: AF, AG, AH, AI, AJ and AK all ok. node --test importee-guard-bash + usage-attribution: 44/44 pass, unchanged.\nEdits were made with the Edit tool. A probe showed it replaces the inode (temp + rename), so running sh seats keep their old bytes and the save leaves a TOOL witness. parity-check.sh fails until step 3 adds the ps1 code.",
+      "startedAt": "2026-10-30T14:13:31.542Z",
+      "completedAt": "2026-10-30T14:18:33.322Z"
     },
     {
       "stepId": "step-3",
       "description": "GREEN, PowerShell twin, in scripts/moe-agent.ps1. Keep its UTF-8 BOM and LF endings, and edit with the Edit tool.\n\n(a) Get-MoeCommitScope, the peer loop (~3133): each PeerDeclared[$k] gains TaskIds and Editing, built as in sh (a).\n- Read both fields RAW: `$e.PSObject.Properties['taskIds']`, with `.Value -is [array]`.\n- Never use Get-MoeProp here. A function return unrolls [\"task-peer\"] into a scalar string and [] into $null, which would silently turn a one-element editing list into no hold. `declared` is read raw for the same reason.\n- Dedupe with -cnotcontains. The first entry keeps TaskId and Idle as today.\n\n(b) Get-MoeDiskScope (~3086): add the same TaskIds and Editing per path.\n- Take IN_PROGRESS step paths from the peer's implementationPlan through ConvertTo-MoeNormalPath and Get-MoePathKey. Get-MoeProp is fine here: this is only iteration, not list-vs-scalar.\n- The first claimant keeps TaskId.\n\n(c) Resolve-MoeAttribution (~3599): build $peerIds and $peerEditing beside $peer and $peerIdle.\n- An entry WITHOUT TaskIds or Editing must act as @(TaskId) and @(). scripts/tests/importee-guard.ps1 builds one, @{ Path; TaskId }, and CI runs it on both engines.\n- So test `$null -ne` before wrapping in @(...): `@($null)` is a one-element array, which would emit a $null row or a bogus `MOE_ATTR_CONTESTED_EDITING()` hold.\n- Write one contested row per id.\n- Put the editing hold after the 'skip' branch and before $idleClean.\n\n(d) New-MoeCommitMessage (~4052): group adjacent -ceq-equal Paths of -Contested into one `Moe-Contested: <path> (<id1>, <id2>)` line. The $landedContested filter (~4841) is unchanged, and it keeps every row of a landed path.\n\n(e) Get-MoeHeldList (~3773): apply sh (d)'s rule with the same strings. Get-MoeRecordHeldFields is unchanged; it already sends every row, first 100.\n\nError handling, as in sh: nothing new may throw.\n- A throw inside the landing's try turns the landing into a failed record.\n- A throw in Get-MoeDiskScope's peer loop must still `continue` past that one bad record, as today's `try { ConvertFrom-Json } catch { continue }` does.\n- So use Get-MoeStringList for the elements, check `-is [array]` and `-is [string]`, and skip null steps.\n\nCheck before moving on:\n- ParseFile is clean.\n- `bash scripts/tests/parity-check.sh` passes, and so does parity-check.ps1.\n- The ps1 AK run is green under powershell.exe and pwsh.exe (scratch harness).\n- importee-guard.ps1 passes on both engines.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1 twin made with the Edit tool. BOM kept, 0 CR.\n- Get-MoeCommitScope reads taskIds/editingTaskIds raw (PSObject.Properties + -is [array]) into PeerDeclared[k].TaskIds/Editing, deduped with -cnotcontains.\n- Get-MoeDiskScope: TaskIds is every contributor; Editing is the IN_PROGRESS step paths (fail closed).\n- Resolve-MoeAttribution: $peerIds/$peerEditing default to @(TaskId)/@() when the keys are missing ($null tested first). One contested row per id. The EDITING hold sits after 'skip' and before $idleClean.\n- New-MoeCommitMessage groups adjacent -ceq paths into one trailer.\n- Get-MoeHeldList: EDITING branch plus the composed remedy.\nResults:\n- ParseFile is clean on PS 5.1 and pwsh 7.\n- parity-check.sh PASS; parity-check.ps1 PASS on both engines.\n- Scratch AK harness (x-green.ps1): `[scenario AK] ok`, RED_FAILS=[] on powershell.exe and pwsh.exe.\n- importee-guard.ps1: 48/0 on both engines.",
+      "startedAt": "2026-10-30T14:18:39.048Z",
+      "completedAt": "2026-10-30T14:25:16.822Z"
     },
     {
       "stepId": "step-4",
       "description": "Docs. These are hot shared files.\n\nBefore the first edit of each doc:\n- `git status --porcelain -- <doc>` must print nothing.\n- If another session's hunks are there, do not edit over them: the whole-file landing would carry them. @mention that task's seat in its channel, then call moe.report_blocked with blockedOnTaskIds [that task].\n- Edit with the Edit tool so the wrapper sees a TOOL witness. Peers 66e8d7d1, ced85748 and f3f364a6 plan these docs, so a shell-written change is held at landing.\n\nState these facts tersely, consistent with docs/MCP_SERVER.md's get_commit_scope and record_commit text:\n\n1. scripts/CLAUDE.md, Land on every exit, the CONTESTED clause:\n- Under skip-untouched, a contesting task mid-step on the path holds it as `MOE_ATTR_CONTESTED_EDITING(task-<peer>)`, even when this session's editing tool wrote it.\n- Mid-step means an IN_PROGRESS plan step naming the path, with an active session (get_commit_scope editingTaskIds). The disk fallback counts any IN_PROGRESS step.\n- This check runs first. skip and commit are unchanged. An older daemon without the field lands as before.\n- A landed contested path carries ONE `Moe-Contested: <path> (<id1>, <id2>)` trailer naming every contesting task.\n- record_commit's contested list has one row per (task, path).\n- The held= remedy gains the editing clause.\n\n2. docs/CONFIGURATION.md: the attribution.contested table row (~182) and the skip-untouched paragraph (~373). Add the editing hold and the trailer form `(task-<a>, task-<b>)`.\n\n3. docs/TROUBLESHOOTING.md, the MOE_ATTR_* table:\n- Add a `MOE_ATTR_CONTESTED_EDITING(task-<peer>)` row after the UNTOUCHED row.\n  - Meaning: a contesting peer was mid-step on the path with a live session, so the path is held even though this session edited it. <peer> is the first editing task.\n  - What to do: coordinate that peer and let its step finish, then re-edit the path with a supported editing tool before the next exit; or let the peer's own landing carry the bytes, and name that commit.\n  - declare_files, unblocking or a shell touch does not release it. Never change the policy as the fix.\n- Update the trailer form in the MOE_ATTR_CONTESTED row.\n\n4. docs/SCHEMA.md, the settings comment (~140): it still says a TOOL witness alone releases a contested path. Add the editing-hold exception and the multi-task trailer.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/CLAUDE.md",
         "docs/CONFIGURATION.md",
         "docs/TROUBLESHOOTING.md",
         "docs/SCHEMA.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "All four docs printed nothing for `git status --porcelain` before the first edit; the earlier peer hunk in CONFIGURATION.md had landed. Every edit used the Edit tool.\n- scripts/CLAUDE.md, the CONTESTED clause: the EDITING hold runs first under skip-untouched (editingTaskIds; the disk fallback counts any IN_PROGRESS step). An older daemon lands as before. Added the one-trailer-per-path form, one record_commit row per (task, path), the remedy clause per kind, and the EDITING route.\n- docs/CONFIGURATION.md: the table row and the skip-untouched paragraph.\n- docs/TROUBLESHOOTING.md: a new MOE_ATTR_CONTESTED_EDITING row after UNTOUCHED, and the trailer form in the MOE_ATTR_CONTESTED row.\n- docs/SCHEMA.md: the settings comment.\nWording matches docs/MCP_SERVER.md's editingTaskIds and MOE_ATTR_CONTESTED_EDITING text. docs/MCP_SERVER.md itself is another session's dirty path and was not touched. npm run lint: OK.",
+      "startedAt": "2026-10-30T14:25:23.116Z",
+      "completedAt": "2026-10-30T14:26:39.553Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. Fresh output of this exact command is the complete_task verification evidence. Run it from this WSL seat, on a snapshot of HEAD plus exactly this task's five script files. Docs are not part of the gate.\n\n```\ncd /mnt/d/projexts/moes && W=$(mktemp -d /mnt/d/moe-scratch/t01f3-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$W/$f\" && cmp \"$f\" \"$W/$f\" || exit 1; done && cd \"$W\" && env $(env | sed -n 's/^\\(\\(MOE\\|CLAUDE\\)[A-Za-z0-9_]*\\)=.*/-u \\1/p') bash -c 'set -e; bash -n scripts/moe-agent.sh; bash scripts/tests/parity-check.sh; node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs scripts/tests/postflight-owner-scope.test.mjs; MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh; for ps in powershell.exe pwsh.exe; do for t in parity-check importee-guard postflight; do WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"$ps\" -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$PWD/scripts/tests/$t.ps1\")\"; done; done'\n```\n\n- It runs for about an hour. Start it in the background with a log file, then poll in foreground `timeout 570` loops: the Bash tool kills a foreground command at 600 s.\n- The cwd must be a Windows drive (mem:gotcha-qa-ps1-postflight-from-wsl). A /tmp UNC cwd breaks the ps1 dirty-helper case.\n- `*>` logs from PS 5.1 are UTF-16LE.\n- On a native Windows seat, run the same legs inside the snapshot from Git Bash plus powershell.exe and pwsh.exe instead. Git Bash postflight.sh takes about 1 h 45 min, so launch it detached (mem:convention-postflight-scratch-harness).\n- Before blaming this change for a failure, rerun the same leg on HEAD's scripts. Record the scope-scenario counts each harness prints.\n- Check net non-board LOC (`git diff --numstat` over the 9 files, tests included) against the 400 cap before you cite the run (mem:gotcha-net-loc-cap-counts-tests).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "note": "The exact plan gate command ran on snapshot /mnt/d/moe-scratch/t01f3-5ssO (HEAD 543b1d08 plus this task's 5 script files, cmp-checked) with MOE_* and CLAUDE* unset. GATE_EXIT=0. Results:\n- bash -n ok; parity-check.sh PASS.\n- node --test: 57/57.\n- postflight.sh PASS: frozen 74, owner 16, commit-scope scenarios run 43.\n- powershell.exe: parity-check.ps1 PASS; importee-guard.ps1 48/0; postflight.ps1 PASS with frozen 74, owner 16, commit-scope 42 (AD link variant and AE skipped: no symlinks on this host).\n- pwsh.exe: parity PASS; importee-guard 48/0; postflight.ps1 PASS with commit-scope 42.\nThe working files still match the snapshot byte for byte. HEAD has moved to 9a53cc96 since, touching only local-runner files.\nAn earlier gate run (t01f3-k1oT) was stopped by me mid-run so I could apply the self-review fix to sh/ps1 (see step 6). The green run above came after that fix.\nNet non-board LOC over the 9 files: +383/-45 = 338, under the 400 cap.",
+      "startedAt": "2026-10-30T14:27:01.022Z",
+      "completedAt": "2026-10-30T15:17:56.168Z"
     },
     {
       "stepId": "step-6",
@@ -124,7 +156,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:11:20.155Z",
-  "updatedAt": "2026-10-30T14:00:10.391Z",
+  "updatedAt": "2026-10-30T15:17:56.168Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:15:38.804Z",
@@ -133,7 +165,8 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T07:15:58.635Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 9
+    "plannedDistinctFileCount": 9,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-32ff5555",
@@ -147,7 +180,13 @@
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T07:39:01.385Z",
   "executionContract": {
@@ -211,5 +250,43 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T07:39:01.404Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "b4b53f3a36069582909733abc191cb4cb1c71a7e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T14:00:04Z",
+      "paths": [
+        ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
+        ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+        ".moe/tasks/task-30066ccdeb6042c3b5c89a7a31833d14.json",
+        ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+        ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+        ".moe/tasks/task-f31d415d5185424ca5f7e375a8b15134.json"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T14:00:22.141Z",
+      "treeId": "e17f5a1155ed7cabf1f60fb4932b237f86aa729e",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
+    ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+    ".moe/tasks/task-30066ccdeb6042c3b5c89a7a31833d14.json",
+    ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+    ".moe/tasks/task-5c2e6cdf2494412ca0c2bc40e26d9da3.json",
+    ".moe/tasks/task-f31d415d5185424ca5f7e375a8b15134.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-73c29a03@2026-10-30T14:00:04Z",
+    "at": "2026-10-30T14:00:22.141Z"
+  },
+  "workStartedAt": "2026-10-30T14:01:04.975Z"
 }

@@ -3170,11 +3170,30 @@ function Get-MoeDiskScope([string]$TaskId) {
             $pst = Get-MoeProp $peer 'status'
             if ($pst -eq 'DONE' -or $pst -eq 'ARCHIVED') { continue }
             $psets = Get-MoeTaskDeclaredSets $peer
+            # TaskId: a path's first claimant; TaskIds: every contributing open
+            # task in enumeration order; Editing: those with an IN_PROGRESS step
+            # naming it. No activity data here, so any IN_PROGRESS step counts
+            # (fail closed; sh twin).
+            $editKeys = @()
+            $steps2 = @()
+            $plan2 = Get-MoeProp $peer 'implementationPlan'
+            if ($plan2) { $steps2 = @($plan2) }
+            foreach ($s in $steps2) {
+                if ($null -eq $s -or (Get-MoeProp $s 'status') -ne 'IN_PROGRESS') { continue }
+                foreach ($q in @(Get-MoeStringList (Get-MoeProp $s 'affectedFiles')) + @(Get-MoeStringList (Get-MoeProp $s 'newFiles')) + @(Get-MoeStringList (Get-MoeProp $s 'modifiedFiles'))) {
+                    $editKeys += Get-MoePathKey (ConvertTo-MoeNormalPath $q)
+                }
+            }
             foreach ($p in @($psets.Asserted) + @($psets.Planned) + @(Get-MoeStringList (Get-MoeProp $peer 'touchedFiles'))) {
                 $n = ConvertTo-MoeNormalPath $p
                 if (-not $n) { continue }
                 $k = Get-MoePathKey $n
-                if (-not $scope.PeerDeclared.ContainsKey($k)) { $scope.PeerDeclared[$k] = @{ Path = $n; TaskId = $pid2 } }
+                if (-not $scope.PeerDeclared.ContainsKey($k)) { $scope.PeerDeclared[$k] = @{ Path = $n; TaskId = $pid2; TaskIds = @(); Editing = @() } }
+                $d = $scope.PeerDeclared[$k]
+                if ($d.TaskIds -cnotcontains $pid2) {
+                    $d.TaskIds += $pid2
+                    if ($editKeys -ccontains $k) { $d.Editing += $pid2 }
+                }
             }
         }
     }
@@ -3236,8 +3255,22 @@ function Get-MoeCommitScope([string]$TaskId, [string]$Phase, [string]$Sid) {
                 # disk-scope entries carry no Idle at all (sh twin: PEER_IDLE).
                 $pa2 = Get-MoeProp $e 'peerActive'
                 $idle = ($pa2 -is [bool]) -and ($pa2 -eq $false)
-                if (-not $scope.PeerDeclared.ContainsKey($k)) { $scope.PeerDeclared[$k] = @{ Path = $n; TaskId = [string]$pt; Idle = $idle } }
+                if (-not $scope.PeerDeclared.ContainsKey($k)) { $scope.PeerDeclared[$k] = @{ Path = $n; TaskId = [string]$pt; Idle = $idle; TaskIds = @([string]$pt); Editing = @() } }
                 else { $scope.PeerDeclared[$k].Idle = ($scope.PeerDeclared[$k].Idle -and $idle) }
+                # TaskIds: every contesting task (the first entry's taskId, then
+                # each entry's taskIds); Editing: those mid-step on the path
+                # (editingTaskIds). Read raw: Get-MoeProp unrolls ["x"] to "x"
+                # and [] to $null. A missing or non-list field (an older daemon)
+                # adds nothing, so it lands byte-for-byte as before (sh twin).
+                $d = $scope.PeerDeclared[$k]
+                $tp = $e.PSObject.Properties['taskIds']
+                foreach ($t in @(if ($tp -and $tp.Value -is [array]) { Get-MoeStringList $tp.Value })) {
+                    if ($t -and $d.TaskIds -cnotcontains $t) { $d.TaskIds += $t }
+                }
+                $ep = $e.PSObject.Properties['editingTaskIds']
+                foreach ($t in @(if ($ep -and $ep.Value -is [array]) { Get-MoeStringList $ep.Value })) {
+                    if ($d.Editing -cnotcontains $t) { $d.Editing += $t }
+                }
             }
         }
         return $scope
@@ -3689,10 +3722,21 @@ function Resolve-MoeAttribution {
     foreach ($p in @($Scope.Planned)) { $tp = ConvertTo-MoeTopPath $p $rel; if ($tp) { $k = Get-MoePathKey $tp; if (-not $asserted.ContainsKey($k)) { $planned[$k] = $tp } } }
     $peer = @{}
     $peerIdle = @{}
+    # $peerIds: every contesting task, the first claimant first; $peerEditing:
+    # those mid-step on the path with a live session. An entry without the
+    # keys (a hand-built scope) acts as @(TaskId) and @(): test $null before
+    # @(...), since @($null) is one element (sh twin: PEER_IDS, PEER_EDITING).
+    $peerIds = @{}
+    $peerEditing = @{}
     foreach ($k in $Scope.PeerDeclared.Keys) {
-        $tp = "$rel$($Scope.PeerDeclared[$k].Path)"
-        $peer[(Get-MoePathKey $tp)] = $Scope.PeerDeclared[$k].TaskId
-        $peerIdle[(Get-MoePathKey $tp)] = ($Scope.PeerDeclared[$k].Idle -eq $true)
+        $d = $Scope.PeerDeclared[$k]
+        $tk = Get-MoePathKey "$rel$($d.Path)"
+        $peer[$tk] = $d.TaskId
+        $peerIdle[$tk] = ($d.Idle -eq $true)
+        $peerIds[$tk] = @($d.TaskId)
+        if ($null -ne $d.TaskIds) { $peerIds[$tk] = @($d.TaskIds) }
+        $peerEditing[$tk] = @()
+        if ($null -ne $d.Editing) { $peerEditing[$tk] = @($d.Editing) }
     }
     $mine = @{}
     foreach ($k in $asserted.Keys) { $mine[$k] = $asserted[$k] }
@@ -3758,9 +3802,16 @@ function Resolve-MoeAttribution {
         $isOwnMemory = ($k.StartsWith($memoryPrefix) -and $entry.XY -ne '??' -and $k.IndexOf($taskIdKey) -ge 0)
         if ($mine.ContainsKey($k) -or $isOwnMemory) {
             if ($peer.ContainsKey($k)) {
-                $contested += @{ Path = $p; TaskId = $peer[$k] }
+                foreach ($t in $peerIds[$k]) { $contested += @{ Path = $p; TaskId = $t } }
                 if ($contestedPolicy -eq 'skip') {
                     $skipped += @{ Path = $p; Code = 'MOE_ATTR_CONTESTED' }
+                    continue
+                }
+                # A contesting task mid-step on the path holds it even when this
+                # session's tool wrote it: completion e67ca0e swept such a peer's
+                # unfinished hunks. This only adds holds (sh twin).
+                if ($contestedPolicy -eq 'skip-untouched' -and $peerEditing[$k].Count -gt 0) {
+                    $skipped += @{ Path = $p; Code = "MOE_ATTR_CONTESTED_EDITING($($peerEditing[$k][0]))" }
                     continue
                 }
                 # 'skip-untouched' (the default since 2026-09-06): a contested
@@ -3858,15 +3909,22 @@ function Resolve-MoeAttribution {
 }
 
 # The own contested paths a landing held back, as `<path>(<peer>)` joined by
-# ',', at most 5 then `,+<N> more`, then one MOE_CONTESTED_HELD remedy (sh
-# twin: attr_held_list). Feeds the session-ended line's held= suffix; a
-# missing Skipped/Contested gives ''.
+# ',', at most 5 then `,+<N> more`, then one MOE_CONTESTED_HELD remedy: the
+# strict sentence, else one clause per held kind (untouched, then editing)
+# before the closing sentence (sh twin: attr_held_list). Feeds the
+# session-ended line's held= suffix; a missing Skipped/Contested gives ''.
 function Get-MoeHeldList($Attr) {
     $held = @()
     $strict = $false
+    $untouched = $false
+    $editing = $false
     foreach ($sk in @($Attr.Skipped)) {
         if ($null -eq $sk) { continue }
         if ($sk.Code -match '^MOE_ATTR_CONTESTED_UNTOUCHED\((.*)\)$') {
+            $untouched = $true
+            $held += "$($sk.Path)($($matches[1]))"
+        } elseif ($sk.Code -match '^MOE_ATTR_CONTESTED_EDITING\((.*)\)$') {
+            $editing = $true
             $held += "$($sk.Path)($($matches[1]))"
         } elseif ($sk.Code -eq 'MOE_ATTR_CONTESTED') {
             $strict = $true
@@ -3882,7 +3940,10 @@ function Get-MoeHeldList($Attr) {
     if ($strict) {
         $out += " MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
     } elseif ($held.Count -gt 0) {
-        $out += " MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task. declare_files, unblocking or a shell touch alone does not release a hold."
+        $out += " MOE_CONTESTED_HELD remedy:"
+        if ($untouched) { $out += " verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task." }
+        if ($editing) { $out += " the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have this task's assignee session re-edit the path with a wrapper-observed editing tool, or let the peer's own landing carry the bytes." }
+        $out += " declare_files, unblocking or a shell touch alone does not release a hold."
     }
     return $out
 }
@@ -4140,7 +4201,15 @@ function New-MoeCommitMessage {
         $lines += "Moe-Status: $statusText"
         $lines += "Moe-Paths: $PathCount"
         $lines += "Moe-Inferred: $InferredCount"
-        foreach ($c in @($Contested)) { if ($c) { $lines += "Moe-Contested: $($c.Path) ($($c.TaskId))" } }
+        # A path's rows are adjacent, so its ONE trailer names every
+        # contesting task (sh twin: write_commit_message).
+        $groups = @()
+        foreach ($c in @($Contested)) {
+            if (-not $c) { continue }
+            if ($groups.Count -gt 0 -and $groups[-1].Path -ceq $c.Path) { $groups[-1].Ids += $c.TaskId }
+            else { $groups += @{ Path = $c.Path; Ids = @($c.TaskId) } }
+        }
+        foreach ($g in $groups) { $lines += "Moe-Contested: $($g.Path) ($($g.Ids -join ', '))" }
     }
     return (($lines -join "`n") + "`n")
 }

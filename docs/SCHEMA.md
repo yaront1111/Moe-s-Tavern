@@ -137,7 +137,7 @@ interface ProjectSettings {
   // Attribution policy for the post-flight (details in CONFIGURATION.md).
   attribution?: {
     undeclared?: 'solo' | 'never' | 'always'; // default 'solo': MEASURED paths only when no other worker is live; MOE_ATTRIBUTION=declared → 'never'
-    contested?: 'skip-untouched' | 'commit' | 'skip'; // default 'skip-untouched': requires a supported Claude editing call and matching successful tool_result from this session, unless the path was clean at the session's pre-flight and every contesting task reports peerActive:false; otherwise MOE_ATTR_CONTESTED_UNTOUCHED. Reports remain ASSERTED. 'commit' records Moe-Contested trailers; 'skip' → MOE_ATTR_CONTESTED
+    contested?: 'skip-untouched' | 'commit' | 'skip'; // default 'skip-untouched': a path a contesting task is mid-step on (get_commit_scope editingTaskIds) is held as MOE_ATTR_CONTESTED_EDITING even with a witness; otherwise requires a supported Claude editing call and matching successful tool_result from this session, unless the path was clean at the session's pre-flight and every contesting task reports peerActive:false; otherwise MOE_ATTR_CONTESTED_UNTOUCHED. Reports remain ASSERTED. 'commit' records Moe-Contested trailers, one per path naming every contesting task; 'skip' → MOE_ATTR_CONTESTED
     exclude?: string[];                       // extra DENY prefixes (project-relative, no absolute/..); default []
   };
 

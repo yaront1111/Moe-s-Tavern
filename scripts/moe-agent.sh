@@ -3462,8 +3462,11 @@ else:
 always.append('.moe/project.json')
 for f in sorted(glob.glob(os.path.join(project, '.moe', 'epics', '*.json'))):
     always.append('.moe/epics/' + os.path.basename(f))
+# One entry per path: taskId is its first claimant, taskIds every contributing
+# open task in record-file order, editingTaskIds those with an IN_PROGRESS step
+# naming it. No activity data here, so any IN_PROGRESS step counts (fail closed).
 peer = []
-seen = PS()
+by_key = {}
 live = []
 for f in sorted(glob.glob(os.path.join(tasks_dir, '*.json'))):
     t = load(f)
@@ -3475,11 +3478,20 @@ for f in sorted(glob.glob(os.path.join(tasks_dir, '*.json'))):
     # peer, so no other task record is ever a board candidate in fallback mode.
     live.append(t.get('id'))
     a2, p2 = tiers(t)
+    editing = PS()
+    for s in steps(t):
+        if isinstance(s, dict) and s.get('status') == 'IN_PROGRESS':
+            editing.addall(s.get('affectedFiles')).addall(s.get('newFiles')).addall(s.get('modifiedFiles'))
     for p in a2 + p2:
-        if seen.has(p):
+        e = by_key.get(key(p))
+        if e is None:
+            e = by_key[key(p)] = {'path': p, 'taskId': t.get('id'), 'taskIds': [], 'editingTaskIds': []}
+            peer.append(e)
+        if t.get('id') in e['taskIds']:
             continue
-        seen.add(p)
-        peer.append({'path': p, 'taskId': t.get('id')})
+        e['taskIds'].append(t.get('id'))
+        if editing.has(p):
+            e['editingTaskIds'].append(t.get('id'))
 out.update(peerDeclared=peer, livePeerIds=live, activePeerIds=live, peersActive=True,
            alwaysInclude=always, excludePrefixes=[],
            policy={'undeclared': 'never', 'contested': 'skip-untouched'})
@@ -3701,12 +3713,28 @@ PEER = {}
 # PEER_IDLE[k]: every entry for k reports peerActive as a JSON false. Absent,
 # null or anything else (an older daemon, the disk fallback) is active.
 PEER_IDLE = {}
+# PEER_IDS[k]: every contesting task of k, the first entry's taskId first, then
+# each entry's taskIds (first-seen order). PEER_EDITING[k]: those mid-step on k
+# with a live session (editingTaskIds). A missing or non-list field (an older
+# daemon) gives [taskId] and [], which lands byte-for-byte as before.
+PEER_IDS = {}
+PEER_EDITING = {}
+def id_list(v):
+    return [x for x in v if isinstance(x, str) and x] if isinstance(v, list) else []
 for ent in (scope.get('peerDeclared') or []):
     if isinstance(ent, dict):
         n = norm_decl(ent.get('path'))
         if n:
             PEER.setdefault(key(n), str(ent.get('taskId') or ''))
             PEER_IDLE[key(n)] = PEER_IDLE.get(key(n), True) and (ent.get('peerActive') is False)
+            ids = PEER_IDS.setdefault(key(n), [PEER[key(n)]])
+            editing = PEER_EDITING.setdefault(key(n), [])
+            for t in id_list(ent.get('taskIds')):
+                if t and t not in ids:
+                    ids.append(t)
+            for t in id_list(ent.get('editingTaskIds')):
+                if t not in editing:
+                    editing.append(t)
 # This session's whole pre-flight dirty snapshot (blob, xy, path rows) as a
 # key set; None = none (a recovery landing, a failed copy): no exception.
 PREFLIGHT_DIRTY = None
@@ -3828,9 +3856,16 @@ for pk in sorted(S):
         continue
     if pk in MINE or own_memory(p, xy):
         if pk in PEER:
-            contested.append((PEER[pk], p))
+            for t in PEER_IDS[pk]:
+                contested.append((t, p))
             if contested_policy == 'skip':
                 skipped.append(('MOE_ATTR_CONTESTED', p))
+                continue
+            # A contesting task mid-step on the path holds it even when this
+            # session's tool wrote it: completion e67ca0e swept such a peer's
+            # unfinished hunks. This only adds holds (ps1 twin).
+            if contested_policy == 'skip-untouched' and PEER_EDITING.get(pk):
+                skipped.append(('MOE_ATTR_CONTESTED_EDITING(%s)' % PEER_EDITING[pk][0], p))
                 continue
             # 'skip-untouched' (default since 2026-09-06): a contested path
             # lands only when THIS session's editing tools wrote it -- an
@@ -4291,16 +4326,19 @@ attr_print_skips() {
 
 # attr_held_list ATTR_DIR -- the own contested paths a landing held back, as
 # `<path>(<peer>)` joined by ',', at most 5 then `,+<N> more`, then one
-# MOE_CONTESTED_HELD remedy (ps1 twin: Get-MoeHeldList). Feeds the
-# session-ended line's held= suffix; an unreadable file gives ''.
+# MOE_CONTESTED_HELD remedy: the strict sentence, else one clause per held kind
+# (untouched, then editing) before the closing sentence (ps1 twin:
+# Get-MoeHeldList). Feeds the session-ended line's held= suffix; an unreadable
+# file gives ''.
 attr_held_list() {
-    local rec code p peer crec out="" n=0 strict=""
+    local rec code p peer crec out="" n=0 strict="" untouched="" editing=""
     [ -r "$1/skipped" ] || return 0
     while IFS= read -r -d '' rec; do
         code="${rec%%"$MOE_TAB"*}"
         p="${rec#*"$MOE_TAB"}"
         case "$code" in
-            "MOE_ATTR_CONTESTED_UNTOUCHED("*")") peer="${code#MOE_ATTR_CONTESTED_UNTOUCHED(}"; peer="${peer%)}" ;;
+            "MOE_ATTR_CONTESTED_UNTOUCHED("*")") untouched=1; peer="${code#MOE_ATTR_CONTESTED_UNTOUCHED(}"; peer="${peer%)}" ;;
+            "MOE_ATTR_CONTESTED_EDITING("*")") editing=1; peer="${code#MOE_ATTR_CONTESTED_EDITING(}"; peer="${peer%)}" ;;
             MOE_ATTR_CONTESTED)
                 strict=1
                 peer=""
@@ -4320,7 +4358,10 @@ attr_held_list() {
     if [ -n "$strict" ]; then
         out="$out MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
     elif [ "$n" -gt 0 ]; then
-        out="$out MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task. declare_files, unblocking or a shell touch alone does not release a hold."
+        out="$out MOE_CONTESTED_HELD remedy:"
+        [ -z "$untouched" ] || out="$out verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task."
+        [ -z "$editing" ] || out="$out the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have this task's assignee session re-edit the path with a wrapper-observed editing tool, or let the peer's own landing carry the bytes."
+        out="$out declare_files, unblocking or a shell touch alone does not release a hold."
     fi
     printf '%s' "$out"
 }
@@ -4538,19 +4579,23 @@ ensure_safe_branch() {
 # write_commit_message KIND OUT N_PATHS N_INFERRED
 write_commit_message() {
     local kind="$1" out="$2" n_paths="${3:-0}" n_inferred="${4:-0}"
-    local subject body contested_lines="" rec srec peer p
+    local subject body contested_lines="" rec srec peer p prev="" ids="" staged=0
     # A trailer claims a landed contested path, so a held one (still in the
-    # contested list for the ledger) gets none (ps1 twin: New-MoeCommitMessage caller).
+    # contested list for the ledger) gets none. A path's rows are adjacent, so
+    # its ONE trailer names every contesting task (ps1 twin: New-MoeCommitMessage).
     while IFS= read -r -d '' rec; do
         peer="${rec%%"$MOE_TAB"*}"
         p="${rec#*"$MOE_TAB"}"
+        if [ "$p" = "$prev" ]; then ids="$ids, $peer"; continue; fi
+        [ "$staged" = 1 ] && contested_lines="$contested_lines
+Moe-Contested: $prev ($ids)"
+        prev="$p"; ids="$peer"; staged=0
         while IFS= read -r -d '' srec; do
-            [ "${srec#*"$MOE_TAB"*"$MOE_TAB"}" = "$p" ] || continue
-            contested_lines="$contested_lines
-Moe-Contested: $p ($peer)"
-            break
+            [ "${srec#*"$MOE_TAB"*"$MOE_TAB"}" = "$p" ] && { staged=1; break; }
         done 2>/dev/null < "${LAND_STAGED_FILE:-/dev/null}"
     done < "$ATTR_DIR/contested"
+    [ "$staged" = 1 ] && contested_lines="$contested_lines
+Moe-Contested: $prev ($ids)"
     if [ "$kind" = "completion" ]; then
         local ctype="feat" suffix=""
         if [ "${LAND_REOPEN:-0}" -gt 0 ] 2>/dev/null; then

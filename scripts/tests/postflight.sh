@@ -4898,14 +4898,109 @@ try {
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AJ] ok"
 
+  # Scenario AK -- get_commit_scope's per-path peer lists (task-01f37ac6; twin:
+  # scenario AK in postflight.ps1). A peerDeclared entry may carry taskIds
+  # (every contesting task) and editingTaskIds (those mid-step on the path with
+  # a live session). Under skip-untouched an editing peer holds even the
+  # TOOL-witnessed tool-written.txt as MOE_ATTR_CONTESTED_EDITING; every
+  # contesting task gets a ledger row and is named in the path's ONE trailer.
+  #   AK1  editing [task-peer]        -> held, editing remedy
+  #   AK2  editing []                 -> lands, as before
+  #   AK3  no fields (older daemon)   -> lands, as before
+  #   AK4  taskIds [task-a, task-b]   -> lands, one trailer naming both
+  #   AK5  contested=skip, as AK1     -> strict MOE_ATTR_CONTESTED
+  #   AK6  contested=commit, as AK1   -> lands
+  #   AK7  disk fallback: an IN_PROGRESS peer step holds its path as EDITING, a
+  #        PENDING-only path lands naming both contributors, a declared
+  #        pre-flight-dirty path is held UNTOUCHED
+  echo "[scenario AK] a contesting peer mid-step holds a witnessed path, and every contesting task is named"
+  scope_ak_untouched="verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task."
+  scope_ak_edit="the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have this task's assignee session re-edit the path with a wrapper-observed editing tool, or let the peer's own landing carry the bytes."
+  scope_ak_never="declare_files, unblocking or a shell touch alone does not release a hold."
+  # Same checker as postflight.ps1's scope-ak-check.cjs: the last ledger row's
+  # contested skips and whole contested list, the held= tail of the
+  # session-ended line, and each held path's [skip] line, untracked status and
+  # CLI bytes.
+  scope_ak_check='
+const [dir,out,skipped,contested,held]=process.argv.slice(1),assert=require("assert"),fs=require("fs"),path=require("path");
+const rows=fs.readFileSync(path.join(dir,".moe/record_commit.jsonl"),"utf8").trim().split("\n").map(JSON.parse),r=rows[rows.length-1];
+const line=fs.readFileSync(path.join(dir,".moe/messages/chan-general.jsonl"),"utf8").trim().split("\n").map(l=>String(JSON.parse(l).content)).filter(s=>s.includes("worker session ended: task=task-postflight")).pop()||"";
+const status=require("child_process").execFileSync("git",["-C",dir,"status","--porcelain"],{encoding:"utf8"}).split("\n"),text=fs.readFileSync(out,"utf8");
+try {
+  const want=JSON.parse(skipped);
+  assert.deepStrictEqual((r.skipped||[]).filter(s=>String(s.code).startsWith("MOE_ATTR_CONTESTED")),want,"skipped");
+  assert.deepStrictEqual(r.contested||[],JSON.parse(contested),"contested");
+  assert.strictEqual(line.includes(" held=")?line.slice(line.indexOf(" held=")):"",held,"held=");
+  for (const s of want) {
+    assert.ok(text.includes("[skip] "+s.path+" "+s.code),"console [skip] "+s.path+" "+s.code);
+    assert.ok(status.includes("?? "+s.path),s.path+" must stay untracked");
+    assert.strictEqual(fs.readFileSync(path.join(dir,s.path),"utf8").trim(),s.path==="held.txt"?"pre":"tool",s.path+" bytes");
+  }
+} catch (e) { console.error(e.message+"\nrow: "+JSON.stringify(r)+"\nline: "+line); process.exit(1); }'
+  for scope_ak_run in 1 2 3 4 5 6 7; do
+    SCOPE_AK_DIR="$TMP_DIR/scope-ak$scope_ak_run"
+    scope_ak_out="$TMP_DIR/scope-ak$scope_ak_run.out"
+    scope_ak_settings='{}'; scope_ak_peers='tool-written.txt:task-peer'; scope_ak_fail=''
+    scope_ak_fields='{"taskIds":["task-peer"],"editingTaskIds":["task-peer"]}'
+    scope_ak_rows='{"path":"tool-written.txt","taskId":"task-peer"}'
+    scope_ak_files='tool-written-abs.txt '; scope_ak_trailer=''
+    scope_ak_skips='[{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED_EDITING(task-peer)"}]'
+    scope_ak_held=" held=tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $scope_ak_edit $scope_ak_never"
+    case "$scope_ak_run" in
+      2|3|4|6) scope_ak_files='tool-written-abs.txt tool-written.txt '; scope_ak_trailer='Moe-Contested: tool-written.txt (task-peer)'
+               scope_ak_skips='[]'; scope_ak_held='' ;;
+    esac
+    case "$scope_ak_run" in
+      2) scope_ak_fields='{"taskIds":["task-peer"],"editingTaskIds":[]}' ;;
+      3) scope_ak_fields='' ;;
+      4) scope_ak_peers='tool-written.txt:task-a'; scope_ak_fields='{"taskIds":["task-a","task-b"],"editingTaskIds":[]}'
+         scope_ak_trailer='Moe-Contested: tool-written.txt (task-a, task-b)'
+         scope_ak_rows='{"path":"tool-written.txt","taskId":"task-a"},{"path":"tool-written.txt","taskId":"task-b"}' ;;
+      5) scope_ak_settings='{"attribution":{"contested":"skip"}}'
+         scope_ak_skips='[{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED"}]'
+         scope_ak_held=" held=tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. $scope_ak_never" ;;
+      6) scope_ak_settings='{"attribution":{"contested":"commit"}}' ;;
+      7) scope_ak_peers=''; scope_ak_fields=''; scope_ak_fail=1
+         scope_ak_trailer='Moe-Contested: tool-written-abs.txt (task-peer, task-peer2)'
+         scope_ak_skips='[{"path":"held.txt","code":"MOE_ATTR_CONTESTED_UNTOUCHED(task-peer2)"},{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED_EDITING(task-peer)"}]'
+         scope_ak_rows='{"path":"held.txt","taskId":"task-peer2"},{"path":"tool-written-abs.txt","taskId":"task-peer"},{"path":"tool-written-abs.txt","taskId":"task-peer2"},'"$scope_ak_rows"
+         scope_ak_held=" held=held.txt(task-peer2),tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $scope_ak_untouched $scope_ak_edit $scope_ak_never" ;;
+    esac
+    make_scope_project "$SCOPE_AK_DIR" '["tool-written.txt"]' REVIEW '[]' "$scope_ak_settings"
+    if [ "$scope_ak_run" = 7 ]; then
+      # The fallback owner guard lands only a task the record assigns to this seat.
+      printf '%s\n' '{"id":"task-postflight","title":"Postflight smoke","status":"REVIEW","assignedWorkerId":"worker-scope","filesModified":["tool-written.txt"],"declaredFiles":["held.txt"]}' > "$SCOPE_AK_DIR/.moe/tasks/task-postflight.json"
+      printf '%s\n' '{"id":"task-peer","status":"WORKING","implementationPlan":[{"status":"IN_PROGRESS","affectedFiles":["tool-written.txt"]},{"status":"PENDING","affectedFiles":["tool-written-abs.txt"]}]}' > "$SCOPE_AK_DIR/.moe/tasks/task-peer.json"
+      printf '%s\n' '{"id":"task-peer2","status":"WORKING","implementationPlan":[{"status":"PENDING","affectedFiles":["tool-written-abs.txt","held.txt"]}]}' > "$SCOPE_AK_DIR/.moe/tasks/task-peer2.json"
+      git -C "$SCOPE_AK_DIR" add .moe/tasks >/dev/null
+      git -C "$SCOPE_AK_DIR" commit -qm ak-records >/dev/null
+      echo pre > "$SCOPE_AK_DIR/held.txt"
+    fi
+    set +e
+    FAKE_SCOPE_DECLARED_FIELD=1 FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED="$scope_ak_peers" \
+      FAKE_SCOPE_PEER_FIELDS="$scope_ak_fields" FAKE_SCOPE_FAIL="$scope_ak_fail" run_scope_wrapper "$SCOPE_AK_DIR" "$scope_ak_out" "$STREAM_CLI"
+    scope_ak_rc=$?
+    set -e
+    [ "$scope_ak_rc" -eq 0 ] || scope_fail "AK$scope_ak_run" "wrapper exited with $scope_ak_rc" "$scope_ak_out"
+    [ "$(committed_paths "$SCOPE_AK_DIR")" = "$scope_ak_files" ] \
+      || scope_fail "AK$scope_ak_run" "expected [$scope_ak_files] committed; got [$(committed_paths "$SCOPE_AK_DIR")]" "$scope_ak_out"
+    scope_ak_got="$(git -C "$SCOPE_AK_DIR" log -1 --format=%B | grep '^Moe-Contested:' || true)"
+    [ "$scope_ak_got" = "$scope_ak_trailer" ] \
+      || scope_fail "AK$scope_ak_run" "expected the trailers [$scope_ak_trailer]; got [$scope_ak_got]" "$scope_ak_out"
+    "$NODE_FOR_TEST" -e "$scope_ak_check" "$SCOPE_AK_DIR" "$scope_ak_out" "$scope_ak_skips" "[$scope_ak_rows]" "$scope_ak_held" \
+      || scope_fail "AK$scope_ak_run" "ledger, held= line or held paths differ" "$scope_ak_out"
+  done
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AK] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  scope_expected_runs=42
-  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=41
+  scope_expected_runs=43
+  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=42
   if [ "$SCOPE_SCENARIOS_RUN" -ne "$scope_expected_runs" ]; then
-    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ); ran $SCOPE_SCENARIOS_RUN" >&2
+    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

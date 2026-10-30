@@ -454,6 +454,7 @@ switch (tool) {
     break;
   }
   case 'get_commit_scope': {
+    if (process.env.FAKE_SCOPE_FAIL === '1') { ok({}); break; }
     // Mirrors tools/getCommitScope.ts over the on-disk records: ASSERTED and
     // PLANNED are the record's own tiers (declaredSets); PEER is the same union
     // over every other record not DONE/ARCHIVED, visited in id order, the
@@ -466,6 +467,13 @@ switch (tool) {
     //   FAKE_SCOPE_PEER_ACTIVE=0|1   every peerDeclared entry's peerActive
     //                                (1 = true); unset omits the field, as a
     //                                daemon from before it does
+    //   FAKE_SCOPE_PEER_FIELDS=<JSON object>  merged into every peerDeclared
+    //                                entry (e.g. taskIds, editingTaskIds); unset
+    //                                serves neither, as a daemon before
+    //                                task-f943b687 does. JSON, not CSV: a
+    //                                PowerShell variable set to '' is deleted.
+    //   FAKE_SCOPE_FAIL=1            answer {} (no taskId): the wrappers take
+    //                                their disk-fallback scope
     //   FAKE_SCOPE_DECLARED_FIELD=1  serve `declared` (the record's
     //                                declaredFiles) as the current daemon does;
     //                                unset models a daemon from before the
@@ -560,6 +568,7 @@ switch (tool) {
     }
     const peerActive = process.env.FAKE_SCOPE_PEER_ACTIVE;
     if (peerActive === '0' || peerActive === '1') for (const e of peerDeclared) e.peerActive = peerActive === '1';
+    if (process.env.FAKE_SCOPE_PEER_FIELDS) for (const e of peerDeclared) Object.assign(e, JSON.parse(process.env.FAKE_SCOPE_PEER_FIELDS));
     const livePeers = process.env.FAKE_SCOPE_PEERS_ACTIVE === '1';
     const orphanCaller = Boolean(args.workerId) && args.workerId !== assignedWorkerId;
     const activePeerIds = [...(livePeers ? ['worker-peer'] : []), ...(orphanCaller ? [args.workerId] : [])];
