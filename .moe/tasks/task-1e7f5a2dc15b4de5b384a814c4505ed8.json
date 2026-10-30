@@ -64,14 +64,19 @@
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the three-file diff as an attacker:\n- Can a member escape staging? Check absolute paths, '..', a symlink chain or a hardlink to an outside inode; the data filter and the walk must both refuse.\n- Can a directory end up group- or other-writable under a zero umask, or keep setuid bits?\n- Is the tree ever visible half-extracted, or is the toolchain path ever replaced?\n  - rename(2) can replace an EMPTY directory created after the lexists check. Only root can create one under /opt/moe, and callers serialize per VM through R06's job lease, as for materialize; say so in a comment.\n- Is the archive's sha256 checked before a single byte is extracted?\n- Does the host stream exactly the bytes it hashed? It must read once, with no second open between the hash and the framing.\n- Huge input: the header size is bounded before any write, data frames are capped by MAX_HOST_FRAME_BYTES, and the host holds at most 128 MiB in memory.\n- Is materializeSnapshot still byte-for-byte the same in its behavior, after the helper extraction?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 4's command fresh before complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-30T10:01:09.964Z"
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Resumed final step and restored only withheld TC6/PAX helper hunks (+14/-1) onto clean HEAD after peer2cf1c6be DONE; preserved its landed fixture/A1 fix and all unrelated dirty paths. Runtime OverflowError repair is already checkpoint1209c752 and unchanged. Adversarial review covers malformed timestamps, staging/rename containment, modes, hash-before-extract, bounded same-buffer host framing and cleanup; no new finding. Root-only protected parent + serialized per-VM lease remains the documented race assumption. Fresh scratch mutant without OverflowError:TC6+4 children fail exit1 vs65. Extra real-supervisor PAX nan/GNU base256 ±2**80 and signed PAX overflow probes:10/10 pass65 with no bytes/install/staging. Fresh exact unfiltered env-i Node24 plan gate:265 tests/264 pass/0 fail/1 pre-existing macOS opt-in skip,exit0; all TC/TT/AJ ran. Scoped diff --check clean,no __pycache__,source hashes unchanged. Evidence /tmp/cq-r11e2-restore.cPUxUf; handoff+gotcha saved. Per governor comment-67d2c864, END WITHOUT complete_task for wrapper checkpoint. Next session must verify delivered test path/no held= and rerun fresh gate before complete_task. No agent Git writes or .moe edits; no isolation claim.",
+      "startedAt": "2026-10-30T10:01:09.964Z",
+      "completedAt": "2026-10-30T11:23:59.413Z"
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-c2da129d",
   "branch": null,
   "prLink": null,
   "reopenCount": 2,
@@ -162,22 +167,35 @@
       "author": "governor-693b7073",
       "content": "Governor protocol for the session that resumes this row (reopen 2, so one more delivery-gap reject would hit the cap):\n1. Before any edit, `git status --porcelain -- scripts/tests/local-runner.test.mjs` must print nothing, and task-2cf1c6be must be DONE. If either check fails, stop and report_blocked on 2cf1c6be.\n2. Re-apply TC6 from comment-8dae859b as a hunk onto HEAD's file. Never copy /tmp/cq-r11e2-repair/local-runner.with-tc6.test.mjs over it: that is a stale full-file snapshot carrying 2cf1c6be's old +11/-2 fixture.\n3. Run the plan's UNFILTERED gate.\n4. End the session WITHOUT complete_task. The wrapper lands a checkpoint. Confirm its session-ended line shows local-runner.test.mjs committed with no held=.\n5. The resume session calls complete_task, citing that checkpoint sha.\nOn a Codex seat this lands without a TOOL witness, because the file was clean at pre-flight and every contesting task is idle or waits on this row.",
       "timestamp": "2026-10-30T10:53:32.689Z"
+    },
+    {
+      "id": "comment-67d2c864ab004938b37dadba36514f92",
+      "author": "governor-693b7073",
+      "content": "@worker-c2da129d Governor protocol for this resume (reopenCount 2, so a third reject hits the cap):\n1. `git status --porcelain -- scripts/tests/local-runner.test.mjs` was empty at your claim, and 2cf1c6be is DONE. Good.\n2. Re-apply the TC6/tarballOf test hunks from comment-8dae859b ONTO HEAD's file, which now carries 2cf1c6be's fixture plus 57075f7e's A1 fix. Never copy /tmp/cq-r11e2-repair/local-runner.with-tc6.test.mjs over it. That stale full-file snapshot would revert 2cf1c6be's landed lines.\n3. The runtime OverflowError→65 fix is already in at checkpoint 1209c752. Verify it; don't redo it. QA also asked for the 'nan' ValueError and base-256 mtime probes if they are in scope.\n4. Run the plan's UNFILTERED gate with no --test-skip-pattern.\n5. End the session WITHOUT complete_task. The wrapper lands a checkpoint. You're a Codex seat, so the file lands only because it was clean at your pre-flight and every contester waits on this row.\n6. Confirm that checkpoint's session-ended line shows the file committed with no held=. Then the resume session completes, citing that sha. If held= appears, don't complete; ping the governor.",
+      "timestamp": "2026-10-30T11:17:48.133Z"
+    },
+    {
+      "id": "comment-953dc0c9881243ceb3c3d3fb67b5bef1",
+      "author": "worker-c2da129d",
+      "content": "@governor-693b7073 Checkpoint-ready per your protocol; NO complete_task this session. Restored only comment-8dae859b's TC6/tarballOf hunks (+14/-1) onto the clean-at-preflight test file, preserving peer DONE task-2cf1c6be's fixture/A1 fix. Runtime OverflowError handler already landed in1209c752; unchanged. Fresh scratch mutation removing only that exception kills TC6 plus all4 children (exit1, actual1 vs65). Extra requested file/dir PAX nan and GNU/base256 ±2**80 probes, plus ±1e999:10/10 fixed65, empty stdout/stderr, no install/staging.\nFresh UNFILTERED `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`: exit0,265 tests/264 pass/0 fail/1 existing opt-in macOS skip,39921ms. Every TC/TT/AJ row ran. /tmp/cq-r11e2-restore.cPUxUf/{red,final-unfiltered,timestamp-probes}.log. Scoped diff --check clean; no __pycache__; all3 source hashes unchanged during gate. Test SHA256 ef867b40a580b27d410cefd3669db37236bd2e75f89925a5462b76317305a0e9.\nFinal adversarial review found no new issue; root-owned parent + serialized per-VM lease assumption remains explicit. Handoff and tarfile timestamp gotcha saved via Serena. Next session must verify actual wrapper checkpoint includes the test path with NO held=, then run fresh unfiltered verification and complete_task citing its SHA. Session worker-c2da129d@2026-10-30T11:16:52Z; wrapper owns all Git writes.",
+      "timestamp": "2026-10-30T11:23:59.399Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:52:33.539Z",
-  "updatedAt": "2026-10-30T10:53:32.689Z",
+  "updatedAt": "2026-10-30T11:23:59.413Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:57:25.378Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 14,
+    "executedStepCount": 15,
     "rejectCount": 2,
     "reopenCount": 2
   },
   "contextFetchedBy": [
     "worker-6e57c4f8",
-    "qa-ba3f4f35"
+    "qa-ba3f4f35",
+    "worker-c2da129d"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -187,7 +205,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [
     {
@@ -397,11 +416,9 @@
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-supervisor.py"
   ],
-  "blockedReason": "Per governor msg-458ea98c: shared scripts/tests/local-runner.test.mjs contains only task-2cf1c6be's still-undelivered +11/-2 fixture. My Codex session has no TOOL witness (harvest file0 bytes), and that path was dirty at preflight; it cannot land TC6 even after a mid-session peer commit. Runtime OverflowError→65 fix remains in guest-supervisor.py for wrapper checkpoint. TC6/helper edits withheld ONLY from shared tree, preserved verbatim in task comment-8dae859bb9d54b58a8e538ac9f1f9098. Fresh scratch unfiltered plan gate with runtime+TC6+untouched peer fixture passed:265 tests/264 pass/0 fail/1 pre-existing macOS skip, exit0; /tmp/cq-r11e2-repair/snapshot-unfiltered.log. No passing claim for undelivered current tests. After peer DONE, fresh session must restore that exact diff, rerun unfiltered gate, finish step5 and complete_task. Handoff and gotchas saved in Serena. No Git writes or .moe edits; no peer bytes reverted. This prevents a third known delivery-gap QA rejection.",
-  "blockedOnTaskIds": [
-    "task-2cf1c6bee5814ed98eb3d069d97b32b3"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T10:08:54.348Z"
+  "blockedFromStatus": null,
+  "blockedAt": null
 }

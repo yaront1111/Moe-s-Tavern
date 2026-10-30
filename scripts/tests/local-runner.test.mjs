@@ -3058,12 +3058,13 @@ const NODE_MEMBERS = [
 function tarballOf(dir, members = NODE_MEMBERS, compression = 'gz') {
   const file = path.join(dir, 'fixture.tar');
   const code = `import io, json, sys, tarfile
-with tarfile.open(sys.argv[1], 'w:' + sys.argv[2]) as tar:
+with tarfile.open(sys.argv[1], 'w:' + sys.argv[2], format=tarfile.PAX_FORMAT) as tar:
     for row in json.load(sys.stdin):
         entry = tarfile.TarInfo(row['name'])
         entry.type = {'file': tarfile.REGTYPE, 'dir': tarfile.DIRTYPE, 'symlink': tarfile.SYMTYPE, 'hardlink': tarfile.LNKTYPE, 'chr': tarfile.CHRTYPE}[row.get('type', 'file')]
         entry.mode, entry.uid, entry.gid = row.get('mode', 0o644), 12345, 12345
         entry.linkname = row.get('linkname', '')
+        entry.pax_headers = row.get('paxHeaders', {})
         data = row.get('data', '').encode()
         entry.size = len(data) if entry.isfile() else 0
         tar.addfile(entry, io.BytesIO(data))`;
@@ -3178,6 +3179,18 @@ test('TC5 existing installs stay untouched and absent data_filter fails closed',
   for (const setup of ["os.geteuid = lambda: os.getuid() + 1",
     "real = m.tarfile.TarFile.extractall\ndef unsafe(self, tree, **kwargs):\n    real(self, tree, **kwargs)\n    os.chmod(os.path.join(tree, 'node-v1.2.3-linux-x64/bin/node'), 0o4777)\nm.tarfile.TarFile.extractall = unsafe"]) {
     assertToolchainRefused(toolchainIn(scratch(t), input, setup));
+  }
+});
+
+test('TC6 overflowing PAX mtimes fail closed during file extraction and directory fixup', { skip: TOOLCHAIN_SKIP }, async t => {
+  for (const type of ['file', 'dir']) for (const mtime of ['1e999', '-1e999']) {
+    await t.test(`${type} mtime=${mtime}`, sub => {
+      const members = [{ name: 'node', type: 'dir' }, { name: 'node/x', type: 'file', data: 'x' }]
+        .map(entry => entry.type === type ? { ...entry, paxHeaders: { mtime } } : entry);
+      const run = toolchainIn(scratch(sub), toolchainFrames(tarballOf(scratch(sub), members)));
+      assertToolchainRefused(run);
+      assert.equal(String(run.stderr), '');
+    });
   }
 });
 
