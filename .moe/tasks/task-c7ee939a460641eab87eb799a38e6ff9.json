@@ -10,23 +10,159 @@
     "node scripts/tests/postflight-safe.mjs bash and node scripts/tests/postflight-safe.mjs powershell both exit 0, run in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST, then the bash fix (load test-driven-development). Files: scripts/tests/postflight.sh, scripts/moe-agent.sh.\n\nLane: 9d277494, then CQ-R13c2 (task-6f5cf10f), land before this row, and both edit all four of this row's files. R13c2 adds a `[protected runtime]` section just before each PASS line and a MOE_RUNTIME_PROTECTED gate near the top. So anchor every edit on the quoted text and the function names below, never on line numbers.\n\nEdit with the Edit tool. Many gated WT rows declare these files, so the landing is contested and needs the TOOL witness. Keep LF endings and ASCII text, then run `bash -n` on both files.\n\n(a) RED. In scripts/tests/postflight.sh's `[worktree reuse]` section, insert case (d):\n- directly after case (c)'s last line: `[ ! -s \"$CLI_ARGS_FILE\" ] && [ ! -e \"$WTR_W\" ] || wtr_fail budget-probe \"the CLI ran, or W was made\"`\n- and before `echo \"[worktree reuse] ok\"`.\n\nIt is a case, not a new section, so it stays ahead of R13c2's. Make pure additions: every existing line stays byte-identical, including case (b), the banner and the header comment (DoD 2). Case (c) leaves no W but keeps the branch, so (d)'s first run re-adds W through the wrapper, exactly as in the bug's repro:\n\n# (d) W holds work, then loses its index FILE (an agent's `rm <index>`, then a crash). With\n# no index a sparse read-tree overwrites the edit and still exits 0, so reuse refuses\n# with CREATE_FAILED and touches nothing. (c) left no W, so the first run re-adds it.\nwtr_run index-setup\n[ \"$wtr_code\" -eq 0 ] && [ -f \"$WTR_W/src/a.txt\" ] || wtr_fail index-setup \"W was not re-added\"\nprintf 'agent edit\\n' > \"$WTR_W/src/a.txt\"; printf 'agent new\\n' > \"$WTR_W/src/new.txt\"\nwtr_index=\"$(git -C \"$WTR_W\" rev-parse --path-format=absolute --git-path index)\"\nrm \"$wtr_index\"\nwtr_run index-deleted\n[ \"$wtr_code\" -eq 1 ] || wtr_fail index-deleted \"exit $wtr_code, expected 1\"\ngrep -q '\\[ERROR\\].* MOE_WORKTREE_CREATE_FAILED: .* has no index file but holds more than \\.git' \"$TMP_DIR/wrapper-wtr-index-deleted.out\" \\\n  || wtr_fail index-deleted \"no CREATE_FAILED line for the missing index\"\n[ \"$(wtr_blocks)\" = 1 ] && grep -q '\"reason\":\"MOE_WORKTREE_CREATE_FAILED: .* has no index file' \"$WTR_DIR/.moe/evidence-rpcs.jsonl\" \\\n  || wtr_fail index-deleted \"not exactly one report_blocked naming CREATE_FAILED\"\n[ ! -s \"$CLI_ARGS_FILE\" ] || wtr_fail index-deleted \"the CLI ran\"\nprintf 'agent edit\\n' | cmp -s - \"$WTR_W/src/a.txt\" && printf 'agent new\\n' | cmp -s - \"$WTR_W/src/new.txt\" \\\n  || wtr_fail index-deleted \"the edited or the untracked file lost its bytes\"\n[ ! -e \"$wtr_index\" ] || wtr_fail index-deleted \"the refusal wrote W's index\"\n\nProve RED on Linux bash against HEAD's wrapper. Work in scratch outside the checkout, never under scripts/tests/, and run from the repo root:\n  R=$(mktemp -d /mnt/d/moe-scratch/c7ee939a-sh.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts | tar -x -C \"$R\" && cp scripts/tests/postflight.sh \"$R/scripts/tests/postflight.sh\" && sed -n '/^# --- \\[worktree reuse\\]/,/^echo \"\\[worktree reuse\\] ok\"/p' \"$R/scripts/tests/postflight.sh\" > \"$R/section.sh\" && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') bash /mnt/d/moe-scratch/c7ee939a-drivers/driver.sh \"$R\" \"$R/section.sh\"\nExpected: `WORKTREE REUSE FAILED (index-deleted): exit 0, expected 1`.\n- driver.sh is a copy of QA's driver; it supplies the harness preamble the section uses.\n- If driver.sh is gone, or a landing made the section need preamble it lacks, run postflight-safe bash on the snapshot instead.\n\n(b) GREEN. In scripts/moe-agent.sh, provision_worktree's reuse branch (`if [ \"$found\" = found ]; then`), replace only the line `[ -e \"$out\" ] || finish=true` with:\n        if [ ! -e \"$out\" ]; then\n            out=$(ls -A \"$w\" 2>/dev/null) && [ \"$out\" = .git ] \\\n                || worktree_stop MOE_WORKTREE_CREATE_FAILED \"$w has no index file but holds more than .git; a human must inspect it\"\n            finish=true\n        fi\nThen replace the two comment lines above the rev-parse with:\n        # No index file: a session died between the add and read-tree. Finish it, but\n        # only a W holding nothing but .git: with no index, a sparse read-tree overwrites\n        # a file already in W with HEAD's bytes and still exits 0.\n        # An empty index proves nothing: an agent's `git rm -r .` empties one on purpose.\nNothing else changes: the created and re-added paths, the finish block, the `.moe` check and shared mode stay as they are.\n\nWhy this shape:\n- A genuine `--no-checkout` W holds exactly `.git`, and still does after `sparse-checkout set` (measured on git 2.43 and 2.54).\n- Error handling: the exact `ls -A` compare fails closed on any listing error.\n- Git Bash lists Git for Windows' Hidden `.git` (measured).\n- The `|| worktree_stop` is outside `$(...)`, so the stop runs in the main shell, as worktree_stop requires.\n\nGREEN check:\n1. `cp scripts/moe-agent.sh \"$R/scripts/moe-agent.sh\"`, then rerun the driver. Expect `[worktree reuse] ok` and `DRIVER DONE`: (b), (a1), (a2), (c) and (d) all pass.\n2. Run the held-out cases: `env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_WORKTREE_ONLY=half-made,lifecycle,dir-exists node \"$R/scripts/tests/postflight-worktree.cjs\" sh \"$R/scripts/moe-agent.sh\" \"$R/scripts/tests/postflight-fake-proxy.js\" \"$(mktemp -d /mnt/d/moe-scratch/c7ee939a-cjs.XXXXXX)\" bash` must print `3 ok, 0 failed`.\n\nThe architect measured this exact guard GREEN on Linux bash: QA's idxdel probe, the whole section, and those three held-out cases.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "PowerShell twin, same order: test first, then the fix. Files: scripts/tests/postflight.ps1, scripts/moe-agent.ps1. Both keep their UTF-8 BOM and LF endings. Edit them with the Edit tool, and keep the new text ASCII.\n\n(a) RED. In postflight.ps1's `[worktree reuse]` block, insert case (d) with the block's 4-space indent:\n- directly after case (c)'s last line: `if ((Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) -or (Test-Path -LiteralPath $wtrW)) { Stop-Wtr 'budget-probe' 'the CLI ran, or W was made' $run }`\n- and before `Write-Host '[worktree reuse] ok'`.\nMake pure additions, as in step 1:\n\n    # (d) W holds work, then loses its index FILE (an agent's `rm <index>`, then a crash). With\n    # no index a sparse read-tree overwrites the edit and still exits 0, so reuse refuses\n    # with CREATE_FAILED and touches nothing. (c) left no W, so the first run re-adds it.\n    $run = Invoke-WtrRun 'index-setup'\n    if ($run.Code -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $wtrW 'src\\a.txt'))) { Stop-Wtr 'index-setup' 'W was not re-added' $run }\n    [IO.File]::WriteAllText((Join-Path $wtrW 'src\\a.txt'), \"agent edit`n\")\n    [IO.File]::WriteAllText((Join-Path $wtrW 'src\\new.txt'), \"agent new`n\")\n    $wtrIndex = \"$(@(Invoke-WtrGit @('-C', $wtrW, 'rev-parse', '--path-format=absolute', '--git-path', 'index')) | Select-Object -First 1)\"\n    Remove-Item -LiteralPath $wtrIndex -Force\n    $run = Invoke-WtrRun 'index-deleted'\n    if ($run.Code -ne 1) { Stop-Wtr 'index-deleted' \"exit $($run.Code), expected 1\" $run }\n    if ($run.Text -cnotmatch '\\[ERROR\\] MOE_WORKTREE_CREATE_FAILED: .+ has no index file but holds more than \\.git') { Stop-Wtr 'index-deleted' 'no CREATE_FAILED line for the missing index' $run }\n    $blocks = @(Get-WtrBlocks)\n    if ($blocks.Count -ne 1 -or -not $blocks[0].Contains('\"reason\":\"MOE_WORKTREE_CREATE_FAILED: ') -or -not $blocks[0].Contains(' has no index file')) { Stop-Wtr 'index-deleted' 'not exactly one report_blocked naming CREATE_FAILED' $run }\n    if (Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) { Stop-Wtr 'index-deleted' 'the CLI ran' $run }\n    if ([IO.File]::ReadAllText((Join-Path $wtrW 'src\\a.txt')) -cne \"agent edit`n\" -or [IO.File]::ReadAllText((Join-Path $wtrW 'src\\new.txt')) -cne \"agent new`n\") { Stop-Wtr 'index-deleted' 'the edited or the untracked file lost its bytes' $run }\n    if (Test-Path -LiteralPath $wtrIndex) { Stop-Wtr 'index-deleted' \"the refusal wrote W's index\" $run }\n\nProve RED under Windows PowerShell 5.1 from the WSL seat. The driver.ps1 copy strips MOE_* and CLAUDE* itself. The subshell gives powershell.exe a drive cwd, not a UNC one:\n  R=$(mktemp -d /mnt/d/moe-scratch/c7ee939a-ps.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD scripts | tar -x -C \"$R\" && cp scripts/tests/postflight.ps1 \"$R/scripts/tests/postflight.ps1\" && sed -n '/# --- \\[worktree reuse\\]/,/Write-Host .\\[worktree reuse\\] ok./p' \"$R/scripts/tests/postflight.ps1\" > \"$R/section.ps1\" && (cd /mnt/d/moe-scratch || exit 1; powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w /mnt/d/moe-scratch/c7ee939a-drivers/driver.ps1)\" -RootDir \"$(wslpath -w \"$R\")\" -Section \"$(wslpath -w \"$R/section.ps1\")\")\nExpected: `DRIVER ERROR: WORKTREE REUSE FAILED (index-deleted): exit 0, expected 1`.\n\n(b) GREEN. In scripts/moe-agent.ps1, Install-MoeTaskWorktree's reuse branch (`if ($hit) {`), replace only `$finish = -not (Test-Path -LiteralPath $index)` with:\n        if (-not (Test-Path -LiteralPath $index)) {\n            # -Force: Git for Windows marks .git Hidden, and a plain listing leaves it out.\n            $names = @(Get-ChildItem -LiteralPath $W -Force -ErrorAction Stop | ForEach-Object { $_.Name })\n            if ($names.Count -ne 1 -or $names[0] -cne '.git') {\n                Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' \"$W has no index file but holds more than .git; a human must inspect it\"\n            }\n            $finish = $true\n        }\nReword the same two comment lines exactly as in step 1, as # comments. The message text after the path must match the sh twin's byte for byte.\n\nNotes:\n- -Force is mandatory. Measured on PS 5.1 with git 2.54.0.windows.1, a plain Get-ChildItem of a half-made W returns nothing, because .git carries the Hidden attribute. Without -Force, case (b) and the held-out half-made case would refuse.\n- Error handling: a listing error throws, and Initialize-MoeWorktree's catch turns that into MOE_WORKTREE_CREATE_FAILED with one report_blocked. So it still fails closed.\n\nGREEN check: `cp scripts/moe-agent.ps1 \"$R/scripts/moe-agent.ps1\"`, rerun the driver, and expect `[worktree reuse] ok` and `DRIVER DONE`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE. Fresh output of this exact command is the complete_task verification evidence. Run it from a WSL seat:\n\ncd /mnt/d/projexts/moes && S=$(mktemp -d /mnt/d/moe-scratch/v-c7ee939a.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u) && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell\n\nWhat it covers:\n- It snapshots HEAD's scripts plus this task's four files outside the shared checkout (GLOBAL rail, DoD 4).\n- The token-set diff and parity-check.sh cover DoD 3.\n- Both full harnesses run the held-out postflight-worktree.cjs, from postflight.sh and postflight.ps1, so DoD 2 is covered on both engines.\n\nIt takes about 30 minutes, so run it in the background with its output going to a log. Then submit its exit code and output tail.\n\nExpected results:\n- an empty diff;\n- PARITY PASS;\n- failureClass NONE and exit 0 for both bash and powershell.\n\nRules:\n- On a failure, fix the cause and rerun the whole command. Never trim it.\n- Never edit postflight-worktree.cjs or postflight-fake-proxy.js (the governor's instruction).\n- QA: if any of the four files is dirty in the shared checkout at audit time, drop the cp loop so the run audits the landed bytes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's own diff, as the last step (load adversarial-self-review). Check each item and note the result:\n1. Scope.\n   - `git diff HEAD -- scripts/tests/postflight.sh scripts/tests/postflight.ps1` is pure additions inside [worktree reuse], with case (b) untouched.\n   - `git diff --exit-code HEAD -- scripts/tests/postflight-worktree.cjs scripts/tests/postflight-fake-proxy.js` exits 0.\n   - Each wrapper's diff is only the guard plus its comment.\n2. Twin parity. Both twins use the same rule (exactly one entry, named .git), the same code, and the same message after the path. The ps1 side uses -Force and -cne. The sh `|| worktree_stop` sits outside $(...).\n3. Mutation. With either twin's guard reverted, its case (d) goes RED, as steps 1 and 2 showed. With the guard, it is GREEN.\n4. Error handling: fail closed. An ls error or a Get-ChildItem throw refuses and never finishes. The refusal writes nothing to W: no index is written and the file bytes are kept, and both are asserted.\n5. Unchanged at HEAD: the created path, the re-added path, reuse with an index, the .moe check, and shared mode (epic rail 4).\n6. Residuals, stated in the completion summary, not fixed here:\n   - A crash in the middle of read-tree now refuses for a human instead of finishing.\n   - A W whose agent deleted every file and the index lists as just .git, so it is finished: HEAD's files come back and no bytes are lost.\n   - OS litter (.DS_Store, desktop.ini) in a half-made W refuses (fail closed).\n   - Two wrappers on one task still need a double claim (WT-04's note).\n7. Size and docs.\n   - About 50 net lines, far under the 400 cap.\n   - Docs untouched: WT-17 lists codes from the landed code, and the governor keeps TROUBLESHOOTING and ARCHITECTURE out of this row.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote: parent WT-04 (c20464ff) is DONE; QA-found data-loss in WT-04's worktree reuse path that must land before WT-19's flip. Slotted into the wrapper lane between 9d277494 and WT-05 (c4cccb84) so later WT rows build on the fixed reuse logic.",
   "createdBy": "QA",
   "parentTaskId": null,
   "dependsOn": [
-    "task-c20464ff64ca49fca4371dd9b5194364"
+    "task-c20464ff64ca49fca4371dd9b5194364",
+    "task-9d27749421b045c18a6c6eb99694236d",
+    "task-6f5cf10f78184c38a46e6973cadda817"
   ],
   "priority": "MEDIUM",
   "order": 30,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-8af70cd171e247959ac8fa10d87b7ffa",
+      "author": "governor-693b7073",
+      "content": "Governor, 22:42Z: promoting this row and placing it in the wrapper lane. WT-04 (task-c20464ff) is DONE (approved 22:38Z).\n\nLane slot:\n- Order: 9d277494 (WORKING now) → THIS ROW → WT-05 (task-c4cccb84) → 7db14e2d → …\n- Why: the fix corrects WT-04's reuse path before WT-05/06/07/10G build on provision_worktree / Install-MoeTaskWorktree. It also keeps the fix ahead of WT-19's flip, as QA asked.\n\nThe wrapper files (scripts/moe-agent.{sh,ps1}, scripts/tests/postflight.{sh,ps1}, postflight-fake-proxy.js) are serialized in that one chain, so:\n- Declare exactly what you edit.\n- Do not touch the held-out postflight-worktree.cjs/postflight-fake-proxy.js unless the fix truly needs it.\n\nInputs:\n- QA's repro and fix direction are in the description. QA's probe files are under /mnt/d/moe-scratch/qa-c20464ff-r2.Wnnxai/ (section-idxdel.sh, driver.sh).\n- The fix shape is the planner's call. QA suggests: finish W only when it holds nothing but its .git file; otherwise MOE_WORKTREE_CREATE_FAILED, touch nothing, one report_blocked, no CLI, exit 1. Apply it in both twins.\n\nGates:\n- Run gates in a git-archive snapshot.\n- No npm build/clean/install in the shared checkout (GLOBAL rail).\n- Size: stay inside 400 net. If the twin tests push past that, say so in the plan.",
+      "timestamp": "2026-10-30T22:40:03.944Z"
+    },
+    {
+      "id": "comment-c2536cd90caa4f0ab92cd71ec7262e6e",
+      "author": "governor-693b7073",
+      "content": "Governor, 23:00Z, lane update for the planner: CQ-R13c2 (task-6f5cf10f) now lands BEFORE this row. The order is 9d277494 → R13c2 → THIS ROW → WT-05.\n\nR13c2 adds two things:\n- a MOE_RUNTIME_PROTECTED gate near the top of both wrappers (sh, next to PROXY_PATH_OVERRIDE; ps1, after `$env:GIT_TERMINAL_PROMPT = '0'`);\n- a `[protected runtime]` section just before the PASS line in postflight.sh/.ps1.\n\nSo anchor your edits on function names (provision_worktree / Install-MoeTaskWorktree), not on line numbers, and put any new postflight section after R13c2's. Please keep docs/TROUBLESHOOTING.md and docs/ARCHITECTURE.md out of this row if you can: CQ-R13 (f4811a72) edits both and may run in parallel with you. If you do need either one, name it in the plan and I will order the pair.",
+      "timestamp": "2026-10-30T22:56:47.178Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T22:26:28.006Z",
-  "updatedAt": "2026-10-30T22:26:28.006Z"
+  "updatedAt": "2026-10-30T23:04:14.307Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T22:40:09.157Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T22:40:20.385Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-915213a1"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T23:04:14.287Z",
+  "executionContract": {
+    "intendedBehavior": "Worktree-mode resume. When the registered W on moe/task/<id> has no per-worktree index file, the wrapper finishes W (sparse-checkout set, then read-tree -mu HEAD) only if W's directory holds exactly one entry, .git.\n\nOtherwise it refuses with MOE_WORKTREE_CREATE_FAILED '<W> has no index file but holds more than .git; a human must inspect it':\n- one [ERROR] line;\n- exactly one report_blocked;\n- no CLI;\n- exit 1;\n- W's files, and its missing index, are left untouched.\n\nThe rule and the message are the same in moe-agent.sh (provision_worktree) and moe-agent.ps1 (Install-MoeTaskWorktree).",
+    "acceptanceCriteria": [
+      "Case (d) in the [worktree reuse] section of both postflight.sh and postflight.ps1: a W that the wrapper re-added, then given an edited tracked src/a.txt and an untracked src/new.txt, then stripped of its index file, refuses as described above. Both files keep their exact bytes, and the index file stays absent.",
+      "A W holding only .git with no index file is still finished: [worktree reuse] case (b) and the held-out postflight-worktree.cjs half-made case pass unchanged.",
+      "The sorted MOE_(WORKTREE|LAND|CONTROL|BOARD)_ token sets of both wrappers are identical, and bash scripts/tests/parity-check.sh passes.",
+      "postflight-safe bash and postflight-safe powershell both exit 0, run in a snapshot outside the shared checkout."
+    ],
+    "invariants": [
+      "Unchanged from HEAD: the created W path, the re-added W path, reuse with the index file present, the W/.moe check, and shared-checkout mode.",
+      "No new MOE_* code: the refusal reuses MOE_WORKTREE_CREATE_FAILED.",
+      "postflight-worktree.cjs and postflight-fake-proxy.js are unchanged. Existing [worktree reuse] lines stay byte-identical; the harness diff is additions only.",
+      "The refusal writes nothing to W: no index, no file change, no removal."
+    ],
+    "compatibility": [
+      "Shared-checkout mode is unchanged (epic rail 4), and worktree mode stays off by default.",
+      "A genuine --no-checkout half-made W, holding only .git before or after sparse-checkout set, is still finished, so WT-04's crash recovery survives."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh provision_worktree: the reuse branch's handling of a missing index file, and its comment.",
+      "scripts/moe-agent.ps1 Install-MoeTaskWorktree: the reuse branch's handling of a missing index file, and its comment.",
+      "scripts/tests/postflight.sh and scripts/tests/postflight.ps1: case (d), added inside the [worktree reuse] section before its ok line."
+    ],
+    "reuse": [
+      "The refusal uses worktree_stop / Stop-MoeWorktreeSeat: one report_blocked, then exit 1.",
+      "Case (d) reuses the existing [worktree reuse] helpers: wtr_run, wtr_fail and wtr_blocks in sh; Invoke-WtrRun, Stop-Wtr, Get-WtrBlocks and Invoke-WtrGit in ps1.",
+      "QA's section drivers, copied to /mnt/d/moe-scratch/c7ee939a-drivers/, give fast RED/GREEN runs per engine."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh provision_worktree: out=`git -C \"$w\" rev-parse --path-format=absolute --git-path index`, then `[ -e \"$out\" ] || finish=true`. The finish block runs `sparse-checkout set --no-cone '/*' '!/.moe/'`, then `read-tree -mu HEAD`.",
+      "scripts/moe-agent.ps1 Install-MoeTaskWorktree: `$finish = -not (Test-Path -LiteralPath $index)`. It runs inside Initialize-MoeWorktree's try/catch, which maps a throw to MOE_WORKTREE_CREATE_FAILED.",
+      "Measured: a half-made W holds exactly .git after add --no-checkout and after sparse-checkout set (git 2.43 and 2.54.0.windows.1). On Windows .git is Hidden: PS 5.1 Get-ChildItem needs -Force, and Git Bash's ls -A lists it.",
+      "Measured by QA qa-4b0c6c8e, and again by the architect through the wrapper: with no index file in a sparse W, read-tree -mu HEAD overwrites an existing tracked file with HEAD's bytes and exits 0."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && S=$(mktemp -d /mnt/d/moe-scratch/v-c7ee939a.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u) && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: QA's direction. When W has no index file, finish it only if W holds exactly one entry, `.git`. Otherwise refuse with MOE_WORKTREE_CREATE_FAILED and touch nothing.\n\nRejected:\n1. `git reset` (mixed), to rebuild the index and keep W's files. After a crash in the middle of read-tree, the paths read-tree had not written yet would look like deletions, and the next landing could commit them. It would also hide a state a human should see.\n2. Comparing every W file to HEAD's blob and finishing when all match. Too much code for a crash window of milliseconds, while refusing is safe.\n3. Asking git (status, ls-files). With no index, git reports every path as both staged-deleted and untracked. Listing W directly is simpler and does not depend on sparse patterns.\n4. `find -mindepth 1 -maxdepth 1 ! -name .git`. It works, but a Windows PATH can put FIND.EXE first. An exact compare of `ls -A` output is the shortest option and fails closed.",
+    "codebaseInsights": "Code paths:\n- sh: provision_worktree's reuse branch sets finish from `[ -e \"$out\" ]`, where out is `git -C \"$w\" rev-parse --path-format=absolute --git-path index`. The finish block (sparse-checkout set, then read-tree -mu HEAD) is shared with the created and re-added paths through `added || finish`.\n- ps1: Install-MoeTaskWorktree runs inside Initialize-MoeWorktree's try/catch, which maps any throw to CREATE_FAILED. Stop-MoeWorktreeSeat's exit is not caught.\n\nMeasured by the architect, 2026-10-31:\n- A half-made W holds exactly `.git`, after `add --no-checkout` and after `sparse-checkout set`, on git 2.43 (WSL) and 2.54.0.windows.1.\n- Git for Windows marks `.git` Hidden. PS 5.1 Get-ChildItem returns [] without -Force and [.git] with it. Git Bash `ls -A` lists it.\n- `worktree remove --force --force` works on a W with no index.\n- The fake proxy's report_blocked only logs, so the extra runs after case (c) are safe.\n\nThe held-out postflight-worktree.cjs runs from postflight.sh (`postflight-worktree.cjs sh` line) and from postflight.ps1 (`postflight-worktree.cjs ps1`). So postflight-safe covers DoD 2 on both engines.\n\nPre-validated on Linux bash with the step 1 guard:\n- QA's idxdel probe went from RED (a.txt reverted, CLI ran) to GREEN (CREATE_FAILED, 1 block, no CLI, bytes kept).\n- The whole [worktree reuse] section passed.\n- Held-out lifecycle, half-made and dir-exists: 3 ok.\n\nSection drivers: /mnt/d/moe-scratch/c7ee939a-drivers/, byte copies of QA's files in /mnt/d/moe-scratch/qa-c20464ff-r2.Wnnxai/.",
+    "risks": "- The ps1 -Force trap: without it, case (b) and the held-out half-made case refuse.\n- Lane order (governor, 22:56Z): 9d277494 → CQ-R13c2 (task-6f5cf10f) → this row → WT-05.\n  - Both earlier rows edit all four files. R13c2 adds a `[protected runtime]` section before each PASS line and a MOE_RUNTIME_PROTECTED gate near the top.\n  - So anchor on text, and keep case (d) inside [worktree reuse].\n  - R13c2's gate fires only on MOE_RUNTIME_PROTECTED=1. The drivers and the verification strip MOE_*.\n- The landing is contested: many gated WT rows declare these files. Use the Edit tool, never a shell rewrite.\n- Keep both .ps1 files' BOM and LF endings.\n- Keep docs/TROUBLESHOOTING.md and docs/ARCHITECTURE.md out of this row (governor: CQ-R13 may run in parallel).\n- Size: about 50 net lines.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/postflight-worktree.cjs",
+      "/mnt/d/moe-scratch/c7ee939a-drivers/driver.sh",
+      "/mnt/d/moe-scratch/c7ee939a-drivers/driver.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T23:04:14.307Z",
+  "approvedPlanRevision": 1
 }
