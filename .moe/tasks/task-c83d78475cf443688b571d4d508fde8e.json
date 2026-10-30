@@ -53,7 +53,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -88,7 +88,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:41:08.564Z",
-  "updatedAt": "2026-10-30T14:51:41.428Z",
+  "updatedAt": "2026-10-30T14:59:34.048Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T14:24:51.983Z",
@@ -97,13 +97,16 @@
   "contextFetchedBy": [
     "qa-ba3f4f35",
     "architect-899a90d6",
-    "worker-c2da129d"
+    "worker-c2da129d",
+    "qa-952969be"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-30T14:24:54.415Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-30T14:59:34.048Z",
+    "wallClockMs": 2079633
   },
   "tier": "light",
   "effort": "high",
@@ -209,5 +212,9 @@
     "kind": "completion",
     "sessionId": "worker-c2da129d@2026-10-30T14:47:11Z",
     "at": "2026-10-30T14:50:55.838Z"
-  }
+  },
+  "completedAt": "2026-10-30T14:59:34.048Z",
+  "reviewCompletedAt": "2026-10-30T14:59:34.048Z",
+  "reviewSummary": "Reviewed completion 0dc350fb (on moe/work-2026-10-24, pushed). Non-board diff: packages/moe-daemon/src/index.test.ts +27/-0, i.e. the staleLockReason import and X15. index.ts is untouched (invariant). X1-X14 are unchanged, there is no new skip or todo, no try/catch, and cleanup uses fs.rmSync without force. Size is far under the cap.\n\nRe-ran independently in a fresh Linux snapshot of the whole repo at HEAD b44951dd, with a lock-matching npm ci, env -i, NO_COLOR=1. The worktree index.ts and index.test.ts equal HEAD.\n- `cd packages/moe-daemon && npm test`: rc0, 208 files passed, 6047 passed / 19 skipped (6066). Log /tmp/moe-c83qa-linux-full.log.\n- X15 alone: 1 passed, 36 filtered.\n\nMutants in the scratch index.ts, restored and cmp'd afterwards:\n- Raw projectPath compare in staleLockReason: rc1, 8 AssertionErrors, one per live/dead array for each of the 4 writers, so every alias-reader tuple fails (/tmp/moe-c83qa-mut-raw.log).\n- Mismatch line deleted: rc1, the foreign-directory control fails (/tmp/moe-c83qa-mut-nomm.log).\n\nNative Windows node v24 in a Windows temp snapshot of HEAD, robocopied node_modules with vitest 5.0.5 equal to the lock: `npx vitest run src/index.test.ts` rc0, 34 passed / 3 existing skips. Verbose output shows X15 RAN and passed with the drive-less /x alias (/tmp/moe-c83qa-win.log). X12-X14 also pass.\n\nDoD1: X15 asserts exact [writer, reader, reason] tuples across the canonical, alias (//x on Linux, /x on Windows), relative and ./base/ spellings. Live owner gives null, dead pid gives 'lock owner not alive', and a lock for another directory gives 'projectPath mismatch'. The fix itself is prerequisite 25ba449a, which staleLockReason now uses (canonicalProjectPath at index.ts:228). DoD2: mkdtemp testDir only, never the live .moe.\n\nSecond-pass complexity review: no findings. Residual non-goals: symlinks/junctions (task-eea78d1d), 8.3 names, \\\\?\\ prefixes, case-insensitive macOS volumes. Scratch snapshots deleted.",
+  "requiredCheckAtDone": null
 }

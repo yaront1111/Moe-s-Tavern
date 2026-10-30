@@ -1,5 +1,5 @@
 // Tests src/generated/initFiles.ts; the subject is prebuild-generated, but this test is handwritten.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -13,6 +13,8 @@ const MARKER_RE = /^<!--\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*-->/;
 const WAVE1_RUNTIME_DIRS = ['attempts/', 'candidates/', 'checks/', 'reviews/', 'receipts/'] as const;
 // The .moe/.gitignore every project got before the Wave 1 directories existed.
 const BUNDLED_GITIGNORE_V1 = '# Moe runtime files (not shared)\ndaemon.json\ndaemon.lock\nworkers/\nproposals/\n';
+const PINS = 'pins/';
+const BUNDLED_GITIGNORE_V2 = '# Moe runtime files (not shared)\ndaemon.json\ndaemon.lock\nworkers/\nproposals/\nattempts/\ncandidates/\nchecks/\nreviews/\nreceipts/\n';
 
 const trimmedLines = (text: string) => text.split(/\r?\n/).map((line) => line.trim());
 
@@ -26,6 +28,66 @@ describe('Wave 1 record directories are gitignored', () => {
     expect(trimmedLines(rootGitignore)).toEqual(
       expect.arrayContaining(WAVE1_RUNTIME_DIRS.map((dir) => `.moe/${dir}`))
     );
+  });
+});
+
+describe('chat pins are gitignored', () => {
+  let moeDir: string;
+  beforeEach(() => {
+    moeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-initfiles-pins-'));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(moeDir, { recursive: true, force: true });
+  });
+
+  it('bundles exactly the previous template plus pins/', () => {
+    expect(GITIGNORE_CONTENT).toBe(BUNDLED_GITIGNORE_V2 + 'pins/\n');
+  });
+
+  it('writes exactly one pins/ line for a fresh project', () => {
+    writeInitFiles(moeDir);
+    const onDisk = fs.readFileSync(path.join(moeDir, '.gitignore'), 'utf-8');
+    expect(trimmedLines(onDisk).filter((line) => line === PINS)).toEqual([PINS]);
+  });
+
+  const crlf = BUNDLED_GITIGNORE_V2.trimEnd().replace(/\n/g, '\r\n');
+  it.each([
+    ['previously current, LF', BUNDLED_GITIGNORE_V2, BUNDLED_GITIGNORE_V2 + 'pins/\n'],
+    ['previously current, CRLF without trailing newline', crlf, crlf + '\npins/\n'],
+    ['custom line', BUNDLED_GITIGNORE_V2 + 'local-cache/\n', BUNDLED_GITIGNORE_V2 + 'local-cache/\npins/\n'],
+    ['pins already listed', BUNDLED_GITIGNORE_V2 + 'pins/\n', BUNDLED_GITIGNORE_V2 + 'pins/\n'],
+    ['pins already listed, padded', BUNDLED_GITIGNORE_V2 + '  pins/  \n', BUNDLED_GITIGNORE_V2 + '  pins/  \n'],
+    ['no Moe header', 'custom-ignore\nworkers/\n', 'custom-ignore\nworkers/\n'],
+  ])('migrates without rewriting existing bytes (%s)', (_label, existing, expected) => {
+    const gitignorePath = path.join(moeDir, '.gitignore');
+    fs.writeFileSync(gitignorePath, existing);
+    writeInitFiles(moeDir);
+    expect(fs.readFileSync(gitignorePath, 'utf-8')).toBe(expected);
+    writeInitFiles(moeDir);
+    expect(fs.readFileSync(gitignorePath, 'utf-8')).toBe(expected);
+  });
+
+  it.each([
+    ['existing ignore', BUNDLED_GITIGNORE_V2],
+    ['missing ignore', undefined],
+  ])('propagates EIO without destructive rewrite (%s)', (_label, existing) => {
+    const gitignorePath = path.join(moeDir, '.gitignore');
+    if (existing !== undefined) fs.writeFileSync(gitignorePath, existing);
+    const realRename = fs.renameSync.bind(fs);
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (path.basename(to.toString()) === '.gitignore') {
+        throw Object.assign(new Error('EIO writing .gitignore'), { code: 'EIO' });
+      }
+      return realRename(from, to);
+    });
+    expect(() => writeInitFiles(moeDir)).toThrow(/EIO/);
+    if (existing !== undefined) {
+      expect(fs.readFileSync(gitignorePath, 'utf-8')).toBe(existing);
+    } else {
+      expect(fs.existsSync(gitignorePath)).toBe(false);
+    }
+    expect(fs.readdirSync(moeDir).filter((name) => /^\.gitignore\..*\.tmp$/.test(name))).toEqual([]);
   });
 });
 

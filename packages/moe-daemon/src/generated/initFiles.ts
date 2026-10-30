@@ -834,8 +834,8 @@ Do NOT analyze why tests failed — that's the worker's job. Just run them and s
 Do NOT call \`moe.*\` MCP tools — the worker owns the Moe state. You just execute and report.`
 };
 
-/** Daemon-written .moe/ record directories: local runtime state, never committed. */
-const RUNTIME_RECORD_DIRS = ['attempts/', 'candidates/', 'checks/', 'reviews/', 'receipts/'];
+/** Daemon-written .moe/ directories (delivery records and chat pins): local state, never committed. */
+const RUNTIME_RECORD_DIRS = ['attempts/', 'candidates/', 'checks/', 'reviews/', 'receipts/', 'pins/'];
 const GITIGNORE_HEADER = '# Moe runtime files (not shared)';
 
 /**

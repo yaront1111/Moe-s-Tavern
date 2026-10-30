@@ -155,8 +155,8 @@ export const SUBAGENT_DOCS: Record<string, string> = {
 ${subagentEntries.join(',\n')}
 };
 
-/** Daemon-written .moe/ record directories: local runtime state, never committed. */
-const RUNTIME_RECORD_DIRS = ['attempts/', 'candidates/', 'checks/', 'reviews/', 'receipts/'];
+/** Daemon-written .moe/ directories (delivery records and chat pins): local state, never committed. */
+const RUNTIME_RECORD_DIRS = ['attempts/', 'candidates/', 'checks/', 'reviews/', 'receipts/', 'pins/'];
 const GITIGNORE_HEADER = '# Moe runtime files (not shared)';
 
 /**
