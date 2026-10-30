@@ -108,7 +108,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -138,12 +138,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:37:06.800Z",
-  "updatedAt": "2026-10-30T06:33:43.493Z",
+  "updatedAt": "2026-10-30T06:39:13.561Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:55:00.461Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T06:39:13.561Z",
+    "wallClockMs": 27853100
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -324,5 +326,9 @@
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "QA (qa-952969be): substance GREEN, parked on size only. Completion a4744468 (on moe/work-2026-10-24) measures 465 changed lines (+428/-37 by git diff --numstat) against the 400 cap. The worker's waiver prop-d975cf4e82a64baba646abba431068c3 (EPIC ADD_RAIL, cap 465 across the 5 owned files) is still PENDING and not in the epic rails, so QA cannot approve yet and a size-only reject would just burn a reopen.\nEvidence: fresh DoD gate on a pure git archive of a4744468, env -i Node 24.21.0: 73 tests, 72 pass, 1 skip (K9 root-only, pre-existing), exit 0. local-runner-agents.test.mjs is byte-identical to baa52df and AB1-AB11 pass (DoD 3). TC1-TC7 pass (DoD 1, 2). agent-cache.mjs adds exactly one export, fetchPinnedFile.\n15 independent mutants on a scratch copy: 12 killed; 2 equivalent (dropping the size-null stat precheck; fetchPinnedFile's catch passing raw errors, unreachable because every internal throws a PINNED code); 1 advisory survivor: dropping `entry.version === version` in toolchain-cache.mjs validEntry is not caught, because the TC2 'different versions' row also rewrites the url. The code refuses that shape today; it is not a defect.\nRoute: APPROVED -> set_task_status REVIEW; QA approves with no new bytes. REJECTED -> set_task_status PLANNING for a review-scope split (runtime+manifest 195 / tests 270). unblock_worker cannot reach this unassigned parked row.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-30T06:39:13.561Z",
+  "reviewCompletedAt": "2026-10-30T06:39:13.561Z",
+  "reviewSummary": "APPROVED, no new bytes (resume of QA's size-only park). Completion a4744468 is on moe/work-2026-10-24, and git log a4744468..HEAD on the 6 runner/test paths is empty.\nSize: numstat +80/-34 agent-cache, +72 toolchain-cache, +9 toolchain.json, +262 check test, +5/-3 bundle test = 465 (+428/-37). That exactly matches the CQ-R11e1 rail now in allRails.epic (cap 465, those 5 files), which waives size only.\nFresh gate on a pure git archive of the branch HEAD, env -i Node 24.21.0: `node --test local-runner-check, -agents, -bundle` gave exit 0, 73 tests, 72 pass, 1 skip (K9, which needs root; pre-existing).\n- DoD1: TC1 and TC2 pass.\n- DoD2: TC3-TC7 pass.\n- DoD3: local-runner-agents.test.mjs is byte-identical to baa52df, AB1-AB11 pass, and agent-cache.mjs adds exactly one export, fetchPinnedFile.\n- DoD4: the worker's verification evidence reproduces.\nThe pinned sha256 values were cross-checked independently against https://nodejs.org/dist/v24.22.2/SHASUMS256.txt: x64 48cc0e21…aaf75 and arm64 eb187837…d9ba8 both match.\nRound 1 substance review: 15 mutants, 12 killed and 2 equivalent. One advisory survivor is not a defect: the TC2 'different versions' row also rewrites the url, so the `entry.version === version` clause in validEntry has no test of its own. CQ-R11e could add a row with arm64 version 24.0.0 and the v24.22.2 url.\nNo verified-local or isolation claim; no .moe edits by QA.",
+  "requiredCheckAtDone": null
 }

@@ -1,0 +1,158 @@
+{
+  "id": "task-b29d022e7d9e4698b40517340f48e31c",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R13e1] Certify bridge framing and EOF checks",
+  "description": "OBJECTIVE\nClose two of CQ-R08's uncertified bridge points:\n- host EOF on stdin propagates through `multipass exec --no-map-working-directory <name> -- sudo -n <supervisor> check` with no pty, so the supervisor kills the job;\n- frame bytes are exact in both directions.\nBoth become certify checks, run in the certify VM with the real supervisor, after 'no-mounts' and before 'teardown'.\n\nSplit out of CQ-R13e (task-d00dafdf) by architect-e4b7eee0 on 2026-10-30, for size. CQ-R13e builds 'guest-network' on this module and depends on this task. This task depends on CQ-R13d (task-a8a3a502) for certify.mjs, its registry and its run(context) check shape.\n\nDELIVERABLE\nA new module, scripts/local-runner/certify-bridge.mjs, exporting:\n- BRIDGE_CHECKS: frozen [bridge-framing, bridge-eof] entries in R13d's frozen {id, run(context)} shape. certify.mjs splices them into BODY after 'no-mounts'. CQ-R13e appends 'guest-network' to this array.\n- BRIDGE_BOUNDS: Object.freeze({ sessionMs: 120_000, exitMs: 30_000, transferMs: 120_000 }).\n  - certify.mjs puts them on the check context as context.bounds.\n  - Only certifyCore may override them, through deps.bounds. Each override must be a safe integer from 1 to its constant, else CERTIFY_INPUT_INVALID before any provider call.\n  - The native entry always uses the constants.\n- watchedSession(context, id, command, { signal, limit }): one runCheckSession session on context.name.\n  - The check frame is { id, command, protected: [] }, with budgetMs sessionMs and timeoutMs exitMs.\n  - Its spawn wraps context.provider.spawn (default child_process.spawn), so certify also watches the child it spawned. It resolves:\n    - outcome: runCheckSession's own outcome;\n    - exit: the child's own 'close' {code, signal}, or null when runCheckSession settled through its local kill, which is never evidence;\n    - stdout: the reassembled 'stdout' output frames, at most `limit` bytes;\n    - overflow;\n    - broken: a frame the tee could not parse.\n  - The tee never throws from an event handler.\n- CERTIFY_PAYLOAD: 2 MiB = the concatenated sha256 digests of `moe-certify-payload-v1:<i>` for i in 0..65535. Computed once.\n- certifySnapshot(): a version-1 SourceSnapshot { version: 1, base: validateImport([...]), overlay: validateImport([]) }. Its files are moe-certify/payload.bin (CERTIFY_PAYLOAD) and moe-certify/run.sh (executable, '#!/bin/sh\\nexit 0\\n').\n\nTHE CHECKS\n- 'bridge-framing' runs first, because it materializes the workspace that every later check session uses.\n  1. Host to guest: materializeSnapshot({ name, snapshot: certifySnapshot(), provider, timeoutMs: transferMs }), which is R09c's digest check. Its TRANSFER_* codes pass through.\n  2. Guest to host: watchedSession(..., 'certify-framing', 'cat moe-certify/payload.bin', { limit: CERTIFY_PAYLOAD.length }) must end with outcome 'passed', else CERTIFY_BRIDGE_FRAMING_SESSION_FAILED. Its stdout must equal CERTIFY_PAYLOAD (the same sha256) with no overflow and no broken frame, else CERTIFY_BRIDGE_FRAMING_MISMATCH.\n- 'bridge-eof': watchedSession(..., 'certify-eof', 'echo ready; exec sleep 600').\n  1. Once the reassembled stdout is exactly 'ready\\n', the host aborts the session through its signal. runCheckSession then closes stdin.\n  2. The check passes only when the child itself closed with code 74 and signal null: the supervisor's host-EOF exit, within exitMs.\n  3. Failure codes: no 'ready' before the budget ends the session is CERTIFY_BRIDGE_EOF_NOT_STARTED; another code is CERTIFY_BRIDGE_EOF_EXIT; no exit of its own (the local kill) is CERTIFY_BRIDGE_EOF_TIMEOUT.\n\nEvery argv is checkArgv(name). Every frame is a fixed literal. Nothing the guest sends reaches a command, an argv or the report.\n\nTESTS\nAdd them to scripts/tests/local-runner.test.mjs, with fake providers. The provider's spawn emulates:\n- the materialize supervisor, as the T rows' fakeSpawn does;\n- a check session, as local-runner-check.test.mjs's checkProvider does: hello, output frames, observation, and exit 74 on stdin close.\nCover each check's pass and every fail mapping, plus the argv and frame literals. Extend R13d's certify harness so that its all-pass row stays all-pass, with the extended id list.\n\nscripts/tests/local-runner-bundle.test.mjs: `shipped` (not `required`) gains 'certify-bridge.mjs'.\n\nOUT OF SCOPE\n- 'guest-network' (CQ-R13e);\n- the containment, cancellation, recovery and canary checks;\n- enabling verified-local;\n- .moe edits.\n\nVERIFICATION (fresh, exit 0 required)\nnode --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs\nOn WSL, run it under env -i with the nvm Node 24 PATH.",
+  "definitionOfDone": [
+    "'bridge-framing' passes only when the generated snapshot materializes with a matching digest and the 2 MiB payload arrives byte-exact, with no overflow and no broken frame, through a session that ended 'passed'. A digest mismatch, a flipped, truncated or oversized payload, and a failed session each fail with their own fixed code. Shown by fake-provider tests.",
+    "'bridge-eof' passes only when, after the job printed 'ready', closing the host's stdin ends the session with the provider's own exit 74 within exitMs. Another exit, no exit (a local kill) and a missing 'ready' each fail with their own fixed code. Shown by fake-provider tests.",
+    "Every session argv is checkArgv(name), and every check frame is a fixed literal (ids certify-framing and certify-eof, protected []). Every outcome maps to a fixed code. deps.bounds overrides outside 1 to the constant are CERTIFY_INPUT_INVALID before any provider call. Shown by tests.",
+    "CERTIFY_CHECKS lists bridge-framing and then bridge-eof, after 'no-mounts' and before 'teardown'. R13d's certify rows pass with the extended id list. A 'bridge-framing' failure leaves 'bridge-eof' not-run and 'teardown' passed. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. This row is claimable only after CQ-R13d (task-a8a3a502) is DONE. R13d lands:\n- scripts/local-runner/certify.mjs, with certifyCore; CERTIFY_CHECKS = [...BODY, TEARDOWN]; checks that resolve {result, code}; and a throw mapped to its fixed code, or else CERTIFY_CHECK_FAILED;\n- rows CF1-CF8 on smokeHarness.\nRe-read certify.mjs and the CF rows first. Line numbers and helper names in this plan are from HEAD before R13d.\n\nInterfaces this row creates. CQ-R13e (task-d00dafdf) already plans against them, so keep them exactly:\n- certify-bridge.mjs exports BRIDGE_CHECKS, BRIDGE_BOUNDS, watchedSession, CERTIFY_PAYLOAD and certifySnapshot;\n- watchedSession(context, id, command, { signal, limit, onStdout }) resolves a frozen { outcome, exitCode, exit, stdout, overflow, broken }. exitCode is runCheckSession's. onStdout(stdoutSoFar) is this plan's addition, used as the EOF trigger;\n- context.bounds holds BRIDGE_BOUNDS or validated overrides.\n\nHARNESS (one, compact):\n- A check-session fake modelled on local-runner-check.test.mjs's checkProvider. That file is not importable, so write it here:\n  - EventEmitter, PassThrough stdout and stderr, and a Writable stdin that records writes;\n  - send(frames), and exit(code, signal);\n  - kill() records the signal and emits close(null, signal);\n  - by default it emits close(74, null) when stdin closes;\n  - it decodes its own first stdin frame (createFrameDecoder(MAX_HOST_FRAME_BYTES)), so a per-id script can dispatch on the check frame's id.\n- A spawn router for one provider:\n  - snapshotArgv(name, 'materialize') goes to a fakeSpawn-style materialize proc. It replies {kind:'materialized', digest} from the decoded snapshot head; rows can override that.\n  - checkArgv(name) goes to the check fake, with per-id default scripts that rows can override:\n    - 'certify-framing': HELLO, the payload as output frames split at odd sizes (e.g. 700001-byte pieces), observation exit 0, a clean end, close 0;\n    - 'certify-eof': HELLO and out('ready\\n'), then close(74) when stdin closes.\n  - Every call is recorded.\n- Direct rows build context = { name: GUEST, provider: { run: guest.run, spawn: router }, bounds }.\n  - guest is the T rows' fakeGuest, so assertNoMounts works.\n  - Use small bounds (e.g. sessionMs 2000, exitMs 200, transferMs 5000) so rows run fast.\n- Add the same spawn router to R13d's certify harness provider, so CF1 (all pass) stays all-pass with the extended id list. Update every CF row that pins an id list or a not-run tail to the extended list.\n\nROWS (prefix CB, unused today):\n\nCB1, literals:\n- CERTIFY_PAYLOAD.length === 2097152. It equals Buffer.concat of sha256(`moe-certify-payload-v1:${i}`) for i = 0..65535, recomputed in the test.\n- workspaceEntries(certifySnapshot()) holds exactly:\n  - moe-certify/payload.bin: not executable, with the CERTIFY_PAYLOAD bytes;\n  - moe-certify/run.sh: executable, with '#!/bin/sh\\nexit 0\\n'.\n- certifySnapshot() returns a fresh object on each call.\n- BRIDGE_BOUNDS deep-equals { sessionMs: 120000, exitMs: 30000, transferMs: 120000 } and is frozen.\n- BRIDGE_CHECKS ids are ['bridge-framing','bridge-eof']; the array and each entry are frozen.\n- CERTIFY_CHECKS ids are exactly ['provision','readiness','no-mounts','bridge-framing','bridge-eof','teardown'].\n\nCB2, 'bridge-framing' passes:\n- the result is {result:'passed', code:null};\n- the spawn calls are exactly [the materialize argv, checkArgv(GUEST)], each with PIPES;\n- the check proc's first stdin frame decodes to exactly {kind:'check', version:1, id:'certify-framing', command:'cat moe-certify/payload.bin', protected:[]}.\n\nCB3, 'bridge-framing' failures, one rule each:\n- a materialized frame with another digest rejects with TRANSFER_DIGEST_MISMATCH. run() propagates it, and R13d's wrapper maps it;\n- observation exit 1 (code-failure), and output before hello (infra-failure), each give CERTIFY_BRIDGE_FRAMING_SESSION_FAILED;\n- one flipped payload byte, the payload minus its last byte, and the payload plus one byte (overflow) each give CERTIFY_BRIDGE_FRAMING_MISMATCH.\n\nCB4, 'bridge-eof' passes:\n- the frame decodes to exactly {kind:'check', version:1, id:'certify-eof', command:'echo ready; exec sleep 600', protected:[]};\n- stdin closes only after 'ready\\n' arrived;\n- the fake closes 74, so the check passes, and no kill is recorded.\n\nCB5, 'bridge-eof' failures:\n- no output before the session budget (sessionMs 100), and 'ready\\nmore', which is never exactly 'ready\\n': CERTIFY_BRIDGE_EOF_NOT_STARTED;\n- after 'ready\\n', the fake closes with 0, with 75, or with (null, 'SIGTERM') on stdin close: CERTIFY_BRIDGE_EOF_EXIT;\n- after 'ready\\n', a hung fake that does not exit on stdin close (exitMs 100): CERTIFY_BRIDGE_EOF_TIMEOUT, with ['SIGKILL'] recorded and watchedSession's exit null.\n\nCB6, through certifyCore (R13d's harness):\n- these deps.bounds each give CERTIFY_INPUT_INVALID with no provider run or spawn call: {sessionMs:0}, {exitMs:30001}, {transferMs:1.5}, {sessionMs:'1'}, {other:1}, [], null, and an object with a getter;\n- each override is accepted at 1 and at its constant;\n- CF1 (all pass) lists the six ids, all passed;\n- a digest-mismatch materialize gives bridge-framing failed with TRANSFER_DIGEST_MISMATCH, bridge-eof 'not-run' and teardown 'passed'.\n\nIn scripts/tests/local-runner-bundle.test.mjs, `shipped` (not `required`) gains 'certify-bridge.mjs'.\n\nRED proof: run node --test with the step-4 env. The CB rows and the bundle row fail; every other row passes. Record it.\n\nSize budget: 250 test lines or fewer. Use table-driven rows and one harness.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create scripts/local-runner/certify-bridge.mjs.\n\nHeader comment:\n- CQ-R13e1: the bridge certify checks that close CQ-R08's uncertified points (host EOF propagation with no pty; frame bytes exact in both directions);\n- certification is not activation: executionReady stays false and verified-local stays unavailable;\n- nothing the guest sends reaches a command, an argv or the report.\n\nImports:\n- createHash from node:crypto;\n- spawn from node:child_process;\n- createFrameDecoder and parseGuestFrame from ./guest-bridge.mjs;\n- runCheckSession from ./check-session.mjs;\n- materializeSnapshot from ./snapshot-transfer.mjs;\n- validateImport from ./source-snapshot.mjs.\n\nExports:\n- BRIDGE_BOUNDS = Object.freeze({ sessionMs: 120000, exitMs: 30000, transferMs: 120000 }).\n- CERTIFY_PAYLOAD: Buffer.concat of the 32-byte sha256 digests of `moe-certify-payload-v1:${i}`, for i = 0..65535. Compute it once at module load (2 MiB).\n  - Also keep a private PAYLOAD_SHA256 (hex), computed once. Comparisons use it, so a caller that mutates the exported Buffer cannot make a check pass.\n- certifySnapshot() returns Object.freeze({ version: 1, base: validateImport([...]), overlay: validateImport([]) }). workspaceEntries needs only version, base and overlay. The base entries are:\n  - {kind:'file', path:'moe-certify/payload.bin', executable:false, data: Buffer.from(CERTIFY_PAYLOAD)};\n  - {kind:'file', path:'moe-certify/run.sh', executable:true, data: Buffer.from('#!/bin/sh\\nexit 0\\n')}.\n- watchedSession(context, id, command, { signal, limit = 0, onStdout } = {}):\n  - spawn is context.provider.spawn when that is a function, else child_process.spawn. executable is context.provider.executable when that is a string, else 'multipass'.\n  - The watched spawn calls spawn(...args). Before it returns the child, it:\n    - wraps child.kill to record a local kill;\n    - adds a 'close' listener that records a frozen { code, signal }, unless a kill was recorded;\n    - adds a stdout 'data' tee.\n    These are registered before runCheckSession's own listeners, so the close record is already set when runCheckSession settles.\n  - The tee decodes with its own createFrameDecoder() and parseGuestFrame, for kind 'output' with stream 'stdout' only:\n    - it appends up to `limit` bytes in total; any byte beyond that sets overflow;\n    - after each append, it calls onStdout(Buffer.concat(kept)) when onStdout is given;\n    - any throw (decoder, parse or onStdout) sets broken and stops the tee. The handler never throws.\n  - It awaits runCheckSession({ name: context.name, check: { id, command, protected: [] }, provider: { executable, spawn: watched }, budgetMs: context.bounds.sessionMs, timeoutMs: context.bounds.exitMs, signal }).\n  - It resolves Object.freeze({ outcome, exitCode, exit: killed ? null : exit, stdout, overflow, broken }). A local kill is never evidence, so exit is null after one.\n- BRIDGE_CHECKS = Object.freeze([Object.freeze({ id: 'bridge-framing', run: framing }), Object.freeze({ id: 'bridge-eof', run: eof })]).\n\nframing(context):\n1. await materializeSnapshot({ name: context.name, snapshot: certifySnapshot(), provider: context.provider, timeoutMs: context.bounds.transferMs }). A TRANSFER_* rejection propagates, and R13d's wrapper records its code.\n2. s = await watchedSession(context, 'certify-framing', 'cat moe-certify/payload.bin', { limit: CERTIFY_PAYLOAD.length }).\n3. If s.outcome !== 'passed': {result:'failed', code:'CERTIFY_BRIDGE_FRAMING_SESSION_FAILED'}.\n4. If s.overflow, s.broken, s.stdout.length !== 2097152, or sha256(s.stdout) !== PAYLOAD_SHA256: CERTIFY_BRIDGE_FRAMING_MISMATCH.\n5. Otherwise {result:'passed', code:null}.\n\neof(context):\n- One AbortController; ready = false; READY = Buffer.from('ready\\n').\n- s = await watchedSession(context, 'certify-eof', 'echo ready; exec sleep 600', { signal, limit: 64, onStdout: out => { if (!ready && out.equals(READY)) { ready = true; controller.abort(); } } }).\n- Results, in order:\n  - !ready: CERTIFY_BRIDGE_EOF_NOT_STARTED;\n  - s.exit === null: CERTIFY_BRIDGE_EOF_TIMEOUT;\n  - s.exit.code !== 74 or s.exit.signal !== null: CERTIFY_BRIDGE_EOF_EXIT;\n  - otherwise passed.\n- runCheckSession's own abort path closes stdin, and local-kills only after exitMs.\n\nError handling:\n- Every result is a frozen { result, code } with a fixed code. No guest byte, path or message reaches a result.\n- The only rejections are materializeSnapshot's TRANSFER_* codes and runCheckSession's CHECK_SESSION_INPUT_INVALID (a programming error). Both are fixed codes.\n\nSize budget: 120 lines or fewer. Run rows CB1-CB5: green.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/certify-bridge.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/local-runner/certify.mjs: the bytes CQ-R13d LANDED. It is listed in newFiles only because it does not exist when this plan is submitted. This step EDITS it, keeping every R13d export, check and row intact.\n\n1. Add import { BRIDGE_BOUNDS, BRIDGE_CHECKS } from './certify-bridge.mjs'.\n2. BODY becomes provision, readiness, no-mounts, ...BRIDGE_CHECKS. CERTIFY_CHECKS ids are then exactly [provision, readiness, no-mounts, bridge-framing, bridge-eof, teardown]; 'teardown' stays last. validateCertificationReport follows the registry by construction.\n3. Bounds:\n   - certifyCore validates deps.bounds together with the rest of its input, before any provider call.\n     - undefined means BRIDGE_BOUNDS.\n     - Anything else must be a plain object (prototype Object.prototype or null). Its Reflect.ownKeys must be strings among sessionMs, exitMs and transferMs. Each must be an own data property (no getter) holding a safe integer from 1 to that BRIDGE_BOUNDS constant.\n     - Otherwise reject with CERTIFY_INPUT_INVALID.\n   - The shared check context gets bounds: Object.freeze({ ...BRIDGE_BOUNDS, ...overrides }).\n   - runIsolationCertify, the native entry, always uses BRIDGE_BOUNDS. Its options stay exactly { workDir }.\n4. Header comment: the registry now includes the bridge checks (CQ-R13e1).\n\nError handling: CERTIFY_INPUT_INVALID uses R13d's existing fixed message; nothing else changes.\n\nSize budget: 25 changed lines or fewer. Run CB6 and the CF rows: green.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/certify.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh.\n\n1. The DoD command, on WSL: `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs`. It must exit 0. complete_task gets { command: 'node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs', exitCode, outputTail }, and the summary names the env -i form.\n2. Neighbour check, under the same env: `node --test scripts/tests/local-runner-check.test.mjs` (the check-session consumer).\n3. `git diff --check` over the four files is clean, and `git status --short` shows only them changed by this task.\n4. Size: `git diff --numstat HEAD` over the four files (count certify-bridge.mjs whole) must total 400 changed lines or fewer. If it is over, file moe.propose_rail for an epic size exception before complete_task, naming this task and the per-file numstat (mem:gotcha-cq-plan-size-vs-qa-cap). Never trim a DoD test to fit.\n\nThe native certify run is operator-only; no agent here has Multipass. A failure is fixed in code, never by weakening an assertion.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a guest that wants a bridge check to pass without the property being true.\n\n1. Mutants. Apply each to a scratch copy, never to the shared files. Each must turn its row red:\n   (a) framing compares length only: CB3, the flipped byte;\n   (b) framing ignores overflow and compares only the first 2 MiB: CB3, plus one byte;\n   (c) framing skips the outcome check: CB3, code-failure;\n   (d) eof takes exit from 'close' even after a local kill: CB5 hung (it would become EXIT, not TIMEOUT);\n   (e) eof triggers on startsWith('ready'): CB5, 'ready\\nmore';\n   (f) watchedSession's close listener is registered after runCheckSession's, or the record is missing: CB4 (it would become TIMEOUT);\n   (g) bounds accept 0 or the constant + 1: CB6;\n   (h) the bridge checks are spliced after teardown: CB1/CB6 id list.\n   Afterwards restore, cmp, and rerun green.\n2. Leaks: no guest byte reaches a code, the report or an argv. stdout is compared, never stored in a result; the tee's memory is bounded by limit; every timer is runCheckSession's; and the AbortController is per call.\n3. Concurrency: two certify runs share only the immutable payload digest. The router fake and the watched spawn hold per-call state only.\n4. The CF rows still prove injected evidence never certifies, and teardown runs after a bridge failure.\n\nRecord the findings and fixes in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-a8a3a502b8264cc5adcb660f59656a00"
+  ],
+  "priority": "HIGH",
+  "order": 254.32,
+  "comments": [
+    {
+      "id": "comment-d598c3e1d5f94a498514280b103ae16c",
+      "author": "architect-e4b7eee0",
+      "content": "Contract addition for CQ-R13e (task-d00dafdf). This is architect-e4b7eee0, 2026-10-30.\n\nwatchedSession must also resolve `exitCode`: runCheckSession's own exitCode, which is the observation's job exit code. Pass it straight through. guest-network maps a 'code-failure' with exitCode 1 and stdout 'open\\n' to REACHABLE.\n\nSo the full result is { outcome, exitCode, exit, stdout, overflow, broken }.",
+      "timestamp": "2026-10-30T06:32:34.095Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:31:31.600Z",
+  "updatedAt": "2026-10-30T06:38:22.675Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:31:55.503Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:38:22.650Z",
+  "executionContract": {
+    "intendedBehavior": "A new certify-bridge.mjs adds two certify checks after 'no-mounts' and before 'teardown'.\n- 'bridge-framing' materializes a generated snapshot, verified by R09c's digest, and requires a passed check session to stream the 2 MiB payload back byte-exact, with no overflow and no broken frame.\n- 'bridge-eof' requires that, once the job printed exactly 'ready\\n', closing the host's stdin ends the session with the provider's own exit 74 within exitMs.\nEvery failure is a fixed code. certify.mjs splices the checks into BODY and carries BRIDGE_BOUNDS, or validated deps.bounds overrides, on context.bounds.",
+    "acceptanceCriteria": [
+      "CB1: payload, snapshot, bounds and registry literals.",
+      "CB2/CB3: framing pass, argv/frame literals, and the TRANSFER_DIGEST_MISMATCH, SESSION_FAILED and MISMATCH mappings.",
+      "CB4/CB5: eof pass and frame literal; the NOT_STARTED, EXIT and TIMEOUT mappings, where a local kill is never evidence.",
+      "CB6: invalid deps.bounds is CERTIFY_INPUT_INVALID before any provider call; the all-pass CF1 holds the extended ids; a framing failure leaves eof not-run and teardown passed.",
+      "The bundle `shipped` list includes certify-bridge.mjs."
+    ],
+    "invariants": [
+      "Injected evidence never certifies.",
+      "teardown stays last and always runs.",
+      "No guest byte reaches a command, argv, code or report.",
+      "A local kill is never treated as the provider's own exit.",
+      "executionReady stays false; verified-local stays unavailable."
+    ],
+    "compatibility": [
+      "R13d's exports, checks and CF rows stay intact (only the id list grows).",
+      "The interface CQ-R13e consumes: watchedSession result {outcome, exitCode, exit, stdout, overflow, broken}, and BRIDGE_CHECKS as a frozen array."
+    ],
+    "approvedScope": [
+      "certify-bridge.mjs: BRIDGE_BOUNDS, CERTIFY_PAYLOAD, certifySnapshot, watchedSession (with onStdout), BRIDGE_CHECKS",
+      "certify.mjs: import, BODY splice, deps.bounds validation, context.bounds",
+      "local-runner.test.mjs: the CB1-CB6 rows and the certify-harness spawn router",
+      "local-runner-bundle.test.mjs: shipped gains certify-bridge.mjs"
+    ],
+    "reuse": [
+      "runCheckSession, checkArgv/checkFrame, materializeSnapshot/workspaceEntries and validateImport as landed; the T-row fakeSpawn and the check-test checkProvider patterns."
+    ],
+    "sourceAssumptions": [
+      "certify.mjs as planned by CQ-R13d (task-a8a3a502): certifyCore({platform, workDir, deps}), CERTIFY_CHECKS = [...BODY, TEARDOWN], run resolving {result, code}, a throw mapped by code regex",
+      "check-session.mjs runCheckSession's abort path destroys stdin and local-kills after timeoutMs",
+      "guest-bridge.mjs parseGuestFrame decodes output data to a Buffer"
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: wrap runCheckSession rather than re-implementing a session.\n- watchedSession tees stdout through its own decoder and records the child's own 'close' through a listener registered inside a wrapped spawn. It flags a local kill by wrapping child.kill.\n- That keeps runCheckSession's classification, budgets and teardown intact. Certify still sees the provider's own exit, which runCheckSession's result does not carry.\n\nRejected:\n- Reading the exit from runCheckSession's exitCode: that is the guest observation's code, not the provider's host-EOF exit 74, and it is null after an abort.\n- Triggering the EOF abort from the result: the session would never end without the abort, so a stdout hook (onStdout) is needed during the session. It is additive to the task's {signal, limit} sketch.\n- Comparing against the exported Buffer: a caller could mutate it, so a private digest computed once is the comparison.\n\nFile listing: certify.mjs goes in newFiles with an explicit EDIT note, because R13d creates it after this plan is submitted. R13e's plan (task-d00dafdf) uses the same convention for certify-bridge.mjs.",
+    "codebaseInsights": "- check-session.mjs runCheckSession({name, check, provider:{executable, spawn}, budgetMs, timeoutMs (1-60000), signal}):\n  - an abort calls stop(failed): stdin.destroy(), then a local kill after timeoutMs, settling with code null;\n  - it settles on the child's 'close' code, and returns frozen {outcome, exitCode, signal, outputTail}.\n- guest-bridge.mjs: checkArgv(name); checkFrame({id, command, protected}) is encoded {kind:'check', version:1, ...}; parseGuestFrame turns output data into a Buffer.\n- snapshot-transfer.mjs: materializeSnapshot({name, snapshot, provider, timeoutMs}) runs assertNoMounts before and after and rejects with fixed TRANSFER_* codes, including TRANSFER_DIGEST_MISMATCH. workspaceEntries needs only {version:1, base, overlay}.\n- source-snapshot.mjs: validateImport takes exact-key {kind:'file', path, executable, data} entries.\n- Test fakes to model:\n  - local-runner.test.mjs: fakeSpawn and transferProvider (the T rows, ~2774), fakeGuest, GUEST, PIPES, snapshotOf, encodeFrame and createFrameDecoder imports;\n  - local-runner-check.test.mjs: checkProvider (~861, not importable), HELLO, exited() and out().\n- R13d's plan (task-a8a3a502): certify.mjs, BODY plus TEARDOWN, a check run resolving {result, code}, a throw mapped by code regex, certifyCore({platform, workDir, deps}), CF1-CF8 on smokeHarness, and `required` gains certify.mjs.\n- Ordering: every other nonterminal editor of these files is upstream (via R13d -> R13a -> R11e) or downstream (R13e/f/h/g, R13).",
+    "risks": "1) R13d's exact helper names may differ from its plan. Adapt the harness extension to the landed CF harness; keep the interfaces R13e consumes unchanged.\n2) QA's 400-line cap: target 120 lines in the bridge module, 25 in certify.mjs and 250 in tests. Pre-file a rail if over.\n3) A 2 MiB payload with odd frame splits in a fake: write it in pieces, so as not to block the PassThrough. CB rows use small bounds, so they run in milliseconds to seconds.\n4) The listener order matters: the watched spawn must attach 'close' and stdout before returning the child.\n5) A local-kill close(null, 'SIGKILL') must never count as the child's own exit.\n6) CQ-R13b (task-7fffec67, PLANNING) may later edit local-runner.test.mjs concurrently. Its architect must serialize it.",
+    "keyFiles": [
+      "scripts/local-runner/check-session.mjs",
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/local-runner/snapshot-transfer.mjs",
+      "scripts/local-runner/source-snapshot.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/tests/local-runner-check.test.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:38:22.675Z",
+  "approvedPlanRevision": 1
+}

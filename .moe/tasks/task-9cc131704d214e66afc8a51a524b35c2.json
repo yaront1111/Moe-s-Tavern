@@ -126,7 +126,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:54.656Z",
-  "updatedAt": "2026-10-30T06:35:59.476Z",
+  "updatedAt": "2026-10-30T06:36:39.185Z",
   "dependsOn": [
     "task-23a5563cea384d56abb8da1551435455",
     "task-0795112597cb453f93aaa5106e92d023",
@@ -257,7 +257,16 @@
     ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
     ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
     ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
-    ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json"
+    ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json",
+    ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+    ".moe/tasks/task-3287014af13b4d1dbaac5622de4c1fc6.json",
+    ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+    ".moe/tasks/task-b799056d744749ba8ca9e4888f3452c4.json",
+    ".moe/tasks/task-b8b8faba152a4d7fae09d9388407f707.json",
+    ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
+    ".moe/tasks/task-d00dafdf2dde4a41bf5983b1f7d495de.json",
+    ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
+    ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json"
   ],
   "completionSummary": "CQ-V03 tool slice: two runner-channel tools, thin delegates over V03b's checkObservationStore.\n- tools/recordCheckDispatch.ts: moe.record_check_dispatch, plus the shared guard runnerToolCall. Missing context.runner gives NOT_ALLOWED RUNNER_CHANNEL_REQUIRED before args are read; non-object args give INVALID_INPUT params; an unknown key gives INVALID_INPUT naming it.\n- tools/recordCheckObservation.ts: moe.record_check_observation. Its binding comes from the recorded dispatch, and runnerId from the channel.\n- tools/index.ts +6: getTools entries, and TOOL_AUDIENCE 'wrapper' for both, which toolAudience.test requires; it hides them from agent roles.\n- Docs: SCHEMA.md (CheckDispatch/CheckObservation sections and rules); MCP_SERVER.md (both tools, a Runner channel paragraph with the legacy/observe limit, and a note that record_check_run is diagnostic).\nDoD -> tests (tools/recordCheckObservation.test.ts, 24):\n1. T1: /mcp and a {} context are refused, writing nothing. T2: runnerId, source, candidateId, treeSha, command and planRevision are each refused by name. T3: a record_check_run run with the real runnerId and dispatchId fails isAuthenticatedCheckRun; the observed run passes, bound to the dispatch. T6: a real /runner round trip is authenticated; /mcp with the key header writes nothing.\n2. T4: an identical replay gives duplicate:true with bytes unchanged; CHECK_RUN_IMMUTABLE; CHECK_DISPATCH_ALREADY_OBSERVED; CHECK_DISPATCH_IMMUTABLE.\n3. T5: a superseded dispatch at revision 2 still binds cand-k1, its tree and revision 1. NOT_CURRENT and NOT_FOUND are refused.\n4. Gate EXIT 0 (verification); tsc 0.\nMutants: 7/7 killed.\nSize: packages/ net +389 (runtime 147, tests 242). Rail files (checkRunStore, recordCheckRun, policy, the store, server/*, guest-bridge) are unchanged.\nLANDING: the peer completion e67ca0e (task-574c0b36) swept this task's MCP_SERVER.md sections into its commit 4 s before step 4 reported them. They are on the branch there; this landing carries SCHEMA.md, inde",
   "commits": [
@@ -284,6 +293,30 @@
       "treeId": "8ff543f3b3c8d7561a91c462c81d150ed7183f38",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "cd9a04f9fb496a0518a6fc1e5d02ef0dae328cca",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T06:31:40Z",
+      "paths": [
+        ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+        ".moe/tasks/task-3287014af13b4d1dbaac5622de4c1fc6.json",
+        ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+        ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+        ".moe/tasks/task-b799056d744749ba8ca9e4888f3452c4.json",
+        ".moe/tasks/task-b8b8faba152a4d7fae09d9388407f707.json",
+        ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
+        ".moe/tasks/task-d00dafdf2dde4a41bf5983b1f7d495de.json",
+        ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
+        ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T06:36:39.184Z",
+      "treeId": "8b15a3e2be2bb6028db8d80efc5b244eb6340a09",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -296,9 +329,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e60b90bd@2026-10-30T06:14:37Z",
-    "at": "2026-10-30T06:26:45.777Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T06:31:40Z",
+    "at": "2026-10-30T06:36:39.184Z"
   },
   "completedAt": "2026-10-30T06:35:59.476Z",
   "reviewCompletedAt": "2026-10-30T06:35:59.476Z",
