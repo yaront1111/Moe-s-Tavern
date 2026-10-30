@@ -88,7 +88,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -120,7 +120,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:17.777Z",
-  "updatedAt": "2026-10-30T00:04:25.330Z",
+  "updatedAt": "2026-10-30T00:10:32.506Z",
   "dependsOn": [
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
     "task-23a5563cea384d56abb8da1551435455",
@@ -133,7 +133,9 @@
     "firstClaimAt": "2026-10-29T13:16:35.024Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T00:10:32.506Z",
+    "wallClockMs": 39237482
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -322,5 +324,9 @@
     "kind": "checkpoint",
     "sessionId": "qa-952969be@2026-10-29T22:46:55Z",
     "at": "2026-10-29T22:55:12.048Z"
-  }
+  },
+  "completedAt": "2026-10-30T00:10:32.506Z",
+  "reviewCompletedAt": "2026-10-30T00:10:32.506Z",
+  "reviewSummary": "CQ-R11, QA round 2, after the delivery hold.\n\nPROVENANCE (condition c):\n- Runtime landed in bbcd13d: check-lifecycle +126, lifecycle +18/-1, provision +1/-1.\n- The test hunks (provisioned() supervisorSha256 line; deleteOwned + CJ1-CJ8) landed in R10d1's checkpoint cac652b, with a Moe-Contested trailer naming this task.\n- The backup patch (sha 557f1230) reverse-applies on cac652b, leaving exactly R10d1's own +22/-3. R11 owns +248/-1.\n- The 4 R11 files are unchanged from cac652b to HEAD 400bd50. Total 396 changed lines.\n- My checkpoint 0514ecf carried board JSON only.\n\nGATES, on a clean git archive of HEAD 400bd50 (env -i, Node 24.21.0):\n- DoD `node --test scripts/tests/local-runner.test.mjs`: exit 0. 231 pass, 0 fail, 1 pre-existing skip (macOS smoke). CJ1-8 and deleteOwned present.\n- check/vm-control/snapshot suites: exit 0. 64 pass, 1 pre-existing skip (K9). DA5 first failed because my archive left out the lockfile; it passes with the lockfile included.\n\nMUTANTS: q1-q10 all killed on a scratch copy, restored identical.\n\nDoD:\n1. No session without provisioned, instance===reserved, bootstrapReady and zero failures. The protected list is frozen into checkFrame; exits 79/80 give skipped/inconclusive (CJ3, CJ6).\n2. Reported via checkEnvironment. Enforced by the no-mount materialize, the guest check mode, and the delete in finally before every settle. A pass without a delete is inconclusive (CJ2, CJ4-6, CJ8).\n3. Image/supervisor change gives a new environment and evidenceStatus stale (CJ7).\n4. Gate exit 0.\n\nInvariants: executionReady false; verified-local untouched; no file writes; fixed codes only; only the reserved name is deleted.\n\nNon-blocking:\n- q11 survives. clearTimeout removal only keeps the event loop alive; no unhandled rejection.\n- q12 is equivalent, since checkFrame needs a non-empty id.\n- R11f must add the workspace verify step before the delete.",
+  "requiredCheckAtDone": null
 }
