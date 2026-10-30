@@ -17,66 +17,112 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nThese prerequisites must be in HEAD; adapt to their landed names (planningNotes lists the assumed ones) and never re-implement them:\n- CQ-V03b: state/checkObservationStore.ts;\n- CQ-V03: tools/recordCheckDispatch.ts and tools/recordCheckObservation.ts.\n\nCreate packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts (vitest). Keep it to about 230 lines, table-driven, because tests count toward QA's 400-net cap.\n\nReadiness mock, scoped to this file:\n- vi.mock('./executionProfile.js') spreads importOriginal and replaces only assertExecutionProfileReady with () => undefined.\n- Pin production with vi.importActual: the real assertExecutionProfileReady('verified-local') still throws codeName EXECUTION_PROFILE_NOT_READY.\n\nFixture, in the style of delivery/requiredChecks.delivery.test.ts (ToolTestHarness, a temp git repo, submit_plan measuring the snapshot):\n- settings executionProfile 'verified-local', deliveryPolicy 'local-branch', approvalMode 'TURBO' (so submit_plan auto-approves and approvedPlanRevision === planRevision), checkEnvironments [ENV_A];\n- the approved defs acc (UNIT) and lint (LINT);\n- a current candidate whose protectedEntries equal the snapshot, plus a completion commit.\n\nHelpers dispatch(check, env) and observe(dispatchId, outcome, exitCode) call the V03 tool handlers with context { runner: { runnerId: 'runner-0123456789abcdef' } }. Assert exact codeNames, tokens, record fields and file absence; never truthiness.\n\nCases:\n- A, admission (DoD 1). Each refusal writes no file under .moe/checks/dispatches:\n  - an unowed command, or an owed command with a wrong or missing checkId: NOT_ALLOWED CHECK_DEFINITION_NOT_APPROVED;\n  - ENV_B (unlisted), or no checkEnvironments at all: CHECK_ENVIRONMENT_NOT_APPROVED;\n  - checkEnvironments 'x' (not an array): INVALID_INPUT field checkEnvironments.\n  An identical replay of an already-recorded dispatch id, after ENV_A is removed, still returns duplicate:true.\n- P, positive control: authenticated 'passed' runs for acc and lint in ENV_A give missingEvidence [].\n- R, freshness (DoD 1 and 2). Starting from that passing pair, each of these brings back both required-check tokens:\n  1. a re-approval at revision 2;\n  2. ENV_A removed from checkEnvironments;\n  3. a newer candidate with a different tree.\n- D, diagnostic (DoD 2): a record_check_run run (recordCheckRunTool) with source runner-observed, exit 0, outcome passed, the same candidate, tree, command, planRevision and ENV_A, the channel's runnerId and a REAL dispatchId leaves the token under verified-local. The identical fixture under executionProfile 'legacy' counts it, as today.\n- O, outcomes (DoD 2 and 3): it.each over no dispatch, dispatched but unobserved, skipped (exit 0), inconclusive (0), timeout (0), infra-failure (0) and code-failure (1) for acc. Each keeps required-check:UNIT, and a dependent of the DONE task stays withheld through dependencyShortfall / unmetDependsOn, the one shared predicate.\n- U, undeclared: a verified-local task with no requiredChecks and no owed gate reports required-checks-undeclared. With qualityGate set and qualityGateScope everyTask, owedChecks is [{command: gate}] instead.\n- T, twin ids: two approved defs with the same command each need their own dispatch, so a pass for one alone leaves the token.\n\nRun `npx vitest run src/delivery/requiredChecks.strong.test.ts`: the new cases fail, and the readiness pin and the legacy case pass.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
+      ],
+      "note": "RED. New delivery/requiredChecks.strong.test.ts (25 cases). Prerequisites are landed under the assumed names: isAuthenticatedCheckRun, getCheckDispatch, recordCheckDispatchTool, recordCheckObservationTool, with handler(args, state, {runner}).\nReadiness is mocked via vi.mock('./executionProfile.js') and pinned with vi.importActual.\nFixture: the TURBO submit_plan auto-approves revision 1 under verified-local; candidates are set directly on h.state.candidates.\nRun in the Linux snapshot /tmp/moe-a9d1-dev.zblOnu: 12 failed, 13 passed.\n- Failing, all for the missing feature: P, A x6, R1, R2, D-verified-local, U, T. The A failures are \"expected a MoeError refusal, got null\", and owedChecks is not a function.\n- Passing: the readiness pin, the A replay, R3, D-legacy, O x7 and L x2. These cases already hold under today's rule and guard regressions and mutants.\nDESIGN NOTE for steps 3 and 4: V03's landed tools/recordCheckObservation.test.ts dispatches an unowed command for a legacy task with no checkEnvironments. Unconditional admission would break it, along with the 'existing tests unchanged' and 'strong branch only when verified-local' invariants. So admission applies only to verified-local tasks. L pins that legacy and observe dispatch are unchanged.\nThe 807 dirty paths belong to peers or are pre-existing; left untouched.",
+      "startedAt": "2026-10-30T06:37:29.673Z",
+      "completedAt": "2026-10-30T06:43:11.094Z"
     },
     {
       "stepId": "step-2",
       "description": "packages/moe-daemon/src/types/schema.ts: in ProjectSettings, after deliveryPolicy, add `checkEnvironments?: string[]` with a doc comment covering:\n- what it is: human-approved isolated check environment ids, the exact CheckRun.environment values, e.g. R11d's 'moe-local-vm-v1:<sha256>';\n- absent or empty approves none;\n- it is read live by delivery/policy.ts and moe.record_check_dispatch, so removing an id revokes the evidence recorded in it;\n- it is set in .moe/project.json, like deliveryPolicy; validateSettingsUpdate refuses it as unknown and preserves it, so the IDE never edits it.\n\nNothing else in schema.ts changes. It is a shared file: preserve peers' bytes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "Added ProjectSettings.checkEnvironments?: string[] after deliveryPolicy, with a doc comment: what the ids are, that absent or empty approves none, that they are read live for verified-local tasks so removal revokes evidence, and that they live in project.json only. I confirmed validateSettingsUpdate's allowlist omits it and starts from {...project.settings}, so the value is preserved. schema.ts had no peer edits (clean in git status); +9/-0.",
+      "startedAt": "2026-10-30T06:43:13.806Z",
+      "completedAt": "2026-10-30T06:43:25.542Z"
     },
     {
       "stepId": "step-3",
       "description": "packages/moe-daemon/src/delivery/policy.ts. Every legacy and observe expression stays byte-identical in effect. The strong branch is reached only when resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot) === 'verified-local'. Add one STRONG paragraph to the header comment. Budget: about 120 net lines.\n\n1. Import isAuthenticatedCheckRun and getCheckDispatch from '../state/checkObservationStore.js', and hasControlChar from candidateStore.\n2. Extract checkShortfall's command resolution into owedGate(state, task): string | null | undefined, where undefined means unreadable (logged as today). checkShortfall's tokens are unchanged.\n3. `export interface OwedCheck { checkId?: string; command: string }` and `export function owedChecks(state, task): OwedCheck[]`:\n   - the approved definitions, only when readRequiredCheckSnapshot(task) is non-null, as {checkId: id, command: command.trim()} in contract order;\n   - then {command: gate} when owedGate returns a string that no definition already runs;\n   - it never throws: a failed contract read yields no definitions.\n4. `export function approvedCheckEnvironments(settings): readonly string[]`:\n   - absent or null gives [];\n   - otherwise an array of at most 50 entries, each a non-blank string of at most 255 characters with no control character (hasControlChar), kept verbatim. That is the CheckRun.environment rule;\n   - anything else throws invalidInput('checkEnvironments', ...).\n5. trustedPassedOn(state, task, current, check). It is false unless current has a treeSha and task.planRevision === task.approvedPlanRevision (a number). Otherwise it is true iff some run of listCheckRunsForCandidate(state, current.id) meets ALL of:\n   - candidateId and treeSha equal current's;\n   - exitCode 0 and outcome === 'passed' exactly;\n   - planRevision === task.approvedPlanRevision;\n   - environment is in approvedCheckEnvironments(settings);\n   - isAuthenticatedCheckRun(state, run);\n   - getCheckDispatch(state, run.dispatchId) returns a dispatch whose command === check.command, and when check.checkId is set, whose checkId equals it.\n6. Wiring for a strong task:\n   - hasPassingCheck takes the task, and the gate uses trustedPassedOn(..., {command});\n   - protectedCheckShortfall owes each definition separately: requiredCheckToken(trimmed command) for every def whose {checkId: d.id, command} fails trustedPassedOn, deduped;\n   - drift tokens are unchanged.\n7. EVIDENCE_TOKENS.requiredChecksUndeclared = 'required-checks-undeclared', plus its TOKEN_REASONS entry. evaluateDeliveryEvidence adds it for a strong task whose contract declares no requiredChecks and that owes no gate.\n8. `export function assertCheckDispatchApproved(state, params)`. When taskId, command and environment are strings and the task exists, it throws NOT_ALLOWED:\n   - CHECK_DEFINITION_NOT_APPROVED unless owedChecks has an entry with this exact command and the same checkId (both absent for the gate);\n   - then CHECK_ENVIRONMENT_NOT_APPROVED unless approvedCheckEnvironments includes the environment.\n   Malformed input returns silently, so the store refuses it with its own codes.\n\nError handling: approvedCheckEnvironments' INVALID_INPUT throw is already read as not satisfied by every evaluateDeliveryEvidence consumer.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/policy.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "note": "policy.ts, +167/-36 (net 131, against a budget of about 120).\n- Header: a STRONG paragraph.\n- Imports: hasControlChar, getCheckDispatch and isAuthenticatedCheckRun.\n- EVIDENCE_TOKENS.requiredChecksUndeclared, plus its TOKEN_REASONS entry.\n- Extracted owedGate(state, task) -> string|null|undefined. checkShortfall logs unreadable as before.\n- Extracted declaredChecks(task) from protectedCheckShortfall. evaluateDeliveryEvidence computes it once and passes it in, so unreadable is still logged once.\n- New: trustedPassedOn (all of the plan's clauses), approvedDefinitions, exported OwedCheck, owedChecks, approvedCheckEnvironments (max 50, each <=255, non-blank, hasControlChar), isVerifiedLocal and assertCheckDispatchApproved.\n- trusted = approved environments for a verified-local task, else null. Legacy/observe keep passedOn. The per-def owed() form is equivalent in effect to the old per-command filter.\n- Deviation: assertCheckDispatchApproved passes legacy and observe tasks through (see the step-1 note). Malformed params, a non-string checkId and an unknown task also return silently.\nSnapshot: strong file 19/25 green; the 6 admission cases wait for step 4. tsc --noEmit EXIT 0.",
+      "startedAt": "2026-10-30T06:43:26.876Z",
+      "completedAt": "2026-10-30T06:45:27.013Z"
     },
     {
       "stepId": "step-4",
       "description": "packages/moe-daemon/src/tools/recordCheckDispatch.ts was created by CQ-V03. It is listed as new only because it does not exist at plan time: edit it, never recreate it.\n\nAfter the runner-channel gate and the unknown-key check, and before delegating to the store's recordCheckDispatch:\n- skip admission when params.id names a dispatch that is already recorded (getCheckDispatch), so a crash retry still replays under the store's rules;\n- otherwise call assertCheckDispatchApproved(state, params), so an unapproved dispatch writes nothing.\nAdd the two codeNames to the tool description. Nothing else changes. Admission and the store write happen in the same non-blocking tool call, under the state mutex.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/recordCheckDispatch.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckDispatch.ts"
+      ],
+      "note": "I edited V03's tools/recordCheckDispatch.ts in place, not as a new file (+11 lines).\n- Admission runs after runnerToolCall. A string id already recorded (getCheckDispatch) skips it and goes straight to the store's replay or immutability rules; anything else calls assertCheckDispatchApproved before the store write. Both happen in the same non-blocking, mutex-held handler.\n- Added an ADMISSION paragraph to the header and the two codeNames to the description.\n- V03's T4 (a differing same-id dispatch gives CHECK_DISPATCH_IMMUTABLE) and T5 still pass unchanged.\nFocused snapshot run: src/delivery/ plus recordCheckObservation, checkObservationStore and recordCheckRun gave 16 files and 906/906 passing. The strong file is 25/25. tsc --noEmit exited 0.",
+      "startedAt": "2026-10-30T06:45:28.182Z",
+      "completedAt": "2026-10-30T06:46:13.126Z"
     },
     {
       "stepId": "step-5",
       "description": "docs/MCP_SERVER.md: edit only CQ-V03's `### moe.record_check_dispatch` section, and preserve peers' bytes. Add an 'Admission (CQ-V04)' paragraph covering:\n- what may be dispatched: an owed check, meaning an approved protected definition matched by exact checkId and trimmed command, or the owed qualityGate with no checkId;\n- in an environment listed in settings.checkEnvironments;\n- the two NOT_ALLOWED refusals, CHECK_DEFINITION_NOT_APPROVED and CHECK_ENVIRONMENT_NOT_APPROVED, which write nothing;\n- the exception: an identical replay of a recorded dispatch id skips admission.\nAdd one sentence: for a verified-local task, only an authenticated observation satisfies a required check (outcome passed, the current approved revision, a dispatch naming that check, a listed environment), and record_check_run reports never do.\n\nThe CONFIGURATION.md row and the SCHEMA.md ProjectSettings field for checkEnvironments are deferred to CQ-V12's docs sweep, as noted on task-b621ddc9.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md: edited only the `### moe.record_check_dispatch` section (+12/-0).\n- Added an 'Admission (CQ-V04)' paragraph:\n  - it applies to verified-local tasks only;\n  - owed checks: a definition matched by exact checkId and trimmed command, while its snapshot is bound; or the gate, without a checkId;\n  - environments must be listed in settings.checkEnvironments, which is project.json-only and read live; absent means none, malformed is INVALID_INPUT;\n  - it runs in the same call as the write, writing nothing on refusal;\n  - an identical replay of a recorded id skips it.\n- Added the sentence that only authenticated observations count under verified-local, and record_check_run reports never do.\n- Two error bullets with their placement: after the argument names, before the field rules.\nThe file had no peer dirt. CONFIGURATION.md and SCHEMA.md are deferred to CQ-V12, per the plan.",
+      "startedAt": "2026-10-30T06:46:14.470Z",
+      "completedAt": "2026-10-30T06:46:43.061Z"
     },
     {
       "stepId": "step-6",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Iterate with `cd packages/moe-daemon && npx vitest run src/delivery/requiredChecks.strong.test.ts src/delivery/requiredChecks.delivery.test.ts`.\n2. Mutants. Apply each to a scratch copy, restore it, then cmp. Each must fail a named case:\n   - drop isAuthenticatedCheckRun: D;\n   - drop the planRevision clause: R1;\n   - drop the environment clause: R2;\n   - accept any outcome at exit 0: O;\n   - drop the checkId clause: T;\n   - skip admission: A;\n   - admit before the replay check: the A replay;\n   - apply the strong rule to every profile: the legacy case.\n3. GATE, fresh, in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate):\n   - `git archive HEAD` of the whole repo, with the prerequisites in HEAD;\n   - overlay ONLY this task's 5 files;\n   - `npm ci` after checking the lockfile against the tree;\n   - env -i with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH;\n   - `cd packages/moe-daemon && npm test` and `npx tsc --noEmit` must both exit 0. schema.ts is shared, so the full suite is the scope;\n   - cmp the overlay against the worktree.\n4. Size: this task's numstat over packages/ must be at most 400 net (QA cap; tests count).\n5. A red run outside this task is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n6. Supply the npm test command, its exit code and the output tail to complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/policy.ts",
         "packages/moe-daemon/src/types/schema.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "VERIFY: no edits were needed. The list repeats the task's 5 paths for attribution.\n1. Iteration: the strong file is 25/25; delivery/, the V03 tool tests and the store tests are 906/906.\n2. Mutants: 8/8 killed by the named cases, applied in a scratch snapshot, then restored and compared.\n   - Dropping isAuthenticatedCheckRun fails D-verified-local.\n   - Dropping the planRevision check fails R1.\n   - Dropping the environment check fails R2.\n   - Accepting any outcome fails O skipped, inconclusive, timeout and infra-failure.\n   - Dropping the checkId check fails T.\n   - Skipping admission fails the 6 A cases.\n   - Admitting before the replay check fails the A replay.\n   - Applying the strong rule to every profile fails D-legacy and L under legacy and observe.\n3. Gate: a fresh snapshot /tmp/moe-a9d1-gate.Sem00O, from git archive of HEAD 777a414 with only the 5 files overlaid. The lockfile is unchanged against HEAD; native npm ci; env -i with NO_COLOR=1 and node v24.21.0.\n   - `cd packages/moe-daemon && npm test`: EXIT 0. 199 files passed; 5543 tests passed, 16 skipped.\n   - `npx tsc --noEmit`: EXIT 0.\n   - A scratch tsconfig over the test file: EXIT 0.\n   - The overlay matches the worktree byte for byte.\n4. Size over packages/: +422/-37, net 385 (runtime 150: policy 131, tool 10, schema 9; tests 235). Docs add +12, for 397 non-board, under 400.",
+      "startedAt": "2026-10-30T06:46:44.275Z",
+      "completedAt": "2026-10-30T06:48:33.042Z"
     },
     {
       "stepId": "step-7",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Read the diff as an agent trying to get a verified-local task DONE without trusted evidence:\n- forgery: a record_check_run run copying runnerId, dispatchId and binding; a caller-built run object; a dispatch for an unowed command or an unlisted environment; a replayed id with altered fields;\n- staleness: a run from an older approved revision, a revoked environment id, a superseded candidate. A DONE task whose id is revoked withholds its dependents until re-checked, which is intended;\n- outcomes: exit 0 with skipped, inconclusive, timeout or infra-failure;\n- legacy: every legacy and observe verdict and existing test unchanged, and readiness unconditional outside this one test file;\n- concurrency: admission and the store write happen in one mutex-held tool call;\n- rails: no .moe edits, no Git writes, no forbidden tokens, and verified-local still unavailable.\n\nThen write the Serena memory 'task-task-a9d1a74d845b4d3d83f359bf864f8651-handoff' with the landed names for CQ-V04b, CQ-V05, CQ-V06 and CQ-V12: owedChecks, approvedCheckEnvironments, assertCheckDispatchApproved, the two codeNames and the new token.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/policy.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "note": "ADVERSARIAL REVIEW of the task's own diff.\n\nForgery:\n- A record_check_run run that copies runnerId, dispatchId and the binding fails isAuthenticatedCheckRun (D).\n- Evaluation reads only stored runs, so a caller-built object never reaches it.\n- An unowed command, wrong checkId or unlisted environment for a verified-local task is refused before any write (A).\n- A replayed id with altered fields skips admission and gets CHECK_DISPATCH_IMMUTABLE from the store (REPLAYED_FIELDS covers command, checkId and environment).\n- A case-variant new id goes through admission, then CASE_COLLISION.\n\nStaleness: covered by R1 (revision), R2 (live revocation; DONE dependents withheld, as intended) and R3 (superseded candidate).\n\nOutcomes: exit 0 with skipped, inconclusive, timeout or infra-failure are all killed (O).\n\nLegacy: trusted=null keeps passedOn. The per-def owed() is equivalent in effect. isVerifiedLocal adds no new throw, because resolveTaskDeliveryPolicy already resolved the same profile. The legacy and observe L/D cases pass, all V03 tests are unchanged, and readiness is mocked only in the new file.\n\nConcurrency: admission and the write run in one non-blocking (mutex-held) handler.\n\nRails: no .moe edits, no Git writes, no forbidden tokens, verified-local still unavailable.\n\nFIX (+2 net): the CHECK_DEFINITION_NOT_APPROVED message echoed an unvalidated checkId verbatim before store validation. It is now renderGot-bounded, and checkId is dropped from the context.\n\nTheoretical, noted:\n- Admission precedes field validation, so error-code precedence differs (documented).\n- A malformed snapshot refuses dispatch with INVALID_INPUT (fail closed).\n- The required-check reason text is generic.\n\nFILED: bug task-43088e9b. A verified-local task under deliveryPolicy legacy or absent is satisfied before any check is judged. Pre-existing and latent.\n\nFinal gate after the fix: npm test EXIT 0 (199 files, 5543 passed, 16 skipped); tsc EXIT 0; the overlay matches the worktree. Handoff memory written.",
+      "startedAt": "2026-10-30T06:48:34.391Z",
+      "completedAt": "2026-10-30T06:50:25.195Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -96,14 +142,15 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:55.999Z",
-  "updatedAt": "2026-10-29T22:13:37.323Z",
+  "updatedAt": "2026-10-30T06:50:42.643Z",
   "dependsOn": [
     "task-9cc131704d214e66afc8a51a524b35c2"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-26T08:35:49.789Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 7
   },
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -112,13 +159,22 @@
   "blockedAt": null,
   "priorBlockedReason": "A plan written now would be speculative. CQ-V04 dispatches required focused checks through the isolated check runner and publishes a pass only through the authenticated observation channel, and neither exists yet.\n1. The runner is CQ-R11 (BACKLOG, unplanned). It owns the fresh check environment, the environment identity that DoD1 must match against approval, and the post-run tree/index/HEAD re-measurement that DoD2 relies on.\n2. The trusted-pass channel is CQ-V03 (BLOCKED, for the same reason, on CQ-V02 and CQ-R11).\nCQ-V02 is planned (2026-10-26). It adds CheckRun outcome / planRevision / environment / dispatchId / attemptId, and a passedOn guard so skipped or inconclusive outcomes never count. That already covers most of DoD3. The planning analysis is in Serena memory task-<this id>-handoff. The task auto-unblocks to PLANNING when both prerequisites are DONE.",
   "contextFetchedBy": [
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-fe18a9a9"
   ],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T18:18:15.882Z",
   "executionContract": {
@@ -211,8 +267,11 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-0b9db30f14454696977421b8c6138ddd.json",
-    ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json"
+    "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+    "docs/MCP_SERVER.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -220,5 +279,15 @@
     "kind": "checkpoint",
     "sessionId": "architect-4ae016fb@2026-10-29T17:46:26Z",
     "at": "2026-10-29T22:13:37.323Z"
-  }
+  },
+  "workStartedAt": "2026-10-30T06:37:29.673Z",
+  "reviewStartedAt": "2026-10-30T06:50:42.641Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh Linux snapshot /tmp/moe-a9d1-gate.Sem00O: git archive of HEAD 777a414 plus only this task's 5 files, byte-equal to the worktree; native npm ci, lockfile unchanged against HEAD; env -i with NO_COLOR=1 and node v24.21.0.\n ✓ src/util/ids.test.ts (4 tests) 3ms\n ✓ src/tools/initHookFixes.test.ts (5 tests) 3ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n\n Test Files  199 passed (199)\n      Tests  5543 passed | 16 skipped (5559)\n   Duration  25.24s (tests 94%, import 4%, transform 1%)\nnpm test exit=0\nnpx tsc --noEmit exit=0",
+    "reportedAt": "2026-10-30T06:50:42.641Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-V04 daemon core. The verified-local trusted pass rule and record_check_dispatch admission. Legacy and observe are unchanged.\n- delivery/policy.ts (+169/-36):\n  - Exported: OwedCheck, owedChecks (approved defs while the snapshot is bound, then the owed gate unless a def runs it), approvedCheckEnvironments (<=50 ids, each <=255 chars, non-blank, no control chars; malformed is INVALID_INPUT), assertCheckDispatchApproved.\n  - trustedPassedOn requires an authenticated observation (isAuthenticatedCheckRun), outcome 'passed' at exit 0, run.planRevision equal to the approved revision, which must equal the current one, an environment in the live list, and a dispatch naming the command and checkId.\n  - New token required-checks-undeclared.\n  - Each def needs its own dispatch.\n- tools/recordCheckDispatch.ts: a recorded id skips admission (store replay); otherwise admission runs before the write.\n- schema.ts: ProjectSettings.checkEnvironments.\n- MCP_SERVER.md: the admission paragraph and 2 errors.\nDEVIATION: admission runs only for verified-local tasks. Universal admission broke V03's landed tests (an unowed legacy dispatch) and contradicts the 'legacy unchanged' and 'strong branch only under verified-local' rules. Case L pins this.\nDoD to tests (requiredChecks.strong.test.ts, 25 cases; readiness mocked only here, the real one pinned):\n1. A refuses an unowed command, a wrong or missing checkId, an unlisted environment and an absent list, writing nothing; a malformed list is INVALID_INPUT; the replay gives duplicate:true. R1 (revision) and R2 (environment revoked) bring the tokens back. T covers twin ids.\n2. R3 (newer tree), D (record_check_run copying a real binding is refused under verified-local and counted under legacy).\n3. O: none, unobserved, skipped, inconclusive, timeout, infra-failure and code-failure each keep the token, and dependents are withheld (dependencyShortfall/unmetDependsOn).\n4. Gate EXIT 0, tsc 0.\nMutants: 8/8 killed. Size: packages/ net 387 (runtime 152,"
 }

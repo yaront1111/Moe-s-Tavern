@@ -1,0 +1,30 @@
+{
+  "id": "task-43088e9b504b49a5ae59c562fcc0c784",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: verified-local task under deliveryPolicy legacy skips every required check",
+  "description": "Repro: delivery/policy.ts evaluateDeliveryEvidence returns {satisfied:true} as soon as resolveTaskDeliveryPolicy gives 'legacy'. That happens before the CQ-V04 strong rule (trustedPassedOn, required-checks-undeclared) runs. So a verified-local task in a project with no deliveryPolicy, or with an explicit 'legacy', passes qa_approve and dependency readiness with no trusted check evidence at all. It is latent while assertExecutionProfileReady throws. Decide one fix: either require a strict deliveryPolicy whenever the profile is verified-local (settings validation or snapshot capture), or judge checks for verified-local even under legacy. Found in CQ-V04's adversarial review.",
+  "definitionOfDone": [
+    "A verified-local task can never be judged satisfied without trusted required-check evidence, whatever deliveryPolicy is set",
+    "Legacy and observe verdicts unchanged; regression test covers verified-local + legacy/absent deliveryPolicy"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-a9d1a74d845b4d3d83f359bf864f8651"
+  ],
+  "priority": "MEDIUM",
+  "order": 267.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:49:24.162Z",
+  "updatedAt": "2026-10-30T06:49:24.162Z"
+}

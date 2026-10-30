@@ -1,6 +1,7 @@
 import type { ToolCallContext, ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { recordCheckDispatch, type RecordCheckDispatchParams } from '../state/checkObservationStore.js';
+import { getCheckDispatch, recordCheckDispatch, type RecordCheckDispatchParams } from '../state/checkObservationStore.js';
+import { assertCheckDispatchApproved } from '../delivery/policy.js';
 import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
 
 // =============================================================================
@@ -15,6 +16,10 @@ import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
 // only an authenticated /runner connection sets (server/runnerChannel.ts).
 // /mcp and /ws callers are refused before anything is read, and no argument
 // can name a runner, a source or a tree: an unknown key is refused by name.
+//
+// ADMISSION (CQ-V04): a NEW dispatch for a verified-local task must name a
+// check the task owes, in an approved environment (assertCheckDispatchApproved),
+// before anything is written. A recorded id skips it and replays under the store.
 //
 // RECORDING, NOT APPROVAL. Not `blocking`: dispatch serializes the tool under
 // the state mutex, and the store's same-id check-then-write relies on it.
@@ -48,6 +53,8 @@ export function recordCheckDispatchTool(_state: StateManager): ToolDefinition {
       'Pins the task\'s CURRENT candidate, that candidate\'s tree and the current approved plan revision: a superseded candidate (CHECK_DISPATCH_NOT_CURRENT), an unknown one (CANDIDATE_NOT_FOUND) ' +
       'or another revision (CHECK_DISPATCH_REVISION_MISMATCH) is refused. Immutable: an identical same-id call returns the stored dispatch with duplicate:true and writes nothing; ' +
       'a differing one is refused (CHECK_DISPATCH_IMMUTABLE). Any other argument, runnerId, source and treeSha included, is refused by name (INVALID_INPUT). ' +
+      'For a verified-local task a NEW dispatch must name a check the task owes, by exact command and checkId (CHECK_DEFINITION_NOT_APPROVED), ' +
+      'in an environment settings.checkEnvironments lists (CHECK_ENVIRONMENT_NOT_APPROVED); both are NOT_ALLOWED and write nothing. ' +
       'Recorded, never approved: a dispatch marks nothing DONE and releases nothing.',
     inputSchema: {
       type: 'object',
@@ -72,6 +79,9 @@ export function recordCheckDispatchTool(_state: StateManager): ToolDefinition {
     },
     handler: async (args, state, context) => {
       const { runner, params } = runnerToolCall(TOOL_NAME, 'check dispatch', FIELDS, args, context);
+      const { id } = params as { id?: unknown };
+      // A recorded id is a crash retry: the store replays or refuses it, never admission.
+      if (typeof id !== 'string' || getCheckDispatch(state, id) === null) assertCheckDispatchApproved(state, params as Record<string, unknown>);
       const { dispatch, duplicate } = await recordCheckDispatch(state, runner, params as RecordCheckDispatchParams);
       return { success: true, dispatch, duplicate };
     },

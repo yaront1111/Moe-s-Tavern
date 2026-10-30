@@ -233,6 +233,15 @@ export interface ProjectSettings {
    */
   deliveryPolicy?: DeliveryPolicy;
   /**
+   * Human-approved isolated check environment ids: the exact CheckRun.environment
+   * values a runner reports, e.g. 'moe-local-vm-v1:<sha256>'. Absent or empty
+   * approves none. Read live by delivery/policy.ts and moe.record_check_dispatch
+   * for verified-local tasks, so removing an id revokes the evidence recorded in
+   * it. Set in .moe/project.json, like deliveryPolicy: validateSettingsUpdate
+   * refuses it as unknown and preserves it, so the IDE never edits it.
+   */
+  checkEnvironments?: string[];
+  /**
    * Branch a worker is expected to be on when it calls `moe.complete_task`.
    * Either a literal branch name or a `*` glob (e.g. "moe/work-*", which is
    * what the agent wrappers peel onto). Matching is case-sensitive because git

@@ -984,9 +984,21 @@ Any other argument, `runnerId`, `source` and `treeSha` included, is refused by n
 - **Immutable, with an idempotent retry.** A same-id call is compared on `taskId`, `candidateId`, `planRevision`, `command`, `checkId`, `environment` and the channel's `runnerId`. An identical one returns the stored dispatch (`duplicate: true`, original `createdAt`) and writes nothing; any difference is refused. The same-id check runs before the currency checks, so a crash retry still replays after its candidate was superseded.
 - **Recorded, not approved.** A dispatch marks nothing `DONE` and releases nothing. `createdAt` is the daemon's clock. The tool is not `blocking`, so dispatch serializes it under the state mutex.
 
+**Admission (CQ-V04).** For a `verified-local` task, a NEW dispatch must name a check the task owes (`owedChecks` in `delivery/policy.ts`), in an approved environment. Legacy and observe tasks are not admitted this way.
+- An owed check is either of these:
+  - an approved protected definition (`executionContract.requiredChecks`, while its approved snapshot is bound to the current definitions), matched by exact `checkId` and trimmed `command`;
+  - the owed `qualityGate`, with no `checkId`, unless a definition already runs it.
+- The `environment` must be listed in `settings.checkEnvironments`. That list is set in `.moe/project.json` only, and is read live. Absent approves none. A malformed list is `INVALID_INPUT` (`context.field` `checkEnvironments`).
+- Admission runs in the same tool call as the write, after the argument-name check, and writes nothing when it refuses.
+- An identical replay of an already-recorded dispatch `id` skips admission and is answered by the store's replay rules, even after its environment was revoked.
+
+For a `verified-local` task, only an authenticated observation satisfies a required check. It must have outcome `passed` at exit 0, the current approved plan revision, a dispatch naming that check, and an environment still listed. `moe.record_check_run` reports never do.
+
 **Errors.** Checked in this order, and every refusal writes nothing:
 - `-32003 RUNNER_CHANNEL_REQUIRED`: the call did not arrive over an authenticated `/runner` connection. Checked before the arguments are read.
 - `-32602 INVALID_INPUT` / `MISSING_REQUIRED`: non-object arguments, an argument outside the list above (named in `context.field`), or a malformed or absent field.
+- `-32003 CHECK_DEFINITION_NOT_APPROVED`: (verified-local, new id; after the argument names, before the field rules) the task owes no check with this exact `command` and `checkId`.
+- `-32003 CHECK_ENVIRONMENT_NOT_APPROVED`: (verified-local, new id, likewise) `settings.checkEnvironments` does not list `environment`.
 - `-32002 CHECK_DISPATCH_IMMUTABLE`: the `id` already holds a different dispatch; `context.differingFields` names the fields.
 - `-32002 CHECK_DISPATCH_ID_CASE_COLLISION`: the `id` differs only by case from a stored dispatch's id (`context.dispatchId`, `context.requestedId`).
 - `-32001 TASK_NOT_FOUND` / `-32001 CANDIDATE_NOT_FOUND`: no such task or candidate.
