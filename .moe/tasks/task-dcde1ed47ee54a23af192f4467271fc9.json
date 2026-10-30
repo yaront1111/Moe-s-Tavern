@@ -1,0 +1,27 @@
+{
+  "id": "task-dcde1ed47ee54a23af192f4467271fc9",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code disconnect/dispose does not cancel an in-flight connect, so startup can reopen /ws after manual disconnect",
+  "description": "Pre-existing in MoeDaemonClient.connect(): pause ensureDaemonRunning(), call connect(), disconnect(), then release startup; it still opens /ws and becomes connected. Reproduced against untouched HEAD source in /tmp/80ed-mutants-2gudnqx7/tests/cancel-repro.test.cjs (cancel-preexisting.log): expected 0 connections, actual 1.\nThe new identity probe is another await in the same unfenced lifecycle. Add cancellation/generation fencing after awaits and tests for manual disconnect/dispose without changing identity policy.",
+  "definitionOfDone": [
+    "Manual disconnect/dispose during pending startup or identity probe opens no later WebSocket or ping timer; regression tests cover both.",
+    "moe-vscode tests and compile pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 311.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T17:09:56.990Z",
+  "updatedAt": "2026-10-30T17:09:56.990Z"
+}

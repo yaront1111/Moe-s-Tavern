@@ -120,7 +120,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:30:28.503Z",
-  "updatedAt": "2026-10-30T17:06:35.774Z",
+  "updatedAt": "2026-10-30T17:07:36.543Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T13:33:01.098Z",
     "plannedStepCount": 5,
@@ -199,7 +199,9 @@
     "scripts/tests/postflight-worktree.cjs",
     ".moe/epics/epic-5f4acf0ae5d3427facd63346f125aec5.json",
     ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json",
-    ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json"
+    ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json",
+    ".moe/tasks/task-b29d022e7d9e4698b40517340f48e31c.json",
+    ".moe/tasks/task-ea8b44c9964442e3a5ca80b2a1cc2ad7.json"
   ],
   "completionSummary": "WT-04T delivered a held-out acceptance suite for worktree provisioning at worker pre-flight.\n\nNew file scripts/tests/postflight-worktree.cjs (311 lines):\n- Same argv as postflight-owner-guard.cjs; MOE_WORKTREE_ONLY and MOE_KEEP_WORKTREE_FIXTURE are supported.\n- 13 cases, each run against a real git fixture repo on moe/control:\n  - lifecycle: create → reuse → re-add → moe-present refusal;\n  - resume, using only the get_context workspace;\n  - half-made, expecting `reused`;\n  - refusals: git-old, not-top, control, target-missing, mismatch, dir-exists, sparse-fail, path-long (win32 only), shared-unlanded;\n  - shared-landed.\n- Each refusal checks:\n  - an `[ERROR] CODE:` line;\n  - exactly one report_blocked whose reason starts with CODE;\n  - no CLI launch and exit 1;\n  - W not registered;\n  - the control HEAD, sha, `ls-files -s -t` and status unchanged.\n\nscripts/tests/postflight-fake-proxy.js (+21/-2):\n- Opt-in knobs FAKE_CLAIM_WORKSPACE, FAKE_CTX_WORKSPACE and FAKE_CTX_COMMITS.\n- report_blocked now logs an RPC row.\n- With the knobs unset, behaviour is unchanged.\n\nNet change is 330 LOC, under the 355 limit. No other file was touched.\n\nRed against today's wrappers, as expected:\n- bash: 1 ok, 11 failed, all AssertionError.\n- PS5.1 and pwsh7: 1 ok, 12 failed, all AssertionError, no SKIP lines.\n- postflight-safe bash and parity-check pass.\n\nGreen against a scratch reference implementation: 12/12 on Linux, 13/13 on Git Bash. Seven mutants were each caught.\n\nThe verification snapshot at /mnt/d/moe-scratch/wt04t-verify-ENES is kept for QA re-runs. It is `git archive` of scripts/ at e8a29d69 plus the two files.\n\nWT-04 must fix MSYS argv conversion on `sparse-checkout set --no-cone '/*'` under Git Bash, using MSYS2_ARG_CONV_EXCL; see comment-c97655995abd4ff6bab7fb23ee937438. Notes are in Serena: task-...-handoff and gotcha-git-bash-stub-path-and-msys-sparse.",
   "commits": [
@@ -221,20 +223,35 @@
       "treeId": "a0f5d22d6f0c8399f6a3ed47ced52f1f43dca341",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "d4f7300129e355e881e3ac0579b006fd8edf3146",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T16:49:21Z",
+      "paths": [
+        ".moe/tasks/task-b29d022e7d9e4698b40517340f48e31c.json",
+        ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json",
+        ".moe/tasks/task-ea8b44c9964442e3a5ca80b2a1cc2ad7.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T17:07:36.543Z",
+      "treeId": "02ee91c445e81c24388f6f5d713b8705baba1d1c",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
     "scripts/tests/postflight-fake-proxy.js",
     "scripts/tests/postflight-worktree.cjs"
   ],
-  "unattributedPaths": [
-    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
-  ],
+  "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e60b90bd@2026-10-30T16:07:03Z",
-    "at": "2026-10-30T16:49:03.959Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T16:49:21Z",
+    "at": "2026-10-30T17:07:36.543Z"
   },
   "completedAt": "2026-10-30T17:06:35.774Z",
   "reviewCompletedAt": "2026-10-30T17:06:35.774Z",
