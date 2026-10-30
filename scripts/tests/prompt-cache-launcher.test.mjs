@@ -472,3 +472,31 @@ for (const engine of psEngines) {
     assert.equal(result.status, 0, result.stdout + result.stderr);
   });
 }
+
+// Get-RoleDoc must decode the role doc as UTF-8: the daemon writes it BOM-less and
+// Windows PowerShell 5.1 would otherwise read it as ANSI (mojibake in the stable prefix).
+const ROLE_DOC_TEXT = '# Worker \u2014 role\nA \u2192 B \u2190 C, x \u2264 y \u2265 z, \u00abq\u00bb \u6f22\u5b57\n';
+if (!psEngines.length) test('Get-RoleDoc reads the UTF-8 role doc on PowerShell 5.1 and 7', { skip: `no PowerShell engine on ${process.platform}` }, () => {});
+for (const engine of psEngines) {
+  for (const bom of [false, true]) {
+    test(`${engine}: Get-RoleDoc puts the exact UTF-8 role doc in the stable system prefix (${bom ? 'BOM' : 'BOM-less'})`, t => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'moe roledoc '));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      mkdirSync(path.join(dir, 'roles'), { recursive: true });
+      writeFileSync(path.join(dir, 'roles', 'worker.md'), Buffer.concat([bom ? Buffer.from([0xef, 0xbb, 0xbf]) : Buffer.alloc(0), Buffer.from(ROLE_DOC_TEXT, 'utf8')]));
+      const src = read('ps1');
+      // The real function and the real assembly; the result goes to a file as UTF-8 so
+      // PowerShell 5.1's console transcoding of stdout cannot confound the comparison.
+      const script = `$moeDir=$env:MOE_TEST_DIR\n$Role='worker'\n$pluginRoot=$null\n$systemAppendPre='stable prefix'\n`
+        + `${between(src, 'function Get-RoleDoc {', '\n$roleDoc = Get-RoleDoc')}\n`
+        + `${between(src, '    $roleDoc = Get-RoleDoc\n    $systemAppend = $systemAppendPre', '    $dynamicContext = ""')}\n`
+        + '[IO.File]::WriteAllText($env:MOE_TEST_OUT, $systemAppend, (New-Object Text.UTF8Encoding $false))';
+      const out = path.join(dir, 'out.txt');
+      const result = runPs(engine, dir, 'roledoc.ps1', script, { MOE_TEST_DIR: dir, MOE_TEST_OUT: out });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const text = readFileSync(out, 'utf8');
+      assert.doesNotMatch(text, /[\ufeff\u00e2]/, 'no BOM and no ANSI-decoded mojibake');
+      assert.equal(text, `stable prefix\n\n${ROLE_DOC_TEXT}`);
+    });
+  }
+}

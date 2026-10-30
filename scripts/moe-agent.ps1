@@ -680,7 +680,8 @@ function Get-RoleDoc {
     if (-not (Test-Path $p) -and $pluginRoot) {
         $p = Join-Path $pluginRoot "docs\roles\$Role.md"
     }
-    if (Test-Path $p) { return Get-Content -Raw -Path $p }
+    # The daemon writes role docs as BOM-less UTF-8; Windows PowerShell 5.1 decodes a BOM-less file as ANSI unless told. -Encoding UTF8 is right on 5.1 and 7, BOM or not.
+    if (Test-Path $p) { return Get-Content -Raw -Encoding UTF8 -Path $p }
     return ""
 }
 $roleDoc = Get-RoleDoc
