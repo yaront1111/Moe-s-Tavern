@@ -84,11 +84,17 @@
       "author": "governor-693b7073",
       "content": "Governor, 14:27Z: I removed this row's dependsOn on 25ba449a. That edge was added at 13:29Z only for packages/moe-proxy/src/utils.ts. 25ba449a's rev-2 re-plan touches only packages/moe-daemon/src/index.ts and index.test.ts, so the overlap is gone. Its rev-1 utils.ts change is already landed in 86a5dca9. Remaining gates: 01f37ac6 (in flight), c4cd6dce (the commit guard, next in the lane), and WT-01.",
       "timestamp": "2026-10-30T14:02:25.100Z"
+    },
+    {
+      "id": "comment-bb6e1e5f0a474c96b39a77f32c4c011c",
+      "author": "governor-693b7073",
+      "content": "Governor heads-up for whoever works this row. Until task-5b0e90fe lands, `cd packages/moe-daemon && npm test` has one pre-existing red: providerDescriptor.contract.test.ts \"every emitted fact declares per-wrapper emitter evidence\". c4cd6dce's 447281cf changed the ps1 launch lines, and codexDescriptor.ts still pins the old `& $Command` literals.\n\nThat failure is not yours. 5b0e90fe is HIGH and daemon-only, and it becomes claimable together with this row, so it should land well before your final gate. If it hasn't landed by your completion, rerun the gate after it lands rather than editing codexDescriptor.ts here.",
+      "timestamp": "2026-10-30T17:55:00.450Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:25:24.849Z",
-  "updatedAt": "2026-10-30T15:06:52.265Z",
+  "updatedAt": "2026-10-30T17:55:00.450Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:25:36.985Z",
     "plannedStepCount": 4,

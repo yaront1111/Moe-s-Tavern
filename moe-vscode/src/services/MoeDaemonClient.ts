@@ -1136,6 +1136,11 @@ export class MoeDaemonClient implements vscode.Disposable {
         if (this.startInProgress) {
             return;
         }
+        // Only connect() starts the daemon: a liveness check that settles after a
+        // manual disconnect() or dispose() must not spawn for the cancelled attempt.
+        if (this.connectCancelled()) {
+            return;
+        }
         if (runtimeProfile(projectPath) === 'protected') { return this.startProtectedDaemon(projectPath); }
         const daemonPath = this.resolveBundledDaemonPath() || this.resolveGlobalConfigDaemonPath();
         if (!daemonPath) {
@@ -1173,7 +1178,10 @@ export class MoeDaemonClient implements vscode.Disposable {
             const message = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
                 ? 'Moe could not start Node.js. Run the Moe installer and restart VS Code, or set MOE_NODE_COMMAND to its executable path.'
                 : `Moe could not start its daemon: ${detail}`;
-            vscode.window.showErrorMessage(message);
+            // A spawn that fails after its connect attempt was cancelled is logged, not shown.
+            if (!this.connectCancelled()) {
+                vscode.window.showErrorMessage(message);
+            }
         } finally {
             this.startInProgress = false;
         }
@@ -1206,7 +1214,7 @@ export class MoeDaemonClient implements vscode.Disposable {
             const message = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
                 ? 'Moe could not start Node.js. Run the Moe installer and restart VS Code, or set MOE_NODE_COMMAND to its executable path.'
                 : `Moe could not start its daemon: ${detail}`;
-            vscode.window.showErrorMessage(message);
+            if (!this.connectCancelled()) { vscode.window.showErrorMessage(message); }
         } finally {
             this.startInProgress = false;
         }

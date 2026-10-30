@@ -29,7 +29,7 @@ function fixture(t, protectedProfile = true, fsApi = fs) {
     const [spawns, errors, logs] = [[], [], []];
     const f = { project, extension, home, outside, daemon, node, env, spawns, errors, logs, polls: 0, unrefs: 0 };
     const vscode = {
-        EventEmitter: class { event = () => ({ dispose() {} }); },
+        EventEmitter: class { event = () => ({ dispose() {} }); fire() {} dispose() {} },
         window: { createOutputChannel: () => ({ appendLine: line => logs.push(line) }), showErrorMessage: m => errors.push(m) },
         workspace: { getConfiguration: () => ({ get: (_key, fallback) => fallback }) }
     };
@@ -220,6 +220,18 @@ for (const code of ['ENOENT', 'EACCES']) {
         assert.equal(f.spawns.length, 1); assert.equal(f.polls, 0); assert.equal(f.unrefs, 0);
         assert.equal(f.client.startInProgress, false);
         assert.equal(f.errors.length, 1); assert.match(f.errors[0], code === 'ENOENT' ? /MOE_NODE_COMMAND/ : /EACCES/);
+    });
+}
+
+for (const how of ['disconnect', 'dispose']) {
+    test(`protected async ENOENT after ${how} is logged without a notice`, async t => {
+        const f = fixture(t); f.failure = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        const startup = f.client.startDaemon('start', f.project);
+        f.client[how]();
+        await startup;
+        assert.equal(f.spawns.length, 1); assert.equal(f.client.startInProgress, false);
+        assert.deepEqual(f.errors, []);
+        assert.ok(f.logs.some(line => line.includes('Failed to start daemon:') && line.includes('ENOENT')));
     });
 }
 

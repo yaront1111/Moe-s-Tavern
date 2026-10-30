@@ -17,11 +17,12 @@
         "moe-vscode/tests/daemon-identity.test.cjs"
       ],
       "modifiedFiles": [
-        "moe-vscode/tests/daemon-identity.test.cjs"
+        "moe-vscode/tests/daemon-identity.test.cjs",
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
       ],
-      "note": "Added only the EventEmitter dispose stub and appended section E helpers/10 rows. Fresh RED: cd moe-vscode && node --test --test-name-pattern='^E ' tests/daemon-identity.test.cjs exits 1: 10 tests, 1 pass (re-arm), 9 fail, all AssertionError (startup probes, opened sockets, foreign recovery rejection); no harness errors. Existing shared board/debris paths left untouched; working in project root for wrapper landing.",
-      "startedAt": "2026-10-30T17:41:39.051Z",
-      "completedAt": "2026-10-30T17:42:11.713Z"
+      "note": "Reopen 1 (QA reject). The original 10 E rows were already in the file from 87a1e939, so this step adds RED regressions for both rejection items.\ndaemon-identity.test.cjs:\n- (a) Fixture gains an opt-in spawn-failure knob, default off, mirroring protected-daemon-spawn's f.failure: `f = {}`; the stub child emits 'error' f.failure instead of 'spawn' when set; the return value is Object.assign(f, ...), with the same own exports. This is scope growth past \"the only fixture edit is dispose()\". It is the only way to drive QA's realistic async spawn 'error' path. Rows A-E are byte-identical (git diff -U0: 3 fixture lines plus an append).\n- (b) 7 appended E rows. Helpers are hoisted function declarations: refusedPortMetadata (daemon.json naming a closed 127.0.0.1 port, so the real isPortOpen refuses) and spawnFailure (ENOENT).\n  - `E {disconnect,dispose} during the daemon liveness check spawns nothing`: resolved, spawns 0, daemon.json bytes unchanged, no warnings/errors, idle.\n  - `E {disconnect,dispose} during a failing daemon spawn shows no late notice`: the spawn is pending at cancel time, resolved, errors 0, the failure still logged, idle.\n  - Controls: `E an uncancelled refused liveness check still starts the daemon` (spawn args start --project).\n  - Controls: `E a failing daemon spawn still notifies the {uncancelled,re-armed} attempt`: 1 Node.js notice, and the first attempt rejects 'Daemon not running'. The re-armed variant (connect, disconnect, connect) pins latest-call-wins for notices.\nprotected-daemon-spawn.test.cjs (scope growth, QA: \"audit protected catch at 1209 too\"):\n- The EventEmitter stub gains no-op fire()/dispose(), so disconnect()/dispose() can run.\n- New rows `protected async ENOENT after {disconnect,dispose} is logged without a notice`. The existing ENOENT/EACCES rows are its uncancelled controls.\nRED at unchanged source (87a1e939):\n- `cd moe-vscode && node --test --test-name-pattern='^E ' tests/daemon-identity.test.cjs`: 17 tests, 13 pass, 4 fail, all ERR_ASSERTION: liveness spawns actual 1/expected 0, both kinds; late notice errors [0,1] vs [0,0], both kinds. The 3 controls and the 10 original rows pass.\n- `node --test --test-name-pattern='^protected async' tests/protected-daemon-spawn.test.cjs`: 4 tests, 2 pass, 2 fail by ERR_ASSERTION, errors ['Moe could not start Node.js...'] vs [].\n- Whole files: daemon-identity 52 tests (48 pass, 4 new RED); protected-daemon-spawn 24 tests (19 pass, 3 Windows skips, 2 new RED).\n- No TypeError or harness errors. git diff --check clean.\nPeer dirty paths (.moe/tasks/* x8, .moe/decisions/, RuntimeSelectionPolicyTest.kt, scripts/local-runner/certify-bridge.mjs, scripts/tests/local-runner.test.mjs) were left untouched.",
+      "startedAt": "2026-10-30T17:59:43.916Z",
+      "completedAt": "2026-10-30T18:03:20.937Z"
     },
     {
       "stepId": "step-2",
@@ -33,9 +34,9 @@
       "modifiedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
       ],
-      "note": "Implemented approved intent flags, terminal dispose, and startup/identity/recovery fences without imports or identity-policy/text/WS-handshake changes. GREEN: cd moe-vscode && node --test --test-name-pattern='^E ' tests/daemon-identity.test.cjs && node --test tests/daemon-identity.test.cjs exits 0: E 10/10 and whole file 45/45, 0 failures.",
-      "startedAt": "2026-10-30T17:42:11.747Z",
-      "completedAt": "2026-10-30T17:42:31.547Z"
+      "note": "Reopen 1 GREEN. The original step-2 fences were already in 87a1e939. This step adds the QA-required inner-startup fencing in MoeDaemonClient.ts (+12/-2, no imports).\nScope reconciliation, per QA's \"reconcile the narrow approved scope with the contract\": intendedBehavior requires \"spawns no further daemon, shows no notice\". So startDaemon and startProtectedDaemon now get fences next to the approved connect()/getVerifiedDaemonInfo ones.\n(1) startDaemon: after the startInProgress check, `if (this.connectCancelled()) { return; }`.\n- Why a choke point: startDaemon is private and only runs inside connect() (from ensureDaemonRunning and getVerifiedDaemonInfo recovery).\n- So this single line fences every post-await spawn path: QA issue 1 (isPortOpen false -> startDaemon at :1094), the catch fallback at :1100, and the protected dispatch (whose refusal notice is synchronous inside startDaemon).\n- Every synchronous connect() path reads connectCancelled() as false, because connect() clears manualDisconnect and returns early when disposed. So a non-cancelled start is unchanged.\n(2) The startDaemon catch shows its notice only `if (!this.connectCancelled())`. The log line is kept, so a cancelled attempt's failure is still recorded (QA issue 2).\n(3) The startProtectedDaemon catch (:1209) gets the same guard (QA: \"audit protected catch at 1209 too\").\nLive errors are not hidden: connectCancelled() is latest-call-wins, so a re-armed attempt (disconnect, then connect) still gets the notice; the re-armed control row pins this. Uncancelled controls also still notify, spawn and reject 'Daemon not running'.\nUnchanged: identity policy/texts, probe, removal, recovery flow, the WS block, disconnect({manual:false}) semantics, and the public signatures.\nEvidence:\n- `cd moe-vscode && node --test --test-name-pattern='^E ' tests/daemon-identity.test.cjs`: 17/17 pass.\n- `node --test --test-name-pattern='^protected async' tests/protected-daemon-spawn.test.cjs`: 4/4.\n- Whole files: daemon-identity 52/52; protected-daemon-spawn 24 tests, 21 pass, 3 Windows-only skips, 0 fail; daemon-start 7/7.\n- QA's own repro (/tmp/qa-dcde-7f99spul test copied verbatim, next to the fixed source in my scratch, QA dir untouched): `--test-name-pattern='^QA'` 8/8 pass, including the QA-real and QA-error cancelled rows and the controls. That full file is 53/53. Scratch removed.",
+      "startedAt": "2026-10-30T18:03:24.013Z",
+      "completedAt": "2026-10-30T18:05:27.941Z"
     },
     {
       "stepId": "step-3",
@@ -45,9 +46,9 @@
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/tests/daemon-identity.test.cjs"
       ],
-      "note": "Fresh root command cd moe-vscode && npm test && npm run compile completed with exit 0: 334 tests, 331 pass, 0 fail, 3 existing platform skips; tsc -p ./ exit 0. No files modified in this verification-only step. Same run retained for complete_task verification evidence.",
-      "startedAt": "2026-10-30T17:42:31.580Z",
-      "completedAt": "2026-10-30T17:43:02.178Z"
+      "note": "Fresh full gate from the repo root (Linux): `cd moe-vscode && npm test && npm run compile` -> exit 0.\n- npm test: 343 tests, 340 pass, 0 fail, 0 cancelled, 3 skipped (the 3 Windows-only protected-daemon-spawn rows), 11966 ms. That is +9 rows over the reopened baseline of 334/331/0/3: 7 new E rows in daemon-identity and 2 protected-async cancellation rows.\n- `tsc -p ./` exit 0.\nLog: /tmp/dcde-gate-step3.log.\nNo files changed in this step. If step 4 changes a file, the gate is re-run fresh and that output becomes the complete_task evidence.",
+      "startedAt": "2026-10-30T18:05:33.721Z",
+      "completedAt": "2026-10-30T18:06:18.047Z"
     },
     {
       "stepId": "step-4",
@@ -58,12 +59,11 @@
         "moe-vscode/tests/daemon-identity.test.cjs"
       ],
       "modifiedFiles": [
-        "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/tests/daemon-identity.test.cjs"
       ],
-      "note": "Adversarial review read scoped diff; no checkout edits. Unmutated scratch baseline 45/45 and every selected pattern clean first; M1-M8 each assertion-killed expected rows (2/2/1/1/2/1/1/1), including M6 spawns2 and M8 connections0; scratch deleted. Extra scratch dispose variants for foreign metadata/configured and recovery respawn/reprobe plus duplicate-connect and disconnect/connect/disconnect startup checks 6/6; removed. Imports unchanged; A-D byte-identical except dispose stub; all D rows passed. Scoped diff --check and cd moe-vscode && npx eslint src/services/MoeDaemonClient.ts exit0. Reviewed concurrency, inputs/failures, cleanup and scope; bounded waits finish before cancellation returns, handshake behavior remains deliberately unchanged. Full step-3 gate remains fresh (no changes afterward): 334 total/331 pass/0 fail/3 skipped, compile0. Serena handoff and harness memory updated; own task paths repeated for explicit wrapper attribution; peers untouched.",
-      "startedAt": "2026-10-30T17:43:02.218Z",
-      "completedAt": "2026-10-30T17:45:37.792Z"
+      "note": "Adversarial self-review: scratch-only mutation runs, with mirror and tools under /tmp, all removed. The checkout was never mutated.\nInitial mutation run on the step-2 code:\n- 12/14 killed.\n- M6 (drop `if (this.disposed) return` in connect()) SURVIVED. The new startDaemon choke point masks the post-dispose spawn that 'dispose is terminal' observed.\n- M2 failed its metadata row by ENOENT from readFileSync, not an AssertionError: the choke point now stops the respawn, so the first observable is the removed daemon.json.\nFixes, all in daemon-identity.test.cjs, which therefore changed in this step:\n(a) New row 'E dispose is terminal: a later connect() leaves stale metadata alone'. It pins the disposed early return through ensureDaemonRunning's stale-metadata unlink.\n(b) The foreign-probe row's metadata check becomes `fs.existsSync(file) && readFileSync(...)`, so a removed file is an AssertionError.\n(c) The liveness rows are parametrized by port kind: 'closed' (real refusal) and 'bad' (70000: isPortOpen throws ERR_SOCKET_BAD_PORT into ensureDaemonRunning's catch fallback). This makes QA's \"fallback\" explicit, with an uncancelled control for each kind.\nFinal mutation run: 14/14 killed, each by ERR_ASSERTION in the expected rows (the runner flags non-assertion failures; none).\n- Baseline: identity 56/56; protected 21 pass, 3 skipped.\n- M1 startup rows. M2 both foreign probe rows. M3 respawn. M4 reprobe. M5 identity-probe rows.\n- M6 stale-metadata row. M7 both terminal rows. M8 re-arm row plus the re-armed notice row.\n- M9 (drop choke point): 4 liveness rows. M10 (legacy catch always notifies): 2 late-notice rows. M11 (protected catch always notifies): 2 protected rows.\n- Over-suppression: M12 (legacy catch never notifies) kills both notify controls; M13 (choke always returns) both uncancelled liveness controls; M14 (protected never notifies) the existing ENOENT/EACCES rows.\nRED proof for the rows added in this step: run against the unfixed 87a1e939 source, all 6 cancelled rows fail by ERR_ASSERTION. Controls and guard rows pass, by design.\nScratch-only extras, all pass on the fix:\n- re-arm during the liveness check spawns 1;\n- disconnect/connect/disconnect spawns 0;\n- dispose then connect spawns 0;\n- the bad-port fallback is fenced, both cancel kinds;\n- two concurrent connects spawn 1;\n- dispose then connect during a failing spawn shows no notice.\nQA's verbatim repro: 8/8 QA rows pass (step 2).\nChecks:\n- Notice reachability: :965/:968 sit after the :960 fence. :1183/:1217 are guarded. The :1197 refusal is synchronous behind the choke point. :1586 is suppressed by manualDisconnect.\n- No import change.\n- A-D rows byte-identical; the fixture got a default-off f.failure knob.\n- eslint MoeDaemonClient.ts exit 0; git diff --check clean.\n- Native Windows `node --test tests\\daemon-identity.test.cjs tests\\protected-daemon-spawn.test.cjs` (v24.16.0): 80 tests, 79 pass, 0 fail, 1 platform skip.\nFresh gate after the change: `cd moe-vscode && npm test && npm run compile` exit 0. 347 tests, 344 pass, 0 fail, 3 skipped; tsc exit 0 (/tmp/dcde-gate-final.log).\nTheoretical, out of scope and unchanged: a cancelled attempt still waits out an in-flight waitForDaemonInfo (bounded at 10s) and does not kill a daemon that was already launched.\nEpic-final note: this is a rolling bug-bucket epic, so the moe-vscode gate is the full regression for this change.\nThis round: +120/-7. With round 1 (+202/-2) the task totals about net 313.",
+      "startedAt": "2026-10-30T18:06:24.419Z",
+      "completedAt": "2026-10-30T18:16:57.349Z"
     }
   ],
   "planRevision": 1,
@@ -71,8 +71,8 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Reviewed completion 87a1e9394777e801390862d9c3ca2821d3130fce (tree83ed4c1), reachable on moe/work-2026-10-24 and origin; no dirty/staged moe-vscode bytes. Own source/tests +202/-2 (net200); A-D unchanged except EventEmitter.dispose(), imports unchanged, commit diff --check clean. Fresh exact `cd moe-vscode && npm test && npm run compile` exits0:334 tests,331 pass,0 fail,3 skips, tsc0. Scoped eslint exits0. The recorded45 identity rows also pass in an immutable-commit scratch mirror. However DoD1's explicit executionContract no-later-spawn/no-notice startup guarantees fail in four adversarial rows. `NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-name-pattern='^QA-(real|error) ' /tmp/qa-dcde-7f99spul/tests/daemon-identity.test.cjs` exits1:6 tests,2 uncancelled controls pass,4 cancellation assertions fail actual1/expected0. Production source in scratch is the exact reviewed blob. Worker confirmed in msg-666718ca35fd4fdc82757425876e6a02 that initial liveness is covered, with no known deferral. Existing WS/ping checks and DoD2 pass; these explicit cancellation obligations do not. Reconcile the narrow approved implementation scope with the contract, add inner-startup side-effect coverage, preserve latest-call rearm/noncancelled errors/identity policy and rerun the full gate.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -80,7 +80,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T17:09:56.990Z",
-  "updatedAt": "2026-10-30T17:45:44.715Z",
+  "updatedAt": "2026-10-30T18:17:58.161Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T17:23:35.457Z",
@@ -90,23 +90,37 @@
     "firstClaimAt": "2026-10-30T17:24:09.241Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 8,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-6fc3dd5c",
-    "worker-262588d0"
+    "worker-5ebbf433",
+    "qa-ba3f4f35",
+    "architect-6fc3dd5c"
   ],
-  "tier": "standard",
-  "effort": "xhigh",
-  "model": "claude-sonnet-5-5",
-  "codexModel": "gpt-6.1-sol",
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
     "step-2",
     "step-3",
     "step-4"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "DoD 1 startup cancellation / executionContract.intendedBehavior: a cancelled attempt spawns no further daemon.",
+      "rejectedAt": "2026-10-30T17:52:47.639Z",
+      "rejectedBy": "qa-ba3f4f35"
+    },
+    {
+      "item": "DoD 1 startup cancellation / executionContract.intendedBehavior: a cancelled attempt shows no notice.",
+      "rejectedAt": "2026-10-30T17:52:47.639Z",
+      "rejectedBy": "qa-ba3f4f35"
+    }
+  ],
   "planSubmittedAt": "2026-10-30T17:40:31.225Z",
   "executionContract": {
     "intendedBehavior": "A manual disconnect() or a dispose() while MoeDaemonClient.connect() awaits daemon startup or the /health identity probe (including foreign-daemon recovery) cancels that attempt. The attempt opens no /ws socket, starts no ping timer, shows no notice, removes no daemon.json, spawns no further daemon, and resolves without rejecting. A connect() issued after a disconnect() re-arms the still-pending attempt (the latest call wins; one attempt is in flight at a time). A disposed client never connects again.",
@@ -167,17 +181,90 @@
   "planApprovedAt": "2026-10-30T17:40:31.256Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T17:41:39.051Z",
-  "reviewStartedAt": "2026-10-30T17:45:44.712Z",
+  "reviewStartedAt": "2026-10-30T18:17:58.159Z",
   "verification": {
     "command": "cd moe-vscode && npm test && npm run compile",
     "exitCode": 0,
-    "outputTail": "ℹ tests 334\nℹ suites 0\nℹ pass 331\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 18266.59915\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./\n",
-    "reportedAt": "2026-10-30T17:45:44.712Z",
+    "outputTail": "✔ task detail keeps every live metric, critique, failed DoD item and handoff (14.333635ms)\n✔ task title stays escaped next to the elapsed badge and in the detail (1.477158ms)\nℹ tests 347\nℹ suites 0\nℹ pass 344\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 12260.584581\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./\n",
+    "reportedAt": "2026-10-30T18:17:58.159Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "moe-vscode/tests/daemon-identity.test.cjs",
+    "moe-vscode/tests/protected-daemon-spawn.test.cjs",
     "moe-vscode/src/services/MoeDaemonClient.ts"
   ],
-  "completionSummary": "Delivered intent-based cancellation for pre-socket VS Code connects: startup/identity/recovery fences, terminal disposal and latest-call re-arm preserving moe.reconnect. Added 10 regression rows; RED 9 assertion failures/1 guard pass, GREEN 45/45 identity rows. Full fresh gate 334 total, 331 pass, 0 fail, 3 skipped; compile and eslint exit 0. Scratch-only M1-M8 each assertion-killed; six additional concurrency/dispose checks passed; scratch removed. No imports, identity policy/text, handshake changes, or A-D edits except EventEmitter dispose stub. Handoff recorded in Serena task-task-dcde1ed47ee54a23af192f4467271fc9-handoff; only two approved paths modified."
+  "completionSummary": "Reopen 1. Both QA items fixed, each with RED-proven regressions.\n(1) A late spawn after a cancelled liveness check: startDaemon now begins with a cancellation choke point, `if (this.connectCancelled()) return;`. It is private and only reached from connect(), so it fences ensureDaemonRunning's isPortOpen path (:1094), its catch fallback (:1100, e.g. a bad port) and the protected refusal path.\n(2) A late startup notice: the startDaemon and startProtectedDaemon (:1209) catches show the notice only `if (!this.connectCancelled())`, and always log. Cancellation stays latest-call-wins, so a re-armed attempt still gets live errors.\nMoeDaemonClient.ts: +12/-2, no imports. Identity policy, texts, recovery, WS block and signatures are unchanged.\nScope reconciled with the contract:\n- daemon-identity fixture: a default-off f.failure spawn knob. Rows A-D are byte-identical.\n- 11 E rows: closed/bad-port liveness x disconnect/dispose spawn nothing; failing spawn x disconnect/dispose shows no notice; uncancelled controls; uncancelled and re-armed notify controls; 'dispose is terminal ... leaves stale metadata alone'.\n- The foreign-probe row now checks the file with existsSync.\n- protected-daemon-spawn: no-op fire()/dispose() on its stub, and 2 rows for the protected catch.\nRED at the unfixed source: 8 rows fail by ERR_ASSERTION; the controls pass. QA's verbatim repro passes 8/8.\nMutation in scratch: 14/14 killed by assertion. That is plan M1-M8 (M6 needed the new stale-metadata row once the choke point masked it), the choke point, both guards, and 3 over-suppression mutants.\nFurther checks:\n- Scratch interleavings pass: re-arm, disconnect/connect/disconnect, dispose+connect, concurrent connects.\n- Native Windows, the two files: 80 tests, 79 pass, 1 skip. eslint exit 0.\n- Fresh gate: 347 tests, 344 pass, 0 fail, 3 skip; tsc 0.\nHandoff: Serena task-task-dcde1ed47ee54a23af192f4467271fc9-handoff.",
+  "commits": [
+    {
+      "sha": "87a1e9394777e801390862d9c3ca2821d3130fce",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-262588d0@2026-10-30T17:40:36Z",
+      "paths": [
+        ".moe/tasks/task-dcde1ed47ee54a23af192f4467271fc9.json",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-identity.test.cjs"
+      ],
+      "recordedBy": "worker-262588d0",
+      "recordedAt": "2026-10-30T17:46:03.699Z",
+      "treeId": "83ed4c1893609c0b75e397c0dbec9ca975102d47",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-262588d0@2026-10-30T17:40:36Z",
+    "at": "2026-10-30T17:46:03.699Z"
+  },
+  "reviewCompletedAt": "2026-10-30T17:52:47.639Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "DoD 1 startup cancellation / executionContract.intendedBehavior: a cancelled attempt spawns no further daemon.",
+      "DoD 1 startup cancellation / executionContract.intendedBehavior: a cancelled attempt shows no notice."
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "file": "moe-vscode/src/services/MoeDaemonClient.ts",
+        "line": 1094,
+        "description": "After connect() starts a real closed-port liveness check, immediate disconnect()/dispose() still lets isPortOpen(false) trigger startDaemon(): spawns=1, expected0, for both. Uncancelled control passes. Fence cancellation before inner startup/fallback side effects, preserve reconnect rearm, and add both regressions. Repro/log: /tmp/qa-dcde-7f99spul/tests/daemon-identity.test.cjs (QA-real rows), real-port-refusal.log."
+      },
+      {
+        "type": "missing_feature",
+        "file": "moe-vscode/src/services/MoeDaemonClient.ts",
+        "line": 1176,
+        "description": "A pending spawn ENOENT after disconnect()/dispose() still calls showErrorMessage: errors=1, expected0, for both. Uncancelled control reports1 correctly. Suppress cancellation-obsolete startup notices without hiding live errors; audit protected catch at1209 too. Add both regressions. Repro/log: /tmp/qa-dcde-7f99spul/tests/daemon-identity.test.cjs (QA-error rows), late-spawn-error.log. Original45 rows pass with opt-in held-child instrumentation."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Reviewed completion 87a1e9394777e801390862d9c3ca2821d3130fce (tree83ed4c1), reachable on moe/work-2026-10-24 and origin; no dirty/staged moe-vscode bytes. Own source/tests +202/-2 (net200); A-D unchanged except EventEmitter.dispose(), imports unchanged, commit diff --check clean. Fresh exact `cd moe-vscode && npm test && npm run compile` exits0:334 tests,331 pass,0 fail,3 skips, tsc0. Scoped eslint exits0. The recorded45 identity rows also pass in an immutable-commit scratch mirror. However DoD1's explicit executionContract no-later-spawn/no-notice startup guarantees fail in four adversarial rows. `NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-name-pattern='^QA-(real|error) ' /tmp/qa-dcde-7f99spul/tests/daemon-identity.test.cjs` exits1:6 tests,2 uncancelled controls pass,4 cancellation assertions fail actual1/expected0. Production source in scratch is the exact reviewed blob. Worker confirmed in msg-666718ca35fd4fdc82757425876e6a02 that initial liveness is covered, with no known deferral. Existing WS/ping checks and DoD2 pass; these explicit cancellation obligations do not. Reconcile the narrow approved implementation scope with the contract, add inner-startup side-effect coverage, preserve latest-call rearm/noncancelled errors/identity policy and rerun the full gate.",
+      "rejectedAt": "2026-10-30T17:52:47.639Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "DoD 1 startup cancellation / executionContract.intendedBehavior: a cancelled attempt spawns no further daemon.",
+        "DoD 1 startup cancellation / executionContract.intendedBehavior: a cancelled attempt shows no notice."
+      ],
+      "issues": [
+        {
+          "type": "missing_feature",
+          "file": "moe-vscode/src/services/MoeDaemonClient.ts",
+          "line": 1094,
+          "description": "After connect() starts a real closed-port liveness check, immediate disconnect()/dispose() still lets isPortOpen(false) trigger startDaemon(): spawns=1, expected0, for both. Uncancelled control passes. Fence cancellation before inner startup/fallback side effects, preserve reconnect rearm, and add both regressions. Repro/log: /tmp/qa-dcde-7f99spul/tests/daemon-identity.test.cjs (QA-real rows), real-port-refusal.log."
+        },
+        {
+          "type": "missing_feature",
+          "file": "moe-vscode/src/services/MoeDaemonClient.ts",
+          "line": 1176,
+          "description": "A pending spawn ENOENT after disconnect()/dispose() still calls showErrorMessage: errors=1, expected0, for both. Uncancelled control reports1 correctly. Suppress cancellation-obsolete startup notices without hiding live errors; audit protected catch at1209 too. Add both regressions. Repro/log: /tmp/qa-dcde-7f99spul/tests/daemon-identity.test.cjs (QA-error rows), late-spawn-error.log. Original45 rows pass with opt-in held-child instrumentation."
+        }
+      ]
+    }
+  ]
 }

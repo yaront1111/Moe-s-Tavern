@@ -15,7 +15,7 @@ const compiled = ts.transpileModule(fs.readFileSync(sourcePath, 'utf8'), {
 }).outputText;
 
 function fixture(projectPath = '/home/project', configPort = 0, platform = process.platform) {
-    const logs = [], warnings = [], errors = [], spawns = [];
+    const logs = [], warnings = [], errors = [], spawns = [], f = {};
     const module = { exports: {} };
     const vscode = {
         EventEmitter: class { event = () => ({ dispose() {} }); fire() {} dispose() {} },
@@ -38,7 +38,7 @@ function fixture(projectPath = '/home/project', configPort = 0, platform = proce
                 spawns.push(args);
                 const child = new EventEmitter();
                 child.unref = () => {};
-                queueMicrotask(() => child.emit('spawn'));
+                queueMicrotask(() => f.failure ? child.emit('error', f.failure) : child.emit('spawn'));
                 return child;
             }
         } : name === 'path' && platform === 'win32' ? path.win32 : require(name)
@@ -46,7 +46,7 @@ function fixture(projectPath = '/home/project', configPort = 0, platform = proce
     const client = new module.exports.MoeDaemonClient('plugin');
     client.resolveBundledDaemonPath = () => 'bundled-daemon.js';
     client.waitForDaemonInfo = async () => {};
-    return { ...module.exports, client, logs, warnings, errors, spawns };
+    return Object.assign(f, module.exports, { client, logs, warnings, errors, spawns });
 }
 
 async function server(t, handler) {
@@ -307,7 +307,7 @@ for (const endpoint of ['metadata', 'configured']) {
         assert.equal(await settled(attempt), 'resolved');
         assert.equal(s.connections(), 0);
         assert.equal(f.spawns.length, 0);
-        assert.equal(fs.readFileSync(file, 'utf8'), text);
+        assert.equal(fs.existsSync(file) && fs.readFileSync(file, 'utf8'), text);
         assert.deepEqual(f.warnings, []);
         assert.deepEqual(f.errors, []);
         assertIdle(f);
@@ -379,3 +379,96 @@ test('E dispose is terminal: a later connect() opens nothing', async t => {
     assert.deepEqual([health(), f.spawns.length, s.connections()], [0, 1, 0]);
     assertIdle(f);
 });
+
+// The liveness check of an existing daemon.json settles after a cancel that follows connect():
+// a closed port answers false, a bad one throws into the catch fallback.
+async function unreachableMetadata(t, kind) {
+    let port = 70000;
+    if (kind === 'closed') {
+        const refused = http.createServer();
+        await new Promise(resolve => refused.listen(0, '127.0.0.1', resolve));
+        port = refused.address().port;
+        await new Promise(resolve => refused.close(resolve));
+    }
+    const { project, file } = metadata(t);
+    const text = JSON.stringify({ ...original, projectPath: project, port });
+    fs.writeFileSync(file, text);
+    return { project, file, text };
+}
+
+function spawnFailure() {
+    return Object.assign(new Error('spawn node ENOENT'), { code: 'ENOENT' });
+}
+
+for (const how of ['disconnect', 'dispose']) {
+    for (const kind of ['closed', 'bad']) {
+        test(`E ${how} during the liveness check of a ${kind} port spawns nothing`, async t => {
+            const { project, file, text } = await unreachableMetadata(t, kind);
+            const f = fixture(project);
+            t.after(() => f.client.disconnect());
+            const attempt = f.client.connect();
+            cancel(f, how);
+            assert.equal(await settled(attempt), 'resolved');
+            assert.equal(f.spawns.length, 0, 'a cancelled liveness check must not start a daemon');
+            assert.equal(fs.readFileSync(file, 'utf8'), text);
+            assert.deepEqual([f.warnings.length, f.errors.length], [0, 0]);
+            assertIdle(f);
+        });
+    }
+
+    test(`E ${how} during a failing daemon spawn shows no late notice`, async t => {
+        const { project } = metadata(t);
+        const f = fixture(project);
+        t.after(() => f.client.disconnect());
+        f.failure = spawnFailure();
+        const attempt = f.client.connect();
+        assert.equal(f.spawns.length, 1, 'the spawn is pending when the attempt is cancelled');
+        cancel(f, how);
+        assert.equal(await settled(attempt), 'resolved');
+        assert.deepEqual([f.warnings.length, f.errors.length], [0, 0]);
+        assert.ok(f.logs.some(line => line.includes('Failed to start daemon:') && line.includes('ENOENT')), 'the failure is still logged');
+        assertIdle(f);
+    });
+}
+
+for (const kind of ['closed', 'bad']) {
+    test(`E an uncancelled liveness check of a ${kind} port still starts the daemon`, async t => {
+        const { project } = await unreachableMetadata(t, kind);
+        const f = fixture(project);
+        t.after(() => f.client.disconnect());
+        await settled(f.client.connect());
+        assert.deepEqual(f.spawns.map(args => Array.from(args[1])), [['bundled-daemon.js', 'start', '--project', project]]);
+    });
+}
+
+test('E dispose is terminal: a later connect() leaves stale metadata alone', async t => {
+    const { project, file } = metadata(t);
+    const text = JSON.stringify({ ...original, projectPath: '/foreign/project' });
+    fs.writeFileSync(file, text);
+    const f = fixture(project);
+    f.client.dispose();
+    assert.equal(await settled(f.client.connect()), 'resolved');
+    assert.equal(fs.existsSync(file) && fs.readFileSync(file, 'utf8'), text);
+    assert.equal(f.spawns.length, 0);
+    assertIdle(f);
+});
+
+for (const mode of ['uncancelled', 're-armed']) {
+    test(`E a failing daemon spawn still notifies the ${mode} attempt`, async t => {
+        const { project } = metadata(t);
+        const f = fixture(project);
+        t.after(() => f.client.disconnect());
+        f.failure = spawnFailure();
+        const attempt = f.client.connect();
+        if (mode === 're-armed') {
+            f.client.disconnect();
+            assert.equal(await settled(f.client.connect()), 'resolved');
+        }
+        const outcome = await settled(attempt);
+        assert.notEqual(outcome, 'resolved');
+        assert.match(outcome.message, /Daemon not running/);
+        assert.equal(f.errors.length, 1);
+        assert.match(f.errors[0], /could not start Node\.js/);
+        assertIdle(f);
+    });
+}
