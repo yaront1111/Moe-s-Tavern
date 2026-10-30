@@ -13,9 +13,42 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "AE harness + AE1 (CQ-R10d composition; tests only, no runtime file changes). Append a '// CQ-R10d end to end' section at the END of scripts/tests/local-runner-bridge.test.mjs, after H8 and after the edits task-2cf1c6be lands there (this task depends on it: it rewires openSession's DAEMON fixture to a fake /health). Reuse, never edit, the existing helpers: LOAD, harness, PEER, NO_GUEST, SUPERVISOR, sessions + after(), openSession, EXIT, SESSION_ID, SPAWNED, KEY, HOST_JOB (claude/ANTHROPIC_API_KEY), QA_HOST_JOB (codex/CODEX_API_KEY), BINDING, QA, launchArgv, LA_CONFIG, rejectsWith, encodeFrame, MAX_HOST_FRAME_BYTES, createFrameDecoder, TOOLS, GUEST_LAYOUT. Every pre-existing row stays byte-identical. No test named AE<n> exists anywhere in scripts/tests (grep-checked).\n\nHarness pieces:\n- SHIM_FILE and TOOLS_FILE: guest-mcp-shim.py and guest-mcp-tools.json beside SUPERVISOR.\n- NO_TOMLLIB = NO_GUEST || (spawnSync('python3', ['-I', '-c', 'import tomllib']).status !== 0 && 'the fake codex reads config.toml with tomllib (python3 >= 3.11)'). Never spawn python when NO_GUEST is set.\n- FAKE_CLI: a constant Python source standing in for /opt/moe/agents/<cli>. It knows only what the real CLI knows:\n  - cli = basename(argv[0]).\n  - claude reads the JSON file after --mcp-config (key mcpServers); codex reads $CODEX_HOME/config.toml with tomllib (key mcp_servers).\n  - It records {cli, argv, cwd, home: $HOME, config: the whole parsed file, replies: [], shim: null}.\n  - It continues only if the file holds exactly one server whose command is exactly GUEST_LAYOUT.shim (interpolated with JSON.stringify) and which has no args. It then spawns <dirname(dirname(argv[0]))>/moe-mcp-shim, the local stand-in for that path, with stdin/stdout pipes and stderr inherited.\n  - The shim's env is what each CLI gives an MCP server: claude the whole job env; codex only HOME and PATH plus the names in env_vars (pinned codex 0.166, mem gotcha-local-runner-codex-mcp-role-env).\n  - It sends one JSON line per message and reads each reply before the next, because the shim drops pending calls at stdin EOF: id 1 initialize {protocolVersion '2025-06-18', capabilities {}, clientInfo}; notifications/initialized (no reply); id 2 tools/list; id 3 tools/call moe.get_context {}; id 4 tools/call of the OTHER role's tool, picked from MOE_ROLE (worker: moe.qa_approve, qa: moe.complete_task), with {}; id 5 tools/call moe.add_comment {content:'e2e', workerId:'someone-else'}; id 6 tools/call moe.add_comment {content:'e2e'}.\n  - It closes the shim's stdin, records shim.wait(), and prints the record as one JSON line on stdout.\n  - Its first statement is signal.alarm(20), so a hung shim ends the job instead of the run.\n- fakeBytes: '#!' + python3's sys.executable (resolved with spawnSync inside the row) + ' -I\\n' + FAKE_CLI.\n- installFakes(base, frames): spawnSync python3 -I -B -c with LOAD + 'sys.exit(m.install_agents(0, 1, sys.argv[2], (os.getuid(), os.getgid())))', passing SUPERVISOR and <base>/agents. Its input is the frames, each encoded with encodeFrame(frame, MAX_HOST_FRAME_BYTES). agentFrames(cli, bytes, digest = sha256 hex of bytes) = [{kind:'agent', cli, size: bytes.length, sha256: digest}, {kind:'data', data: bytes.toString('base64')}]. The stream ends with {kind:'end'}.\n- standIn(base): writes <base>/moe-mcp-shim with mode 0o700.\n  - Shebang '#!<python> -IB'; B means no __pycache__ beside the shipped shim.\n  - It loads SHIM_FILE with importlib.util.spec_from_file_location, then sets m.AGENT_SOCKET = <base>/agent.sock and m.TOOLS_PATH = TOOLS_FILE. main() reads both module globals at call time.\n  - It writes ONE stderr line, json {role: os.environ.get('MOE_ROLE'), env: sorted(os.environ)}: key names only, never values. Then sys.exit(m.main()).\n  - Embed paths with JSON.stringify.\n- agentMain(base): bridgeMain's shape.\n  - spawn records the launch, sets host.socket = <base>/agent.sock, and runs python3 -I -B -c LOAD + code that mkdirs <base>/ws and calls m.main(['bridge'], geteuid=lambda: 0, workspace=<base>/ws, sessions=<base>/sessions, identity=(os.getuid(), os.getgid(), None), jobs={cli: (os.path.join(<base>/agents, os.path.relpath(exe, m.AGENTS)), names) for cli, (exe, names) in m.JOBS.items()}, agent_socket=<base>/agent.sock${PEER}).\n  - It pushes host onto sessions, so after() reaps it and removes <base> = dirname(host.socket).\n  - The relpath re-rooting is the composition point: the job runs the very file agents mode installed at AGENTS/<cli>.\n- Error handling in the harness:\n  - assert every spawnSync status with its stderr in the assertion message, so a failed install or harness names its cause;\n  - a fake that cannot parse its config or start the shim still prints its record (shim null), so the row fails on a precise field, not on a timeout.\n\nAE1 'end to end, each installed CLI starts headless from its session config and reaches Moe only through the shim and the agent socket' {skip: NO_TOMLLIB, timeout: 60_000}. For each [binding, job] of [BINDING, HOST_JOB], [QA, HOST_JOB], [BINDING, QA_HOST_JOB] and [QA, QA_HOST_JOB], in a fresh mkdtemp base, assert:\n1. installFakes with agentFrames('claude', fakeBytes), agentFrames('codex', fakeBytes) and end: status 0; stdout decodes (createFrameDecoder(MAX_HOST_FRAME_BYTES)) to exactly [{kind:'installed', count:2}]; both agents/<cli> are mode 0o555 and hold exactly fakeBytes.\n2. Call standIn(base). Then run = openSession(agentMain(base), {binding, job, timeoutMs: 10_000, answer}). The answer throws new Error(UPSTREAM) for moe.add_comment (UPSTREAM is a distinctive marker string) and returns {content:[{type:'text', text: tool}]} otherwise.\n3. await run.promise deep-equals {observation: EXIT, executionReady: false}; host.launches deep-equals [SPAWNED]; host.proc.exitCode is 0.\n4. report = JSON.parse(the stdout output bytes):\n   - report.argv deep-equals launchArgv(job.cli, binding.role, report.home, join(base, 'agents', job.cli)). That is the exact headless argv, which excludes any resume or continue token, and it runs the installed file.\n   - cwd is join(base, 'ws').\n   - config deep-equals JSON.parse(LA_CONFIG.claude) for claude, and {mcp_servers: {moe: {command: GUEST_LAYOUT.shim, env_vars: ['MOE_ROLE'], default_tools_approval_mode: 'approve'}}} for codex.\n   - shim is 0.\n   - replies, in order, each a whole {jsonrpc:'2.0', id, ...} object:\n     - id 1: assert only result.protocolVersion '2025-06-18' (SH2 owns the rest).\n     - id 2: exactly {tools: Object.entries(TABLE[role]).map(([name, properties]) => ({name, inputSchema: {type:'object', properties, additionalProperties:false}}))}, with TABLE = JSON.parse(readFileSync(TOOLS_FILE)). Its names equal Object.keys(TOOLS[role]).\n     - id 3: result {content:[{type:'text', text:'moe.get_context'}]}.\n     - id 4: error {code:-32602, message:'Tool not available to this role.'}.\n     - id 5: error {code:-32602, message:'Argument not allowed for this tool.'}.\n     - id 6: error {code:-32004, message:'Moe refused the tool call.', data:{code:'BRIDGE_UPSTREAM_FAILED'}}.\n5. run.forwarded deep-equals exactly [['moe.get_context', {taskId:'task-abc', workerId: binding.workerId, sessionId: SESSION_ID}], ['moe.add_comment', {content:'e2e', taskId:'task-abc', workerId: binding.workerId}]]. The denied call and the argument-refused call never reached the host.\n6. The stderr output bytes are exactly one JSON line from the stand-in. role equals binding.role, and env includes MOE_ROLE. For codex, env excludes job.credential.name and CODEX_HOME: the role crossed only through env_vars. Do not pin the whole env list: PEP 538 locale coercion adds LC_CTYPE when LANG is absent.\n7. Neither KEY nor UPSTREAM appears in any output bytes, the report, or JSON.stringify(host.launches).\n\nBudget: the whole task stays at or under 300 changed lines in this one file (git diff --numstat; comments and blank lines count; QA's cap is 400). ASCII only. Avoid \\u escapes, because the Edit tool and heredocs turn them into literal characters (mem gotcha-local-runner-supervisor-tests).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "AE2: fail closed on a pin mismatch, and pin the install-to-job layout. Same file, same section. Add `import { AGENT_CLIS } from '../local-runner/agent-cache.mjs';` to the top import block, the host cache's CLI list. Row 'AE2 a CLI binary that misses its pinned sha256 is never installed, so its job never starts, and JOBS runs only agents-mode paths' {skip: NO_GUEST, timeout: 30_000}:\n1. Layout pin. harness(\"print(json.dumps([m.AGENTS, {cli: exe for cli, (exe, _) in m.JOBS.items()}]))\") exits 0. Its executable map deep-equals Object.fromEntries(AGENT_CLIS.map(cli => [cli, `${agentsDir}/${cli}`])), where agentsDir is the printed m.AGENTS. So the host cache, agents mode (which installs JOBS keys at AGENTS/<cli>) and the job table name one set of files.\n2. Mismatch. In a fresh mkdtemp base, call installFakes with: a claude header whose sha256 is the digest of fakeBytes, followed by data of fakeBytes plus one '#' (size = the tampered length); then a valid codex binary; then end. Expect status 65 (EX_DATAERR), empty stdout, and readdirSync(<base>/agents) deep-equal to []: no binary and no staging dir. install_agents is all-or-nothing.\n3. Fail closed. session = openSession(agentMain(base), {binding: BINDING, job: HOST_JOB, timeoutMs: 10_000}) rejects with SESSION_PROVIDER_FAILED (use rejectsWith). session.forwarded, session.observations and session.outputs are all []. The supervisor's host.proc.exitCode is 71 (EX_OSERR): GUARD's Popen finds no executable, so the supervisor sends hello and no observation (guest-supervisor.py run_bridge 'the guard could not start the job'). No stand-in is needed, because no job runs.\nAE2 must kill two mutants: install_agents without its sha256 comparison, and a JOBS executable moved off AGENTS.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once and fresh, after steps 1-2. On WSL:\n`env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-agents.test.mjs`\nThis is the task's own four-file command plus local-runner-agents.test.mjs, whose AB, SH and TY rows hold the slice evidence for DoD items 1 and 2. AI, AH and RA are in local-runner.test.mjs.\n- Exit 0 is required. AE1 and AE2 must PASS on Linux, not skip.\n- While iterating, use --test-name-pattern='^AE[12] '.\n- If a peer's uncommitted bytes turn the shared tree red, run the same command from a full-tree scratch copy and say so in the completion summary. CQ-R11e2 is editing guest-supervisor.py and local-runner.test.mjs right now. Build the copy as follows:\n  - `git archive HEAD | tar -x -C <scratch>`;\n  - copy in only this task's test file;\n  - symlink <scratch>/packages/moe-daemon/dist to the shared checkout's dist, because TY1 reads the built daemon. Never run npm install or npm run build in the shared packages/moe-daemon.\n- Submit this run's command, exit code and output tail to complete_task.\n- No docs step: this is a mid-epic slice, and the CQ-R13 final task owns the docs sweep.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review: load the adversarial-self-review skill.\n\nMutation sweep:\n- Work only on scratch full-tree archive copies, never the shared tree. Use one mutant per copy.\n- Run each with `timeout 120` and --test-name-pattern='^(AE[12]|LA[1-6]|SH[1-9]|TY[1-3]) ', and score by exit code.\n- Put a per-run env marker in the node env, so you kill only your own leftover python processes. Never `pgrep -af guest-supervisor`: agent prompts contain that string (mem gotcha-local-runner-supervisor-tests).\n- An AE row must kill each of these:\n  (a) guest-supervisor.py LAUNCH codex config without its env_vars line;\n  (b) LAUNCH claude tail plus '--continue';\n  (c) LAUNCH claude config with a second mcpServers entry;\n  (d) SHIM naming another path;\n  (e) start_job spawning with cwd = home instead of workspace;\n  (f) guest-mcp-shim.py main() serving the worker table whatever MOE_ROLE says;\n  (g) the shim's tool-allowlist check removed: the call then reaches the host, comes back as REFUSED BRIDGE_TOOL_DENIED instead of TOOL_DENIED, and AE1 kills it;\n  (h) the shim's argument-key check removed: AE1 gets BRIDGE_IDENTITY_MISMATCH instead of ARGUMENT_DENIED;\n  (i) install_agents without its sha256 comparison (AE2);\n  (j) JOBS['codex'] moved to /opt/moe/bin/codex (AE2 layout, and AE1 codex).\n- Record each kill and the counts in the step note. For any survivor, prove it is equivalent or add an assertion.\n\nThen confirm, and record each in the note:\n- this task changed only scripts/tests/local-runner-bridge.test.mjs;\n- every pre-existing row is byte-identical (the diff is additions only);\n- 300 changed lines or fewer;\n- ASCII only (grep -cP '[^\\x00-\\x7f]');\n- no __pycache__ under scripts/local-runner;\n- no leftover processes from your runs;\n- nothing makes executionReady true or claims verified-local or isolation.\n\nIf the review changed any byte, re-run the step-3 command fresh and submit that output instead.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,7 +58,8 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-7f928d96060341f382d37cf5e22f7d53",
-    "task-2e8dda26dd9848c5bbb02e31424b99b8"
+    "task-2e8dda26dd9848c5bbb02e31424b99b8",
+    "task-2cf1c6bee5814ed98eb3d069d97b32b3"
   ],
   "priority": "HIGH",
   "order": 252.5,
@@ -51,16 +85,82 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T12:06:53.451Z",
-  "updatedAt": "2026-10-30T08:33:31.925Z",
+  "updatedAt": "2026-10-30T08:57:03.537Z",
   "metrics": {
-    "firstClaimAt": "2026-10-29T17:00:53.601Z"
+    "firstClaimAt": "2026-10-29T17:00:53.601Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 1
   },
   "contextFetchedBy": [
-    "architect-bd1eb82d"
+    "architect-bd1eb82d",
+    "architect-e4b7eee0"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
-  "blockedAt": null
+  "blockedAt": null,
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T08:57:03.518Z",
+  "executionContract": {
+    "intendedBehavior": "Tests only. Two new rows in scripts/tests/local-runner-bridge.test.mjs prove that the landed CQ-R10d1-5 slices compose end to end.\nAE1: a fake claude or codex is installed through the real supervisor agents mode and started by the real bridge job (main(['bridge']) to start_job and prepare_launch) with its exact headless argv in the workspace. It reads its session MCP config, starts the real guest-mcp-shim.py from that config, and reaches the host session only through the agent socket, for exactly its role's tools, with fixed error codes.\nAE2: a binary that misses its pinned sha256 is never installed and its job never starts.\nNo runtime file changes. executionReady stays false. No verified-local or isolation claim.",
+    "acceptanceCriteria": [
+      "AE1 passes for claude/worker, claude/qa, codex/worker and codex/qa on Linux and macOS; it skips only on win32 or a python3 without tomllib.",
+      "AE1 pins:\n- the exact launchArgv of the installed file, and cwd = workspace;\n- the parsed config naming only GUEST_LAYOUT.shim, and for codex env_vars ['MOE_ROLE'];\n- tools/list equal to the role's tools.json table, in TOOLS order;\n- get_context answered;\n- the other role's tool TOOL_DENIED, an identity key ARGUMENT_DENIED, and a host upstream failure REFUSED with data code BRIDGE_UPSTREAM_FAILED;\n- forwarded exactly get_context (with sessionId) and add_comment, both stamped with the binding;\n- the credential and the upstream marker never seen.",
+      "AE2 pins:\n- JOBS executables == AGENTS/<cli> for exactly AGENT_CLIS;\n- a sha-mismatched install gives exit 65 and an empty agents dir;\n- the session then rejects SESSION_PROVIDER_FAILED with supervisor exit 71, no observation, no forward and no output.",
+      "The gate command exits 0, and its output is supplied to complete_task.",
+      "At most 300 changed lines in the one file. Every mutation (a)-(j) in step 4 is killed, or proven equivalent."
+    ],
+    "invariants": [
+      "No edits outside scripts/tests/local-runner-bridge.test.mjs, and every pre-existing row there stays byte-identical.",
+      "The supervisor, shim, tools.json and host modules under test run unmodified. Only documented seams are used: main() keywords, install_agents' agents and owner arguments, and the shim's AGENT_SOCKET and TOOLS_PATH module globals in a test stand-in.",
+      "No __pycache__ is written under scripts/local-runner, every python file is loaded with -B, and nothing new is added to the supervisor CLI.",
+      "No .moe edits and no Git writes by the agent."
+    ],
+    "compatibility": [
+      "win32 skips via NO_GUEST. macOS uses PEER's injected peer uid. Session sockets stay under mkdtemp(tmpdir()), within macOS's sun_path limit.",
+      "openSession and its DAEMON fixture stay as task-2cf1c6be lands them; this task depends on it."
+    ],
+    "reuse": [
+      "The bridge test's LOAD, harness, PEER, sessions/after, openSession, launchArgv, LA_CONFIG, SPAWNED, SESSION_ID, KEY, HOST_JOB, QA_HOST_JOB, BINDING, QA and rejectsWith. agentMain copies bridgeMain's shape (H7).",
+      "The guest-bridge.mjs encodeFrame, createFrameDecoder, TOOLS and MAX_HOST_FRAME_BYTES; guest-bootstrap.mjs GUEST_LAYOUT.shim; agent-cache.mjs AGENT_CLIS."
+    ],
+    "sourceAssumptions": [
+      "guest-supervisor.py:\n- JOBS[cli][0] == AGENTS + '/' + cli; LAUNCH holds the per-CLI argv tail and config, and SHIM == GUEST_LAYOUT.shim (pinned by LA4);\n- start_job reads the job frame, prepare_launch writes .moe-mcp.json or CODEX_HOME/config.toml into a fresh home, and relay runs the job under GUARD with cwd = workspace;\n- main(argv, geteuid, **seams) passes workspace, sessions, identity, jobs, agent_socket and peer_uid to start_job;\n- install_agents(in_fd, out_fd, agents, owner) returns 65 on a digest mismatch, installing nothing;\n- if GUARD cannot Popen the job, run_bridge returns EX_OSERR (71) after hello.",
+      "guest-mcp-shim.py main() == serve(os.environ.get('MOE_ROLE'), load_tools(TOOLS_PATH), AGENT_SOCKET), reading the module globals at call time. _Shim.run returns 0 at stdin EOF and drops pending calls. tools/list serves {type:object, properties: the tools.json fragments, additionalProperties:false}.",
+      "guest-session.mjs reply(): a forward throw becomes refusal BRIDGE_UPSTREAM_FAILED and the error is never echoed; STAMPED adds sessionId only to moe.get_context; scopeRequest stamps taskId and workerId per TOOLS entry.",
+      "Pinned codex 0.166 gives a stdio MCP server only HOME, PATH and LC_CTYPE plus the env_vars names; claude passes the whole env (CQ-R10d4 handoff)."
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-agents.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. The e2e in local-runner-agents.test.mjs: rejected. It would duplicate the bridge-job and host-session harness that only the bridge file has: openSession, PEER, LOAD, sessions cleanup, launchArgv and LA_CONFIG. CQ-R13b (task-7fffec67) already expects this task to be the bridge file's last editor before its H4 fix.\n2. Driving the host installAgents (R10d3) inside the e2e: rejected. AH3 already runs host cache to the real agents mode, and doing it here would need local-runner.test.mjs's fakeGuest mount-probe fakes in a file under active R11e edits. JS-built frames go straight into the real install_agents instead.\n3. Running the pinned real codex or claude against the shim: out of scope. It needs the 319 MB member and a model endpoint, and CQ-R13 certifies on hardware.\n4. Patching LAUNCH or SHIM in the harness so the config names a test path: rejected. Instead, the fake CLI maps the exact GUEST_LAYOUT.shim command to a local stand-in. That way the supervisor under test is byte-identical, and the CLI reads the real config bytes.\n5. Any runtime change: none needed. DoD 1-3 are met by the landed slices, so this row's job is to prove they compose: install, then launch, then config, then shim, then socket, then host.",
+    "codebaseInsights": "- Composition gaps today:\n  - The SH rows test the shim against a fake socket peer.\n  - H5 and H7 test the real supervisor with raw-frame probe agents.\n  - LA3 reads the config but starts no shim.\n  - So nothing yet runs config, real shim, real agent-socket ingress and host session together. The CQ-R10d4 bug task-afe6838d (codex env_vars missing MOE_ROLE) would only have been caught by such a row.\n- The shim's main() reads AGENT_SOCKET and TOOLS_PATH at call time, so a stand-in can re-root them without touching the file.\n- At stdin EOF the shim exits 0 and drops pending calls, so the fake must be strictly request-then-reply.\n- install_agents takes agents and owner arguments. main(['agents']) has no seams, so call install_agents directly, as AH3 does.\n- start_job uses jobs[cli][0] as the executable. Re-rooting it with relpath(exe, m.AGENTS) both runs the installed file and pins the layout.\n- If GUARD's Popen fails, the result is 71, with hello only and no observation; the host then reports SESSION_PROVIDER_FAILED.\n- The host never sends a shim-passed call to the daemon if the call has a forbidden identity key: the shim's key allowlist (TOOLS args) refuses it first, as ARGUMENT_DENIED. So to get an end-to-end REFUSED, make forward throw, which gives BRIDGE_UPSTREAM_FAILED.",
+    "risks": "- Peer bytes:\n  - CQ-R11e2 (task-1e7f5a2d) is editing guest-supervisor.py and local-runner.test.mjs right now, and R11e4 and R11e5 follow it. Do not edit those files. Their in-flight bytes can make the shared tree red, so use step 3's full-tree archive fallback.\n  - task-2cf1c6be's openSession or DAEMON changes land before this task starts (it is in dependsOn).\n  - CQ-R13b (task-7fffec67) also declares the bridge file but is gated on this task. Start from a clean file at pre-flight, so the default contested-path landing lands it.\n- Portability:\n  - Shebangs use python3's absolute sys.executable, because the job PATH is /usr/local/bin:/usr/bin:/bin and macOS python3 may live elsewhere.\n  - tomllib needs python 3.11 or later. Every CI runner has 3.12+, and the explicit NO_TOMLLIB skip covers anything older.\n  - LC_CTYPE may appear in the codex shim env (PEP 538), so pin names, not the full env.\n- Hangs: signal.alarm in the fake, the test timeouts, and sessions/after() reaping all prevent a hung shim, job or supervisor from blocking node --test.\n- The heredoc and Edit escape trap: keep the file ASCII.\n- Size: about 150-250 lines is expected. Measure with git diff --numstat right after green.\n- Do not use `__proto__` anywhere: it is a forbidden pattern.\n- Any editing tool is fine; the plan mandates none, so codex seats can work it.",
+    "keyFiles": [
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/local-runner/guest-mcp-shim.py",
+      "scripts/local-runner/guest-mcp-tools.json",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/local-runner/agent-cache.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T08:57:03.537Z",
+  "approvedPlanRevision": 1
 }
