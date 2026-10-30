@@ -18,9 +18,11 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.lang.reflect.Proxy
 import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
+import java.util.Optional
 import java.util.concurrent.TimeUnit
 
 class MoeDaemonSupervisorTest {
@@ -355,6 +357,202 @@ class MoeDaemonSupervisorTest {
         supervisor(home).applyDaemonPath(env, null, windows = true)
 
         assertEquals(mapOf("PATH" to "first"), env)
+    }
+
+    @Test
+    fun `RP1 confirmed replacement uses only installed stop then start with fresh provenance`() {
+        for (keepFile in listOf(false, true)) ReplacementFixture().use { f ->
+            f.wsl = keepFile
+            f.stop = { f.targetAlive = false; f.parentAlive = false; if (!keepFile) f.file.delete(); 0 }
+            setSpawnAttempts(f.service, 3)
+            assertTrue(f.service.ensureDaemonRunning())
+            assertEquals(listOf("Test Project" to 4242), f.asked)
+            assertEquals(listOf("stop", "start"), f.commands.map { it.command()[2] })
+            f.commands.forEach { pb ->
+                val action = pb.command()[2]
+                val host = if (action == "start" && f.wsl) listOf("--host", "wsl") else emptyList()
+                assertEquals(listOf(f.node.canonicalPath, f.daemon.canonicalPath, action, "--project", f.root.path) + host, pb.command())
+                assertEquals(f.daemon.canonicalFile.parentFile, pb.directory())
+                assertFalse(pb.environment().containsKey("NODE_OPTIONS"))
+                assertFalse(pb.environment().containsKey("NODE_PATH"))
+                val path = pb.environment().entries.firstOrNull { it.key.equals("PATH", true) }?.value.orEmpty()
+                assertTrue(path.split(File.pathSeparator).all { RuntimeSelectionPolicy.isOutsideProject(it, f.root.path) })
+            }
+            assertEquals(ProcessBuilder.Redirect.DISCARD, f.commands.first().redirectOutput())
+            assertTrue(f.commands.first().redirectErrorStream())
+            assertFalse(f.file.exists())
+            assertNull(f.service.activationRefusal(f.info.copy(pid = ProcessHandle.current().pid().toInt())))
+            assertTrue(Files.exists(f.store.root))
+        }
+    }
+
+    @Test
+    fun `RP2 no explicit confirmation never stops or changes metadata`() {
+        for (mode in listOf("decline", "throw", "edt")) ReplacementFixture().use { f ->
+            f.edt = mode == "edt"
+            f.confirm = { if (mode == "throw") error("dialog failed") else false }
+            val before = f.file.readText()
+            assertFalse(mode, f.service.ensureDaemonRunning())
+            assertEquals(mode, if (f.edt) 0 else 1, f.asked.size)
+            assertEquals(mode, before, f.file.readText())
+            f.assertRefused(mode)
+            f.edt = false; f.confirm = { true }
+            assertTrue("$mode releases the guard for a later explicit consent", f.service.ensureDaemonRunning())
+        }
+    }
+
+    @Test
+    fun `RP3 stop failures and bounded waits retain the exact refusal`() {
+        for (mode in listOf("nonzero", "timeout", "throw", "target", "parent", "badjson", "newpid", "deleted")) ReplacementFixture().use { f ->
+            f.stop = {
+                when (mode) {
+                    "nonzero" -> 1
+                    "timeout" -> null
+                    "throw" -> error("stop failed")
+                    else -> {
+                        f.targetAlive = mode in listOf("target", "deleted")
+                        f.parentAlive = mode == "parent"
+                        if (mode == "newpid") writeDaemonInfo(f.root, f.info.copy(pid = 5252))
+                        if (mode in listOf("deleted", "parent")) f.file.delete()
+                        if (mode == "badjson") f.file.writeText("{broken")
+                        0
+                    }
+                }
+            }
+            assertFalse(mode, f.service.ensureDaemonRunning())
+            assertEquals(mode, 1, f.commands.size)
+            assertEquals(mode, if (mode in listOf("nonzero", "timeout", "throw")) 0 else 2, f.polls)
+            f.assertRefused(mode, stops = 1)
+            assertEquals(mode, f.refusal, f.service.selectionRefusal())
+            assertFalse("$mode retry must not bypass process or metadata clearance", f.service.ensureDaemonRunning())
+            assertEquals(mode, 1, f.commands.size)
+        }
+    }
+
+    @Test
+    fun `RP4 unchanged paths do not prompt and an in-flight replacement excludes reentry`() {
+        for (mode in listOf("legacy", "verified", "missing", "lookup", "reentry")) ReplacementFixture().use { f ->
+            if (mode == "legacy") f.profile = RuntimeProfile.LEGACY
+            if (mode == "missing") f.installed = null
+            if (mode == "lookup") f.target = null
+            if (mode == "verified") {
+                val self = ProcessHandle.current()
+                RuntimeSelectionPolicy.recordProtectedSpawn(f.root.path, self, f.daemon)
+                writeDaemonInfo(f.root, f.info.copy(pid = self.pid().toInt()))
+            }
+            if (mode == "reentry") f.stop = {
+                f.file.delete()
+                assertFalse("no duplicate spawn while stop has removed metadata", f.service.ensureDaemonRunning())
+                f.targetAlive = false; f.parentAlive = false; 0
+            }
+            assertEquals(mode, mode == "reentry", f.service.ensureDaemonRunning())
+            assertEquals(mode, if (mode == "reentry") 1 else 0, f.asked.size)
+            assertEquals(mode, if (mode == "reentry") 2 else 0, f.commands.size)
+        }
+    }
+
+    @Test
+    fun `RP5 default confirmer refuses without an IntelliJ application`() {
+        ReplacementFixture().use { f ->
+            val service = MoeDaemonSupervisor(f.root.path, "Test Project", portProbe = { _, _ -> true },
+                processAliveProbe = { true }, processStarter = { error("must not start") },
+                profile = { RuntimeProfile.PROTECTED }, installedRoot = { f.installed }, nodeExecutable = { f.node.path },
+                processLookup = { f.target }, onDispatchThread = { false }, runStop = { error("must not stop") })
+            assertFalse(service.ensureDaemonRunning())
+            assertEquals(f.refusal, service.activationRefusal(f.info))
+        }
+    }
+
+    @Test
+    fun `RP-S stop selection never publishes clears or stores a refusal`() {
+        ReplacementFixture().use { f ->
+            f.profile = RuntimeProfile.LEGACY; f.nodePath = null
+            assertNull(f.service.stopCommandOrNull(f.root.path))
+            assertTrue(f.statuses.isEmpty())
+            assertNull(f.service.selectionRefusal())
+            f.profile = RuntimeProfile.PROTECTED
+            assertNull(f.service.selectionRefusal())
+            f.file.delete()
+            assertFalse(f.service.ensureDaemonRunning())
+            val refused = f.service.selectionRefusal()
+            assertEquals("Protected execution profile: node executable not found. Project and PATH copies of the Moe daemon are not used.", refused)
+            val statuses = f.statuses.toList()
+            f.nodePath = f.node.path
+            assertEquals(listOf(f.node.canonicalPath, f.daemon.canonicalPath, "stop", "--project", f.root.path), f.service.stopCommandOrNull(f.root.path))
+            assertEquals(refused, f.service.selectionRefusal())
+            assertEquals(statuses, f.statuses)
+        }
+    }
+
+    @Test
+    fun `RP6 production stop runner waits within its bound and destroys only its timed-out CLI`() {
+        for (completed in listOf(false, true)) ReplacementFixture().use { f ->
+            val cli = FakeProcess().also { if (completed) it.waitFor() }
+            val commands = mutableListOf<String>()
+            val service = MoeDaemonSupervisor(f.root.path, "Test Project", portProbe = { _, _ -> true },
+                processAliveProbe = { f.targetAlive }, profile = { RuntimeProfile.PROTECTED }, installedRoot = { f.installed },
+                nodeExecutable = { f.node.path }, processLookup = { f.target }, replaceConfirmer = { _, _ -> true },
+                onDispatchThread = { false }, processStarter = {
+                    commands += it.command()[2]
+                    f.targetAlive = false; f.parentAlive = false; f.file.delete()
+                    if (it.command()[2] == "stop") cli else FakeProcess()
+                })
+            assertEquals(completed, service.ensureDaemonRunning())
+            assertEquals(if (completed) listOf("stop", "start") else listOf("stop"), commands)
+            assertEquals(if (completed) 0 else 1, cli.destroyCalls)
+        }
+    }
+
+    private inner class ReplacementFixture : AutoCloseable {
+        val root = temporaryFolder.newFolder().also { File(it, ".moe").mkdirs() }
+        var installed: File? = temporaryFolder.newFolder()
+        val daemon = File(installed, "daemon/index.js").apply { parentFile.mkdirs(); writeText("installed") }
+        val node = File(installed, "node").apply { writeText("node") }
+        val store = ProtectedStateStore(temporaryFolder.newFolder().toPath().resolve("moe/state"))
+        val info = DaemonInfo(9876, 4242, "now", root.canonicalPath)
+        val file = writeDaemonInfo(root, info)
+        val refusal = "Protected execution profile: the running Moe daemon (pid 4242) was not started by this IDE " +
+            "from the installed Moe runtime. Stop it, then use Restart Daemon."
+        var targetAlive = true
+        var parentAlive = true
+        var profile = RuntimeProfile.PROTECTED
+        var nodePath: String? = node.path
+        var wsl = false
+        var edt = false
+        var polls = 0
+        val asked = mutableListOf<Pair<String, Int>>()
+        val commands = mutableListOf<ProcessBuilder>()
+        val statuses = mutableListOf<String>()
+        var confirm: () -> Boolean = { true }
+        var stop: () -> Int? = { targetAlive = false; parentAlive = false; file.delete(); 0 }
+        private val parent = handle({ parentAlive }, null)
+        var target: ProcessHandle? = handle({ targetAlive }, parent)
+        init {
+            RuntimeSelectionPolicy.resetForTest()
+            RuntimeSelectionPolicy.store = { store }
+            File(root, "packages/moe-daemon/dist/index.js").apply { parentFile.mkdirs(); writeText("repo trap") }
+        }
+        val service by lazy {
+            MoeDaemonSupervisor(root.path, "Test Project", onStatus = { _, text -> statuses += text },
+                portProbe = { _, _ -> true }, processAliveProbe = { it != 4242 || targetAlive },
+                processStarter = { commands += it; FakeProcess(ProcessHandle.current()) },
+                wslAgentsEnabled = { wsl }, profile = { profile }, installedRoot = { installed }, nodeExecutable = { nodePath },
+                processLookup = { target }, replaceConfirmer = { name, pid -> asked += name to pid; confirm() },
+                runStop = { commands += it; stop() }, onDispatchThread = { edt }, sleep = { polls++ }, exitTimeoutMs = 500)
+        }
+        fun assertRefused(label: String, stops: Int = 0) {
+            assertEquals(label, stops, commands.size)
+            assertEquals(label, refusal, service.activationRefusal(info))
+        }
+        private fun handle(alive: () -> Boolean, parent: ProcessHandle?): ProcessHandle =
+            Proxy.newProxyInstance(ProcessHandle::class.java.classLoader, arrayOf(ProcessHandle::class.java)) { _, method, _ ->
+                when (method.name) {
+                    "isAlive" -> alive()
+                    "parent" -> Optional.ofNullable(parent)
+                    else -> error("unexpected handle operation: ${method.name}")
+                }
+            } as ProcessHandle
+        override fun close() = RuntimeSelectionPolicy.resetForTest()
     }
 
     private fun supervisor(

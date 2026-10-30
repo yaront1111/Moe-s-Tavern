@@ -2,8 +2,10 @@ package com.moe.services
 
 import com.google.gson.Gson
 import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.extensions.PluginId
+import com.intellij.openapi.ui.Messages
 import com.moe.model.DaemonInfo
 import com.moe.util.MoeProjectInitializer
 import com.moe.util.MoeProjectRegistry
@@ -15,7 +17,9 @@ import java.io.File
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.nio.file.Files
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Owns daemon discovery, spawn backoff, and the lifecycle of the process started by the plugin.
@@ -33,7 +37,12 @@ class MoeDaemonSupervisor(
     private val profile: () -> RuntimeProfile = { RuntimeSelectionPolicy.profile(basePath) },
     private val installedRoot: () -> File? = { RuntimeSelectionPolicy.installedRoot() },
     private val nodeExecutable: (() -> String?)? = null,
-    private val processLookup: (Long) -> ProcessHandle? = { ProcessHandle.of(it).orElse(null) }
+    private val processLookup: (Long) -> ProcessHandle? = { ProcessHandle.of(it).orElse(null) },
+    private val replaceConfirmer: (String, Int) -> Boolean = ::confirmDaemonReplacement,
+    private val runStop: (ProcessBuilder) -> Int? = { runStopProcess(it, processStarter) },
+    private val onDispatchThread: () -> Boolean = { ApplicationManager.getApplication()?.isDispatchThread == true },
+    private val sleep: (Long) -> Unit = Thread::sleep,
+    private val exitTimeoutMs: Long = EXIT_TIMEOUT_MS
 ) {
     private val log = Logger.getInstance(MoeDaemonSupervisor::class.java)
     private val gson = Gson()
@@ -43,6 +52,12 @@ class MoeDaemonSupervisor(
     @Volatile private var lastDaemonStartAttemptAt = 0L
     private val daemonStartCooldownMs = 10_000L
     @Volatile private var selectionRefusal: String? = null
+    private val replacementInFlight = AtomicBoolean()
+    private var pendingReplacement: ReplacementTarget? = null
+
+    private data class ReplacementTarget(val target: ProcessHandle, val parent: ProcessHandle?, val refusal: String) {
+        fun alive(): Boolean = target.isAlive || parent?.isAlive == true
+    }
 
     fun readDaemonInfo(): DaemonInfo? {
         val base = basePath.ifBlank { return null }
@@ -72,13 +87,32 @@ class MoeDaemonSupervisor(
     }
 
     fun ensureDaemonRunning(): Boolean {
+        if (profile() != RuntimeProfile.PROTECTED) return ensureDaemonRunningImpl()
+        // Cover the fall-through spawn too: stop may remove metadata before the old processes exit.
+        if (!replacementInFlight.compareAndSet(false, true)) return false
+        return try {
+            pendingReplacement?.let {
+                if (it.alive() || !replacementMetadataCleared()) { selectionRefusal = it.refusal; return false }
+                pendingReplacement = null
+            }
+            ensureDaemonRunningImpl()
+        } catch (ex: Exception) {
+            log.warn("Cannot replace or start the protected daemon", ex)
+            if (ex is InterruptedException) Thread.currentThread().interrupt()
+            false
+        } finally {
+            replacementInFlight.set(false)
+        }
+    }
+
+    private fun ensureDaemonRunningImpl(): Boolean {
         if (!ensureMoeInitialized()) {
             return false
         }
 
         val info = readDaemonInfo()
         if (info != null && isProcessAlive(info.pid) && isPortOpen(info.port)) {
-            return false
+            if (!replacedUnverified(info)) return false
         }
 
         // Clean up stale daemon.json so connectWithRetry reads fresh data from the new daemon
@@ -162,6 +196,68 @@ class MoeDaemonSupervisor(
         }
     }
 
+    // Called under the protected ensure guard, held through the new spawn and released in finally.
+    private fun replacedUnverified(info: DaemonInfo): Boolean {
+        return try {
+            if (profile() != RuntimeProfile.PROTECTED) return false
+            val refusal = activationRefusal(info) ?: return false
+            if (onDispatchThread()) return false
+            val command = stopCommandOrNull(basePath) ?: return false
+            val target = processLookup(info.pid.toLong()) ?: return false
+            val captured = ReplacementTarget(target, target.parent().orElse(null), refusal)
+            if (!replaceConfirmer(projectName, info.pid)) return false
+            // Keep captured identities across failed attempts, even when stop deletes daemon.json.
+            pendingReplacement = captured
+            selectionRefusal = refusal
+            when {
+                runStop(stopBuilder(command)) != 0 -> {
+                    log.warn("Unverified daemon replacement refused: installed stop failed or timed out")
+                    false
+                }
+                !waitForReplacementExit(captured) -> {
+                    log.warn("Unverified daemon replacement refused: target, parent or metadata did not clear")
+                    false
+                }
+                else -> {
+                    pendingReplacement = null
+                    resetSpawnBackoff()
+                    log.info("Unverified daemon stopped; starting the installed Moe runtime")
+                    true
+                }
+            }
+        } catch (ex: Exception) {
+            log.warn("Unverified daemon replacement failed", ex)
+            if (ex is InterruptedException) Thread.currentThread().interrupt()
+            false
+        }
+    }
+
+    private fun waitForReplacementExit(captured: ReplacementTarget): Boolean {
+        var remaining = exitTimeoutMs.coerceIn(0, EXIT_TIMEOUT_MS)
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remaining)
+        while (true) {
+            if (!captured.alive() && replacementMetadataCleared()) return true
+            if (remaining <= 0 || System.nanoTime() >= deadline) return false
+            val delay = minOf(POLL_MS, remaining)
+            sleep(delay)
+            remaining -= delay
+        }
+    }
+
+    // Do not use readDaemonInfo here: it deletes mismatched project metadata, and null also means unreadable.
+    private fun replacementMetadataCleared(): Boolean = try {
+        val path = File(basePath, ".moe/daemon.json").toPath()
+        if (Files.notExists(path)) true else {
+            val bytes = Files.newInputStream(path).use { it.readNBytes(MAX_DAEMON_JSON_BYTES + 1) }
+            if (bytes.size > MAX_DAEMON_JSON_BYTES) false else {
+                val info = gson.fromJson(String(bytes, Charsets.UTF_8), DaemonInfo::class.java)
+                info != null && info.pid > 0 && !isProcessAlive(info.pid)
+            }
+        }
+    } catch (_: Exception) {
+        false
+    }
+
     /** Why the protected profile refused to start a daemon; null under LEGACY or once a selection succeeds. */
     fun selectionRefusal(): String? = selectionRefusal?.takeIf { profile() == RuntimeProfile.PROTECTED }
 
@@ -218,7 +314,7 @@ class MoeDaemonSupervisor(
     }
 
     /** The installed node and daemon; project, parent, PATH, env and global-config copies are never consulted. */
-    internal fun protectedDaemonCommand(basePath: String, root: File?, node: String?): ProtectedDaemonCommand {
+    internal fun protectedDaemonCommand(basePath: String, root: File?, node: String?, subcommand: String = "start"): ProtectedDaemonCommand {
         val daemon = when (val selection = RuntimeSelectionPolicy.installedArtifact(root, "daemon/index.js", basePath)) {
             is RuntimeSelection.Accepted -> selection.file
             is RuntimeSelection.Rejected -> return ProtectedDaemonCommand.Refused(selection.reason)
@@ -227,19 +323,14 @@ class MoeDaemonSupervisor(
             is RuntimeSelection.Accepted -> selection.file
             is RuntimeSelection.Rejected -> return ProtectedDaemonCommand.Refused(selection.reason)
         }
-        val command = mutableListOf(nodeFile.path, daemon.path, "start", "--project", basePath)
-        if (wslAgentsEnabled()) command += listOf("--host", WSL_BIND_HOST)
+        val command = mutableListOf(nodeFile.path, daemon.path, subcommand, "--project", basePath)
+        if (subcommand == "start" && wslAgentsEnabled()) command += listOf("--host", WSL_BIND_HOST)
         return ProtectedDaemonCommand.Ready(command)
     }
 
     // A refusal starts nothing: it is logged, published and kept for connect() to show.
     private fun protectedCommandOrRefuse(basePath: String): List<String>? {
-        val node = if (nodeExecutable != null) {
-            nodeExecutable.invoke()
-        } else {
-            resolveNodeExecutable(nodeOnPath = { nodeOnProtectedPath(System.getenv("PATH").orEmpty(), basePath) })
-        }
-        return when (val selection = protectedDaemonCommand(basePath, installedRoot(), node)) {
+        return when (val selection = protectedDaemonCommand(basePath, installedRoot(), protectedNode(basePath))) {
             is ProtectedDaemonCommand.Ready -> selection.command.also { selectionRefusal = null }
             is ProtectedDaemonCommand.Refused -> {
                 val message = "Protected execution profile: ${selection.reason}. Project and PATH copies of the Moe daemon are not used."
@@ -249,6 +340,28 @@ class MoeDaemonSupervisor(
                 null
             }
         }
+    }
+
+    private fun protectedNode(basePath: String): String? = if (nodeExecutable != null) nodeExecutable.invoke() else
+        resolveNodeExecutable(nodeOnPath = { nodeOnProtectedPath(System.getenv("PATH").orEmpty(), basePath) })
+
+    /** No status/refusal mutation: Restart Daemon also uses this selector under LEGACY. */
+    internal fun stopCommandOrNull(basePath: String): List<String>? = try {
+        when (val selection = protectedDaemonCommand(basePath, installedRoot(), protectedNode(basePath), "stop")) {
+            is ProtectedDaemonCommand.Ready -> selection.command
+            is ProtectedDaemonCommand.Refused -> null.also { log.warn("Installed daemon stop refused: ${selection.reason}") }
+        }
+    } catch (ex: Exception) {
+        log.warn("Cannot build installed daemon stop command", ex)
+        null
+    }
+
+    private fun stopBuilder(command: List<String>): ProcessBuilder = ProcessBuilder(command).apply {
+        directory(File(command[1]).parentFile)
+        redirectErrorStream(true)
+        redirectOutput(ProcessBuilder.Redirect.DISCARD)
+        applyDaemonPath(environment(), command[0])
+        protectedDaemonEnvironment(environment(), basePath)
     }
 
     /** Drops what could load repository code into the installed daemon: NODE_OPTIONS, NODE_PATH and unsafe PATH entries. */
@@ -603,6 +716,40 @@ class MoeDaemonSupervisor(
     }
 
     companion object {
+        private const val STOP_TIMEOUT_MS = 20_000L
+        private const val EXIT_TIMEOUT_MS = 15_000L
+        private const val POLL_MS = 250L
+
+        private fun runStopProcess(builder: ProcessBuilder, starter: (ProcessBuilder) -> Process): Int? {
+            val process = starter(builder)
+            return try {
+                if (process.waitFor(STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) process.exitValue() else null
+            } finally {
+                if (process.isAlive) process.destroyForcibly()
+            }
+        }
+
+        private fun confirmDaemonReplacement(projectName: String, pid: Int): Boolean {
+            return try {
+                val app = ApplicationManager.getApplication()
+                if (app == null || app.isUnitTestMode || app.isHeadlessEnvironment || app.isDispatchThread) return false
+                var choice = -1
+                app.invokeAndWait {
+                    val message = "The daemon that .moe/daemon.json names for $projectName (pid $pid) was not started " +
+                        "by this IDE from the installed Moe runtime. Another client, such as VS Code or a terminal " +
+                        "agent, may be using it, and stopping it disconnects them. Stop it with the installed Moe " +
+                        "CLI and start the installed daemon?"
+                    choice = Messages.showDialog(message, "Moe: Unverified Daemon",
+                        arrayOf("Keep It", "Stop and Replace"), 0, Messages.getWarningIcon())
+                }
+                choice == 1
+            } catch (ex: Exception) {
+                Logger.getInstance(MoeDaemonSupervisor::class.java).warn("Unverified daemon confirmation failed", ex)
+                if (ex is InterruptedException) Thread.currentThread().interrupt()
+                false
+            }
+        }
+
         // The daemon's symbolic bind host: loopback plus the WSL virtual adapter, never every interface.
         private const val WSL_BIND_HOST = "wsl"
 
