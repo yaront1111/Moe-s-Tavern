@@ -22,6 +22,8 @@ const HELD_PATHS_SHOWN = 5;
 const CONTESTED_STRICT_CODE = 'MOE_ATTR_CONTESTED';
 const CONTESTED_UNTOUCHED_RE = /^MOE_ATTR_CONTESTED_UNTOUCHED\((task-[A-Za-z0-9_-]+)\)$/;
 const HELD_REMEDY_UNTOUCHED = 'MOE_ATTR_CONTESTED_UNTOUCHED: verify these bytes are this task\'s and coordinate any live peer, then before the next landing either this task\'s own assignee session edits the path with a wrapper-observed successful editing tool (Claude Edit/Write family or a supported Serena editor, not a shell write), or the stale peer task is legitimately completed or archived.';
+const CONTESTED_EDITING_RE = /^MOE_ATTR_CONTESTED_EDITING\((task-[A-Za-z0-9_-]+)\)$/;
+const HELD_REMEDY_EDITING = 'MOE_ATTR_CONTESTED_EDITING: a contesting peer task was mid-step on the path with an active session at this landing, so this session\'s editing tool did not release it (the file can carry that peer\'s unfinished hunks). Coordinate that peer; after its step completes, either this task\'s own assignee session edits the path with a wrapper-observed successful editing tool before the next landing, or the peer\'s own landing carries these bytes (name its commit in the summary).';
 const HELD_REMEDY_STRICT = 'MOE_ATTR_CONTESTED (attribution.contested=skip) holds the path whatever the session\'s tools did: only resolving or legitimately completing or archiving the peer task releases it.';
 const HELD_REMEDY_NEVER = 'declare_files, unblocking or a shell touch alone does not release a hold; never change the policy as the fix.';
 /** #governors gets at most one commit alert per task per window; the task channel gets every line. */
@@ -114,14 +116,15 @@ function readRecordList<T extends Record<string, string>>(
 interface HeldPath {
   path: string;
   peer: string | null;
-  strict: boolean;
+  kind: 'untouched' | 'editing' | 'strict';
 }
 
 /**
  * Own contested paths this landing held back, read from the skip codes only:
  * `contested` also names paths that landed (TOOL witness, contested=commit),
- * so it is used solely to name a strict hold's peer. Malformed paths are
- * ignored; the first entry per normalized path wins.
+ * so it is used solely to name a strict hold's peer; an untouched or editing
+ * hold names its peer in its code. Malformed paths are ignored; the first
+ * entry per normalized path wins.
  */
 function heldContestedPaths(
   skipped: readonly { path: string; code: string }[],
@@ -135,13 +138,15 @@ function heldContestedPaths(
   for (const entry of skipped) {
     const strict = entry.code === CONTESTED_STRICT_CODE;
     const untouched = strict ? null : CONTESTED_UNTOUCHED_RE.exec(entry.code);
-    if (!strict && !untouched) continue;
+    const editing = strict || untouched ? null : CONTESTED_EDITING_RE.exec(entry.code);
+    if (!strict && !untouched && !editing) continue;
     const path = tolerantNormalizePath(entry.path);
     if (path === null || held.has(pathKey(path))) continue;
-    const peer = untouched
-      ? untouched[1]
+    const named = untouched ?? editing;
+    const peer = named
+      ? named[1]
       : contested.find((c) => keyOf(c.path) === pathKey(path))?.taskId ?? null;
-    held.set(pathKey(path), { path, peer, strict });
+    held.set(pathKey(path), { path, peer, kind: untouched ? 'untouched' : editing ? 'editing' : 'strict' });
   }
   return Array.from(held.values());
 }
@@ -150,8 +155,9 @@ function heldContestedLine(taskId: string, held: readonly HeldPath[]): string {
   const shown = held.slice(0, HELD_PATHS_SHOWN).map((h) => `${h.path}(${h.peer ?? '?'})`);
   const more = held.length > shown.length ? ` … (+${held.length - shown.length} more)` : '';
   const remedy = [
-    ...(held.some((h) => !h.strict) ? [HELD_REMEDY_UNTOUCHED] : []),
-    ...(held.some((h) => h.strict) ? [HELD_REMEDY_STRICT] : []),
+    ...(held.some((h) => h.kind === 'untouched') ? [HELD_REMEDY_UNTOUCHED] : []),
+    ...(held.some((h) => h.kind === 'editing') ? [HELD_REMEDY_EDITING] : []),
+    ...(held.some((h) => h.kind === 'strict') ? [HELD_REMEDY_STRICT] : []),
     HELD_REMEDY_NEVER,
   ].join(' ');
   return `MOE_CONTESTED_HELD task=${taskId}: ${shown.join(', ')}${more} — ${remedy}`;

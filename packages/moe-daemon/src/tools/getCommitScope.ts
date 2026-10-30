@@ -47,6 +47,24 @@ function peerTaskActive(state: StateManager, other: Task, nowMs: number, sinceMs
 }
 
 /**
+ * The paths named by the plan steps a task is in the middle of: affectedFiles ∪
+ * newFiles ∪ modifiedFiles over every IN_PROGRESS step. A peer's record is
+ * worker-typed, so a non-array plan or list is skipped and PathSet drops what it
+ * cannot normalise: one peer's junk never fails another task's scope.
+ */
+function inProgressStepPaths(task: Task): PathSet {
+  const paths = new PathSet();
+  if (!Array.isArray(task.implementationPlan)) return paths;
+  for (const step of task.implementationPlan) {
+    if (!step || step.status !== 'IN_PROGRESS') continue;
+    for (const list of [step.affectedFiles, step.newFiles, step.modifiedFiles]) {
+      if (Array.isArray(list)) paths.addAll(list);
+    }
+  }
+  return paths;
+}
+
+/**
  * Whether a session that is not the assignee must leave the task's source paths
  * alone. False only for an unassigned task, or for an owner that is missing or
  * DEAD and holds no non-closed attempt of its own on this task. True otherwise:
@@ -74,7 +92,7 @@ function sortedById<T extends { id: string }>(items: Iterable<T>): T[] {
 export function getCommitScopeTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.get_commit_scope',
-    description: 'Attribution scope the agent wrapper stages a task\'s commit from: the task\'s ASSERTED paths (completed steps\' modifiedFiles/affectedFiles, filesModified, declare_files, tool-written, previously committed), the DECLARED part of them (moe.declare_files: committed regardless of the pre-task baseline; the rest of ASSERTED only when this task produced the dirty bytes), its PLANNED paths (plan-declared only, committed when changed since the pre-task baseline), every other open task\'s declared paths (PEER map; a peer that waits on this task contributes only its asserted paths, since it cannot have run yet; each entry\'s peerActive is false only when, since `since`, no contributing task had an active assignee, an open attempt or an attempt phase change — always true without `since`), which workers are active (peersActive drives the attribution.undeclared policy), the board-state paths it may commit, and the project\'s commit policy. Read-only apart from a liveness touch; no ownership guard — an orphan-mode caller (workerId not the assignee) is counted in activePeerIds — but assigneeProtected tells a caller that is not the assignee whether it must leave the task\'s source paths alone. finalizingAttempt names the task\'s finalizing attempt exactly as claim_next_task\'s finalizing hold selects it ({attemptId, workerId, generation}, whoever holds it, the caller included) or is null; a daemon older than the field omits it.',
+    description: 'Attribution scope the agent wrapper stages a task\'s commit from: the task\'s ASSERTED paths (completed steps\' modifiedFiles/affectedFiles, filesModified, declare_files, tool-written, previously committed), the DECLARED part of them (moe.declare_files: committed regardless of the pre-task baseline; the rest of ASSERTED only when this task produced the dirty bytes), its PLANNED paths (plan-declared only, committed when changed since the pre-task baseline), every other open task\'s declared paths (PEER map; a peer that waits on this task contributes only its asserted paths, since it cannot have run yet; each entry\'s peerActive is false only when, since `since`, no contributing task had an active assignee, an open attempt or an attempt phase change — always true without `since`; taskIds lists every contributing task in id order, taskId being the first; editingTaskIds lists the contributors with an IN_PROGRESS plan step naming the path that are active by the peerActive rule — every such contributor without `since`), which workers are active (peersActive drives the attribution.undeclared policy), the board-state paths it may commit, and the project\'s commit policy. Read-only apart from a liveness touch; no ownership guard — an orphan-mode caller (workerId not the assignee) is counted in activePeerIds — but assigneeProtected tells a caller that is not the assignee whether it must leave the task\'s source paths alone. finalizingAttempt names the task\'s finalizing attempt exactly as claim_next_task\'s finalizing hold selects it ({attemptId, workerId, generation}, whoever holds it, the caller included) or is null; a daemon older than the field omits it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -125,8 +143,13 @@ export function getCommitScopeTool(_state: StateManager): ToolDefinition {
 
       // ---- peers -----------------------------------------------------------
       // Deterministic: tasks visited in id order, first claimant of a path wins
-      // taskId; peerActive is an OR over every task contributing the path.
-      const peerByKey = new Map<string, { path: string; taskId: string; peerActive: boolean }>();
+      // taskId; peerActive is an OR over every task contributing the path. taskIds
+      // names every contributor (taskId === taskIds[0]); editingTaskIds the ones
+      // with an IN_PROGRESS step naming the path that are active, so a wrapper can
+      // hold a path a live peer is mid-edit on instead of sweeping its hunks.
+      const peerByKey = new Map<string, {
+        path: string; taskId: string; peerActive: boolean; taskIds: string[]; editingTaskIds: string[];
+      }>();
       const peerSet = new PathSet();
       for (const other of sortedById<Task>(state.tasks.values())) {
         if (other.id === task.id) continue;
@@ -141,15 +164,22 @@ export function getCommitScopeTool(_state: StateManager): ToolDefinition {
         const waitsOnThis = findDependencyPath(state, other.id, task.id) !== null;
         const peerPaths = waitsOnThis ? collectTaskPathTiers(other).asserted : collectPeerPaths(other);
         const active = peerTaskActive(state, other, nowMs, sinceMs);
+        const editing = active ? inProgressStepPaths(other) : null;
         for (const p of peerPaths) {
           const stored = peerSet.add(p);
           if (stored === null) continue;
+          const isEditing = editing?.has(stored) === true;
           const entry = peerByKey.get(stored);
           if (entry) {
             entry.peerActive ||= active;
+            entry.taskIds.push(other.id);
+            if (isEditing) entry.editingTaskIds.push(other.id);
             continue;
           }
-          peerByKey.set(stored, { path: stored, taskId: other.id, peerActive: active });
+          peerByKey.set(stored, {
+            path: stored, taskId: other.id, peerActive: active,
+            taskIds: [other.id], editingTaskIds: isEditing ? [other.id] : [],
+          });
         }
       }
       const peerDeclared = Array.from(peerByKey.values());

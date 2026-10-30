@@ -21,7 +21,7 @@ interface ScopeResult {
   touchedFiles: string[];
   inferredPaths: string[];
   unattributedPaths: string[];
-  peerDeclared: { path: string; taskId: string; peerActive: boolean }[];
+  peerDeclared: { path: string; taskId: string; peerActive: boolean; taskIds: string[]; editingTaskIds: string[] }[];
   livePeerIds: string[];
   activePeerIds: string[];
   peersActive: boolean;
@@ -522,8 +522,163 @@ describe('moe.get_commit_scope', () => {
         await h.state.load();
 
         const result = await scope({ workerId: 'worker-1', since: new Date(Date.now() - 5 * 60_000).toISOString() });
-        expect(result.peerDeclared).toEqual([{ path: 'src/shared.ts', taskId: 'task-p1', peerActive: true }]);
+        expect(result.peerDeclared).toEqual([
+          { path: 'src/shared.ts', taskId: 'task-p1', peerActive: true, taskIds: ['task-p1', 'task-p2'], editingTaskIds: [] },
+        ]);
       }
+    });
+  });
+
+  describe('peerDeclared[].taskIds and editingTaskIds', () => {
+    // The e67ca0e repro: a TOOL witness released docs/MCP_SERVER.md while a
+    // second peer was mid-step on it, and the Moe-Contested trailer named only
+    // the first claimant. taskIds names every contributor; editingTaskIds the
+    // ones with an IN_PROGRESS step on the path that may be writing right now.
+    afterEach(() => { vi.useRealTimers(); });
+
+    const sinceIso = () => new Date(Date.now() - 5 * 60_000).toISOString();
+    const editing = (result: ScopeResult, path: string) =>
+      result.peerDeclared.find((e) => pathKey(e.path) === pathKey(path))?.editingTaskIds;
+
+    function stepPeer(
+      id: string,
+      status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED',
+      affectedFiles: unknown,
+      overrides: Record<string, unknown> = {}
+    ): void {
+      h.createTask({
+        id,
+        status: 'WORKING',
+        implementationPlan: [{ stepId: 's1', description: id, status, affectedFiles }],
+        ...overrides,
+      } as Parameters<typeof h.createTask>[0]);
+    }
+
+    function setupLanding(): void {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1', implementationPlan: [
+        { stepId: 's1', description: 'a', status: 'COMPLETED', modifiedFiles: ['docs/MCP_SERVER.md'] },
+      ] });
+      h.createWorker({ id: 'worker-live', status: 'CODING', lastActivityAt: new Date().toISOString() });
+    }
+
+    it("counts a peer's IN_PROGRESS step path, names every contesting task and flags the live mid-step one", async () => {
+      setupLanding();
+      stepPeer('task-66e8', 'PENDING', ['docs/MCP_SERVER.md']);
+      stepPeer('task-9cc1', 'IN_PROGRESS', ['docs/MCP_SERVER.md', 'docs/SCHEMA.md'], { assignedWorkerId: 'worker-live' });
+      await h.state.load();
+
+      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      expect(result.peerDeclared.find((e) => e.path === 'docs/MCP_SERVER.md')).toEqual({
+        path: 'docs/MCP_SERVER.md', taskId: 'task-66e8', peerActive: true,
+        taskIds: ['task-66e8', 'task-9cc1'], editingTaskIds: ['task-9cc1'],
+      });
+      expect(result.peerDeclared.find((e) => e.path === 'docs/SCHEMA.md')).toEqual({
+        path: 'docs/SCHEMA.md', taskId: 'task-9cc1', peerActive: true,
+        taskIds: ['task-9cc1'], editingTaskIds: ['task-9cc1'],
+      });
+    });
+
+    it('with since: an IN_PROGRESS step is editing only while its task is active', async () => {
+      setupLanding();
+      stepPeer('task-live', 'IN_PROGRESS', ['src/a.ts'], { assignedWorkerId: 'worker-live' });
+      stepPeer('task-idle', 'IN_PROGRESS', ['src/b.ts']);
+      stepPeer('task-open', 'IN_PROGRESS', ['src/c.ts']);
+      await h.state.load();
+      await openAttempt(h.state, { taskId: 'task-open', workerId: 'worker-gone', runnerId: 'worker-gone', workspace: h.testDir });
+
+      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      expect(editing(result, 'src/a.ts')).toEqual(['task-live']);
+      expect(editing(result, 'src/b.ts')).toEqual([]);
+      expect(result.peerDeclared.find((e) => e.path === 'src/b.ts')?.taskIds).toEqual(['task-idle']);
+      expect(editing(result, 'src/c.ts')).toEqual(['task-open']);
+    });
+
+    it('never counts a PENDING or COMPLETED step as editing, even for an active assignee', async () => {
+      setupLanding();
+      stepPeer('task-pending', 'PENDING', ['src/p.ts'], { assignedWorkerId: 'worker-live' });
+      stepPeer('task-done-step', 'COMPLETED', ['src/c.ts'], { assignedWorkerId: 'worker-live' });
+      await h.state.load();
+
+      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      expect(editing(result, 'src/p.ts')).toEqual([]);
+      expect(editing(result, 'src/c.ts')).toEqual([]);
+      expect(result.peerDeclared.find((e) => e.path === 'src/c.ts')?.taskIds).toEqual(['task-done-step']);
+    });
+
+    it('matches the stored spelling of a raw IN_PROGRESS step path', async () => {
+      setupLanding();
+      stepPeer('task-raw', 'IN_PROGRESS', ['./src\\x.ts'], { assignedWorkerId: 'worker-live' });
+      await h.state.load();
+
+      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      expect(result.peerDeclared.map((e) => [e.path, e.editingTaskIds])).toEqual([['src/x.ts', ['task-raw']]]);
+    });
+
+    it('marks only the paths an IN_PROGRESS step names, not the same task\'s other claims', async () => {
+      setupLanding();
+      stepPeer('task-two', 'IN_PROGRESS', ['src/a.ts'], { assignedWorkerId: 'worker-live', declaredFiles: ['src/b.ts'] });
+      await h.state.load();
+
+      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      expect(editing(result, 'src/a.ts')).toEqual(['task-two']);
+      expect(editing(result, 'src/b.ts')).toEqual([]);
+    });
+
+    it('lists a task once per path however many spellings it claims, and once across tasks', async () => {
+      setupLanding();
+      stepPeer('task-a', 'IN_PROGRESS', ['src/a.ts', './src/a.ts', 'src\\a.ts'], {
+        assignedWorkerId: 'worker-live', declaredFiles: ['./src/a.ts', 'src\\a.ts'],
+      });
+      stepPeer('task-b', 'IN_PROGRESS', ['src\\a.ts'], { assignedWorkerId: 'worker-live', filesModified: ['./src/a.ts'] });
+      await h.state.load();
+
+      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      expect(result.peerDeclared).toEqual([{
+        path: 'src/a.ts', taskId: 'task-a', peerActive: true, taskIds: ['task-a', 'task-b'], editingTaskIds: ['task-a', 'task-b'],
+      }]);
+    });
+
+    it('fails closed without since: every IN_PROGRESS contributor is editing, an unassigned one included', async () => {
+      setupLanding();
+      stepPeer('task-unassigned', 'IN_PROGRESS', ['src/a.ts']);
+      stepPeer('task-b', 'IN_PROGRESS', ['src/a.ts'], { assignedWorkerId: 'worker-missing' });
+      await h.state.load();
+
+      const result = await scope({ workerId: 'worker-1' });
+      expect(editing(result, 'src/a.ts')).toEqual(['task-b', 'task-unassigned']);
+      expect(result.peerDeclared[0]?.taskIds).toEqual(['task-b', 'task-unassigned']);
+    });
+
+    it('keeps the waits-on-this rule: a dependent contributes no entry for a path only its plan names', async () => {
+      setupLanding();
+      stepPeer('task-dep', 'IN_PROGRESS', ['src/only-plan.ts'], { assignedWorkerId: 'worker-live', dependsOn: ['task-1'] });
+      await h.state.load();
+
+      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      expect(result.peerDeclared).toEqual([]);
+    });
+
+    it('does not throw on junk step data and adds no entry for it', async () => {
+      setupLanding();
+      // newFiles/modifiedFiles are non-arrays; null is the one shape collectTaskPathTiers
+      // already tolerates, so this pins that the editing marks add nothing of their own.
+      h.createTask({ id: 'task-junk', status: 'WORKING', assignedWorkerId: 'worker-live', declaredFiles: ['ok/declared.ts'],
+        implementationPlan: [{
+          stepId: 's1', description: 'j', status: 'IN_PROGRESS',
+          affectedFiles: ['/abs.ts', '../up.ts', 42, 'ok/fine.ts'], newFiles: null, modifiedFiles: false,
+        }] } as unknown as Parameters<typeof h.createTask>[0]);
+      h.createTask({ id: 'task-noplan', status: 'WORKING', assignedWorkerId: 'worker-live', declaredFiles: ['ok/np.ts'],
+        implementationPlan: 'garbage' } as unknown as Parameters<typeof h.createTask>[0]);
+      await h.state.load();
+
+      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      expect(result.peerDeclared.map((e) => [e.path, e.taskIds, e.editingTaskIds])).toEqual([
+        ['ok/declared.ts', ['task-junk'], []],
+        ['ok/fine.ts', ['task-junk'], ['task-junk']],
+        ['ok/np.ts', ['task-noplan'], []],
+      ]);
     });
   });
 

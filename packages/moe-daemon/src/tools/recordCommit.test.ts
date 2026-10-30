@@ -441,6 +441,106 @@ describe('moe.record_commit', () => {
       expect(h.state.getTask('task-1')!.lastCommitOutcome).toMatchObject({ outcome: 'nothing', code: 'MOE_COMMIT_NOTHING_TO_COMMIT' });
     });
 
+    describe('MOE_ATTR_CONTESTED_EDITING(task-<peer>)', () => {
+      const EDITING = (peer: string) => `MOE_ATTR_CONTESTED_EDITING(${peer})`;
+      const EDITING_REMEDY = "MOE_ATTR_CONTESTED_EDITING: a contesting peer task was mid-step on the path with an active session at this landing, so this session's editing tool did not release it (the file can carry that peer's unfinished hunks). Coordinate that peer; after its step completes, either this task's own assignee session edits the path with a wrapper-observed successful editing tool before the next landing, or the peer's own landing carries these bytes (name its commit in the summary).";
+      const NEVER_REMEDY = 'declare_files, unblocking or a shell touch alone does not release a hold; never change the policy as the fix.';
+      const heldLine = () => taskText().split('\n').find((l: string) => l.startsWith('MOE_CONTESTED_HELD'));
+
+      it('holds a path a live peer was mid-step on: names the peer, gives only the editing remedy, alerts #governors once', async () => {
+        await seedSpied();
+        await record({
+          paths: ['src/a.ts'],
+          skipped: [{ path: 'docs/x.md', code: EDITING('task-peer') }],
+          contested: [{ path: 'docs/x.md', taskId: 'task-peer' }],
+        });
+        expect(heldLine()).toBe(`MOE_CONTESTED_HELD task=task-1: docs/x.md(task-peer) — ${EDITING_REMEDY} ${NEVER_REMEDY}`);
+        expect(heldLine()).not.toContain('MOE_ATTR_CONTESTED_UNTOUCHED');
+        expect(heldLine()).not.toContain('attribution.contested=skip');
+        expect(gov).toHaveBeenCalledTimes(1);
+        expect(gov).toHaveBeenCalledWith('governors', expect.stringContaining(heldLine()!));
+      });
+
+      it('takes the peer from the code, not from a contested entry that names another task', async () => {
+        await seedSpied();
+        await record({
+          paths: ['src/a.ts'],
+          skipped: [{ path: './docs/x.md', code: EDITING('task-b') }],
+          contested: [{ path: 'docs/x.md', taskId: 'task-a' }],
+        });
+        expect(heldLine()).toContain('MOE_CONTESTED_HELD task=task-1: docs/x.md(task-b) — ');
+        expect(heldLine()).not.toContain('task-a');
+      });
+
+      it('keeps the first skip entry for a path, whichever hold kind it is', async () => {
+        await seedSpied();
+        await record({
+          paths: ['src/a.ts'],
+          skipped: [{ path: 'docs/x.md', code: EDITING('task-a') }, { path: 'docs/x.md', code: UNTOUCHED('task-b') }],
+        });
+        expect(heldLine()).toBe(`MOE_CONTESTED_HELD task=task-1: docs/x.md(task-a) — ${EDITING_REMEDY} ${NEVER_REMEDY}`);
+      });
+
+      it.each([
+        'MOE_ATTR_CONTESTED_EDITING', 'MOE_ATTR_CONTESTED_EDITING()', 'MOE_ATTR_CONTESTED_EDITING(peer)',
+        'MOE_ATTR_CONTESTED_EDITING(task-a)x', 'MOE_ATTR_CONTESTED_EDITING(task-a b)', 'MOE_ATTR_CONTESTED_EDITING(task-a)(task-b)',
+        'XMOE_ATTR_CONTESTED_EDITING(task-a)', 'moe_attr_contested_editing(task-a)',
+      ])('does not treat the malformed code %s as a hold, even beside a contested entry', async (code) => {
+        await seedSpied();
+        const result = await record({
+          paths: ['src/a.ts'],
+          skipped: [{ path: 'docs/x.md', code }],
+          contested: [{ path: 'docs/x.md', taskId: 'task-peer' }],
+        });
+        expect(result.success).toBe(true);
+        expect(taskText()).not.toContain('MOE_CONTESTED_HELD');
+        expect(gov).not.toHaveBeenCalled();
+      });
+
+      it('skips an editing code on a path that cannot be normalised and still records the landing', async () => {
+        await seedSpied();
+        const result = await record({
+          paths: ['src/a.ts'],
+          skipped: [{ path: '../x', code: EDITING('task-peer') }, { path: '/etc/x', code: EDITING('task-peer') }],
+        });
+        expect(result.success).toBe(true);
+        expect(taskText()).not.toContain('MOE_CONTESTED_HELD');
+        expect(gov).not.toHaveBeenCalled();
+        expect(h.state.getTask('task-1')!.commits).toHaveLength(1);
+      });
+
+      it('names an untouched and an editing hold on one line, remedies in the order untouched, editing, never', async () => {
+        await seedSpied();
+        await record({
+          paths: ['src/a.ts'],
+          skipped: [{ path: 'src/u.ts', code: UNTOUCHED('task-a') }, { path: 'docs/e.md', code: EDITING('task-b') }],
+        });
+        const line = heldLine()!;
+        expect(line.startsWith('MOE_CONTESTED_HELD task=task-1: src/u.ts(task-a), docs/e.md(task-b) — ')).toBe(true);
+        const at = (needle: string) => line.indexOf(needle);
+        expect(at('MOE_ATTR_CONTESTED_UNTOUCHED:')).toBeGreaterThan(0);
+        expect(at(EDITING_REMEDY)).toBeGreaterThan(at('MOE_ATTR_CONTESTED_UNTOUCHED:'));
+        expect(at(NEVER_REMEDY)).toBeGreaterThan(at(EDITING_REMEDY));
+        expect(line.endsWith(NEVER_REMEDY)).toBe(true);
+        expect(line).not.toContain('attribution.contested=skip');
+        expect(taskText().match(/MOE_CONTESTED_HELD task=task-1/g)).toHaveLength(1);
+      });
+
+      it('puts the strict remedy after the editing remedy and before the never clause', async () => {
+        await seedSpied();
+        await record({
+          paths: ['src/a.ts'],
+          skipped: [{ path: 'src/s.ts', code: 'MOE_ATTR_CONTESTED' }, { path: 'docs/e.md', code: EDITING('task-b') }],
+          contested: [{ path: 'src/s.ts', taskId: 'task-c' }],
+        });
+        const line = heldLine()!;
+        expect(line).toContain('src/s.ts(task-c), docs/e.md(task-b) — ');
+        expect(line).not.toContain('MOE_ATTR_CONTESTED_UNTOUCHED');
+        expect(line.indexOf('attribution.contested=skip')).toBeGreaterThan(line.indexOf(EDITING_REMEDY));
+        expect(line.indexOf(NEVER_REMEDY)).toBeGreaterThan(line.indexOf('attribution.contested=skip'));
+      });
+    });
+
     it('reports a hold on refused and failed outcomes too', async () => {
       await seedSpied();
       await record({ outcome: 'refused', sha: undefined, ref: undefined, code: 'MOE_COMMIT_REFUSED_NO_OWNED_PATHS',
