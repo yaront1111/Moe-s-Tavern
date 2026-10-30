@@ -62,7 +62,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -82,14 +82,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:24:18.022Z",
-  "updatedAt": "2026-10-30T07:02:04.146Z",
+  "updatedAt": "2026-10-30T07:14:40.980Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:27:17.977Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
     "executedStepCount": 8,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T07:14:40.980Z",
+    "wallClockMs": 2843003
   },
   "contextFetchedBy": [
     "worker-e60b90bd",
@@ -231,7 +233,7 @@
     "sessionId": "worker-e60b90bd@2026-10-30T06:50:03Z",
     "at": "2026-10-30T07:02:04.146Z"
   },
-  "reviewCompletedAt": "2026-10-30T06:49:57.988Z",
+  "reviewCompletedAt": "2026-10-30T07:14:40.980Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Each refusal exits 65 with no frame, no installed file and no staging directory left: an unknown or non-string cli, a duplicate, a size or hash mismatch, a malformed or overlong data frame, an empty stream, EOF before end, a frame after end, and a valid binary followed by a bad one. An agents path that is a symlink exits 74. Shown by tests."
@@ -274,5 +276,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T07:14:40.980Z",
+  "reviewSummary": "Approve, reopen 1. Completion commit 22c07c36 on moe/work-2026-10-24, recorded after reject 1 (tree 5dbb564 matches). Test-only, +14/-7 in AI4; guest-supervisor.py byte-identical to 4f2692a (code verified in round 1). HEAD == 22c07c36 for both files, tree clean. Size vs 4f2692a~1: +219/-11 = 230 (cap 400).\n\nGate, fresh, env -i, node v24.21.0: node --test scripts/tests/local-runner.test.mjs exit 0, 247 tests, 246 pass, 0 fail, 1 skip (pre-existing macOS smoke); matches task.verification. Bridge neighbour 55/55. No __pycache__.\n\nReject 1 closed. My mutants on a git-archive scratch copy (^AI[0-9]) each turn AI4 red, restored byte-equal:\n- whole size check deleted, only `1 <=` deleted, `0 <= size`: 'size 0'\n- only `<= MAX_AGENT_BYTES` deleted, cap bound at def time: 'a size above the cap'\n- only `type(size) is int` deleted, isinstance(size, int): 'size true'\n- `< MAX`: 'size == cap'; `1 < size`: 'size 1'\n\nDoD:\n1. AI2/AI3: exact bytes, 0555, uid seam, 0755 dir, one installed frame, rename replace (hard link keeps old bytes); AI1 pins owner (0, 0).\n2. AI4 rows each isolate one rule: 65, no stdout, state == OLD_AGENTS. AI5: symlink/file agents path, fsync/rename failure: 74.\n3. AI1: 64 extra argv, 77 non-root, routes to install_agents(0, 1).\n4. Verification evidence present and reproduced.\n\nNon-blocking:\n(a) Two outcome-equivalent mutants survive the full file: no sha256 format check, and copy_data without `len(chunk) > left`. The hash compare, and left never returning to 0, still refuse the same streams with 65; only fail-fast and pre-refusal bytes differ, which no DoD item covers. The second is pre-existing from R09c receive().\n(b) The architect comment plans R10d3 rows with the same AI prefix ('AI3'). R10d3 should pick another prefix.\n(c) Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
