@@ -8,9 +8,36 @@
     "The change touches only a .gitignore file."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Edit the root .gitignore, the only file this task touches. moe-jetbrains/.gitignore does not exist, so do not create one.\n\nAdd two rules, each under a short comment, and keep every existing line byte-identical:\n1. Next to the '# Gradle' block, add `.kotlin/`. The Kotlin Gradle plugin writes daemon-session files under it (moe-jetbrains/.kotlin/sessions/*.salive). Unanchored, it also covers any future Kotlin module. Nothing named .kotlin is tracked.\n2. Add `/.serena/`, the human's 2026-10-30 scope addition relayed by governor-693b7073. Serena keeps its local LSP index, project.yml and memories there. They were never committed, and both wrappers already refuse untracked .serena/** at landing. Anchor it to the root, as the human asked.\n\nUse an editing tool and keep the file's line endings. No other file changes. packages/moe-daemon/src/util/initFiles.test.ts only checks that the root .gitignore contains the .moe runtime lines (arrayContaining), so added lines cannot break it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".gitignore"
+      ],
+      "modifiedFiles": [
+        ".gitignore"
+      ],
+      "note": "Added documented root ignore rules for Kotlin daemon session directories and the root Serena local index; preserved existing LF line endings and all prior rules.",
+      "startedAt": "2026-10-30T08:06:01.575Z",
+      "completedAt": "2026-10-30T08:06:15.918Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "VERIFY ONCE, then a short self-review. This is a config-only change, so no new test file is needed. The DoD checks below are the test.\n\nVerification command (fresh, exit 0; supply its output to complete_task):\ngit check-ignore -v moe-jetbrains/.kotlin/sessions/x.salive .serena/project.yml && test -z \"$(git ls-files -ci --exclude-standard)\" && test -z \"$(git ls-files -- .serena moe-jetbrains/.kotlin)\"\n\n- check-ignore must print one rule line per path. A probe on 2026-10-30 confirmed it matches a nested path that does not exist yet.\n- `git ls-files -ci --exclude-standard` printed nothing before this change, so 'nothing new' means it still prints nothing.\n- Also run `git status --porcelain -- moe-jetbrains/.kotlin .serena`. It now prints nothing.\n\nError handling: if check-ignore exits non-zero or lists a tracked file, the rule is wrong. Fix the rule and rerun; never untrack or delete files.\n\nSelf-review:\n- Does either rule hide a tracked file, or a path the wrappers must still see? .serena is already DENY at landing, and .kotlin holds only transient session files.\n- Is the diff only .gitignore, with no reordering?",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        ".gitignore"
+      ],
+      "note": "Fresh DoD command passed: both check-ignore rules matched; no tracked ignored files and no tracked .serena/.kotlin paths. Scoped self-review found only .gitignore changed for this task; status for both target directories is clean.",
+      "startedAt": "2026-10-30T08:06:20.473Z",
+      "completedAt": "2026-10-30T08:06:37.832Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -30,5 +57,54 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:45:23.579Z",
-  "updatedAt": "2026-10-30T07:59:46.909Z"
+  "updatedAt": "2026-10-30T08:06:50.974Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T08:03:51.532Z",
+    "plannedStepCount": 2,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-6e57c4f8"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6-luna",
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T08:05:11.034Z",
+  "planningNotes": {
+    "approachesConsidered": "- Creating moe-jetbrains/.gitignore with `.kotlin/`: rejected. The file does not exist, and the root .gitignore already carries the repo's Gradle/IDE rules, so one existing file covers both scope items.\n- attribution.exclude for .serena: not needed. Gitignoring removes .serena from git status entirely, and the human chose the gitignore.",
+    "codebaseInsights": "- `git ls-files -ci --exclude-standard` is empty today.\n- No tracked path sits under .serena/ or any .kotlin/.\n- moe-jetbrains/.kotlin/ exists untracked.\n- initFiles.test.ts reads the root .gitignore with arrayContaining, so extra lines are safe.",
+    "risks": "- A peer could edit the root .gitignore concurrently. None is planned in any active task today. Preserve every existing byte.",
+    "keyFiles": [
+      ".gitignore"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T08:05:11.064Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T08:06:01.575Z",
+  "reviewStartedAt": "2026-10-30T08:06:50.972Z",
+  "verification": {
+    "command": "git check-ignore -v moe-jetbrains/.kotlin/sessions/x.salive .serena/project.yml && test -z \"$(git ls-files -ci --exclude-standard)\" && test -z \"$(git ls-files -- .serena moe-jetbrains/.kotlin)\"",
+    "exitCode": 0,
+    "outputTail": ".gitignore:23:.kotlin/\tmoe-jetbrains/.kotlin/sessions/x.salive\n.gitignore:54:/.serena/\t.serena/project.yml",
+    "reportedAt": "2026-10-30T08:06:50.972Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    ".gitignore"
+  ],
+  "completionSummary": "Added `.kotlin/` (unanchored) and `/.serena/` (root-anchored) ignore rules in the root .gitignore. Verification passed: both probe paths matched; no tracked ignored files or tracked paths under either directory. This is config-only, so no test suite applies; the plan's DoD command is the verification."
 }
