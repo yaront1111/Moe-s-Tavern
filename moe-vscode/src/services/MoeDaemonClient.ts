@@ -242,6 +242,7 @@ function selectInstalledFile(file: string, label: string, basePath: string, fold
     } catch (err) {
         return rejected(errorCode(err) === 'ENOENT' ? `${label} not found` : `${label} cannot be resolved`, errorText(err));
     }
+    if (isWindowsAlias(real)) { return rejected(`${label} is not a plain local Windows path`, real); }
     if (realRoot !== undefined && !isWithin(comparablePath(real, false), comparablePath(realRoot, false))) {
         return rejected(`${label} resolves outside the installed Moe runtime`, real);
     }
@@ -256,11 +257,18 @@ export function isFullyQualified(p: string, windows = process.platform === 'win3
     return windows ? /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(p) : path.posix.isAbsolute(p);
 }
 
+/** Win32 strips segment-ending dots/spaces that Node's namespaced fs keeps; UNC shares can expose any local folder. */
+export function isWindowsAlias(p: string, windows = process.platform === 'win32'): boolean {
+    return windows && (/[. ](?:[\\/]|$)/.test(p) || comparablePath(p, false).startsWith('//'));
+}
+
 export function isOutsideProject(p: string, basePath: string, foldCase = defaultFoldCase): boolean {
     try {
         if (!isFullyQualified(p)) { return false; }
+        const forms = pathForms(p);
+        if (forms.some(form => isWindowsAlias(form))) { return false; }
         const projects = pathForms(basePath);
-        return !pathForms(p).some(form => projects.some(project => isWithin(comparablePath(form, foldCase), comparablePath(project, foldCase))));
+        return !forms.some(form => projects.some(project => isWithin(comparablePath(form, foldCase), comparablePath(project, foldCase))));
     } catch { return false; }
 }
 

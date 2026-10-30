@@ -161,6 +161,38 @@ test('Windows rooted PATH and node spellings are refused on any host drive', { s
     assert.equal(env.PATH, [path.dirname(f.node), f.outside, device].join(';'));
 });
 
+test('Windows alias predicate rejects segment-ending dots/spaces and UNC forms only on Windows', t => {
+    const { isWindowsAlias } = fixture(t).api;
+    assert.equal(typeof isWindowsAlias, 'function');
+    for (const p of ['C:\\p.', 'C:\\p.\\', 'C:\\p.\\bin', 'C:\\p. ', 'C:\\p .', '//?/C:/p.', '//?/C:/p./bin',
+        'C:\\PROJEC~1.', '\\\\?\\C:\\p.', 'C:\\p \\bin', '\\\\srv\\sh', '//srv/sh', '\\\\?\\UNC\\srv\\sh', '\\\\localhost\\C$\\x']) {
+        assert.equal(isWindowsAlias(p, true), true, p); assert.equal(isWindowsAlias(p, false), false, p);
+    }
+    for (const p of ['C:\\p', 'C:\\p\\', 'C:\\', 'C:\\Program Files\\nodejs\\', 'C:\\Python3.11\\Scripts', '\\\\?\\C:\\x']) {
+        assert.equal(isWindowsAlias(p, true), false, p);
+    }
+    for (const p of ['/tmp/p.', '/tmp/p./bin', '/tmp/a /b', '//srv/sh']) { assert.equal(isWindowsAlias(p, false), false, p); }
+});
+
+test('Windows aliases cannot run project executables through the protected PATH', { skip: process.platform !== 'win32' && 'Windows only' }, t => {
+    const f = fixture(t), api = f.api, p = f.project, SystemRoot = process.env.SystemRoot;
+    t.after(() => assert.equal(fs.existsSync(path.dirname(p)), false, 'fixture removes literal trailing-dot folder too'));
+    for (const dir of [p, path.join(p, 'bin')]) {
+        fs.copyFileSync(path.join(SystemRoot, 'System32', 'whoami.exe'), write(path.join(dir, 'moe-rf06b-alias.exe')));
+    }
+    const device = '//?/' + p.replace(/\\/g, '/');
+    const aliases = [p + '.', p + '.\\', p + '.\\bin', p + '. ', p + ' .', device + '.', device + './bin',
+        '\\\\localhost\\' + p[0] + '$' + p.slice(2), '\\\\127.0.0.1\\' + p[0] + '$' + p.slice(2)];
+    for (const alias of aliases) { assert.equal(api.isOutsideProject(alias, p), false, alias); }
+    const env = api.protectedDaemonEnvironment({ PATH: [...aliases, f.outside].join(';'), SystemRoot }, p, f.node, true, undefined);
+    assert.equal(env.PATH, [path.dirname(f.node), f.outside].join(';'));
+    const spawn = env => require('node:child_process').spawnSync('moe-rf06b-alias', { cwd: f.outside, env });
+    assert.equal(spawn({ PATH: p + '.', SystemRoot }).status, 0, 'control: raw trailing-dot PATH runs the project executable');
+    assert.equal(spawn(env).error?.code, 'ENOENT');
+    assert.deepEqual(plain(api.installedExecutable(write(path.join(p + '.', 'node.exe')), p)),
+        { rejected: 'node executable is not a plain local Windows path' });
+});
+
 for (const code of ['ENOENT', 'EACCES']) {
     test(`protected async ${code} resets the guard and does not poll readiness`, async t => {
         const f = fixture(t); f.failure = Object.assign(new Error(code), { code });
