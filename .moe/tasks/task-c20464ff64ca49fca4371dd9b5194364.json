@@ -96,7 +96,7 @@
   ],
   "planRevision": 1,
   "status": "REVIEW",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "qa-b29f7b3d",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -125,11 +125,17 @@
       "author": "worker-e60b90bd",
       "content": "From WT-04T's worker (task-dd5daa4b), for whoever implements WT-04. The suite is scripts/tests/postflight-worktree.cjs and the fake-proxy knobs are as the contract says.\n\nWhat I measured while proving the suite passable, using a scratch bash reference of the contract (not delivered):\n1. Git Bash/MSYS rewrites the `'/*'` argument of `git -C \"$W\" sparse-checkout set --no-cone '/*' '!/.moe/'` as a POSIX path, so W keeps .moe. The suite fails that as MOE_WORKTREE_MOE_PRESENT and \"W/.moe exists\" in lifecycle, resume, half-made and others. Fix in the sh twin: prefix that one call with `MSYS2_ARG_CONV_EXCL='*'`, or feed the patterns through `sparse-checkout set --no-cone --stdin`. Linux bash and PowerShell 5.1/7 are unaffected: the `/* | !/.moe/` patterns survive.\n2. half-made expects the verb `reused`, as your step-3 plan says. The other verbs: create → `created`, reuse → `reused`, re-add → `re-added`.\n3. The `[worktree] <verb> <W> on moe/task/<id>` path is compared after realpath, forward slashes and (win32) case-folding, so either D:/ or D:\\ spelling passes.\n4. controlSame checks the control checkout's `ls-files -s -t` as well as status. A sparse-checkout run against the control checkout (S tags; it deletes the tracked .moe) fails four cases.\n5. The suite strips ANSI from the log, so `${RED}[ERROR]${NC} CODE: detail` matches.\n6. For sh engines with the git stub, the suite also sets BASH_ENV, because Git Bash's bin/bash.exe puts /mingw64/bin ahead of PATH. Don't reset PATH in the wrapper's preamble, or git-old and sparse-fail lose the stub.\n7. The fixture's .gitignore also lists .mcp.json and logs/: every wrapper run writes both into the project.\nGreen proof of the reference: Linux bash 12/12 ok (path-long n/a), win32 Git Bash 13/13 ok.",
       "timestamp": "2026-10-30T16:34:28.940Z"
+    },
+    {
+      "id": "comment-553affb577554104b1670d1306a91bec",
+      "author": "worker-0062feec",
+      "content": "@qa-ba3f4f35 worker-0062feec's answer to msg-241f1812 is chat msg-fc55c304. The chat reply routed to no one, so this comment points you to it. In short:\n1. No architect has approved a deferral. \"absent means shared\" comes from three places: the row description, executionContract.intendedBehavior, and approved plan step 3a (\"Unparseable JSON counts as absent\"). task-31187ec1 is a bug I filed as WORKER that asks for the decision. It authorizes nothing.\n2. The window is wider than \"branch never added\". A moe/task/<id> that holds nothing HEAD lacks passes task_branch_landed (sh :2886, ps1 :2671), so that resume also runs shared. It is the same contract gap, so I added it to 31187ec1, not here.\n3. For your reject: plan step 2 makes postflight-worktree.cjs and postflight-fake-proxy.js held-out. Please name where the two regressions for msg-df930e45 should go.",
+      "timestamp": "2026-10-30T20:03:26.838Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:49:26.469Z",
-  "updatedAt": "2026-10-30T19:52:16.951Z",
+  "updatedAt": "2026-10-30T20:24:30.371Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:59.143Z",
@@ -144,7 +150,9 @@
   "contextFetchedBy": [
     "architect-4ae016fb",
     "architect-bc59d28a",
-    "worker-0062feec"
+    "worker-0062feec",
+    "qa-ba3f4f35",
+    "qa-b29f7b3d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -235,6 +243,29 @@
       "treeId": "29ba966e056cc3a132065a2b8305e0dce4be89a8",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "5657d18600485971d47a5f0be7d45074ba25205d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T18:47:54Z",
+      "paths": [
+        ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+        ".moe/tasks/task-a10a7f7840dc4fda9310e61789545877.json",
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/importee-guard-bash.test.mjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/usage-attribution.test.mjs"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T19:52:34.004Z",
+      "treeId": "618b0f9a75c8ee525a166736aca154b9d4c62ab3",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -243,14 +274,17 @@
     "scripts/tests/usage-attribution.test.mjs",
     "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
-    "scripts/moe-agent.ps1"
+    "scripts/moe-agent.ps1",
+    ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+    ".moe/tasks/task-a10a7f7840dc4fda9310e61789545877.json",
+    ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-4ae016fb@2026-10-30T13:01:05Z",
-    "at": "2026-10-30T14:22:33.077Z"
+    "kind": "completion",
+    "sessionId": "worker-0062feec@2026-10-30T18:47:54Z",
+    "at": "2026-10-30T19:52:34.004Z"
   },
   "workStartedAt": "2026-10-30T18:49:58.731Z",
   "reviewStartedAt": "2026-10-30T19:52:16.948Z",
@@ -261,5 +295,13 @@
     "reportedAt": "2026-10-30T19:52:16.948Z",
     "source": "agent-reported"
   },
-  "completionSummary": "WT-04: a worker seat's pre-flight now provisions the per-task worktree, in both wrappers. The work was submitted at 362 net lines (+382/-20), against the ~240 estimate and the 400 cap.\n\nDelivered:\n- sh: provision_worktree, task_branch_landed and worktree_stop. Globals MOE_WT_*. Call site above \"Pre-flight landing\".\n- ps1 twins: Initialize-MoeWorktree, Install-MoeTaskWorktree, Get-MoeWorkspaceClaim, Test-MoeTaskBranchLanded and Stop-MoeWorktreeSeat. State $script:MoeWt*. Call site above \"Pre-flight baseline\".\n- Guard order: git >= 2.38, project at the git top, control on moe/control, target is a local branch, foreign task commits contained in the target, Windows path budget.\n- Then W = <top>/.worktrees/<id> is reused (repaired on a cross-OS spelling, a half-made index finished), re-added without -b, or created locked and sparse with !/.moe/. A W holding .moe is refused.\n- Shared mode refuses only an unlanded moe/task/<id>.\n- The 9 sh MOE_LAND_* bridge env names became MOE_PY_* (DoD 5).\n- Both harnesses run the held-out suite unchanged.\n\nDeviations:\n- The claim/context JSON reaches python on stdin (128 KiB env cap).\n- Refusal details carry the last line of git's output.\n- An unregistered existing W refuses before the add, because `worktree add -b` creates the branch even when it fails.\n- printf, not echo -e.\n- ls-files reads stdout only.\n- A ps1-only catch turns any PowerShell throw into CREATE_FAILED.\n\nEvidence:\n- The verification chain exits 0. In the suite, sh passes 12/12 and ps1 13/13 under PS 5.1; path-long is n/a off win32.\n- The suite was also run directly: sh 13/13 under Git Bash, ps1 13/13 under PS 5.1.\n\nNot covered here:\n- pwsh 7 (Store build) fails at the agent git guard. It reproduces with HEAD's ps1, predates this task, and is outside the DoD (PS 5.1).\n\nFiled task-31187ec1 (bug): a resumed worktree task whose get_context fails reads as shared.\n\nHandoff memory: task-task-c20464ff64ca49fca4371dd9b5194364-handoff."
+  "completionSummary": "WT-04: a worker seat's pre-flight now provisions the per-task worktree, in both wrappers. The work was submitted at 362 net lines (+382/-20), against the ~240 estimate and the 400 cap.\n\nDelivered:\n- sh: provision_worktree, task_branch_landed and worktree_stop. Globals MOE_WT_*. Call site above \"Pre-flight landing\".\n- ps1 twins: Initialize-MoeWorktree, Install-MoeTaskWorktree, Get-MoeWorkspaceClaim, Test-MoeTaskBranchLanded and Stop-MoeWorktreeSeat. State $script:MoeWt*. Call site above \"Pre-flight baseline\".\n- Guard order: git >= 2.38, project at the git top, control on moe/control, target is a local branch, foreign task commits contained in the target, Windows path budget.\n- Then W = <top>/.worktrees/<id> is reused (repaired on a cross-OS spelling, a half-made index finished), re-added without -b, or created locked and sparse with !/.moe/. A W holding .moe is refused.\n- Shared mode refuses only an unlanded moe/task/<id>.\n- The 9 sh MOE_LAND_* bridge env names became MOE_PY_* (DoD 5).\n- Both harnesses run the held-out suite unchanged.\n\nDeviations:\n- The claim/context JSON reaches python on stdin (128 KiB env cap).\n- Refusal details carry the last line of git's output.\n- An unregistered existing W refuses before the add, because `worktree add -b` creates the branch even when it fails.\n- printf, not echo -e.\n- ls-files reads stdout only.\n- A ps1-only catch turns any PowerShell throw into CREATE_FAILED.\n\nEvidence:\n- The verification chain exits 0. In the suite, sh passes 12/12 and ps1 13/13 under PS 5.1; path-long is n/a off win32.\n- The suite was also run directly: sh 13/13 under Git Bash, ps1 13/13 under PS 5.1.\n\nNot covered here:\n- pwsh 7 (Store build) fails at the agent git guard. It reproduces with HEAD's ps1, predates this task, and is outside the DoD (PS 5.1).\n\nFiled task-31187ec1 (bug): a resumed worktree task whose get_context fails reads as shared.\n\nHandoff memory: task-task-c20464ff64ca49fca4371dd9b5194364-handoff.",
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/importee-guard-bash.test.mjs",
+    "scripts/tests/usage-attribution.test.mjs",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1"
+  ]
 }

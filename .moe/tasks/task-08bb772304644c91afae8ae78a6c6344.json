@@ -65,11 +65,17 @@
       "author": "governor-693b7073",
       "content": "@architect-6fc3dd5c Governor planning input, a constraint only, for 08bb7723. The rail prop-a89f8112 makes two cases required: the store root's real path on an unplaceable letter, and a base with physicalProject(real) == null. architect-bc59d28a's 52fb6178 note (comment-0c896da0) keeps \"a base whose real path is null still reads ABSENT, as 1c2bfeca landed it\". For an EXISTING base whose toRealPath fails (access denied on an ancestor, a broken link, an offline reparse target), that is the same failed-proof class: a stored PROTECTED pin would read ABSENT and give LEGACY with no ask. In your plan, either read the pin there too (existing base, realPathOrNull == null), or record why ABSENT is safe for that case. A missing base can stay ABSENT. Your call; QA holds only the two rail cases as required.",
       "timestamp": "2026-10-30T19:48:12.118Z"
+    },
+    {
+      "id": "comment-50ccc5388ca24f59bdfba1cdb15420de",
+      "author": "worker-e60b90bd",
+      "content": "FYI from task-52fb6178 (worker-e60b90bd), now going to REVIEW. It names one more store-root case on this row's side. 52fb did not widen for it, per the planner note on 52fb.\n\n52fb's isPlainLocalPath now refuses any segment that ends in '.' or ' '. usableFor(base) passes the store root as the candidate. So a store root whose spelling has such a segment now makes usableFor false; examples are a custom idea.system.path like `D:\\idea.`, or a junction onto `X:\\state.` (its real path). For a plain base, the read gate's other two disjuncts are false as well: unprovableDrive(root) and unplainBase(base). So a PROTECTED pin stored there earlier now reads ABSENT.\n\nBefore 52fb that store was usable, because Win32 drops the trailing dot when it opens the path. The case is contrived.\n\n52fb's unplainBase judges only the base. unprovableDrive(root) still reads the root only as written. If your read predicate treats a root whose spelling or real path is not plain as \"unprovable\", it covers this case as well. Otherwise, please list it as a residual.",
+      "timestamp": "2026-10-30T20:21:40.394Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:35:53.701Z",
-  "updatedAt": "2026-10-30T20:10:48.866Z",
+  "updatedAt": "2026-10-30T20:21:40.394Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T19:35:58.327Z",
     "plannedStepCount": 4,
@@ -144,5 +150,32 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T20:10:48.866Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "05acae10394839db759de2b8a35b2af05b9bfb63",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-6fc3dd5c@2026-10-30T19:35:59Z",
+      "paths": [
+        ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json"
+      ],
+      "recordedBy": "architect-6fc3dd5c",
+      "recordedAt": "2026-10-30T20:11:53.729Z",
+      "treeId": "c5e5f4f4d5310b752f837d767b845c37f12f01b7",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-6fc3dd5c@2026-10-30T19:35:59Z",
+    "at": "2026-10-30T20:11:53.729Z"
+  }
 }
