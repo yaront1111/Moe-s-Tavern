@@ -109,7 +109,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:59.341Z",
-  "updatedAt": "2026-10-30T07:54:07.546Z",
+  "updatedAt": "2026-10-30T07:54:37.669Z",
   "dependsOn": [
     "task-6be626cfe5744ee29deeb2bb1b59468e",
     "task-72184c6505cc41e8b6066732011ffb70",
@@ -224,7 +224,48 @@
     "packages/moe-daemon/src/tools/qaReject.ts",
     "packages/moe-daemon/src/delivery/policy.ts",
     "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
-    "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts"
+    "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts",
+    ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+    ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+    ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+    ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json"
   ],
-  "completionSummary": "CQ-V06 revision-bound QA review. Strict means verified-local. 6 paths, net about 355 non-board LOC (runtime +108, tests +247).\n- NEW delivery/reviewBinding.ts: assertReviewBinding and assertReviewedCandidateCurrent. Under strict, qa_approve and qa_reject refuse, in order:\n  1. QA's OWN identity via assertExecutionAuthorized: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE;\n  2. REVIEWED_CANDIDATE_REQUIRED;\n  3. CANDIDATE_MISMATCH;\n  4. approve only: CANDIDATE_REVISION_STALE, read from the PRODUCER attempt's snapshot; missing or malformed gives null and fails closed.\n  A reject of a stale-revision candidate is allowed. Legacy and observe call resolveReviewedCandidate exactly as before.\n- qaApprove.ts and qaReject.ts: optional attemptId, generation and sessionId params, plus one description sentence each. The binding sits at the old resolveReviewedCandidate site, so it still comes before EXECUTION_PROFILE_NOT_READY and every write. Readiness is untouched and still refuses strict approvals.\n- policy.ts is unchanged, a deviation from step 4. V04's trustedPassedOn already binds every verified-local check run to the approved revision, and passedOn is never reached for such a task, so the planned parameter would be dead code. Q5 pins the rule, and a mutant removing it fails Q5.\n- Scope grew by 2 landed tests that asserted NOT_READY for a bare strict qa_approve:\n  - executionPolicyIntegration.test.ts, the M01f Q describe: the binding is spied as a pass-through, so the rows still pin readiness;\n  - executionPolicyLifecycle.test.ts B2: now expects STEP_ENTRY_IDENTITY_REQUIRED.\n  qaApprove.test.ts and qaReject.test.ts are unchanged.\n- Evidence:\n  - 12 new tests;\n  - red first (7 failed);\n  - 8 mutants, all killed;\n  - full gate green (above).\n- Follow-ups:\n  - CQ-V06a (task-a4ad3fdb): the proxy stamps the identity onto the qa tools;\n  - V12 (task-b621ddc9): MCP_SERVER.md docs;\n  - R08: guest-bridge identi"
+  "completionSummary": "CQ-V06 revision-bound QA review. Strict means verified-local. 6 paths, net about 355 non-board LOC (runtime +108, tests +247).\n- NEW delivery/reviewBinding.ts: assertReviewBinding and assertReviewedCandidateCurrent. Under strict, qa_approve and qa_reject refuse, in order:\n  1. QA's OWN identity via assertExecutionAuthorized: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE;\n  2. REVIEWED_CANDIDATE_REQUIRED;\n  3. CANDIDATE_MISMATCH;\n  4. approve only: CANDIDATE_REVISION_STALE, read from the PRODUCER attempt's snapshot; missing or malformed gives null and fails closed.\n  A reject of a stale-revision candidate is allowed. Legacy and observe call resolveReviewedCandidate exactly as before.\n- qaApprove.ts and qaReject.ts: optional attemptId, generation and sessionId params, plus one description sentence each. The binding sits at the old resolveReviewedCandidate site, so it still comes before EXECUTION_PROFILE_NOT_READY and every write. Readiness is untouched and still refuses strict approvals.\n- policy.ts is unchanged, a deviation from step 4. V04's trustedPassedOn already binds every verified-local check run to the approved revision, and passedOn is never reached for such a task, so the planned parameter would be dead code. Q5 pins the rule, and a mutant removing it fails Q5.\n- Scope grew by 2 landed tests that asserted NOT_READY for a bare strict qa_approve:\n  - executionPolicyIntegration.test.ts, the M01f Q describe: the binding is spied as a pass-through, so the rows still pin readiness;\n  - executionPolicyLifecycle.test.ts B2: now expects STEP_ENTRY_IDENTITY_REQUIRED.\n  qaApprove.test.ts and qaReject.test.ts are unchanged.\n- Evidence:\n  - 12 new tests;\n  - red first (7 failed);\n  - 8 mutants, all killed;\n  - full gate green (above).\n- Follow-ups:\n  - CQ-V06a (task-a4ad3fdb): the proxy stamps the identity onto the qa tools;\n  - V12 (task-b621ddc9): MCP_SERVER.md docs;\n  - R08: guest-bridge identi",
+  "commits": [
+    {
+      "sha": "582fc1604e98e4a71e71ca01af7f0007e8a858d2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T07:39:26Z",
+      "paths": [
+        ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+        ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+        ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+        ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
+        "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts",
+        "packages/moe-daemon/src/delivery/reviewBinding.test.ts",
+        "packages/moe-daemon/src/delivery/reviewBinding.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T07:54:37.669Z",
+      "treeId": "55b9334dfe8663ac53a65f0724f6090801b89daa",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/reviewBinding.test.ts",
+    "packages/moe-daemon/src/delivery/reviewBinding.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-093a65d0@2026-10-30T07:39:26Z",
+    "at": "2026-10-30T07:54:37.669Z"
+  }
 }

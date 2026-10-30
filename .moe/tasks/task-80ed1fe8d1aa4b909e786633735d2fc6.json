@@ -1,0 +1,33 @@
+{
+  "id": "task-80ed1fe8d1aa4b909e786633735d2fc6",
+  "epicId": "epic-be924fb8",
+  "title": "VS Code extension refuses to connect to a daemon whose /health reports another project",
+  "description": "Follow-up from task-e7f4026a (HIGH, a seat adopted another project's daemon through a stale daemon.json). That bug's description asks to check \"the IDE plugins' daemon adoption\". Its DoD covers JetBrains only (task-90664db1), so this row is the VS Code parity. It lands in BACKLOG for the human to schedule.\n\nThe gap, checked by the planning architect on 2026-10-30, is wider than in JetBrains. moe-vscode/src/services/MoeDaemonClient.ts ensureDaemonRunning() and waitForDaemonInfo():\n- compare only the projectPath written in .moe/daemon.json (pathsMatch);\n- then trust isPortOpen(host, port), with no PID check at all.\nSo once this project's daemon dies and another project's daemon takes the recorded port, connect() opens ws://<host>:<port>/ws to the other project's board.\n\nDeliverable:\n- Before connect() opens /ws, probe http://<host>:<port>/health with a bounded timeout and a body capped at 64 KiB. Compare its projectPath by the comparable-path rule of packages/moe-proxy/src/utils.ts comparableProjectPath (D:\\x == D:/x == /mnt/d/x).\n- On a foreign reply:\n  - open no client;\n  - treat daemon.json as stale, deleting it only while it still names the pid, port and startedAt that were read;\n  - log and show which project that daemon serves;\n  - start this project's daemon, which takes the next free port.\n- An unknown reply (unreachable, non-JSON, oversize, no projectPath) keeps today's behavior.\n- Mirror the decisions landed by the JetBrains fix (task-90664db1): read its code and handoff memory first.\n- Tests in moe-vscode/tests. The vm harnesses transpile single files with a closed require shim (mem:gotcha-vscode-vm-test-harness), so check which harnesses load MoeDaemonClient.ts before adding an import to it.\n\nOrdering: MoeDaemonClient.ts is in CQ-RF06's and CQ-RF06b's plans (task-98ffe33f, task-032c9739). This row dependsOn both, plus the JetBrains fix.\n\nNot in scope: the proxy, the wrappers, the JetBrains plugin, the daemon.\n\nVerification command (fresh, exit 0): cd moe-vscode && npm test && npm run compile",
+  "definitionOfDone": [
+    "A daemon at the port .moe/daemon.json names, whose /health projectPath is another project, gets no /ws client from the extension. The stale daemon.json is removed only while it still names the pid, port and startedAt that were read, and this project's daemon is started. Proven by a moe-vscode test.",
+    "This project's path in any spelling (D:\\x, D:/x, /mnt/d/x) counts as the same project. Unreachable, non-JSON, oversize and projectPath-less /health replies keep today's behavior. Proven by test rows.",
+    "`cd moe-vscode && npm test && npm run compile` exits 0, with its output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-98ffe33f448746e6bc802db0b5624fd0",
+    "task-032c973941bc41d9b051eedacb7de0b6",
+    "task-90664db1e08a45f7b63c1e0f44eeee09"
+  ],
+  "priority": "HIGH",
+  "order": 286.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:55:18.945Z",
+  "updatedAt": "2026-10-30T07:55:18.945Z"
+}

@@ -46,16 +46,36 @@
       "stepId": "step-3",
       "description": "VERIFY ONCE, fresh.\n\n1. Run the DoD command, `node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs`. On WSL, run it as `env -i HOME=\"$HOME\" PATH=\"<nvm node 24 bin>:/usr/local/bin:/usr/bin:/bin\" node --test ...`, with POSIX python3 on PATH. It must exit 0; supply its command, exit code and output tail to complete_task.\n2. ALSO run `node --test scripts/tests/local-runner.test.mjs` and report it; it holds the R11f and R10d3 supervisor rows.\n3. Mutants, on scratch copies only; restore and cmp afterwards:\n   (i) drop --strict-mcp-config: LA1;\n   (ii) write the config before session_home, or into WORKSPACE: LA2;\n   (iii) create without O_EXCL or O_NOFOLLOW: replace a pre-planted symlink at the config path in an LA2 variant (planted before prepare_launch through a session_home seam). It must give 71, with no file written through the link;\n   (iv) pass the role from the frame into argv unvalidated: LA1's prompt pins;\n   (v) change JOBS to 3-tuples: B17.",
       "status": "PENDING",
-      "affectedFiles": []
+      "affectedFiles": [],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "VERIFY ONCE, fresh.\n\nCONTRACT AMENDMENT (2026-10-30, architect-4ae016fb, from task-afe6838d58874da58a2d4c1e0956c799):\n- Codex's session config.toml is the FOUR-line table '[mcp_servers.moe]\\ncommand = \"/opt/moe/bin/moe-mcp-shim\"\\nenv_vars = [\"MOE_ROLE\"]\\ndefault_tools_approval_mode = \"approve\"\\n'.\n- The reason: pinned codex 0.166.0 starts a stdio MCP server with only HOME, PATH and LC_CTYPE. Without env_vars the shim gets no MOE_ROLE and serves no tools. env_vars forwards exactly MOE_ROLE, never the credential.\n- This supersedes the 'three-line' wording in steps 1-2 and in this task's contract.\n- task-afe6838d lands that line, LA2's pin and its new credential assertions, and the opt-in LA5 pinned-codex row before this task resumes. Read those landed bytes first, and do not re-edit them.\n\n1. Run the DoD command, `node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs`.\n   - On WSL, run it as `env -i HOME=\"$HOME\" PATH=\"<nvm node 24 bin>:/usr/local/bin:/usr/bin:/bin\" MOE_PINNED_CODEX=<pinned codex member, memberSha256 b8a11fed…> node --test ...`, with POSIX python3 on PATH, so LA5 runs rather than skips.\n   - It must exit 0. Supply its command, exit code and output tail to complete_task.\n2. ALSO run `node --test scripts/tests/local-runner.test.mjs` and report it; it holds the R11f and R10d3 supervisor rows.\n3. Mutants, on scratch copies only; restore and cmp afterwards:\n   (i) drop --strict-mcp-config: LA1;\n   (ii) write the config before session_home, or into WORKSPACE: LA2;\n   (iii) create without O_EXCL or O_NOFOLLOW: replace a pre-planted symlink at the config path in an LA2 variant (planted before prepare_launch through a session_home seam). It must give 71, with no file written through the link;\n   (iv) pass the role from the frame into argv unvalidated: LA1's prompt pins;\n   (v) change JOBS to 3-tuples: B17;\n   (vi) drop the codex env_vars line: LA2 and LA5.",
+          "reason": "Contract amendment from task-afe6838d. Pinned codex 0.166.0 starts stdio MCP servers with only HOME, PATH and LC_CTYPE, so codex's table needs env_vars = [\"MOE_ROLE\"]. task-afe6838d lands the line, the LA2 pin and the opt-in LA5 pinned-binary row before this task resumes. This step's gate now covers them.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-30T07:55:56.676Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a hostile workspace and agent. Check:\n- Can a candidate file in WORKSPACE add an MCP server?\n  - claude: --strict-mcp-config ignores .mcp.json and settings.\n  - codex: does the pinned version read a project .codex/config.toml when CODEX_HOME is fresh with no trusted projects? Confirm it from the pinned codex version's docs or behavior and record the answer. If it does read one, refuse a workspace with .codex/config.toml (exit 65), or pass the version's override; never assume.\n- Can a symlink or pre-existing file in the fresh home redirect the config write? (O_EXCL, O_NOFOLLOW and dir_fd; and the home is fresh per job.)\n- Does the credential appear in argv, a file or the prompt? It must be env-only.\n- No resume or continue under any role.\n- --dangerously-skip-permissions runs only as moe-agent, never as root; the identity drop is unchanged.\n- The other modes are byte-identical; no .moe edits; no verified-local or isolation claim.\nReport every path in complete_step.modifiedFiles, and write the Serena handoff memory 'task-task-60626bee13034a178fed55c697d14d06-handoff' for CQ-R10 and CQ-R13 (task-f4811a72).",
       "status": "PENDING",
-      "affectedFiles": []
+      "affectedFiles": [],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then read the diff as a hostile workspace and agent.\n\nCheck:\n- Can a candidate file in WORKSPACE add an MCP server?\n  - claude: --strict-mcp-config ignores .mcp.json and settings.\n  - codex: does the pinned version read a project .codex/config.toml when CODEX_HOME is fresh with no trusted projects? Confirm it from the pinned codex version's docs or behavior, and record the answer. If it does read one, refuse a workspace with .codex/config.toml (exit 65) or pass the version's override. Never assume.\n- Can a symlink or pre-existing file in the fresh home redirect the config write? Check O_EXCL, O_NOFOLLOW and dir_fd, and that the home is fresh per job.\n- Does the credential appear in argv, a file or the prompt? It must be env-only.\n- Codex's env_vars forwards exactly MOE_ROLE (task-afe6838d's amendment). The credential's name never appears in config.toml, and the MCP server's environment never holds it.\n- There is no resume or continue under any role.\n- --dangerously-skip-permissions runs only as moe-agent, never as root, and the identity drop is unchanged.\n- The other modes are byte-identical. No .moe edits, and no verified-local or isolation claim.\n\nReport every path in complete_step.modifiedFiles. Write the Serena handoff memory 'task-task-60626bee13034a178fed55c697d14d06-handoff' for CQ-R10 and CQ-R13 (task-f4811a72). Note in it that this task did not probe whether pinned claude 2.1.308 forwards MOE_ROLE to its stdio MCP server; CQ-R10d's end-to-end row (task-90847011) must cover it with the real binaries.",
+          "reason": "Adds the env_vars review points from task-afe6838d's contract amendment: only MOE_ROLE is forwarded, the credential never is, and pinned claude's MCP env forwarding is noted as unprobed, for CQ-R10d.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-30T07:55:56.696Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     }
   ],
-  "planRevision": 1,
+  "planRevision": 3,
   "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
@@ -77,11 +97,17 @@
       "author": "worker-55e6716a",
       "content": "Steps1/2 implemented and checkpoint-ready; focused LA1-LA4/J3/J4 7/7 green. Blocking on task-afe6838d58874da58a2d4c1e0956c799: actual pinned Codex 0.166.0 filters MOE_ROLE out of stdio MCP env under the approved exact three-line table, so real guest shim exposes zero tools. Need architect reconcile contract/plan to allow role forwarding (e.g. env_vars=[\"MOE_ROLE\"]). Full gate and mutations intentionally still pending, not passing claims. All paths reported in complete_step. Serena handoff and gotcha written.",
       "timestamp": "2026-10-30T07:45:30.656Z"
+    },
+    {
+      "id": "comment-a50388c93a254a6cb6fb1c3cbf8730e2",
+      "author": "architect-4ae016fb",
+      "content": "Architect contract amendment, 2026-10-30, resolving this task's block on task-afe6838d.\n\nThe codex session config.toml is now the FOUR-line table: [mcp_servers.moe] / command = \"/opt/moe/bin/moe-mcp-shim\" / env_vars = [\"MOE_ROLE\"] / default_tools_approval_mode = \"approve\". This supersedes the \"three-line\" wording in completed steps 1-2 and in executionContract.intendedBehavior. The table still names only the moe shim with approval 'approve'; it now also forwards exactly MOE_ROLE and never the credential.\n\nEvidence: the architect probed the pinned codex 0.166.0 member (sha256 b8a11fed…, matching agent-binaries.json) with a recorder MCP server.\n- three-line table: the server gets HOME, LC_CTYPE, PATH;\n- with env_vars: it gets HOME, LC_CTYPE, MOE_ROLE, PATH;\n- a literal env table also works, but was rejected because it would make the config per-role.\n\ntask-afe6838d lands the supervisor line, the LA_CONFIG pin plus LA2 credential guards, and an opt-in LA5 pinned-binary row (MOE_PINNED_CODEX). This task then auto-unblocks, and its amended steps 3-4 run the gate with LA5 included, plus mutant (vi).\n\nOpen for CQ-R10d (task-90847011): whether pinned claude 2.1.308 forwards MOE_ROLE to its stdio MCP server is still unprobed.",
+      "timestamp": "2026-10-30T07:56:03.429Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:35.352Z",
-  "updatedAt": "2026-10-30T07:48:11.896Z",
+  "updatedAt": "2026-10-30T07:56:03.429Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:29:27.778Z",
     "plannedStepCount": 4,

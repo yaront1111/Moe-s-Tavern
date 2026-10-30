@@ -1,0 +1,29 @@
+{
+  "id": "task-90664db1e08a45f7b63c1e0f44eeee09",
+  "epicId": "epic-be924fb8",
+  "title": "JetBrains plugin refuses to connect to a daemon whose /health reports another project",
+  "description": "Split from task-e7f4026a (HIGH; a seat adopted another project's daemon through a stale daemon.json). That row's DoD 3 asks for the JetBrains check. Its architect checked the code and found the gap, so this task fixes it, and that row dependsOn this task.\n\nThe gap: MoeProjectService.connect() and connectWithRetry() adopt the daemon that .moe/daemon.json names whenever isProcessAlive(pid) && isPortOpen(port). doConnect then opens ws://127.0.0.1:<port>/ws.\n- After the project's daemon dies, Windows can reuse its PID, and another project's daemon can take the port.\n- The plugin then attaches this window to the other project's board. It registers seats there and sends DEREGISTER_WORKER there (agentSeats.resendGone()).\n- Under the PROTECTED profile, activationRefusal (RF01 provenance) already refuses an unrecorded daemon. LEGACY has no check.\n\nDeliverable:\n- A small pure helper in a new file, for example moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt.\n  - It GETs http://127.0.0.1:<port>/health with short connect and read timeouts and a body capped at 64 KiB.\n  - It classifies the reply as same, foreign (with the served path) or unknown.\n  - It compares paths by the comparable-path rule of packages/moe-proxy/src/utils.ts comparableProjectPath: D:\\x == D:/x == /mnt/d/x, with drive paths case-insensitive.\n  - A /mnt/<d> spelling of this project is never foreign: a WSL-hosted daemon serving this project must not be deleted or duplicated.\n- MoeProjectService.doConnect, after activationRefusal and before any client is created:\n  - A foreign reply is handled like the dead-PID branch.\n    - Delete .moe/daemon.json only while it still names the same pid, port and startedAt that were read.\n    - Publish a status naming the project that daemon serves, and saying this project's daemon will start on the next free port.\n    - Schedule the reconnect, which spawns this project's daemon.\n  - An unknown reply proceeds as today.\n  - The probe never runs on the EDT.\n- JUnit tests:\n  - the helper, against a local com.sun.net.httpserver.HttpServer: same in each spelling, foreign, unreachable, non-JSON, no projectPath, and an oversize body;\n  - the doConnect branch, as far as MoeProjectService's test seams allow.\n\nOrdering:\n- MoeProjectService.kt is also in CQ-RF04's plan (task-de91373a), which now dependsOn this task.\n- Do not edit MoeDaemonSupervisor.kt: RF01, task-0c72d59a, RF03 and RF04 are serialized on it.\n\nNot in scope:\n- the proxy and the wrappers (sibling and parent rows);\n- VS Code (a BACKLOG follow-up);\n- the daemon;\n- RF behavior.\n\nVerification command (fresh, exit 0), under the jetbrains-gradle lease:\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\nThis is the Windows equivalent of `cd moe-jetbrains && ./gradlew test`; this WSL host has no JDK.",
+  "definitionOfDone": [
+    "Under the LEGACY profile, a daemon at the recorded port whose /health projectPath is another project gets no WebSocket client and no seat traffic. A stale daemon.json is removed only while it still names the pid, port and startedAt that were read, and the published status names the other project. Proven by gradle tests.",
+    "This project's path spelled D:\\x, D:/x or /mnt/d/x counts as the same project. Unreachable, non-JSON, oversize and projectPath-less replies keep today's behavior. Proven by helper test rows.",
+    "MoeDaemonSupervisor.kt is unchanged by this task.",
+    "The verification command exits 0, with its output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 286.54,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:54:54.318Z",
+  "updatedAt": "2026-10-30T07:54:54.318Z"
+}
