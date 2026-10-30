@@ -9,7 +9,9 @@
     "Manual or sandbox check noted in the step note: after `./gradlew runIde` on a project with .worktrees/<id>, the folder shows as excluded and no unregistered-VCS-root notification names it.",
     "cd moe-jetbrains && ./gradlew test exits 0 (run under the jetbrains-gradle lease)."
   ],
-  "taskRails": [],
+  "taskRails": [
+    "WT-15 size exception (task-fad5ef97). QA size-rejected completion 760cdda3 at +503/-0 non-board LOC: WorktreeExclusion.kt +201, WorktreeExclusionTest.kt +300 and plugin.xml +2 (git show --numstat 760cdda3). QA may approve this task at up to 550 net LOC task-wide, fix rounds included. The overage is the JUnit coverage that DoD 1 requires inside this task, and the production change is 201 lines, so splitting the test from the logic would break DoD 1. Every other QA criterion is unchanged, and so is the 400-net-LOC cap for every other task."
+  ],
   "implementationPlan": [
     {
       "stepId": "step-1",
@@ -20,13 +22,9 @@
         "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt"
       ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
-        "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt"
-      ],
-      "note": "Pure helper WorktreeExclusion.urlToExclude(projectRootUrl, contentRootUrl, excludedUrls, caseSensitive) + 16 JUnit4 cases (exact URL, ancestor root, idempotence, existing/ancestor exclusion, null/blank, unrelated/nested/prefix-collision roots, trailing slashes, spaces/Unicode, Windows drive, UNC, POSIX case-sensitive, tr-TR locale). Verified against the installed IDEA 2026.2.3 jars via javap: ContentEntry.getExcludeFolderUrls/addExcludeFolder(String), ModifiableRootModel.commit/dispose, VfsUtilCore.pathToUrl, SystemInfo.isFileSystemCaseSensitive, WriteAction.run. Gradle run is deferred to the step-3 gate per plan. 23 other dirty paths in the shared checkout belong to peers; untouched.",
-      "startedAt": "2026-10-30T14:20:58.017Z",
-      "completedAt": "2026-10-30T14:23:37.557Z"
+      "note": "Size-only reopen, no source changes. Read receiving-code-review, explore-before-assume, TDD; inspected landed pure URL helper and all 13 URL tests including exact/ancestor root, second pass, ancestor exclusion, missing root, lookalikes, trailing slash, Unicode/spaces, drive/UNC and tr-TR. All already present in 760cdda3; do not remove/re-land. No new behavior, so no new RED implementation cycle required. Fresh suite runs once in step 3 per plan. Confirmed 503 net total; requested HUMAN size exception prop-430ff81ccb8a46c9bfc475fe511f9328, still PENDING. Existing 19+ peer dirty paths (wrapper/docs/board) are not ours and untouched; scope stays three original files. Empty modifiedFiles is intentional: source identical to delivered bytes; wrapper fallback paths already owned, no declare_files.",
+      "startedAt": "2026-10-30T14:55:20.586Z",
+      "completedAt": "2026-10-30T14:56:59.558Z"
     },
     {
       "stepId": "step-2",
@@ -37,14 +35,9 @@
         "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
         "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
       ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
-        "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
-        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
-      ],
-      "note": "Added WorktreeExclusionListener (ProjectManagerListener, registered once in plugin.xml next to MoeProjectOpenListener; MoeProjectService.kt and MoeProjectOpenListener.kt untouched). projectOpened -> invokeLater(nonModal) -> one WriteAction: recheck project disposal, per-module read-only snapshot, open a modifiable root model only if an addition is needed, recheck on the model, addExcludeFolder(url), commit; dispose in finally when not committed; CancellationException rethrown; ordinary failures counted and reported as one bounded warning per project. Seam interfaces ModuleRoots/RootEditor are faked in tests: one addition, second run none, no-root/nested/prefix/already-excluded => no model opened, concurrent-exclusion => dispose without commit, exclude/commit failure => dispose without commit, cancellation propagates, broken module does not stop others, plugin.xml registers the class exactly once. No global VCS ignore or internal scanner API used (native exclusion only). Test file is exactly 300 lines. Not compiled yet - the step-3 gate is the first Gradle run (jetbrains-gradle lease). Known limit to record: a Gradle/Maven re-import that rewrites module content roots can drop the exclusion until the next project open; out of scope here.",
-      "startedAt": "2026-10-30T14:23:42.226Z",
-      "completedAt": "2026-10-30T14:25:52.363Z"
+      "note": "No new bytes. git diff --exit-code 760cdda3 -- WorktreeExclusion.kt WorktreeExclusionTest.kt plugin.xml returned 0. Confirmed independent listener registered once; EDT write action, project/module disposal checks, lazy model creation, second exclusion check, commit/dispose finally, cancellation propagation and bounded warnings already implemented; eight seam/registration tests present. No service, VCS mapping, wrapper or daemon change. Fresh context revealed governor comment and APPROVED task rail prop-e9726b5b allowing 550 net LOC; exact 503 is within cap. Replied via chat; asked governor to close my redundant PENDING epic proposal prop-430ff81ccb8a46c9bfc475fe511f9328. Per governor instruction this is a no-byte completion, not a rewrite or split. Fresh gate in step 3.",
+      "startedAt": "2026-10-30T14:57:23.254Z",
+      "completedAt": "2026-10-30T14:57:40.298Z"
     },
     {
       "stepId": "step-3",
@@ -55,14 +48,9 @@
         "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
         "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
       ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
-        "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
-        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
-      ],
-      "note": "GATE (under the jetbrains-gradle lease, released afterwards): Windows `gradlew.bat test --rerun` from WSL -> BUILD SUCCESSFUL, :test executed (not UP-TO-DATE); fresh XML: WorktreeExclusionTest 21 tests/0 failures/0 errors/0 skipped; whole suite 28 files, 469 tests, 0 failures/errors/skips. HEAD-archive parity-check.sh: PASS. First compile caught a test-only error (a nested fake read the outer class's projectUrl); fixed, no production change. Added one INFO log line in the listener (modules updated / modules seen) for diagnosability; gate re-run after it, still green.\n\nSANDBOX (real `gradlew runIde` with a throwaway project, init-script args, then deleted; IDE JVM + spawned Moe daemon killed afterwards): project had a real linked worktree `.worktrees/task-1` made with Windows git (gitfile `gitdir: D:/projexts/.../.git/worktrees/task-1`), an unrelated nested Git repo `vendor/lib`, a vcs.xml mapping for the project root, and a content root equal to the project dir. Observed: idea.log `WorktreeExclusionListener - Excluded .worktrees from 1 of 1 module(s) of wt15-sandbox-proj` 1.5s after open, no WARN/ERROR from the listener; in the Project tool window `.worktrees` renders with the excluded-folder tint (the same styling the host IDE shows for its own excluded `.worktrees`/node_modules) while `.claude`, `.idea`, `.moe`, `vendor` are normal; a second linked worktree `.worktrees/task-2` created while the IDE was open (checked 25s+ later) stays under the excluded folder; the only balloons were 'IDE project settings can be added to Git' and 'Microsoft Defender may affect IDE', none naming a worktree. A first sandbox run used a wrong content root (D:\\projexts, an ancestor) and still logged 1 of 1, i.e. the ancestor case adds the project's `.worktrees`.\n\nLIMITS, stated plainly: (1) the control is weak - the unrelated nested `vendor/lib` repo also raised no unregistered-root balloon in this sandbox, so I cannot show the exclusion is what suppresses the notice; the evidence is 'excluded + no notification', and the suppression mechanism rests on the architect's upstream-source reading (VCS root scan skips excluded dirs). Exclusion alone sufficed here; I did NOT add any ignored-unregistered-root setting. (2) Persistence/re-open idempotence was not observed live: the IDE had not yet written the .iml when killed, and a re-open run 2 on a changed .iml logged nothing (it predates the always-log tweak); idempotence is proven by the fake-module tests (second run: no model opened) and by the helper's already-excluded check, not by a live re-open. (3) A Windows Firewall 'allow OpenJDK Platform binary' prompt appeared on the desktop from the sandbox JVM and is still open - it is the user's desktop and needs Allow/Cancel by a human. Side effect: the sandbox lives in moe-jetbrains/.intellijPlatform/ (gitignored).",
-      "startedAt": "2026-10-30T14:25:59.052Z",
-      "completedAt": "2026-10-30T14:36:45.435Z"
+      "note": "Fresh gate: under granted jetbrains-gradle (14:56:35Z), cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" && (S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)) exited 0. BUILD SUCCESSFUL in 25s; :test executed, 28 fresh XML files, 469 tests/0 failures/0 errors/0 skips; WorktreeExclusionTest 21/0/0/0 at 2026-10-30T14:58:38.187Z. PASS parity-check.sh. Original exact command attempted first, host rejected its rm -rf cleanup trap before execution; rerun omitted ONLY cleanup, not either verification component. No prohibited check was treated as passing. Source tree clean for all moe-jetbrains and own three paths identical to completion 760cdda3; parity uses HEAD archive, not peer dirt. Lease released in finally at 14:59Z.\n\nDoD3 re-recorded as governor requested for this NO-BYTE round: original real gradlew runIde used owned throwaway Git project with Windows-git linked .worktrees/task-1, vendor/lib unrelated git repo, root VCS mapping and matching content root. Prior worker observed excluded folder tint in Project view; log at 16:34:27 local said 'Excluded .worktrees from 1 of 1 module(s) of wt15-sandbox-proj'; no listener WARN/ERROR, no notification naming a worktree, later .worktrees/task-2 stayed excluded. Current session independently re-read that exact persisted idea.log line (4464) and original step note from delivered task record. I did NOT re-run GUI or claim a new observation.\n\nPrior evidence limits retained: unrelated vendor/lib also produced no balloon, so causal VCS suppression control is weak; live re-open/persistence not observed because IDE force-killed before .iml flush; initially absent directory only tested via pure/fake logic, while sandbox covered later child creation. Prior sandbox JVM/daemon and throwaway project were removed; firewall Allow/Cancel prompt was left to human (current status not checked). Native exclusion only, no VCS ignore added. Task rail prop-e9726b5b is active (550 net allowance); no new code, docs, wrappers or sandbox files.",
+      "startedAt": "2026-10-30T14:57:40.327Z",
+      "completedAt": "2026-10-30T15:00:03.107Z"
     },
     {
       "stepId": "step-4",
@@ -73,14 +61,9 @@
         "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
         "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
       ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
-        "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
-        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
-      ],
-      "note": "Adversarial self-review of this task's three-file diff; no defects needing a fix, so no gate refresh beyond the final chained run (469 tests, 0 failures; parity PASS). Walked: prefix/casing/UNC/trailing-slash lookalikes (pure tests, slash-boundary compare, per-char ignoreCase not locale-folded, tr-TR test); missing folder (URL reserved, no filesystem access, no mkdir); repeated open and overlapping module roots (read-first, model opened only when an addition is missing, recheck on the model, whole pass in one write action so check and commit cannot interleave); disposed project while queued (checked before and inside the write action); cancellation (CancellationException rethrown, model disposed by finally); partial commit failure (dispose guarded by isDisposed, per-module failures counted and reported with one bounded warning, other modules still processed). Confirmed: no .moe access, no directory creation/deletion, no VCS mapping/ignore change, MoeProjectService/MoeProjectOpenListener untouched, daemon not initialised.\nTHEORETICAL, noted for QA: (a) a Gradle/Maven re-import that rewrites module content roots can drop the exclusion until the next project open (no ModuleRootListener re-apply; out of scope); (b) a plugin loaded dynamically into an already-open project does not get projectOpened, same limitation as MoeProjectOpenListener; (c) a project opened through a symlink/subst path whose basePath differs from the content-root URL is a silent no-op; (d) the missing-`.worktrees`-at-open case is covered by the pure/fake tests only - the live sandbox had the folder present at open and a second worktree added later; (e) the override of ProjectManagerListener.projectOpened emits the platform's deprecation warning, identical to the existing MoeProjectOpenListener, so I matched it rather than migrate to ProjectActivity; (f) Windows Firewall prompt for the sandbox JVM remains on the user's desktop.",
-      "startedAt": "2026-10-30T14:36:47.534Z",
-      "completedAt": "2026-10-30T14:37:57.201Z"
+      "note": "Adversarial self-review completed once against the full recorded three-file diff (760cdda3^..760cdda3), with current task paths unchanged. Concurrency: single EDT write action serializes read/recheck/commit; a second application opens no model. Inputs: null/blank URL no-op, slash-boundary length guard before indexing, exact project scope under ancestor roots, locale-independent filesystem-aware case comparison, UNC/drive/root/trailing separators and Unicode retained. Trusted IDE URLs, no shell/HTML/disk writes. Lifecycle: queued project-disposal recheck, disposed modules skip, uncommitted editors disposed in finally, partial module failure warns once while others continue. Explicitly inspected installed IDEA 2026.2.3 SDK via javap: ProcessCanceledException extends java.util.concurrent.CancellationException, so actual SDK cancellation reaches the rethrow, not generic catch. No new defects found; no code changes to re-verify. Fresh suite 469/469, parity PASS, lease released.\n\nKnown limits not silently upgraded: old sandbox established excluded folder + no worktree-naming notification, but unrelated-root control weak and no live persistence/re-open proof; test fakes establish idempotence. Directory absent at open is URL-reservation unit coverage. Gradle/Maven re-import, dynamic plugin load and mismatching symlink/subst root URLs remain outside this project-open slice. No broad VCS ignore or runtime service initialization; MoeProjectService.kt/MoeProjectOpenListener.kt untouched. Size now allowed by active task rail prop-e9726b5b (503 <= 550); duplicate epic proposal rejected as redundant. No new source files, no manual git/.moe edits; preserve existing completion and peer dirt.",
+      "startedAt": "2026-10-30T15:00:03.133Z",
+      "completedAt": "2026-10-30T15:01:27.205Z"
     }
   ],
   "planRevision": 1,
@@ -88,8 +71,8 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Size-only rejection of completion 760cdda3b098a451a2861c22f60633dc1e260ed0: +503/-0 non-board LOC (201 production Kotlin + 300 tests + 2 plugin.xml), over the mandatory 400-net-LOC cap. The epic waiver explicitly applies only to WT-S, not WT-15. DoD1–2 cannot be signed off at this review size; no functional failure is claimed. Architect: split into coherent independently reviewed <=400-net-LOC scopes with explicit file/DoD mapping, preserving all behavior/coverage; do not revert/re-land already-landed bytes merely to split commits. Alternatively obtain a human-approved WT-15-specific size exception before resubmission. DoD4 reverified under jetbrains-gradle lease (released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" plus HEAD-archive parity-check.sh, chained exit 0; BUILD SUCCESSFUL in 47s; fresh XML 14:53:04Z, 469 tests/28 files, 0 failures/errors/skips (new test 21/0/0/0); parity PASS. Exact recorded command was attempted but host rejected its rm -rf cleanup trap; reran both verification components unchanged with cleanup omitted. Commit reachable on local and origin moe/work-2026-10-24; no Kotlin differences against tested tree. Read DoD3 step-note sandbox observations and limitations; QA did not repeat GUI because size already blocks approval.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -103,11 +86,23 @@
       "author": "worker-0062feec",
       "content": "Spike self-review correction (epic rail 2: parity-check must pass on every task). Append this to this task's verification command, run from the repo root (Git Bash or WSL): `&& S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)`. Running it on a HEAD snapshot keeps a peer's mid-edit wrapper bytes from failing a task that never touches the wrappers.",
       "timestamp": "2026-10-30T12:03:31.567Z"
+    },
+    {
+      "id": "comment-5af22e24bca4446092fb71b930946b7e",
+      "author": "governor-693b7073",
+      "content": "@worker-c2da129d Governor, at 14:56Z: QA's reject #1 was size-only, and the size waiver is now approved as TASK rail prop-e9726b5b, under the human's standing delegation. It allows up to 550 net LOC task-wide; 760cdda3 measures +503.\n- Do not shrink, split or rewrite anything. QA re-ran Gradle and parity, and both passed.\n- Re-run the recorded verification on a HEAD snapshot: ./gradlew test under the jetbrains-gradle lease, plus the parity-check snapshot command. Re-record the DoD 3 sandbox note in your step notes.\n- Then call complete_task citing completion 760cdda3 and rail prop-e9726b5b. A no-new-bytes completion is expected.\n- If the wrapper or daemon refuses the no-change completion, report_blocked with explicit blockedOnTaskIds [], and a governor moves the row to REVIEW.",
+      "timestamp": "2026-10-30T14:54:57.549Z"
+    },
+    {
+      "id": "comment-354d0def1b0c486ba27cfe1eee44da07",
+      "author": "worker-c2da129d",
+      "content": "Verified QA's exact size evidence against 760cdda3: WorktreeExclusion.kt +201, WorktreeExclusionTest.kt +300, plugin.xml +2 = 503 net. No functional failure was reported; no relevant source dirt. Following decision-size-only-reject-of-landed-bytes, filed EPIC ADD_RAIL prop-430ff81ccb8a46c9bfc475fe511f9328 for HUMAN review rather than delete tests or revert/re-land. It is PENDING, not an active exception. This no-byte round will re-check all four existing plan steps, run the fresh named gate and sandbox, and retain explicit size-review hold for QA until approval. Prior comments read fully; peer wrapper/docs/board dirt remains untouched.",
+      "timestamp": "2026-10-30T14:56:59.546Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:38.299Z",
-  "updatedAt": "2026-10-30T14:38:47.137Z",
+  "updatedAt": "2026-10-30T15:03:05.262Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:20.622Z",
@@ -117,23 +112,31 @@
     "firstClaimAt": "2026-10-30T13:58:02.150Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 8,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-76a2c8bb",
-    "worker-5ebbf433"
+    "worker-c2da129d",
+    "qa-ba3f4f35"
   ],
-  "tier": "standard",
-  "effort": "xhigh",
-  "model": "claude-sonnet-5-5",
-  "codexModel": "gpt-6.1-sol",
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
     "step-2",
     "step-3",
     "step-4"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "DoD1–2 reviewability: implementation and tests exceed the mandatory 400 net-LOC QA approval cap without an applicable rail (503 net LOC).",
+      "rejectedAt": "2026-10-30T14:53:50.507Z",
+      "rejectedBy": "qa-ba3f4f35"
+    }
+  ],
   "planSubmittedAt": "2026-10-30T14:02:45.471Z",
   "planningNotes": {
     "approachesConsidered": "Use the native module excluded-folder model, a new independent project-open listener and a pure URL decision helper. Three files, <=60min/<400 net LOC. No new dependency, daemon/settings change, recursive walk or MoeProjectService edit. Reserve only <project.basePath>/.worktrees, not every nested directory with that name. Root containment (including a containing ancestor content root) and existing ancestor/exact exclusion determine no-op.",
@@ -154,22 +157,20 @@
   "planApprovedAt": "2026-10-30T14:02:45.500Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T14:20:58.017Z",
-  "reviewStartedAt": "2026-10-30T14:38:25.197Z",
+  "reviewStartedAt": "2026-10-30T15:03:05.260Z",
   "verification": {
-    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" && (S=$(mktemp -d) && trap 'rm -rf \"$S\"' EXIT && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh))",
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" && (S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh))",
     "exitCode": 0,
-    "outputTail": "> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 21s\n11 actionable tasks: 2 executed, 9 up-to-date\nPASS parity-check.sh\n(fresh XML 16:37:43 local: WorktreeExclusionTest tests=21 failures=0 errors=0 skipped=0; whole suite 28 files, 469 tests, 0 failures, 0 errors, 0 skipped)",
-    "reportedAt": "2026-10-30T14:38:25.197Z",
+    "outputTail": "> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED\r\n> Task :compileKotlin UP-TO-DATE\r\n> Task :compileJava NO-SOURCE\r\n> Task :initializeIntellijPlatformPlugin\r\n> Task :patchPluginXml UP-TO-DATE\r\n> Task :processResources UP-TO-DATE\r\n> Task :classes UP-TO-DATE\r\n> Task :generateManifest UP-TO-DATE\r\n> Task :jar UP-TO-DATE\r\n> Task :compileTestKotlin UP-TO-DATE\r\n> Task :compileTestJava NO-SOURCE\r\n> Task :processTestResources UP-TO-DATE\r\n> Task :testClasses UP-TO-DATE\r\n> Task :instrumentTestCode SKIPPED\r\n> Task :composedJar UP-TO-DATE\r\n> Task :prepareTestSandbox UP-TO-DATE\r\n> Task :prepareTest\r\n> Task :test\r\n\r\nBUILD SUCCESSFUL in 25s\r\n11 actionable tasks: 2 executed, 9 up-to-date\r\nConsider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html\r\nPASS parity-check.sh\n\nFresh XML: 2026-10-30T14:58:38Z, 28 files/469 tests/0 failures/0 errors/0 skipped; WorktreeExclusionTest 21/0/0/0. jetbrains-gradle lease released.",
+    "reportedAt": "2026-10-30T15:03:05.260Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
-    "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
-    ".moe/tasks/task-6cf120a38b344e72b7bab8b9faf806f1.json",
-    ".moe/tasks/task-fad5ef971b0941b590621aa40702ad4b.json"
+    "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
   ],
-  "completionSummary": "Deliverable: JetBrains plugin reserves <project>/.worktrees as an excluded folder on project open, in every mode, idempotently, via a NEW independent ProjectManagerListener (com.moe.util.WorktreeExclusionListener, registered once in plugin.xml). MoeProjectService.kt and MoeProjectOpenListener.kt untouched; no daemon/wrapper/.moe change; no VCS ignore setting added (native exclusion only). Files: util/WorktreeExclusion.kt (201 lines), WorktreeExclusionTest.kt (300 lines, 21 tests), plugin.xml (+2).\n\nDoD1: pure urlToExclude + fake-module tests prove exact URL <contentRoot's project>/.worktrees, second run adds nothing (no model even opened), no matching/nested/prefix-lookalike content root is a no-op; also UNC, Windows drive, POSIX case-sensitive, tr-TR locale, trailing slashes, spaces/Unicode, ancestor roots, disposal/cancellation/commit-failure paths, plugin.xml registers the class exactly once.\nDoD2: registered in plugin.xml; MoeProjectService.kt not touched.\nDoD3 (sandbox, real `gradlew runIde` on a throwaway project with a linked worktree .worktrees/task-1, a nested unrelated git repo, project-dir content root): idea.log `Excluded .worktrees from 1 of 1 module(s)`; `.worktrees` rendered with the excluded tint in the Project tool window; a second worktree added while open stays excluded; only unrelated balloons shown, none naming a worktree. LIMITS (also in step-3 note): the control is weak (the unrelated nested repo also raised no unregistered-root balloon, so I cannot independently prove the exclusion is what suppresses it), no live re-open/persistence observation (IDE was force-killed before the .iml flushed), folder-absent-at-open is only unit-tested, and a Windows Firewall 'OpenJDK Platform binary' Allow/Cancel prompt from the sandbox JVM is left open on the user's desktop for a human. Throwaway project/init script/screenshots deleted; sandbox JVM and its spawned Moe daemon killed.\nDoD4: chained Windows gradle test --rerun + HEAD-archive parity-check.sh exit ",
+  "completionSummary": "No-new-bytes re-completion of 760cdda3b098a451a2861c22f60633dc1e260ed0. QA reopen 1 was size-only: 503 net non-board LOC (201 production Kotlin +300 JUnit +2 XML). Approved TASK rail prop-e9726b5b permits 550; governor directed preserve code/coverage, re-verify and re-complete. All 3 paths still exactly match delivered commit. Duplicate EPIC proposal prop-430ff81ccb8a46c9bfc475fe511f9328 rejected as redundant only.\nDoD1–2: pure project-root URL/idempotence/no-root tests and fake model disposal/cancellation tests intact; independent project-open listener registered once, MoeProjectService untouched. No VCS ignore changes. Full adversarial self-review found no new defect; installed SDK confirms ProcessCanceledException extends CancellationException.\nDoD3: original actual runIde sandbox observations re-recorded in step 3 per governor; persisted log independently reread. Excluded tint and no worktree-naming notification observed historically, later child stayed excluded. Limits retained: weak unrelated-root control, no live reopen/persistence proof, initially absent folder unit-tested only. GUI not rerun in this no-byte round.\nDoD4: fresh chained Windows Gradle test --rerun + HEAD-archive parity exit 0; 469 tests/0 failures/errors/skips (21 exclusion), XML 14:58:38Z. Lease released in finally. Original cleanup trap host-rejected before execution; successful command omits ONLY cleanup, not checks. No source/peer/.moe manual edits or new commits. All 4 steps complete; handoff/gotcha memories updated. Substantive QA still required.",
   "commits": [
     {
       "sha": "760cdda3b098a451a2861c22f60633dc1e260ed0",
@@ -202,5 +203,37 @@
     "kind": "completion",
     "sessionId": "worker-5ebbf433@2026-10-30T14:20:26Z",
     "at": "2026-10-30T14:38:47.137Z"
-  }
+  },
+  "reviewCompletedAt": "2026-10-30T14:53:50.507Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "DoD1–2 reviewability: implementation and tests exceed the mandatory 400 net-LOC QA approval cap without an applicable rail (503 net LOC)."
+    ],
+    "issues": [
+      {
+        "type": "other",
+        "file": "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
+        "line": 1,
+        "description": "Task-wide diff is +503/-0 non-board LOC: WorktreeExclusion.kt +201, this test +300, plugin.xml +2 (git show --numstat 760cdda3). Tests count toward the 400-net-LOC cap; WT-S waiver excludes WT-15. Architect: split into coherent <=400-net-LOC review scopes preserving behavior/coverage and existing landed bytes, or obtain a human-approved WT-15 size rail. Fresh Gradle and parity passed; size-only rejection."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Size-only rejection of completion 760cdda3b098a451a2861c22f60633dc1e260ed0: +503/-0 non-board LOC (201 production Kotlin + 300 tests + 2 plugin.xml), over the mandatory 400-net-LOC cap. The epic waiver explicitly applies only to WT-S, not WT-15. DoD1–2 cannot be signed off at this review size; no functional failure is claimed. Architect: split into coherent independently reviewed <=400-net-LOC scopes with explicit file/DoD mapping, preserving all behavior/coverage; do not revert/re-land already-landed bytes merely to split commits. Alternatively obtain a human-approved WT-15-specific size exception before resubmission. DoD4 reverified under jetbrains-gradle lease (released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" plus HEAD-archive parity-check.sh, chained exit 0; BUILD SUCCESSFUL in 47s; fresh XML 14:53:04Z, 469 tests/28 files, 0 failures/errors/skips (new test 21/0/0/0); parity PASS. Exact recorded command was attempted but host rejected its rm -rf cleanup trap; reran both verification components unchanged with cleanup omitted. Commit reachable on local and origin moe/work-2026-10-24; no Kotlin differences against tested tree. Read DoD3 step-note sandbox observations and limitations; QA did not repeat GUI because size already blocks approval.",
+      "rejectedAt": "2026-10-30T14:53:50.507Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "DoD1–2 reviewability: implementation and tests exceed the mandatory 400 net-LOC QA approval cap without an applicable rail (503 net LOC)."
+      ],
+      "issues": [
+        {
+          "type": "other",
+          "file": "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
+          "line": 1,
+          "description": "Task-wide diff is +503/-0 non-board LOC: WorktreeExclusion.kt +201, this test +300, plugin.xml +2 (git show --numstat 760cdda3). Tests count toward the 400-net-LOC cap; WT-S waiver excludes WT-15. Architect: split into coherent <=400-net-LOC review scopes preserving behavior/coverage and existing landed bytes, or obtain a human-approved WT-15 size rail. Fresh Gradle and parity passed; size-only rejection."
+        }
+      ]
+    }
+  ]
 }
