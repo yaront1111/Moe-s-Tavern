@@ -45,34 +45,39 @@
     {
       "stepId": "step-3",
       "description": "Single end-of-task verification gate (DoD 1–3): from the repository root run exactly `cd packages/moe-daemon && npm test`. Expect exit 0 with all daemon suites, including proposeRail.test.ts, passing. This full daemon regression is required by the DoD and the MCP input-schema change even though this is a mid-epic bug fix. Load regression-check and verification-before-completion. Preserve the fresh command, exitCode, and outputTail for complete_task.verification; do not substitute a focused run or an old successful log. If it fails, diagnose and fix task-caused defects within scope; report unrelated failures accurately without modifying peer work or claiming green.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/proposeRail.ts",
         "packages/moe-daemon/src/tools/proposeRail.test.ts",
         "docs/MCP_SERVER.md",
         "docs/SCHEMA.md"
       ],
-      "startedAt": "2026-10-30T13:24:21.780Z"
+      "note": "Resumed already-IN_PROGRESS step (start_step correctly refused PENDING-only transition). Fresh repository-root `cd packages/moe-daemon && npm test` exit 0: 208 files passed, 5953 tests passed, 16 skipped, 183.87s. Log /tmp/moe-b1aecb54-resume-gate.log. Environment only: scrubbed MOE_* vars, exported NODE_PATH=/tmp/moe-8012-final.C3TqDm/repo/packages/moe-daemon/node_modules (normalized lock matches), VITEST_MAX_WORKERS=4. No tests skipped beyond existing platform skips, no timeouts/coverage weakened; shared dependencies/source untouched. Earlier implementation/docs bytes are in f6da2d7f (manual D) plus checkpoint 52a459c3; no source modifications this session. Other sessions' dirty paths preserved.",
+      "startedAt": "2026-10-30T13:24:21.780Z",
+      "completedAt": "2026-10-30T13:49:08.382Z"
     },
     {
       "stepId": "step-4",
       "description": "Final adversarial self-review of this task's own diff, once. Load adversarial-self-review. Check that restoring the old assignee-only expression would fail the explicit-caller tests; removing either fallback would fail a distinct regression; and schema optionality is independently asserted. Review empty/omitted IDs, unassigned tasks, caller IDs not registered locally, unchanged rail rejections and persistence failures. Confirm consecutive/concurrent proposals use their own arguments (no shared mutable identity), existing serialized dispatch/persistence are preserved, and no historical proposal, approval, proxy, UI, or task assignment is rewritten. Check both docs match the expression and there is no line-ending churn or unrelated dirt. If review requires changes, refresh the same verification gate before completion. Complete through Moe with all actual modified paths reported and the fresh gate evidence; leave git staging/committing to the wrapper.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/proposeRail.ts",
         "packages/moe-daemon/src/tools/proposeRail.test.ts",
         "docs/MCP_SERVER.md",
         "docs/SCHEMA.md"
-      ]
+      ],
+      "note": "Adversarial self-review completed once across own f6da2d7f diff and current four paths, with clean scoped diff/check. Old assignee-only expression fails explicit governor/QA/architect/unassigned/verbatim cases; removing assignee fallback fails omitted/empty assigned cases; removing unknown fails null-assignee cases. Independent schema optionality/type/additionalProperties assertions. Existing invalid-task/rail/length rejections unchanged; disk-full test verifies rejection without publication. Per-call params, unique proposal IDs, unchanged serialized McpAdapter dispatch and write-before-publish createProposal avoid shared identity/races; no new handles/retries. Caller attribution is intentionally not authentication; arbitrary nonempty strings remain verbatim with existing schema contract, omitted/empty fallback preserved. No historical record, assignment, approval, proxy or UI rewrites. Both local docs agree. No fixes needed, no new source edits, peer dirt untouched. Fresh required full gate exit0:208 files/5953 pass/16 skip,183.87s; own proposeRail33/33. Earlier source bytes in manual f6da2d7f plus checkpoint52a459c3; wrapper owns landing.",
+      "startedAt": "2026-10-30T13:49:08.403Z",
+      "completedAt": "2026-10-30T13:49:32.912Z"
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor unblock: the real blocker, task-6f3f7fe9 (a peer's RED proposal-replay tests), is DONE. The remaining blockedOnTaskIds entry, cf7f4708, was auto-parsed from an informational \"filed task-…\" mention. It is a Windows-only pwsh fixture failure that doesn't gate this row's Linux full daemon gate. Next claimer: rerun the fresh full daemon gate, then finish step 3/4. Bytes so far are f6da2d7f plus checkpoint 52a459c3.",
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -105,7 +110,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:43:48.172Z",
-  "updatedAt": "2026-10-30T13:33:05.839Z",
+  "updatedAt": "2026-10-30T13:49:40.981Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:47.690Z",
@@ -115,11 +120,12 @@
     "firstClaimAt": "2026-10-30T13:18:51.455Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-76a2c8bb",
-    "worker-55e6716a"
+    "worker-55e6716a",
+    "worker-c2da129d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -127,7 +133,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:22:19.465Z",
@@ -151,14 +159,11 @@
   "planApprovedAt": "2026-10-30T13:22:19.492Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T13:23:13.012Z",
-  "blockedReason": "Implementation/docs complete and own focused regression 33/33 passes. Required fresh root full daemon gate cannot pass while live peer proposal-replay work is red: latest `cd packages/moe-daemon && npm test` (Linux, matching NODE_PATH native bindings, VITEST_MAX_WORKERS=4) exits1 with only12 StateManager proposal-replay failures,5929pass,16skip. These are task-6f3f7fe97a91434c9143e52e57c6f302's concurrently added tests/source, not task-caused; peer files preserved and @worker-262588d0 notified. Prior default Linux run had only CLI timeout contention (focused rerun3/3pass); Windows full run exposed separate missing PowerShell test helper, filed task-cf7f470818b34486b4e74bacc1b92c7a. Need peer landing then fresh full gate and step4 final review. No unrun/failed check represented as passing.",
-  "blockedOnTaskIds": [
-    "task-6f3f7fe97a91434c9143e52e57c6f302",
-    "task-cf7f470818b34486b4e74bacc1b92c7a"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T13:32:06.662Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "52a459c3d7122b8c37848ea2b044e50a8479f523",
@@ -182,12 +187,10 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
-    ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json",
-    ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
-    ".moe/tasks/task-cf7f470818b34486b4e74bacc1b92c7a.json",
-    ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json",
-    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json"
+    "packages/moe-daemon/src/tools/proposeRail.ts",
+    "packages/moe-daemon/src/tools/proposeRail.test.ts",
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -195,5 +198,15 @@
     "kind": "checkpoint",
     "sessionId": "worker-55e6716a@2026-10-30T13:22:20Z",
     "at": "2026-10-30T13:32:29.837Z"
-  }
+  },
+  "priorBlockedReason": "Implementation/docs complete and own focused regression 33/33 passes. Required fresh root full daemon gate cannot pass while live peer proposal-replay work is red: latest `cd packages/moe-daemon && npm test` (Linux, matching NODE_PATH native bindings, VITEST_MAX_WORKERS=4) exits1 with only12 StateManager proposal-replay failures,5929pass,16skip. These are task-6f3f7fe97a91434c9143e52e57c6f302's concurrently added tests/source, not task-caused; peer files preserved and @worker-262588d0 notified. Prior default Linux run had only CLI timeout contention (focused rerun3/3pass); Windows full run exposed separate missing PowerShell test helper, filed task-cf7f470818b34486b4e74bacc1b92c7a. Need peer landing then fresh full gate and step4 final review. No unrun/failed check represented as passing.",
+  "reviewStartedAt": "2026-10-30T13:49:40.979Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh repository-root run /tmp/moe-b1aecb54-resume-gate.log. Environment preparation: unset all MOE_*; export NODE_PATH=/tmp/moe-8012-final.C3TqDm/repo/packages/moe-daemon/node_modules (normalized package-lock matches); export VITEST_MAX_WORKERS=4. Source/tests run from shared project root unchanged. No dependency install, exclusions or timeout changes.\n Test Files  208 passed (208)\n      Tests  5953 passed | 16 skipped (5969)\n   Start at  15:46:01\n   Duration  183.87s (tests 72%, import 23%, worker 3%, transform 2%)",
+    "reportedAt": "2026-10-30T13:49:40.979Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Caller attribution fix, regression coverage and contract docs complete. Optional workerId takes precedence over assignee, then unknown; empty/omitted callers retain legacy behavior. No historical rewrites or approval/proxy/UI changes. Earlier four-path source/docs bytes are in manual commit f6da2d7f5fcf99185ce2b9fdfaefcf5cf50d8433 (D), plus task checkpoint52a459c3; QA must review those, not only completion commit. Resumed verification/review with no new source edits. Fresh full daemon gate:208 files passed,5953 tests passed,16 existing skips; exit0. Adversarial self-review and scoped diff/check clean. Handoff memory saved; shared peer dirt preserved."
 }

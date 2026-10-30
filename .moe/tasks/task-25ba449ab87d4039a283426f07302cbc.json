@@ -13,98 +13,57 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST, then the rule (load test-driven-development). Never run npm test, npm run build or vitest in the shared checkout's packages/moe-proxy: live WSL seats run its dist/ through the global npm link, and its node_modules are Windows builds (mem:gotcha-proxy-npm-test-shared-checkout-deletes-dist). Edit the worktree, and iterate in a /tmp snapshot (recipe in step 5).\n\nContested path: task-724e31fa's plan also names utils.ts, for its getDaemonHost JSDoc only; leave that JSDoc alone.\n- Run moe.get_commit_scope {taskId, phase:'postflight'} and read peerDeclared.\n- A contested path lands only when a wrapper-witnessed editor wrote it (Claude Edit/Write, or Serena's editors), or when it was clean at this session's pre-flight and every contesting task is idle.\n- A seat with no witnessed editor finishes all its edits to such a path in one session.\n- If the session-ended line names held=<path>, follow its MOE_CONTESTED_HELD remedy. Never hand-land the path or weaken the policy.\n\nA. packages/moe-proxy/src/utils.test.ts, in describe('comparableProjectPath'). Reuse onWin32, hoisting it to file scope if the readDaemonInfo row needs it. Keep every existing test unchanged: they are the drive, /mnt and relative-path regressions.\n1. A contract table of [input, key] rows. Assert it with one toEqual natively and once more under onWin32; identical keys on both prove the rule is OS-independent.\n- D:\\proj → d:/proj; d:/Proj/ → d:/proj; D:\\ → d:; D:/../proj → d:/proj\n- /mnt/d/proj → d:/proj; /mnt/D/Proj/ → d:/proj; /mnt/d → d:; /mnt/dd/x → /mnt/dd/x; /MNT/d/x → /MNT/d/x\n- /home/qa/OtherProject → /home/qa/OtherProject; /home/qa/otherproject → /home/qa/otherproject; /home//u/./x/../p/ → /home/u/p; ///x → /x\n- \\\\srv\\share\\proj → //srv/share/proj; //SRV/SHARE/PROJ/ → //srv/share/proj; //srv/share/../../b → //srv/share/b\n- \\\\wsl.localhost\\Ubuntu\\home\\u\\proj → /home/u/proj; //wsl$/Ubuntu/home/u/proj → /home/u/proj; //WSL$/Ubuntu/mnt/d/proj → d:/proj; //wsl$/Ubuntu → /\n- 'D:/qa/\\u212a' → d:/qa/k. This is the documented toLowerCase fold, the same as Kotlin lowercase() and python lower().\n2. DoD 1, under onWin32: /home/u/p and C:\\home\\u\\p get different keys. No cwd drive is added to a POSIX path.\n3. Drive letter and mount are ASCII-only. '\\u212a:/x' is not a drive: its key differs from k:/x. '/mnt/\\u212a/x' keeps the key /mnt/\\u212a/x.\n4. Discovery: write a .moe/daemon.json whose projectPath is testDir.toUpperCase().\n- POSIX testDir: readDaemonInfoResult(testDir) returns the error 'daemon.json belongs to a different project', natively and under onWin32.\n- Drive testDir (native Windows): it returns the info, because drive paths stay case-insensitive.\n- Branch on testDir's form, not on process.platform.\nRun A against HEAD's utils.ts first. Expect assertion failures from the UNC and WSL rows natively on Linux, and from the POSIX-case rows under onWin32.\n\nB. packages/moe-proxy/src/utils.ts: replace comparableProjectPath and normalizeWindowsDrivePath. Port Kotlin DaemonIdentityProbe.comparableProjectPath, classified by the launchers' regex:\n- WINDOWS_FORM = /^(?:[A-Za-z]:[\\\\/]|[\\\\/]{2}[^\\\\/])/: drive or UNC, as in moe-agent.{sh,ps1} and the daemon's isForeignDaemonInfo.\n- WSL_SHARE = /^\\/\\/(?:wsl\\$|wsl\\.localhost)\\/[^/]+(\\/.*)?$/i: no u flag, so ASCII-only.\n- MNT_DRIVE = /^\\/mnt\\/([A-Za-z])(?:\\/(.*))?$/\ncomparableProjectPath(p):\n- raw = p.trim().\n- abs = raw when WINDOWS_FORM matches it or it starts with '/'; otherwise path.resolve(raw).\n- If WINDOWS_FORM does not match abs, return posixKey(abs).\n- Otherwise let s be abs with every \\ turned into /. On a WSL_SHARE match, return posixKey(group 1 ?? '/').\n- Otherwise unc = s.startsWith('//'). Return (unc ? '//' : '') + collapse(s, unc ? 2 : 1), lowercased.\nposixKey(p): key = '/' + collapse(p, 0). On a MNT_DRIVE match, return `${letter}:${rest ? '/' + rest : ''}` lowercased; otherwise return the key with its case kept.\ncollapse(p, keep): split on '/' and drop '' and '.' segments. '..' pops only while more than keep segments remain (the drive, or the UNC server and share). Join with '/'.\nThe absolute route has no process.platform branch and no path.win32 or path.posix normalize. Only a relative input reaches path.resolve, which keeps native cwd semantics and the X9 and cwd-spy rows.\nError handling: the rule stays a total, pure string function. It does no IO and never throws for any string input; path.resolve sees only relative input. readDaemonInfoResult keeps its existing error results and messages unchanged.\nThe doc comment IS the contract, at most about 22 lines. It must state:\n- who follows it: the daemon twin, JetBrains DaemonIdentityProbe and the launchers;\n- the three forms and their separators;\n- the '..' floor;\n- case: drive and UNC fold with toLowerCase (locale-independent, full Unicode; it over-folds U+212A and U+212B, which NTFS keeps apart, a fail-open 'same'), and POSIX keeps case;\n- the drive letter and mount are ASCII-only, and the distro is not compared;\n- a relative input is resolved first;\n- the launchers still read a WSL share as plain UNC until task-3def0804.\nRun `npx tsc --noEmit -p .` in the snapshot, because tsc compiles the tests too.\nBudget: utils.ts at most +25 net, utils.test.ts at most +55 net.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-proxy/src/utils.ts",
         "packages/moe-proxy/src/utils.test.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-proxy/src/utils.ts",
-        "packages/moe-proxy/src/utils.test.ts"
-      ],
-      "note": "Tests first, in /tmp/moe-25ba-dev.lJf6eS: a HEAD snapshot with the proxy and daemon node_modules hardlinked from /tmp/e7f4-proxy.ZKUBah, whose locks match HEAD. Never run in the shared checkout.\n- New tests in describe('comparableProjectPath'):\n  - a 21-row CONTRACT table, asserted natively and under onWin32;\n  - win32 adds no cwd drive to a POSIX path;\n  - drive letter and /mnt are ASCII-only (Kelvin sign);\n  - discovery: an uppercased POSIX daemon.json is a different project natively and under onWin32, and a drive testDir is the same project.\n- I did not hoist onWin32. The discovery row uses its own mkdtemp, so every existing test and helper stays byte-identical.\n- RED on HEAD utils.ts: all 4 new tests fail by assertion (UNC/WSL rows natively; POSIX case, cwd drive and /mnt/K under onWin32; discovery returned info under onWin32).\n- GREEN: utils.test.ts 101/101. `npx tsc --noEmit -p .` is clean.\n- utils.ts: WINDOWS_FORM, WSL_SHARE and MNT_DRIVE regexes, plus the posixKey and collapse helpers; normalizeWindowsDrivePath is removed. A 17-line contract doc comment names the twin, JetBrains, the launchers and task-3def0804.\n- Size: utils.ts +40/-32 (net +8, budget 25); utils.test.ts +48/-0 (budget 55).\n- get_commit_scope postflight: no peer declares any of the six owned paths. Edits were made with Claude Edit. The getDaemonHost JSDoc is untouched.",
-      "startedAt": "2026-10-30T13:28:31.232Z",
-      "completedAt": "2026-10-30T13:30:41.061Z"
+      ]
     },
     {
       "stepId": "step-2",
       "description": "Daemon twin, same algorithm.\n\npackages/moe-daemon/src/index.ts:\n- Replace comparableProjectPath with step 1's algorithm: the same regexes and logic. Local formatting may stay compact.\n- Delete normalizeWindowsDrivePath.\n- Add comparableProjectPath to the export list; step 4 imports it from dist.\n- Replace its doc comment with a pointer of at most 5 lines:\n  - the key is comparison-only and never written;\n  - the contract is documented on moe-proxy's comparableProjectPath (packages/moe-proxy/src/utils.ts);\n  - keep the two equivalent, because scripts/tests/daemon-json-cap.test.mjs checks both dists against one table.\n- Do not touch isForeignDaemonInfo, staleLockReason, probeDaemonHealth, validateDaemonInfoForProject or any deleter. Their error handling and foreign guards stay exactly as they are.\n\npackages/moe-daemon/src/index.test.ts, in 'daemon.json across the WSL boundary':\n- X1, new equal pairs:\n  - \\\\srv\\share\\proj and //SRV/SHARE/PROJ/;\n  - \\\\wsl.localhost\\Ubuntu\\home\\u\\proj and /home/u/proj;\n  - //wsl$/Ubuntu/mnt/d/proj and D:\\proj.\n- X1, new unequal pairs:\n  - /home/qa/OtherProject and /home/qa/otherproject;\n  - /home/u/p and C:\\home\\u\\p;\n  - //srv/share/p and /srv/share/p.\n- X1: drop the win32 guard so the /tmp/A vs /tmp/a check runs everywhere. On native Windows it fails on HEAD and passes after.\n- X10, using its onWin32 helper:\n  - /home/qa/OtherProject vs /home/qa/otherproject gives [false, false];\n  - \\\\srv\\share\\proj vs //SRV/SHARE/PROJ/ gives [true, true];\n  - \\\\wsl.localhost\\Ubuntu\\home\\u\\proj vs /home/u/proj gives [true, true].\n- X9, X11 and every other test stay byte-identical. They are the relative and non-normalized WSL --project regressions (mem:gotcha-comparable-project-path-relative, mem:gotcha-daemon-lifecycle-wsl-foreign).\n- Never call existingDaemonBlocksStart, stopDaemon or statusDaemon with a relative path under a cwd spy, and never against the live .moe.\n\nBudget: index.ts at most +10 net, index.test.ts at most +25 net.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts",
         "packages/moe-daemon/src/index.test.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/index.ts",
-        "packages/moe-daemon/src/index.test.ts",
-        "packages/moe-proxy/src/utils.ts"
-      ],
-      "note": "Daemon twin. comparableProjectPath now uses the same WINDOWS_FORM, WSL_SHARE and MNT_DRIVE regexes and the same posixKey and collapse helpers as the proxy, so the two bodies are textually identical. A diff of the extracted blocks differs only in the proxy's `export` keyword.\n- Removed: normalizeWindowsDrivePath.\n- Doc comment: a 3-line pointer to the proxy contract and the daemon-json-cap check.\n- comparableProjectPath is added to the export list.\n- Unchanged: isForeignDaemonInfo, staleLockReason, probeDaemonHealth, validateDaemonInfoForProject and every deleter.\n- I also tightened collapse in both twins, filtering ''/'.' before the loop with the same behavior, to fit the +10 budget. utils.ts is therefore re-listed.\n\nTests (index.test.ts):\n- X1 gains 3 equal pairs (UNC, WSL-share, WSL-share /mnt) and 3 unequal pairs (POSIX case, POSIX vs C:, //x vs /x). The win32 guard on /tmp/A vs /tmp/a is dropped.\n- X10 gains 3 onWin32 rows.\n- X9, X11 and every other test are byte-identical.\n\nResults:\n- RED on HEAD's index.ts: X1 fails on the UNC row; X10 fails on POSIX case under win32 ([true,true]).\n- GREEN in /tmp/moe-25ba-dev.lJf6eS: npm run build exits 0; vitest on index.test.ts, healthHost.test.ts and bindHosts.test.ts gives 3 files, 108/108; proxy utils.test.ts is still 101/101, and proxy tsc --noEmit is clean.\n- Size: index.ts +29/-19 (net +10, at the budget); index.test.ts +10/-1 (net +9, budget 25).",
-      "startedAt": "2026-10-30T13:30:44.051Z",
-      "completedAt": "2026-10-30T13:31:59.698Z"
+      ]
     },
     {
       "stepId": "step-3",
       "description": "Proxy identity suite (DoD 3).\n\nIn packages/moe-proxy/src/daemonIdentity.test.ts, describe('probeDaemonIdentity'), add one it.each of [served, own, kind] rows. Each row runs against the real fake server, listen(healthy(served)).\n- served /home/qa/OtherProject, own /home/qa/otherproject: foreign. This is DoD 1 on a real Windows client: it fails on HEAD under native Windows.\n- served //SRV/SHARE/PROJ/, own \\\\srv\\share\\proj: same. It fails on HEAD on Linux.\n- served /home/u/proj, own \\\\wsl.localhost\\Ubuntu\\home\\u\\proj: same.\n- served \\\\wsl$\\Ubuntu\\home\\u\\proj, own /home/u/proj: same.\n- served /home/u/proj, own C:\\home\\u\\proj: foreign.\n\nA foreign row expects { kind: 'foreign', projectPath: served }, with the served path verbatim; every other row expects { kind: 'same' }.\n\nAdd no platform guard: every row runs natively on Linux and on Windows. Leave every existing row unchanged, including the drive and /mnt rows of 'classifies the spelling %s of /mnt/d/proj as same'.\n\nBudget: at most +15 net.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-proxy/src/daemonIdentity.test.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-proxy/src/daemonIdentity.test.ts"
-      ],
-      "note": "Added to describe('probeDaemonIdentity'): one it.each of 5 [served, own, kind] rows against the real fake /health server, listen(healthy(served)). No platform guard.\n- POSIX case: foreign.\n- UNC spellings: same.\n- WSL share, both directions: same.\n- POSIX vs C:\\home: foreign.\nA foreign row expects { kind: 'foreign', projectPath: served } verbatim. Existing rows are unchanged.\n\nResults:\n- RED on HEAD utils.ts, Linux snapshot: the 3 UNC/WSL rows fail. The POSIX-case row fails on HEAD only on native Windows; step 5 checks it there.\n- GREEN with the new rule: 5/5.\n- Size: +14/-0 (budget 15).",
-      "startedAt": "2026-10-30T13:32:02.874Z",
-      "completedAt": "2026-10-30T13:32:30.136Z"
+      ]
     },
     {
       "stepId": "step-4",
       "description": "Cross-implementation contract (DoD 2 and 3).\n\nIn scripts/tests/daemon-json-cap.test.mjs, add a 'path contract:' block before the CI meta-test. Reuse between(), SEGMENTS, ENGINES, PYTHON, psq and spawnAsync, and leave every existing test byte-identical. Follow-up task-3def0804 will also name this file once it is planned; step 1's contested-path rule applies.\n\nTables:\n- CONTRACT: the 15 ASCII non-WSL rows of step 1. Leave out ///x and the Unicode rows.\n- WSL_SHARES: step 1's 4 WSL-share rows.\n- A one-line comment names moe-proxy comparableProjectPath as the contract's home.\n\nEngines. Each one maps the input list to keys in ONE child process.\na. moe-proxy dist: comparableProjectPath from packages/moe-proxy/dist/utils.js.\nb. moe-daemon dist: comparableProjectPath from packages/moe-daemon/dist/index.js, step 2's export.\n   For a and b:\n   - spawnSync process.execPath with ['--input-type=module', '-e', code];\n   - the code reads the JSON list with readFileSync(0), awaits import(<file URL>), prints JSON and calls process.exit(0);\n   - a child process keeps the daemon's module graph from holding the test process open;\n   - a missing dist must FAIL with 'build packages/moe-proxy and packages/moe-daemon first' and never skip. CI's build-all-platforms job builds both before this step.\nc. sh launcher rule: PYTHON -c running the source between 'WINDOWS = re.compile(' and '\\ntry:' in SEGMENTS.sh.probe(). Add a driver that prints json.dumps([comparable(p) for p in json.load(sys.stdin)]).\nd. ps1 launcher rule, for each ENGINES entry with ext ps1, honoring its skip:\n   - write a BOM-prefixed temp .ps1 with $ErrorActionPreference='Stop', the text between '\\nfunction Get-MoeComparableProjectPath(' and '\\n# Which project the daemon on 127.0.0.1' in ps, and a foreach that prints one key per line for the psq-quoted rows;\n   - run it with -NoProfile -NonInteractive -ExecutionPolicy Bypass -File;\n   - strip \\r from the output;\n   - remove the temp dir in finally.\n\nError handling: a child that fails to spawn, exits non-zero, or prints output that does not parse or has the wrong row count fails its test, with the child's exit status and stderr in the assertion message. Temp dirs are removed in finally. No engine is skipped except through the existing ENGINES skip reasons.\n\nTests:\n1. 'path contract: moe-proxy and moe-daemon give every row its contract key'. deepEqual over CONTRACT plus WSL_SHARES, for engine a and for engine b.\n2. 'path contract: moe-proxy matches every absolute row of the JetBrains table'.\n   - Parse the \"<in>\" to \"<out>\" pairs in moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt, between 'fun `comparableProjectPath folds Windows, WSL and UNC spellings`()' and 'for ((input, expected) in rows)'.\n   - Unescape with s.replace(/\\\\(.)/g, '$1').\n   - Keep the rows whose trimmed input matches /^(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\/]|\\/)/, and assert at least 20 rows.\n   - deepEqual engine a's keys with the Kotlin keys.\n3. For each launcher engine (c, and each available d), two tests:\n   - one asserts the CONTRACT keys exactly;\n   - one asserts the contract keys for WSL_SHARES, with { todo: 'launchers still read a WSL share as plain UNC: task-3def080415d3495a8557b514d6a0ab2a' }.\n\nDo not edit .github/workflows/ci.yml: this file's own CI meta-test already makes it run on Linux and Windows.\n\nChecked by the architect on 2026-10-30:\n- python3 and PS5.1 give the CONTRACT keys for all 15 rows and differ only on the 4 WSL rows;\n- the step-1 rule matches all 25 absolute Kotlin rows.\n\nBudget: at most +110 net.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "scripts/tests/daemon-json-cap.test.mjs"
-      ],
-      "modifiedFiles": [
-        "scripts/tests/daemon-json-cap.test.mjs"
-      ],
-      "note": "Added a 'path contract:' block to scripts/tests/daemon-json-cap.test.mjs, before the CI meta-test. Existing tests are byte-identical.\n\nTables:\n- CONTRACT: 15 ASCII non-WSL rows.\n- WSL_SHARES: 4 rows.\n- A one-line comment names moe-proxy comparableProjectPath as the contract's home.\n\nHelpers:\n- childKeys runs ONE spawnSync child with ENV and the JSON input list on stdin. A spawn error, non-zero exit, unparseable output or wrong row count fails the test, with the exe, exit status, error and stderr in the message.\n  - I used spawnSync instead of spawnAsync because the children need stdin and no /health server is involved.\n- distKeys runs process.execPath --input-type=module -e and imports the dist by file URL.\n  - Output goes through writeSync(1) and process.exit(0), so a Windows async pipe cannot truncate it.\n  - A missing dist FAILS with '<rel> is missing: build packages/moe-proxy and packages/moe-daemon first'. I checked this by moving the daemon dist aside.\n- pythonKeys runs PYTHON -c with the real sh probe text from 'WINDOWS = re.compile(' up to '\\ntry:'.\n- powershellKeys writes a BOM'd temp .ps1 with the real Get-MoeComparableProjectPath text and the psq-quoted rows, runs it with -File, strips \\r, and removes the dir in finally.\n\nTests:\n1. proxy and daemon dists match CONTRACT plus WSL_SHARES.\n2. The proxy dist matches the Kotlin table's absolute rows: 25 parsed, at least 20 asserted.\n3. Per launcher rule (sh/python and each ps1 ENGINE, honouring its skip): the CONTRACT keys exactly, plus the WSL_SHARES rows as todo naming task-3def080415d3495a8557b514d6a0ab2a.\n\nResults in the Linux snapshot:\n- RED with HEAD's proxy dist: tests 1 and 2 fail by deepEqual (UNC key '/tmp/…/\\\\\\\\srv\\\\share\\\\proj').\n- GREEN: 3 pass, 0 fail, 1 todo (python WSL), 4 skipped (PS5.1 and pwsh are not on Linux).\n- Importing the daemon dist created no files.\n- Size: +80/-0 (budget 110).\n- The PS engines run natively on Windows in step 5.",
-      "startedAt": "2026-10-30T13:32:33.857Z",
-      "completedAt": "2026-10-30T13:35:01.305Z"
+      ]
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE (load verification-before-completion). Never build or test in the shared checkout.\n\n1. Linux snapshot.\n- SNAP=$(mktemp -d /tmp/moe-25ba-gate.XXXXXX)\n- git archive HEAD packages/moe-daemon packages/moe-proxy scripts docs .github moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt CLAUDE.md .gitignore package.json | tar -x -C $SNAP\n- Copy the six task files over the archive, and cmp each one against the worktree.\n- Daemon node_modules, per mem:gotcha-linux-vitest-reuse-native-node-modules: cp -al a /tmp tree whose lock matches HEAD; if none is left, npm ci.\n- Proxy node_modules: npm ci, plus the rolldown Linux-binding fix in mem:gotcha-gate-snapshot-psparse-and-proxy-rolldown.\n- Run with every MOE_* variable unset (mem:gotcha-gate-hermetic-snapshot-from-wsl).\n\n2. GATE. Run from $SNAP, fresh. It must exit 0; this is complete_task's verification:\n(cd packages/moe-proxy && npm test) && (cd packages/moe-daemon && npm run build && npx vitest run src/index.test.ts src/server/healthHost.test.ts src/server/bindHosts.test.ts) && node --test scripts/tests/daemon-json-cap.test.mjs\nExpect 0 failures. The python WSL path-contract rows report as todo.\n\n3. Native Windows (DoD 3), per mem:pattern-qa-windows-native-vitest-from-wsl and mem:gotcha-node-test-windows-path-glob.\n- W=$(mktemp -d /mnt/c/Users/Yaron/AppData/Local/Temp/moe-25ba-win.XXXXXX)\n- Copy $SNAP into it without node_modules.\n- robocopy D:\\projexts\\moes\\packages\\moe-daemon\\node_modules and D:\\projexts\\moes\\packages\\moe-proxy\\node_modules into it, with /E /XD .vite; any rc of 7 or less is success.\n- Check node_modules/vitest/package.json against HEAD's locks.\n- Run the same three legs with Windows node:\n  - cmd.exe /c \"cd /d <W>\\packages\\moe-proxy && npm test\"\n  - cmd.exe /c \"cd /d <W>\\packages\\moe-daemon && npm run build && npx vitest run src/index.test.ts src/server/healthHost.test.ts src/server/bindHosts.test.ts\"\n  - from cd $W: \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/daemon-json-cap.test.mjs\n- The PS5.1 and PS7 path-contract tests must run, not skip.\n- A failure is acceptable only when an unmodified HEAD Windows snapshot fails the same test the same way. Name it, with both logs.\n- A run without a test-count summary line did not run.\n- Afterwards, rm -rf $W, guarded by its prefix.\n\n4. Mutant check. In a scratch copy of $SNAP, restore HEAD's comparableProjectPath bodies in utils.ts and index.ts, keeping the daemon export. Rerun utils.test.ts, daemonIdentity.test.ts and index.test.ts on Linux. The new contract, onWin32 POSIX-case, UNC and WSL rows must fail by assertion.\n\n5. Size and ownership. git diff --numstat over the six owned paths must total at most 330 net non-board LOC, because the 400 review cap counts tests (mem:gotcha-proxy-identity-review-size). Every other dirty path belongs to a peer or was already there: name them and leave them untouched.\n\nPut the Linux and Windows pass/skip/todo counts and the log paths in the step note.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "note": "VERIFY ONCE. Nothing was built or tested in the shared checkout.\n\n1. Linux snapshot /tmp/moe-25ba-gate.LqR4pK\n- git archive of HEAD 52a459c3. Since my edits began, HEAD moved only by peer launcher comment/grouping hunks; none of the six owned paths changed.\n- Overlaid the six task files. cmp: all same, rechecked after the runs.\n- node_modules: cp -al from /tmp/e7f4-proxy.ZKUBah for both packages. Each lock matched HEAD after CR stripping, and the proxy tree already had @rolldown/binding-linux-x64-gnu, so npm ci and the rolldown fix were not needed.\n- Every MOE_* variable was unset.\n\n2. GATE, run fresh from the snapshot: EXIT 0. Log: /tmp/moe-25ba-gate-linux.log.\n- Proxy npm test: 6 files, 272/272.\n- Daemon npm run build, then vitest on index, healthHost and bindHosts: 3 files, 108/108.\n- node --test daemon-json-cap: 63 tests, 16 pass, 0 fail, 46 skipped (the PS5.1/pwsh engines are not on Linux), 1 todo (the python WSL rows).\n\n3. Native Windows, Windows node v24, in C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-25ba-win.JGbx36 (since removed)\n- node_modules were robocopied from D: (rc 1 for both). The shared locks equal HEAD, and vitest is 5.0.5, matching the lock.\n- Proxy npm test: rc 0, 6 files, 271 passed, 1 skipped (the existing skipIf(win32) cwd-spy test). Log: /tmp/moe-25ba-win-proxy.log.\n- Daemon build plus the 3 files: rc 0, 89 passed, 19 skipped. index.test.ts skips only the existing win32 guards (X9, X11, /dev/zero); X1, now unguarded, and the X10 rows pass. Log: /tmp/moe-25ba-win-daemon.log.\n- node.exe --test daemon-json-cap: rc 0, 63 tests, 57 pass, 0 fail, 3 todo (WSL rows for python, PS5.1 and PS7), 3 skipped (the existing Git Bash 'Windows-owned daemon.json' skips). The PS5.1 and PS7 path-contract tests RAN and passed. Log: /tmp/moe-25ba-win-cap.log.\n\n4. Mutant: HEAD's comparableProjectPath bodies in utils.ts and index.ts, keeping the daemon export, on Linux.\n- Proxy: 7 failed out of 181.\n- Daemon: 2 failed out of 31 (X1 and X10).\n- All 9 fail by AssertionError: the contract rows, onWin32 POSIX case and cwd drive, /mnt/K under win32, discovery, the 3 UNC/WSL identity rows, X1 UNC and X10 POSIX case. The mutant dir is removed.\n\n5. Size: +220/-52, net 168 over the six owned paths (cap 330).\nOther dirty paths belong to peers and are untouched: docs/ARCHITECTURE.md; moe-vscode/src/services/MoeDaemonClient.ts; moe-vscode/src/util/AgentLauncher.ts; packages/moe-daemon/src/server/WebSocketServer.test.ts; packages/moe-daemon/src/state/StateManager{,.test}.ts; the untracked moe-vscode/tests/protected-runtime.test.cjs and scripts/mods/*/tsconfig.json; plus the .moe/ board and role files.",
-      "startedAt": "2026-10-30T13:35:04.924Z",
-      "completedAt": "2026-10-30T13:38:42.796Z"
+      "status": "PENDING",
+      "affectedFiles": []
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, over this task's diff (load adversarial-self-review).\n\nDestructive direction first. Can the new rule call a LIVE same-project daemon.json or daemon.lock a 'projectPath mismatch' where HEAD said same? Walk staleLockReason, validateDaemonInfoForProject, probeDaemonHealth and every deleter with:\n- a relative --project ('.', 'sub/..') under a /mnt cwd (X9, X11);\n- a Windows drive cwd, and a UNC cwd;\n- drive-letter case and trailing separators;\n- a file written by the other side.\nEvery changed verdict must be one of: POSIX case on win32, POSIX vs cwd drive on win32, a UNC spelling, a WSL share, or //x vs /x. Each must be either the intended fix or guarded by isForeignDaemonInfo.\n\nFail-open. List what now compares same that did not before. Two WSL distros that both have /home/u/p are the accepted exception, as in JetBrains. Can the proxy bridge to another project's daemon in any realistic layout?\n\nEdge inputs: '', whitespace, '/', 'D:', 'D:x', '\\x', '\\\\', '\\\\?\\D:\\x', a 64 KiB served path, U+00AD segments (JS compares code units, unlike PowerShell -eq), runs of '..', mixed separators.\n\nStructure:\n- No platform branch is left on the absolute route.\n- The proxy and daemon algorithms are equivalent; step 4 proves both dists on one table.\n- The comments name the contract's home and task-3def0804.\n\nRails:\n- error handling: the rule never throws, and every child-process failure in the contract tests surfaces as a test failure;\n- regression tests are present;\n- no MCP contract change;\n- existing daemon.json and lock files still parse;\n- no forbidden pattern;\n- the diff is at most 330 net.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "modifiedFiles": [
-        "packages/moe-proxy/src/utils.ts",
-        "packages/moe-proxy/src/utils.test.ts",
-        "packages/moe-proxy/src/daemonIdentity.test.ts",
-        "packages/moe-daemon/src/index.ts",
-        "packages/moe-daemon/src/index.test.ts",
-        "scripts/tests/daemon-json-cap.test.mjs"
-      ],
-      "note": "Adversarial self-review, once, over the six owned paths. No code changes were needed. modifiedFiles re-lists the task's paths for attribution.\n\nDestructive direction:\n- The writers: the lock records canonicalProjectPath = path.resolve(--project), and daemon.json records the raw --project.\n- Unchanged verdicts:\n  - a relative --project ('.', 'sub/..') under a /mnt, drive or UNC cwd: still resolved first, so it matches the lock (X9/X11 pass);\n  - drive case and trailing separators;\n  - a file written by the other side: an isForeignDaemonInfo guard fires first, judging by /health, never deleting.\n  - validateDaemonInfoForProject still sets foreign:true on a mismatch, so no daemon.json is deleted.\n- Changed verdicts appear only in the planned classes:\n  - POSIX on win32: case, and the cwd drive;\n  - UNC spellings;\n  - WSL shares;\n  - //x vs /x.\n- One narrow destructive edge, which is the flip side of that intent:\n  - On Linux, a raw `--project //x` vs the lock's resolved '/x'; on native Windows, a raw `/x` vs 'C:\\x'. staleLockReason now says 'projectPath mismatch'.\n  - It is reachable only in a start race before daemon.json exists. A daemon.json with those raw spellings is already foreign under HEAD's isForeignDaemonInfo.\n  - staleLockReason is out of scope (the plan forbids touching it), so I filed LOW bug task-c83d78475cf443688b571d4d508fde8e (dependsOn this task), suggesting it compare against canonicalProjectPath.\n\nFail-open (now same, previously different):\n- UNC spellings on Linux;\n- \\\\wsl$ / \\\\wsl.localhost <distro> paths ≡ POSIX /x, including /mnt/<d> ≡ <D>:;\n- two distros with the same /home path: the accepted exception, as in JetBrains.\n- No other realistic bridge to a foreign daemon.\n\nEdge probe (/tmp/moe-25ba-edge.mjs) over 30 inputs, through both gated dists on Linux and the twin excerpt under Windows node. Inputs included '', whitespace, '/', '//', 'D:', 'D:x', '\\x', '\\\\', '\\\\?\\D:\\x', '\\\\.\\pipe\\x', runs of '..', mixed separators, U+00AD and a 64 KiB path.\n- 0 throws and 0 twin mismatches on both OSes.\n- The regexes are anchored and linear.\n- U+00AD segments stay distinct: code-unit compare, fail-closed.\n\nStructure:\n- 0 process.platform references in either rule body.\n- The twins are textually identical except for `export`.\n- utils.ts names the twin, JetBrains, the launchers and task-3def0804. The daemon pointer names the proxy contract and daemon-json-cap. The test todo names task-3def080415d3495a8557b514d6a0ab2a.\n\nRails:\n- No forbidden patterns.\n- isForeignDaemonInfo, staleLockReason, probeDaemonHealth, validateDaemonInfoForProject and the deleters are untouched.\n- No MCP, daemon.json or lock shape change.\n- Child-process failures fail tests; verified with a missing dist.\n- Net 168 LOC (cap 330).",
-      "startedAt": "2026-10-30T13:38:46.702Z",
-      "completedAt": "2026-10-30T13:41:23.827Z"
+      "status": "PENDING",
+      "affectedFiles": []
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Reject completion 86a5dca9a3f7327f630104756ad17dd962ad2750, tree9593421af5401c04f85764b370dc800deeb78e3f, contained on moe/work-2026-10-24. Six owned files +220/-52=net168 LOC. Exact task.verification rerun in /tmp/moe-qa25ba.txGbOF with MOE_* unset: proxy272pass, daemon108pass, cap16pass/46skip/1authorized WSL todo, exit0 (/tmp/qa25ba-linux.log). Native-Windows equivalents exit0: proxy271pass/1skip, daemon89pass/19skip, cap57pass/3skip/3authorized WSL todos; PS5.1/PS7 checks ran (/tmp/qa25ba-win-{proxy,daemon,cap}.log). However targeted runtime checks prove NEW live-state deletion and duplicate-writer admission on BOTH OSes; parent 86a5dca9^ preserves metadata/refuses contention. This violates lifecycle safety and existing-state compatibility despite passing helper tables. Dependent LOW task-c83d78475cf443688b571d4d508fde8e is not an authorized deferral and its race-only diagnosis is incomplete. Repros: node /tmp/qa25ba-live-daemon.mjs <snapshot>/packages/moe-daemon/dist/index.js; node /tmp/qa25ba-lock-race.mjs <snapshot>/packages/moe-daemon/dist/index.js. Parent snapshot=/tmp/moe-qa25ba-parent.NWLGiq. Logs=/tmp/qa25ba-live-{candidate,parent}.log, /tmp/qa25ba-race-{candidate,parent}.log and corresponding qa25ba-win-* logs. All use fresh temp projects; no shared source or live state changed. Request narrow architect scope amendment/replan for lifecycle consumers currently excluded by the plan; do not weaken the required cross-OS comparison contract.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -119,7 +78,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:27:29.451Z",
-  "updatedAt": "2026-10-30T13:42:46.186Z",
+  "updatedAt": "2026-10-30T13:49:44.718Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:46.958Z",
@@ -129,28 +88,31 @@
     "firstClaimAt": "2026-10-30T12:55:56.361Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
-  "contextFetchedBy": [
-    "architect-bd1eb82d",
-    "worker-5ebbf433"
-  ],
+  "contextFetchedBy": [],
   "tier": "heavy",
-  "effort": "xhigh",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [
-    "step-1",
-    "step-2",
-    "step-3",
-    "step-4",
-    "step-5",
-    "step-6"
+  "stepsCompleted": [],
+  "failedDodItems": [
+    {
+      "item": "Proxy/daemon identity and discovery suites cover the corrected comparison on Linux and native Windows without regressing drive-/mnt spellings.",
+      "rejectedAt": "2026-10-30T13:49:44.718Z",
+      "rejectedBy": "qa-ba3f4f35"
+    },
+    {
+      "item": "Epic rail: Fixes must be backward-compatible with existing .moe/ state files",
+      "rejectedAt": "2026-10-30T13:49:44.718Z",
+      "rejectedBy": "qa-ba3f4f35"
+    }
   ],
-  "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:26:05.078Z",
   "executionContract": {
     "intendedBehavior": "moe-proxy comparableProjectPath (packages/moe-proxy/src/utils.ts) and its daemon twin (packages/moe-daemon/src/index.ts) give every absolute project path a key that does not depend on the OS computing it.\n- Drive and UNC forms: \\ and / both separate, '..' never climbs past the drive or the UNC server and share, and case folds with toLowerCase.\n- \\\\wsl$\\<distro>\\x and \\\\wsl.localhost\\<distro>\\x name that distro's POSIX /x.\n- Any other path starting with / is POSIX: it keeps its case and maps /mnt/<d>[/x] to <d>:[/x].\n- Only a relative path is first resolved natively against cwd.\nTests prove this natively, under win32 emulation and on native Windows. They also check the proxy, daemon, sh and ps1 launcher, and JetBrains rules against one table.",
@@ -234,7 +196,118 @@
     "packages/moe-daemon/src/index.ts",
     "packages/moe-daemon/src/index.test.ts",
     "packages/moe-proxy/src/daemonIdentity.test.ts",
+    "scripts/tests/daemon-json-cap.test.mjs",
+    ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
+    ".moe/tasks/task-2c3e6170c6b7406f8136625781d327c6.json",
+    ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
+    ".moe/tasks/task-b294377dde9e4ab6b1d422163b941115.json",
+    ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json",
+    ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+    ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json",
+    ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json"
+  ],
+  "completionSummary": "One cross-platform comparableProjectPath contract. Every absolute path gets an OS-independent key; only a relative input goes through path.resolve.\n- Proxy (utils.ts): WINDOWS_FORM (the launchers' regex), Kotlin's WSL_SHARE, MNT_DRIVE, plus posixKey and collapse.\n  - Drive and UNC forms: \\ and / both separate, '..' stops at the drive or the server and share, toLowerCase.\n  - \\\\wsl$|wsl.localhost\\<distro>\\x maps to POSIX /x.\n  - Any other leading / is POSIX: case kept, /mnt/<d> maps to <d>:.\n  - The doc comment states the contract and names task-3def0804.\n- Daemon twin (index.ts): textually identical, exported. normalizeWindowsDrivePath is removed from both.\n- Unchanged: isForeignDaemonInfo, the deleters, and every MCP, daemon.json and lock shape.\n\nDoD:\n1. On Linux, under onWin32 and on native Windows, /home/qa/OtherProject and /home/qa/otherproject get distinct keys, and /home/u/p differs from C:\\home\\u\\p.\n2. UNC and WSL-share rules are explicit. The proxy and daemon dists match a 19-row contract plus the 25 absolute JetBrains rows. The sh and ps1 rules (python, PS5.1, PS7) match the 15 non-WSL rows; their WSL rows are todo naming task-3def0804.\n3. The proxy identity, discovery and daemon suites pass natively on Linux and Windows; drive and /mnt keys and the X9/X11/cwd-spy rows are unchanged.\n\nEvidence:\n- Linux gate exit 0: proxy 272/272, daemon 108/108, cap 63 tests (16 pass, 0 fail, 46 skip, 1 todo).\n- Native Windows, all three legs rc 0: proxy 271 pass + 1 existing skip; daemon 89 pass + 19 existing skip; cap 57 pass, 3 todo, 3 existing skip, with PS5.1 and PS7 run.\n- Mutant with HEAD's rule bodies: all 9 new tests fail by assertion.\n- Net +168 LOC over the 6 owned files.\n- Self-review found one race-only edge outside scope: staleLockReason compares the resolved lock path with the raw --project (//x on Linux, /x on native Windows). Filed as LOW task-c83d78475cf443688b571d4d508fde8e.",
+  "commits": [
+    {
+      "sha": "86a5dca9a3f7327f630104756ad17dd962ad2750",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T13:26:04Z",
+      "paths": [
+        ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
+        ".moe/tasks/task-2c3e6170c6b7406f8136625781d327c6.json",
+        ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
+        ".moe/tasks/task-b294377dde9e4ab6b1d422163b941115.json",
+        ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json",
+        ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+        ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json",
+        ".moe/tasks/task-dd5daa4b789645d29b192176390884be.json",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts",
+        "packages/moe-proxy/src/utils.test.ts",
+        "packages/moe-proxy/src/utils.ts",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T13:43:22.672Z",
+      "treeId": "9593421af5401c04f85764b370dc800deeb78e3f",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-proxy/src/utils.test.ts",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-daemon/src/index.test.ts",
+    "packages/moe-daemon/src/index.ts",
+    "packages/moe-proxy/src/daemonIdentity.test.ts",
     "scripts/tests/daemon-json-cap.test.mjs"
   ],
-  "completionSummary": "One cross-platform comparableProjectPath contract. Every absolute path gets an OS-independent key; only a relative input goes through path.resolve.\n- Proxy (utils.ts): WINDOWS_FORM (the launchers' regex), Kotlin's WSL_SHARE, MNT_DRIVE, plus posixKey and collapse.\n  - Drive and UNC forms: \\ and / both separate, '..' stops at the drive or the server and share, toLowerCase.\n  - \\\\wsl$|wsl.localhost\\<distro>\\x maps to POSIX /x.\n  - Any other leading / is POSIX: case kept, /mnt/<d> maps to <d>:.\n  - The doc comment states the contract and names task-3def0804.\n- Daemon twin (index.ts): textually identical, exported. normalizeWindowsDrivePath is removed from both.\n- Unchanged: isForeignDaemonInfo, the deleters, and every MCP, daemon.json and lock shape.\n\nDoD:\n1. On Linux, under onWin32 and on native Windows, /home/qa/OtherProject and /home/qa/otherproject get distinct keys, and /home/u/p differs from C:\\home\\u\\p.\n2. UNC and WSL-share rules are explicit. The proxy and daemon dists match a 19-row contract plus the 25 absolute JetBrains rows. The sh and ps1 rules (python, PS5.1, PS7) match the 15 non-WSL rows; their WSL rows are todo naming task-3def0804.\n3. The proxy identity, discovery and daemon suites pass natively on Linux and Windows; drive and /mnt keys and the X9/X11/cwd-spy rows are unchanged.\n\nEvidence:\n- Linux gate exit 0: proxy 272/272, daemon 108/108, cap 63 tests (16 pass, 0 fail, 46 skip, 1 todo).\n- Native Windows, all three legs rc 0: proxy 271 pass + 1 existing skip; daemon 89 pass + 19 existing skip; cap 57 pass, 3 todo, 3 existing skip, with PS5.1 and PS7 run.\n- Mutant with HEAD's rule bodies: all 9 new tests fail by assertion.\n- Net +168 LOC over the 6 owned files.\n- Self-review found one race-only edge outside scope: staleLockReason compares the resolved lock path with the raw --project (//x on Linux, /x on native Windows). Filed as LOW task-c83d78475cf443688b571d4d508fde8e."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-30T13:26:04Z",
+    "at": "2026-10-30T13:43:22.672Z"
+  },
+  "reviewCompletedAt": "2026-10-30T13:49:44.718Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Proxy/daemon identity and discovery suites cover the corrected comparison on Linux and native Windows without regressing drive-/mnt spellings.",
+      "Epic rail: Fixes must be backward-compatible with existing .moe/ state files"
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "packages/moe-daemon/src/index.ts",
+        "line": 105,
+        "description": "P1: new keys differ for native filesystem aliases (/tmp/x vs //tmp/x on Linux; C:\\Users\\... vs /Users/... on Windows). With healthy daemon.json+lock stored under the native absolute path, existingDaemonBlocksStart(alternate) returns false and deletes BOTH files without probing /health; parent probes once, returns true, preserves both. The stored path is native, so the foreign guard does not fire. Reconcile native lifecycle identity with transport comparison; audit stop/status too."
+      },
+      {
+        "type": "regression",
+        "file": "packages/moe-daemon/src/index.ts",
+        "line": 225,
+        "description": "P1: acquireLock writes a native resolved projectPath, then staleLockReason compares it with raw --project using the changed helper. Two real processes using //tmp/x (Linux) or /Users/... (Windows): candidate reports 'projectPath mismatch' for the live owner, unlinks its lock and grants the contender ownership. Parent refuses and preserves owner PID. Preserve live-lock exclusion for native aliases without weakening cross-OS foreign-daemon protections."
+      },
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/index.test.ts",
+        "line": 240,
+        "description": "Current passing helper/X1/X10 tables miss both destructive lifecycle regressions. Add Linux and native-Windows tests in fresh temp projects for healthy-daemon metadata preservation and two-process live-lock contention under native aliases. Assert no deletion, no second lock owner, and retained foreign-daemon protections. Obtain the narrow scope amendment needed for currently excluded lifecycle consumers before fixing."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Reject completion 86a5dca9a3f7327f630104756ad17dd962ad2750, tree9593421af5401c04f85764b370dc800deeb78e3f, contained on moe/work-2026-10-24. Six owned files +220/-52=net168 LOC. Exact task.verification rerun in /tmp/moe-qa25ba.txGbOF with MOE_* unset: proxy272pass, daemon108pass, cap16pass/46skip/1authorized WSL todo, exit0 (/tmp/qa25ba-linux.log). Native-Windows equivalents exit0: proxy271pass/1skip, daemon89pass/19skip, cap57pass/3skip/3authorized WSL todos; PS5.1/PS7 checks ran (/tmp/qa25ba-win-{proxy,daemon,cap}.log). However targeted runtime checks prove NEW live-state deletion and duplicate-writer admission on BOTH OSes; parent 86a5dca9^ preserves metadata/refuses contention. This violates lifecycle safety and existing-state compatibility despite passing helper tables. Dependent LOW task-c83d78475cf443688b571d4d508fde8e is not an authorized deferral and its race-only diagnosis is incomplete. Repros: node /tmp/qa25ba-live-daemon.mjs <snapshot>/packages/moe-daemon/dist/index.js; node /tmp/qa25ba-lock-race.mjs <snapshot>/packages/moe-daemon/dist/index.js. Parent snapshot=/tmp/moe-qa25ba-parent.NWLGiq. Logs=/tmp/qa25ba-live-{candidate,parent}.log, /tmp/qa25ba-race-{candidate,parent}.log and corresponding qa25ba-win-* logs. All use fresh temp projects; no shared source or live state changed. Request narrow architect scope amendment/replan for lifecycle consumers currently excluded by the plan; do not weaken the required cross-OS comparison contract.",
+      "rejectedAt": "2026-10-30T13:49:44.718Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Proxy/daemon identity and discovery suites cover the corrected comparison on Linux and native Windows without regressing drive-/mnt spellings.",
+        "Epic rail: Fixes must be backward-compatible with existing .moe/ state files"
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "packages/moe-daemon/src/index.ts",
+          "line": 105,
+          "description": "P1: new keys differ for native filesystem aliases (/tmp/x vs //tmp/x on Linux; C:\\Users\\... vs /Users/... on Windows). With healthy daemon.json+lock stored under the native absolute path, existingDaemonBlocksStart(alternate) returns false and deletes BOTH files without probing /health; parent probes once, returns true, preserves both. The stored path is native, so the foreign guard does not fire. Reconcile native lifecycle identity with transport comparison; audit stop/status too."
+        },
+        {
+          "type": "regression",
+          "file": "packages/moe-daemon/src/index.ts",
+          "line": 225,
+          "description": "P1: acquireLock writes a native resolved projectPath, then staleLockReason compares it with raw --project using the changed helper. Two real processes using //tmp/x (Linux) or /Users/... (Windows): candidate reports 'projectPath mismatch' for the live owner, unlinks its lock and grants the contender ownership. Parent refuses and preserves owner PID. Preserve live-lock exclusion for native aliases without weakening cross-OS foreign-daemon protections."
+        },
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/index.test.ts",
+          "line": 240,
+          "description": "Current passing helper/X1/X10 tables miss both destructive lifecycle regressions. Add Linux and native-Windows tests in fresh temp projects for healthy-daemon metadata preservation and two-process live-lock contention under native aliases. Assert no deletion, no second lock owner, and retained foreign-daemon protections. Obtain the narrow scope amendment needed for currently excluded lifecycle consumers before fixing."
+        }
+      ]
+    }
+  ]
 }
