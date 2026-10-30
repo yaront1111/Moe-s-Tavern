@@ -42,8 +42,11 @@ const VALID = deepFreeze({
   providerImageHash: 'fedcba9876543210'.repeat(4),
   supervisorSha256: '00ff11ee22dd33cc'.repeat(4),
   resources: { cpus: 2, memoryBytes: 4294967296, diskBytes: 21474836480 },
+  toolchainSha256: '7a7a5b5b6c6c7d7d'.repeat(4),
+  dependencyDigest: 'de11de22de33de44'.repeat(4),
 });
-const HASHES = ['sourceImageSha256', 'providerImageHash', 'supervisorSha256'];
+const HASHES = ['sourceImageSha256', 'providerImageHash', 'supervisorSha256', 'toolchainSha256'];
+const INPUT_HASHES = [...HASHES, 'dependencyDigest']; // dependencyDigest may also be null: no dependency phase
 const RESOURCES = ['cpus', 'memoryBytes', 'diskBytes'];
 const fresh = () => structuredClone(VALID);
 const refusal = (fn, label) => {
@@ -68,7 +71,9 @@ const LITERAL = {
     home: { fresh: true, mode: '0700' },
     protectedPaths: { owner: 'root', verified: ['before-run', 'after-run'] },
     supervisorCredential: { path: '/etc/moe/supervisor.credential', owner: 'root', mode: '0400', jobIdentities: 'readiness-denied' },
+    toolchain: { owner: 'root', writable: false, identity: 'host-pinned-sha256' },
   },
+  dependencies: { source: 'host-offline-cache', integrity: 'lockfile-sha512', scripts: 'ignored', network: 'none', failure: 'infra-failure' },
   time: { budget: 'host-enforced' },
 };
 
@@ -93,6 +98,7 @@ test('E2 checkEnvironment is the sha256 of the sorted-key canonical encoding of 
   assert.equal(checkEnvironment(VALID), identity);
   assert.equal(checkEnvironment(fresh()), identity);
   assert.equal(checkEnvironment({ ...reversed(VALID), resources: reversed(VALID.resources) }), identity);
+  assert.equal(checkEnvironment({ ...fresh(), dependencyDigest: null }), oracle(CHECK_BOUNDARIES, { ...VALID, dependencyDigest: null }));
 });
 
 test('E3 any input change gives a different identity', () => {
@@ -115,7 +121,10 @@ test('E3 any input change gives a different identity', () => {
   }
   note({ ...fresh(), sourceImageSha256: VALID.providerImageHash, providerImageHash: VALID.sourceImageSha256 }, 'swapped source/provider');
   note({ ...fresh(), providerImageHash: VALID.supervisorSha256, supervisorSha256: VALID.providerImageHash }, 'swapped provider/supervisor');
-  assert.equal(seen.size, 1 + HASHES.length + RESOURCES.length + 2);
+  note({ ...fresh(), dependencyDigest: 'ef'.repeat(32) }, 'dependencyDigest alone');
+  note({ ...fresh(), dependencyDigest: null }, 'no dependency phase');
+  note({ ...fresh(), toolchainSha256: VALID.dependencyDigest, dependencyDigest: VALID.toolchainSha256 }, 'swapped toolchain/dependencies');
+  assert.equal(seen.size, 1 + HASHES.length + RESOURCES.length + 5);
 });
 
 // Every leaf, array and object of a clone of the boundaries, changed one at a time.
@@ -161,7 +170,7 @@ test('E4 every CHECK_BOUNDARIES leaf, array and object is part of the identity',
 test('E5 invalid or extra-key input refuses with CHECK_INPUT_INVALID and fixed text', () => {
   refusal(() => checkEnvironment(), 'no argument');
   for (const input of [null, undefined, 'x', 42, [], Object.assign([], VALID)]) refuses(input, `input ${String(input)}`);
-  for (const key of [...HASHES, 'resources']) {
+  for (const key of [...INPUT_HASHES, 'resources']) {
     const missing = fresh();
     delete missing[key];
     refuses(missing, `missing ${key}`);
@@ -173,10 +182,10 @@ test('E5 invalid or extra-key input refuses with CHECK_INPUT_INVALID and fixed t
   }
   refuses({ ...fresh(), extra: 1 }, 'extra key');
   refuses({ ...fresh(), constructor: 1 }, 'extra constructor key');
-  for (const key of HASHES) {
+  for (const key of INPUT_HASHES) {
     const valid = VALID[key];
     const bad = [valid.toUpperCase(), valid.slice(1), `${valid}0`, `${valid.slice(1)}g`, `${valid}\n`, '', undefined, null, 42, new String(valid)];
-    for (const value of bad) refuses({ ...fresh(), [key]: value }, `${key}=${String(value)}`);
+    for (const value of bad.filter(value => key !== 'dependencyDigest' || value !== null)) refuses({ ...fresh(), [key]: value }, `${key}=${String(value)}`);
   }
   for (const value of [null, undefined, [], Object.assign([], VALID.resources), 'x', 42]) refuses({ ...fresh(), resources: value }, 'resources');
   for (const key of RESOURCES) {
@@ -206,16 +215,19 @@ test('E5 the hashed value is the validated value: each field is read exactly onc
   spy(input, 'sourceImageSha256', VALID.sourceImageSha256, 'z');
   spy(input, 'providerImageHash', VALID.providerImageHash, VALID.supervisorSha256);
   spy(input, 'supervisorSha256', VALID.supervisorSha256, 'not hex');
+  spy(input, 'toolchainSha256', VALID.toolchainSha256, VALID.supervisorSha256);
+  spy(input, 'dependencyDigest', VALID.dependencyDigest, null);
   const resources = {};
   spy(resources, 'cpus', VALID.resources.cpus, -1);
   spy(resources, 'memoryBytes', VALID.resources.memoryBytes, 0);
   spy(resources, 'diskBytes', VALID.resources.diskBytes, 1.5);
   spy(input, 'resources', resources, null);
   assert.equal(checkEnvironment(input), checkEnvironment(VALID));
-  assert.deepEqual(reads, { sourceImageSha256: 1, providerImageHash: 1, supervisorSha256: 1, resources: 1, cpus: 1, memoryBytes: 1, diskBytes: 1 });
+  assert.deepEqual(reads, { sourceImageSha256: 1, providerImageHash: 1, supervisorSha256: 1, toolchainSha256: 1, dependencyDigest: 1, resources: 1, cpus: 1,
+    memoryBytes: 1, diskBytes: 1 });
 });
 
-const OBSERVED = deepFreeze({ environment: checkEnvironment(VALID), treeSha: 'ab12'.repeat(10), definitionDigest: 'cd34'.repeat(16), planRevision: 3 });
+const OBSERVED = deepFreeze({ environment: oracle(CHECK_BOUNDARIES, VALID), treeSha: 'ab12'.repeat(10), definitionDigest: 'cd34'.repeat(16), planRevision: 3 });
 const STRINGS = ['environment', 'treeSha', 'definitionDigest'];
 const FIELDS = [...STRINGS, 'planRevision'];
 const copy = (patch = {}) => ({ ...OBSERVED, ...patch });
@@ -275,6 +287,17 @@ test('E7 evidenceStatus never throws and reads each field at most once per recor
   assert.deepEqual(reads, { environment: 1, treeSha: 1, definitionDigest: 1, planRevision: 1 });
 });
 
+test('E9 evidence observed under another toolchain or dependency set is stale, and identical inputs stay fresh', () => {
+  const observed = inputs => copy({ environment: checkEnvironment(inputs) });
+  for (const [label, changes] of [['toolchain', { toolchainSha256: 'ab'.repeat(32) }], ['dependency digest', { dependencyDigest: 'cd'.repeat(32) }],
+    ['no dependency phase', { dependencyDigest: null }]]) {
+    const other = { ...fresh(), ...changes };
+    assert.deepEqual([evidenceStatus(observed(VALID), observed(other)), evidenceStatus(observed(other), observed(VALID)),
+      evidenceStatus(observed(other), observed({ ...fresh(), ...changes }))], [STALE, STALE, FRESH], label);
+  }
+  assert.equal(evidenceStatus(observed(VALID), observed(fresh())), FRESH);
+});
+
 test('E8 the CI local-runner step runs this file', () => {
   const ci = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
   const line = ci.split('\n').find(text => text.trimStart().startsWith('run: node --test scripts/tests/local-runner.test.mjs'));
@@ -285,7 +308,7 @@ test('E8 the CI local-runner step runs this file', () => {
 test('E5 a throwing accessor or Proxy trap refuses with the fixed refusal and carries no input text', () => {
   const secret = 'secret-from-the-hostile-input';
   const boom = () => { throw new Error(secret); };
-  for (const key of [...HASHES, 'resources']) {
+  for (const key of [...INPUT_HASHES, 'resources']) {
     const input = fresh();
     Object.defineProperty(input, key, { enumerable: true, get: boom });
     refuses(input, `throwing ${key}`);

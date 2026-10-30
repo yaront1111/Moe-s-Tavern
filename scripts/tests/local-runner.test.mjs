@@ -4282,10 +4282,18 @@ test('deleteOwned purges only its owner\'s launched record, never an unlaunched 
 
 const CHECK = Object.freeze({ id: 'unit', command: 'python3 -m unittest', protected: Object.freeze([Object.freeze({ path: 'tests/a.py', oid: 'e'.repeat(40) })]) });
 const CHECK_SNAPSHOT = snapshotOf([fileOf('tests/a.py', 'pass\n')], [fileOf('src/a.py', 'A')]);
-const identityOf = ({ source = SOURCE.sha256, image = PROVIDER_HASH, supervisor = BOOTSTRAP.supervisorSha256 } = {}) =>
-  checkEnvironment({ sourceImageSha256: source, providerImageHash: image, supervisorSha256: supervisor, resources: GUEST_RESOURCES });
+// CQ-R11e: the host toolchain and offline dependency steps are recording fakes too; no row downloads Node or a tarball.
+const TOOLCHAIN = Object.freeze({ file: '/var/cache/moe/toolchain.tar.xz', sha256: '7a'.repeat(32), size: 3, version: '24.22.2' });
+const cacheOf = digest => Object.freeze({ tree: Object.freeze({ entries: Object.freeze([]), digest }), digest, packages: 0, bytes: 0 });
+const CACHE = cacheOf('de'.repeat(32));
+// Lockfiles at the root and in pkg, which the overlay replaces, and in gone, which it deletes.
+const LOCKED_SNAPSHOT = snapshotOf([fileOf('package-lock.json', 'ROOT'), fileOf('pkg/package-lock.json', 'BASE'), fileOf('gone/package-lock.json', 'GONE'),
+  fileOf('tests/a.py', 'pass\n')], [fileOf('pkg/package-lock.json', 'OVERLAY'), { kind: 'delete', path: 'gone/package-lock.json' }]);
+const identityOf = ({ source = SOURCE.sha256, image = PROVIDER_HASH, supervisor = BOOTSTRAP.supervisorSha256, toolchain = TOOLCHAIN.sha256, dependencies = null } = {}) =>
+  checkEnvironment({ sourceImageSha256: source, providerImageHash: image, supervisorSha256: supervisor, resources: GUEST_RESOURCES, toolchainSha256: toolchain,
+    dependencyDigest: dependencies });
 const PASSED_RUN = { outcome: 'passed', exitCode: 0, signal: null, outputTail: 'ok\n' };
-const FULL_LOG = ['provision', 'reserve', 'materialize', 'onReady', 'session', 'verify', 'remove', 'removed'];
+const FULL_LOG = ['provision', 'reserve', 'toolchain', 'materialize', 'installToolchain', 'onReady', 'session', 'verify', 'remove', 'removed'];
 const UNVERIFIED_LOG = FULL_LOG.filter(name => name !== 'verify'); // only a passed session is verified (CQ-R11f)
 const readyGuest = (changes = {}) => ({ provisioned: true, instance: GUEST, bootstrapReady: true, executionReady: false, prerequisites: READY_ITEMS,
   image: { source: SOURCE, provider: { imageHash: PROVIDER_HASH, imageRelease: '24.04 LTS' } }, supervisorSha256: BOOTSTRAP.supervisorSha256, failures: [], ...changes });
@@ -4299,15 +4307,17 @@ const ranWith = (run, changes = {}) => ({ ...run, environment: identityOf(), wor
   executionReady: false, ...changes });
 
 function checkHarness({ provision = reserving(readyGuest()), materialize = () => {}, onReady = () => {}, session = () => PASSED_RUN, verify = () => 'intact',
-  remove = () => 'deleted' } = {}) {
+  remove = () => 'deleted', toolchain = () => TOOLCHAIN, dependencies = () => CACHE, installToolchain = () => {}, installDependencies = () => {} } = {}) {
   const h = { log: [], seen: {} };
   const step = (name, behave) => async options => { h.log.push(name); h.seen[name] = options; return behave(options); };
   h.ledger = { read: async () => assert.fail('read'), update: async () => assert.fail('update'), recordImage: async () => assert.fail('recordImage'),
     reserve: async who => { h.log.push('reserve'); h.seen.reserve = who; return { instance: GUEST }; } };
   h.deps = { provision: step('provision', provision), materialize: step('materialize', materialize), session: step('session', session), verify: step('verify', verify),
-    remove: step('remove', async options => { await wait(1); try { return await remove(options); } finally { h.log.push('removed'); } }) };
+    remove: step('remove', async options => { await wait(1); try { return await remove(options); } finally { h.log.push('removed'); } }),
+    toolchain: step('toolchain', toolchain), dependencies: step('dependencies', dependencies), installToolchain: step('installToolchain', installToolchain),
+    installDependencies: step('installDependencies', installDependencies) };
   h.input = { platform: onWindows(), ledger: h.ledger, owner, cacheDir: '/var/cache/moe', supervisor: SUPERVISOR, credential: CREDENTIAL,
-    snapshot: CHECK_SNAPSHOT, check: CHECK, budgetMs: 60_000, provider: { run: async () => assert.fail('provider') }, timeoutMs: 1_000,
+    snapshot: CHECK_SNAPSHOT, check: CHECK, budgetMs: 60_000, dependencies: [], provider: { run: async () => assert.fail('provider') }, timeoutMs: 1_000,
     onReady: environment => { h.log.push('onReady'); h.seen.onReady = environment; return onReady(environment); } };
   return h;
 }
@@ -4344,12 +4354,15 @@ test('CJ2 a clean run provisions, materializes, reports the environment, runs th
   assert.deepEqual(provisioned, { platform: h.input.platform, owner, cacheDir: '/var/cache/moe', supervisor: SUPERVISOR, credential: CREDENTIAL, provider: h.input.provider });
   assert.deepEqual([ledger === h.ledger, h.seen.reserve, h.seen.remove], [false, owner, { ledger, name: GUEST, owner, provider: h.input.provider }]);
   assert.deepEqual(h.seen.materialize, { name: GUEST, snapshot: CHECK_SNAPSHOT, provider: h.input.provider });
+  assert.deepEqual([h.seen.toolchain, h.seen.installToolchain, h.seen.dependencies, h.seen.installDependencies],
+    [{ arch: 'x64', cacheDir: '/var/cache/moe' }, { name: GUEST, toolchain: TOOLCHAIN, provider: h.input.provider }, undefined, undefined]);
   assert.deepEqual(h.seen.session, { name: GUEST, check: CHECK, provider: h.input.provider, budgetMs: 60_000, timeoutMs: 1_000, signal });
   assert.deepEqual([h.seen.session.signal === signal, h.seen.session.provider === h.seen.materialize.provider], [true, true]);
   // Two concurrent runs of one owner each reserve, check and delete only their own VM.
   const names = [nameAt(1), nameAt(2)];
   const used = [];
   const deps = { provision: async ({ ledger: own, owner: who }) => readyGuest({ instance: (await own.reserve(who)).instance }), materialize: async () => {},
+    toolchain: async () => TOOLCHAIN, installToolchain: async () => {},
     session: async ({ name }) => { used.push(['session', name]); await wait(1); return PASSED_RUN; },
     remove: async ({ name }) => { used.push(['remove', name]); return 'deleted'; } };
   const twins = await Promise.all([0, 1].map(() => runCheckJob({ ...h.input, ledger: { ...h.ledger, reserve: async () => ({ instance: names.shift() }) } }, deps)));
@@ -4365,8 +4378,9 @@ test('CJ3 nothing runs in the VM unless it is provisioned and cleanly ready, and
     ['bootstrapReady not exactly true', reserving(readyGuest({ bootstrapReady: 'true' })), stopped('CHECK_GUEST_NOT_READY')],
     ['failures not an array', reserving(readyGuest({ failures: undefined })), stopped('CHECK_GUEST_NOT_READY')],
     ['another instance', reserving(readyGuest({ instance: nameAt(2) })), stopped('CHECK_PROVISION_FAILED')],
-    ['no supervisor identity', reserving(readyGuest({ supervisorSha256: undefined })), stopped('CHECK_ENVIRONMENT_UNKNOWN')],
-    ['no provider image identity', reserving(readyGuest({ image: { source: SOURCE, provider: null } })), stopped('CHECK_ENVIRONMENT_UNKNOWN')],
+    ['no supervisor identity', reserving(readyGuest({ supervisorSha256: undefined })), stopped('CHECK_ENVIRONMENT_UNKNOWN'), ['provision', 'reserve', 'toolchain', 'remove', 'removed']],
+    ['no provider image identity', reserving(readyGuest({ image: { source: SOURCE, provider: null } })), stopped('CHECK_ENVIRONMENT_UNKNOWN'),
+      ['provision', 'reserve', 'toolchain', 'remove', 'removed']],
     ['a throw after reserving', reserving(failWith({ code: 'LIFECYCLE_RETRY_EXHAUSTED' })), stopped('LIFECYCLE_RETRY_EXHAUSTED')],
     ['an unknown code after reserving', reserving(failWith({ code: 'EACCES' })), stopped('CHECK_PROVISION_FAILED')],
     ['a code carrying a path', reserving(failWith({ code: 'PROVIDER_/private/secret' })), stopped('CHECK_PROVISION_FAILED')],
@@ -4385,7 +4399,7 @@ test('CJ4 a refused no-mount materialization stops the run before the hook and t
     [failWith({ code: 'SNAPSHOT_PATH_INVALID' }), 'CHECK_MATERIALIZE_FAILED'], [new Error('/private/secret'), 'CHECK_MATERIALIZE_FAILED']]) {
     const h = checkHarness({ materialize: () => { throw error; } });
     assert.deepEqual([await runCheckJob(h.input, h.deps), h.log],
-      [stopped(failure, { environment: identityOf() }), ['provision', 'reserve', 'materialize', 'remove', 'removed']], failure);
+      [stopped(failure, { environment: identityOf() }), ['provision', 'reserve', 'toolchain', 'materialize', 'remove', 'removed']], failure);
   }
 });
 
@@ -4404,11 +4418,12 @@ test('CJ5 the onReady hook gates the session; its error, a timeout or an abort s
   const aborted = checkHarness({ onReady: () => { during.abort(); return new Promise(() => {}); } });
   assert.deepEqual([await runCheckJob({ ...aborted.input, signal: during.signal }, aborted.deps), aborted.log],
     [stopped('CHECK_ABORTED', { environment: identityOf() }), gated]);
-  for (const [at, log] of [['provision', ['provision', 'reserve', 'remove', 'removed']], ['materialize', ['provision', 'reserve', 'materialize', 'remove', 'removed']]]) {
+  for (const [at, log, environment = identityOf()] of [['provision', ['provision', 'reserve', 'remove', 'removed'], null],
+    ['materialize', ['provision', 'reserve', 'toolchain', 'materialize', 'remove', 'removed']]]) {
     const controller = new AbortController();
     const abortAfter = behave => async options => { const value = await behave(options); controller.abort(); return value; };
     const h = checkHarness(at === 'provision' ? { provision: abortAfter(reserving(readyGuest())) } : { materialize: abortAfter(() => {}) });
-    assert.deepEqual([await runCheckJob({ ...h.input, signal: controller.signal }, h.deps), h.log], [stopped('CHECK_ABORTED', { environment: identityOf() }), log], at);
+    assert.deepEqual([await runCheckJob({ ...h.input, signal: controller.signal }, h.deps), h.log], [stopped('CHECK_ABORTED', { environment }), log], at);
   }
 });
 
@@ -4451,18 +4466,21 @@ test('CJ6 outcomes pass through after the delete, the approved protected list re
   }
 });
 
-test('CJ7 a changed image or supervisor gives a new environment, and evidence observed in the old one is stale', async () => {
-  const runWith = async changes => {
-    const h = checkHarness({ provision: reserving(readyGuest(changes)) });
-    const { environment } = await runCheckJob(h.input, h.deps);
+test('CJ7 a changed image, supervisor, toolchain or dependency set gives a new environment, and evidence observed in the old one is stale', async () => {
+  const runWith = async (changes, options = {}, input = {}) => {
+    const h = checkHarness({ provision: reserving(readyGuest(changes)), ...options });
+    const { environment } = await runCheckJob({ ...h.input, ...input }, h.deps);
     return { environment, treeSha: 'f'.repeat(40), definitionDigest: `sha256:${'d'.repeat(64)}`, planRevision: 1 };
   };
   const first = await runWith({});
   assert.deepEqual([first.environment, evidenceStatus(first, await runWith({}))], [identityOf(), 'fresh']);
   const provider = { imageHash: 'ef'.repeat(32), imageRelease: '24.04 LTS' };
-  for (const [changes, identity] of [[{ image: { source: SOURCE, provider } }, { image: provider.imageHash }], [{ supervisorSha256: 'ab'.repeat(32) }, { supervisor: 'ab'.repeat(32) }],
-    [{ image: { source: { ...SOURCE, sha256: '12'.repeat(32) }, provider: { imageHash: PROVIDER_HASH } } }, { source: '12'.repeat(32) }]]) {
-    const next = await runWith(changes);
+  const locked = { snapshot: LOCKED_SNAPSHOT, dependencies: ['.'] };
+  for (const [changes, identity, options, input] of [[{ image: { source: SOURCE, provider } }, { image: provider.imageHash }], [{ supervisorSha256: 'ab'.repeat(32) }, { supervisor: 'ab'.repeat(32) }],
+    [{ image: { source: { ...SOURCE, sha256: '12'.repeat(32) }, provider: { imageHash: PROVIDER_HASH } } }, { source: '12'.repeat(32) }],
+    [{}, { toolchain: 'ab'.repeat(32) }, { toolchain: () => ({ ...TOOLCHAIN, sha256: 'ab'.repeat(32) }) }],
+    [{}, { dependencies: CACHE.digest }, {}, locked], [{}, { dependencies: 'ef'.repeat(32) }, { dependencies: () => cacheOf('ef'.repeat(32)) }, locked]]) {
+    const next = await runWith(changes, options, input);
     assert.deepEqual([next.environment, next.environment !== first.environment, evidenceStatus(first, next)], [identityOf(identity), true, 'stale']);
   }
 });
@@ -4484,7 +4502,8 @@ test('CJ8 the real provisionGuest and deleteOwned purge exactly the VM this run 
       : Promise.resolve(purged.push(args[2]) && h.fake.present.delete(args[2]) && { stdout: '', stderr: '' }));
     const result = await runCheckJob({ ...checkHarness().input, ledger: h.ledger, cacheDir: h.cacheDir, provider: { run }, onReady: () => {} }, {
       provision: options => provisionGuest({ ...options, fetch: h.download.fetch, digest: h.digest, sleep: async () => {} }),
-      materialize: async () => {}, session: async () => PASSED_RUN, verify: async () => 'intact' });
+      materialize: async () => {}, session: async () => PASSED_RUN, verify: async () => 'intact', toolchain: async () => TOOLCHAIN,
+      installToolchain: async () => {}, dependencies: async () => assert.fail('dependencies'), installDependencies: async () => assert.fail('installDependencies') });
     const records = Object.fromEntries((await h.ledger.list()).records.map(record => [record.instance, record.phase]));
     assert.deepEqual([result, purged.filter(name => name !== GUEST), records, [GUEST, nameAt(0xa1), nameAt(0xa2)].map(name => h.fake.present.has(name))],
       [expected, [], { [nameAt(0xa1)]: 'owned', [nameAt(0xa2)]: 'collision', [GUEST]: taken ? 'collision' : 'deleted' }, [taken, true, true]], label);
@@ -4695,6 +4714,94 @@ test('CJ10 end to end, the real supervisor verify reports a passed job\'s edits 
     }
     assert.deepEqual(guest.unexpected, []);
   });
+
+// CQ-R11e: runCheckJob's required dependencies dir list, the pinned toolchain and offline dependency steps around materialize,
+// and both identities in the environment.
+test('CJ11 dependencies is required: a missing, malformed or unlocked dir list refuses before any ledger, provider or step call', async () => {
+  const dirs = count => Array.from({ length: count }, (_, at) => `d${at}`);
+  const wide = snapshotOf(dirs(17).map(dir => fileOf(`${dir}/package-lock.json`, '{}')));
+  for (const [label, changes] of [['missing', null], ...['.', null, {}, { length: 1, 0: '.' }].map(value => [`not an array: ${String(value)}`, { dependencies: value }]),
+    ['17 dirs', { snapshot: wide, dependencies: dirs(17) }], ['a duplicate', { dependencies: ['pkg', 'pkg'] }],
+    ...['', '/pkg', 'a/../pkg', '..', 'pkg\\x', 'pkg/', './pkg', 1, null].map(dir => [`dir ${String(dir)}`, { dependencies: [dir] }]),
+    ['no lockfile anywhere', { snapshot: CHECK_SNAPSHOT, dependencies: ['.'] }], ['a lockfile the overlay deletes', { dependencies: ['gone'] }],
+    ['a dir without a lockfile', { dependencies: ['.', 'tests'] }]]) {
+    const h = checkHarness();
+    const { dependencies, ...rest } = h.input;
+    await assert.rejects(runCheckJob(changes === null ? rest : { ...h.input, snapshot: LOCKED_SNAPSHOT, ...changes }, h.deps), checkRefused('CHECK_JOB_INPUT_INVALID'), label);
+    assert.deepEqual(h.log, [], label);
+  }
+  const h = checkHarness();
+  const result = await runCheckJob({ ...h.input, snapshot: wide, dependencies: dirs(16) }, h.deps);
+  assert.deepEqual([result.outcome, h.seen.dependencies.lockfiles.map(({ dir }) => dir)], ['passed', dirs(16)]);
+});
+
+test('CJ12 the toolchain and the merged view\'s lockfiles are fetched for the guest arch, installed after materialize and in the environment', async () => {
+  const bytes = text => new Uint8Array(Buffer.from(text));
+  for (const arch of ['x64', 'arm64']) {
+    const h = checkHarness({ provision: reserving(readyGuest({ image: { source: { ...SOURCE, arch }, provider: { imageHash: PROVIDER_HASH } } })) });
+    let reads = 0;
+    const dirs = ['.', 'pkg'];
+    Object.defineProperty(dirs, 0, { enumerable: true, get: () => (++reads === 1 ? '.' : 'gone') }); // read exactly once
+    const result = await runCheckJob({ ...h.input, snapshot: LOCKED_SNAPSHOT, dependencies: dirs }, h.deps);
+    const environment = identityOf({ dependencies: CACHE.digest });
+    assert.deepEqual([result, h.log, h.seen.onReady, reads], [ranWith(PASSED_RUN, { environment }), ['provision', 'reserve', 'toolchain', 'dependencies',
+      'materialize', 'installToolchain', 'installDependencies', 'onReady', 'session', 'verify', 'remove', 'removed'], environment, 1], arch);
+    assert.deepEqual([h.seen.toolchain, h.seen.dependencies, h.seen.installToolchain, h.seen.installDependencies], [{ arch, cacheDir: '/var/cache/moe' },
+      { lockfiles: [{ dir: '.', bytes: bytes('ROOT') }, { dir: 'pkg', bytes: bytes('OVERLAY') }], cpu: arch, cacheDir: '/var/cache/moe' },
+      { name: GUEST, toolchain: TOOLCHAIN, provider: h.input.provider }, { name: GUEST, tree: CACHE.tree, provider: h.input.provider }], arch);
+  }
+});
+
+test('CJ13 a refused or malformed toolchain or dependency step stops the run before onReady and the session, and still deletes the VM', async () => {
+  const locked = { snapshot: LOCKED_SNAPSHOT, dependencies: ['.'] };
+  const ready = identityOf({ dependencies: CACHE.digest });
+  const thrown = (step, cases, log, environment) => cases.map(([error, failure]) => [{ [step]: () => { throw error; } }, failure, log, environment]);
+  const returned = (step, values, failure, log) => values.map(value => [{ [step]: () => value }, failure, log]);
+  const installed = ['toolchain', 'dependencies', 'materialize', 'installToolchain'];
+  for (const [options, failure, log, environment = null] of [
+    ...thrown('toolchain', [[failWith({ code: 'TOOLCHAIN_CHECKSUM_MISMATCH' }), 'TOOLCHAIN_CHECKSUM_MISMATCH'], [failWith({ code: 'TOOLCHAIN_/private' }), 'CHECK_TOOLCHAIN_FAILED'],
+      [failWith({ code: 'DEPENDENCY_LIMIT_EXCEEDED' }), 'CHECK_TOOLCHAIN_FAILED'], ['x', 'CHECK_TOOLCHAIN_FAILED']], ['toolchain']),
+    ...returned('toolchain', [null, undefined, { ...TOOLCHAIN, sha256: 'AB'.repeat(32) }, { ...TOOLCHAIN, sha256: new String(TOOLCHAIN.sha256) }, { ...TOOLCHAIN, sha256: undefined }],
+      'CHECK_TOOLCHAIN_FAILED', ['toolchain']),
+    ...thrown('dependencies', [[failWith({ code: 'DEPENDENCY_SOURCE_UNSUPPORTED' }), 'DEPENDENCY_SOURCE_UNSUPPORTED'], [failWith({ code: 'TOOLCHAIN_INPUT_INVALID' }), 'CHECK_DEPENDENCIES_FAILED'],
+      [new Error('/private/secret'), 'CHECK_DEPENDENCIES_FAILED']], ['toolchain', 'dependencies']),
+    ...returned('dependencies', [null, cacheOf('DE'.repeat(32)), { ...CACHE, digest: 'ef'.repeat(32) }, { ...CACHE, tree: null }, { ...CACHE, digest: undefined }],
+      'CHECK_DEPENDENCIES_FAILED', ['toolchain', 'dependencies']),
+    ...thrown('installToolchain', [[transferError('TRANSFER_MOUNTS_PRESENT'), 'TRANSFER_MOUNTS_PRESENT'], [transferError('TRANSFER_TOOLCHAIN_MISMATCH'), 'TRANSFER_TOOLCHAIN_MISMATCH'],
+      [failWith({ code: 'TOOLCHAIN_UNREADABLE' }), 'CHECK_TOOLCHAIN_FAILED']], installed, ready),
+    ...thrown('installDependencies', [[transferError('TRANSFER_DIGEST_MISMATCH'), 'TRANSFER_DIGEST_MISMATCH'], [failWith({ code: 'DEPENDENCY_X' }), 'CHECK_DEPENDENCIES_FAILED']],
+      [...installed, 'installDependencies'], ready)]) {
+    const h = checkHarness(options);
+    const result = await runCheckJob({ ...h.input, ...locked }, h.deps);
+    assert.deepEqual([result, h.log, /secret|private/.test(JSON.stringify(result))],
+      [stopped(failure, { environment }), ['provision', 'reserve', ...log, 'remove', 'removed'], false], `${Object.keys(options)} ${failure}`);
+  }
+  // A guest image without a pinned arch fetches nothing: never a default or the host's arch.
+  for (const source of [{ url: SOURCE.url, sha256: SOURCE.sha256 }, { ...SOURCE, arch: 'ia32' }]) {
+    const h = checkHarness({ provision: reserving(readyGuest({ image: { source, provider: { imageHash: PROVIDER_HASH } } })) });
+    assert.deepEqual([await runCheckJob(h.input, h.deps), h.log], [stopped('CHECK_TOOLCHAIN_FAILED'), ['provision', 'reserve', 'remove', 'removed']], String(source.arch));
+  }
+  for (const step of ['toolchain', 'dependencies', 'installToolchain', 'installDependencies']) {
+    const controller = new AbortController();
+    const h = checkHarness({ [step]: () => { controller.abort(); return { toolchain: TOOLCHAIN, dependencies: CACHE }[step]; } });
+    const result = await runCheckJob({ ...h.input, ...locked, signal: controller.signal }, h.deps);
+    assert.deepEqual([result.outcome, result.failure, result.vm, result.environment, h.log.slice(-3)],
+      ['infra-failure', 'CHECK_ABORTED', 'deleted', step === 'toolchain' ? null : ready, [step, 'remove', 'removed']], step);
+  }
+});
+
+test('CJ14 a guest dependency phase failure (supervisor exit 81 before hello) is infra-failure, never passed or code-failure', async () => {
+  const h = checkHarness();
+  const spawn = () => {
+    const proc = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true });
+    proc.stdin = new Writable({ write(chunk, encoding, done) { setImmediate(() => proc.stdout.once('close', () => proc.emit('close', 81, null)).end()); done(); } });
+    return proc;
+  };
+  const { session, ...deps } = h.deps; // the real runCheckSession
+  const result = await runCheckJob({ ...h.input, snapshot: LOCKED_SNAPSHOT, dependencies: ['.'], provider: { spawn } }, deps);
+  assert.deepEqual([result.outcome, result.failure, result.workspace, result.vm, result.environment, h.log.includes('verify')],
+    ['infra-failure', null, 'unverified', 'deleted', identityOf({ dependencies: CACHE.digest }), false]);
+});
 
 // CQ-R10d3a agents install rows: the real supervisor's install_agents() into <dir>/agents, owned by the test user (the owner seam).
 import { MAX_AGENT_BINARY_BYTES } from '../local-runner/agent-cache.mjs';

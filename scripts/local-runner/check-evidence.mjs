@@ -1,12 +1,13 @@
 // Check environment identity for the isolated local-runner check path. CHECK_BOUNDARIES is the contract that the
-// guest check mode (CQ-R11a/R11b) implements: a descriptor, not a measurement. Nothing here claims isolation;
-// executionReady stays false and verified-local stays unavailable. Pure functions only: no provider call, no file
-// read, no clock.
+// guest check mode (CQ-R11a/R11b) implements: a descriptor, not a measurement. The identity also covers the check's
+// pinned Node toolchain and its offline dependency tree (CQ-R11e), so a change to either requires new evidence. Nothing
+// here claims isolation; executionReady stays false and verified-local stays unavailable. Pure functions only: no
+// provider call, no file read, no clock.
 import { createHash } from 'node:crypto';
 import { GUEST_LAYOUT, GUEST_RESOURCES, JOB_IDENTITIES } from './guest-bootstrap.mjs';
 
 const ENVIRONMENT_PREFIX = 'moe-local-vm-v1:';
-const INPUT_KEYS = ['providerImageHash', 'resources', 'sourceImageSha256', 'supervisorSha256'];
+const INPUT_KEYS = ['dependencyDigest', 'providerImageHash', 'resources', 'sourceImageSha256', 'supervisorSha256', 'toolchainSha256'];
 const RESOURCE_KEYS = Object.keys(GUEST_RESOURCES);
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const MESSAGE = 'Check environment input was invalid.';
@@ -33,7 +34,10 @@ export const CHECK_BOUNDARIES = deepFreeze({
     home: { fresh: true, mode: '0700' },
     protectedPaths: { owner: 'root', verified: ['before-run', 'after-run'] },
     supervisorCredential: { path: GUEST_LAYOUT.credential, owner: 'root', mode: '0400', jobIdentities: 'readiness-denied' },
+    toolchain: { owner: 'root', writable: false, identity: 'host-pinned-sha256' },
   },
+  // Installed by `npm ci --offline --ignore-scripts` in the private netns before the check; a failure is never the code's.
+  dependencies: { source: 'host-offline-cache', integrity: 'lockfile-sha512', scripts: 'ignored', network: 'none', failure: 'infra-failure' },
   time: { budget: 'host-enforced' },
 });
 
@@ -62,17 +66,21 @@ function canonicalJson(value) {
 // and hashed.
 function validatedInputs(inputs) {
   if (!record(inputs) || !exactKeys(inputs, INPUT_KEYS)) return null;
-  const { providerImageHash, resources, sourceImageSha256, supervisorSha256 } = inputs;
+  const { dependencyDigest, providerImageHash, resources, sourceImageSha256, supervisorSha256, toolchainSha256 } = inputs;
   if (!record(resources) || !exactKeys(resources, RESOURCE_KEYS)) return null;
   const { cpus, diskBytes, memoryBytes } = resources;
-  if (![providerImageHash, sourceImageSha256, supervisorSha256].every(sha256Hex) || ![cpus, diskBytes, memoryBytes].every(count)) return null;
-  return { providerImageHash, resources: { cpus, diskBytes, memoryBytes }, sourceImageSha256, supervisorSha256 };
+  if (![providerImageHash, sourceImageSha256, supervisorSha256, toolchainSha256].every(sha256Hex) || !(dependencyDigest === null || sha256Hex(dependencyDigest))
+    || ![cpus, diskBytes, memoryBytes].every(count)) return null;
+  return { dependencyDigest, providerImageHash, resources: { cpus, diskBytes, memoryBytes }, sourceImageSha256, supervisorSha256, toolchainSha256 };
 }
 
 /**
  * The exact environment identity of one check observation: a sha256 over CHECK_BOUNDARIES and the observed image,
- * supervisor and VM size. It fits CheckRun.environment, an opaque value the daemon compares exactly. The size is
- * shape-checked only, because the orchestrator may pass the observed size rather than GUEST_RESOURCES.
+ * supervisor and VM size, the pinned toolchain's sha256 (so a toolchain change requires new evidence) and the
+ * installed dependency tree's digest, or null for a run with no dependency phase (the tree names the lockfile dirs
+ * installed, which treeSha alone does not). It fits CheckRun.environment, an opaque value the daemon compares
+ * exactly. The size is shape-checked only, because the orchestrator may pass the observed size rather than
+ * GUEST_RESOURCES.
  */
 export function checkEnvironment(inputs) {
   let checked = null;

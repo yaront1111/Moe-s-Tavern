@@ -17,43 +17,72 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nThis row was split on 2026-10-30. Its guest and host pieces live in CQ-R11e1..e5 (tasks b799056d, 1e7f5a2d, ab029075, 71516084 and 41fc271b), all of which are dependsOn here. What remains is the lifecycle wiring and the environment identity, and its tests prove DoD 1-3 at the composition level. Plan against the LANDED bytes of CQ-R11 (task-07951125) and CQ-R11f (task-5b0a2bcf): runCheckJob with R11f's verify step. Use the landed exports of R11e1..e5 too, and re-read each before editing.\n\n(a) scripts/tests/local-runner-check.test.mjs, R11d's E rows:\n- Every checkEnvironment input fixture gains two keys:\n  - toolchainSha256: 64 lowercase hex;\n  - dependencyDigest: 64 lowercase hex, or null for a run with no dependency phase.\n- E1 pins the two new CHECK_BOUNDARIES descriptors exactly, as listed in step 2.\n- E3-style rows: toolchainSha256 alone, and dependencyDigest alone (including null versus a digest), each give a different identity.\n- Each of these refuses with CHECK_INPUT_INVALID:\n  - either key missing, or an extra key;\n  - an uppercase, short or non-hex value, or a String object;\n  - dependencyDigest as undefined or ''.\n- A new row covers evidenceStatus:\n  - an observation recorded under toolchain A, against a current record under toolchain B, with every other freshness field equal, is 'stale';\n  - the same holds for the dependency digest;\n  - identical inputs stay 'fresh'.\n\n(b) scripts/tests/local-runner.test.mjs, R11's CJ rows:\n- checkHarness gains four injected steps, each a recording fake:\n  - toolchain resolves a frozen TOOLCHAIN = {file, sha256, size, version};\n  - dependencies resolves a frozen CACHE = {tree: {entries: [], digest: D}, digest: D, packages, bytes};\n  - installToolchain and installDependencies resolve.\n- identityOf gains toolchain (default TOOLCHAIN.sha256) and dependencies (default null).\n- Every existing CJ input gains dependencies: []. CJ8's real provisionGuest row injects the four fakes too, so no test downloads Node or a registry tarball.\n- CJ9: dependencies is required. Each of these refuses with CHECK_JOB_INPUT_INVALID before any ledger, provider or step call:\n  - a missing key or a non-array;\n  - 17 entries, or a duplicate;\n  - '', an absolute path, a '..' segment or a backslash;\n  - a dir whose package-lock.json is not in the merged snapshot view.\n- CJ10 uses dependencies ['.', 'pkg'] and a snapshot whose overlay replaces pkg/package-lock.json.\n  - The step order is provision, toolchain, dependencies, materialize, installToolchain, installDependencies, onReady, session, verify, remove.\n  - toolchain gets {arch: the arch of readyGuest's image.source, cacheDir}.\n  - dependencies gets {lockfiles: [{dir: '.', bytes}, {dir: 'pkg', bytes}], cpu: that arch, cacheDir}. The bytes are the MERGED view's: the overlay's, never the base's.\n  - installToolchain gets {name, toolchain: TOOLCHAIN, provider}.\n  - installDependencies gets {name, tree: CACHE.tree, provider}.\n  - onReady and the result get checkEnvironment({...the image, supervisor and resources inputs, toolchainSha256: TOOLCHAIN.sha256, dependencyDigest: D}).\n  - With dependencies [], neither dependencies nor installDependencies is called, and dependencyDigest is null.\n- CJ11: each new step's failure stops the run before onReady and the session. The VM is still deleted, and the run resolves infra-failure with this failure:\n  - toolchain rejecting {code:'TOOLCHAIN_X'} gives 'TOOLCHAIN_X'. Any other rejection gives 'CHECK_TOOLCHAIN_FAILED', as does a result whose sha256 is not 64 lowercase hex.\n  - dependencies rejecting {code:'DEPENDENCY_X'} gives 'DEPENDENCY_X', else 'CHECK_DEPENDENCIES_FAILED'. A digest that is not hex, or differs from tree.digest, gives 'CHECK_DEPENDENCIES_FAILED'.\n  - installToolchain rejecting {code:'TRANSFER_X'} gives 'TRANSFER_X', else 'CHECK_TOOLCHAIN_FAILED'.\n  - installDependencies rejecting {code:'TRANSFER_X'} gives 'TRANSFER_X', else 'CHECK_DEPENDENCIES_FAILED'.\n  - An abort fired inside each new step gives 'CHECK_ABORTED'.\n- CJ12: a session resolving 'infra-failure' passes through as infra-failure with failure null. That is what the guest's DEPENDENCIES_FAILED (81) gives, never passed or code-failure.\n- CJ7 is extended: a changed toolchain sha256, or a changed dependency digest, gives a new environment, and evidence observed in the old one is stale.\n\nRun `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-check.test.mjs`. The new and changed rows fail for the expected reason; every other row passes.\n\nError handling in the tests: assertions name fixed codes, never messages, and no row reaches the network or a real provider.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-check.test.mjs",
         "scripts/tests/local-runner.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "RED written; the run is logged at /tmp/r11e-red.log. With node 24.21 under env -i, filtered to E/CJ: 26 tests, 20 fail, 6 pass.\n- Failure codes: CHECK_JOB_INPUT_INVALID (dependencies is an unknown key), CHECK_INPUT_INVALID (the six-key identity), an E1 literal mismatch, and CJ11's 'Missing expected rejection: missing'.\n- Renumbered: R11f already landed CJ9 and CJ10, and E8 exists. So the plan's CJ9-CJ12 are CJ11 (input), CJ12 (order and args, x64+arm64, read-once getter, merged-view bytes), CJ13 (failure codes, the no-pinned-arch row, and an abort inside each new step) and CJ14 (the real runCheckSession over a supervisor that exits 81 before hello gives infra-failure with failure null). The new evidence row is E9.\n- CJ7 is extended with toolchain and dependency-digest changes. CJ2, CJ3, CJ4, CJ5 and CJ8 are adjusted for the new step order: CJ8 and CJ2's twins inject all four fakes, and CJ5's abort-after-provision now stops before the toolchain, so environment is null.\n- OBSERVED in the check test now uses the independent oracle, which E2 pins equal to checkEnvironment(VALID), so the file loads under RED.\n- Lockfile bytes: validateImport's entry.data is already a private Uint8Array copy, so CJ12 compares Uint8Array.\n- Scope note: check-dispatch.mjs (CQ-V04b, landed 2026-10-30 after this plan) calls runCheckJob without dependencies. I will file a bug: row in step 3. Peer dirty paths (postflight*, daemon index, .moe tasks) are untouched.",
+      "startedAt": "2026-10-30T14:15:29.180Z",
+      "completedAt": "2026-10-30T14:22:33.864Z"
     },
     {
       "stepId": "step-2",
       "description": "scripts/local-runner/check-evidence.mjs (R11d): the toolchain and dependency identity inputs.\n\n- INPUT_KEYS becomes ['dependencyDigest', 'providerImageHash', 'resources', 'sourceImageSha256', 'supervisorSha256', 'toolchainSha256'].\n- validatedInputs reads each value exactly once, as today.\n  - toolchainSha256 must pass sha256Hex.\n  - dependencyDigest must be null or pass sha256Hex.\n  - The returned copy carries both.\n- CHECK_BOUNDARIES gains two descriptors, which E1 pins:\n  - filesystem.toolchain: { owner: 'root', writable: false, identity: 'host-pinned-sha256' };\n  - dependencies: { source: 'host-offline-cache', integrity: 'lockfile-sha512', scripts: 'ignored', network: 'none', failure: 'infra-failure' }.\n  - Leave resources alone: R11a's drift test pins CHECK_RLIMITS against it.\n- ENVIRONMENT_PREFIX stays 'moe-local-vm-v1:'. The inputs changed, so every identity value changes anyway, and nothing parses the prefix.\n- Update the module header and checkEnvironment's JSDoc to name both inputs and say why each is there:\n  - the toolchain digest makes a toolchain change require new evidence (R11e DoD 3);\n  - the dependency digest covers which lockfile dirs were installed, which treeSha alone does not.\n\nError handling: unchanged. Any bad value, or an accessor that throws, is CHECK_INPUT_INVALID with the fixed message.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/check-evidence.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-evidence.mjs"
+      ],
+      "note": "check-evidence.mjs changes:\n- INPUT_KEYS now has 6 keys.\n- validatedInputs reads each value once. toolchainSha256 must be sha256Hex; dependencyDigest must be null or sha256Hex; both are carried in the hashed copy.\n- CHECK_BOUNDARIES gains filesystem.toolchain and a top-level dependencies descriptor, exactly as planned. resources is untouched, so the K2/K3 CHECK_RLIMITS drift stays intact.\n- The prefix stays v1. The header and checkEnvironment JSDoc name both inputs and why each is there.\n\nGREEN: E1-E9, 12/12 pass (/tmp/r11e-e.log, node 24.21 under env -i).",
+      "startedAt": "2026-10-30T14:22:34.807Z",
+      "completedAt": "2026-10-30T14:23:19.678Z"
     },
     {
       "stepId": "step-3",
       "description": "scripts/local-runner/check-lifecycle.mjs (CQ-R11, with CQ-R11f's verify step). Edit its LANDED bytes.\n\nImports:\n- fetchNodeToolchain from './toolchain-cache.mjs' (R11e1);\n- buildDependencyCache from './dependency-cache.mjs' (R11e3);\n- installToolchain and installDependencies from './snapshot-transfer.mjs' (R11e2 and R11e4);\n- validateImportPath from './source-snapshot.mjs'.\n\nInput:\n- KEYS gains 'dependencies'. It is REQUIRED, so it is not added to OPTIONAL.\n- parse() copies it exactly once:\n  - an array of 0-16 unique strings, each either '.' or a path that validateImportPath returns unchanged;\n  - for each dir, the merged entry 'package-lock.json' (for '.') or `${dir}/package-lock.json` must be in workspaceEntries(snapshot).entries;\n  - keep o.lockfiles as a frozen [{dir, bytes}], where bytes is a copy of that entry's data.\n- Anything else returns null, which is CHECK_JOB_INPUT_INVALID before any call.\n\nInjected steps: runCheckJob's second argument gains toolchain = fetchNodeToolchain, dependencies = buildDependencyCache, installToolchain and installDependencies, beside provision, materialize, session, verify and remove.\n\nIn checkJob, after the readiness check and before checkEnvironment:\n- toolchain = await steps.toolchain({ arch: guest.image?.source?.arch, cacheDir }):\n  - a rejection is codeOf(error, /^TOOLCHAIN_[A-Z0-9_]{1,60}$/, 'CHECK_TOOLCHAIN_FAILED');\n  - a result whose sha256 is not 64 lowercase hex is 'CHECK_TOOLCHAIN_FAILED'.\n- When o.lockfiles is non-empty, cache = await steps.dependencies({ lockfiles: o.lockfiles, cpu: <the same arch>, cacheDir }):\n  - a rejection is codeOf(error, /^DEPENDENCY_[A-Z0-9_]{1,60}$/, 'CHECK_DEPENDENCIES_FAILED');\n  - a digest that is not hex, or differs from cache.tree?.digest, is 'CHECK_DEPENDENCIES_FAILED'.\n- checkEnvironment also gets toolchainSha256: toolchain.sha256 and dependencyDigest: cache ? cache.digest : null.\n\nAfter materialize and before ready():\n- await steps.installToolchain({ name, toolchain, provider }). A rejection is codeOf(error, TRANSFER_CODE, 'CHECK_TOOLCHAIN_FAILED').\n- When cache is set, await steps.installDependencies({ name, tree: cache.tree, provider }). A rejection is codeOf(error, TRANSFER_CODE, 'CHECK_DEPENDENCIES_FAILED').\n- Pass neither one timeoutMs. Like materialize, each keeps its own transfer default, because a tree can outlast the 60 s call bound.\n\nAfter each new step: `if (signal?.aborted) return 'CHECK_ABORTED'`.\n\nThe session's outcome passes through unchanged. The guest's DEPENDENCIES_FAILED (81) already arrives as 'infra-failure', because check-session.mjs reports any exit before hello, other than 79, that way.\n\nUpdate the header and runCheckJob's JSDoc:\n- the step order;\n- the dependencies input, where [] means no dependency phase, as a deliberate caller choice;\n- the new fallback codes CHECK_TOOLCHAIN_FAILED and CHECK_DEPENDENCIES_FAILED, and the passed-through TOOLCHAIN_, DEPENDENCY_ and TRANSFER_ prefixes.\n\nError handling:\n- Every new call is wrapped in its own try/catch inside checkJob, like the existing steps. A rejection, or a malformed or null result (read with optional chaining), becomes a fixed code, and runCheckJob still deletes the VM before settling, with workspace 'unverified' unless R11f's verify ran.\n- No message carries a path, a lockfile byte or upstream text.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/check-lifecycle.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-lifecycle.mjs"
+      ],
+      "note": "check-lifecycle.mjs is wired; the landed R11/R11f bytes are kept.\n- `dependencies` is a required key.\n- lockfilesOf reads the dirs once (Array.from over an integer length of at most MAX_LOCKFILES). It requires them unique, '.' or validateImportPath-clean, each with a package-lock.json in the merged workspaceEntries view. It keeps frozen {dir, bytes}, where bytes is validateImport's private Uint8Array copy.\n- The new injected steps are toolchain=fetchNodeToolchain, dependencies=buildDependencyCache, installToolchain and installDependencies (the snapshot-transfer imports are aliased to avoid TDZ).\n- hostInputs runs after readiness and before checkEnvironment:\n  - A guest image arch not in IMAGE_ARCHES gives CHECK_TOOLCHAIN_FAILED with no fetch.\n  - Each result is read once by destructure, so a null result is the fallback code.\n  - Toolchain: sha256 must be hex, and TOOLCHAIN_* passes through.\n  - Dependencies run only when the lockfile list is non-empty. digest must be hex and equal tree.digest; DEPENDENCY_* passes through.\n- Abort checks run before the toolchain, after each new step, and after materialize.\n- checkEnvironment receives toolchainSha256 and dependencyDigest (null when there is no phase).\n- installHostInputs runs after materialize and before ready. TRANSFER_* passes through, else CHECK_TOOLCHAIN_FAILED or CHECK_DEPENDENCIES_FAILED. No timeoutMs is passed, so each step keeps its own transfer default.\n- The header and JSDoc document the step order, the [] choice and the codes. checkJob is 42 lines; the file is 206.\n- GREEN: CJ1-CJ14 14/14 (/tmp/r11e-cj.log).\n- Scope: filed task-da1d95742d6f48de9f40269e637b986c (bug: check-dispatch landedRunCheck omits the now-required dependencies; it fails closed with CHECK_JOB_INPUT_INVALID). It dependsOn this row; check-dispatch.mjs is not edited here.",
+      "startedAt": "2026-10-30T14:23:20.674Z",
+      "completedAt": "2026-10-30T14:26:30.211Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh.\n\n1. Run `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs`.\n   - This is R11e's command plus local-runner-agents.test.mjs, matching CI's local-runner line.\n   - On WSL, run it under env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\", so Windows Node is never used.\n   - It must exit 0. Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. `git diff --check -- scripts/local-runner/check-evidence.mjs scripts/local-runner/check-lifecycle.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-check.test.mjs` is clean.\n3. A read-only `git status --short` shows that this task changed only those four files. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code. Never weaken a test that pins a boundary, a code or the step order.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh verification, node v24.21.0 under env -i (nvm bin, /usr/bin, /bin).\n\n1. The task's own DoD command, the 5-file node --test, in the shared root: exit 0. 426 tests, 423 pass, 0 fail, 3 pre-existing opt-in skips (LA5 pinned codex, K9 root, macOS smoke). Log: /tmp/r11e-dod.log.\n2. The plan's 6-file CI line (plus local-runner-agents) in the shared root fails only TY1: 'build the daemon first'. The shared checkout has no packages/moe-daemon/dist, and building there would compile a peer's dirty daemon src and add untracked files.\n   - So I ran it in git-archive snapshot /tmp/r11e-snap.c1bKyU: HEAD, plus my 4 files (cmp-identical), plus a hardlinked lock-matching native Linux daemon node_modules and tsc (exit 0).\n   - Result: exit 0, 449 tests, 446 pass, 0 fail, 3 skips. Log: /tmp/r11e-verify6.log.\n3. git diff --check on the 4 files is clean. numstat: check-evidence +17/-9, check-lifecycle +93/-22, check test +31/-8, local-runner test +125/-19 = 324 changed. git status (read-only) shows this task changed only those 4 files. Peer dirty paths (docs, daemon src, wrappers, postflight, jetbrains/vscode, .moe) are untouched. No __pycache__.",
+      "startedAt": "2026-10-30T14:26:31.075Z",
+      "completedAt": "2026-10-30T14:31:02.424Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff of the four files as an attacker:\n- Does any path reach the session with an environment that lacks the toolchain sha256, or before installToolchain resolved?\n- Can any new step's rejection or malformed result escape checkJob, so runCheckJob rejects, or skips the delete?\n- Is dependencies read more than once, so a getter or Proxy could swap it after validation? Are the lockfile bytes the merged view's, and copied?\n- Is the arch the guest's verified image.source.arch, never the host's process.arch? A guest without a pinned arch must fail as CHECK_TOOLCHAIN_FAILED, never fall back to a default.\n- Two concurrent runs share cacheDir. Confirm that R11e1's and R11e3's landed writers use an exclusive .part and an atomic rename, as their contracts say.\n- Is huge input bounded? dirs are capped at 16, and validateImport caps the tree.\n- Can a pass be recorded with no dependency phase for a check that needed one? Only when the caller passed [], and the JSDoc names that as the caller's choice.\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 4's command fresh before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Adversarial review of the 4-file diff.\n- Session gating: the session is reached only after installHostInputs returns null (installToolchain resolved, and installDependencies when there is a cache) and after onReady. The environment always carries toolchainSha256, read once from a frozen copy.\n- Fixed codes: every new call is in its own try/catch and maps to a fixed code. A null or malformed result throws on destructure inside the try and gets the fallback code. A runCheckJob rejection still goes through finally, so remove() always runs.\n- Inputs read once: dependencies is destructured once, then its length and each index are read once, after a safe-integer check of at most 16 (no big allocation). The bytes are validateImport's private copy of the merged view (CJ12 shows OVERLAY, not BASE).\n- Arch: the only source is guest.image.source.arch, checked against IMAGE_ARCHES. A missing or ia32 arch gives CHECK_TOOLCHAIN_FAILED with no fetch (CJ13).\n- Concurrency: R11e1 and R11e3 both write through fetchPinnedFile, which opens a .part per nonce with 'wx' and then does an atomic rename (agent-cache.mjs:238/257/270).\n- [] semantics: only an explicit caller [] skips the phase, as the JSDoc says.\n\nMutation, 13 probes on scratch copies: 12 killed (arch check, toolchain hex, tree digest, abort after toolchain, pre-toolchain abort, digest null, host arch, dedupe, count cap, install skip, install fallback, code passthrough). One survivor, the abort check after the dependencies step, was redundant with checkJob's existing check after the environment. I removed it (comment added) and pinned result.environment in the CJ13 abort row.\n\nTheoretical only:\n- (a) A hostile error object with a throwing `code` getter would escape codeOf. This is pre-existing for provision and materialize; the steps are trusted host injections, and the delete still runs.\n- (b) A caller that mutates its snapshot buffers between parse and materialize could materialize a lockfile other than the one fetched. The guest's offline npm ci then fails closed as infra-failure.\n\nRe-verified fresh:\n- DoD 5-file command in the shared root: exit 0, 426 tests, 423 pass, 0 fail, 3 skips (/tmp/r11e-dod-final.log).\n- 6-file CI line in snapshot /tmp/r11e-snap.c1bKyU with the 4 current files: exit 0, 449/446/0/3 (/tmp/r11e-verify6-final.log). No runner or test file changed on HEAD since the snapshot.\n- diff --check is clean; numstat 325 changed lines.",
+      "startedAt": "2026-10-30T14:31:03.372Z",
+      "completedAt": "2026-10-30T14:34:12.481Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -83,20 +112,28 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:27:38.551Z",
-  "updatedAt": "2026-10-30T13:21:38.234Z",
+  "updatedAt": "2026-10-30T14:34:25.445Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:33:18.537Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-0062feec"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T22:56:55.819Z",
   "planningNotes": {
@@ -121,5 +158,21 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T22:56:55.910Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T14:15:29.180Z",
+  "reviewStartedAt": "2026-10-30T14:34:25.443Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ RA checkAgents reports AGENT_MISSING for an absent binary and AGENT_HASH_MISMATCH for a changed one, from the installed pins only (25.261344ms)\nℹ tests 426\nℹ suites 0\nℹ pass 423\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 37770.824275\n(skips are pre-existing opt-in rows: LA5 pinned codex, K9 root mount namespace, macOS native smoke. Plan step-4's 6-file CI line incl. local-runner-agents also exit 0, 449 tests/446 pass/0 fail/3 skip, run in git-archive snapshot /tmp/r11e-snap.c1bKyU with a compiled daemon, because the shared checkout has no packages/moe-daemon/dist for TY1)",
+    "reportedAt": "2026-10-30T14:34:25.443Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/check-evidence.mjs",
+    "scripts/local-runner/check-lifecycle.mjs"
+  ],
+  "completionSummary": "CQ-R11e delivered: the check lifecycle wires in the pinned toolchain and offline dependencies, and the environment identity names both. 4 files, 325 changed lines (+267/-58).\n\ncheck-evidence.mjs:\n- checkEnvironment requires toolchainSha256 (sha256 hex) and dependencyDigest (hex, or null when there is no dependency phase), each read once.\n- CHECK_BOUNDARIES gains filesystem.toolchain and a dependencies descriptor; the prefix stays v1.\n\ncheck-lifecycle.mjs:\n- runCheckJob takes a REQUIRED `dependencies`: 0-16 unique dirs, each '.' or validateImportPath-clean, read once, each with a package-lock.json in the MERGED snapshot view. [] is the caller's explicit choice of no dependency phase.\n- New injected steps: toolchain=fetchNodeToolchain, dependencies=buildDependencyCache, installToolchain, installDependencies.\n- Order: provision, toolchain, dependencies, environment, materialize, installToolchain, installDependencies, onReady, session, verify, remove.\n- The arch is guest.image.source.arch only. An unpinned arch gives CHECK_TOOLCHAIN_FAILED with no fetch.\n- TOOLCHAIN_, DEPENDENCY_ and TRANSFER_ codes pass through; anything else is CHECK_TOOLCHAIN_FAILED or CHECK_DEPENDENCIES_FAILED. A malformed result fails closed, an abort is checked after each step, and the VM is always deleted.\n\nTests:\n- E1-E5 extended and E9 added: stale evidence across a toolchain or dependency change.\n- CJ2/3/4/5/7/8 adjusted, CJ7 extended.\n- New CJ11-CJ14 (CJ9/CJ10 were already R11f's):\n  - CJ11: input refusals;\n  - CJ12: order and args for x64 and arm64, overlay bytes, read once;\n  - CJ13: failure codes, no arch, abort per step;\n  - CJ14: the real session with a supervisor exit of 81 gives infra-failure, failure null.\n\nMutation: 13 probes, 12 killed. The survivor was a redundant abort check; I removed it and pinned environment in its test row.\n\nVerification:\n- DoD command: exit 0, 426/423/0 fail/3 pre-existing skips.\n- 6-file CI line in an archive snapshot: exit 0, 449/446/0/3.\n\nFiled task-da1d95"
 }
