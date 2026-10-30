@@ -99,7 +99,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -132,11 +132,17 @@
       "author": "worker-0062feec",
       "content": "Round-2 response to the QA size-only reject, following QA's route with no byte changes:\n1. Filed prop-77f189b18e6145d080a447131f2dfa15, an EPIC ADD_RAIL in V03a shape (633 chars). It names 1cf1b47 (tree dc659992) and +474/-0 (net 474): state/checkObservationStore.test.ts +241/-0, state/checkObservationStore.ts +202/-0, types/schema.ts +31/-0. That is 233 runtime and 241 tests. It contains \"waive size-based rejection of those landed bytes; grow only by QA-required fixes\". The reason carries QA's V03/V04 advisory: the maps are module-owned, so use getCheckDispatch/getCheckObservation.\n2. Pinged #governors (msg-4466a310), routed to governor-693b7073.\n3. Re-measured: `git show --numstat --format= 1cf1b47` matches. The 3 owned paths have an empty diff 1cf1b47..HEAD 263a198 and are clean in the worktree.\nNext: walk the plan steps without edits, run a fresh gate, then complete_task.",
       "timestamp": "2026-10-30T05:22:24.896Z"
+    },
+    {
+      "id": "comment-02d18c4d670c47cc95d1dc7d8e2ed139",
+      "author": "qa-952969be",
+      "content": "QA round 2 (qa-952969be, 2026-10-30 05:48Z). Verdict: PARK; neither approve nor reject. The substance is green. Size waiver prop-77f189b18e6145d080a447131f2dfa15 is still PENDING (resolvedBy null), and allRails.epic has no rail for this row, so the 400 net-LOC cap still applies. Only a rail can waive it.\n\nBytes:\n- Code completion 1cf1b47 (tree dc659992) on moe/work-2026-10-24. `git show --numstat --format= 1cf1b47` over packages/ gives +474/-0: checkObservationStore.test.ts +241, checkObservationStore.ts +202, schema.ts +31. This equals the proposal text.\n- Round-2 completion d62694d (tree 22902d55) is board-only: two .moe/tasks records, no source.\n- The 3 owned blobs are identical at 1cf1b47, HEAD f7867a2 and the worktree. `git log 1cf1b47..HEAD` touches none of them, nor checkRunStore.ts, recordCheckRun.ts, delivery/policy.ts or StateManager.ts.\n\nFresh gate: /tmp/moe-v03bqa2-gate.fcTOA3, a git archive of the whole repo at HEAD f7867a2 with no overlay. The owned files are cmp-equal to 1cf1b47 and to the worktree, and package/lock are equal modulo CR. Native npm ci exited 0. Run under env -i NO_COLOR=1, node v24.21.0.\n- `cd packages/moe-daemon && npm test`: EXIT 0. Test Files 194 passed (194); Tests 5456 passed | 16 skipped (5472); checkObservationStore.test.ts 42/42. This matches task.verification.\n- `npx tsc --noEmit`: EXIT 0. Test-file scratch-tsconfig typecheck: EXIT 0.\n\nReview: I re-read the module and the tests in full.\n- DoD 1: the forgery test goes through the real record_check_run handler, with both sources, and returns false; the observed run returns true.\n- DoD 2: replay duplicate, CHECK_RUN_IMMUTABLE and CHECK_DISPATCH_ALREADY_OBSERVED, each checked with byte snapshots.\n- DoD 3: NOT_FOUND, RUNNER and ENVIRONMENT refusals write nothing; a superseded dispatch binds to cand-k1 at revision 1; a new dispatch on it gets CHECK_DISPATCH_NOT_CURRENT.\n- DoD 4: restart reload, and an EIO-once crash retry that completes the marker.\n- DoD 5: the gate above.\n\nNew QA mutants, none overlapping rounds 1 or 2, all KILLED (42 tests, 1 failed each):\n- QB: drop the marker.checkRunId compare.\n- QD: drop the planRevision<1 guard.\n- QG: drop the extra-key length check.\n- QI: turn off the case-collision check.\n- QK: drop the blank-text guard.\nThe module was restored cmp-equal.\n\nRails: no forbidden patterns in the added lines, no .moe edits, verified-local untouched.\n\nResume:\n- APPROVED: set_task_status REVIEW. The next QA confirms the rail, re-measures numstat against it, re-runs the gate and approves naming 474 net.\n- REJECTED: set_task_status PLANNING for a review-scope split.",
+      "timestamp": "2026-10-30T05:48:40.035Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:38:47.791Z",
-  "updatedAt": "2026-10-30T05:28:49.441Z",
+  "updatedAt": "2026-10-30T05:49:16.165Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:43:34.854Z",
     "plannedStepCount": 6,
@@ -317,5 +323,9 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedReason": "QA park, size waiver pending. The substance is green. Only the 400 net-LOC review cap blocks approval, and no rail waives it yet. Waiver proposal prop-77f189b18e6145d080a447131f2dfa15 (EPIC ADD_RAIL on epic-f5c1c2ea674e40bcad8ab16d7657ccc0) has been PENDING since 05:22Z, and only a human can resolve it.\nBytes: completion 1cf1b47 (tree dc659992) is +474/-0 over packages/: checkObservationStore.test.ts +241, checkObservationStore.ts +202, schema.ts +31. This equals the proposal text. d62694d is board-only.\nFresh QA gate on a git archive of HEAD f7867a2 (no overlay; owned files cmp-equal to 1cf1b47; native npm ci; env -i; node v24.21.0):\n- npm test EXIT 0: 194 files, 5456 passed, 16 skipped.\n- tsc --noEmit EXIT 0; test-file typecheck EXIT 0.\n- DoD 1-5 verified; 5 new QA mutants, all killed. The evidence is in QA comment-02d18c4d.\nResume:\n- When the proposal is APPROVED, set_task_status REVIEW. The next QA confirms the rail in allRails.epic, re-runs the gate and approves, naming 474 net.\n- If it is REJECTED, set_task_status PLANNING for a review-scope split.\nunblock_worker cannot reach this unassigned row.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-30T05:49:16.165Z"
 }
