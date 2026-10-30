@@ -80,8 +80,8 @@
     }
   ],
   "planRevision": 5,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-b29f7b3d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -154,11 +154,17 @@
       "author": "architect-bc59d28a",
       "content": "Planner note (architect-bc59d28a, 19:48Z). This supersedes the conditional parts of comment-55421a67; its S11 profile() requirement stands. It agrees with comment-b0ef1ee6 and with the governor relay comment-e97ad83a. No re-plan: the files and the DoD are unchanged. I checked it against 7eec5dbe (HEAD) and against your in-progress tree.\n@worker-e60b90bd\n1. Step 1(g), approved as you wrote it. storedProfile's read gate becomes `it.usableFor(basePath) || windowsHost && (unprovableDrive(it.root.toString()) || unplainBase(basePath))`, where `unplainBase(basePath) = !isPlainLocalBase(basePath) || realPathOrNull(basePath)?.let { !isPlainLocalBase(it.toString()) } == true`. Keep these four things:\n- The raw check runs first, so the new code never opens a non-plain base.\n- windowsHost stays in front: off Windows, isPlainLocalBase is false for every path.\n- A base whose real path is null still reads ABSENT, as 1c2bfeca landed it.\n- D2 is unchanged.\n2. Tests for 1(g), on Windows. The plan has none yet, and usableFor == false cannot tell inside from unprovable.\n- Setup: install a store and a RecordingConfirmer the way withProfileStore does, and use the native drive seam. N14's throwing seam would escape as an AssertionError through unprovableDrive(root). Write the pin directly, the way D1 does at :110: `store.write(RuntimeSelectionPolicy.profileRecordName(base), profileJson(File(base), \"protected\"))`. Use no verified-local declaration, then call forgetSessionForTest().\n- N14: base = realFile(project).path + \".\" (local, so no share is opened). profile(base) == PROTECTED and asks.paths == [base]. After asks.answers.last()(true), the record is unchanged.\n- S11: the same check on link.path, using profileJson(link, …).\n- S12: comment-b0ef1ee6's check stays. It also passes under the landed gate, because the subst letter is drive-unprovable.\n- Step 3, RED-4: put back `listOf(it.root.toString(), basePath).any(::unprovableDrive)`. N14's and S11's profile() checks must fail, and S12's must pass. Record RED-4 with the other REDs.\n3. Step 1(f) needs no change: 7eec5dbe already has the target text.\n4. Wording for N14's comment and step 5's RF07 line: such a base persists nothing new, so a verified-local pin, daemon provenance and a confirmed downgrade all stay session-only. A PROTECTED pin stored earlier is still read, so the downgrade is asked again after every restart.\n5. Not this row. Don't widen for either case; name both in the completion summary.\n(i) The store root's real path (task-08bb7723). unprovableDrive(root) still reads the root only as written.\n(ii) A base on a subst letter whose target folder is a junction onto a letter the lookup can't place. Its toRealPath result is plain, physicalProject fails in a later round, and the pin still reads ABSENT. I flagged (ii) to the governor for 08bb7723 (msg-c55586da).",
       "timestamp": "2026-10-30T19:47:26.616Z"
+    },
+    {
+      "id": "comment-798c7bad967b47c5ac4d3b8887edc33e",
+      "author": "governor-4764040b",
+      "content": "From the governor, for whoever QAs this round. You should get a recovered checkpoint, not a completion commit.\n- What happened: worker-e60b90bd called complete_task at 20:23:31Z, then its terminal closed at 20:23:53Z in the fleet restart, before its post-flight could land anything. So task.commits has no completion commit for this round; the only commit is the old checkpoint 4e3b3f52.\n- Where the bytes are: the delivery sits uncommitted in the shared checkout. RuntimeSelectionPolicy.kt (55 changed lines) and RuntimeSelectionPolicyTest.kt (269), both in this row's filesModified.\n- Why recovery should fire: attempt 2f4f82d2 is closed, not finalizing. The live marker's pid 317155 is gone. The baseline at head 7eec5dbe says landed=0.\n- What to do: your QA wrapper's pre-flight should land those two paths as a `wip(task-52fb6178...) ... recovered` checkpoint. Review that SHA as the delivery. A NO-COMPLETION-COMMIT warning at qa_approve is expected; say \"recovered checkpoint <sha>\" in the approval.\n- If that checkpoint isn't in task.commits when you start, stop and post in #governors. Do not self-land.\n- The completion's own verification is in its TASK_COMPLETED event: gradlew.bat test --rerun, exit 0, run 20:19:40Z under the jetbrains-gradle lease.",
+      "timestamp": "2026-10-30T20:38:09.647Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:28:38.098Z",
-  "updatedAt": "2026-10-30T20:36:03.710Z",
+  "updatedAt": "2026-10-30T20:50:33.135Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T18:20:47.227Z",
@@ -168,7 +174,9 @@
     "firstClaimAt": "2026-10-30T16:38:30.014Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T20:50:33.135Z",
+    "wallClockMs": 15123121
   },
   "contextFetchedBy": [
     "architect-6fc3dd5c",
@@ -281,19 +289,38 @@
       "treeId": "7225688f332cd533fb71f8bccdb168311c502ff5",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "04a3e180c6327c1eb9c130f11ceb33250f728be3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-30T20:35:57Z",
+      "paths": [
+        ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-30T20:36:13.986Z",
+      "treeId": "fc46b85bac1d7ee67ddb2d660c4940338a8910d8",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
-    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+    ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
+    "outcome": "committed",
     "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-bc59d28a@2026-10-30T18:21:23Z",
-    "at": "2026-10-30T18:45:22.386Z"
+    "sessionId": "qa-b29f7b3d@2026-10-30T20:35:57Z",
+    "at": "2026-10-30T20:36:13.986Z"
   },
   "blockedFromStatus": null,
   "blockedAt": null,
@@ -310,5 +337,9 @@
     "reportedAt": "2026-10-30T20:23:31.007Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Protected on Windows needs a plain local project base: isPlainLocalPath (drive-qualified, no segment ending in '.' or ' ') plus 1c2bfeca's resolveWindowsDrivePath proving the drive local (seam sees only X:, fails closed), checked on the raw base (before any open) and its real path. select refuses with \"the project directory is not a plain local Windows path\", so \\\\localhost\\C$\\...\\project no longer puts local project paths outside it. Such a base's pin is still read (unplainBase: unprovable, never inside). LEGACY, POSIX unchanged (S10/S12 pin LEGACY Restart stop).\nChanges: (1) protected refuses a candidate with a '.'/' '-ending segment in its spelling or real path; (2) an unprovable drive base reads BASE_NOT_PLAIN, not \"cannot be resolved\" (N11); (3) it refuses a blank or relative base.\nRF07 (task-f3f364a6) accepted cost, protected on Windows: opened via a UNC share (incl. \\\\localhost\\C$), a device path, \\\\wsl$ or \\\\wsl.localhost, a rooted or drive-relative spelling, a '.', '..', trailing '.' or ' ' spelling or a real path ending in '.', a mapped network drive or an unknown device family (VeraCrypt, ImDisk, WinFsp) a project starts nothing, keeps no PATH entry. Such a base persists nothing new, so a verified-local pin, daemon provenance and a confirmed downgrade stay session-only. A PROTECTED pin stored earlier is still read, so the downgrade is asked after every restart. TROUBLESHOOTING: clone to an unmapped local drive, run the IDE inside the distro for WSL, or stay legacy.\nResiduals: RF02/RF01 keyed by the opened spelling (9a1da6f6); missing PATH leaf lexical until dd545bf1; JetBrains refuses unknown device families, VS Code has no such check. Not covered by unplainBase (08bb7723's side): (i) unprovableDrive(root) reads the root only as written; (ii) a subst base whose target junctions onto an unplaceable letter reads ABSENT (msg-c55586da); (iii) new: a store root with a '.'/' ' segment is unusable, its pin reads ABSENT (contrived; noted on 08bb7723)."
+  "completionSummary": "Protected on Windows needs a plain local project base: isPlainLocalPath (drive-qualified, no segment ending in '.' or ' ') plus 1c2bfeca's resolveWindowsDrivePath proving the drive local (seam sees only X:, fails closed), checked on the raw base (before any open) and its real path. select refuses with \"the project directory is not a plain local Windows path\", so \\\\localhost\\C$\\...\\project no longer puts local project paths outside it. Such a base's pin is still read (unplainBase: unprovable, never inside). LEGACY, POSIX unchanged (S10/S12 pin LEGACY Restart stop).\nChanges: (1) protected refuses a candidate with a '.'/' '-ending segment in its spelling or real path; (2) an unprovable drive base reads BASE_NOT_PLAIN, not \"cannot be resolved\" (N11); (3) it refuses a blank or relative base.\nRF07 (task-f3f364a6) accepted cost, protected on Windows: opened via a UNC share (incl. \\\\localhost\\C$), a device path, \\\\wsl$ or \\\\wsl.localhost, a rooted or drive-relative spelling, a '.', '..', trailing '.' or ' ' spelling or a real path ending in '.', a mapped network drive or an unknown device family (VeraCrypt, ImDisk, WinFsp) a project starts nothing, keeps no PATH entry. Such a base persists nothing new, so a verified-local pin, daemon provenance and a confirmed downgrade stay session-only. A PROTECTED pin stored earlier is still read, so the downgrade is asked after every restart. TROUBLESHOOTING: clone to an unmapped local drive, run the IDE inside the distro for WSL, or stay legacy.\nResiduals: RF02/RF01 keyed by the opened spelling (9a1da6f6); missing PATH leaf lexical until dd545bf1; JetBrains refuses unknown device families, VS Code has no such check. Not covered by unplainBase (08bb7723's side): (i) unprovableDrive(root) reads the root only as written; (ii) a subst base whose target junctions onto an unplaceable letter reads ABSENT (msg-c55586da); (iii) new: a store root with a '.'/' ' segment is unusable, its pin reads ABSENT (contrived; noted on 08bb7723).",
+  "completedAt": "2026-10-30T20:50:33.135Z",
+  "reviewCompletedAt": "2026-10-30T20:50:33.135Z",
+  "reviewSummary": "APPROVED. Diff 7eec5dbe..04a3e180 on the 2 planned files: +309/-15, 294 net.\nDELIVERY: no completion commit. worker-e60b90bd is DEAD (20:42Z sweep). My QA pre-flight recovered its bytes as checkpoint 04a3e180, pushed, on origin/moe/work-2026-10-24, sha256 equal to the worker's final hashes (84029211/baf16e76). I made no commit (nothing dirty; the rail bars Git writes outside wrappers), so expect NO-COMPLETION-COMMIT; 04a3e180 is the delivery.\nGATE (lease held, then released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" gave rc=0, :test executed. 492 tests, 0 fail/err/skip (RSPT 66, MDST 79). N13, N14, S10, S11 and S12 ran unskipped; N5-N12, S7-S9, D2 and D9 pass. No leftovers.\nDoD 1: N14, isOutsideProject false over every non-plain base (UNC localhost/127.0.0.1 shares included) for 4 paths, with a throwing resolver and seam. S10: in-project and outside node/daemon are refused with exactly BASE_NOT_PLAIN before any lookup; spawn goes via a local volume base. DoD 2: the re-run above.\nCriteria: S11 junction (candidate and base), S12 seam fakes and X:-only asks, LEGACY stop under a throwing seam (S10/S12). Only N11's one assertion changed.\nCODE: order is raw check, then realPathOrNull, then real check, before resolve(), with projects lazy. Every new check is gated by strict(). Grepped all callers: the LEGACY stop and env paths are unchanged; the others are protected-only. The storedProfile gate is step 1(g) (comment-0c896da0). No production Kernel32; reasons never carry a path; nothing throws. RED-1..5 checked by reading only, not re-run.\nRF07 cost: a non-plain base persists nothing new. A verified-local pin set through one is session-only, so only an earlier pin survives restarts. Ponytail: lean, net -0.",
+  "requiredCheckAtDone": null
 }

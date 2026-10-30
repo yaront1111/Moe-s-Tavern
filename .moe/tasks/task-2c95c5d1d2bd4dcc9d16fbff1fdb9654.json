@@ -1,0 +1,33 @@
+{
+  "id": "task-2c95c5d1d2bd4dcc9d16fbff1fdb9654",
+  "epicId": "epic-be924fb8",
+  "title": "bug: DEAD team members keep their team seats until the 30-min stale prune, so seats launched after a fleet restart run teamless and skip claimable rows",
+  "description": "Observed 2026-10-30, filed by governor-4764040b.\n\nWhat happened:\n- At 20:23Z the JetBrains plugin deregistered 16 seats with terminal_closed. Each became DEAD and its record was kept.\n- Worker team team-a94dc136 (\"moes\", maxSize 20) kept all 16 in memberIds, so it stayed full at 20/20.\n- Three seats launched after 20:24Z could not join: worker-632cd3f0, architect-915213a1 and architect-4ff0711c. The wrapper warned \"moe.join_team refused: ... this seat has NO team, so claim_next_task skips every epic a live worker already holds\".\n- worker-632cd3f0 was alive and polling every 30s. It still never claimed WT-04 (task-c20464ff). From 20:34Z WT-04 was the only claimable WORKING row and the head of the 28-row critical chain. It was skipped because worker-c0a1ac70 held WT-08T in the same epic and status.\n- At 20:42Z the governor removed the 16 DEAD members with moe.leave_team. The seat joined and claimed WT-04 within 5s.\n\nMechanism, as read from the code:\n- packages/moe-daemon/src/state/teamStore.ts addTeamMember refuses when `existing.memberIds.length >= existing.maxSize`, and that count includes DEAD members.\n- Membership is dropped, with a formerMemberIds tombstone, only by deleteWorker (state/workerStore.ts).\n- deleteWorker runs from the stale-worker sweep (state/sweeps.ts, Layer 3) once staleWorkerTimeoutMs (30 min) has passed, or at a restart purge.\n- Deregistration (moe.deregister_worker, the plugin's DEREGISTER_WORKER) marks the record DEAD and leaves its membership.\n- So after any IDE tab-close wave, new seats run teamless for up to about 35 minutes.\n\nConstraint: a hot reload deregisters with wrapper_restart and re-registers under the SAME id (every seat did this at 19:53Z). A DEAD member re-joining under its own id must keep working.\n\nThe fix is the planner's call. For example: count only non-DEAD members against maxSize, and on a join, evict the DEAD members to formerMemberIds the way deleteWorker does. The teamless claim filter itself is out of scope.",
+  "definitionOfDone": [
+    "Daemon regression test, RED on the parent: a team at maxSize whose members include DEAD workers accepts join_team from a new worker, and the team never holds more than maxSize non-DEAD members.",
+    "A DEAD member re-joining under its own id (the wrapper_restart path) still succeeds when the team is otherwise full.",
+    "Evicted DEAD members land in formerMemberIds, as deleteWorker does, and the teamless claim filter is unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion from BACKLOG under the human's 2026-10-30 13:00Z delegation. At 20:23Z, DEAD seats counting against team maxSize left a coder teamless and the critical-chain head unclaimed. The defect recurs at every tab-close wave. It is daemon-side, outside the wrapper lane, so planning it runs in parallel with the critical path.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 316.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T20:43:22.675Z",
+  "updatedAt": "2026-10-30T20:43:49.179Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T20:43:49.179Z",
+    "seq": 1
+  }
+}
