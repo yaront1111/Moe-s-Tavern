@@ -13,14 +13,65 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Windows: only drive-qualified forms are plainly local. Production change, one file: moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt.\n\n(a) Beside `defaultFoldCase` (line 187), add `internal val windowsHost: Boolean = System.getProperty(\"os.name\").orEmpty().lowercase(Locale.ROOT).startsWith(\"windows\")`. Use that same idiom; util must not call MoeDaemonSupervisor.isWindowsHost.\n\n(b) Beside DRIVE_ROOT, add `private val LOCAL_DRIVE = Regex(\"^[A-Za-z]:/\")` and `internal fun isPlainLocalPath(path: String, windows: Boolean = windowsHost): Boolean = !windows || LOCAL_DRIVE.containsMatchIn(comparablePath(path, false))`. Its KDoc must give the why:\n- On a Windows host only a drive-qualified form is plainly local.\n- A UNC form (`\\\\srv\\sh`, `//srv/sh`, `\\\\?\\UNC\\…`, `\\\\.\\UNC\\…`) can reach any local folder through a share. A loopback admin share (`\\\\localhost\\C$\\<project>`) names the project itself.\n- A device form (`\\\\.\\Volume{…}\\…`, `\\\\.\\GLOBALROOT\\…`) names a folder without its drive.\n- Java's toRealPath keeps both forms, and nothing maps them back to the project, so neither is provably outside.\n- comparablePath already turns `\\\\?\\C:\\` and `\\\\.\\C:\\` into `C:/`, so those stay plain.\n- POSIX has neither form, so the answer there is always true.\n\n(c) isOutsideProject: add a trailing parameter `resolve: (String) -> Path? = ::realPathOrNull`. Its KDoc: the real-path lookup, which tests substitute.\n- Keep `candidate.isAbsolute`.\n- Then require `isPlainLocalPath(candidate.normalize().toString())` BEFORE `resolve(path)` runs, using the `&&` short-circuit. A UNC or device PATH entry is then never contacted: no SMB connection, no NTLM handshake, no network timeout.\n- Then every form in `listOfNotNull(candidate.normalize(), resolve(path))` must be plain local AND not within any project form. The project forms and the comparablePath/isWithin check stay as they are.\n- Error handling is unchanged and fails closed: keep both catches, so Exception and IOError answer false.\n- Update the KDoc: true only for an absolute path outside the project both as written and as its real path; on a Windows host both must also be plainly local.\n\n(d) select: add as the FIRST when-branch `!isPlainLocalPath(real.toString()) -> rejected(\"$label is not a plain local Windows path\", real)`.\n- It goes before isRegularFile, so a share is not read again.\n- The wording is the one VS Code's selectInstalledFile uses.\n- rejected() logs the path and returns only the reason, as the other branches do.\n- It covers installedExecutable (node) and installedArtifact (daemon, wrapper and proxy). A plugin installed on a share is not used, as with VS Code's network extension install.\n- Do NOT pre-check installedExecutable's spelling. Its real path is checked here, and S8 reaches this branch through a device spelling.\n\nNo other production file changes. These consumers keep their signatures and inherit the rule:\n- MoeDaemonSupervisor.protectedPathEntries, nodeOnProtectedPath and protectedDaemonEnvironment (MoeDaemonSupervisor.kt:566-588);\n- protectedDaemonCommand (:515);\n- TerminalAgentLauncher, through installedArtifact;\n- ManagedVmPanel.kt:137-138;\n- ProtectedStateStore.usableFor (:37). A state root on a share now reads as unusable, so state stays session-only: the fail-closed direction.\nLEGACY never calls these functions.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "note": "RuntimeSelectionPolicy.kt only: added LOCAL_DRIVE regex, internal val windowsHost (same os.name idiom as defaultFoldCase), internal fun isPlainLocalPath(path, windows = windowsHost) = !windows || comparablePath(path,false) starts with a drive letter + '/'. isOutsideProject gains trailing resolve: (String) -> Path? = ::realPathOrNull; the spelling must be plain local (&& short-circuit) BEFORE resolve runs; then every form (normalized spelling, resolved real path) must be plain local and not within any project form. Both catches (Exception, IOError) kept. select gains first when-branch `!isPlainLocalPath(real) -> rejected(\"$label is not a plain local Windows path\", real)`, before isRegularFile. Existing positional callers (protectedPathEntries, ProtectedStateStore.usableFor, tests) compile unchanged; installedArtifact/installedExecutable signatures unchanged. Compile is checked by the Windows gradle run in step 3 (no Linux JDK). Peer dirty paths (board JSONs, .moe/decisions, scripts/*, scripts/mods tsconfigs, docs/TROUBLESHOOTING.md) untouched. Open note: the inverse case (a UNC project BASE, comments on this task from governor-693b7073 and architect-6fc3dd5c) is not in this plan; filing it as a bug row.",
+      "startedAt": "2026-10-30T16:27:31.226Z",
+      "completedAt": "2026-10-30T16:28:27.810Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Tests, one file: moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt. Change no existing row.\n\nThe paths below are runtime values; write them as Kotlin literals with doubled backslashes.\n- Windows-only methods start with `assumeTrue(\"Windows path forms\", RuntimeSelectionPolicy.windowsHost)`. They skip on Linux CI and must RUN on the Windows verification host.\n- No row needs the network: every UNC or device spelling is refused before any lookup. The one exception is S8(iv), which touches only the local SMB server.\n\nN5, isPlainLocalPath (any host, pure strings):\n- With windows=true it answers false for `\\\\srv\\sh\\x`, `//srv/sh/x`, `\\\\?\\UNC\\srv\\sh\\x`, `\\\\.\\UNC\\srv\\sh\\x`, `\\\\localhost\\C$\\proj`, `\\\\127.0.0.1\\C$\\proj`, `\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\proj`, `\\\\.\\GLOBALROOT\\Device\\Mup\\localhost\\C$\\proj`, `C:`, `\\proj` and `proj`.\n- With windows=true it answers true for `C:\\proj`, `c:/proj`, `C:\\`, `\\\\?\\C:\\proj` and `\\\\.\\C:\\proj`.\n- With windows=false it answers true for `//srv/sh/x`, `\\\\srv\\sh\\x` and `/w/proj`: POSIX is unchanged.\n\nN6, isOutsideProject (Windows).\nSetup:\n- project = newFolder(\"project\") and outside = newFolder(\"outside\").\n- A helper share(host, dir) returns `\\\\<host>\\<drive>$\\` followed by realFile(dir).path after `X:\\`. assumeTrue that the real path is drive-qualified.\n- `val untouched: (String) -> Path? = { throw AssertionError(\"looked up $it\") }`. AssertionError is an Error, so isOutsideProject's error handling does not swallow it, and any lookup fails the test.\nEach spelling below answers false both with resolve = untouched and with the default lookup:\n- `\\\\srv\\sh\\x`, `//srv/sh/x`, `\\\\?\\UNC\\srv\\sh\\x` and `\\\\.\\UNC\\srv\\sh\\x`;\n- `\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\x`;\n- `\\\\.\\GLOBALROOT\\Device\\Mup\\localhost\\<d>$\\<project rest>`;\n- share(\"localhost\", project), share(\"127.0.0.1\", project) and share(\"localhost\", project) + `\\bin`;\n- share(\"localhost\", outside). It is refused although it names an outside folder: the accepted cost.\nReal path, with no I/O: isOutsideProject(outside.path, project.path, resolve = { Paths.get(share(\"localhost\", outside)) }) is false. So is a resolve that returns Paths.get of the UNC string `\\\\srv\\sh\\outside`; Paths.get of a UNC string does no I/O.\nControls: the default call and resolve = { Paths.get(it).toRealPath() } both answer true for outside.path. So each refusal comes from the form alone.\n\nS7, protected daemon PATH (Windows):\n- As in S4, use supervisorFor(project, { null }, { null }).\n- env PATH = outsideA, then every N6 spelling built for this project, then outsideB, joined with File.pathSeparator.\n- After supervisor.protectedDaemonEnvironment(env, project.path), assertEquals(mapOf(\"PATH\" to listOf(outsideA, outsideB).joinToString(File.pathSeparator)), env). The whole-map assert also shows nothing else changed.\n\nS8, a node whose real path is not plain local spawns nothing (Windows).\nSetup:\n- Take (project, root, node) from protectedFixture().\n- Add a helper volumeSpelling(file). It runs File(System.getenv(\"SystemRoot\"), \"System32\\mountvol.exe\") with `<X:>` and `/L` through ProcessBuilder, as junction() does with cmd.\n- It trims the output and strictly matches the `\\\\?\\Volume{GUID}\\` line, then returns `\\\\.\\Volume{GUID}\\` followed by the real path after `X:\\`.\n- Java parses only the `\\\\.\\` form, and toRealPath keeps it: a local device path, with no network.\n- Error handling: on any failure it returns null. Guard with assumeTrue.\nAssertions:\n- (i) assertRejected on installedExecutable(volumeSpelling(node), project.path) gives exactly \"node executable is not a plain local Windows path\".\n- (ii) installedArtifact(File(volumeSpelling(root)), \"daemon/index.js\", project.path) gives \"installed daemon/index.js is not a plain local Windows path\".\n- (iii) For supervisorFor(project, { root }, { volumeNode }, started = started, statuses = statuses), ensureDaemonRunning() is false, started is empty, and selectionRefusal() is \"Protected execution profile: node executable is not a plain local Windows path. Project and PATH copies of the Moe daemon are not used.\"\n- (iv) share(\"localhost\", node) has a UNC real path wherever the loopback share is reachable. It is always refused, and it gives the named reason when Files.isRegularFile(Paths.get(it)) holds.\n- (v) Control: installedExecutable(node.path, project.path) is still Accepted(realFile(node)).\n\nRED, then GREEN. Record both in the step note:\n- Run the focused class once (`--tests com.moe.util.RuntimeSelectionPolicyTest`, unquoted) with isPlainLocalPath temporarily returning true. N5, N6, S7 and S8 must fail.\n- Restore it. They must pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "RuntimeSelectionPolicyTest.kt only; no existing row changed. Added import java.nio.file.Paths; rows N5 (isPlainLocalPath truth table, windows=true/false, any host), N6 (Windows: every UNC/device/loopback-share spelling false with resolve=untouched [throws AssertionError] and with the default lookup; plain spelling with a UNC real path false; controls true), S7 (Windows: protectedDaemonEnvironment whole-map assert keeps only outsideA, outsideB), S8 (Windows: volume-GUID node -> 'node executable is not a plain local Windows path'; volume-GUID root -> 'installed daemon/index.js is not a plain local Windows path'; supervisor spawns nothing, statuses + selectionRefusal show the protected message; loopback-share node rejected, named reason when the share file is readable; local node control Accepted). Helpers share(), nonLocalSpellings(), volumeSpelling() (mountvol <X:> /L via ProcessBuilder, strict VOLUME_LINE match, null on failure), companion DRIVE_PATH and VOLUME_LINE.\nRED (isPlainLocalPath temporarily `true`, focused class `--tests com.moe.util.RuntimeSelectionPolicyTest --rerun`): exit 1, 53 tests, 4 failed: N5 ('\\\\srv\\sh\\x'), N6 ('looked up \\\\srv\\sh\\x' - lookup happened), S7 (PATH kept \\\\srv, \\\\?\\UNC, \\\\.\\Volume, GLOBALROOT and \\\\localhost\\C$\\...\\work\\proj entries - the original bug), S8 ('volume node: Accepted(\\\\.\\Volume{d9fe...}\\...\\runtime\\node)').\nGREEN (restored): exit 0, 53 tests, failures=0 errors=0 skipped=0; N5, N6, S7, S8 pass (not skipped) on the Windows host; \\\\localhost\\C$ is reachable here so S8(iv) asserted the named reason. Note: this JDK did not throw for `\\\\?\\UNC\\srv\\sh\\x` (RED kept it in PATH); GREEN drops it via comparablePath -> //srv. jetbrains-gradle lease held for step 3.",
+      "startedAt": "2026-10-30T16:28:28.544Z",
+      "completedAt": "2026-10-30T16:32:49.803Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once.\n- Take the `jetbrains-gradle` lease with moe.acquire_resource, and release it afterwards.\n- WSL has no JDK. Run exactly: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n  This is the Windows equivalent of `cd moe-jetbrains && ./gradlew test`. Run it from a /mnt/d cwd.\n- It must exit 0, and :test must execute (not UP-TO-DATE).\n- Confirm in moe-jetbrains/build/test-results/test/TEST-*.xml:\n  - failures=0 and errors=0;\n  - the RuntimeSelectionPolicyTest XML is stamped by this run;\n  - N5, N6, S7 and S8 appear without <skipped/>.\n- These existing rows must pass unchanged: S4, N1-N4, D1, PS4 and all of MoeDaemonSupervisorTest.\n- Give complete_task the command, the exit code and the output tail, labeled as the Windows equivalent, plus the test count (469 before this task).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Under the jetbrains-gradle lease (released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" (Windows equivalent of cd moe-jetbrains && ./gradlew test; WSL has no JDK) -> exit 0, BUILD SUCCESSFUL in 21s, :test executed. TEST-*.xml: 28 files, total=473 (469 before + N5/N6/S7/S8), failures=0 errors=0 skipped=0. RuntimeSelectionPolicyTest stamped 2026-10-30T16:34:01Z (this run), 53 tests; MoeDaemonSupervisorTest 73/0/0/0. N5, N6, S7, S8 present without <skipped/>; S4, N1-N4, D1, PS4 pass unchanged.",
+      "startedAt": "2026-10-30T16:32:49.822Z",
+      "completedAt": "2026-10-30T16:34:46.166Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review, this diff only (git diff on the two files). Check:\n- No share is contacted: resolve runs only after the spelling passes isPlainLocalPath. N6's untouched lambda proves it.\n- Error handling still fails closed: the catches stay Exception + IOError, a lookup failure answers false, and nothing new throws past them.\n- POSIX is unchanged: with windows=false, isPlainLocalPath always answers true.\n- `C:\\` and `\\\\?\\C:\\` spellings behave as before.\n- LEGACY never calls these functions.\n- These consumers keep their signatures: protectedPathEntries, nodeOnProtectedPath, protectedDaemonCommand, TerminalAgentLauncher, ManagedVmPanel:137-138 and ProtectedStateStore.usableFor. A state root on a share is now unusable (session-only, fail closed), and D1's local store root still passes.\n- Refusal reasons carry no absolute path; assertRejected checks this.\n- No new shared state is added.\n- The diff touches exactly the two planned files.\n- Peer dirty paths stay untouched: board JSONs, .moe/decisions, the scripts/mods tsconfigs and moe-vscode/tests.\n- Subst and mapped drive letters are task-1c2bfeca0ec34589b8cb498abc082549 (BACKLOG). Do not fix them here.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Adversarial self-review of `git diff -- moe-jetbrains/` (exactly the 2 planned files, +140/-6):\n- No share contacted by isOutsideProject: `isPlainLocalPath(spelling) &&` short-circuits before resolve(path); N6's throwing `untouched` resolver proves it (RED showed the lookup when the guard was disabled).\n- Fail closed: catches unchanged (Exception, IOError); isPlainLocalPath/comparablePath are pure string ops and cannot throw; a resolve failure -> null/false.\n- POSIX: windowsHost false -> isPlainLocalPath always true, so `.all { true && projects.none{isWithin} }` == the old `.none { projects.any{isWithin} }`.\n- `C:\\` -> `C:/` matches LOCAL_DRIVE; `\\\\?\\C:\\` / `\\\\.\\C:\\` -> `C:/` via DEVICE_PREFIX, so unchanged.\n- LEGACY: every caller is protected-only (activationRefusal returns early on non-PROTECTED; protectedDaemonCommand/Environment; TerminalAgentLauncher protected runtime; ManagedVmPanel isProtected branch; ProtectedStateStore under protected profile reads). Signatures unchanged; new isOutsideProject param is trailing + defaulted.\n- Refusal reason \"<label> is not a plain local Windows path\" carries no path; rejected() logs the path only.\n- No new shared state (windowsHost is an immutable val).\nTheoretical, noted for QA: (a) per the plan, select does NOT pre-check the node SPELLING, so a UNC node configured explicitly in IDE settings is looked up once (toRealPath) before refusal; nodes from PATH are now filtered by isOutsideProject first, so no share lookup there. (b) The installed root/project base still go through realPathOrNull in installedArtifact/select. (c) A protected state root on a network share (redirected %LOCALAPPDATA%) now reads unusable -> session-only (fail closed; RF07 docs should state this alongside the network PATH/node cost). (d) The test JVM here parsed `\\\\?\\UNC\\srv\\sh\\x` (planning probe said JDK 17 throws); GREEN drops it either way via comparablePath.\nOut of scope, filed: inverse UNC project BASE -> task-52fb6178b3684db89d6e8a5a351c63ea (BACKLOG, dependsOn this row). Subst/mapped drive letters stay task-1c2bfeca. Peer dirty paths (board JSONs, .moe/decisions, scripts/*, scripts/tests/*, docs/TROUBLESHOOTING.md, scripts/mods tsconfigs) untouched.",
+      "startedAt": "2026-10-30T16:34:47.164Z",
+      "completedAt": "2026-10-30T16:35:57.935Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote under the human's 2026-10-30 13:00Z delegation. architect-6fc3dd5c filed this at about 16:00Z while re-planning RF06b: Java toRealPath keeps \\\\localhost\\C$\\<project> as UNC, so JetBrains' protected PATH filter and node selection treat the local project as outside it. It is the JetBrains parity twin of RF06b rev 2's UNC refusal, a security fix for the primary IDE. Its only dependency, 0ef30f9f, is DONE. It has no human-gating rails. RF07 f3f364a6 now dependsOn it.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -28,8 +79,124 @@
   ],
   "priority": "MEDIUM",
   "order": 295.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-a441d201a73e46e194d29298a0e55d38",
+      "author": "governor-693b7073",
+      "content": "@architect-4ae016fb Fact for your plan; the planner decides scope. On RF06b e83fef4c, qa-ba3f4f35 found the INVERSE UNC case on native Windows (comment-09feee65, 16:12Z). When the project/workspace base itself is a UNC spelling (\\\\localhost\\C$\\…\\project, also 127.0.0.1), realpath keeps the UNC form. A local C:\\…\\project PATH entry then passes isOutsideProject, and a node physically inside the project is accepted. Repro: UNC_PROJECT_LEAKS=2.\nThis row's DoD covers UNC spellings of PATH entries and node candidates against a local project base. It does not say what happens when the project base is UNC. Java toRealPath keeps the UNC form too, so JetBrains likely has the same inverse gap. Check it before you submit. VS Code rev 2's rule is \"refuse, never canonicalize\", which would mean refusing a UNC project base under the protected profile. That keeps the IDEs in parity if you adopt it.",
+      "timestamp": "2026-10-30T16:15:55.633Z"
+    },
+    {
+      "id": "comment-88f86890e98a428e8dc687dac404b4c9",
+      "author": "architect-6fc3dd5c",
+      "content": "@architect-4ae016fb Parity input while you plan this row: the inverse UNC case from RF06b QA (comment-09feee65 on task-032c9739).\n- The project BASE is UNC: \\\\localhost\\C$\\…\\project, \\\\127.0.0.1\\C$\\…, or a mapped drive whose real path is UNC.\n- RuntimeSelectionPolicy.select computes project = toRealPath(basePath), which keeps UNC per this row's JDK 17 probe. isOutsideProject builds its project forms the same way (normalize + toRealPath).\n- So a local C:\\…\\project PATH entry, or a node physically inside the project, reads as outside. This is by code reading; I ran no JetBrains probe. VS Code reproduces it (QA, UNC_PROJECT_LEAKS=2).\n- DoD 0 here covers UNC entries and candidates, not a UNC base. Consider refusing when either base form is UNC.\n- Caveat: JetBrains opens \\\\wsl$ and \\\\wsl.localhost projects, and those fail closed under protected with such a rule. Don't carve them out blindly: \\\\wsl$\\<distro>\\mnt\\<drive>\\… aliases a local drive folder too.\n- If RF06b gets reopened for this, its fix applies isWindowsAlias to every base form.",
+      "timestamp": "2026-10-30T16:21:07.312Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T15:54:56.266Z",
-  "updatedAt": "2026-10-30T15:54:56.266Z"
+  "updatedAt": "2026-10-30T16:36:27.577Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T16:01:33.405Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T16:01:38.157Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-0062feec"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T16:26:39.868Z",
+  "executionContract": {
+    "intendedBehavior": "Under the protected profile on a Windows host, RuntimeSelectionPolicy treats any path form that is not drive-qualified as not provably outside the project. That covers:\n- UNC forms: `\\\\srv\\sh`, `//srv/sh`, `\\\\?\\UNC\\…` and `\\\\.\\UNC\\…`;\n- device forms: `\\\\.\\Volume{…}\\…` and `\\\\.\\GLOBALROOT\\…`;\nin the spelling or in the real path.\nisOutsideProject answers false for such a path and never looks the spelling up, so the protected daemon PATH drops it.\nselect refuses a node, daemon, wrapper or proxy whose real path has such a form, with \"<label> is not a plain local Windows path\", and nothing is spawned.\nPOSIX hosts, drive-qualified spellings and the legacy profile are unchanged.",
+    "acceptanceCriteria": [
+      "On Windows, isOutsideProject is false for `\\\\srv\\sh\\x`, `//srv/sh/x`, `\\\\?\\UNC\\srv\\sh\\x`, `\\\\.\\UNC\\srv\\sh\\x`, the loopback-share spelling of the project and a device spelling, without any lookup. It is also false for a plain spelling whose real path is UNC.",
+      "On Windows, protectedDaemonEnvironment keeps only the local outside entries.",
+      "On Windows, a node whose real path is not plain local is refused with 'node executable is not a plain local Windows path', and nothing is spawned.",
+      "The existing RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest rows pass unchanged."
+    ],
+    "invariants": [
+      "A spelling that is not plainly local is never passed to a real-path lookup, so no share is contacted.",
+      "isOutsideProject never throws; any failure answers false.",
+      "isPlainLocalPath(p, windows = false) is true for every p.",
+      "Refusal reasons never contain an absolute path.",
+      "LEGACY selection never calls these functions."
+    ],
+    "compatibility": [
+      "Existing positional callers of isOutsideProject compile unchanged: MoeDaemonSupervisor.protectedPathEntries, ProtectedStateStore.usableFor and the D1 test.",
+      "The installedArtifact and installedExecutable signatures are unchanged (TerminalAgentLauncher, ManagedVmPanel, MoeDaemonSupervisor).",
+      "Existing refusal strings are unchanged; one reason string is added."
+    ],
+    "approvedScope": [
+      "RuntimeSelectionPolicy.windowsHost (new internal val)",
+      "RuntimeSelectionPolicy.isPlainLocalPath(path, windows = windowsHost) (new internal fun)",
+      "RuntimeSelectionPolicy.isOutsideProject gains a trailing `resolve: (String) -> Path? = ::realPathOrNull`",
+      "RuntimeSelectionPolicy.select gains a first plain-local branch",
+      "RuntimeSelectionPolicyTest: N5, N6, S7 and S8, plus the test helpers share() and volumeSpelling()"
+    ],
+    "reuse": [
+      "comparablePath (device-prefix and UNC normalization) and isWithin",
+      "rejected(), for refusals logged with their path",
+      "The test helpers protectedFixture, supervisorFor, assertRejected and realFile, plus junction()'s ProcessBuilder pattern for mountvol"
+    ],
+    "sourceAssumptions": [
+      "RuntimeSelectionPolicy.kt: isOutsideProject at 243-258, select at 260-278, comparablePath at 190-199, defaultFoldCase at 187-188, DRIVE_ROOT at 56.",
+      "MoeDaemonSupervisor.kt:583-586: protectedPathEntries calls isOutsideProject(entry, basePath).",
+      "ProtectedStateStore.kt:37: usableFor calls isOutsideProject(root.toString(), basePath).",
+      "Probed on JDK 17: Paths.get rejects `\\\\?\\…` and `\\\\.\\C:\\…`, and toRealPath keeps `\\\\localhost\\C$\\…` and `\\\\.\\Volume{…}\\…`."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) A UNC-only denylist, as VS Code's isWindowsAlias uses. Rejected:\n- On native Windows (architect probe, D:\\arch-526a-probe\\spawn.cjs), bare-name spawns also ran the project's exe through device forms (`\\\\.\\Volume{GUID}\\…` and `\\\\.\\GLOBALROOT\\Device\\Mup\\…`).\n- Java toRealPath keeps those forms (UncProbe.java), so a `//` test misses them. A drive-qualified allowlist refuses both with the same one-liner.\n- VS Code needs no change: Node's realpath.native resolves device forms to the drive path (subst-node.cjs).\n(2) Canonicalize a share back to a local path. Rejected: localhost, 127/8, the host name, its FQDN, NIC IPs and DFS all alias the same machine (mem:decision-protected-windows-alias-refusal).\n(3) File identity through Files.isSameFile. It is true for every alias probed, subst included, but it opens handles: it contacts shares and costs a lookup per ancestor. Deferred to task-1c2bfeca for drive letters, where spelling cannot help.\n(4) Also pre-check the node spelling in installedExecutable. Rejected: select's real-path check covers it, and S8 needs a device spelling to reach that branch.\n(5) Linux rows with windows=true for isOutsideProject. Not possible: on POSIX no drive spelling is absolute, so the real-path branch can only run on Windows. Hence the resolve seam.",
+    "codebaseInsights": "Java on Windows (JDK 17, probed):\n- Paths.get throws InvalidPathException for every `\\\\?\\…` spelling (illegal '?') and for `\\\\.\\C:\\…` (illegal ':'). Those already answer false.\n- `\\\\srv\\sh`, `//srv/sh`, `\\\\.\\UNC\\…`, `\\\\.\\Volume{…}\\…` and `\\\\.\\GLOBALROOT\\…` parse as absolute.\n- toRealPath keeps UNC and `\\\\.\\Volume` forms. It calls GetFinalPathNameByHandle only at a reparse point, which is also why a subst drive stays `Q:\\`.\ncomparablePath:\n- It maps `\\\\.\\UNC\\x` and `\\\\?\\UNC\\x` to `//x`.\n- It strips `\\\\.\\` from device forms, giving `Volume{…}/…`.\nSeams in RuntimeSelectionPolicy are defaulted function parameters (verifyProvenance's facts, foldCase) and internal vars reset by resetForTest.\nThe test helpers protectedFixture, supervisorFor, assertRejected, realFile and symlink (with its junction() cmd fallback) already exist.\nThis host:\n- has no symlink privilege;\n- runs mountvol unelevated;\n- can reach \\\\localhost\\C$.\nJetBrains CI runs gradle only on ubuntu. The Windows rows run in the Windows verification command, which QA re-runs.",
+    "risks": "- A worker who resolves before the spelling check contacts \\\\srv over SMB, which is slow and leaks an NTLM handshake. N6's untouched resolver catches this.\n- Never assert that a share is reachable; assert refusal only. S8(iv) asserts the named reason only when the loopback file is readable.\n- mountvol prints `\\\\?\\Volume{GUID}\\` with leading spaces: trim it and match strictly.\n- Accepted cost under the protected profile on Windows:\n  - PATH entries on shares or device paths are not used;\n  - neither is a node or plugin install on a share or device path;\n  - a protected state root on a share is unusable, so state stays session-only.\n  RF07 (task-f3f364a6) docs should state this.\n- Out of scope: subst and mapped drive letters (task-1c2bfeca).",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+      "moe-vscode/src/services/MoeDaemonClient.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T16:26:39.890Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T16:27:31.226Z",
+  "reviewStartedAt": "2026-10-30T16:36:27.575Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "[Windows equivalent of `cd moe-jetbrains && ./gradlew test`; WSL has no JDK]\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 21s\n11 actionable tasks: 2 executed, 9 up-to-date\n\nTEST-*.xml: 28 files, total=473 (469 before + N5/N6/S7/S8), failures=0 errors=0 skipped=0. RuntimeSelectionPolicyTest stamped 2026-10-30T16:34:01Z (this run): 53 tests, 0/0/0; MoeDaemonSupervisorTest 73/0/0/0. N5, N6, S7, S8 ran (no <skipped/>).",
+    "reportedAt": "2026-10-30T16:36:27.575Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+  ],
+  "completionSummary": "JetBrains protected selection now refuses Windows path forms that are not drive-qualified. RuntimeSelectionPolicy.kt changes:\n- New internal windowsHost and isPlainLocalPath(path, windows = windowsHost). On POSIX it is always true. On Windows only `X:/` after comparablePath counts, so `\\\\?\\C:\\` and `\\\\.\\C:\\` stay plain.\n- isOutsideProject gains a trailing `resolve = ::realPathOrNull`. The spelling must be plain local before any lookup, so no share is contacted. Then the spelling and the real path must both be plain local and outside the project. Catches are unchanged (fail closed).\n- select's first branch refuses with \"<label> is not a plain local Windows path\". This covers node, daemon, wrapper and proxy.\n- Existing callers and signatures are unchanged, and LEGACY never calls these functions.\n\nRuntimeSelectionPolicyTest adds four rows and changes none:\n- N5: an isPlainLocalPath truth table that runs on any host.\n- N6, Windows: UNC, device and loopback-share spellings answer false. A resolver that throws AssertionError proves no lookup happens. A UNC real path also answers false, with local controls.\n- S7, Windows: a whole-map PATH assert keeps only the two local outside entries.\n- S8, Windows: a volume-GUID node and installed root are refused with the named reasons and nothing is spawned. A node through the loopback share is refused with the named reason (the share is reachable on this host). A local node control is accepted.\n\nRED was run with the predicate forced true: N5, N6, S7 and S8 failed. S7 kept `\\\\localhost\\C$\\...\\proj`, which is the original bug. GREEN passed. The full suite has 473 tests with 0 failures, 0 errors and 0 skips.\n\nOut of scope and filed: a UNC project base is the inverse case → task-52fb6178b3684db89d6e8a5a351c63ea. Subst and mapped drives remain task-1c2bfeca. RF07 docs should state the accepted cost: network or device PATH entries, a node or plugin on a share, and a state root on a share are not used."
 }

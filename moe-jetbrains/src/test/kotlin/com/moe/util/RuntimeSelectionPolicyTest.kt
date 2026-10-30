@@ -37,6 +37,7 @@ import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.AclEntry
 import java.nio.file.attribute.AclEntryPermission
@@ -451,6 +452,40 @@ class RuntimeSelectionPolicyTest {
         assumeTrue("links unavailable on this host", symlink(linkedDir.toPath(), project.toPath()))
         val linked = RuntimeSelectionPolicy.installedExecutable(File(linkedDir, "node").path, project.path)
         assertEquals("node executable resolves inside the project", assertRejected("node through a link into the project", linked))
+    }
+
+    @Test
+    fun `N5 on Windows only drive-qualified forms are plainly local`() {
+        listOf(
+            "\\\\srv\\sh\\x", "//srv/sh/x", "\\\\?\\UNC\\srv\\sh\\x", "\\\\.\\UNC\\srv\\sh\\x", "\\\\localhost\\C$\\proj",
+            "\\\\127.0.0.1\\C$\\proj", "\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\proj",
+            "\\\\.\\GLOBALROOT\\Device\\Mup\\localhost\\C$\\proj", "C:", "\\proj", "proj"
+        ).forEach { assertFalse(it, RuntimeSelectionPolicy.isPlainLocalPath(it, windows = true)) }
+        listOf("C:\\proj", "c:/proj", "C:\\", "\\\\?\\C:\\proj", "\\\\.\\C:\\proj")
+            .forEach { assertTrue(it, RuntimeSelectionPolicy.isPlainLocalPath(it, windows = true)) }
+        listOf("//srv/sh/x", "\\\\srv\\sh\\x", "/w/proj")
+            .forEach { assertTrue("POSIX $it", RuntimeSelectionPolicy.isPlainLocalPath(it, windows = false)) }
+    }
+
+    @Test
+    fun `N6 on Windows a UNC or device path is never provably outside the project and never looked up`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val project = temporaryFolder.newFolder("project")
+        val outside = temporaryFolder.newFolder("outside")
+        // An Error, so isOutsideProject's error handling cannot swallow it: any lookup fails the test.
+        val untouched: (String) -> Path? = { throw AssertionError("looked up $it") }
+        // The outside folder through the loopback share is refused too: the accepted cost.
+        (nonLocalSpellings(project) + share("localhost", outside)).forEach { spelling ->
+            assertFalse("$spelling without a lookup", RuntimeSelectionPolicy.isOutsideProject(spelling, project.path, resolve = untouched))
+            assertFalse(spelling, RuntimeSelectionPolicy.isOutsideProject(spelling, project.path))
+        }
+        // A plain spelling whose real path is UNC; Paths.get of a UNC string does no I/O.
+        listOf(share("localhost", outside), "\\\\srv\\sh\\outside").forEach { real ->
+            assertFalse("real path $real", RuntimeSelectionPolicy.isOutsideProject(outside.path, project.path, resolve = { Paths.get(real) }))
+        }
+        // Controls: the same folder, plainly spelled and resolved locally, is outside.
+        assertTrue(RuntimeSelectionPolicy.isOutsideProject(outside.path, project.path))
+        assertTrue(RuntimeSelectionPolicy.isOutsideProject(outside.path, project.path, resolve = { Paths.get(it).toRealPath() }))
     }
 
     @Test
@@ -871,6 +906,50 @@ class RuntimeSelectionPolicyTest {
         File(outsideB, nodeName).writeText("node")
         val path = listOf(File(project, "bin").path, "bin", "\"$outsideB\"").joinToString(File.pathSeparator)
         assertEquals(File(outsideB, nodeName).absolutePath, supervisor.nodeOnProtectedPath(path, project.path, windows))
+    }
+
+    @Test
+    fun `S7 on Windows the protected daemon PATH keeps only plain local entries outside the project`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val (project, _, node) = protectedFixture()
+        val supervisor = supervisorFor(project, { null }, { null })
+        val outsideA = temporaryFolder.newFolder("path-a").path
+        val outsideB = node.parentFile.path
+        val entries = listOf(outsideA) + nonLocalSpellings(project) + share("localhost", File(outsideA)) + outsideB
+        val env = mutableMapOf("PATH" to entries.joinToString(File.pathSeparator))
+        supervisor.protectedDaemonEnvironment(env, project.path)
+        assertEquals(mapOf("PATH" to listOf(outsideA, outsideB).joinToString(File.pathSeparator)), env)
+    }
+
+    @Test
+    fun `S8 on Windows a node whose real path is not plain local spawns nothing`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val (project, root, node) = protectedFixture()
+        val volumeNode = volumeSpelling(node)
+        val volumeRoot = volumeSpelling(root)
+        assumeTrue("no volume GUID path on this host", volumeNode != null && volumeRoot != null)
+        val reason = "node executable is not a plain local Windows path"
+        assertEquals(reason, assertRejected("volume node", RuntimeSelectionPolicy.installedExecutable(volumeNode, project.path)))
+        assertEquals(
+            "installed daemon/index.js is not a plain local Windows path",
+            assertRejected("volume root", RuntimeSelectionPolicy.installedArtifact(File(volumeRoot!!), "daemon/index.js", project.path))
+        )
+
+        val started = mutableListOf<List<String>>()
+        val statuses = mutableListOf<Pair<Boolean, String>>()
+        val supervisor = supervisorFor(project, { root }, { volumeNode }, started = started, statuses = statuses)
+        val message = "Protected execution profile: $reason. Project and PATH copies of the Moe daemon are not used."
+        assertFalse(supervisor.ensureDaemonRunning())
+        assertEquals(emptyList<List<String>>(), started)
+        assertEquals(listOf(false to message), statuses)
+        assertEquals(message, supervisor.selectionRefusal())
+
+        // Through the loopback share the real path is UNC; whether the share is reachable varies, the refusal never does.
+        val shared = share("localhost", node)
+        val viaShare = assertRejected("node through the loopback share", RuntimeSelectionPolicy.installedExecutable(shared, project.path))
+        if (Files.isRegularFile(Paths.get(shared))) assertEquals("node through the loopback share", reason, viaShare)
+
+        assertEquals(RuntimeSelection.Accepted(realFile(node)), RuntimeSelectionPolicy.installedExecutable(node.path, project.path))
     }
 
     @Test
@@ -1374,6 +1453,33 @@ class RuntimeSelectionPolicyTest {
         false
     }
 
+    /** [dir] through the [host] admin share of its drive: `\\<host>\<d>$\<rest>`. */
+    private fun share(host: String, dir: File): String {
+        val real = realFile(dir).path
+        assumeTrue("drive-qualified real path $real", DRIVE_PATH.containsMatchIn(real))
+        return "\\\\$host\\${real[0]}\$\\${real.substring(3)}"
+    }
+
+    /** Every Windows form of [project] or elsewhere that is not drive-qualified, UNC and device alike. */
+    private fun nonLocalSpellings(project: File): List<String> = listOf(
+        "\\\\srv\\sh\\x", "//srv/sh/x", "\\\\?\\UNC\\srv\\sh\\x", "\\\\.\\UNC\\srv\\sh\\x",
+        "\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\x",
+        "\\\\.\\GLOBALROOT\\Device\\Mup\\" + share("localhost", project).removePrefix("\\\\"),
+        share("localhost", project), share("127.0.0.1", project), share("localhost", project) + "\\bin"
+    )
+
+    /** [file] through its volume GUID device path, `\\.\Volume{…}\<rest>`: local, drive-less, no network; null when mountvol cannot say. */
+    private fun volumeSpelling(file: File): String? = try {
+        val real = realFile(file).path
+        val mountvol = File(System.getenv("SystemRoot"), "System32\\mountvol.exe").path
+        val process = ProcessBuilder(mountvol, real.substring(0, 2), "/L").redirectErrorStream(true).start()
+        val output = process.inputStream.readBytes().toString(Charsets.UTF_8).trim()
+        val volume = VOLUME_LINE.matchEntire(output)?.groupValues?.get(1)
+        if (process.waitFor() == 0 && volume != null && DRIVE_PATH.containsMatchIn(real)) "\\\\.\\$volume\\${real.substring(3)}" else null
+    } catch (_: Exception) {
+        null
+    }
+
     /** A store whose root does not exist yet, under a fresh folder outside every test project. */
     private fun newStore(): ProtectedStateStore = ProtectedStateStore(temporaryFolder.newFolder().toPath().resolve("moe/protected-state"))
 
@@ -1452,6 +1558,9 @@ class RuntimeSelectionPolicyTest {
         private val LIVE = mapOf(100L to ProcessFacts(100, T0, 1), 200L to ProcessFacts(200, T1, 100))
         private const val NOT_STARTED_HERE = "this IDE did not start it from the installed Moe runtime"
         private const val STOP_FAILED = "the stop request failed"
-        private val SPAWN_ATTEMPTS = MoeDaemonSupervisor::class.java.getDeclaredField("daemonSpawnAttempts").apply { isAccessible = true }
+        private val DRIVE_PATH = Regex("""^[A-Za-z]:\\""")
+        // mountvol <X:> /L prints exactly one `\\?\Volume{GUID}\` line.
+        private val VOLUME_LINE = Regex("""\\\\\?\\(Volume\{[0-9A-Fa-f-]{36}\})\\""")
+        private val SPAWN_ATTEMPTS =MoeDaemonSupervisor::class.java.getDeclaredField("daemonSpawnAttempts").apply { isAccessible = true }
     }
 }

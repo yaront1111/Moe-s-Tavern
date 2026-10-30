@@ -54,6 +54,7 @@ object RuntimeSelectionPolicy {
     private const val MAX_PROJECT_JSON_BYTES = 1 shl 20
     private val gson = Gson()
     private val DRIVE_ROOT = Regex("^[A-Za-z]:/$")
+    private val LOCAL_DRIVE = Regex("^[A-Za-z]:/")
     private val DEVICE_PREFIX = Regex("^//[?.]/(unc/)?", RegexOption.IGNORE_CASE)
     private const val PLUGIN_ID = "com.moe.jetbrains"
 
@@ -187,6 +188,20 @@ object RuntimeSelectionPolicy {
     internal val defaultFoldCase: Boolean =
         System.getProperty("os.name").orEmpty().lowercase(Locale.ROOT).let { it.startsWith("windows") || it.startsWith("mac") }
 
+    internal val windowsHost: Boolean = System.getProperty("os.name").orEmpty().lowercase(Locale.ROOT).startsWith("windows")
+
+    /**
+     * On a Windows host only a drive-qualified form is plainly local. A UNC form (`\\srv\sh`,
+     * `//srv/sh`, `\\?\UNC\…`, `\\.\UNC\…`) can reach any local folder through a share, and a
+     * loopback admin share (`\\localhost\C$\<project>`) names the project itself. A device form
+     * (`\\.\Volume{…}\…`, `\\.\GLOBALROOT\…`) names a folder without its drive. toRealPath keeps
+     * both forms and nothing maps them back to the project, so neither is provably outside it.
+     * comparablePath turns `\\?\C:\` and `\\.\C:\` into `C:/`, so those stay plain. POSIX has
+     * neither form: there the answer is always true.
+     */
+    internal fun isPlainLocalPath(path: String, windows: Boolean = windowsHost): Boolean =
+        !windows || LOCAL_DRIVE.containsMatchIn(comparablePath(path, false))
+
     /**
      * Separators become `/`, the `\\?\` and `\\.\` device prefixes go (`\\?\UNC\server` becomes
      * `//server`), and trailing separators go except on a root. Folding upper-cases before
@@ -242,15 +257,23 @@ object RuntimeSelectionPolicy {
 
     /**
      * True only for an absolute [path] outside the project, both as written and as the real path
-     * it resolves to. A relative or unparseable path, or any failure, answers false.
+     * it resolves to; on a Windows host both must also be plainly local ([isPlainLocalPath]), and
+     * a spelling that is not is never looked up, so no share is contacted. A relative or
+     * unparseable path, or any failure, answers false. [resolve] is the real-path lookup, which tests substitute.
      */
-    fun isOutsideProject(path: String, basePath: String, foldCase: Boolean = defaultFoldCase): Boolean = try {
+    fun isOutsideProject(
+        path: String,
+        basePath: String,
+        foldCase: Boolean = defaultFoldCase,
+        resolve: (String) -> Path? = ::realPathOrNull
+    ): Boolean = try {
         val candidate = Paths.get(path)
         val projects = listOfNotNull(Paths.get(basePath).toAbsolutePath().normalize(), realPathOrNull(basePath))
             .map { comparablePath(it.toString(), foldCase) }
-        candidate.isAbsolute && listOfNotNull(candidate.normalize(), realPathOrNull(path))
-            .map { comparablePath(it.toString(), foldCase) }
-            .none { form -> projects.any { isWithin(form, it) } }
+        candidate.isAbsolute && isPlainLocalPath(candidate.normalize().toString()) &&
+            listOfNotNull(candidate.normalize(), resolve(path)).map { it.toString() }.all { form ->
+                isPlainLocalPath(form) && comparablePath(form, foldCase).let { c -> projects.none { isWithin(c, it) } }
+            }
     } catch (_: Exception) {
         false
     } catch (_: IOError) {
@@ -268,6 +291,8 @@ object RuntimeSelectionPolicy {
             return rejected("$label cannot be resolved", ex)
         }
         return when {
+            // Before any further read, so a share is not contacted again.
+            !isPlainLocalPath(real.toString()) -> rejected("$label is not a plain local Windows path", real)
             !Files.isRegularFile(real) -> rejected("$label is not a regular file", real)
             realRoot != null && !isWithin(comparablePath(real.toString(), false), comparablePath(realRoot.toString(), false)) ->
                 rejected("$label resolves outside the installed Moe runtime", real)

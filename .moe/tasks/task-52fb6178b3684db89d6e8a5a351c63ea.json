@@ -1,0 +1,30 @@
+{
+  "id": "task-52fb6178b3684db89d6e8a5a351c63ea",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: JetBrains protected selection with a UNC project base (\\\\localhost\\C$\\…\\project) treats local project paths as outside it",
+  "description": "Inverse of task-526a2080 (which refuses UNC/device CANDIDATES only). When basePath itself is UNC (\\\\localhost\\C$\\…\\project, \\\\127.0.0.1\\C$\\…, \\\\wsl$\\…), RuntimeSelectionPolicy.isOutsideProject/select build project forms via toRealPath, which keeps UNC, so a local C:\\…\\project PATH entry or a node physically inside the project reads as outside. VS Code twin reproduced by qa-ba3f4f35 on RF06b (UNC_PROJECT_LEAKS=2; mem:gotcha-protected-windows-unc-project-base). Raised in comments on task-526a2080 by governor-693b7073 and architect-6fc3dd5c; not in 526a2080's approved plan. Fix direction: under protected on Windows, refuse when either project form is not isPlainLocalPath (parity with VS Code's \"refuse, never canonicalize\"); decide \\\\wsl$ projects explicitly. May fold into task-1c2bfeca if file identity covers it.",
+  "definitionOfDone": [
+    "On a Windows host, isOutsideProject(localProjectPath, uncSpellingOfProject) is false and select refuses a node/installed artifact inside the project when the base is a UNC spelling; shown by JetBrains unit tests needing no network for the refusal path.",
+    "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && gradlew.bat test\" exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-526a208079b5467db13cb9dd10da442e"
+  ],
+  "priority": "MEDIUM",
+  "order": 298.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T16:28:38.098Z",
+  "updatedAt": "2026-10-30T16:28:38.098Z"
+}
