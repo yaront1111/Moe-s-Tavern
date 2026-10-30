@@ -5839,6 +5839,7 @@ function seededAgents(t) {
   mkdirSync(path.join(dir, 'agents'));
   chmodSync(path.join(dir, 'agents'), 0o755);
   writeFileSync(path.join(dir, 'agents', 'claude'), 'old', { mode: 0o555 });
+  chmodSync(path.join(dir, 'agents', 'claude'), 0o555); // a creation mode is masked by the umask; chmod is not
   return dir;
 }
 
