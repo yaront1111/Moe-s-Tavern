@@ -126,7 +126,7 @@
     }
   ],
   "planRevision": 4,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -139,7 +139,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:48.454Z",
-  "updatedAt": "2026-10-30T04:57:46.502Z",
+  "updatedAt": "2026-10-30T05:03:48.939Z",
   "dependsOn": [
     "task-f12b03e83a1a491494a08e42c7a58504"
   ],
@@ -147,11 +147,14 @@
     "firstClaimAt": "2026-10-29T13:30:52.693Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T05:03:48.939Z",
+    "wallClockMs": 55976246
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-73c29a03"
+    "worker-73c29a03",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -195,18 +198,38 @@
       "treeId": "c3c58bcf8dece99f827b2a499cc4b0114b5c4468",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "6560e3802bedab5bc7f48c324e7d83bad47a9f1a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T04:39:57Z",
+      "paths": [
+        ".moe/tasks/task-3d0be5681276428d8908d361341145bf.json",
+        ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json",
+        "packages/moe-daemon/src/context/recipes/docsLiteralReplace.test.ts",
+        "packages/moe-daemon/src/context/recipes/docsLiteralReplace.ts"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T04:58:13.062Z",
+      "treeId": "fb1e1685c36669ea5fc87e69039c0845835dd46b",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/context/recipes/docsLiteralReplace.test.ts",
-    "packages/moe-daemon/src/context/recipes/docsLiteralReplace.ts"
+    "packages/moe-daemon/src/context/recipes/docsLiteralReplace.ts",
+    ".moe/tasks/task-3d0be5681276428d8908d361341145bf.json",
+    ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-4ae016fb@2026-10-29T13:30:51Z",
-    "at": "2026-10-29T17:45:51.573Z"
+    "kind": "completion",
+    "sessionId": "worker-73c29a03@2026-10-30T04:39:57Z",
+    "at": "2026-10-30T04:58:13.062Z"
   },
   "workStartedAt": "2026-10-30T04:41:40.718Z",
   "reviewStartedAt": "2026-10-30T04:57:46.500Z",
@@ -217,5 +240,13 @@
     "reportedAt": "2026-10-30T04:57:46.500Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-C09 docs-literal-replace recipe kind. 2 new files, 330 lines (cap 400): docsLiteralReplace.ts 161, docsLiteralReplace.test.ts 167 (67 tests on real temp Git repos). No C08, submitPlan, taskStore or schema edits.\n\nBehaviour:\n- C08 RecipeKind 'docs-literal-replace', self-registered in recipeKinds.\n- validateDefinition: params is exactly {allowedPaths}, 1-16 canonical prefixes, none under .moe. requiredChecks stay C08's job.\n- validateInputs: exact string keys {path, originalSha256, oldText, newText}; canonical path, no control chars; 64 lowercase hex; old 1-2000 / new 0-2000 chars; no NUL or lone surrogates; new !== old. Then *.md, not .moe, under a prefix by whole segments.\n- assessSource: committed bytes via readRepositorySource; served + 100644; sha of the re-encoded bytes (BOM/CRLF exact); exactly one occurrence, overlaps counted. Patched bytes must fit 64 KiB.\n- instantiate: one step that JSON-quotes both texts and states the expected sha, 'change nothing else', the report_blocked error handling and the test commands. affectedFiles [path]; contract approvedScope [path], checkRefs = commands, no requiredChecks. plan-too-large instead of truncation.\n- assessPostpatch: recipe-mismatch, then inputs-changed, then exact diff-tree from instance.commit to postCommit. Only .moe/tasks/<taskId>.json is ignored; otherwise extra-edits (with detail) or patch-missing. Then a byte-exact post check (mismatch); failures give unavailable. Never throws.\n\nDoD:\n1. Hash and unique old text (worktree edit doesn't count; 'aa' in 'aaa' ambiguous).\n2. allowedPaths required; plan carries the definition's checks plus C08's config.\n3. Extra edits, changed inputs and recipe mismatch refuse; kind refusals fall back with the row untouched.\n4. Gate exit 0: 5408 passed / 16 skipped (5341 + 67); tsc 0 for source and test.\n\n7 mutants killed: uniqueness, worktree hash, ignore extra, skip inputs digest, mode check, non-overlapping, ignore all board paths.\n\nNotes for activation/final: nothing in pro"
+  "completionSummary": "CQ-C09 docs-literal-replace recipe kind. 2 new files, 330 lines (cap 400): docsLiteralReplace.ts 161, docsLiteralReplace.test.ts 167 (67 tests on real temp Git repos). No C08, submitPlan, taskStore or schema edits.\n\nBehaviour:\n- C08 RecipeKind 'docs-literal-replace', self-registered in recipeKinds.\n- validateDefinition: params is exactly {allowedPaths}, 1-16 canonical prefixes, none under .moe. requiredChecks stay C08's job.\n- validateInputs: exact string keys {path, originalSha256, oldText, newText}; canonical path, no control chars; 64 lowercase hex; old 1-2000 / new 0-2000 chars; no NUL or lone surrogates; new !== old. Then *.md, not .moe, under a prefix by whole segments.\n- assessSource: committed bytes via readRepositorySource; served + 100644; sha of the re-encoded bytes (BOM/CRLF exact); exactly one occurrence, overlaps counted. Patched bytes must fit 64 KiB.\n- instantiate: one step that JSON-quotes both texts and states the expected sha, 'change nothing else', the report_blocked error handling and the test commands. affectedFiles [path]; contract approvedScope [path], checkRefs = commands, no requiredChecks. plan-too-large instead of truncation.\n- assessPostpatch: recipe-mismatch, then inputs-changed, then exact diff-tree from instance.commit to postCommit. Only .moe/tasks/<taskId>.json is ignored; otherwise extra-edits (with detail) or patch-missing. Then a byte-exact post check (mismatch); failures give unavailable. Never throws.\n\nDoD:\n1. Hash and unique old text (worktree edit doesn't count; 'aa' in 'aaa' ambiguous).\n2. allowedPaths required; plan carries the definition's checks plus C08's config.\n3. Extra edits, changed inputs and recipe mismatch refuse; kind refusals fall back with the row untouched.\n4. Gate exit 0: 5408 passed / 16 skipped (5341 + 67); tsc 0 for source and test.\n\n7 mutants killed: uniqueness, worktree hash, ignore extra, skip inputs digest, mode check, non-overlapping, ignore all board paths.\n\nNotes for activation/final: nothing in pro",
+  "touchedFiles": [
+    "packages/moe-daemon/src/context/recipes/docsLiteralReplace.test.ts",
+    "packages/moe-daemon/src/context/recipes/docsLiteralReplace.ts"
+  ],
+  "completedAt": "2026-10-30T05:03:48.939Z",
+  "reviewCompletedAt": "2026-10-30T05:03:48.939Z",
+  "reviewSummary": "APPROVED CQ-C09. Reviewed completion commit 6560e38 on moe/work-2026-10-24 (parent c72d9bb). Diff: 2 new files, +330/-0 net, under the 400 cap. The other paths are board records; C08 files untouched.\n\nGATE (QA, snapshot /tmp/moe-c09qa-gate.83LDUs: archive of 6560e38, native deps, env -i with 0 MOE_* vars, node v24.21.0):\n- npm test exits 0: 192 files, 5408 passed / 16 skipped.\n- tsc 0 for source and test.\n\nDoD:\n1. Committed bytes only, 100644; BOM/CRLF exact. A worktree edit doesn't count; overlapping 'aa' in 'aaa' is ambiguous.\n2. allowedPaths: 1-16 prefixes, none .moe. requiredChecks owned by C08 (recipe.test.ts:132). One step, affectedFiles [path]; checkRefs and approvedScope are exact.\n3. assessPostpatch refuses recipe-mismatch, inputs-changed, extra-edits (paths listed), patch-missing and mismatch; unavailable on Git failure; never throws. Fallbacks leave the row untouched.\n4. Gate exits 0.\n\nMUTANTS (QA): 8 of 9 killed. The `!isMoe(path)` survivor is equivalent, since validateDefinition refuses .moe prefixes.\n\nRails: no forbidden patterns, read-only Git, no .moe edits. Nothing imports the module, so legacy is unchanged.\n\nNotes for activation and final 4e0264fc:\n- import the module and call assessPostpatch;\n- the caller's taskId is trusted for the ignored board path;\n- forbidden patterns in the texts, or a path of ~780+ chars, fall back fail-closed.",
+  "requiredCheckAtDone": null
 }
