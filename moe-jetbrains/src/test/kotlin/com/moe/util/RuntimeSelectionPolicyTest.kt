@@ -29,6 +29,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.lang.reflect.Proxy
@@ -581,6 +582,40 @@ class RuntimeSelectionPolicyTest {
     @Test
     fun `PS5 plain JUnit has no IDE state store`() {
         assertNull(ProtectedStateStore.forIde())
+    }
+
+    @Test
+    fun `PS6 absence requires a directory above the state root`() {
+        val store = newStore()
+        assertNull("fresh root below a directory", store.read(NAME_A))
+        Files.createDirectories(store.root.parent)
+        Files.writeString(store.root, "not a directory")
+        assertThrows("regular-file root", ProtectedStateStore.Untrusted::class.java) { store.read(NAME_A) }
+        assertEquals("read leaves the root unchanged", "not a directory", Files.readString(store.root))
+
+        val blockedParent = newStore()
+        Files.writeString(blockedParent.root.parent, "not a directory")
+        // Windows throws Untrusted; POSIX throws the lookup's own 'Not a directory' FileSystemException.
+        assertThrows("regular-file parent", IOException::class.java) { blockedParent.read(NAME_A) }
+    }
+
+    @Test
+    fun `PS7 absence requires an owner-only link-free root but permits linked parents`() {
+        val loosened = newStore().apply { write(NAME_B, "other") }
+        assumeTrue("cannot grant another principal access on this host", loosen(loosened.root, directory = true))
+        assertThrows("absent file under a loosened root", ProtectedStateStore.Untrusted::class.java) { loosened.read(NAME_A) }
+
+        val elsewhere = newStore().apply { write(NAME_B, "other") }
+        val linkedRoot = ProtectedStateStore(temporaryFolder.root.toPath().resolve("linked-root"))
+        assumeTrue("links unavailable on this host", symlink(linkedRoot.root, elsewhere.root))
+        assertThrows("absent file under a linked root", ProtectedStateStore.Untrusted::class.java) { linkedRoot.read(NAME_A) }
+
+        val system = temporaryFolder.root.toPath().resolve("linked-system")
+        assumeTrue("links unavailable on this host", symlink(system, temporaryFolder.newFolder().toPath()))
+        val linkedParent = ProtectedStateStore(system.resolve("moe/protected-state"))
+        assertNull("fresh root below a linked directory", linkedParent.read(NAME_A))
+        linkedParent.write(NAME_A, "round trip")
+        assertEquals("round trip", linkedParent.read(NAME_A))
     }
 
     @Test

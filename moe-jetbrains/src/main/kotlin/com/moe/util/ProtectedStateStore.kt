@@ -36,20 +36,37 @@ class ProtectedStateStore internal constructor(val root: Path) {
     /** False for a root inside the project, such as a runIde sandbox under the repository it opens. */
     fun usableFor(basePath: String): Boolean = RuntimeSelectionPolicy.isOutsideProject(root.toString(), basePath)
 
-    /** The text stored under [name], or null when there is none. Throws [Untrusted] for a file the IDE would not have written. */
+    /**
+     * The text stored under [name], or null only for a missing root below a directory or no file in an owner-only root.
+     * Throws [Untrusted] for state the IDE would not have written.
+     */
     fun read(name: String): String? {
         val file = fileFor(name)
-        try {
-            Files.readAttributes(file, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-        } catch (_: NoSuchFileException) {
+        // Windows calls a lookup through a regular file missing, so an unchecked root could make a broken store read as empty.
+        if (!present(root)) {
+            requireDirectoryAbove(root)
             return null
         }
         requireOwnerOnly(root, directory = true)
+        if (!present(file)) return null
         requireOwnerOnly(file, directory = false)
         // Opened without following links too, so a link swapped in after the checks is refused as well.
         val bytes = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS).use { it.readNBytes(MAX_BYTES + 1) }
         if (bytes.size > MAX_BYTES) throw Untrusted("a protected state file is larger than 64 KiB")
         return String(bytes, Charsets.UTF_8)
+    }
+
+    private fun present(path: Path): Boolean = try {
+        Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        true
+    } catch (_: NoSuchFileException) {
+        false
+    }
+
+    private fun requireDirectoryAbove(path: Path) {
+        val parent = generateSequence(path.parent) { it.parent }.firstOrNull(::present) ?: return
+        // The IDE system directory may be behind a link; only the state root itself must be link-free.
+        if (!Files.isDirectory(parent)) throw Untrusted("the protected state root is not under a directory")
     }
 
     /** Atomically replaces [name] with [text], creating the root; the new file is owner-only before any byte is written. */
