@@ -9,9 +9,50 @@
     "postflight.{sh,ps1} assert the row count on the AJ2 shape; parity-check passes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD RED: create scripts/tests/landing-ledger.ps1, an AST-loaded test drill in the style of scripts/tests/hooked-commit.ps1. It takes param([string]$Case=''), parses $PSScriptRoot/../moe-agent.ps1 with ParseFile, dot-sources every top-level FunctionDefinitionAst, and sets $script:MoeCaseFoldPaths and $script:myPid=$PID.\n\nAFTER that load loop, redefine these collaborators as stubs. PowerShell rejects unknown named parameters, so each stub declares every name its call sites pass:\n- Get-MoeOwnerGuard -> @{Code='';Detail='';Scope=@{Title='Ledger drill'}}\n- Get-MoeDirtySnapshot -> @{}, or $null in case E\n- Resolve-MoeAttribution(param $Git,$S,$B,$U,$Tool,$Scope,$Settings,$TaskId,$Mode,$PolicyOverride,$Evidence,$PreflightDirty) -> the case's canned attr\n- Ensure-MoeSafeBranch -> '' (the peel fails); throws in case C; in case D it first sets $script:MoeGate=@{Started=$true;Finished=$false;Process=$null;Recorded=$false}, then throws\n- Invoke-MoeRescueRef(param $Git,$TaskId,$Reason,$Title,$Status,$Sid,$Attr,$Sha,$Scope) records $Reason and returns $null (nothing to park)\n- Send-MoeRecordCommit([hashtable]$Record) appends to a List[hashtable] and returns @{success=$true}\n- Push-MoeBranch -> $false; Write-MoeBaseline -> $true\n- Send-MoeCheckRun counts its calls and returns $true\n- Remove-MoeGateWorkspace sets $script:MoeGate=$null and returns $true\n\nKeep these REAL: Invoke-MoeLanding, Get-MoeRecordHeldFields, Get-MoeHeldList, ConvertTo-MoeRootRelative, ConvertTo-MoeRecordPaths, Read-MoeBaseline, Get-MoeBaselinePath, Get-MoeBaselineLandedFlag, Stop-MoeGateChild. No stub may write to the pipeline: List[T].Add returns void; never use ArrayList.\n\nCanned attr:\n- Skipped=@(@{Path='held.txt';Code='MOE_ATTR_CONTESTED'})\n- Contested=@(@{Path='held.txt';TaskId='task-peer'})\n- Unattributed=@(), Missing=@(), Own=@{}\n- every count 0, except AssertedCount = the candidate count\n- Candidates=@() in case A, else @(@{Path='owned.txt';Reason='ASSERTED';Inferred=$false})\n\n$Git=@{Top=<fresh temp dir>; GitDir=<that dir>\\.git; Rel=''}. A finally removes the temp dir; no stub runs git.\n\nEach case resets the rows, the rescues, the check-run count, $script:MoeGate and $script:MoeFrozen. It then calls Invoke-MoeLanding -Kind completion -TaskId task-drill -Git $Git -Settings @{} -Status REVIEW -Sid sess-drill 6>$null. It asserts the result is a [hashtable] and asserts EXACT equality (no >=, no tail slice) of the outcome/code/kind sequence and of the rescue reasons:\n- A no-candidate-peel: [failed/MOE_COMMIT_FAILED_PEEL/completion]; rescues [peel-failed]; Code PEEL; StopLoop true.\n- B candidates-peel: the same.\n- C throw-after-attribution (DoD 2): [failed/MOE_COMMIT_FAILED/completion], sent from the finally; rescues [commit-failed]; StopLoop true. That row's skipped holds {path held.txt, code MOE_ATTR_CONTESTED} and its contested holds {path held.txt, taskId task-peer}.\n- D mid-gate-exception: [failed/MOE_COMMIT_FAILED_GATE/completion]; rescues [teardown]; exactly 1 Send-MoeCheckRun.\n- E status-failure: [failed/MOE_COMMIT_FAILED_ATTRIBUTION/completion]; no rescue. sh's run_landing parks nothing there either.\n\nerror handling: each case runs in its own try/catch, so one failure is reported and the rest still run. Print 'PASS|FAIL landing-ledger: <case> <detail>' and then 'landing-ledger.ps1: N passed, M failed'. Exit 1 on any failure, or when Invoke-MoeLanding did not load. The file is ASCII only, with LF line endings.\n\nRED proof: run the drill with powershell.exe from a scratch copy of the current scripts/ under /mnt/d/moe-scratch (it loads ../moe-agent.ps1). A, B and E must FAIL with two rows; C and D must PASS. The architect's probe showed exactly this on PS 5.1 and on pwsh 7.\n\nCI wiring in .github/workflows/ci.yml, in both 'Test Windows PowerShell landing guard' and 'Test PowerShell 7 landing guard', after the hooked-commit.ps1 line: add `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`, then `powershell -NoProfile -File scripts/tests/landing-ledger.ps1` (pwsh in the second step). A pwsh run block fails only on its last command's exit code, hence the guard line.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "newFiles": [
+        "scripts/tests/landing-ledger.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN fix in scripts/moe-agent.ps1 Invoke-MoeLanding. This is ps1 only; scripts/moe-agent.sh stays unchanged. Reuse the function-local $recorded to mean 'this landing's ledger row is out, committed or failed'.\n\n(1) Add `$recorded=$true` on the line after each of the 8 explicit failed Send-MoeRecordCommit sends in the try body:\n- git status failed (MOE_COMMIT_FAILED_ATTRIBUTION)\n- the no-candidate completion peel (MOE_COMMIT_FAILED_PEEL)\n- the 7.1 candidates peel (MOE_COMMIT_FAILED_PEEL)\n- temp-index build failed (MOE_COMMIT_FAILED_ATTRIBUTION)\n- evidence unavailable (MOE_COMMIT_FAILED_GATE)\n- qualityGate failed (MOE_COMMIT_FAILED_GATE)\n- commit creation failed (MOE_COMMIT_FAILED)\n- ref contention (MOE_COMMIT_FAILED_REF_CONTENTION)\n\n(2) In the finally, change `if ($res.Outcome -eq 'failed' -and -not $res.Ref) {` to `if ($res.Outcome -eq 'failed' -and -not $res.Ref -and -not $recorded) {`, and set `$recorded=$true` after that block's send.\n\n(3) Give the `$recorded=$false` init a short why-comment: the finally sends a failed row only when none went out yet (the catch, an interrupted gate); the twin run_landing records exactly one.\n\nDo NOT set $recorded:\n- in the catch's failed branch (DoD 2: a real exception after attribution must still get its rescue and row from the finally);\n- in the $interrupted branch.\nLeave the committed re-send, the owner refusal, the nothing/refused sends and Invoke-MoeRescueRef unchanged.\n\nSay in the completion summary: the git-status and temp-index failure paths no longer get a second rescue attempt from the finally. sh's run_landing/land_plumbing park nothing there either; the baseline is kept and the next pre-flight recovers.\n\nEdit ONLY with the Claude Edit tool:\n- it keeps the UTF-8 BOM and LF line endings;\n- its TOOL witness lets the landing commit a path that another nonterminal task may still declare (attribution.contested skip-untouched);\n- never use sed or python on tracked files.\n\nLive Windows seats may hot-reload this file, so run ParseFile on powershell.exe and pwsh.exe right after editing. Then landing-ledger.ps1 passes all 5 cases on both engines.\n\nMutant test, on a scratch copy only:\n- dropping `-not $recorded` from the finally must fail A, B and E;\n- setting `$recorded=$true` in the catch must fail C.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 3: pin the row count on the AJ2 shape in BOTH harnesses.\n\nIn scripts/tests/postflight.sh (scenario AJ, $scope_aj_check) and scripts/tests/postflight.ps1 (scenario AJ, the scope-aj-check.cjs here-string), remove these two lines:\n- `assert.ok(rows.length>=expected.length,\"missing ledger rows\");`\n- `rows.slice(-expected.length).forEach(...)`\nReplace them with one exact assertion: `assert.deepStrictEqual(rows.map(r=>[r.outcome,r.code,r.kind]),expected,\"ledger rows: exactly one failed row per landing\");`\n\nKeep these unchanged:\n- the expected arrays: AJ1 [committed/peel-failed/rescue, failed/MOE_COMMIT_FAILED_PEEL/completion]; AJ2 [failed/MOE_COMMIT_FAILED_PEEL/completion];\n- the every-row held-field test loop;\n- the fixtures;\n- the ps1 MOE_COMMIT_REFUSED_NO_OWNED_PATHS grep;\n- the scenario counts.\n\nReword the AJ comments in both files: the ledger must hold exactly these rows on both wrappers; ps1's finally used to add a second failed row (task-4fdc7590).\n\nThe architect ran sh AJ on HEAD's scripts: AJ1 holds exactly 2 rows and AJ2 exactly 1, so sh passes unchanged (the parity pin). HEAD's ps1 AJ2 holds 2 rows (see /mnt/d/moe-scratch/dfbda1-Rkml/red-ps51-aj2.log), so the new check is RED there and GREEN after step 2. If any run shows an extra row, investigate it; never fall back to a tail check.\n\nEdit both files with the Claude Edit tool; postflight.ps1 must keep its UTF-8 BOM.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate. Run the ONE verification command below exactly once, after the last edit, with run_in_background. Its fresh output is the complete_task evidence, and QA re-runs it verbatim. It takes about 40 minutes: postflight.sh, then postflight.ps1 on PS 5.1 and on pwsh 7.\n\nWhat the command does:\n- snapshots HEAD's scripts/ into /mnt/d/moe-scratch/t4fdc-XXXX and copies the 4 changed scripts over, cmp-verified;\n- unsets leaked MOE_/CLAUDE/FAKE_ env and checks that ci.yml parses;\n- runs bash -n;\n- on both engines: ParseFile of moe-agent.ps1 and landing-ledger.ps1, then landing-ledger.ps1 itself;\n- runs parity-check.sh and parity-check.ps1 (PS 5.1);\n- runs the three postflight test runs with MOE_POSTFLIGHT_TIMEOUT_SEC=180;\n- writes <dir>.log, ending in GATE_EXIT=<n>.\n\nPoll with `until grep -q '^GATE_EXIT=' \"$(cat /tmp/t4fdc-dir).log\"; do sleep 20; done`. The foreground cap is 600 s, so re-poll.\n\nPass means all of:\n- GATE_EXIT=0;\n- '[landing-ledger powershell.exe] ok' and '[landing-ledger pwsh.exe] ok';\n- '[scenario AJ1] ok' and '[scenario AJ2] ok' in all three postflight runs;\n- the same scope counts as before: sh 42, ps1 41, or one fewer or one more as symlink support differs.\n\nDo not edit any file while the gate runs. If a ps1 failure looks environmental, rerun the parent revision's scripts the same way before blaming the change (Serena gotcha-qa-ps1-postflight-from-wsl).\n\nFull postflight regression is warranted on this mid-epic task because the change touches every ps1 landing's ledger path.\n\nCOMMAND:\ncd /mnt/d/projexts/moes && W=$(mktemp -d /mnt/d/moe-scratch/t4fdc-XXXX) && echo \"$W\" > /tmp/t4fdc-dir && ( for v in $(compgen -e | grep -E '^(MOE_|CLAUDE|FAKE_)'); do unset \"$v\"; done; git rev-parse HEAD && python3 -I -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))' && echo \"[ci.yml] ok\" && git archive HEAD scripts | tar -x -C \"$W\" && for f in scripts/moe-agent.ps1 scripts/tests/landing-ledger.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$W/$f\" && cmp \"$f\" \"$W/$f\" || exit 1; done && cd \"$W\" && bash -n scripts/moe-agent.sh && echo \"[bash -n] ok\" && for eng in powershell.exe pwsh.exe; do for s in scripts/moe-agent.ps1 scripts/tests/landing-ledger.ps1; do P=\"$(wslpath -w \"$W/$s\")\"; $eng -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$P',[ref]\\$null,[ref]\\$e); exit \\$e.Count\" && echo \"[ParseFile $eng $s] ok\" || exit 1; done; $eng -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/landing-ledger.ps1\")\" && echo \"[landing-ledger $eng] ok\" || exit 1; done && bash scripts/tests/parity-check.sh && echo \"[parity-check.sh] ok\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/parity-check.ps1\")\" && echo \"[parity-check.ps1 PS5.1] ok\" && echo \"=== Linux bash postflight.sh ===\" && MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && echo \"=== Windows PowerShell 5.1 postflight.ps1 ===\" && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/postflight.ps1\")\" && echo \"=== pwsh 7 postflight.ps1 ===\" && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$W/scripts/tests/postflight.ps1\")\" ) > \"$W.log\" 2>&1; echo \"GATE_EXIT=$?\" >> \"$W.log\"; echo \"$W\"",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of the diff, using the adversarial-self-review skill. The diff covers moe-agent.ps1, landing-ledger.ps1, ci.yml, postflight.sh and postflight.ps1.\n\n(a) Every explicit failed send inside Invoke-MoeLanding's try body is followed by $recorded=$true, and no catch or interrupt path sets it. Compare the `outcome = 'failed'` / `outcome='failed'` hits inside the function with the $recorded=$true lines.\n(b) Twice or concurrently: $recorded is function-local, so --loop landings and recovered landings never share it.\n(c) Ctrl+C mid-gate still parks and records once: the postflight frozen-candidate interrupt-int mode plus drill case D.\n(d) Known pre-existing edge, out of scope: a throw between an explicit rescue that parked a ref and its send still records no row, because the finally keeps -not $res.Ref. Name it in the completion summary; do not fix it here.\n(e) No record_commit payload shape, MCP contract or daemon change, and git diff shows moe-agent.sh untouched.\n(f) The BOM bytes ef bb bf still lead moe-agent.ps1 and postflight.ps1, landing-ledger.ps1 is ASCII, and LF line endings hold throughout.\n\nIf the review changes any byte, re-run the step-4 command and submit only the fresh run.\n\nFinally, update the Serena memory gotcha-ps1-landing-no-candidate-peel. Its duplicate-row paragraph becomes: fixed by task-4fdc7590; scenario AJ now asserts the exact row sequence; scripts/tests/landing-ledger.ps1 pins one failed row per landing.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,9 +64,94 @@
     "task-dfbda1a8230a4fe5b57dbe512fa62a33"
   ],
   "priority": "LOW",
-  "order": 291.6,
+  "order": 1,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:04:11.016Z",
-  "updatedAt": "2026-10-30T09:04:11.016Z"
+  "updatedAt": "2026-10-30T10:16:48.920Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T09:54:40.801Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T09:55:16.013Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T10:16:48.897Z",
+  "executionContract": {
+    "intendedBehavior": "A ps1 Invoke-MoeLanding records at most one failed moe.record_commit row per landing, as sh's run_landing does. Some failure paths already send their own failed row: the git-status and temp-index attribution failures, both peel failures, the gate and evidence-unavailable failures, a failed commit creation and ref contention. Those paths no longer get a second rescue attempt or a second failed row from the finally block, even when their rescue parked nothing. Two paths still get exactly one rescue attempt and one failed row from the finally: a real exception after attribution (the catch), and an interrupted gate. moe-agent.sh is unchanged.",
+    "acceptanceCriteria": [
+      "A ps1 peel failure with nothing to rescue records exactly one failed/MOE_COMMIT_FAILED_PEEL ledger row and makes one rescue attempt (peel-failed). This holds for both the no-candidate peel and the candidates peel.",
+      "A real exception after attribution still records exactly one failed row (code MOE_COMMIT_FAILED) from the finally, after one rescue attempt (commit-failed). That row carries the held skipped/contested fields.",
+      "An exception while the gate child is still running records exactly one MOE_COMMIT_FAILED_GATE row, with rescue reason teardown and one check-run send.",
+      "A git-status failure records exactly one MOE_COMMIT_FAILED_ATTRIBUTION row and no rescue.",
+      "postflight.sh and postflight.ps1 scenario AJ assert the exact ledger row sequence: AJ1 has 2 rows and AJ2 has 1 failed PEEL row. Both pass, as do parity-check.sh and parity-check.ps1.",
+      "scripts/tests/landing-ledger.ps1 passes on Windows PowerShell 5.1 and on pwsh 7, and runs in both Windows CI landing-guard steps.",
+      "The step-4 verification command ends with GATE_EXIT=0."
+    ],
+    "invariants": [
+      "No landing parks a second rescue ref: the finally rescues only when $res.Ref is empty and no row has gone out yet.",
+      "The committed path and its finally re-send (casOk -and -not $recorded) are unchanged.",
+      "The catch's failed branch never sets $recorded.",
+      "record_commit payload shapes, MCP contracts, daemon code and moe-agent.sh are unchanged.",
+      "moe-agent.ps1 and postflight.ps1 keep their UTF-8 BOM, and every file keeps LF line endings."
+    ],
+    "compatibility": [
+      "Existing .moe/ state and the daemon's record_commit handling are untouched; only the duplicate failed rows disappear.",
+      "The ps1/sh string parity (codes, banners, env names) is unchanged: no new strings or env vars."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.ps1 Invoke-MoeLanding: $recorded set after the 8 explicit failed Send-MoeRecordCommit sends; '-not $recorded' added to the finally's failed-row fallback condition; one why-comment",
+      "new scripts/tests/landing-ledger.ps1, an AST-loaded drill (cases A-E) with stubbed collaborators",
+      "the scenario AJ checker and comments in scripts/tests/postflight.sh and scripts/tests/postflight.ps1",
+      "the .github/workflows/ci.yml Windows PowerShell 5.1 and pwsh 7 landing-guard steps run landing-ledger.ps1"
+    ],
+    "reuse": [
+      "The AST loader pattern of scripts/tests/hooked-commit.ps1 and scripts/tests/importee-guard.ps1 (ParseFile, then dot-source each FunctionDefinitionAst).",
+      "The real Get-MoeRecordHeldFields and Get-MoeHeldList, so the drill also proves the finally row's held fields.",
+      "The existing scenario AJ fixtures and expected arrays in both postflight harnesses, unchanged.",
+      "The function-local $recorded flag already guarding the committed re-send; no new variable."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1 Invoke-MoeLanding: $recorded=$false at init; the finally's fallback `if ($res.Outcome -eq 'failed' -and -not $res.Ref)` runs Invoke-MoeRescueRef (reason teardown or commit-failed) and then a second failed Send-MoeRecordCommit.",
+      "Invoke-MoeRescueRef returns $null when Attr.Candidates is empty or the built tree is unchanged ('nothing to rescue'), so $res.Ref stays empty.",
+      "Send-MoeRecordCommit swallows exceptions and returns $null on failure, so a send never reaches the catch.",
+      "Invoke-MoeFrozenGate catches everything and sets Finished after the wait, so $interrupted (Started -and -not Finished) means a Ctrl+C, or an exception, mid-gate.",
+      "scripts/moe-agent.sh run_landing records exactly one failed row per failed landing. land_commit's peel failure and land_plumbing's commit failure call rescue_ref once; the git_dirty_snapshot and temp-index-build failures rescue nothing.",
+      "On HEAD, an architect probe (AST-loaded, stubbed) gave on both PS engines: no-candidate and candidates peel = 2 rows, git-status failure = 2 rows, throw after attribution = 1 row, mid-gate exception = 1 row. With the guard prototype applied, every case gave 1 row.",
+      "sh scenario AJ on HEAD: AJ1 = [committed/peel-failed/rescue, failed/MOE_COMMIT_FAILED_PEEL/completion] and AJ2 = [failed/MOE_COMMIT_FAILED_PEEL/completion], exactly."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Mark only the two peel sends. Rejected: the same finally fallback duplicates the row on every explicit failed path whose rescue parks nothing (git-status failure, temp-index failure, gate/evidence-unavailable, commit-failed, ref contention). The probe showed 2 rows on the git-status path today.\n2) A $caught flag set in the catch, with the finally gated on ($caught -or $interrupted). Rejected for two reasons. A Ctrl+C after an explicit path set Outcome=failed but before its send would record nothing. A throw after an explicit send (e.g. Push-MoeBranch after the commit-failed send) would still duplicate the row.\n3) A sentinel in $res.Ref. Rejected: $res.Ref feeds the session-ended line and finalize.\n4) CHOSEN: reuse the function-local $recorded as 'this landing's ledger row is out'. Set it after each explicit failed send, and gate the finally's fallback on it. This is the smallest change and is exactly sh's one-row invariant.\n5) For DoD 2, an integration-level exception injection in postflight.ps1 (e.g. identity-less commit-tree under a gate). Rejected as fragile. The AST-loaded stub drill matches the existing hooked-commit.ps1/importee-guard.ps1 pattern and runs in seconds.",
+    "codebaseInsights": "- A PowerShell Ctrl+C skips catch blocks but runs finally blocks. The finally's fallback exists for exactly two paths: the catch (an exception after attribution, with no row sent) and an interrupted gate.\n- Every explicit failed path in the try body sends its own row and then returns. That is why the fallback double-sends whenever their rescue parks nothing ($res.Ref empty). In the no-candidate completion peel the rescue ALWAYS parks nothing (Candidates is empty), so the duplicate there is deterministic.\n- Scenario AJ ledgers hold only landing rows, so an exact-sequence assertion is safe.\n- Gotcha: in a test, @($null).Count is 1. Compare joined outcome/code/kind strings rather than counting optional fields.\n- In the frozen-candidate gate harness (top of postflight.{sh,ps1}), mode interrupt-int already covers the real Ctrl+C path. It asserts one rescue ref and that the last record_commit code is MOE_COMMIT_FAILED_GATE.\n- The architect's prototype probe, if still present: /tmp/claude-1000/-mnt-d-projexts-moes/124f3aef-7b02-48eb-a90a-71c3ccce937f/scratchpad/probe-ledger.ps1 (run with -Wrapper <windows path to moe-agent.ps1>).",
+    "risks": "- Encoding: moe-agent.ps1 and postflight.ps1 are UTF-8 with BOM. Use the Claude Edit tool only; PS 5.1 misparses a BOM-less non-ASCII script.\n- Contested paths: task-dfbda1a8 (REVIEW) declared the same three files. The Edit tool's TOOL witness lets the landing commit them under skip-untouched; shell writes would be held.\n- Hot reload: live Windows seats reload moe-agent.ps1. Run ParseFile on both engines after each edit.\n- Gate environment: run from a /mnt/d cwd with MOE_/CLAUDE env unset and MOE_POSTFLIGHT_TIMEOUT_SEC=180. The postflight runs take about 40 minutes, so use run_in_background and poll.\n- Stub binding: each stub must declare every named parameter its call sites pass (Invoke-MoeRescueRef also receives -Sha on ref contention). A stub must never emit pipeline output, or Invoke-MoeLanding's return becomes an array.\n- ci.yml: put the $LASTEXITCODE guard before the new line. Otherwise a hooked-commit failure is masked.\n- Pre-existing and out of scope: a throw between a successful explicit rescue and its send still records no row.\n- Behavior change to document: git-status and temp-index failures no longer get a finally rescue attempt. This matches sh.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/hooked-commit.ps1",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T10:16:48.920Z",
+  "approvedPlanRevision": 1
 }

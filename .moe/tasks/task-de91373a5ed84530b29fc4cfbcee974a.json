@@ -81,15 +81,22 @@
       "author": "architect-4ae016fb",
       "content": "Clarification for RF04's worker and QA (architect-4ae016fb, RF03's architect, 2026-10-30), on comment-7a94ba4a.\n\n'Only protectedCommandOrRefuse writes that field' has one exception, and it is deliberate. RF03's step 3 adds it. replacedUnverified stores the replacement refusal when the stop removed daemon.json while the captured target still lives.\n- That branch is reachable only under PROTECTED: replacedUnverified's condition 1 requires it.\n- So no LEGACY path writes selectionRefusal, and W4(d) holds.\n- Do not report that write as a contract break.\n\nThe contract this row relies on is narrower: stopCommandOrNull itself never sets or clears selectionRefusal and never calls onStatus. RF03 now pins it at the source too (task-ec64165c, amendment to comment-08300e67). W4(d) and its mutant stay as written.",
       "timestamp": "2026-10-30T08:53:50.182Z"
+    },
+    {
+      "id": "comment-663bd16c06894bcf8e7034f6be163496",
+      "author": "architect-4ae016fb",
+      "content": "Sequencing note from architect-4ae016fb (2026-10-30), who planned task-6fc0096b (HIGH). RF04 now also dependsOn task-6fc0096b.\n\nWhy: both tasks edit MoeDaemonSupervisor.kt, MoeDaemonSupervisorTest.kt and MoeProjectService.kt, and both were waiting only on RF03 and task-90664db1, so they would have run at the same time.\n\nWhat task-6fc0096b lands in the files RF04 edits. Re-read the landed bytes before your step 1, as your plan already says, and use the landed names if they differ.\n\n1. stopDaemonForRestart(info) gets a new first line.\n   - When daemon.json was written on the other side of the Windows/WSL boundary (the companion isOtherSideOfWsl(info.projectPath, windows), which is the daemon's isForeignDaemonInfo rule), it returns a fixed refusal in both profiles.\n   - That happens before any isProcessAlive, processLookup or destroy, because the pid lives in another pid namespace.\n   - Keep that check FIRST when you change the parameter to DaemonInfo? and add the windowsRestart branch: `if (info != null && <other side>) return <that refusal>` must come before `if (windowsRestart()) return stopWindowsRestart(info)`.\n   - stopWindowsRestart must never receive an other-side info.\n2. readDaemonInfo no longer deletes anything.\n   - A daemon.json naming another project now reads as null.\n   - ensureDaemonRunningImpl removes it before spawning through deleteDaemonInfoIfUnchanged(info), a compare-delete.\n   - restartDaemon's own post-stop delete is untouched; it stays yours.\n3. In MoeProjectService:\n   - connect() and connectWithRetry() use daemonSupervisor.isReachable(info): a pid that is alive and an open port, or only the open port for an other-side info.\n   - handleForeignDaemon uses deleteDaemonInfoIfUnchanged.\n   - restartDaemon is unchanged.\n\nYour W rows use native projectPaths, so the new guard never fires for them, and N1, N2 and R1-R4 are unaffected.",
+      "timestamp": "2026-10-30T10:17:42.015Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:39.223Z",
-  "updatedAt": "2026-10-30T10:03:30.569Z",
+  "updatedAt": "2026-10-30T10:17:42.016Z",
   "dependsOn": [
     "task-ec64165c85f246088a7224cf70b04670",
     "task-f3485ac9d4384664870d88db876ddd54",
-    "task-90664db1e08a45f7b63c1e0f44eeee09"
+    "task-90664db1e08a45f7b63c1e0f44eeee09",
+    "task-6fc0096b9fff4c45904cfbce7833ad2d"
   ],
   "planningEntry": {
     "from": "BACKLOG",

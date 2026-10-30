@@ -1,0 +1,31 @@
+{
+  "id": "task-007c0ea856e546d2a619e012815cd89f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains STATE_SNAPSHOT project check deletes daemon.json and reconnects when a WSL-hosted daemon spells this project /mnt/<d>/...",
+  "description": "Found by architect-4ae016fb on 2026-10-30, while planning task-6fc0096b. It is the same bug class, one stage later: after the /health probe instead of before it.\n\nWhat the code does\n- MoeMessageDispatcher.handle, STATE_SNAPSHOT branch (moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt, about lines 83-96), compares File(newState.project.rootPath).canonicalPath with File(project.basePath).canonicalPath.\n- On a mismatch it deletes .moe/daemon.json unconditionally, then calls onProjectMismatch: disconnect, then scheduleReconnect.\n\nRepro on Windows\n- The project is D:/proj. A WSL agent's pre-flight started its daemon with --project /mnt/d/proj, so the snapshot's rootPath is /mnt/d/proj.\n- On Windows, File('/mnt/d/proj').canonicalPath is D:\\mnt\\d\\proj, so the check fails.\n- The plugin deletes the live daemon.json and reconnects. The reconnect spawns a second daemon over the same .moe/.\n\nAfter task-6fc0096b, readDaemonInfo, the reachability checks and the /health probe all accept that daemon as this project. This check is the one deleter left on that path.\n\nWanted\n- Judge rootPath with task-6fc0096b's same-project rule, MoeDaemonSupervisor.isSameProject: comparableProjectPath first, then canonicalPath. Do not add another normalizer.\n- A genuinely different rootPath still disconnects and reconnects, as today.\n- Remove daemon.json only through MoeDaemonSupervisor.deleteDaemonInfoIfUnchanged, against the DaemonInfo the client connected with, never unconditionally. The dispatcher holds no supervisor, so do the removal in MoeProjectService's onProjectMismatch.\n- When planning, serialize with CQ-RF04 (task-de91373a): it also edits MoeProjectService.kt (restartDaemon).\n\nOut of scope\n- VS Code (task-80ed1fe8).\n- restartDaemon.",
+  "definitionOfDone": [
+    "A STATE_SNAPSHOT whose rootPath names this project in a drive, forward-slash, /mnt/<d> or //wsl$ spelling neither deletes daemon.json nor disconnects. A JetBrains test shows it.",
+    "A STATE_SNAPSHOT for another project still disconnects and reconnects. daemon.json is removed only while it still parses to the DaemonInfo the client connected with. Tests show both.",
+    "JetBrains tests pass under the jetbrains-gradle lease: from WSL, cmd.exe gradlew.bat test --rerun."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-6fc0096b9fff4c45904cfbce7833ad2d"
+  ],
+  "priority": "HIGH",
+  "order": 2.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T10:17:28.429Z",
+  "updatedAt": "2026-10-30T10:17:28.429Z"
+}
