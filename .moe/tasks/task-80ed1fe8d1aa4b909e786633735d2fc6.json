@@ -9,9 +9,39 @@
     "`cd moe-vscode && npm test && npm run compile` exits 0, with its output supplied to complete_task."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST. Load test-driven-development.\n\nPrerequisites. dependsOn gates the claim, not the bytes. Confirm these are DONE:\n- RF06 (task-98ffe33f) and RF06b (task-032c9739), which rewrote MoeDaemonClient.ts and exported its policy helpers;\n- task-90664db1, the JetBrains identity check.\n\nThen read:\n- the landed MoeDaemonClient.ts;\n- task-90664db1's DaemonIdentity code and its handoff;\n- task-86093c3e's packages/moe-proxy/src/daemonIdentity.ts;\n- mem:decision-daemon-identity-probe.\n\nMirror their classification exactly:\n- Only HTTP 200 or 503 with a JSON object body counts.\n- projectPath must be a non-empty ABSOLUTE path (drive, UNC or POSIX).\n- A relative projectPath is unknown, because the daemon reports its raw --project.\n- A 503 carrying an absolute, different projectPath is foreign.\n\nCreate moe-vscode/tests/daemon-identity.test.cjs. Transpile MoeDaemonClient.ts into a vm the way tests/daemon-start.test.cjs does (mem:gotcha-vscode-vm-test-harness):\n- node builtins and ws come through the real require;\n- MoeDaemonClient.ts must keep NO local relative import, or five harnesses break;\n- vm-realm objects fail deepStrictEqual, so compare fields or JSON.\n\nA. Path rule rows for the exported comparableProjectPath and pathsMatch:\n- D:\\x\\y, d:/x/y/, D:\\x\\.\\y and /mnt/d/x/y all match each other.\n- /home/a and /home/b do not match.\n\nB. probeDaemonIdentity(host, port, projectPath, {timeoutMs}), against a real http.createServer on 127.0.0.1:0. It must NEVER reject.\n- same: the spelling rows.\n- foreign: an absolute, different path, returned verbatim. A 503 with an absolute, different path is foreign too.\n- unknown, one row each:\n  - a relative path ('.');\n  - connection refused (a server you closed);\n  - timeout: a server that never answers, timeoutMs 150, resolving within about 1 s;\n  - a non-JSON body;\n  - a JSON array body;\n  - no projectPath;\n  - projectPath 42, '' or null;\n  - a body over 64 KiB;\n  - status 426 and status 500.\n\nC. removeDaemonJsonIfUnchanged(file, {pid, port, startedAt}):\n- it removes the file when all three match;\n- it keeps the file when any one differs, and when the file is missing or unparseable;\n- it never throws.\n\nD. connect() on a real MoeDaemonClient in the vm.\nSetup:\n- Stub vscode.workspace with getConfiguration and workspaceFolders pointing at a temp project.\n- Stub vscode.window with show*Message capture.\n- Stub child_process.spawn to record args.\n- The fake daemon is an http server answering /health, with a WebSocketServer({server}) counting 'connection' events.\n- The temp .moe/daemon.json names its port, a pid and a startedAt.\n- Replace waitForDaemonInfo as daemon-start does.\nRows:\n- D1 foreign. The fake WSS sees 0 connections. daemon.json is removed. The spawn args contain 'start', '--project' and the temp project. A shown message names the foreign project.\n- D2 same. At least 1 /ws connection, daemon.json kept, no spawn. Disconnect and close every server.\n- D3 foreign with moe.daemon.port configured. No connection, an error message names both projects, daemon.json is untouched, and there is no spawn.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/daemon-identity.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT in moe-vscode/src/services/MoeDaemonClient.ts. Use node builtins only, with no new local import.\n\n1. Path rule.\n- Export comparableProjectPath, mirroring packages/moe-proxy/src/utils.ts:\n  - a drive path goes through path.win32.normalize, then '/' separators, no trailing slash, lowercase;\n  - /mnt/<d> maps to <d>: after normalizing. Use path.posix.normalize of the raw string on win32, and path.resolve elsewhere.\n- If RF06 already landed an identical rule, reuse it instead of adding a second one.\n- pathsMatch delegates to it. Its three existing call sites then accept every spelling of this project: the daemon.json checks in getDaemonInfo and ensureDaemonRunning, and the STATE_SNAPSHOT rootPath check. That also stops a Windows daemon from being deleted and duplicated by a Remote-WSL window.\n- Export isAbsoluteAnyOs (drive, UNC or POSIX), mirroring the proxy.\n\n2. Probe. Export probeDaemonIdentity(host, port, projectPath, {timeoutMs = 1500}). It returns {kind:'same'}, {kind:'foreign', projectPath} or {kind:'unknown'}.\n- Make one node:http GET of /health.\n- Use one overall timer plus the request timeout.\n- Count body bytes and stop at 64 KiB.\n- Settle once, through a done guard.\n- Clear the timer and destroy the socket on every path.\n- Never reject.\n\n3. Export removeDaemonJsonIfUnchanged(file, {pid, port, startedAt}).\n- Re-read the file through readDaemonJsonText and unlink it only when all three fields still match.\n- Log, and never throw, on any error.\n\n4. getDaemonInfo also returns pid, startedAt and a fromConfig flag, keeping host and port as today. Check every caller still compiles.\n\n5. connect(): probe after getDaemonInfo and before setConnectionState('connecting') and new WebSocket.\n- Foreign, from daemon.json:\n  - log the event;\n  - show a warning: 'Moe: the daemon on <host>:<port> serves <served>, not this workspace (<project>). Starting this project's daemon on the next free port.';\n  - call removeDaemonJsonIfUnchanged;\n  - await startDaemon('start', projectPath);\n  - re-read getDaemonInfo once and probe once more. A second foreign or missing answer throws, so the callers' existing error and reconnect handling applies. Never loop.\n- Foreign, from a configured moe.daemon.port: show an error naming both projects and throw. Delete nothing and start nothing.\n- Unknown or same: proceed exactly as today.\n\nError handling:\n- The probe never throws.\n- A refusal opens no WebSocket and leaves no ping interval.\n- connectInProgress is still reset in finally.\n- The STATE_SNAPSHOT mismatch check stays as the second line of defense.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants, on a scratch copy of MoeDaemonClient.ts. Restore it and cmp after each one. A kill counts only on assertion failures.\n- M1: connect() ignores the probe. D1 fails, because the WSS sees a connection.\n- M2: the rule drops /mnt folding. The A and B spelling rows fail.\n- M3: a relative served path is judged. The B relative row fails.\n- M4: removal is unconditional. The C keep-rows fail.\n\n2. GATE (DoD 3). Run fresh; it must exit 0, and its output goes to complete_task:\ncd moe-vscode && npm test && npm run compile\n- Run it on Linux node.\n- Also run it on Windows node through cmd.exe, because CI's 3-OS matrix runs these tests and win32 path.resolve differs:\n  cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && npm test\"\n- Report the counts for both runs.\n\n3. Check `git status --short -- moe-vscode`. This task's paths are the two plan files. Every other dirty path was there before and is untouched.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review.\n\n- Can any connect path still open /ws to a foreign daemon? Check:\n  - reconnect;\n  - the configured port;\n  - the auto-start path;\n  - two concurrent connect() calls;\n  - a daemon that changes between the probe and the upgrade.\n- Can a spelling difference, or a relative path in daemon.json or in /health, delete a live same-project daemon.json or start a duplicate daemon? Check:\n  - the Remote-WSL extension host (/mnt/d) against a Windows daemon (D:\\);\n  - Windows against a WSL daemon.\n- Is every read bounded, every timer cleared and every socket destroyed? Can the probe or the second attempt loop?\n- Does the warning reveal anything beyond the two paths and host:port?\n- Do the rules agree with the proxy (task-86093c3e) and JetBrains (task-90664db1) on every row?\n- Rails:\n  - regression tests are present;\n  - error handling: the probe never throws and unknown keeps today's behavior;\n  - no MCP contract change;\n  - existing daemon.json files still parse;\n  - no forbidden pattern.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -29,10 +59,44 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:55:18.945Z",
-  "updatedAt": "2026-10-30T07:59:34.287Z",
+  "updatedAt": "2026-10-30T08:03:40.341Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:59:34.287Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T08:00:30.842Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T08:03:40.312Z",
+  "planningNotes": {
+    "approachesConsidered": "- Relying on the existing STATE_SNAPSHOT rootPath check alone: rejected.\n  - It already disconnects on a mismatch and deletes daemon.json.\n  - But by then a /ws client is open on the foreign board, which DoD 1 forbids.\n  - Its unconditional unlink is also a TOCTOU.\n- A separate daemonIdentity.ts module: rejected. The vm harnesses transpile MoeDaemonClient.ts alone with a closed require shim, and five of them load it. The helpers are exported from MoeDaemonClient.ts, as RF06 did.\n- Probing only in ensureDaemonRunning: rejected. connect() also serves a configured moe.daemon.port and every reconnect, so the probe sits where the socket opens.",
+    "codebaseInsights": "- VS Code adopts the port from daemon.json after a pathsMatch on the file's projectPath plus isPortOpen. It has no PID check.\n- pathsMatch does path.resolve plus lowercase on win32, without /mnt folding. A Remote-WSL window can therefore misjudge a Windows daemon as stale, delete its daemon.json and start a duplicate.\n- On 'open' the client only sends GET_STATE and pings. The STATE_SNAPSHOT handler compares payload.project.rootPath, then disconnects and unlinks.\n- tests/daemon-start.test.cjs shows how to build a MoeDaemonClient in the vm with stubbed vscode and child_process.\n- isEpicFinal on this row is only the order fallback of a grab-bag epic with no designated finalTaskId. The regression scope is the full moe-vscode suite.",
+    "risks": "- RF06 and RF06b rewrite MoeDaemonClient.ts first. Read the landed bytes and reuse their path helper where it is the same rule.\n- The connect-level tests need real servers in the test process. node --test runs async tests, so never spawnSync there.\n- Closing the WebSocketServer, the http server and the client in every test avoids hanging the runner.\n- Windows path.resolve differs, so run the suite on Windows node too.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/daemon-identity.test.cjs",
+      "moe-vscode/tests/daemon-start.test.cjs",
+      "packages/moe-proxy/src/utils.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T08:03:40.340Z",
+  "approvedPlanRevision": 1
 }

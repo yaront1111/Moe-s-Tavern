@@ -23,13 +23,9 @@
       "newFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt"
       ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
-        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
-      ],
-      "note": "NEW com.moe.util.ProtectedStateStore (155 lines, LF): internal ctor(root), companion forIde() (null without Application, or on any exception), usableFor = isOutsideProject, read/write/delete with names limited to [0-9a-f]{64}\\.json (IllegalArgumentException otherwise), typed Untrusted : IOException. Owner-only = POSIX exactly rwx------/rw------- or ACL non-empty with every entry ALLOW for the owner; write sets it explicitly (dir + temp file before any byte), re-checks it and refuses to persist if it did not hold, then ATOMIC_MOVE+REPLACE_EXISTING, temp deleted on any failure. Read: NOFOLLOW_LINKS attribute check + NOFOLLOW_LINKS open, root must be a real directory (a link or Windows junction root is refused), 64 KiB cap (cap+1 read). Additions beyond the plan, all fail-closed: write refuses text over the cap; a write re-restricts an existing root (heals a loosened root; a loosened file stays untrusted until replaced). Tests PS1-PS5 in RuntimeSelectionPolicyTest (plan (a)-(e); named PS* because P1-P4 already name the profile tests): PS1 write/read/replace/delete + owner-only (independent check, exactly one ALLOW owner ACE on Windows); PS2 loosened file AND loosened root -> Untrusted, healed by next write; PS3 absent/no-root null, exactly-cap ok, cap+1 Untrusted, write over cap refused keeping old bytes, 9 bad names throw on read/write/delete and write nothing, linked file + linked root refused (root write too). PS4 usableFor; PS5 forIde null. RED (stub): 5 failed/34. GREEN: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --rerun\"` exit 0, XML 34 tests 0 skipped 0 failures (Windows; no POSIX branch exercised here, CI Linux runs it). Windows ACL confirmed: setAcl leaves exactly the single owner entry.",
-      "startedAt": "2026-10-30T07:09:30.953Z",
-      "completedAt": "2026-10-30T07:15:05.901Z"
+      "note": "No-byte QA size-remediation round, per rejection route. Revalidated the already-landed ProtectedStateStore and PS1-PS5 from disk; current moe-jetbrains source matches completion 227833f4585675ac3ab82e587ed97de302869629 exactly. Owner-only read/write, size/name/link checks and outside-project root remain intact. Verified numstat +713/-31 (net 682, 744 changed) across exactly five files. Filed EPIC size-only proposal prop-bc838f5dc025424a99fed98ec1625dc5 and pinged #governors; PENDING is not approval. No files modified, no new behavior/tests; existing RED/GREEN evidence remains historical, with fresh gate scheduled for step 4. Preserved all peer/pre-existing dirty paths (868 at preflight).",
+      "startedAt": "2026-10-30T07:57:34.553Z",
+      "completedAt": "2026-10-30T07:58:46.683Z"
     },
     {
       "stepId": "step-2",
@@ -39,13 +35,9 @@
         "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
       ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
-        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
-      ],
-      "note": "Persisted provenance in RuntimeSelectionPolicy. SpawnRecord gains daemon (installed daemon's comparable real path via installedDaemonKey); recordProtectedSpawn(basePath, handle, installedDaemon) and remember persist records that name their daemon (never throws; store failure keeps the record in memory, warn log). verifyProvenance(basePath, pid, facts, installedDaemon): session rules first (unchanged; the in-session parent path now also persists the child, since Process.destroy on Windows orphans the _run child); else, when installedDaemon resolves and the store is outside the project, load <sha256(projectKey)>.json under storeLock, prune records whose pid+start no longer match (rewrite, or delete when empty), and accept only own (pid,start) or a child of a persisted supervisor whose record names the installed daemon; accepted records + child go to memory, child persisted. Strict file codec: STRICT reader, no BOM/trailing content, exact fields {version,project,records} and {pid,start,supervisor,daemon}, canonical version 1, project == this key, positive canonical pid, ISO start, boolean supervisor, string daemon; any violation refuses the whole file with the exact existing refusal. persist replaces an untrusted file (its records never trusted); a failed load never rewrites during verify. parseStrict takes a label (default project.json, existing messages unchanged). Tests: PP1, PP2a+PP2b (plan P2, split to keep functions under 50 lines; PP2b also proves the valid file verifies before each mutation and the exact-cap file verifies before the one-byte overflow; PP2a also refuses a valid file placed in an in-project store), PP3 (= plan P1-P3; 'PP' avoids clashing with existing profile tests P1-P4). V3's call now names facts = {...}: the new trailing installedDaemon parameter would otherwise capture the trailing lambda; semantics unchanged. RuntimeSelectionPolicy.kt is 467 lines (>300 guideline): the plan limits the change to five files and the codec needs the private parseStrict/UntrustedSetting; no function exceeds 25 lines. Evidence (Windows, jetbrains-gradle lease): RED 07:20:34Z 3 failed/37 (PP1, PP3 NoSuchElementException in storedPids; PP2 baseline AssertionError). GREEN 07:28:13Z `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --rerun\"` exit 0; TEST-com.moe.util.RuntimeSelectionPolicyTest.xml tests=38 failures=0 errors=0 skipped=0. LF only; no forbidden patterns.",
-      "startedAt": "2026-10-30T07:15:09.862Z",
-      "completedAt": "2026-10-30T07:28:32.344Z"
+      "note": "No-byte round: re-read landed RuntimeSelectionPolicy provenance persistence/verification and PP1/PP2a/PP2b/PP3. Verified strict version/field/type/project validation; pid+start and installed-daemon matching; supervisor-only child provenance; failed loads refuse; dead/reused-pid pruning; serialized RMW and project-key SHA-256 filenames. No implementation or test changes. QA-H is correctly advisory: current project hashing is correct, but a simultaneous two-project assertion is absent, so no size-growth fix added. Fresh test results will be supplied at step 4. Empty modifiedFiles is intentional (the daemon's fallback warning does not mean we edited a planned path).",
+      "startedAt": "2026-10-30T07:58:46.708Z",
+      "completedAt": "2026-10-30T07:59:07.257Z"
     },
     {
       "stepId": "step-3",
@@ -56,14 +48,9 @@
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
       ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
-        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
-        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
-      ],
-      "note": "MoeDaemonSupervisor: the protected spawn records the installed daemon it runs — `if (isProtected && direct != null) recordProtectedSpawn(projectBasePath, process, File(direct[1]))` (same condition form as the existing pb.directory line; direct is always non-null under PROTECTED) — and the private helper passes it through with its try/catch unchanged. activationRefusal under PROTECTED resolves installedArtifact(installedRoot(), \"daemon/index.js\", basePath) and passes the Accepted file (Rejected -> null, so only in-session records verify) as installedDaemon; LEGACY returns null before touching the policy or store. doConnect and stopDaemonForRestart are unchanged and inherit the persisted check through activationRefusal. Tests: S6 in RuntimeSelectionPolicyTest (test store; PROTECTED supervisor spawning IdleProcess(self); after forgetSessionForTest a NEW supervisor's activationRefusal is null for its project + installed daemon, exactly refusal(self) for a second installedLayout, for another project, and once the single store file is deleted). MoeDaemonSupervisorTest: legacy spawn + activation with a counting store provider — project carries packages/moe-daemon/dist/index.js (direct command) and FakeProcess now takes an optional real handle (ProcessHandle.current()), so a LEGACY-recording mutant would persist; asserts profile LEGACY, store root never created, activation null with a garbage file present, provider consulted 0 times; resetForTest in finally. This guard passes before and after the wiring (it pins unchanged LEGACY behaviour); step 4's M5 mutant shows it can fail. Evidence (Windows, jetbrains-gradle lease): RED 07:30:42Z — S6 failed ('its project and installed daemon expected null' got the refusal), 60 run/1 failed. GREEN 07:31:10Z `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --tests com.moe.services.MoeDaemonSupervisorTest --rerun\"` exit 0: RuntimeSelectionPolicyTest tests=39 failures=0 errors=0 skipped=0; MoeDaemonSupervisorTest tests=21 failures=0 errors=0 skipped=0.",
-      "startedAt": "2026-10-30T07:28:34.052Z",
-      "completedAt": "2026-10-30T07:31:27.741Z"
+      "note": "No-byte round: inspected landed supervisor diff, S6, legacy no-store test, doConnect and restart callers. Protected spawn forwards the resolved installed daemon; activation resolves the installed artifact before persisted verification. LEGACY exits before store access and retains historical spawn/restart policy. S6 checks same project/runtime after session reset and rejects different installed runtime/project or missing record. No source/test changes or scope growth; RF02/RF03/RF04/RF06 remain untouched. Fresh verification follows in step 4.",
+      "startedAt": "2026-10-30T07:59:07.279Z",
+      "completedAt": "2026-10-30T07:59:19.212Z"
     },
     {
       "stepId": "step-4",
@@ -76,12 +63,9 @@
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
       ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
-      ],
-      "note": "Windows evidence, under the jetbrains-gradle lease (released). MUTANTS — harness /mnt/d/moe-scratch/rf01/mutate.py (outside the repo; backups in /mnt/d/moe-scratch/rf01/backup), each run `gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --tests com.moe.services.MoeDaemonSupervisorTest --rerun` with fresh XML timestamps; every file was restored after each mutant and sha256-checked, and `sha256sum -c` was OK for all three main files at the end. M1 daemon path not compared: KILLED (PP2a 'another installed daemon', S6). M2 start not compared for stored records, in the prune and in the own/supervisor match: KILLED (PP2a 'a reused pid', PP3). Dropping start from the match alone is an equivalent mutant, because the prune already enforces start equality. M3 project field unchecked: KILLED (PP2a foreign file). M4 owner-only read check skipped: KILLED (PS2, PP2b 'a loosened file'). M5 LEGACY persists: KILLED (MoeDaemonSupervisorTest legacy test). M6 no pruning on verify: KILLED (PP1, PP3). M7 usableFor allows an in-project root: KILLED (PS4, PP2a in-project). EXTRAS: M7b policy ignores usableFor: KILLED (PP2a). M9 in-session child not persisted: KILLED (PP1 'usual order'). Two extras SURVIVED and were closed with new assertions. M6b, no pruning on persist: added a PP3 case where a new record prunes the gone 300 and the reused 500 (stored [100]); now KILLED. M10, store path ignores the supervisor flag: added a PP2a case where the persisted child 200 must not vouch for its own child 300 (exact refusal(300)); now KILLED. Both PP tests stay under 50 lines and were renamed to match. GATE, run last on the restored bytes: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` at 07:35:52Z, exit 0, BUILD SUCCESSFUL. TEST-com.moe.util.RuntimeSelectionPolicyTest.xml: tests=39 failures=0 errors=0 skipped=0. TEST-com.moe.services.MoeDaemonSupervisorTest.xml: tests=21 failures=0 errors=0 skipped=0. All 24 result classes are fresh: 352 tests, 0 failures, 0 errors, 0 skipped. No assumeTrue case skipped on this Windows host, since links (symlink, else junction) and ACL loosening were both available. ProtectedStateStore's POSIX branch (exact rwx------/rw-------) and the POSIX branches of the owner-only test helpers run only on CI's Linux job; here the ACL branch ran.",
-      "startedAt": "2026-10-30T07:31:35.356Z",
-      "completedAt": "2026-10-30T07:36:56.758Z"
+      "note": "Fresh Windows verification at 2026-10-30T07:59:31.348Z under jetbrains-gradle lease (07:59:19Z), released after completion: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" exited 0, BUILD SUCCESSFUL in 8s, :test executed. XML: 24 classes, all fresh after run start; 352 tests, 0 failures/errors/skipped; RuntimeSelectionPolicyTest 39/39, MoeDaemonSupervisorTest 21/21. No assumeTrue cases skipped; Windows ACL branches exercised, POSIX branches remain CI/Linux-only (not newly claimed). Current moe-jetbrains tree still exactly equals 227833f4. Per QA's no-byte remediation, mutants were not rerun: historical worker M1-M7 all KILLED; extra M6b/M10 fixed then KILLED; QA independently killed QA-A/B/C/D/E. QA-H survived and remains explicitly advisory. The new fresh full gate, not those historical runs, is this round's completion evidence. No files modified; no clean command.",
+      "startedAt": "2026-10-30T07:59:19.231Z",
+      "completedAt": "2026-10-30T08:00:25.640Z"
     },
     {
       "stepId": "step-5",
@@ -92,9 +76,13 @@
         "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
       ],
-      "note": "I ran the adversarial self-review on the task-scoped diff. No bytes changed in this step: every edit predates the step-4 gate at 07:35:52Z, and the main files match their pre-mutation sha256. The step-4 gate therefore stands as the evidence. (a) Every failure path fails closed to the existing refusal text, asserted with exact strings in PP2a, PP2b and S6: absent file, untrusted file, IO error, unusable or in-project store, and a null or unresolvable installed daemon. verifyProvenance, recordProtectedSpawn and persist catch everything, and activationRefusal only composes installedArtifact (never throws) with verifyProvenance. Gson is 2.14.0, so a deeply nested file hits the reader's nesting limit and becomes a caught IOException. (b) Only an owner-only regular file reached without a link, at most 64 KiB, named by a sha-256 hex and passing the strict schema is trusted. Planted, loosened, linked or junctioned, in-project and foreign-project files are all refused (PS2-PS4, PP2a, PP2b). (c) Stored records need pid+start equality in both the prune and the match (M2 killed), and only a supervisor record vouches for a child (M10 killed after the new PP2a case). (d) Each read-modify-write runs under storeLock. The temp file plus ATOMIC_MOVE means a reader never sees a partial file. Each project has its own hashed file. (e) LEGACY returns before any policy or store call; the spawn records only when isProtected; the restart LEGACY branch is untouched. V1-V3, S1-S5, R2 and G3 are green in the full gate. (f) Only daemon.json's pid enters verification. Persisted values come from OS facts, the IDE's own basePath key and the installed daemon's real path. The file name is a hash, never a project file or a path from input. (g) Only the five planned files are touched. There are no .moe edits by me, no forbidden patterns, LF only, and the KDoc on ProtectedStateStore explains why the store exists and that CQ-RF02 reuses it. Theoretical risks I considered and did not fix: (1) Two IDE JVMs writing the same project file concurrently can lose a record; that fails closed to today's refusal. (2) The JDK exposes no ACL view on macOS, so extended macOS ACLs are not inspected; the POSIX 700/600 modes are set explicitly and checked. (3) An IDE running as root could trust an attacker-owned 600 file, but only if an ancestor of the IDE system directory were writable by that attacker. For a non-root user, readable plus owner-only already implies the user is the owner. (4) A JVM crash mid-write can leave a state-*.tmp file; it never matches the name pattern and is never read. Size: RuntimeSelectionPolicy.kt is 467 lines, kept in one file by the plan's five-file limit, with no function over 25 lines. The test file was already far over 300 lines.",
-      "startedAt": "2026-10-30T07:36:58.924Z",
-      "completedAt": "2026-10-30T07:39:06.685Z"
+      "modifiedFiles": [
+        ".serena/memories/task-task-fd653cfbaea541c39569dfed9452cf5c-handoff.md",
+        ".serena/memories/gotcha-cq-plan-size-vs-qa-cap.md"
+      ],
+      "note": "Adversarial review complete on the landed five-file diff plus byte-equality check: no new code defect found. Reviewed strict malformed/null/size/type refusal, owner-only/link/name/inside-project guards, pid+start/installed-daemon/project matching, supervisor-only child chain, locked in-JVM RMW + atomic replace, error cleanup and unchanged LEGACY. Theoretical existing limits: cross-JVM record loss fails closed; trusted system-dir ancestors, macOS ACL visibility and crash-temp leftovers remain noted. QA-H remains advisory; no code/test growth. Fresh Windows gate: 352/352, zero failures/errors/skips; policy 39 and supervisor 21. Proposal prop-bc838f5dc025424a99fed98ec1625dc5 is APPROVED and the exact rail is confirmed in refreshed get_context. No rewrite/re-slice/re-land. Only required handoff/gotcha metadata scope grows: both listed files updated through Serena; both are untracked .serena paths excluded by wrapper DENY before attribution. Source/tests remain byte-identical to 227833f4; no direct .moe or Git writes and all shared dirty bytes preserved.",
+      "startedAt": "2026-10-30T08:00:25.658Z",
+      "completedAt": "2026-10-30T08:04:41.628Z"
     }
   ],
   "planRevision": 1,
@@ -102,16 +90,29 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Size-only rejection: no DoD behaviour failed, so failedDodItems is empty. The substance passed a full QA review, but completion 227833f4 lands 682 net non-board lines (+713/-31: runtime 343, tests 339), over the 400 net QA cap. No project or CQ-RF epic rail waives it and no size proposal is filed. Only a rail waives the cap; an approved test-heavy plan does not.\n\nQA evidence (Windows):\n1. Re-ran the task command `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` under the jetbrains-gradle lease (07:51:39Z) on a tree equal to 227833f4 for moe-jetbrains/. Exit 0; 24 fresh XML classes, 352 tests, 0 failures/errors/skipped; RuntimeSelectionPolicyTest 39/39, MoeDaemonSupervisorTest 21/21. The POSIX branch runs only on CI Linux.\n2. 6 independent mutants on a git-archive copy outside the repo, each restored with sha256 checked. KILLED:\n- QA-A, read skips the root owner-only check (PS2, PS3);\n- QA-B, write skips restricting the temp file (8 tests);\n- QA-C, a junction root is accepted (PS3);\n- QA-D, extra JSON fields are accepted (PP2b);\n- QA-E, the version is not checked (PP2b).\nSURVIVED: QA-H, where all projects share one file (advisory issue).\n3. Diff: DoD 1 and 2 are met (PP1, PP2a/b, PP3, S6, PS1-PS5, the legacy no-store test); LEGACY is unchanged; only the 5 planned files changed. No forbidden patterns, LF only. The only removed test lines are V3's named-argument fix and the FakeProcess signature.\n\nRoute, with no rewrite, re-slice or re-land: the worker files the EPIC ADD_RAIL (issue 1) with moe.propose_rail and pings #governors with the prop id. Then a no-byte round: a fresh gate with the same command, then complete_task. QA parks while the proposal is PENDING and approves once it is APPROVED.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 273.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-825022758e6943e8b898f957b8c151b3",
+      "author": "worker-262588d0",
+      "content": "Reviewed both rejection items and verified the actual commit: 744 changed non-board lines (+713/-31, net 682) across exactly the five planned files; current moe-jetbrains tree is identical to 227833f4. Filed EPIC ADD_RAIL prop-bc838f5dc025424a99fed98ec1625dc5 and pinged #governors. Following the explicitly requested no-byte round; preserving all shipped code/tests and the advisory QA-H test gap (no byte growth). Loaded receiving-code-review and test-driven-development; no new implementation, behavior, or tests are being introduced, so no new RED/GREEN cycle applies. Existing step results will be revalidated from disk; the full named Windows gate will run fresh under the lease. Shared dirty paths from other sessions are preserved.",
+      "timestamp": "2026-10-30T07:58:22.271Z"
+    },
+    {
+      "id": "comment-1a85ec60f4be465ab4e95f3e3fd75d02",
+      "author": "worker-262588d0",
+      "content": "No-byte remediation complete: prop-bc838f5dc025424a99fed98ec1625dc5 is APPROVED, and refreshed get_context confirms the exact size-only exception in allRails.epic. Fresh Windows verification (07:59:31.348Z; jetbrains-gradle lease acquired 07:59:19Z and released) ran cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" => exit 0, BUILD SUCCESSFUL in 8s. All 24 XML classes are fresh: 352 tests, 0 failures/errors/skips; RuntimeSelectionPolicyTest 39/39, MoeDaemonSupervisorTest 21/21. POSIX branches are Linux-CI-only, not claimed as locally run. All five implementation/test files are byte-identical to 227833f4585675ac3ab82e587ed97de302869629; LF-only, no forbidden patterns. Completed the adversarial checklist; no new code defect found. Historical mutants are not represented as fresh; QA-H remains advisory and no growth was added. Required Serena handoff/gotcha metadata only; no source/test/.moe/Git-write edits.",
+      "timestamp": "2026-10-30T08:03:38.122Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:18.870Z",
-  "updatedAt": "2026-10-30T07:41:12.772Z",
+  "updatedAt": "2026-10-30T08:05:12.362Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T06:51:59.902Z",
@@ -121,11 +122,13 @@
     "firstClaimAt": "2026-10-30T06:56:26.693Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-32ff5555",
-    "worker-fe18a9a9"
+    "worker-262588d0",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -168,24 +171,24 @@
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
   ],
-  "reviewStartedAt": "2026-10-30T07:40:47.641Z",
+  "reviewStartedAt": "2026-10-30T08:05:12.360Z",
   "verification": {
     "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
     "exitCode": 0,
-    "outputTail": "> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED\n> Task :initializeIntellijPlatformPlugin\n> Task :patchPluginXml UP-TO-DATE\n> Task :processResources UP-TO-DATE\n> Task :generateManifest UP-TO-DATE\n> Task :processTestResources UP-TO-DATE\n> Task :compileKotlin\n> Task :compileJava NO-SOURCE\n> Task :classes UP-TO-DATE\n> Task :jar\n> Task :compileTestKotlin UP-TO-DATE\n> Task :compileTestJava NO-SOURCE\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :composedJar\n> Task :prepareTestSandbox\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 7s\n11 actionable tasks: 6 executed, 5 up-to-date\nConsider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html\n[exit=0; build/test-results XML, all 24 classes fresh after 2026-10-30T07:35:52Z: 352 tests, 0 failures, 0 errors, 0 skipped. RuntimeSelectionPolicyTest 39/39, MoeDaemonSupervisorTest 21/21]",
-    "reportedAt": "2026-10-30T07:40:47.641Z",
+    "outputTail": "> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED\n> Task :compileKotlin UP-TO-DATE\n> Task :compileJava NO-SOURCE\n> Task :initializeIntellijPlatformPlugin\n> Task :patchPluginXml UP-TO-DATE\n> Task :processResources UP-TO-DATE\n> Task :classes UP-TO-DATE\n> Task :generateManifest UP-TO-DATE\n> Task :jar UP-TO-DATE\n> Task :compileTestKotlin UP-TO-DATE\n> Task :compileTestJava NO-SOURCE\n> Task :processTestResources UP-TO-DATE\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :composedJar UP-TO-DATE\n> Task :prepareTestSandbox UP-TO-DATE\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 8s\n11 actionable tasks: 2 executed, 9 up-to-date\nConsider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html\n[Windows run started 2026-10-30T07:59:31.348Z under jetbrains-gradle lease; lease released. XML: all 24 classes fresh; 352 tests, 0 failures, 0 errors, 0 skipped. RuntimeSelectionPolicyTest 39/39; MoeDaemonSupervisorTest 21/21. POSIX branches not locally exercised.]",
+    "reportedAt": "2026-10-30T08:05:12.360Z",
     "source": "agent-reported"
   },
   "filesModified": [
-    "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
-    ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
-    ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json"
+    "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+    ".serena/memories/task-task-fd653cfbaea541c39569dfed9452cf5c-handoff.md",
+    ".serena/memories/gotcha-cq-plan-size-vs-qa-cap.md"
   ],
-  "completionSummary": "CQ-RF01: a protected-profile IDE can again activate, after a restart, a daemon it spawned earlier. Each protected spawn record (project key, pid, start instant, supervisor flag, installed-daemon real path) is persisted to the new owner-only ProtectedStateStore under the IDE system dir, never in the repository. The store is exact 700/600 on POSIX; on Windows the ACL holds only owner ALLOW entries. Files are read with no links, capped at 64 KiB, and named by a sha-256 hex; CQ-RF02 is meant to reuse this store. verifyProvenance checks the session first (rules unchanged; the in-session child is now persisted too, because Windows orphans `_run`). Otherwise it reads the strict file for this project and prunes records whose pid+start no longer match (rewriting or deleting the file). It accepts only an own (pid,start) record, or a child of a persisted supervisor, that names the currently installed daemon. Everything else gets today's exact refusal. MoeDaemonSupervisor passes the installed daemon at spawn and in activationRefusal; LEGACY never touches the store. Only the five planned files changed. Tests: PS1-PS5, PP1/PP2a/PP2b/PP3 and S6 in RuntimeSelectionPolicyTest, plus a legacy no-store test in MoeDaemonSupervisorTest. RED was observed before each step's code. Windows gate: 352 tests, 0 failed/skipped (RuntimeSelectionPolicyTest 39, MoeDaemonSupervisorTest 21). Mutants M1-M7 all killed. Extras M6b and M10 first survived; assertions were added and both are now killed. M7b and M9 were killed. The POSIX branch runs on CI Linux only. Theoretical risks are noted in the step-5 note.",
+  "completionSummary": "CQ-RF01 no-byte QA remediation: filed size-only EPIC ADD_RAIL prop-bc838f5dc025424a99fed98ec1625dc5; it is APPROVED and confirmed in get_context.allRails.epic. The waiver exactly matches completion 227833f4585675ac3ab82e587ed97de302869629: five implementation/test files, +713/-31 (744 changed, net 682); no rewrite, re-slice, re-land or source growth. All five files remain byte-identical to that completion. Delivered behavior remains: protected daemon spawn provenance persists in the IDE's owner-only external store; reconnection checks live pid/start plus project and installed-daemon identity, prunes dead/reused records and fails closed on missing/untrusted state. Supervisor integration and LEGACY no-store behavior preserved. Fresh Windows gate at 07:59:31Z under jetbrains-gradle lease exited 0: 24 fresh XML classes, 352 tests, 0 failures/errors/skips; policy 39/39, supervisor 21/21. POSIX branch remains Linux-CI-only. Historical mutant results were not rerun or presented as fresh; QA-H remains advisory. Adversarial review found no new defect. Required Serena handoff/gotcha metadata updated and declared; untracked .serena paths are wrapper-excluded. No direct .moe or Git-write edits.",
   "commits": [
     {
       "sha": "227833f4585675ac3ab82e587ed97de302869629",
@@ -220,5 +223,41 @@
     "kind": "completion",
     "sessionId": "worker-fe18a9a9@2026-10-30T07:02:58Z",
     "at": "2026-10-30T07:41:12.772Z"
-  }
+  },
+  "reviewCompletedAt": "2026-10-30T07:56:10.904Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "file": "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+        "description": "Oversized, no waiver: 227833f4 has 744 changed lines (net 682): ProtectedStateStore.kt +155/-0, RuntimeSelectionPolicy.kt +202/-23, MoeDaemonSupervisor.kt +15/-6, RuntimeSelectionPolicyTest.kt +313/-1, MoeDaemonSupervisorTest.kt +28/-1. Fix: an EPIC ADD_RAIL under 1000 chars, e.g. 'CQ-RF01 size exception: completion 227833f4 may land 744 changed lines (+713/-31) across exactly these 5 files <numstat>; waives size only; growth only by QA-required fixes.'"
+      },
+      {
+        "type": "other",
+        "file": "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "line": 387,
+        "description": "Advisory, not an approval blocker. Mutant QA-H made recordsFile hash ByteArray(0), so every project shares one provenance file, and it passed all 60 tests; two protected projects would then overwrite each other's records. Today's code is correct. Only if you change bytes anyway: in PP1, persist supervisors for 2 projects in one store, call forgetSessionForTest, and assert both verify and storeFiles has 2 entries. Put that growth in the rail."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Size-only rejection: no DoD behaviour failed, so failedDodItems is empty. The substance passed a full QA review, but completion 227833f4 lands 682 net non-board lines (+713/-31: runtime 343, tests 339), over the 400 net QA cap. No project or CQ-RF epic rail waives it and no size proposal is filed. Only a rail waives the cap; an approved test-heavy plan does not.\n\nQA evidence (Windows):\n1. Re-ran the task command `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` under the jetbrains-gradle lease (07:51:39Z) on a tree equal to 227833f4 for moe-jetbrains/. Exit 0; 24 fresh XML classes, 352 tests, 0 failures/errors/skipped; RuntimeSelectionPolicyTest 39/39, MoeDaemonSupervisorTest 21/21. The POSIX branch runs only on CI Linux.\n2. 6 independent mutants on a git-archive copy outside the repo, each restored with sha256 checked. KILLED:\n- QA-A, read skips the root owner-only check (PS2, PS3);\n- QA-B, write skips restricting the temp file (8 tests);\n- QA-C, a junction root is accepted (PS3);\n- QA-D, extra JSON fields are accepted (PP2b);\n- QA-E, the version is not checked (PP2b).\nSURVIVED: QA-H, where all projects share one file (advisory issue).\n3. Diff: DoD 1 and 2 are met (PP1, PP2a/b, PP3, S6, PS1-PS5, the legacy no-store test); LEGACY is unchanged; only the 5 planned files changed. No forbidden patterns, LF only. The only removed test lines are V3's named-argument fix and the FakeProcess signature.\n\nRoute, with no rewrite, re-slice or re-land: the worker files the EPIC ADD_RAIL (issue 1) with moe.propose_rail and pings #governors with the prop id. Then a no-byte round: a fresh gate with the same command, then complete_task. QA parks while the proposal is PENDING and approves once it is APPROVED.",
+      "rejectedAt": "2026-10-30T07:56:10.904Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "file": "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+          "description": "Oversized, no waiver: 227833f4 has 744 changed lines (net 682): ProtectedStateStore.kt +155/-0, RuntimeSelectionPolicy.kt +202/-23, MoeDaemonSupervisor.kt +15/-6, RuntimeSelectionPolicyTest.kt +313/-1, MoeDaemonSupervisorTest.kt +28/-1. Fix: an EPIC ADD_RAIL under 1000 chars, e.g. 'CQ-RF01 size exception: completion 227833f4 may land 744 changed lines (+713/-31) across exactly these 5 files <numstat>; waives size only; growth only by QA-required fixes.'"
+        },
+        {
+          "type": "other",
+          "file": "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+          "line": 387,
+          "description": "Advisory, not an approval blocker. Mutant QA-H made recordsFile hash ByteArray(0), so every project shares one provenance file, and it passed all 60 tests; two protected projects would then overwrite each other's records. Today's code is correct. Only if you change bytes anyway: in PP1, persist supervisors for 2 projects in one store, call forgetSessionForTest, and assert both verify and storeFiles has 2 entries. Put that growth in the rail."
+        }
+      ]
+    }
+  ]
 }

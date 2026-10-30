@@ -128,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:01:29.803Z",
-  "updatedAt": "2026-10-30T08:02:08.380Z",
+  "updatedAt": "2026-10-30T08:02:50.105Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:34:19.267Z",
     "plannedStepCount": 6,
@@ -234,7 +234,13 @@
     "docs/CONFIGURATION.md",
     "docs/MCP_SERVER.md",
     ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
-    ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json"
+    ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json",
+    ".moe/epics/epic-5f4acf0ae5d3427facd63346f125aec5.json",
+    ".moe/tasks/task-3fa69c192a2147fa8555b33c86ad2f82.json",
+    ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+    ".moe/tasks/task-afe6838d58874da58a2d4c1e0956c799.json",
+    ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
   ],
   "completionSummary": "CQ-V05b: repair decision activation for verified-local tasks, wired into moe.record_check_observation. It uses existing transitions only. Legacy and observe are unchanged.\n\n- delivery/repairActivation.ts (106, new):\n  - decideCheckRepair: authenticated runs of ONE check (same dispatch command and checkId) across the task's candidates go to V05's decideRepair. It returns null for a non-verified-local task (isVerifiedLocal), a superseded candidate, or a stale run whose diagnostics.checkRunId is not the run's.\n  - applyRepairDecision:\n    - repair: an unparked REVIEW task goes to WORKING (qa_reject's reopen shape: no reopenCount, tier or model change, planRevision kept); a comment by 'moe-daemon' in any status.\n    - escalate: a comment and a #governors alert.\n    - replan: WORKING or REVIEW goes to PLANNING with request_replan's payload, and #architects is told.\n    - retry-infra and none: nothing.\n- tools/recordCheckObservation.ts (+23/-2): the result gains `repair`, also on duplicates but applied only once, and `repairError` (logged; success stays true). Otherwise it is exactly V03's shape.\n- Docs: a CONFIGURATION.md repairPolicy row, and MCP_SERVER.md repair/repairError notes.\n\nDoD:\n1. C1 (repair 1, 2 remaining, WORKING, revisions 1/1, exact comment), C2 (repair 2, 1 remaining while WORKING), C3 (budget 1, then escalate).\n2. I1 (infra-failure and timeout give retry-infra 1 and 2 with the task deep-equal; the 3rd escalates with an alert; a later code-failure is repair 1, so no code budget was consumed), C3 unchanged-candidate.\n3. R1 (planRevision 2 vs approved 1 goes to PLANNING with priorAttempt; a superseded candidate is ignored), L (legacy and observe: exact V03 result, row deep-equal).\n4. Gate EXIT 0, above.\nAlso: D (duplicate), S (stale), C4 (parked), E (repairError), P (readiness pinned). 11/11 mutants were killed. Net packages/ +356.\n\nDeviations:\n- No touchWorker: updateTask already releases the prior owner under the plan's condition.\n- An added current-candi",
   "commits": [
@@ -263,6 +269,27 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "acf50d7bf909adb11c925d867974a48936daf5ea",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T07:57:48Z",
+      "paths": [
+        ".moe/epics/epic-5f4acf0ae5d3427facd63346f125aec5.json",
+        ".moe/tasks/task-3fa69c192a2147fa8555b33c86ad2f82.json",
+        ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+        ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+        ".moe/tasks/task-afe6838d58874da58a2d4c1e0956c799.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T08:02:50.105Z",
+      "treeId": "5b26a8b375c53a10b688922fe103fb23cfea9b71",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -271,15 +298,12 @@
     "docs/MCP_SERVER.md",
     "packages/moe-daemon/src/tools/recordCheckObservation.ts"
   ],
-  "unattributedPaths": [
-    "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
-    "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts"
-  ],
+  "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-0062feec@2026-10-30T07:35:48Z",
-    "at": "2026-10-30T07:51:39.513Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T07:57:48Z",
+    "at": "2026-10-30T08:02:50.105Z"
   },
   "completedAt": "2026-10-30T08:02:08.380Z",
   "reviewCompletedAt": "2026-10-30T08:02:08.380Z",
