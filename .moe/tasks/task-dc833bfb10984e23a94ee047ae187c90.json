@@ -85,7 +85,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -98,16 +98,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:58:17.297Z",
-  "updatedAt": "2026-10-30T11:14:10.866Z",
+  "updatedAt": "2026-10-30T11:18:02.590Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T11:02:06.937Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T11:18:02.590Z",
+    "wallClockMs": 955653
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-ba3f4f35"
   ],
   "tier": "standard",
   "effort": "high",
@@ -195,7 +198,45 @@
     "packages/moe-daemon/src/tools/recordCommit.test.ts",
     "packages/moe-daemon/src/tools/getCommitScope.ts",
     "packages/moe-daemon/src/tools/getCommitScope.test.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+    ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json",
+    ".moe/tasks/task-dc833bfb10984e23a94ee047ae187c90.json"
   ],
-  "completionSummary": "record_commit's MOE_CONTESTED_HELD line now names the real release routes and carries a byte-stable HELD_REMEDY_WITNESS sentence. get_commit_scope's peerDeclared entries gain activeTaskIds. Gate ran in a Linux snapshot of HEAD REV=9fa1fcb3d7ee1d1adb737098dd464507dc276fda with the 5 files overlaid (cmp ok on all 5). DoD 1 = R1, R3, R4-R6 in recordCommit.test.ts. DoD 2 = R2, a literal strict-only line with no witness. DoD 3 = T1-T6 in getCommitScope.test.ts, plus the three whole-entry assertions and the invariants helper on every entry of the peerActive and taskIds suites. DoD 4 = docs/MCP_SERVER.md: activeTaskIds is documented, and the UNTOUCHED, EDITING and WITNESS texts each occur exactly once, verbatim. DoD 5 = build and full suite exit 0, 207 files, 5861 passed, 16 skipped. Mutants M1-M5 all killed."
+  "completionSummary": "record_commit's MOE_CONTESTED_HELD line now names the real release routes and carries a byte-stable HELD_REMEDY_WITNESS sentence. get_commit_scope's peerDeclared entries gain activeTaskIds. Gate ran in a Linux snapshot of HEAD REV=9fa1fcb3d7ee1d1adb737098dd464507dc276fda with the 5 files overlaid (cmp ok on all 5). DoD 1 = R1, R3, R4-R6 in recordCommit.test.ts. DoD 2 = R2, a literal strict-only line with no witness. DoD 3 = T1-T6 in getCommitScope.test.ts, plus the three whole-entry assertions and the invariants helper on every entry of the peerActive and taskIds suites. DoD 4 = docs/MCP_SERVER.md: activeTaskIds is documented, and the UNTOUCHED, EDITING and WITNESS texts each occur exactly once, verbatim. DoD 5 = build and full suite exit 0, 207 files, 5861 passed, 16 skipped. Mutants M1-M5 all killed.",
+  "commits": [
+    {
+      "sha": "35eaae3b5c157ce21655a4eb08f1f19827fbf7b3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T11:10:33Z",
+      "paths": [
+        ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+        ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json",
+        ".moe/tasks/task-dc833bfb10984e23a94ee047ae187c90.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/recordCommit.test.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T11:14:30.904Z",
+      "treeId": "e24a40bab26c4113115dc904a732825fb39de4a4",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-e60b90bd@2026-10-30T11:10:33Z",
+    "at": "2026-10-30T11:14:30.904Z"
+  },
+  "completedAt": "2026-10-30T11:18:02.590Z",
+  "reviewCompletedAt": "2026-10-30T11:18:02.590Z",
+  "reviewSummary": "Verified recorded completion 35eaae3b5c157ce21655a4eb08f1f19827fbf7b3 (tree e24a40ba; contained in moe/work-2026-10-24 and origin tracking branch), not shared dirty peer bytes. Scoped diff: 5 files, +174/-69 (net +105). Re-ran task.verification verbatim: bash /tmp/dc833bfb-gate.sh; snapshot REV=35eaae3b, all 5 files equal completion blobs. Inner cd packages/moe-daemon && npm run build && npm test exited 0: 207 files passed, 5861 tests passed, 16 skipped. DoD 1/2: exact R1-R6 hold lines, witness once before strict, no misleading old phrases, strict-only literal unchanged; STRICT/NEVER constants byte-equal to parent. DoD 3: T1-T6 and checked invariants cover active/editing/taskIds subsets, id order, idle-first/live-second, all-idle and without-since cases; existing activity rule reused, input schema and prior keys unchanged. DoD 4: activeTaskIds Returns/fallback documented; UNTOUCHED/EDITING/WITNESS each match docs exactly once, WITNESS byte-identical to contract. Independently ran /tmp/dc833bfb-qa-mutants.py: M1-M5 killed by actual failing assertions (1/6/2/9/10 failures); restored sources match completion and focused npx vitest run src/tools/recordCommit.test.ts src/tools/getCommitScope.test.ts passed 134/134. git diff --check 35eaae3b^ 35eaae3b clean. Hold classification, peer naming, 5-path bound/rate limit unchanged; no forbidden patterns or out-of-scope source hunks. No required check deferred or left unrun. Complexity: Lean already; net 0 lines possible. Reusable facts folded into decision-contested-held-label-order; task handoff written and destination collision check clear for safe post-approval retirement.",
+  "requiredCheckAtDone": null
 }
