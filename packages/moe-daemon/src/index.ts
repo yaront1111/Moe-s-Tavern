@@ -147,6 +147,20 @@ function isForeignDaemonInfo(info: Pick<DaemonInfo, 'projectPath'>, platform: No
     : /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(info.projectPath);
 }
 
+// path.resolve is lexical; native paths may also name our directory on disk.
+// realpathSync.native resolves symlinks, junctions and 8.3 names (plain realpathSync leaves 8.3).
+// Foreign paths stay as written: resolving /home/u/p on Windows reads C:\home\u\p,
+// and //x on POSIX becomes /x. Any realpath error means the path is not ours.
+function namesOwnProject(recorded: string, own: string): boolean {
+  if (isSameProjectPath(recorded, own)) return true;
+  if (isForeignDaemonInfo({ projectPath: recorded })) return false;
+  try {
+    return isSameProjectPath(fs.realpathSync.native(recorded), fs.realpathSync.native(own));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The WSL default gateway (the Windows host in NAT mode), read from
  * /proc/net/route without spawning anything; null on any error. Node twin of
@@ -223,9 +237,8 @@ function staleLockReason(projectPath: string): string | null {
   if (!info || !info.pid || !Number.isFinite(info.createdAtMs)) return 'malformed lock';
   // Its owner's pid is in another pid namespace: never judge it stale from here.
   if (info.projectPath && isForeignDaemonInfo({ projectPath: info.projectPath })) return null;
-  // acquireLock records path.resolve(--project). Resolve ours the same way, or a native alias of
-  // this directory (//x on POSIX, /x on the current Windows drive) reads a live owner's lock as stale.
-  if (info.projectPath && !isSameProjectPath(info.projectPath, canonicalProjectPath(projectPath))) return 'projectPath mismatch';
+  // Native lexical and on-disk aliases must not make a live owner's lock look stale.
+  if (info.projectPath && !namesOwnProject(info.projectPath, canonicalProjectPath(projectPath))) return 'projectPath mismatch';
   if (!isProcessAlive(info.pid)) return 'lock owner not alive';
   if (Date.now() - info.createdAtMs > LOCK_STALE_TIMEOUT_MS) return 'lock owner unverifiable after timeout';
   return null;
@@ -345,7 +358,7 @@ async function probeDaemonHealth(
 ): Promise<boolean> {
   // Exported, so it resolves the caller's own path itself (see validateDaemonInfoForProject).
   const own = canonicalProjectPath(expectedProjectPath);
-  if (!isDaemonInfoShape(info) || !isSameProjectPath(info.projectPath, own)) {
+  if (!isDaemonInfoShape(info) || !namesOwnProject(info.projectPath, own)) {
     return false;
   }
 
@@ -379,7 +392,7 @@ async function probeDaemonHealth(
             res.statusCode === 200
             && parsed.status === 'healthy'
             && typeof parsed.projectPath === 'string'
-            && isSameProjectPath(parsed.projectPath, own)
+            && namesOwnProject(parsed.projectPath, own)
             && isValidPid(parsed.pid)
             && parsed.pid === info.pid
           );
@@ -405,12 +418,9 @@ async function validateDaemonInfoForProject(
   if (!info) return { valid: false, reason: 'missing' };
   if (!isDaemonInfoShape(info)) return { valid: false, reason: 'malformed' };
   const foreign = isForeignDaemonInfo(info);
-  // Our --project names a directory on this host, so resolve it here: a native alias
-  // (//x on POSIX, /x on the current Windows drive) must not orphan a live daemon's files.
-  // Recorded and reported paths are compared as written. Resolving them here would
-  // read the other side's /home/u/p as C:\home\u\p.
+  // Resolve our --project; namesOwnProject also recognizes native on-disk aliases without resolving foreign paths.
   const own = canonicalProjectPath(projectPath);
-  if (!isSameProjectPath(info.projectPath, own)) {
+  if (!namesOwnProject(info.projectPath, own)) {
     return { valid: false, reason: 'projectPath mismatch', ...(foreign ? { foreign } : {}) };
   }
   if (foreign) {

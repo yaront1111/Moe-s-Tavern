@@ -6,7 +6,7 @@ import http from 'http';
 import net from 'net';
 import { createRequire } from 'module';
 import { pathToFileURL } from 'url';
-import { spawn, type ChildProcess } from 'child_process';
+import { execSync, spawn, type ChildProcess } from 'child_process';
 import type { DaemonInfo } from './types/schema.js';
 import { logger } from './util/logger.js';
 import {
@@ -217,11 +217,11 @@ describe('daemon lifecycle validation', () => {
       }
     }
 
-    function writeDaemonFiles(port: number, pid = DEAD_PID): string {
-      const raw = JSON.stringify(daemonInfo({ port, pid }));
+    function writeDaemonFiles(port: number, pid = DEAD_PID, projectPath = testDir): string {
+      const raw = JSON.stringify(daemonInfo({ port, pid, projectPath }));
       fs.writeFileSync(jsonPath(), raw);
       fs.writeFileSync(lockPath(), JSON.stringify({
-        pid, projectPath: testDir, createdAt: new Date().toISOString(),
+        pid, projectPath, createdAt: new Date().toISOString(),
       }));
       return raw;
     }
@@ -430,7 +430,8 @@ describe('daemon lifecycle validation', () => {
 
     // A native alias spells testDir's own directory differently: //tmp/x is /tmp/x on
     // POSIX, and /Users/x is C:\Users\x on Windows from a cwd on C:. Only the caller's own
-    // --project is resolved that way; recorded and reported paths are compared as written.
+    // --project is resolved that way. Recorded and reported paths are compared as written,
+    // except native paths may also name testDir on disk (symlinks, junctions and 8.3 names).
     describe('native aliases of --project', () => {
       const tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
       const source = new URL('./index.ts', import.meta.url).href;
@@ -545,6 +546,86 @@ setInterval(() => {}, 60000);`;
         expect(spellings.map(reader => [moved, reader, staleLockReason(reader)]))
           .toEqual(spellings.map(reader => [moved, reader, 'projectPath mismatch']));
         fs.rmSync(lockPath());
+      });
+
+      describe('on-disk aliases of --project', () => {
+        let link: string;
+        const links: string[] = [];
+        const otherDirs: string[] = [];
+        const diskSpelling = (kind: string) => kind === 'link' ? link : testDir;
+
+        beforeEach(() => {
+          link = testDir + '-link';
+          fs.symlinkSync(testDir, link, 'junction');
+          links.push(link);
+          expect([isSameProjectPath(link, testDir), fs.realpathSync.native(link) === fs.realpathSync.native(testDir)])
+            .toEqual([false, true]);
+        });
+
+        afterEach(() => {
+          for (const created of links.splice(0)) fs.unlinkSync(created);
+          for (const dir of otherDirs.splice(0)) fs.rmSync(dir, { recursive: true });
+        });
+
+        async function blocksAndStops(recorded: string, caller: string): Promise<void> {
+          let probes = 0;
+          const port = await healthServer(recorded);
+          servers.at(-1)!.on('request', () => { probes += 1; });
+          writeDaemonFiles(port, process.pid, recorded);
+          const kept = files();
+          const info = vi.spyOn(logger, 'info');
+
+          expect([await existingDaemonBlocksStart(caller), probes, ...files()]).toEqual([true, 1, ...kept]);
+          await statusDaemon(caller);
+          expect(info.mock.calls.filter(([, msg]) => msg === 'Daemon status').map(([fields]) => fields))
+            .toMatchObject([{ status: 'running', owner: 'local', pid: process.pid }]);
+          const killSpy = killSpyWithoutSignals();
+          await stopDaemon(caller);
+          expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined))
+            .toEqual([[process.pid, 'SIGTERM']]);
+          expect([probes, ...files(), fs.existsSync(stopPath())]).toEqual([3, ...kept, true]);
+        }
+
+        it.each([['canonical', 'link'], ['link', 'canonical']])('X16 a daemon recorded as %s is preserved and stopped through %s', async (recorded, caller) => {
+          await blocksAndStops(diskSpelling(recorded), diskSpelling(caller));
+        });
+
+        it.runIf(process.platform === 'win32')('X16 a daemon is preserved and stopped through its 8.3 spelling', async (ctx) => {
+          if (/["%]/.test(testDir)) ctx.skip();
+          const short = execSync('for %I in ("' + testDir + '") do @echo %~sI', {
+            encoding: 'utf8', shell: 'cmd.exe', windowsHide: true,
+          }).trim();
+          if (short === testDir) ctx.skip();
+          await blocksAndStops(testDir, short);
+        });
+
+        it.each([['canonical', 'link'], ['link', 'canonical']])('X17 a live %s lock refuses a %s contender', async (ownerKind, contenderKind) => {
+          const owner = await lockOwner(diskSpelling(ownerKind));
+          const lock = fs.readFileSync(lockPath(), 'utf-8');
+          const recorded = JSON.parse(lock) as { pid: number; projectPath: string };
+          expect([recorded.pid, fs.realpathSync.native(recorded.projectPath)])
+            .toEqual([owner.pid, fs.realpathSync.native(testDir)]);
+
+          expect(acquireLock(diskSpelling(contenderKind))).toBe(false);
+          expect([fs.readFileSync(lockPath(), 'utf-8'), process.kill(owner.pid!, 0), owner.exitCode]).toEqual([lock, true, null]);
+        }, 60_000);
+
+        it.each(['directory', 'link to it'])('X18 a daemon recorded for another %s is cleaned up without probing', async (kind) => {
+          const other = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-daemon-other-'));
+          otherDirs.push(other);
+          const recorded = kind === 'directory' ? other : other + '-link';
+          if (kind !== 'directory') {
+            fs.symlinkSync(other, recorded, 'junction');
+            links.push(recorded);
+          }
+          let probes = 0;
+          const port = await healthServer(recorded);
+          servers.at(-1)!.on('request', () => { probes += 1; });
+          writeDaemonFiles(port, process.pid, recorded);
+
+          expect([await existingDaemonBlocksStart(testDir), probes, fs.existsSync(jsonPath()), fs.existsSync(lockPath())])
+            .toEqual([false, 0, false, false]);
+        });
       });
     });
   });
