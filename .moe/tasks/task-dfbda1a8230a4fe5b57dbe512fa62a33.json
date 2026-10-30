@@ -72,7 +72,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -83,7 +83,7 @@
   "dependsOn": [
     "task-a2f243a111654c7fbb2a28848a923e8c"
   ],
-  "priority": "LOW",
+  "priority": "CRITICAL",
   "order": 274.5,
   "comments": [
     {
@@ -95,7 +95,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:35:22.260Z",
-  "updatedAt": "2026-10-30T09:44:08.744Z",
+  "updatedAt": "2026-10-30T10:44:34.294Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T06:52:01.942Z",
@@ -105,12 +105,15 @@
     "firstClaimAt": "2026-10-30T07:03:08.506Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T10:44:34.294Z",
+    "wallClockMs": 13285788
   },
   "contextFetchedBy": [
     "architect-32ff5555",
     "worker-6e57c4f8",
-    "worker-73c29a03"
+    "worker-73c29a03",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -221,5 +224,9 @@
     "scripts/moe-agent.ps1",
     "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1"
-  ]
+  ],
+  "completedAt": "2026-10-30T10:44:34.294Z",
+  "reviewCompletedAt": "2026-10-30T10:44:34.294Z",
+  "reviewSummary": "Approved. Reviewed completion 03308100 and checkpoint a399f32c (on moe/work-2026-10-24, pushed; tree matches 03308100 for the 3 files). The Moe-Contested ps1 trailer is a declared-path overlap only; every ps1 hunk is this task's. Size +170/-23, net 147.\n\nDoD1: all 18 Send-MoeRecordCommit sites checked. The helper is merged into:\n- rescue 4198, PEEL 4718/4746, ATTRIBUTION 4774, gate 4812/4827;\n- FAILED 4863, REF_CONTENTION 4906, catch 4977, finally 4996/5004.\nDrops match sh: \"\" maps to @(), LAND_DROPPED_FILE to $dropped. The exclusions (1846, 3208, 4622) carry no list, as on sh. The preamble sets $attr=$null and $dropped=@(). No + key collides. BOM kept, 0 CR, no forbidden patterns. sh unchanged.\n\nDoD2: AJ1/AJ2 mirrored in both harnesses. They assert array skipped/contested holding held.txt (MOE_ATTR_CONTESTED, task-peer) on every row, plus the tail rows and that HEAD, branch and bytes are unchanged.\n\nDoD3: I re-ran task.verification on a fresh snapshot (HEAD c7493fb2 scripts plus the 3 files from 03308100, cmp-verified). GATE_EXIT=0:\n- bash -n, ParseFile on 5.1 and 7, both parity checks: pass.\n- sh postflight PASS (frozen 74, owner 16, AJ ok, scope 42).\n- PS 5.1 PASS (scope 41); pwsh 7 PASS (scope 41).\n\nIndependent PS 5.1 checks:\n- Pre-task wrapper: AJ1 FAILS (rescue and failed rows lack the arrays).\n- Mutant M3 (helper stripped at 4718): AJ2 FAILS.\n\nNon-blocking: the ps1 AJ fixture commit ignores failure, but other asserts would catch it. The duplicate finally row is pre-existing (task-4fdc7590).",
+  "requiredCheckAtDone": null
 }
