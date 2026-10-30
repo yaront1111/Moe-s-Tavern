@@ -81,7 +81,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -101,17 +101,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:14:13.471Z",
-  "updatedAt": "2026-10-30T18:51:50.337Z",
+  "updatedAt": "2026-10-30T18:56:31.587Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T19:05:26.061Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T18:56:31.587Z",
+    "wallClockMs": 85865526
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
     "worker-0062feec",
-    "worker-6e57c4f8"
+    "worker-6e57c4f8",
+    "qa-ba3f4f35"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -207,13 +210,32 @@
       "treeId": "c39f27034c63179704dd9f95cbb8f6132336fc71",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "77e9e47cabe0417741105352cb7a930ca4556f59",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-6e57c4f8@2026-10-30T18:45:27Z",
+      "paths": [
+        ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+        ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts"
+      ],
+      "recordedBy": "worker-6e57c4f8",
+      "recordedAt": "2026-10-30T18:52:08.763Z",
+      "treeId": "8c1fa10d8bc82f1a0a973cd11060d4eb20fdb069",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/state/deliveryProjection.ts",
     "packages/moe-daemon/src/state/deliveryProjection.test.ts",
     "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
-    "packages/moe-daemon/src/state/dependencyUnblock.ts"
+    "packages/moe-daemon/src/state/dependencyUnblock.ts",
+    ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+    ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/state/deliveryProjection.test.ts",
@@ -222,9 +244,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-0062feec@2026-10-30T18:32:50Z",
-    "at": "2026-10-30T18:44:54.132Z"
+    "kind": "completion",
+    "sessionId": "worker-6e57c4f8@2026-10-30T18:45:27Z",
+    "at": "2026-10-30T18:52:08.763Z"
   },
   "reviewStartedAt": "2026-10-30T18:51:50.335Z",
   "verification": {
@@ -234,5 +256,9 @@
     "reportedAt": "2026-10-30T18:51:50.335Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-V12b: MCP dependency projection agreement matrix (8 prerequisite states x legacy/verified-local consumers), real qa_approve/auto-unblock sequencing, and optional latestCheckRun.outcome. Outcome emitted only for CHECK_OUTCOMES members; absent/invalid rows keep exact legacy shape. Audited every readiness call, including resource eligibility and timeout alerts: V09 already forwards consumer everywhere, so no dependency production patch needed. Existing source checkpoint8f951bf4 contains initial implementation; this session hardened set/list/search count assertions and uses createMcpCaller runner options with authenticateRunner over temporary host key rather than literal identity. New acceptance file276 lines/13 tests; source net296 LOC. Six planned mutants compile and fail assertions; two extra omitted-count mutants survive old assertions then fail new ones. Full daemon gate6155 passed/20 skipped,213 files; production and owned-test typechecks pass. Adversarial review complete; gated bytes unchanged. Legacy missing-id input contract preserved (set refuses, report ignores). Strict means execution profile, not live deliveryPolicy. verified-local remains disabled; no isolation claim. Handoff and gotcha memory saved. V12 owns SCHEMA/MCP_SERVER outcome docs; JetBrains rendering out of epic. No Git writes; wrapper owns landing."
+  "completionSummary": "CQ-V12b: MCP dependency projection agreement matrix (8 prerequisite states x legacy/verified-local consumers), real qa_approve/auto-unblock sequencing, and optional latestCheckRun.outcome. Outcome emitted only for CHECK_OUTCOMES members; absent/invalid rows keep exact legacy shape. Audited every readiness call, including resource eligibility and timeout alerts: V09 already forwards consumer everywhere, so no dependency production patch needed. Existing source checkpoint8f951bf4 contains initial implementation; this session hardened set/list/search count assertions and uses createMcpCaller runner options with authenticateRunner over temporary host key rather than literal identity. New acceptance file276 lines/13 tests; source net296 LOC. Six planned mutants compile and fail assertions; two extra omitted-count mutants survive old assertions then fail new ones. Full daemon gate6155 passed/20 skipped,213 files; production and owned-test typechecks pass. Adversarial review complete; gated bytes unchanged. Legacy missing-id input contract preserved (set refuses, report ignores). Strict means execution profile, not live deliveryPolicy. verified-local remains disabled; no isolation claim. Handoff and gotcha memory saved. V12 owns SCHEMA/MCP_SERVER outcome docs; JetBrains rendering out of epic. No Git writes; wrapper owns landing.",
+  "completedAt": "2026-10-30T18:56:31.587Z",
+  "reviewCompletedAt": "2026-10-30T18:56:31.587Z",
+  "reviewSummary": "Reviewed completion 77e9e47c (tree 8c1fa10d8bc82f1a0a973cd11060d4eb20fdb069) plus checkpoint 8f951bf4 via git show; both contained by moe/work-2026-10-24. Owned source +301/-5 = net296 LOC; diff --check clean. No QA shared-tree/Git writes.\nFresh whole-repo archive of completion: /tmp/moe-v12b-qa.46FJQU/repo; lockfile matched Git, native npm ci, env -i HOME/NO_COLOR/Linux-only Node24.21.0 PATH. Re-ran `cd packages/moe-daemon && npm test`: exit0, 213 files, 6155 passed/20 skipped, 37.63s. `npx tsc --noEmit` and owned-test-inclusive `npx tsc -p tsconfig.qa-owned.json`: exit0.\nDoD1/2: inspected 8-state x legacy/strict hard-coded matrix via createMcpCaller: exact projections/counts, ranked/explicit claims, blocking/auto-unblock; real QA identity/check refusals and QA-before-release sequencing. Preserves landed V09 profile semantics and missing-id refusal/ignore contracts. DoD3: independently audited all predicate calls, including resource/claim eligibility, no-op dependency updates and timeout descriptions: all pass consumer; no dependency production fix needed. DoD4: all six outcomes projected; absent/null/invalid values omit key with exact legacy shape. DoD5/6: existing tests unchanged; full suite green.\nAll six planned scratch mutants compiled and assertion-failed (3/5/3/1/6/22 failures); restored focused suites 79/79. An initially noncompiling ARCHIVED mutant was corrected for TS narrowing before counting it. Restored files cmp-identical to commit; owned working files also match. No production enablement, new events, UI or migration/config changes. SCHEMA/MCP_SERVER outcome docs handed to V12; JetBrains rendering outside epic. Complexity: lean already; net0 lines proposed.",
+  "requiredCheckAtDone": null
 }
