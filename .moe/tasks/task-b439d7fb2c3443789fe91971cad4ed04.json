@@ -103,7 +103,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:45.773Z",
-  "updatedAt": "2026-10-30T07:59:33.027Z",
+  "updatedAt": "2026-10-30T08:00:09.616Z",
   "planningEntry": {
     "from": "BLOCKED",
     "at": "2026-10-30T07:25:12.923Z",
@@ -183,18 +183,60 @@
       "treeId": "52acd28721d6b36a95fbb1594c8305d1b5b2dd81",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "4fee627223944067ca31d61963f167898e3f8f24",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T07:47:20Z",
+      "paths": [
+        ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+        ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+        ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+        ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+        ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+        ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json",
+        ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+        ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json",
+        "docs/ARCHITECTURE.md",
+        "docs/design/protected-profile-threat-model.md"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T08:00:09.616Z",
+      "treeId": "68b69ca91d7a230bf19352ced546ffa894726f94",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-b621ddc99fe44d50ab700b2aa51c84fc"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
     "docs/design/protected-profile-threat-model.md",
-    "docs/ARCHITECTURE.md"
+    "docs/ARCHITECTURE.md",
+    ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+    ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+    ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+    ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+    ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+    ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json",
+    ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json",
+    ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+    ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-0062feec@2026-10-30T07:18:09Z",
-    "at": "2026-10-30T07:22:33.346Z"
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-30T07:47:20Z",
+    "at": "2026-10-30T08:00:09.616Z"
   },
   "priorBlockedReason": "Step-1 premise check failed, so per the plan's stop rule the planned decision was not written. In-model repository content can rewrite .moe/daemon.json: it is gitignored, and `git pull` silently overwrites an ignored file that upstream force-added (reproduced). Under PROTECTED with WSL agents on, the daemon binds 0.0.0.0 (MoeDaemonSupervisor.kt:222). A pulled daemon.json without bindHost then defeats guest-session.mjs daemonRefusal, and guest code could reach the unauthenticated /mcp through the host interface. This contradicts Open Point 2's claim that only a same-user host writer can change daemon.json. Also, /ws and /mcp have no Origin check, so browser pages are an unlisted attacker class. The architect must re-decide; the options are in comment-4bef8984.",
   "blockedOnTaskIds": null,
@@ -228,5 +270,9 @@
     "reportedAt": "2026-10-30T07:59:33.025Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Delivered the CQ-RF05 decision record, docs/design/protected-profile-threat-model.md. It has the six H2 headings Status, Threat model, Open points, Options considered, Decision and Follow-up rows, in that order. docs/ARCHITECTURE.md gains a `## Security Notes` section before `## Error Handling (Current)` that links the record (14 insertions, nothing else changed). No code or .moe edits.\n\nThe decision:\n- OUT of the model: same-user host processes, host-launched seats (the agentCommand gap stays flagged), other local users (a single-user host is assumed), and operator bind configuration.\n- IN the model: repository content (including ignored .moe files a pull can overwrite), guest code, browser pages and network peers.\n- On the live daemon, a project file may add a refusal but never an admission.\n- Point 1 (port↔pid binding) is accepted.\n- Point 2: the window is accepted, and its input moves to the daemon (task-2cf1c6be).\n- Guest sessions and a bind beyond loopback are mutually exclusive.\n\nOptions are listed with reasons: the OS lookup, the nonce, the owner-only record and accepting the gap for point 1, and (a)-(d) for point 2. The record names task-2cf1c6be as the new follow-up, and task-724e31fa with task-801272c4, task-2f2484b4 and task-0c72d59a as the already-filed ones.\n\nFacts that differ from the plan, as read this session:\n- task-801272c4's Origin rule has LANDED (82c97980, in review), so the record calls it landed.\n- The IDE takes the pid and the port from the same file, so the record documents a pid-guess redirect case under point 1. It stays accepted, because the listener is always a host process.\n- /health has no Host check. I filed this as a NEW row, task-80930ce6 (LOW), and the record names it as required.\n\nThe adversarial review fixed six over-broad claims. Verification was re-run fresh after the last edit: npm run lint plus the checkRefs grep chain, VERIFY-OK, exit 0."
+  "completionSummary": "Delivered the CQ-RF05 decision record, docs/design/protected-profile-threat-model.md. It has the six H2 headings Status, Threat model, Open points, Options considered, Decision and Follow-up rows, in that order. docs/ARCHITECTURE.md gains a `## Security Notes` section before `## Error Handling (Current)` that links the record (14 insertions, nothing else changed). No code or .moe edits.\n\nThe decision:\n- OUT of the model: same-user host processes, host-launched seats (the agentCommand gap stays flagged), other local users (a single-user host is assumed), and operator bind configuration.\n- IN the model: repository content (including ignored .moe files a pull can overwrite), guest code, browser pages and network peers.\n- On the live daemon, a project file may add a refusal but never an admission.\n- Point 1 (port↔pid binding) is accepted.\n- Point 2: the window is accepted, and its input moves to the daemon (task-2cf1c6be).\n- Guest sessions and a bind beyond loopback are mutually exclusive.\n\nOptions are listed with reasons: the OS lookup, the nonce, the owner-only record and accepting the gap for point 1, and (a)-(d) for point 2. The record names task-2cf1c6be as the new follow-up, and task-724e31fa with task-801272c4, task-2f2484b4 and task-0c72d59a as the already-filed ones.\n\nFacts that differ from the plan, as read this session:\n- task-801272c4's Origin rule has LANDED (82c97980, in review), so the record calls it landed.\n- The IDE takes the pid and the port from the same file, so the record documents a pid-guess redirect case under point 1. It stays accepted, because the listener is always a host process.\n- /health has no Host check. I filed this as a NEW row, task-80930ce6 (LOW), and the record names it as required.\n\nThe adversarial review fixed six over-broad claims. Verification was re-run fresh after the last edit: npm run lint plus the checkRefs grep chain, VERIFY-OK, exit 0.",
+  "touchedFiles": [
+    "docs/design/protected-profile-threat-model.md",
+    "docs/ARCHITECTURE.md"
+  ]
 }

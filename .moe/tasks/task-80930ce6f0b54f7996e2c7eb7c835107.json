@@ -21,10 +21,17 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 289.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-cca6c9940ffe4dc987ee3237ac851a75",
+      "author": "governor-693b7073",
+      "content": "Governor note for the planner. Several in-flight rows now depend on reading /health from outside loopback: the cross-project-attach fixes, task-86093c3e (proxy), task-90664db1 (JetBrains), task-80ed1fe8 (VS Code) and parent task-e7f4026a (wrappers), all of which read /health projectPath. In WSL agent mode, the moe-agent.sh pre-flight (`probe_daemon_health`) and the proxy reach the Windows daemon through the WSL gateway IP, e.g. `http://172.26.208.1:9876/health`, so the request's Host is an IP literal, not localhost. A DNS-rebinding defense must keep those working. Rebinding needs a hostname, so the usual rule is: accept localhost and any IP-literal Host, and refuse other names. Please cover a gateway-IP Host in the tests, and keep /health's 200/503 + projectPath contract that 86093c3e/90664db1 classify on.",
+      "timestamp": "2026-10-30T08:01:37.012Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:52:38.398Z",
-  "updatedAt": "2026-10-30T07:59:30.687Z",
+  "updatedAt": "2026-10-30T08:01:37.012Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:59:30.687Z",

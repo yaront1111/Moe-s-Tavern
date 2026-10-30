@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, getEventListeners, once } from 'node:events';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { connect } from 'node:net';
 import { constants, tmpdir } from 'node:os';
@@ -1189,7 +1189,7 @@ const LA_PROMPTS = {
 };
 const LA_CONFIG = {
   claude: JSON.stringify({ mcpServers: { moe: { command: '/opt/moe/bin/moe-mcp-shim' } } }),
-  codex: '[mcp_servers.moe]\ncommand = "/opt/moe/bin/moe-mcp-shim"\ndefault_tools_approval_mode = "approve"\n',
+  codex: '[mcp_servers.moe]\ncommand = "/opt/moe/bin/moe-mcp-shim"\nenv_vars = ["MOE_ROLE"]\ndefault_tools_approval_mode = "approve"\n',
 };
 function launchArgv(cli, role, home, exe = `/opt/moe/agents/${cli}`) {
   return cli === 'claude'
@@ -1359,7 +1359,12 @@ test('LA2 only the shim config exists in the fresh home, with private modes and 
     }
     const text = readFileSync(join(home, paths.at(-1)), 'utf8');
     if (frame.cli === 'claude') assert.deepEqual(JSON.parse(text), JSON.parse(LA_CONFIG.claude));
-    else assert.equal(text, LA_CONFIG.codex);
+    else {
+      assert.equal(text, LA_CONFIG.codex);
+      // codex hands its MCP server only the variables named here: exactly the role, never the credential, no env table.
+      assert.deepEqual(text.split('\n').filter(line => line.startsWith('env_vars')), ['env_vars = ["MOE_ROLE"]']);
+      assert.equal(/^env\s*=/m.test(text) || text.includes('CODEX_API_KEY'), false);
+    }
     assert.equal(text.includes(SECRET), false);
   }
 });
@@ -1415,6 +1420,47 @@ test('LA4 launch keys, exact prompts and shim path mirror the protected tables',
   const run = harness("print(json.dumps([sorted(m.LAUNCH), sorted(m.JOBS), sorted(m.PROMPTS), sorted(m.JOB_ROLES), m.SHIM, m.PROMPTS]))");
   assert.equal(run.status, 0, String(run.stderr));
   assert.deepEqual(JSON.parse(run.stdout), [['claude', 'codex'], ['claude', 'codex'], ['qa', 'worker'], ['qa', 'worker'], GUEST_LAYOUT.shim, LA_PROMPTS]);
+});
+
+// Opt-in (needs the 319 MB pinned member, see agent-binaries.json): codex 0.166 starts a stdio MCP server with only
+// HOME/PATH/LC_CTYPE, so the role reaches the real shim only through env_vars. A recorder stands in for the shim.
+const PINNED_CODEX = process.env.MOE_PINNED_CODEX;
+const LA5_SKIP = process.platform !== 'linux' ? 'pinned codex runs only on Linux'
+  : !PINNED_CODEX ? 'set MOE_PINNED_CODEX to the pinned codex member to run this row' : false;
+const RECORDER = `#!/usr/bin/env python3
+import json, os, sys
+json.dump(dict(os.environ), open(sys.argv[1], 'w'))
+for line in sys.stdin:
+    message = json.loads(line)
+    if 'id' in message:
+        result = {'protocolVersion': '2024-11-05', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'recorder', 'version': '1'}} if message.get('method') == 'initialize' else {'tools': []}
+        print(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}), flush=True)
+`;
+test('LA5 pinned codex forwards exactly MOE_ROLE to its MCP server', { skip: LA5_SKIP }, t => {
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const pinned = JSON.parse(readFileSync(new URL('../local-runner/agent-binaries.json', import.meta.url), 'utf8')).binaries.codex[arch].memberSha256;
+  assert.equal(createHash('sha256').update(readFileSync(PINNED_CODEX)).digest('hex'), pinned, 'MOE_PINNED_CODEX is not the pinned codex member');
+  for (const role of ['worker', 'qa']) {
+    const dir = mkdtempSync(join(tmpdir(), 'moe-la5-'));
+    try {
+      const home = join(dir, 'home'), ws = join(dir, 'ws'), marker = join(dir, 'env.json'), recorder = join(dir, 'recorder.py');
+      mkdirSync(join(home, '.codex'), { recursive: true });
+      mkdirSync(ws);
+      writeFileSync(recorder, RECORDER);
+      chmodSync(recorder, 0o700);
+      const parts = LA_CONFIG.codex.split('"/opt/moe/bin/moe-mcp-shim"');
+      assert.equal(parts.length, 2, 'exactly one shim path to replace');
+      writeFileSync(join(home, '.codex', 'config.toml'), parts.join(`"${recorder}"\nargs = ["${marker}"]`));
+      // The model call fails by design (unreachable base URL), so codex's exit code is not asserted.
+      spawnSync(PINNED_CODEX, ['exec', '--sandbox', 'danger-full-access', '--skip-git-repo-check', LA_PROMPTS[role]], {
+        cwd: ws, stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000, killSignal: 'SIGKILL',
+        env: { HOME: home, CODEX_HOME: join(home, '.codex'), PATH: '/usr/bin:/bin', MOE_ROLE: role, CODEX_API_KEY: SECRET, OPENAI_BASE_URL: 'http://127.0.0.1:1/v1' } });
+      assert.ok(existsSync(marker), `${role}: codex never started the MCP server`);
+      const env = JSON.parse(readFileSync(marker, 'utf8'));
+      assert.equal(env.MOE_ROLE, role);
+      assert.equal(Object.keys(env).includes('CODEX_API_KEY') || Object.values(env).some(value => value.includes(SECRET)), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
 });
 
 // CQ-R10c: the host's job frame is the first stdin write of every session, and endAgentJobs proves the end of the guest
@@ -1489,7 +1535,7 @@ body = json.dumps({'kind': 'request', 'id': 1, 'tool': 'moe.get_context', 'args'
 s.sendall(struct.pack('>I', len(body)) + body)
 f = s.makefile('rb')
 answer = json.loads(f.read(struct.unpack('>I', f.read(4))[0]))
-names = sorted(set(os.environ) - {'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'MOE_ROLE'})
+names = sorted(set(os.environ) - {'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'MOE_ROLE', 'CODEX_HOME'})
 print(json.dumps({'role': os.environ['MOE_ROLE'], 'names': names, 'sha': [hashlib.sha256(os.environ[name].encode()).hexdigest() for name in names],
                   'answer': answer}))
 `;

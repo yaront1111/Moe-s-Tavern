@@ -787,11 +787,13 @@ PROMPTS = {
     'worker': 'Call moe.get_context for your assigned task first. You are the worker: follow nextAction and the approved implementation plan, then finish with moe.complete_task.',
     'qa': 'Call moe.get_context for your assigned task first. You are QA: review against the definition of done, then finish with moe.qa_approve or moe.qa_reject.',
 }
+# codex 0.166 starts a stdio MCP server with only HOME, PATH and LC_CTYPE: env_vars forwards exactly MOE_ROLE, the one
+# variable guest-mcp-shim.py main() reads, and never the credential.
 LAUNCH = {
     'claude': (('-p', '{prompt}', '--mcp-config', '{config}', '--strict-mcp-config', '--dangerously-skip-permissions'),
                '.moe-mcp.json', json.dumps({'mcpServers': {'moe': {'command': SHIM}}})),
     'codex': (('exec', '--sandbox', 'danger-full-access', '--skip-git-repo-check', '{prompt}'), '.codex/config.toml',
-              '[mcp_servers.moe]\ncommand = "' + SHIM + '"\ndefault_tools_approval_mode = "approve"\n'),
+              '[mcp_servers.moe]\ncommand = "' + SHIM + '"\nenv_vars = ["MOE_ROLE"]\ndefault_tools_approval_mode = "approve"\n'),
 }
 JOB_PATH = '/usr/local/bin:/usr/bin:/bin'
 SESSIONS = '/var/lib/moe/sessions'

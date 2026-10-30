@@ -103,7 +103,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -128,16 +128,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:01:29.803Z",
-  "updatedAt": "2026-10-30T07:51:39.513Z",
+  "updatedAt": "2026-10-30T08:02:08.380Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:34:19.267Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T08:02:08.380Z",
+    "wallClockMs": 48469113
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-0062feec"
+    "worker-0062feec",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -277,5 +280,9 @@
     "kind": "completion",
     "sessionId": "worker-0062feec@2026-10-30T07:35:48Z",
     "at": "2026-10-30T07:51:39.513Z"
-  }
+  },
+  "completedAt": "2026-10-30T08:02:08.380Z",
+  "reviewCompletedAt": "2026-10-30T08:02:08.380Z",
+  "reviewSummary": "CQ-V05b approved. Reviewed completion 2a3701f8 (tree 7ff0f39c), on moe/work-2026-10-24. The owned paths are clean in the worktree.\n\nGATE, re-run by QA in a Linux snapshot of HEAD 477d7f52 (npm ci, env -i, node v24.21.0):\n- npm test EXIT 0: 205 files, 5767 passed, 16 skipped. repairActivation 13/13, recordCheckObservation 24/24.\n- tsc --noEmit EXIT 0.\n\nDoD:\n1. C1: repair 1 with 2 remaining. REVIEW goes to WORKING, unassigned, revisions 1/1, reopenCount 0, steps reset, exact comment, seat IDLE. C2: attempt 2. C3: the budget escalates.\n2. I1: infra and timeout give retry-infra with no task change. The 3rd escalates with one alert. A later code-failure is still repair 1. C3 also covers unchanged-candidate. A QA scratch probe confirmed unchanged-failure escalates and a pass gives none with no change.\n3. R1 gives PLANNING with priorAttempt. L: legacy and observe are byte-identical to V03.\n4. The gate is above.\n\nReview: only authenticated same-check runs count, and the current-candidate guard matches getContext. Duplicates are not re-applied. Errors come back as repairError. updateTask bounds comments. qaReject.ts, requestReplan.ts and executionProfile.ts are untouched, and P pins verified-local unavailable.\n\nSize: +359 net plus the 1-line config row, under the 400 cap.\n\nNotes for V12, non-blocking:\n- (a) The CONFIGURATION.md repairPolicy row landed under peer commit 82c97980.\n- (b) MCP_SERVER.md says a superseded run gets neither field, but a superseded replay after a pass returns repair:{none,passed}. No side effect.\n- (c) Documented crash window: an observation is not re-activated on replay.\n- (d) The unattributed executionPolicy*.test.ts paths were landed by peer V06 (582fc160).",
+  "requiredCheckAtDone": null
 }
