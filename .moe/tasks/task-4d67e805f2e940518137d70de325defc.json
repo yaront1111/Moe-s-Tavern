@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,16 +99,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:35:01.788Z",
-  "updatedAt": "2026-10-30T06:56:36.310Z",
+  "updatedAt": "2026-10-30T07:50:23.468Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:40:57.614Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T07:50:23.468Z",
+    "wallClockMs": 4165854
   },
   "contextFetchedBy": [
     "architect-32ff5555",
-    "worker-093a65d0"
+    "worker-093a65d0",
+    "qa-ba3f4f35"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -215,5 +218,9 @@
     "kind": "completion",
     "sessionId": "worker-093a65d0@2026-10-30T06:49:12Z",
     "at": "2026-10-30T06:56:36.310Z"
-  }
+  },
+  "completedAt": "2026-10-30T07:50:23.468Z",
+  "reviewCompletedAt": "2026-10-30T07:50:23.468Z",
+  "reviewSummary": "Reviewed completion f4e99ab2178672579e901d9f4d6e417e6b119f8f (tree fa6874186a25aa0a8d91945da766f554a6cb9fa3), contained on moe/work-2026-10-24 and origin's tracking ref. Non-board diff: +236/-13, net 223 LOC across the 3 planned files; remaining paths are daemon board records. Used a full git archive of that exact commit in /tmp/moe-4d67-qa.BdSmpP/repo, fresh native npm ci and scrubbed env (Node v24.21.0); no shared-tree overlays. Re-ran `cd packages/moe-daemon && npx tsc --noEmit && npm test`: exit 0, 199 files passed, 5550 passed / 16 skipped. Scratch test-file tsconfig with types node: `npx tsc -p tsconfig.qa.json`, exit 0. Re-ran governanceFeatures + affectedFiles: 2 files / 49 tests passed. Regression sensitivity: substituting only the parent claimNextTask implementation caused all 7 added cases to fail (7 failed / 14 passed); restored delivered bytes and cmp-verified all 3 task files against the commit. Verified liveAssignee uses registered/non-DEAD liveness (no idle heuristic), absent on unassigned/DEAD/missing owners; live-first notices target live peers plus claimer; dormant-only notices have no mentions; mention-token/group-token/path/backtick guards prevent unintended broadcasts. Scan failure leaves assignment intact and omits fileCollision; both scan and notice errors are fail-open. Existing API/state shapes remain backward-compatible, and both claim_next_task docs hunks landed. No forbidden patterns or weakened tests. Complexity pass: Lean already. Ship.",
+  "requiredCheckAtDone": null
 }

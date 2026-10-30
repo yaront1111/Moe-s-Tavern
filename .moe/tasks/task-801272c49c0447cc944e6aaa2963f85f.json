@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:32:46.880Z",
-  "updatedAt": "2026-10-30T07:48:21.923Z",
+  "updatedAt": "2026-10-30T07:48:55.311Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:35:07.652Z",
     "plannedStepCount": 5,
@@ -210,7 +210,54 @@
     "packages/moe-daemon/src/server/webSocketOrigin.test.ts",
     "packages/moe-daemon/src/server/WebSocketServer.ts",
     "docs/CONFIGURATION.md",
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+    ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json"
+  ],
+  "completionSummary": "The daemon's WSS now refuses, with HTTP 403 and before 'connection', any upgrade on any path (/ws, /mcp, /runner, others) that carries an Origin header outside a frozen, empty allowed set. 'null' and '' count as present and are refused. An absent Origin is accepted.\n\nWebSocketServer.ts (+51/-1):\n- ALLOWED_WS_ORIGINS, with no knob, as the comment says.\n- exported isAllowedUpgradeOrigin.\n- verifyClient in the 2-argument form in the WSS options, so forwarded upgrades from 2f2484b4 are checked too.\n- verifyUpgradeOrigin and upgradeOriginAllowed. The body is the fixed 'Forbidden' and never echoes the origin. A warn log carries remoteAddress, path and the origin truncated to 120. An exception fails closed.\n\nBeyond the plan:\n- Both Origin and Sec-WebSocket-Origin are checked via req.headersDistinct, because ws's info.origin reads only sec-websocket-origin on a version-8 handshake.\n- done(true) stays outside the try, so a throw in onConnection can never 403 an already-upgraded socket.\n- onConnection, /runner key auth and /health are unchanged.\n\nNew webSocketOrigin.test.ts, 24 tests:\n- Refusal rows: /ws, /mcp, /, a query path, 'null', '', a mixed-case name, v8+Origin, v13+Sec-WebSocket-Origin, /runner with a valid key, the ws origin option, truncation and fail-closed. Each asserts onConnection is never called and no client set grows.\n- Accepted rows: ws with no options on /ws and /mcp; the claude-plugin's raw bytes; Node's global WebSocket; the Java-WebSocket 1.6.0 header set, verified from the jar (no 'Origin' string; TreeMap order) and cited; /runner key auth with and without the key.\n- RED before the impl: 17 failed, 7 passed. 5 mutants, all killed.\n\nDocs: a CONFIGURATION.md 'WebSocket Origin rule' paragraph and a TROUBLESHOOTING.md 'WebSocket upgrade refused with HTTP 403' entry, at problem-class level.\n\nNet own LOC: 293 (runtime+docs 62, tests 231).\n\nThe gate ran in a Linux-native snapshot of HEAD 5f62b98f with the 4 owned files overlaid and cmp-equal; the shared checko",
+  "commits": [
+    {
+      "sha": "82c97980144401a70688cdddb99309f4e3ba0a21",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T07:37:49Z",
+      "paths": [
+        ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+        ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/webSocketOrigin.test.ts"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T07:48:55.310Z",
+      "treeId": "89fb90dd753fec402c8fc32e0cc2a0acd39fb7c4",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-01f37ac63316409ab581f5a189002cb8"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-01f37ac63316409ab581f5a189002cb8"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/server/webSocketOrigin.test.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "docs/CONFIGURATION.md",
     "docs/TROUBLESHOOTING.md"
   ],
-  "completionSummary": "The daemon's WSS now refuses, with HTTP 403 and before 'connection', any upgrade on any path (/ws, /mcp, /runner, others) that carries an Origin header outside a frozen, empty allowed set. 'null' and '' count as present and are refused. An absent Origin is accepted.\n\nWebSocketServer.ts (+51/-1):\n- ALLOWED_WS_ORIGINS, with no knob, as the comment says.\n- exported isAllowedUpgradeOrigin.\n- verifyClient in the 2-argument form in the WSS options, so forwarded upgrades from 2f2484b4 are checked too.\n- verifyUpgradeOrigin and upgradeOriginAllowed. The body is the fixed 'Forbidden' and never echoes the origin. A warn log carries remoteAddress, path and the origin truncated to 120. An exception fails closed.\n\nBeyond the plan:\n- Both Origin and Sec-WebSocket-Origin are checked via req.headersDistinct, because ws's info.origin reads only sec-websocket-origin on a version-8 handshake.\n- done(true) stays outside the try, so a throw in onConnection can never 403 an already-upgraded socket.\n- onConnection, /runner key auth and /health are unchanged.\n\nNew webSocketOrigin.test.ts, 24 tests:\n- Refusal rows: /ws, /mcp, /, a query path, 'null', '', a mixed-case name, v8+Origin, v13+Sec-WebSocket-Origin, /runner with a valid key, the ws origin option, truncation and fail-closed. Each asserts onConnection is never called and no client set grows.\n- Accepted rows: ws with no options on /ws and /mcp; the claude-plugin's raw bytes; Node's global WebSocket; the Java-WebSocket 1.6.0 header set, verified from the jar (no 'Origin' string; TreeMap order) and cited; /runner key auth with and without the key.\n- RED before the impl: 17 failed, 7 passed. 5 mutants, all killed.\n\nDocs: a CONFIGURATION.md 'WebSocket Origin rule' paragraph and a TROUBLESHOOTING.md 'WebSocket upgrade refused with HTTP 403' entry, at problem-class level.\n\nNet own LOC: 293 (runtime+docs 62, tests 231).\n\nThe gate ran in a Linux-native snapshot of HEAD 5f62b98f with the 4 owned files overlaid and cmp-equal; the shared checko"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-e60b90bd@2026-10-30T07:37:49Z",
+    "at": "2026-10-30T07:48:55.310Z"
+  }
 }
