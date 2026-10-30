@@ -15,36 +15,56 @@
   ],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-915213a1",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor: the park reason no longer holds. scripts/local-runner/certify.mjs and certify-bridge.mjs are in the tree, R11e (001d8ab3) is DONE, and R13e (d00dafdf) is WORKING on an approved plan, so R13f can be planned now (plan-don't-park rule, 2026-10-27). dependsOn stays [d00dafdf, 001d8ab3], so no worker starts it before R13e is DONE.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-f4811a729f9e436ba129a65c12d348c1",
   "priority": "HIGH",
   "order": 254.4,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-afc45033bab44419a50dcddc78fbf2dd",
+      "author": "governor-693b7073",
+      "content": "Governor, 17:36Z: I moved this from BLOCKED to PLANNING so the plan is ready the moment R13e lands. Every hop in the R13 chain was paying planning latency.\n\nThe park reason is gone:\n- scripts/local-runner/certify.mjs (R13d) is in the tree, so submit_plan's affectedFiles check passes.\n- R11e (001d8ab3) is DONE, which gives runCheckJob its final shape.\n- R13e (d00dafdf) is WORKING on an approved 4-step plan, and step 1 has landed (checkpoint f7b5e172). certify-bridge.mjs is in the tree.\n\nPlanner:\n- Follow the plan-don't-park rule. Plan against R13e's approved plan and the landed bytes, and name any R13e interface you assume, such as the snapshot generate-and-materialize helper, as an assumption in the plan. Do not report_blocked again.\n- The resume pointers in the old blockedReason still apply: certify.mjs BODY order, the context fields, the teardown-last rule, check-lifecycle.mjs runCheckJob, 'controller-replacement' last before teardown, and fake-provider rows in scripts/tests/local-runner.test.mjs.\n- dependsOn stays [d00dafdf, 001d8ab3], so no worker can start before R13e is DONE.",
+      "timestamp": "2026-10-30T17:36:21.172Z"
+    },
+    {
+      "id": "comment-a69c61416beb4f66b00b6425aec045e2",
+      "author": "governor-693b7073",
+      "content": "@architect-899a90d6 FYI for this plan: QA (qa-ba3f4f35) is rejecting R13e (d00dafdf) narrowly on a race in the guest-network check (certify-bridge.mjs:170-173). A real TCP connect can be queued while accepted() is still 0, and then server.close drops it, so the check false-passes. The fix is a bounded listener observation/drain barrier plus a regression test, inside that one check. QA says no R13f interface redesign is indicated: the registry entry shape, context fields and snapshot helper stay the same. Plan as you were, and if a check of yours also uses a listener witness, use the same drain-before-close rule.",
+      "timestamp": "2026-10-30T17:43:43.240Z"
+    },
+    {
+      "id": "comment-9ec6579760f7432ca5d00418ffcde931",
+      "author": "architect-899a90d6",
+      "content": "Architect, 2026-10-30: two decisions the human made in the architect REPL.\n\n1. Split for size. The three checks measured about 470 changed lines, over QA's 400 cap. New prerequisite CQ-R13f1 (task-4e2ab1584c3140019be709b94c71f1cc) lands 'check-containment' in scripts/local-runner/certify-containment.mjs. This row adds 'writer-containment' before it and 'controller-replacement' after it in the same module, and its gate re-runs all three. DoD 2 is delivered by R13f1's landed bytes and re-verified here.\n\n2. The protected-overwrite run. On a correct guest the check job can never change a protected file: CQ-R11b bind-mounts it read-only, so the job's own write fails with EROFS. 'inconclusive' (supervisor exit 80) only happens when a protected file changes during the run and the after-run hash check catches it. So in R13f1 the command tries the overwrite (refused), then waits, and once the session has started the certify host changes the file as root in the guest's own mount namespace. The run must resolve 'inconclusive', which keeps DoD 2 literal and exercises the after-run check natively. The probe run separately requires the job's own write to fail with EROFS.",
+      "timestamp": "2026-10-30T18:02:49.514Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:04:16.594Z",
-  "updatedAt": "2026-10-30T06:30:49.419Z",
+  "updatedAt": "2026-10-30T20:24:32.205Z",
   "dependsOn": [
     "task-d00dafdf2dde4a41bf5983b1f7d495de",
-    "task-001d8ab383ef41088e045b2e41ed0e1e"
+    "task-001d8ab383ef41088e045b2e41ed0e1e",
+    "task-4e2ab1584c3140019be709b94c71f1cc"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-30T06:29:13.938Z"
   },
   "contextFetchedBy": [
-    "architect-bd1eb82d"
+    "architect-bd1eb82d",
+    "architect-899a90d6",
+    "architect-915213a1"
   ],
-  "blockedReason": "Not plannable yet. This row is blocked on its own two dependencies and returns to PLANNING automatically once both are DONE.\n\n1. CQ-R13e, task-d00dafdf2dde4a41bf5983b1f7d495de. Another architect is still planning it, and through it CQ-R13d.\n   - CQ-R13d creates scripts/local-runner/certify.mjs, with the CERTIFY_CHECKS BODY/TEARDOWN registry and the shared check context. The file is not in the tree yet, so submit_plan's affectedFiles check refuses it.\n   - CQ-R13e appends its checks, plus the snapshot generate-and-materialize step that check mode needs. 'check-containment' should reuse that step rather than duplicate it.\n2. CQ-R11e, task-001d8ab383ef41088e045b2e41ed0e1e. It owns runCheckJob's final shape with the toolchain and offline dependency phases, and its R11e1-e5 slices are still in flight. 'check-containment' drives runCheckJob and asserts its outcomes: 'inconclusive', and workspace 'changed'.\n\nPlanning now would mean guessing three unlanded APIs (the registry entry shape, R13e's snapshot helper, runCheckJob's result) and replanning later.\n\nResume: read the landed certify.mjs (BODY order, context fields, the teardown-last rule), R13e's checks and check-lifecycle.mjs runCheckJob. Then plan the three BODY checks, with 'controller-replacement' last before teardown, and fake-provider rows in scripts/tests/local-runner.test.mjs. Pointers are in this row's Serena handoff memory.",
-  "blockedOnTaskIds": [
-    "task-d00dafdf2dde4a41bf5983b1f7d495de",
-    "task-001d8ab383ef41088e045b2e41ed0e1e"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "PLANNING",
-  "blockedAt": "2026-10-30T06:30:49.419Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Not plannable yet. This row is blocked on its own two dependencies and returns to PLANNING automatically once both are DONE.\n\n1. CQ-R13e, task-d00dafdf2dde4a41bf5983b1f7d495de. Another architect is still planning it, and through it CQ-R13d.\n   - CQ-R13d creates scripts/local-runner/certify.mjs, with the CERTIFY_CHECKS BODY/TEARDOWN registry and the shared check context. The file is not in the tree yet, so submit_plan's affectedFiles check refuses it.\n   - CQ-R13e appends its checks, plus the snapshot generate-and-materialize step that check mode needs. 'check-containment' should reuse that step rather than duplicate it.\n2. CQ-R11e, task-001d8ab383ef41088e045b2e41ed0e1e. It owns runCheckJob's final shape with the toolchain and offline dependency phases, and its R11e1-e5 slices are still in flight. 'check-containment' drives runCheckJob and asserts its outcomes: 'inconclusive', and workspace 'changed'.\n\nPlanning now would mean guessing three unlanded APIs (the registry entry shape, R13e's snapshot helper, runCheckJob's result) and replanning later.\n\nResume: read the landed certify.mjs (BODY order, context fields, the teardown-last rule), R13e's checks and check-lifecycle.mjs runCheckJob. Then plan the three BODY checks, with 'controller-replacement' last before teardown, and fake-provider rows in scripts/tests/local-runner.test.mjs. Pointers are in this row's Serena handoff memory."
 }
