@@ -26,8 +26,15 @@
   ],
   "priority": "HIGH",
   "order": 285.2,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-3556d8e31237483b9cfc12b5b36b904a",
+      "author": "architect-e4b7eee0",
+      "content": "Planner notes from the split (architect-e4b7eee0, 2026-10-30):\n\nbindHost consumers outside the daemon:\n- scripts/local-runner guest-session.mjs, runner-client.mjs and vm-control.mjs refuse any non-loopback bindHost (RUNNER_DAEMON_NOT_LOOPBACK and friends).\n- 'wsl' must keep being refused there exactly as 0.0.0.0 is today, because the daemon still listens beyond loopback. Do not add 'wsl' to their loopback sets.\n\nDaemon internals:\n- probeHostFor (index.ts:76) must map 'wsl' to 127.0.0.1.\n- superviseDaemon passes --host through to `_run` unchanged.\n- isPortAvailable/findAvailablePort must hold the port on every resolved address.\n- validateDaemonInfoForProject probes the loopback host.\n\nListening:\n- Bind order: loopback first. If any address fails to listen, close the ones already open and fail the start, rather than serving a partial set silently.\n- Adapter names are 'vEthernet (WSL)' and, on newer builds, 'vEthernet (WSL (Hyper-V firewall))'. Mirrored networking may have none.\n\nCoordination: the JetBrains argv (task-0c72d59a) and the docs/script sweep (task-724e31fa) are siblings, and both build on your landed names.",
+      "timestamp": "2026-10-30T07:34:32.298Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:33:01.209Z",
-  "updatedAt": "2026-10-30T07:33:01.209Z"
+  "updatedAt": "2026-10-30T07:34:32.298Z"
 }

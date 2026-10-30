@@ -9,9 +9,63 @@
     "`npm run lint` at the repo root passes (the 40-line cap holds), the daemon prebuild still regenerates initFiles.ts and skillFiles.ts cleanly, and the completion summary notes that seats pick the change up at the next daemon or plugin rebuild."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "ARCHITECT POINTER RULE in docs/skills/moe-planning/SKILL.md, section '## How phases map to plan steps'. Add one bullet beside 'Set affectedFiles tight per step.':\n\n- When a Serena memory bears on a step, name it in that step's description as `mem:<name>` (for example `mem:gotcha-moe-doc-generated-artifacts`), so the worker calls read_memory on exactly that memory instead of scanning list_memories.\n- Cite only live names. A name under `_archive/` is hidden from Serena by .serena/project.yml ignored_memory_patterns, and read_memory refuses it.\n\nLeave docs/roles/architect.md unchanged. It is at 39 of the 40-line lint cap and already sends architects to moe-planning; the DoD allows 'or the moe-planning skill it points to'. Keep the file ASCII: no typographic quotes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/skills/moe-planning/SKILL.md"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "QA RETIREMENT RULE in docs/roles/qa.md: at most 3 lines, keeping the file at or under the 40-line lint cap (32 now). This is the always-loaded QA doc; the full lifecycle goes in docs/MEMORY.md in step 3. Add a short '## Handoff retirement' section, or append to '## Approval bar', carrying the rule:\n\n- After `moe.qa_approve` only, fold any reusable fact from this task's `task-<id>-handoff` / `task-<id>-qa-handoff` memories into a gotcha-/pattern-/decision- memory. Prefer edit_memory over a near-duplicate.\n- Then retire them with a plain file move: `mkdir -p .serena/memories/_archive && mv .serena/memories/task-<id>-*handoff.md .serena/memories/_archive/`. Serena refuses `_archive/` names, so never use rename_memory. Alternatively use delete_memory when nothing is reusable and no live memory cites it.\n- Write no new qa-handoff on approve.\n- After `moe.qa_reject`, keep the handoffs. Never retire another task's.\n- Point to docs/MEMORY.md for the lifecycle.\n\n.serena/ is untracked and excluded at landing by both wrappers: never declare_files or commit it.\n\nError handling: if the move fails (missing file, existing archive copy), say so in the qa_approve summary. Never overwrite an archived file.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/roles/qa.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/MEMORY.md.\n\n(1) Under '### Handoff convention', add the lifecycle:\n- `task-<id>-handoff` (and QA's `-qa-handoff`) is written while the task is open;\n- it is retired at qa_approve, after its reusable facts are folded into topic memories, by archiving or deleting;\n- a rejected task keeps it.\n\n(2) Add the `_archive/` convention:\n- retired or merged-away memories move to .serena/memories/_archive/<same name>.md;\n- .serena/project.yml `ignored_memory_patterns: [_archive/.*]` hides them from list_memories, read_memory and write_memory, and read_file still reads the raw file;\n- the wrappers' pre-flight <inbox> name preload scans only the top level.\n\n(3) Under '### Architects', add the `mem:<name>` pointer convention: name the memory in the plan step that needs it, and never cite an _archive/ name. Under '### QA', add a one-line pointer to the retirement rule in docs/roles/qa.md.\n\n(4) In '## Caveats', adjust the no-dedup or no-merging claim only where it conflicts. Merging stays manual, by edit_memory.\n\nThis is an edit, not a rewrite: keep every existing section.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MEMORY.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "REGENERATE the vendored copies, following `mem:gotcha-moe-doc-generated-artifacts`.\n- docs/roles/*.md feed packages/moe-daemon/src/generated/initFiles.ts, through `npm run generate-init-files`.\n- docs/skills/** feed packages/moe-daemon/src/generated/skillFiles.ts, through `npm run generate-skill-files`.\n\nBefore regenerating:\n- Save copies of both generated files to scratch.\n- `git status --porcelain -- docs/roles docs/skills docs/agents` must show only this task's two sources: qa.md and moe-planning/SKILL.md.\n\nFrom WSL, run them through Windows Git Bash interop, because WSL tsx cannot load the Windows node_modules:\n`\"/mnt/c/Program Files/Git/bin/bash.exe\" -lc 'cd /d/projexts/moes/packages/moe-daemon && npm run generate-init-files && npm run generate-skill-files'`\nRecord both `Generated ...` stdout lines. A 'skipping' line counts as failure.\n\nThen diff each file against its saved copy. The delta must be only this task's entries: the marker sha, the edited bodies and the shipped-body sha.\n\nNEVER run npm run build or prebuild in the shared tree: `clean` deletes dist/ from under other sessions. The CRLF and LF warnings are pre-existing autocrlf noise.\n\nError handling: if the diff carries a foreign hunk (a peer's dirty doc), restore the saved copy, name the hunk in the step note and coordinate before retrying.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY, once and fresh, from the repo root in WSL. npm run lint is pure bash; run it under env -i with a Linux node bin on PATH if npm needs it:\n`npm run lint && \"/mnt/c/Program Files/Git/bin/bash.exe\" -lc 'cd /d/projexts/moes/packages/moe-daemon && npx tsc --noEmit && npx vitest run src/util/initFiles.test.ts src/util/skillFiles.test.ts src/util/qaCommitPolicy.test.ts src/util/targetedContextGuidance.test.ts' && grep -q 'mem:<name>' packages/moe-daemon/src/generated/skillFiles.ts && grep -q '_archive/' packages/moe-daemon/src/generated/initFiles.ts`\n- lint proves the 40-line caps hold;\n- tsc and the 4 test files cover the vendored-docs consumers;\n- the greps prove that both generated files carry the new text.\n\nRecord the counts. This exact command's fresh output is the complete_task verification evidence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/roles/qa.md",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "SELF-REVIEW (load adversarial-self-review). Check that:\n\n(a) The rules agree across moe-planning SKILL.md, qa.md and MEMORY.md: retire only after approve, keep on reject, use the _archive/ path, and never rename_memory into _archive/.\n(b) qa.md and architect.md are each at most 40 lines, and architect.md is untouched.\n(c) Nothing tells an agent to edit .moe or commit .serena.\n(d) The generated-file diffs hold only this task's entries.\n(e) ASCII apostrophes and backticks are used throughout.\n\nThe completion summary must say that running seats pick the change up only after the daemon is rebuilt (.moe/roles and .moe/skills re-sync at daemon boot), and for IDE users after a plugin rebuild. It must name the step-4 generator output lines, and note that qa.reference.md was intentionally left unchanged: the rule lives in the always-loaded qa.md, with the detail in MEMORY.md.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/skills/moe-planning/SKILL.md",
+        "docs/roles/qa.md",
+        "docs/MEMORY.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,8 +78,79 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:17:43.360Z",
-  "updatedAt": "2026-10-30T07:17:56.187Z",
+  "updatedAt": "2026-10-30T07:34:46.990Z",
   "dependsOn": [
     "task-78ba155c350f4927ab5bdf53c21a4468"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:31:36.068Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:34:46.956Z",
+  "executionContract": {
+    "intendedBehavior": "Architects name the Serena memories that bear on each plan step as `mem:<name>` (the moe-planning skill). QA, after qa_approve, folds reusable facts from the task's handoff memories into topic memories, then retires the handoffs into .serena/memories/_archive/ by file move, or deletes them; a rejected task keeps them (docs/roles/qa.md). docs/MEMORY.md documents the handoff lifecycle, the _archive/ convention and the mem: pointer convention. The vendored initFiles.ts and skillFiles.ts are regenerated.",
+    "acceptanceCriteria": [
+      "moe-planning SKILL.md carries the mem:<name> step-pointer rule, and MEMORY.md describes it",
+      "qa.md (at most 40 lines) carries the retire-after-approve and keep-on-reject rule, and MEMORY.md documents the lifecycle and _archive/",
+      "The step-5 command exits 0: npm run lint, daemon tsc, the 4 vendored-docs test files, and both generated files carrying the new text"
+    ],
+    "invariants": [
+      "Role docs stay within the 40-line lint cap",
+      "Generated files change only through the generators, with deltas limited to this task's docs"
+    ],
+    "compatibility": [
+      "docs/roles/architect.md (39 of 40 lines) and qa.reference.md are unchanged",
+      ".moe/roles and .moe/skills are never edited by hand; the daemon re-syncs them at boot",
+      "No npm run build or prebuild in the shared tree"
+    ],
+    "approvedScope": [
+      "docs/skills/moe-planning/SKILL.md",
+      "docs/roles/qa.md",
+      "docs/MEMORY.md",
+      "packages/moe-daemon/src/generated/initFiles.ts and skillFiles.ts (generator output only)"
+    ],
+    "reuse": [
+      "The WSL-to-Windows Git Bash generator recipe in mem:gotcha-moe-doc-generated-artifacts"
+    ],
+    "sourceAssumptions": [
+      "docs/roles/architect.md is 39 lines and qa.md 32; the lint cap is 40 (scripts/lint-role-docs.sh, ROLE_DOC_MAX_LINES)",
+      "docs/MEMORY.md has '### Handoff convention', '### Architects', '### QA' and '## Caveats'",
+      "packages/moe-daemon/scripts/generate-init-files.ts reads docs/roles/*.md and docs/agents; generate-skill-files reads docs/skills; both outputs are tracked",
+      "The task depends on task-78ba155c, which creates .serena/memories/_archive/ and the ignored_memory_patterns entry"
+    ],
+    "checkRefs": [
+      "npm run lint && \"/mnt/c/Program Files/Git/bin/bash.exe\" -lc 'cd /d/projexts/moes/packages/moe-daemon && npx tsc --noEmit && npx vitest run src/util/initFiles.test.ts src/util/skillFiles.test.ts src/util/qaCommitPolicy.test.ts src/util/targetedContextGuidance.test.ts' && grep -q 'mem:<name>' packages/moe-daemon/src/generated/skillFiles.ts && grep -q '_archive/' packages/moe-daemon/src/generated/initFiles.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Adding the mem: rule to architect.md: rejected. It is at 39 of 40 lines; the DoD allows the moe-planning skill, which loads at plan time.\n- Putting the QA rule in qa.md plus qa.reference.md: rejected. With 6 files the daemon floored the plan to the heavy tier. qa.md, which is in every QA prompt, carries the rule and MEMORY.md the detail, so the plan stays at 5 files.\n- Editing moe-qa-loop SKILL.md: skipped for the same reason.",
+    "codebaseInsights": "Role docs and skills are vendored into the tracked generated/initFiles.ts and skillFiles.ts and synced into .moe at daemon boot. From WSL, run the generators through Windows Git Bash (the memory recipe). The initFiles and skillFiles tests check the sync mechanism, not text equality, which is why the verification greps the new phrases.",
+    "risks": "- A peer's dirty docs/roles or docs/skills lines would be swept into the regenerated files. Check git status first and diff afterwards.\n- The 40-line cap.\n- Typographic quotes make scripted edits silently miss.\n- The _archive/ convention depends on the prune task (78ba155c), which is already in this task's dependsOn.",
+    "keyFiles": [
+      "docs/skills/moe-planning/SKILL.md",
+      "docs/roles/qa.md",
+      "docs/MEMORY.md",
+      "packages/moe-daemon/src/generated/initFiles.ts",
+      "packages/moe-daemon/src/generated/skillFiles.ts",
+      "scripts/lint-role-docs.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:34:46.990Z",
+  "approvedPlanRevision": 1
 }
