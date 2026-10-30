@@ -19,9 +19,9 @@
       "modifiedFiles": [
         "packages/moe-daemon/src/util/executionContractDocs.test.ts"
       ],
-      "note": "Added drift cases (submit_plan param block vs EXECUTION_CONTRACT_FIELDS, requiredChecks wording, nine-field wording, schema.ts/launcher comment windows). RED in Linux snapshot: 6 new/changed cases fail as expected, 11 existing pass. 743 dirty paths belong to others; untouched.",
-      "startedAt": "2026-10-30T03:41:12.423Z",
-      "completedAt": "2026-10-30T03:42:00.690Z"
+      "note": "Round 2 (QA reject was landing-only). No new edits: the test file is already at HEAD (2fb7264), cmp-equal to the worktree. RED on a pure HEAD f49c8fc archive with native node_modules under env -i: 3 failed / 14 passed, the same 3 QA named. GREEN with only docs/MCP_SERVER.md overlaid: 17/17. 745 peer/pre-existing dirty paths untouched.",
+      "startedAt": "2026-10-30T03:53:42.244Z",
+      "completedAt": "2026-10-30T03:56:19.890Z"
     },
     {
       "stepId": "step-2",
@@ -32,13 +32,12 @@
         "docs/MCP_SERVER.md"
       ],
       "modifiedFiles": [
-        "packages/moe-daemon/src/types/schema.ts",
         "docs/MCP_SERVER.md",
-        "packages/moe-daemon/src/util/executionContractDocs.test.ts"
+        "packages/moe-daemon/src/types/schema.ts"
       ],
-      "note": "schema.ts comment-only fix; MCP_SERVER.md submit_plan lists requiredChecks objects (<=20) and says nine-field; test window tightened.",
-      "startedAt": "2026-10-30T03:42:01.526Z",
-      "completedAt": "2026-10-30T03:42:15.032Z"
+      "note": "No new edits. schema.ts comment is at HEAD (2fb7264), cmp-equal. docs/MCP_SERVER.md is the only owned path still unlanded: `git diff HEAD --numstat` = 7 3, the same hunk QA measured (requiredChecks listing plus eight-field to nine-field), all this row's. Former contestant task-915d7e84 is DONE. Live get_commit_scope lists the path under asserted with no peerDeclared entry. I also called declare_files on it so the wrapper stages it regardless of baseline.",
+      "startedAt": "2026-10-30T03:56:20.830Z",
+      "completedAt": "2026-10-30T03:56:32.498Z"
     },
     {
       "stepId": "step-3",
@@ -52,34 +51,27 @@
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
       ],
-      "note": "Comment-only edits at 3 sites per launcher (grok env block, pin_attempt_identity header, MOE_SESSION_ID export); BOM/LF preserved. OPERATOR NOTE: landing wrapper comments can trigger the normal wrapper hot reload of the fleet; I did not restart anything.",
-      "startedAt": "2026-10-30T03:42:15.934Z",
-      "completedAt": "2026-10-30T03:42:25.950Z"
+      "note": "No new edits. Both launchers' comment-only hunks are already at HEAD (2fb7264) and cmp-equal to the worktree; nothing in either wrapper changes this round, so this round triggers no new hot reload. Ponytail rung 1: nothing to write.",
+      "startedAt": "2026-10-30T03:56:33.472Z",
+      "completedAt": "2026-10-30T03:56:37.196Z"
     },
     {
       "stepId": "step-4",
       "description": "Single final verification gate from repository root: `bash -n scripts/moe-agent.sh && powershell.exe -NoProfile -NonInteractive -Command '$tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./scripts/moe-agent.ps1),[ref]$tokens,[ref]$errors); if($errors.Count){$errors; exit 1}' && bash scripts/tests/parity-check.sh && node --test scripts/tests/prompt-cache-launcher.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test) && (cd packages/moe-proxy && npm test) && npm run lint`. Run against a stable full candidate snapshot with docs and all declared files present, native dependencies and clean MOE_* test environment; do not rebuild/delete dist under live proxies. Native Windows PowerShell parses the PS1 twin; Bash and Node tests cover Unix/Git Bash. Require all new drift cases and full daemon/proxy suites pass, and supported Windows launcher branches actually execute (not blanket skipped). Capture fresh command/exitCode/outputTail for complete_task. Schema executable types and wire shapes are unchanged, but this epic-final follow-up retains the daemon/proxy integration suites rather than a test-file-only gate.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "Gate run in Linux snapshot (HEAD + 5 owned files, cmp-equal), env -i: bash -n 0; tsc 0; daemon npm test 190 files, 5320 passed/16 skipped; proxy 176 passed; parity PASS; prompt-cache-launcher 28 pass/0 fail/1 skipped; lint OK; native powershell.exe ParseFile of ps1 exit 0. Proxy node_modules is the older /tmp/bdf6-snap tree (lock differs from HEAD); proxy untouched by this task.",
-      "startedAt": "2026-10-30T03:42:26.922Z",
-      "completedAt": "2026-10-30T03:43:33.208Z"
+      "note": "Gate EXIT 0. Snapshot: git archive of HEAD f49c8fc plus the 5 owned files, all cmp-equal to the worktree; only docs/MCP_SERVER.md differs from HEAD. Run under env -i with a Linux-only PATH and no MOE_*.\nResults: bash -n 0; ParseFile errors=0; parity PASS; prompt-cache-launcher 28 pass, 0 fail, 1 skip; tsc 0; daemon 190 files, 5320 passed, 16 skipped; proxy 5 files, 176 passed; lint OK.\nEnv notes:\n1) The plan's ParseFile command cannot open the snapshot's \\\\wsl.localhost provider path, so the PS segment parses the worktree twin on D:, guarded by cmp.\n2) Proxy deps came from npm ci of HEAD's lock (lock unchanged). npm skipped the optional @rolldown/binding-linux-x64-gnu, so I added 1.2.15 from npm pack; its integrity matches the lock.",
+      "startedAt": "2026-10-30T03:56:38.279Z",
+      "completedAt": "2026-10-30T04:02:43.197Z"
     },
     {
       "stepId": "step-5",
       "description": "Final adversarial self-review once: trace the three statements to the current approval validator, proxy identity map and execution-contract validator, then inspect the whole CQ-F documentation flow for contradictory approval/receipt/evidence claims. Within this task every launcher/schema diff must be comment-only; MCP listing must distinguish requiredChecks objects from checkRefs strings. Ensure tests fail if any one corrected statement regresses and are scoped to owning sections. Preserve historical unstamped approvals, rendered-token CAS, protected fail-closed behavior and existing full-epic tests. Record any unrelated new defects rather than growing this scope; rerun the same gate if review makes fixes.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/util/executionContractDocs.test.ts",
-        "packages/moe-daemon/src/types/schema.ts",
-        "docs/MCP_SERVER.md",
-        "scripts/moe-agent.sh",
-        "scripts/moe-agent.ps1"
-      ],
-      "note": "Self-review: schema/launcher diffs comment-only (git diff -U0 checked); repo-wide grep finds no other stale eight-field/omitted-token/start_step-only statements (MCP_SERVER.md:3052 correctly says deleted). requiredChecks objects distinct from checkRefs strings. No unrelated defects found. Gate unchanged, no fixes needed.",
-      "startedAt": "2026-10-30T03:43:34.126Z",
-      "completedAt": "2026-10-30T03:43:42.446Z"
+      "note": "Self-review, round 2. The only delta from HEAD is the docs hunk, so no code was reviewed again; QA confirmed statements 1 and 2 at HEAD. I traced statement 3 to state/validators.ts:\n- EXECUTION_CONTRACT_FIELDS = Object.keys(CONTRACT_FIELD_KINDS), including requiredChecks: 'checks'.\n- MAX_REQUIRED_CHECKS = 20.\n- id (1-64 chars, unique) and command are required.\n- configs/scripts/assertionRoots are optional, each at most MAX_REQUIRED_CHECK_PATHS = 50.\n- checkRefs stays a string list.\nThe doc hunk states exactly this. The drift tests fail on pure HEAD (3 cases) and pass with the hunk (17/17), so a regression of statement 3 is caught. No fixes and no new defects.\nLanding risk checked: get_commit_scope lists docs/MCP_SERVER.md as asserted with no peer contest, and declare_files was recorded.",
+      "startedAt": "2026-10-30T04:02:44.276Z",
+      "completedAt": "2026-10-30T04:03:02.778Z"
     }
   ],
   "planRevision": 1,
@@ -87,8 +79,8 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Statement 3 (submit_plan requiredChecks / nine-field) is not at HEAD, so two DoD items fail on committed bytes. Code and tests are fine; docs/MCP_SERVER.md never landed.\n\nEvidence:\n- Completion 2fb7264 carries 6 paths (schema.ts, test, both launchers, 2 task JSONs), not docs/MCP_SERVER.md. Your TASK_COMMIT_RECORDED event lists it as `contested` with task-915d7e84.\n- `git show HEAD:docs/MCP_SERVER.md` still says \"canonical eight-field object\" and lacks requiredChecks in the submit_plan block.\n- Pure `git archive HEAD` + node_modules, env -i: `vitest run src/util/executionContractDocs.test.ts` = 3 failed / 14 passed (MCP_SERVER.md stale-statement, EXECUTION_CONTRACT_FIELDS properties, requiredChecks wording). HEAD's daemon suite is red and peer QA gates will hit the same 3.\n- With the working-tree docs overlaid: 17/17 green.\n\nPasses (HEAD + docs hunks): bash -n 0; powershell.exe ParseFile 0; parity PASS; prompt-cache-launcher 28 pass/0 fail/1 skip; tsc 0; daemon 190 files, 5320 passed/16 skipped; proxy 176 passed; lint OK. schema.ts and launcher hunks are comment-only; statements 1 and 2 are correct.\n\nContention is gone: task-915d7e84 is DONE and its docs are in b06e425. `git diff HEAD -- docs/MCP_SERVER.md` is exactly +7/-3 and I measured all of it as this row's. I did not self-land or approve: the epic rail says no Git writes outside wrappers, and approving would leave a red HEAD.\n\nTo pass: no new edits. Confirm `git diff HEAD --numstat -- docs/MCP_SERVER.md` is still `7 3`, then call complete_task again so the wrapper stages the declared, now-uncontested path. If it is held as contested again, post the contesting task id in the task channel. Afterwards `git show HEAD:docs/MCP_SERVER.md | grep -c nine-field` should be 1 and the docs test 17/17 on a pure HEAD archive.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -108,22 +100,23 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T10:43:25.554Z",
-  "updatedAt": "2026-10-30T03:44:15.483Z",
+  "updatedAt": "2026-10-30T04:04:08.279Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T16:07:37.010Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-1520cc31",
-    "worker-b5749787",
+    "worker-093a65d0",
     "qa-952969be"
   ],
-  "tier": "standard",
-  "effort": "high",
-  "model": "claude-sonnet-5-5",
-  "codexModel": "gpt-6.1-sol",
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
     "step-2",
@@ -131,7 +124,18 @@
     "step-4",
     "step-5"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "The three stale statements match the code at HEAD",
+      "rejectedAt": "2026-10-30T03:50:16.199Z",
+      "rejectedBy": "qa-952969be"
+    },
+    {
+      "item": "F12b drift test (src/util/executionContractDocs.test.ts) and parity-check.sh stay green",
+      "rejectedAt": "2026-10-30T03:50:16.199Z",
+      "rejectedBy": "qa-952969be"
+    }
+  ],
   "planSubmittedAt": "2026-10-26T16:09:53.754Z",
   "planningNotes": {
     "approachesConsidered": "Comment/reference correction only, plus regression guards in the existing F12b drift test. No runtime/wire/schema shape changes. F12 completion is landed/merged and supplies the code, although REVIEW keeps the dependency gate. Added c2a900aa dependency serializes these wrapper/docs edits behind the previously planned wrapper chain; do not edit before claim eligibility.",
@@ -147,24 +151,22 @@
   },
   "planApprovedAt": "2026-10-26T16:09:53.849Z",
   "workStartedAt": "2026-10-30T03:41:12.423Z",
-  "reviewStartedAt": "2026-10-30T03:43:47.761Z",
+  "reviewStartedAt": "2026-10-30T04:04:08.277Z",
   "verification": {
-    "command": "Linux snapshot (git archive HEAD + 5 owned files cmp-equal), env -i: bash -n scripts/moe-agent.sh && powershell.exe ParseFile moe-agent.ps1 && bash scripts/tests/parity-check.sh && node --test scripts/tests/prompt-cache-launcher.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test) && (cd packages/moe-proxy && npm test) && npm run lint",
+    "command": "Snapshot HEAD f49c8fc + 5 cmp-equal owned files, env -i: bash -n moe-agent.sh && powershell.exe ParseFile moe-agent.ps1 (D: twin) && parity-check.sh && node --test prompt-cache-launcher.test.mjs && (daemon: tsc --noEmit && npm test) && (proxy: npm test) && npm run lint",
     "exitCode": 0,
-    "outputTail": "bash -n 0; psparse 0; PASS parity-check.sh; prompt-cache-launcher pass 28 fail 0 skipped 1; tsc 0; daemon Test Files 190 passed, Tests 5320 passed | 16 skipped; proxy Test Files 5 passed, Tests 176 passed; lint OK (worker.md 29/40)",
-    "reportedAt": "2026-10-30T03:43:47.761Z",
+    "outputTail": "bash -n 0\npsparse errors=0 tokens=52231\nPASS parity-check.sh\n# tests 29 # pass 28 # fail 0 # skipped 1\ntsc 0\n Test Files  190 passed (190)\n      Tests  5320 passed | 16 skipped (5336)\n Test Files  5 passed (5)\n      Tests  176 passed (176)\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 29 lines (max 40)\nOK: docs/roles/qa.md has 32 lines (max 40)\nGATE EXIT=0",
+    "reportedAt": "2026-10-30T04:04:08.277Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "packages/moe-daemon/src/util/executionContractDocs.test.ts",
-    "packages/moe-daemon/src/types/schema.ts",
     "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/types/schema.ts",
     "scripts/moe-agent.sh",
-    "scripts/moe-agent.ps1",
-    ".moe/tasks/task-bc8410afe7144ddda804b60af000864d.json",
-    ".moe/tasks/task-edda38a1b19d41fa8bc09d424edee81d.json"
+    "scripts/moe-agent.ps1"
   ],
-  "completionSummary": "Fixed the three stale statements, with drift tests. 5 files: schema.ts comment, MCP_SERVER.md, both launchers (comment-only), executionContractDocs.test.ts.\n1) schema.ts approvedPlanRevision comment: absence is a historical unstamped or relaxed set_task_status approval; a current human approval needs expectedPlanRevision and omission is INVALID_INPUT.\n2) moe-agent.sh/.ps1, 3 comment sites each: sessionId is stamped on get_context/start_step/complete_step/complete_task, the attempt pair only on the last three (CQ-F09/F12a).\n3) MCP_SERVER.md submit_plan: added the ninth field requiredChecks (ProtectedCheckDefinition objects, at most 20, separate from the 50-item string lists); \"eight-field\" is now \"nine-field\".\nTests (RED first, 6 failing, then GREEN): the submit_plan param block's properties equal EXECUTION_CONTRACT_FIELDS; requiredChecks and nine-field wording; bounded comment windows for schema.ts and both launchers; a missing anchor throws.\nOPERATOR NOTE: landing wrapper comment edits can trigger the normal fleet hot reload; nothing was restarted.\nGate (Linux snapshot, HEAD + 5 cmp-equal files, env -i): tsc 0, daemon 190 files 5320 passed/16 skipped, proxy 176 passed, parity PASS, prompt-cache-launcher 28 pass/1 skipped, lint OK, native powershell.exe ParseFile exit 0.",
+  "completionSummary": "Round 2 fixes QA's landing-only reject. No new edits.\n- docs/MCP_SERVER.md is the only unlanded owned path. `git diff HEAD --numstat` = 7 3, the hunk QA measured: the requiredChecks listing and \"eight-field\" changed to \"nine-field\".\n- The other 4 owned files are at HEAD (2fb7264) and cmp-equal to the worktree. The launchers do not change this round, so this round triggers no wrapper hot reload.\nLanding:\n- The former contestant task-915d7e84 is DONE.\n- Live get_commit_scope lists docs/MCP_SERVER.md under asserted, with no peerDeclared entry. The WORKING CQ-V/C11a/M06 rows that plan the path wait on this task, so getCommitScope does not count them as peers.\n- declare_files recorded for the path.\n- After landing, expect `git show HEAD:docs/MCP_SERVER.md | grep -c nine-field` to equal 1.\nRED/GREEN on a pure HEAD f49c8fc archive with native node_modules under env -i: executionContractDocs.test.ts fails 3 of 17, the same 3 cases QA named. With only the docs hunk overlaid: 17/17.\nFresh full gate: EXIT 0 (see verification).\nStatement 3 traced to state/validators.ts:\n- MAX_REQUIRED_CHECKS = 20;\n- id and command required;\n- configs/scripts/assertionRoots optional, each at most MAX_REQUIRED_CHECK_PATHS = 50;\n- checkRefs stays a string list.\nGate env notes:\n- ParseFile cannot open a \\\\wsl.localhost path, so the PS segment parsed the cmp-equal D: twin.\n- The proxy npm ci left HEAD's lock unchanged, but npm skipped the optional @rolldown/binding-linux-x64-gnu. I added 1.2.15 via npm pack; its integrity matches the lock.\nHandoff: mem task-task-bc8410afe7144ddda804b60af000864d-handoff and gotcha-gate-snapshot-psparse-and-proxy-rolldown.",
   "commits": [
     {
       "sha": "2fb72648e6983aa31dffc854332c0c573c60d3ed",
@@ -195,9 +197,59 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-b5749787@2026-10-30T03:40:49Z",
-    "at": "2026-10-30T03:44:15.483Z"
-  }
+    "outcome": "refused",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
+    "sessionId": "qa-952969be@2026-10-30T03:47:18Z",
+    "at": "2026-10-30T03:50:41.512Z"
+  },
+  "reviewCompletedAt": "2026-10-30T03:50:16.199Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "The three stale statements match the code at HEAD",
+      "F12b drift test (src/util/executionContractDocs.test.ts) and parity-check.sh stay green"
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "file": "docs/MCP_SERVER.md",
+        "line": 324,
+        "description": "The requiredChecks listing and eight-field to nine-field wording exist only as dirty working-tree hunks (+7/-3), not in completion commit 2fb7264 (path held as contested with task-915d7e84, now DONE). Statement 3 is not fixed at HEAD. Get this path landed, e.g. re-run complete_task so the wrapper stages it."
+      },
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/util/executionContractDocs.test.ts",
+        "line": 120,
+        "description": "On a pure HEAD archive 3 of 17 cases fail: 'MCP_SERVER.md' stale-statement ('canonical eight-field object'), 'documents exactly the EXECUTION_CONTRACT_FIELDS properties', 'documents requiredChecks as at most 20 definition objects'. The tests are correct (17/17 with the doc present); they are red only because the doc they pin is uncommitted."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Statement 3 (submit_plan requiredChecks / nine-field) is not at HEAD, so two DoD items fail on committed bytes. Code and tests are fine; docs/MCP_SERVER.md never landed.\n\nEvidence:\n- Completion 2fb7264 carries 6 paths (schema.ts, test, both launchers, 2 task JSONs), not docs/MCP_SERVER.md. Your TASK_COMMIT_RECORDED event lists it as `contested` with task-915d7e84.\n- `git show HEAD:docs/MCP_SERVER.md` still says \"canonical eight-field object\" and lacks requiredChecks in the submit_plan block.\n- Pure `git archive HEAD` + node_modules, env -i: `vitest run src/util/executionContractDocs.test.ts` = 3 failed / 14 passed (MCP_SERVER.md stale-statement, EXECUTION_CONTRACT_FIELDS properties, requiredChecks wording). HEAD's daemon suite is red and peer QA gates will hit the same 3.\n- With the working-tree docs overlaid: 17/17 green.\n\nPasses (HEAD + docs hunks): bash -n 0; powershell.exe ParseFile 0; parity PASS; prompt-cache-launcher 28 pass/0 fail/1 skip; tsc 0; daemon 190 files, 5320 passed/16 skipped; proxy 176 passed; lint OK. schema.ts and launcher hunks are comment-only; statements 1 and 2 are correct.\n\nContention is gone: task-915d7e84 is DONE and its docs are in b06e425. `git diff HEAD -- docs/MCP_SERVER.md` is exactly +7/-3 and I measured all of it as this row's. I did not self-land or approve: the epic rail says no Git writes outside wrappers, and approving would leave a red HEAD.\n\nTo pass: no new edits. Confirm `git diff HEAD --numstat -- docs/MCP_SERVER.md` is still `7 3`, then call complete_task again so the wrapper stages the declared, now-uncontested path. If it is held as contested again, post the contesting task id in the task channel. Afterwards `git show HEAD:docs/MCP_SERVER.md | grep -c nine-field` should be 1 and the docs test 17/17 on a pure HEAD archive.",
+      "rejectedAt": "2026-10-30T03:50:16.199Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "The three stale statements match the code at HEAD",
+        "F12b drift test (src/util/executionContractDocs.test.ts) and parity-check.sh stay green"
+      ],
+      "issues": [
+        {
+          "type": "missing_feature",
+          "file": "docs/MCP_SERVER.md",
+          "line": 324,
+          "description": "The requiredChecks listing and eight-field to nine-field wording exist only as dirty working-tree hunks (+7/-3), not in completion commit 2fb7264 (path held as contested with task-915d7e84, now DONE). Statement 3 is not fixed at HEAD. Get this path landed, e.g. re-run complete_task so the wrapper stages it."
+        },
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/util/executionContractDocs.test.ts",
+          "line": 120,
+          "description": "On a pure HEAD archive 3 of 17 cases fail: 'MCP_SERVER.md' stale-statement ('canonical eight-field object'), 'documents exactly the EXECUTION_CONTRACT_FIELDS properties', 'documents requiredChecks as at most 20 definition objects'. The tests are correct (17/17 with the doc present); they are red only because the doc they pin is uncommitted."
+        }
+      ]
+    }
+  ],
+  "declaredFiles": [
+    "docs/MCP_SERVER.md"
+  ]
 }
