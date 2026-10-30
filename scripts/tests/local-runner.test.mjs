@@ -4358,15 +4358,18 @@ test('AI3 a reinstall replaces an older binary by rename, never in place, and fo
 test('AI4 a malformed, mismatched or partial stream exits 65 with no frame and installs nothing', { skip: NOT_POSIX }, t => {
   const claude = Buffer.from('claude!');
   const codex = Buffer.from('codex');
+  const bit = Buffer.from('c');
   const data = bytes => ({ kind: 'data', data: Buffer.from(bytes).toString('base64') });
   const C = agentOf('claude', claude);
   const X = data(claude);
   const one = (header, ...frames) => [header, ...(frames.length ? frames : [X]), AGENTS_END];
   const both = [C, X, agentOf('codex', codex), data(codex), AGENTS_END];
-  for (const [label, frames] of [
+  // A row's third element is harness setup; each size row is a whole, hash-correct binary, so only the size rule refuses it.
+  for (const [label, frames, setup] of [
     ['an unknown cli', one({ ...C, cli: 'gemini' })], ...[['claude'], 7, null].map(cli => [`cli ${JSON.stringify(cli)}`, one({ ...C, cli })]),
     ['a duplicate cli', [C, X, C, X, AGENTS_END]],
-    ...[0, MAX_AGENT_BINARY_BYTES + 1, true].map(size => [`size ${size}`, one({ ...C, size })]),
+    ['size 0', [agentOf('claude', Buffer.alloc(0)), AGENTS_END]], ['size true', one(agentOf('claude', bit, { size: true }), data(bit))],
+    ['a size above the cap', one(C), `m.MAX_AGENT_BYTES = ${claude.length - 1}`],
     ...[C.sha256.toUpperCase(), C.sha256.slice(1), 7].map(sha256 => [`sha256 ${sha256}`, one({ ...C, sha256 })]),
     ['a wrong hash', one({ ...C, sha256: sha(Buffer.from('claude?')) })],
     ['short data', one(C, data('cla'))], ['a chunk past the size', one(C, data('cla'), data('ude!x'))],
@@ -4378,13 +4381,17 @@ test('AI4 a malformed, mismatched or partial stream exits 65 with no frame and i
     ['a partial frame after end', [...one(C), encodeFrame(AGENTS_END).subarray(0, 5)]],
     ['a valid claude then a bad codex', [C, X, agentOf('codex', codex, { sha256: sha(claude) }), data(codex), AGENTS_END]],
   ]) {
-    const run = agentsIn(seededAgents(t), framesOf(frames));
+    const run = agentsIn(seededAgents(t), framesOf(frames), setup);
     assert.deepEqual([run.status, run.stdout.length, agentsState(run.agents), modeOf(run.agents)], [65, 0, OLD_AGENTS, 0o755], `${label} ${run.stderr}`);
   }
-  // Each row breaks exactly one rule: the base streams install, in either order.
-  for (const frames of [both, [...both.slice(2, 4), ...both.slice(0, 2), AGENTS_END]]) {
-    const run = agentsIn(seededAgents(t), framesOf(frames));
-    assert.deepEqual([run.status, agentsState(run.agents)], [0, [['claude', claude, 0o555], ['codex', codex, 0o555]]], String(run.stderr));
+  // Each row breaks exactly one rule: the base streams install, in either order, and so does a size at either bound.
+  const pair = [['claude', claude, 0o555], ['codex', codex, 0o555]];
+  for (const [label, frames, setup, installed] of [['claude first', both, '', pair],
+    ['codex first', [...both.slice(2, 4), ...both.slice(0, 2), AGENTS_END], '', pair],
+    ['size 1', one(agentOf('claude', bit), data(bit)), '', [['claude', bit, 0o555]]],
+    ['size == cap', one(C), `m.MAX_AGENT_BYTES = ${claude.length}`, [['claude', claude, 0o555]]]]) {
+    const run = agentsIn(seededAgents(t), framesOf(frames), setup);
+    assert.deepEqual([run.status, agentsState(run.agents)], [0, installed], `${label} ${run.stderr}`);
   }
 });
 
