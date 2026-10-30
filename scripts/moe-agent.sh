@@ -1570,7 +1570,8 @@ if [ "$NO_START_DAEMON" = false ]; then
                 exit 1
             fi
             # Candidate hosts: explicit override, loopback (mirrored networking),
-            # then the WSL default gateway (NAT mode, daemon bound to 0.0.0.0).
+            # then the WSL default gateway (NAT mode: the Windows WSL adapter
+            # address, which a daemon started with --host wsl also listens on).
             DAEMON_HOST_CANDIDATES=""
             [ -n "${MOE_DAEMON_HOST:-}" ] && DAEMON_HOST_CANDIDATES="$MOE_DAEMON_HOST"
             DAEMON_HOST_CANDIDATES="$DAEMON_HOST_CANDIDATES 127.0.0.1"
@@ -1594,7 +1595,7 @@ if [ "$NO_START_DAEMON" = false ]; then
             if [ "$RUNNING" = false ]; then
                 echo -e "${RED}[ERROR]${NC} daemon.json points at a Windows-side daemon ($DAEMON_PROJECT, port $DAEMON_PORT) that is not reachable from here (tried:$DAEMON_HOST_CANDIDATES)."
                 echo -e "${YELLOW}Fix options:${NC}"
-                echo "  - Restart the daemon listening beyond loopback: --host 0.0.0.0 (or MOE_BIND_HOST=0.0.0.0)"
+                echo "  - Restart the daemon listening on loopback plus the WSL adapter: --host wsl (or MOE_BIND_HOST=wsl)"
                 echo "  - Allow inbound TCP $DAEMON_PORT from the WSL subnet in Windows Defender Firewall"
                 echo "  - Or set MOE_DAEMON_HOST to the address the daemon is reachable at"
                 echo "Refusing to touch daemon.json or start a second daemon over the same .moe/."

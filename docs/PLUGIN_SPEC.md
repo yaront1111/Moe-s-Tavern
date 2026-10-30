@@ -73,7 +73,7 @@ Bundled resources: daemon `dist/` + `node_modules/`, proxy, `scripts/`, role doc
 
 - Prefers the bundled daemon (`daemon/index.js`); `MOE_DAEMON_COMMAND` / `MOE_NODE_COMMAND` override resolution.
 - On Windows, also checks installer shims under `Program Files\Moe\moe-daemon`.
-- WSL agent mode: the Agents menu toggle spawns the daemon with `--host 0.0.0.0` and launches agents via `moe-agent.sh` with `/mnt/` paths.
+- WSL agent mode: the Agents menu toggle spawns the daemon with `--host wsl` (loopback plus the WSL adapter, never every interface) and launches agents via `moe-agent.sh` with `/mnt/` paths.
 
 ---
 

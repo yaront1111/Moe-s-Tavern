@@ -25,7 +25,7 @@ This document covers all configuration options for Moe's Tavern.
 
 **WebSocket Origin rule.** The daemon refuses any WebSocket upgrade that carries an `Origin` header (`Sec-WebSocket-Origin` too), on every path (`/ws`, `/mcp`, `/runner`), with HTTP 403 before any message is processed. That includes the values `null` and empty. Browsers always send `Origin` on a WebSocket upgrade and apply no CORS to it. No Moe client sends one: the IDE plugins, moe-proxy, the Claude plugin hook and the local runner. The allowed set is empty, and it has no setting or environment knob. `/runner` still requires its key on top of this rule. See `docs/TROUBLESHOOTING.md`, **WebSocket upgrade refused with HTTP 403**.
 
-`--host wsl` selects the same mode and takes precedence over `MOE_BIND_HOST`. With no WSL adapter (mirrored networking or a non-Windows host), it binds only loopback. JetBrains' **Run Agents in WSL** mode uses `wsl` once the corresponding launcher update is installed; older launchers use `0.0.0.0`. An explicit `--host 0.0.0.0` still listens on every IPv4 interface and is **not recommended**.
+`--host wsl` selects the same mode as `MOE_BIND_HOST=wsl`; any `--host` value takes precedence over `MOE_BIND_HOST`. With no WSL adapter (mirrored networking or a non-Windows host), it binds only loopback. JetBrains' **Run Agents in WSL** mode passes `--host wsl`; older plugin builds passed `0.0.0.0`, and a daemon they started keeps that bind, across supervised crash restarts too, until the updated plugin restarts it. An explicit `--host 0.0.0.0` still listens on every IPv4 interface and is **not recommended**.
 
 ### Proxy Configuration
 

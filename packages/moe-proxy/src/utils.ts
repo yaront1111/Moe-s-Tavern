@@ -68,7 +68,7 @@ function isSameProjectPath(a: string, b: string): boolean {
 
 /**
  * Host the proxy connects to. Defaults to loopback; MOE_DAEMON_HOST overrides
- * for cross-boundary setups (WSL agent -> Windows daemon bound to 0.0.0.0).
+ * for cross-boundary setups (WSL agent -> Windows daemon started with --host wsl).
  */
 export function getDaemonHost(): string {
   return process.env.MOE_DAEMON_HOST || '127.0.0.1';
