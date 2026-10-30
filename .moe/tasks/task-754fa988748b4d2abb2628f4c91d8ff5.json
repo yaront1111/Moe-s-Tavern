@@ -87,7 +87,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -115,19 +115,22 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:13:47.066Z",
-  "updatedAt": "2026-10-30T19:11:50.790Z",
+  "updatedAt": "2026-10-30T19:21:06.380Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:57:26.256Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T19:21:06.380Z",
+    "wallClockMs": 87820124
   },
   "contextFetchedBy": [
     "governor-693b7073",
     "worker-5ebbf433",
-    "qa-ba3f4f35"
+    "qa-ba3f4f35",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -246,11 +249,32 @@
       "treeId": "5c0d7c1a5b398bc4ad5229801ce4c328405f880f",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "864d787c822eba8f88d9a4ca5fb1b143576a5bcb",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T19:02:55Z",
+      "paths": [
+        ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+        ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+        ".moe/tasks/task-f9789178469f499ca3268fc4b392bd0c.json",
+        "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T19:12:11.242Z",
+      "treeId": "449988174b38f8766b6477d9c858ead620e469df",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
-    "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts"
+    "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
+    ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+    ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+    ".moe/tasks/task-f9789178469f499ca3268fc4b392bd0c.json"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
@@ -260,8 +284,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "completion",
-    "sessionId": "worker-5ebbf433@2026-10-30T18:45:45Z",
-    "at": "2026-10-30T18:56:50.821Z"
+    "sessionId": "worker-5ebbf433@2026-10-30T19:02:55Z",
+    "at": "2026-10-30T19:12:11.242Z"
   },
   "reviewStartedAt": "2026-10-30T19:11:42.124Z",
   "verification": {
@@ -272,7 +296,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "CQ-V12a reopen 1: fixed the single QA issue, a portable-path assertion. No production change.\n\nFIX, in src/__acceptance__/deliveryBypass.acceptance.test.ts (+2/-1):\n- F3 now expects ['dispatches', path.join('dispatches', `${d.id}.json`)]. It used to hard-code 'dispatches/<id>.json', but files() returns native fs.readdirSync({recursive:true}) entries.\n- A 1-line JSDoc on files() records that its entries are native.\n- Exact membership, the INVALID_INPUT codeName and message, and refusedApproval (DELIVERY_EVIDENCE_MISSING with [required-check:npm run gate]) are unchanged. All 22 cases are kept, none skipped.\n- No other disk-path literals remain. The remaining '/' strings are Git refs and wire values, which are POSIX by contract.\n- mcpCall.ts and requiredChecks.delivery.test.ts are unchanged since 273aa770.\n\nRED to GREEN on native Windows (Node v24.16.0, MOE_* cleared, my own D:\\ archives plus native npm ci; the shared node_modules were not touched):\n- HEAD 975842e6, unfixed: 5 failed | 17 passed, all five F3 rows receiving 'dispatches\\\\dispatch-1.json', which reproduces QA;\n- fixed: 22/22;\n- re-run at HEAD ede0f012 plus the fix: 22/22, exit 0. Log: D:\\moe-v12a-fix2.WD6urz\\native-test.log.\n\nLINUX GATE, fresh archive of HEAD ede0f012 overlaying only this file (all 3 owned files cmp ok; lock identical; env -i, NO_COLOR=1, node v24.21.0, MOE_* count 0):\n- npm test EXIT 0: 213 files, 6214 passed | 20 skipped;\n- npx tsc --noEmit: 0. A scratch tsconfig over the 3 task files: 0, at 975842e6.\n- The earlier run at 975842e6 also exited 0 (6204 passed), the same count as QA's run. Peer WT-03b (ede0f012) landed WebSocketServer and workerLifecycle changes mid-gate, hence this re-run.\n\nMUTANT: with runnerToolCall's unknown-key throw disabled, the run is still KILLED on exactly the five F3 rows, at the INVALID_INPUT assertion (17 others passed, so it compiled). Restored, cmp ok. QA's earlier 9+2 mutant kills cover the unchanged cases.\n\nSIZE: owned files from e71b0971~ to the worktree,",
-  "reviewCompletedAt": "2026-10-30T19:02:44.884Z",
+  "reviewCompletedAt": "2026-10-30T19:21:06.380Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Forgery: a /mcp record_check_run claiming runner-observed, a dispatch or observation sent without the /runner context, and observation args carrying runnerId/source/candidateId each leave a strict task's qa_approve refused, with exact codeNames and tokens asserted, proven by src/__acceptance__/deliveryBypass.acceptance.test.ts."
@@ -303,5 +327,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T19:21:06.380Z",
+  "reviewSummary": "CQ-V12a reopen 1 verified.\nScope: completion 864d787c is on moe/work-2026-10-24, and HEAD 8237c85e has the same daemon tree. Round diff +2/-1: F3 expects path.join('dispatches', id.json), plus a files() JSDoc. Assertions unchanged; no case skipped. Owned net from e71b0971~: +388/-6 = 382 ≤ 400. Commits carry only the 3 owned test files plus board JSON: no production change, no hand .moe edit.\nLinux gate (fresh archive of 864d787c, owned files cmp-ok, lock identical, npm ci, env -i, node v24.21.0, MOE_* 0):\n- `cd packages/moe-daemon && npm test` EXIT 0: 214 files, 6239 passed | 20 skipped. deliveryBypass 22/22, requiredChecks.delivery 19/19.\n- `npx tsc --noEmit` EXIT 0.\nWindows native, the rejected defect (fresh D: archive, npm ci, Node v24.16.0, MOE_* cleared): `npx vitest run src/__acceptance__/deliveryBypass.acceptance.test.ts` EXIT 0, 22/22.\nMutants (each restored, cmp-ok):\n- unknown-key throw disabled: KILLED, exactly the 5 F3 rows at :216;\n- declaredChecks catch returning []: corrupt-entry test KILLED (1 failed);\n- protectedDrift without candidate.has: both duplicate rows KILLED (2 failed).\nPrior QA's 9 acceptance kills still hold: test bytes and target modules unchanged since 273aa770.\nDoD 1-7 mapped: F1-F3, S1-S3, M1 x5 plus M2, T1 plus control, T2 restart duplicate, W1 /runner 1008, CQ-V01 x2, gate 0. No Tool( or .handler( hits; P0 pins production readiness. Complexity pass on the round diff: no findings. Docs stay V12 scope.\nLogs: /tmp/moe-v12a-qa2.ESfXaj, D:\\moe-v12a-qa2w.pE3G0M.",
+  "requiredCheckAtDone": null
 }
