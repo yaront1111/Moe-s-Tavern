@@ -93,7 +93,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -113,16 +113,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:17:33.972Z",
-  "updatedAt": "2026-10-30T07:39:57.767Z",
+  "updatedAt": "2026-10-30T08:18:07.053Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:27:13.643Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T08:18:07.053Z",
+    "wallClockMs": 3053410
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-262588d0"
+    "worker-262588d0",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -215,5 +218,9 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "worker-262588d0@2026-10-30T07:31:22Z",
     "at": "2026-10-30T07:39:57.767Z"
-  }
+  },
+  "completedAt": "2026-10-30T08:18:07.053Z",
+  "reviewCompletedAt": "2026-10-30T08:18:07.053Z",
+  "reviewSummary": "QA verified memory-only task (no tracked bytes; commits[] empty and lastCommitOutcome=nothing is expected: .serena is untracked, and peer commit 4d047c70 now gitignores /.serena/). Re-ran task.verification: exit 0, `git log --oneline -- .serena` empty (also with --all), listed=494 chars=20466 archived_handoffs=309 bad=[] (worker's 461/18979 plus peer memory growth; before was 784/35423, so the listing is clearly smaller). DoD1: independent scan of .moe/tasks shows all 309 archived handoffs are DONE/ARCHIVED, and the 55 top-level handoffs of unfinished tasks (49 WORKING, 5 REVIEW, 1 BLOCKED) are untouched. 329 files in _archive/ = 309 handoffs + 20 merged-away gotcha/decision sources; no name exists in both places. 308 of 309 archived handoffs hash-match the step-1 baseline; the exception, f943b687, was one of the 2 additional handoffs, written by a peer at 07:35:55Z after its task went DONE, before the move. DoD2: project.yml differs from the backup only by `ignored_memory_patterns: []` -> `- _archive/.*` (CRLF kept), and MemoryManager lists no _archive/ names. DoD3: for all 12 merges, every non-blank line of all 20 archived sources is present in the kept file (0 missing; archived copies are byte-identical to the backed-up originals). No live memory still references a merged-away name, apart from this task's own ledger handoff. daemon/ and jetbrains/ mtimes are unchanged. Complementary groups were kept separate with a reason, in kept-separate.txt. No .gitignore, settings or .moe edits by this task. Non-blocking notes: (1) 14 handoffs of tasks that reached DONE after the worker's board snapshot (e.g. 4d67e805, 66e8d7d1, 7e39a63f, fd653cfb) still sit at top level; a later sweep can archive them. (2) The gitignore question (msg-2c79a164) is mostly overtaken by peer commit 4d047c70; the attribution.exclude half is still the human's call.",
+  "requiredCheckAtDone": null
 }
