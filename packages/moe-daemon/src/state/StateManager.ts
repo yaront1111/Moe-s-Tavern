@@ -64,7 +64,7 @@ import type {
   WorkerStatus
 } from '../types/schema.js';
 import { CURRENT_SCHEMA_VERSION, ACTIVITY_EVENT_TYPES } from '../types/schema.js';
-import { invalidInput } from '../util/errors.js';
+import { invalidInput, notAllowed } from '../util/errors.js';
 import { findRailIndex } from './railChange.js';
 import { generateId } from '../util/ids.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
@@ -1368,9 +1368,9 @@ export class StateManager {
 
   async approveProposal(proposalId: string): Promise<RailProposal> {
     const proposal = this.proposals.get(proposalId);
-    if (!proposal) {
-      throw new Error(`Proposal not found: ${proposalId}`);
-    }
+    if (!proposal) throw new Error(`Proposal not found: ${proposalId}`);
+    if (proposal.status === 'APPROVED') return proposal;
+    if (proposal.status !== 'PENDING') throw notAllowed('resolve proposal', 'proposal already resolved');
 
     await this.applyRailChange(proposal);
 
@@ -1465,9 +1465,9 @@ export class StateManager {
 
   async rejectProposal(proposalId: string): Promise<RailProposal> {
     const proposal = this.proposals.get(proposalId);
-    if (!proposal) {
-      throw new Error(`Proposal not found: ${proposalId}`);
-    }
+    if (!proposal) throw new Error(`Proposal not found: ${proposalId}`);
+    if (proposal.status === 'REJECTED') return proposal;
+    if (proposal.status !== 'PENDING') throw notAllowed('resolve proposal', 'proposal already resolved');
 
     const updated: RailProposal = {
       ...proposal,

@@ -11,7 +11,7 @@ import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
 import * as speedMode from '../tools/submitPlan.js';
 import { decodeClientHello } from './clientCapabilities.js';
-import type { TaskExecutionContract } from '../types/schema.js';
+import type { RailProposal, TaskExecutionContract } from '../types/schema.js';
 
 describe('MoeWebSocketServer Integration', () => {
   let testDir: string;
@@ -172,6 +172,114 @@ describe('MoeWebSocketServer Integration', () => {
 
       return { ws, ready, nextMessage };
     }
+
+    describe('rail-proposal resolution', () => {
+      type Command = 'APPROVE_PROPOSAL' | 'REJECT_PROPOSAL';
+      type Client = ReturnType<typeof connectAndCollect>;
+      type Frame = { type: string; payload?: RailProposal; operation?: Command };
+      let clients: Client[];
+      const conflict = {
+        type: 'ERROR', code: -32003, codeName: 'NOT_ALLOWED',
+        message: '[NOT_ALLOWED] resolve proposal not allowed: proposal already resolved',
+      };
+      beforeEach(() => { clients = []; });
+      afterEach(async () => {
+        for (const client of clients) client.ws.close();
+        await state.flushActivityLog();
+      });
+      async function connect(): Promise<Client> {
+        const client = connectAndCollect();
+        clients.push(client);
+        await client.ready;
+        expect(JSON.parse(await client.nextMessage()).type).toBe('STATE_SNAPSHOT');
+        return client;
+      }
+      async function seed(): Promise<RailProposal> {
+        const proposal: RailProposal = {
+          id: 'proposal-resolution', workerId: 'worker-test', taskId: 'task-1',
+          proposalType: 'ADD_RAIL', targetScope: 'EPIC', currentValue: null,
+          proposedValue: 'Keep resolved decisions stable', reason: 'regression',
+          status: 'PENDING', resolvedAt: null, resolvedBy: null, createdAt: new Date().toISOString(),
+        };
+        return state.createProposal(proposal);
+      }
+      function snapshot(id: string) {
+        const files = ['project.json', 'epics/epic-1.json', 'tasks/task-1.json',
+          `proposals/${id}.json`, 'activity.log'];
+        return {
+          bytes: files.map(file => fs.readFileSync(path.join(moePath, file))),
+          memory: structuredClone({ project: state.project, epic: state.getEpic('epic-1'),
+            task: state.getTask('task-1'), proposal: state.proposals.get(id) }),
+        };
+      }
+      function send(client: Client, type: Command, proposalId: string) {
+        client.ws.send(JSON.stringify({ type, payload: { proposalId } }));
+      }
+
+      it.each((['APPROVED', 'REJECTED'] as const).flatMap(status =>
+        (['replay', 'conflict'] as const).map(decision => ({ status, decision }))))(
+        '$status $decision preserves resolved state at /ws', async ({ status, decision }) => {
+          const proposal = await seed();
+          const resolved = status === 'APPROVED'
+            ? await state.approveProposal(proposal.id) : await state.rejectProposal(proposal.id);
+          const approve = (status === 'APPROVED') === (decision === 'replay');
+          const command: Command = approve ? 'APPROVE_PROPOSAL' : 'REJECT_PROPOSAL';
+          const client = await connect();
+          await state.flushActivityLog();
+          const before = snapshot(proposal.id);
+          const events = vi.fn();
+          const unsubscribe = state.subscribe(events);
+          try {
+            send(client, command, proposal.id);
+            const reply: Frame = JSON.parse(await client.nextMessage());
+            if (decision === 'replay') expect(reply).toEqual({ type: 'PROPOSAL_UPDATED', payload: resolved });
+            else expect(reply).toMatchObject({ ...conflict, operation: command });
+            await state.flushActivityLog();
+            expect(snapshot(proposal.id)).toEqual(before);
+            expect(events).not.toHaveBeenCalled();
+          } finally { unsubscribe(); }
+        },
+      );
+
+      it.each(['APPROVE_PROPOSAL', 'REJECT_PROPOSAL'] as const)(
+        'serializes two clients approving vs %s', async secondCommand => {
+          const proposal = await seed();
+          const pair = await Promise.all([connect(), connect()]);
+          const events: string[] = [];
+          const unsubscribe = state.subscribe(event => events.push(event.type));
+          try {
+            send(pair[0], 'APPROVE_PROPOSAL', proposal.id);
+            send(pair[1], secondCommand, proposal.id);
+            const replies: Frame[] = await Promise.all(pair.map(async client => JSON.parse(await client.nextMessage())));
+            await state.flushActivityLog();
+            const resolved = state.proposals.get(proposal.id)!;
+            expect(resolved).toMatchObject({ resolvedAt: expect.any(String), resolvedBy: 'HUMAN' });
+            const successes = replies.filter(reply => reply.type === 'PROPOSAL_UPDATED');
+            if (secondCommand === 'APPROVE_PROPOSAL') {
+              expect(resolved.status).toBe('APPROVED');
+              expect(successes).toHaveLength(2);
+            } else {
+              expect(['APPROVED', 'REJECTED']).toContain(resolved.status);
+              expect(successes).toHaveLength(1);
+              expect(replies.filter(reply => reply.type === 'ERROR')).toEqual([expect.objectContaining({
+                ...conflict, operation: resolved.status === 'APPROVED' ? 'REJECT_PROPOSAL' : 'APPROVE_PROPOSAL',
+              })]);
+            }
+            for (const reply of successes) expect(reply.payload).toEqual(resolved);
+            expect(state.getEpic('epic-1')!.epicRails)
+              .toEqual(resolved.status === 'APPROVED' ? [proposal.proposedValue] : []);
+            expect(state.project!.globalRails.customRules).toEqual([]);
+            expect(state.getTask('task-1')!.taskRails).toEqual([]);
+            expect(state.getActivityLog(100).filter(entry =>
+              entry.event === 'PROPOSAL_APPROVED' || entry.event === 'PROPOSAL_REJECTED'))
+              .toEqual([expect.objectContaining({ event: `PROPOSAL_${resolved.status}` })]);
+            expect(events.filter(type => type === 'PROPOSAL_UPDATED')).toEqual(['PROPOSAL_UPDATED']);
+            expect(JSON.parse(fs.readFileSync(path.join(moePath, 'proposals', `${proposal.id}.json`), 'utf8')))
+              .toEqual(resolved);
+          } finally { unsubscribe(); }
+        },
+      );
+    });
 
     describe('capability negotiation v1', () => {
       afterEach(() => { vi.restoreAllMocks(); state.clearEmitter(); });

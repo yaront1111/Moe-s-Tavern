@@ -131,6 +131,13 @@ Plugin → Server commands:
 - `APPROVE_PROPOSAL` / `REJECT_PROPOSAL`, `APPROVE_DECISION` / `REJECT_DECISION`
 - `UPDATE_SETTINGS`
 
+Rail proposals transition only from `PENDING`. Repeating the same approval or rejection
+returns the unchanged `PROPOSAL_UPDATED` acknowledgment without new persistence,
+activity entries or state events. The opposite decision on a resolved proposal returns
+`ERROR` with code `-32003`, codeName `NOT_ALLOWED` and the stable message
+`[NOT_ALLOWED] resolve proposal not allowed: proposal already resolved`, leaving
+the rails and proposal record untouched. These rules concern rail proposals, not chat decisions.
+
 ### CLI ↔ Proxy ↔ Daemon (MCP)
 
 MCP JSON-RPC 2.0 over stdio (proxy) → WebSocket `/mcp` (daemon).

@@ -787,6 +787,99 @@ describe('StateManager', () => {
       await stateManager.load();
     });
 
+    const scopes = ['GLOBAL', 'EPIC', 'TASK'] as const;
+    const conflict = {
+      code: -32003, codeName: 'NOT_ALLOWED',
+      message: '[NOT_ALLOWED] resolve proposal not allowed: proposal already resolved',
+    };
+    const railLists = () => [
+      stateManager.project!.globalRails.customRules,
+      stateManager.getEpic('epic-test123')!.epicRails,
+      stateManager.getTask('task-test123')!.taskRails,
+    ];
+    function resolutionSnapshot(id: string) {
+      const files = ['project.json', 'epics/epic-test123.json', 'tasks/task-test123.json',
+        `proposals/${id}.json`, 'activity.log'];
+      return {
+        bytes: files.map(file => fs.readFileSync(path.join(moePath, file))),
+        memory: structuredClone({ rails: railLists(), proposal: stateManager.proposals.get(id) }),
+      };
+    }
+    async function expectNoResolutionEffects(id: string, operation: () => Promise<unknown>) {
+      await stateManager.flushActivityLog();
+      const before = resolutionSnapshot(id);
+      const events = vi.fn();
+      const unsubscribe = stateManager.subscribe(events);
+      const writes = vi.spyOn(stateManager, 'writeEntity');
+      const activity = vi.spyOn(stateManager, 'appendActivity');
+      try {
+        await operation();
+        await stateManager.flushActivityLog();
+        expect(resolutionSnapshot(id)).toEqual(before);
+        expect(events).not.toHaveBeenCalled();
+        expect(writes).not.toHaveBeenCalled();
+        expect(activity).not.toHaveBeenCalled();
+      } finally {
+        unsubscribe();
+        writes.mockRestore();
+        activity.mockRestore();
+      }
+    }
+
+    describe.each(scopes)('%s terminal decisions', targetScope => {
+      it.each((['APPROVED', 'REJECTED'] as const).flatMap(status =>
+        (['replay', 'conflict'] as const).map(decision => ({ status, decision }))))(
+        '$status $decision has no resolution side effects', async ({ status, decision }) => {
+          const proposal = await stateManager.createProposal(createTestProposal({ targetScope }));
+          const decide = status === 'APPROVED' ? 'approveProposal' : 'rejectProposal';
+          const opposite = status === 'APPROVED' ? 'rejectProposal' : 'approveProposal';
+          const resolved = await stateManager[decide](proposal.id);
+          expect(resolved).toMatchObject({ status, resolvedBy: 'HUMAN', resolvedAt: expect.any(String) });
+          expect(resolved.resolvedAt).not.toBeNull();
+          expect(railLists()).toEqual(scopes.map(scope =>
+            status === 'APPROVED' && scope === targetScope ? [proposal.proposedValue] : []));
+          await stateManager.flushActivityLog();
+          expect(stateManager.getActivityLog(100).filter(entry => entry.event === `PROPOSAL_${status}`))
+            .toHaveLength(1);
+          await expectNoResolutionEffects(proposal.id, async () => {
+            if (decision === 'replay') expect(await stateManager[decide](proposal.id)).toBe(resolved);
+            else await expect(stateManager[opposite](proposal.id)).rejects.toMatchObject(conflict);
+          });
+        },
+      );
+    });
+
+    it.each(scopes.flatMap(targetScope => (['MODIFY_RAIL', 'REMOVE_RAIL'] as const)
+      .map(proposalType => ({ targetScope, proposalType }))))(
+      'replays $targetScope $proposalType after the original rail is gone', async ({ targetScope, proposalType }) => {
+        const original = createTestProposal({ targetScope, proposedValue: 'original' });
+        await stateManager.createProposal(original);
+        await stateManager.approveProposal(original.id);
+        const proposal = await stateManager.createProposal(createTestProposal({
+          id: 'proposal-change', targetScope, proposalType, currentValue: 'original', proposedValue: 'replacement',
+        }));
+        const resolved = await stateManager.approveProposal(proposal.id);
+        expect(railLists()).toEqual(scopes.map(scope =>
+          scope === targetScope && proposalType === 'MODIFY_RAIL' ? ['replacement'] : []));
+        await expectNoResolutionEffects(proposal.id, async () => {
+          expect(await stateManager.approveProposal(proposal.id)).toBe(resolved);
+        });
+      },
+    );
+
+    it.each(['approveProposal', 'rejectProposal'] as const)('%s retains missing-ID errors', async method => {
+      await expect(stateManager[method]('missing')).rejects.toThrow('Proposal not found: missing');
+    });
+
+    it('keeps different pending proposals independent even when their rail text matches', async () => {
+      for (const id of ['proposal-first', 'proposal-second']) {
+        await stateManager.createProposal(createTestProposal({ id }));
+        await stateManager.approveProposal(id);
+      }
+      expect(railLists()[0]).toEqual(Array(2).fill('Always add regression tests'));
+      await stateManager.flushActivityLog();
+    });
+
     it('preserves the complete approved global rail through project reload', async () => {
       const rule = 'Owner-approved constraint. '.repeat(50) +
         'A real product defect still rejects; all safety gates remain unchanged.';

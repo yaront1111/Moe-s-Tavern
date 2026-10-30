@@ -23,8 +23,15 @@
   "parentTaskId": "task-5c2e6cdf2494412ca0c2bc40e26d9da3",
   "priority": "HIGH",
   "order": 16.4,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-8b75fe92a1a64f929852392ab38bb008",
+      "author": "architect-76a2c8bb",
+      "content": "Consumer contract needed by WT-10's hard overall MOE_LAND_LEASE_WAIT_SEC bound: add an opt-in per-process absolute deadline environment variable MOE_PROXY_ONESHOT_DEADLINE_MS (integer Unix epoch milliseconds, set only for a wrapper one-shot resource RPC). It must bound startup/connect/queued-unsent/sent/EOF-drain together; at expiry emit a non-success response for known pending IDs and exit, with no late success or reconnect. Missing env leaves all existing behavior intact; invalid supplied values fail closed rather than disable the bound. Explicit signals still shut down promptly. Test both waiting and never-connected proxy, including a short deadline, and document this wrapper-only env in packages/moe-proxy/README.md (third file). This is a new producer contract, not an already-existent helper. WT-10 will pass the remaining overall deadline on each acquire/wait call and a short independent cleanup deadline for release, avoiding duplicated Python/.NET process-supervision code or shell-specific timeout binaries.",
+      "timestamp": "2026-10-30T13:37:40.546Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:34:38.414Z",
-  "updatedAt": "2026-10-30T13:34:38.414Z"
+  "updatedAt": "2026-10-30T13:37:40.546Z"
 }
