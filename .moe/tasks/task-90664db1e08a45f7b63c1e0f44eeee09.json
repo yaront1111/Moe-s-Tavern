@@ -91,7 +91,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -123,14 +123,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:54:54.318Z",
-  "updatedAt": "2026-10-30T10:15:27.068Z",
+  "updatedAt": "2026-10-30T10:23:27.115Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:58:59.861Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T10:23:27.115Z",
+    "wallClockMs": 8667254
   },
   "contextFetchedBy": [
     "worker-e60b90bd",
@@ -314,7 +316,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "Reopen-1 QA fixes; the 4 owned files only; MoeDaemonSupervisor.kt unchanged.\n(1) F2: handleForeignDaemon no longer calls readDaemonInfo(), which deleted a rewritten daemon.json on a projectPath mismatch before the guard. A private rereadDaemonInfo(file) reads at most MAX_DAEMON_JSON_BYTES+1 bytes; oversize, malformed or absent gives null; it never deletes. The file is deleted only when pid, port and startedAt all still match. Deviation: plan step 4 named readDaemonInfo(), the rejected defect; I followed QA's side-effect-free reread.\n(2) Deadline: probe() is an HTTP/1.0 GET over Socket(Proxy.NO_PROXY).use{} on the caller's thread. One deadline (connect + read) caps the status line, headers and body; each read waits min(readTimeout, time left), with a 1 ms floor. The reply cap is 64 KiB body + 8 KiB head. No threads; the socket closes on every path; Unknown on expiry; a raw socket follows no redirect.\nNew rows (red on the old code or a mutant):\n- header trickle: Unknown in <2 s, and the responder must end (socket closed);\n- the last read waits only the time left (2.2 s; uncapped 3.8 s);\n- the IDE ProxySelector is never consulted;\n- replacements naming another project, or this project's WSL spelling, are kept byte for byte;\n- an oversize daemon.json is neither parsed nor removed.\nThe unreachable-port row now uses a released ServerSocket port, because on JDK 21 a never-started HttpServer still listens after stop(0).\nEvidence (D:/moe-scratch/task-90664db1/worker-e60b90bd):\n- RED: red1.log, red3.log. GREEN: green4.log, green5.log.\n- 10 mutants, 9 killed: raw compare, unconditional delete, Unknown treated as Foreign, connecting kept, readDaemonInfo reread, uncapped read timeout, socket left open, no NO_PROXY, uncapped reread.\n- Survivor: dropping the `leftMs<=0` return. It is near-equivalent, since the 1 ms floor still stops at the deadline. A sub-ms row couldn't kill it on Windows (0.86 s) and was removed.\n- Full gate fresh: 26 suites / 398 tests / 0 failures.\nOut of scop",
-  "reviewCompletedAt": "2026-10-30T09:26:09.148Z",
+  "reviewCompletedAt": "2026-10-30T10:23:27.115Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Under the LEGACY profile, a daemon at the recorded port whose /health projectPath is another project gets no WebSocket client and no seat traffic. A stale daemon.json is removed only while it still names the pid, port and startedAt that were read, and the published status names the other project. Proven by gradle tests."
@@ -357,5 +359,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T10:23:27.115Z",
+  "reviewSummary": "Reviewed git show of checkpoint 52d45cb6, completion 7d3fbec6 and reopen ff5933d9bf0db7bf107a56ca9f0f27ea7bb0a954; 969f12fd is board-only. git branch --contains confirms all on moe/work-2026-10-24. Tested sources/tests match ff5933d9; QA edited no shared sources. Cumulative owned diff +802/-0 LOC (238 runtime, 564 tests), covered by the epic's 651-LOC waiver plus QA-required growth. diff --check clean.\nExact task.verification rerun under jetbrains-gradle:\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\nExit 0, BUILD SUCCESSFUL in 16s. 26 suites/398 tests/0 failures/errors/skips; all XML fresh after Windows start 2026-10-30T10:20:09.8709526Z. Helper 19, foreign-daemon 8, unedited connection 5. Logs/XML/hashes: D:/moe-scratch/task-90664db1/qa-ba3f4f35/reopen-1/. Lease released.\nDoD verified: foreign -> no client/WS or seat traffic, guarded deletion, named status and reconnect; Windows/WSL/UNC equivalents Same; relative/invalid/missing/oversize/unreachable/other-status Unknown. Both rejection fixes pass: side-effect-free bounded reread preserves foreign/WSL replacement bytes and oversize metadata; whole-request socket deadline includes headers/body, closes socket, bypasses proxies, no redirects. Header-trickle 0.520s, final-read budget 2.202s. Static review confirms EDT offload, disposal-after-probe guard, unchanged client body/callbacks. Supervisor unchanged by this task (intervening edits belong to peers). Its existing reader defect is tracked separately in task-6fc0096b; accepted compare/delete window and pre-existing connect race unchanged. No further docs/config/migrations required. Worker mutant logs audited, not claimed as QA reruns. Complexity: lean already; net: -0 lines possible.",
+  "requiredCheckAtDone": null
 }
