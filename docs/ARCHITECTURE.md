@@ -157,6 +157,7 @@ See `docs/MCP_SERVER.md` for tool definitions.
 ├── attempts/  candidates/  checks/       # delivery records (gitignored; see Delivery Path below)
 ├── reviews/  receipts/                   # delivery records (gitignored)
 ├── resources/         # shared-resource leases (gitignored)
+├── pins/              # chat pins, one <channelId>.json each (gitignored: they reference message ids that live only in the gitignored messages/)
 ├── channels/  decisions/
 ├── roles/             # role guides (sha-stamped, auto-upgraded)
 ├── agents/            # Claude Code subagent defs (mirrored to .claude/agents/)
