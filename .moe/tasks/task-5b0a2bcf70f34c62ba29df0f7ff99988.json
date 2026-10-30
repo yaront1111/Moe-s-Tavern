@@ -90,7 +90,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -114,16 +114,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:20:36.992Z",
-  "updatedAt": "2026-10-30T00:26:55.712Z",
+  "updatedAt": "2026-10-30T00:53:50.394Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:23:16.834Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T00:53:50.394Z",
+    "wallClockMs": 9033560
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -251,5 +254,9 @@
     "kind": "completion",
     "sessionId": "worker-fe18a9a9@2026-10-30T00:10:51Z",
     "at": "2026-10-30T00:26:55.712Z"
-  }
+  },
+  "completedAt": "2026-10-30T00:53:50.394Z",
+  "reviewCompletedAt": "2026-10-30T00:53:50.394Z",
+  "reviewSummary": "Reviewed completion 04ec043 (moe/work-2026-10-24, pushed). Code diff 341 LOC (supervisor +57/-1, transfer +23/-1, lifecycle +20/-11, tests +218/-10); its files are unchanged at HEAD.\n\nFresh runs on a clean export of 04ec043 (WSL, env -i, Node 24.21.0, python3):\n- local-runner.test.mjs: exit 0, 242 tests, 241 pass, 1 pre-existing macOS skip.\n- check+snapshot suites: exit 0, 57 tests, 56 pass, 1 K9 root skip.\n\nDoD:\n1. VR2 (real supervisor) and CJ10 (end to end, default verifyWorkspace): bytes, delete, chmod ±x, symlink, ancestor symlink, hard link, dir or FIFO swap all give changed.\n2. VR3 and CJ10: new 0600/0700 and mode-000 entries stay intact; only manifest names are opened.\n3. VR4: no mutation, identical lstat/sha, frame keys exactly {changed, kind}. VR3: O_NOFOLLOW and read-only opens. VR5: 65/74 with no frame. VH2 and CJ9: every failure is a fixed code, then 'unverified'.\n4. CJ9 order: session, verify, remove.\n5. Fresh run above.\n\nAdversarial:\n- fd walk with fstat only; nlink and size checks; growth read; '..' segment gives 65.\n- reown keeps the owner exec bit, so the real flow matches the manifest.\n- The decoder yields records only; the timeout is capped at 60 s; verify runs before the finally delete.\n- The other modes are untouched; executionReady stays false.\n\nMy mutants, 6/6 killed: hard link, no O_NOFOLLOW, non-pass verified, after-mount check dropped, junk mapped to intact, growth check removed.\n\nNon-blocking: verify ignores signal (at most 60 s); a pass whose delete fails is 'inconclusive' and may carry 'intact'; guest-root reads are certified by CQ-R13. Complexity: lean.",
+  "requiredCheckAtDone": null
 }
