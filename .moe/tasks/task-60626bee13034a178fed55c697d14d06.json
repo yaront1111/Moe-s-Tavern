@@ -45,8 +45,14 @@
     {
       "stepId": "step-3",
       "description": "VERIFY ONCE, fresh.\n\n1. Run the DoD command, `node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs`. On WSL, run it as `env -i HOME=\"$HOME\" PATH=\"<nvm node 24 bin>:/usr/local/bin:/usr/bin:/bin\" node --test ...`, with POSIX python3 on PATH. It must exit 0; supply its command, exit code and output tail to complete_task.\n2. ALSO run `node --test scripts/tests/local-runner.test.mjs` and report it; it holds the R11f and R10d3 supervisor rows.\n3. Mutants, on scratch copies only; restore and cmp afterwards:\n   (i) drop --strict-mcp-config: LA1;\n   (ii) write the config before session_home, or into WORKSPACE: LA2;\n   (iii) create without O_EXCL or O_NOFOLLOW: replace a pre-planted symlink at the config path in an LA2 variant (planted before prepare_launch through a session_home seam). It must give 71, with no file written through the link;\n   (iv) pass the role from the frame into argv unvalidated: LA1's prompt pins;\n   (v) change JOBS to 3-tuples: B17.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Fresh gate (WSL, env -i, Node 24.21.0, python3 3.12.3, MOE_PINNED_CODEX=pinned member sha b8a11fed…): `node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs` exit 0, 81/81 pass incl. LA1-LA5 (LA5 ran against the real pinned codex, not skipped). `node --test scripts/tests/local-runner.test.mjs` exit 0, 251 tests / 250 pass / 1 pre-existing macOS skip. Logs /tmp/r10d4-evidence/gate-final.log, gate-lr-final.log.\n\nOne test gap closed: mutation showed a non-root run can't see a dropped fchown (real fchown to own uid is a no-op), which in the real guest would leave the root-written 0600 config unreadable by moe-agent. LA2 now spies os.fchown (stderr) and asserts one call per created entry with the job uid/gid (file; dir+file for codex). Diff vs HEAD: +5/-3 in local-runner-bridge.test.mjs only; supervisor unchanged since HEAD.\n\nMutants (scratch copy /tmp/r10d4-mut, restored and cmp-equal to repo; log /tmp/r10d4-evidence/mutants.log): 20 run, 19 killed, 1 equivalent.\n(i) drop --strict-mcp-config: LA1/LA3/J3. (ii) config into WORKSPACE, and argv config path into WORKSPACE: LA2/LA1/LA3/J3. (iii-a) drop O_EXCL: LA2 file row. (iii-c) drop O_EXCL+O_NOFOLLOW: LA2 symlink row, status not 71. (iii-b) drop O_NOFOLLOW only: SURVIVES by design — O_CREAT|O_EXCL already refuses any existing leaf including a symlink (open(2)); O_NOFOLLOW stays as defense in depth/idiom parity with materialize, equivalent. (iv) role into argv unvalidated: LA1/LA3/J3. (v) JOBS 3-tuples: B17. (vi) drop codex env_vars line: LA2/LA3 (LA5 splits the test's own LA_CONFIG, so a test-side drop of env_vars is what kills LA5: verified red). Extras all killed: drop file fchown, drop dir fchown, no CODEX_HOME, file mode 0644, sandbox workspace-write, drop --skip-git-repo-check, drop --dangerously-skip-permissions, add --resume, failure not 71, credential name in env_vars.\n\nUnrelated dirty paths (~875) preserved; no Git writes, no .moe edits.",
+      "startedAt": "2026-10-30T08:06:16.736Z",
+      "completedAt": "2026-10-30T08:12:57.203Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -61,8 +67,15 @@
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a hostile workspace and agent. Check:\n- Can a candidate file in WORKSPACE add an MCP server?\n  - claude: --strict-mcp-config ignores .mcp.json and settings.\n  - codex: does the pinned version read a project .codex/config.toml when CODEX_HOME is fresh with no trusted projects? Confirm it from the pinned codex version's docs or behavior and record the answer. If it does read one, refuse a workspace with .codex/config.toml (exit 65), or pass the version's override; never assume.\n- Can a symlink or pre-existing file in the fresh home redirect the config write? (O_EXCL, O_NOFOLLOW and dir_fd; and the home is fresh per job.)\n- Does the credential appear in argv, a file or the prompt? It must be env-only.\n- No resume or continue under any role.\n- --dangerously-skip-permissions runs only as moe-agent, never as root; the identity drop is unchanged.\n- The other modes are byte-identical; no .moe edits; no verified-local or isolation claim.\nReport every path in complete_step.modifiedFiles, and write the Serena handoff memory 'task-task-60626bee13034a178fed55c697d14d06-handoff' for CQ-R10 and CQ-R13 (task-f4811a72).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Adversarial self-review done against the PINNED binaries (probe tooling /tmp/r10d4-probe, recorder MCP server with a positive control each time).\n\nFIXED (real): pinned codex 0.166.0 `exec` with the exact fixed argv and a FRESH CODEX_HOME still loads <workspace>/.codex/config.toml and starts its MCP servers (the earlier `mcp list` probe said otherwise; the exec path differs). Only the cwd's .codex is read (parent ignored). Remedy per the plan: start_job returns 65 with no frame, home or job when cli == codex and os.path.lexists(workspace/.codex) (file, dir or dangling symlink), checked before session_home. TDD: LA6 written red first, then green; 5 mutants killed (drop, exists() vs lexists, every cli, config.toml only, after session_home). The alternative (trust_level = \"untrusted\" in CODEX_HOME config) also works but would change the pinned 4-line config.\n\nCONFIRMED safe: claude 2.1.308 --strict-mcp-config ignores hostile workspace .mcp.json + .claude/settings.json (control without the flag starts the evil server). O_EXCL|O_NOFOLLOW|dir_fd and the fresh mkdtemp home: pre-planted symlink/file/dir give 71 with nothing written through the link (LA2; dropping O_NOFOLLOW alone is equivalent because O_CREAT|O_EXCL refuses any existing leaf). Credential: env-only; LA1/LA2/LA3 assert it is in no argv, config or prompt; codex env_vars forwards exactly MOE_ROLE and its MCP server env never held the credential (probe). No resume/continue under any role (LA1). Identity drop and spawn dict unchanged; --dangerously-skip-permissions runs only as the dropped moe-agent account. Other modes byte-identical (AST compare vs 5f62b98f^: only start_job changed; added SHIM/PROMPTS/LAUNCH/prepare_launch). No .moe edits; no verified-local or isolation claim in the code.\n\nNOTED, not fixed (in the Serena handoff for CQ-R10/R10d/R13): (a) claude forwards its whole env to its stdio MCP server — the probe saw MOE_ROLE (so the shim gets its role; answers the open question for a recorder, CQ-R10d's real-binary row must still confirm) AND the credential, so the \"MCP env never holds the credential\" invariant is codex-only; shim must never log env. (b) A hostile workspace .claude/settings.json env/apiKeyHelper could redirect ANTHROPIC_BASE_URL and receive the credential: out of scope, CQ-R13 egress/settings policy. (c) Same-uid concurrency: CQ-R10 must keep one live job per VM. (d) A failed prepare_launch leaves the fresh home (never reused), 71, no job.\n\nAlso this step: LA2 fchown spy (closed the non-root blind spot for a dropped fchown). Final fresh gates: bridge+agents with MOE_PINNED_CODEX 82/82 exit 0 (LA5 ran); plain DoD command 81 pass + LA5 skipped, exit 0; local-runner + check + snapshot + bundle suites 330/332 pass, 2 pre-existing skips. Changed ~244 lines (cap 400). Unrelated dirty paths preserved; no Git writes, no .moe edits.",
+      "startedAt": "2026-10-30T08:12:59.637Z",
+      "completedAt": "2026-10-30T08:22:23.471Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -76,7 +89,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -107,18 +120,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:35.352Z",
-  "updatedAt": "2026-10-30T07:58:53.902Z",
+  "updatedAt": "2026-10-30T08:22:33.312Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:29:27.778Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
     "worker-55e6716a",
     "architect-4ae016fb",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "worker-fe18a9a9"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -126,7 +140,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T22:33:04.481Z",
@@ -189,13 +205,11 @@
   "planApprovedAt": "2026-10-29T22:33:04.567Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T07:40:32.685Z",
-  "blockedReason": "Real pinned codex 0.166.0 recorder probe proves parent MOE_ROLE=qa is absent from its stdio MCP subprocess (only HOME/PATH/LC_CTYPE forwarded). guest-mcp-shim.py serve(None,...) exposes zero tools, so prescribed 3-line table cannot satisfy first moe.get_context. Defect task-afe6838d58874da58a2d4c1e0956c799 filed; exact config expectations forbid silently adding env_vars. Steps1/2 implemented; focused tests 7/7 pass, full gates/mutants/final review unrun and not claimed passing. Evidence and both modified paths recorded in step notes and Serena handoff. Safe completion requires the config/role contract reconciled.",
-  "blockedOnTaskIds": [
-    "task-afe6838d58874da58a2d4c1e0956c799"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T07:45:30.672Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "5f62b98f5a7885422b7496b1e72cf7ebac5eec90",
@@ -220,13 +234,8 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-0c72d59aad37467fb49e5ad699692d78.json",
-    ".moe/tasks/task-3fa69c192a2147fa8555b33c86ad2f82.json",
-    ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
-    ".moe/tasks/task-afe6838d58874da58a2d4c1e0956c799.json",
-    ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
-    "scripts/local-runner/guest-supervisor.py",
-    "scripts/tests/local-runner-bridge.test.mjs"
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-supervisor.py"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -234,5 +243,14 @@
     "kind": "checkpoint",
     "sessionId": "worker-55e6716a@2026-10-30T07:39:30Z",
     "at": "2026-10-30T07:45:54.076Z"
-  }
+  },
+  "reviewStartedAt": "2026-10-30T08:22:33.310Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_PINNED_CODEX=/tmp/r10d4-evidence/codex-x86_64-unknown-linux-musl node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ LA5 pinned codex forwards exactly MOE_ROLE to its MCP server (33125ms)\n✔ B17 AGENT_JOBS is the guest supervisor job table\n✔ H8 endAgentJobs reports verified only on an observed pgrep count of 0, retries a live job and fails closed otherwise\nℹ tests 82\nℹ suites 0\nℹ pass 82\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 51413\n(plain DoD command without MOE_PINNED_CODEX: exit 0, 82 tests, 81 pass, 1 skipped = LA5. scripts/tests/local-runner.test.mjs + check + snapshot + bundle: exit 0, 332 tests, 330 pass, 2 pre-existing skips.)",
+    "reportedAt": "2026-10-30T08:22:33.310Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-R10d4 headless launch spec. guest-supervisor.py: SHIM, PROMPTS (worker/qa, each starting 'Call moe.get_context for your assigned task first.'), LAUNCH and prepare_launch; start_job runs relay(argv) from the fixed template. JOBS 2-tuple unchanged (B17).\n- claude: -p PROMPT --mcp-config <home>/.moe-mcp.json --strict-mcp-config --dangerously-skip-permissions.\n- codex: exec --sandbox danger-full-access --skip-git-repo-check PROMPT, CODEX_HOME=<home>/.codex whose config.toml is the amended FOUR-line moe table (env_vars = [\"MOE_ROLE\"], approval 'approve').\n- Config files are created via dir-fd WALK, O_EXCL|O_NOFOLLOW, 0600 files / 0700 .codex, fchown to the job uid, in the fresh home; a creation failure is 71 with no job. No resume/continue. Credential env-only.\nSelf-review findings (probed on the pinned binaries):\n- FIXED: pinned codex exec loads <workspace>/.codex/config.toml even with a fresh CODEX_HOME. start_job now refuses a codex job whose WORKSPACE holds any .codex entry (65, before any home/frame/job). LA6 pins it.\n- Confirmed: claude --strict-mcp-config ignores hostile workspace .mcp.json/.claude/settings.json (control starts the server).\n- Noted for CQ-R10/R10d/R13: claude's MCP server inherits the whole env, credential included (MOE_ROLE is forwarded); a hostile workspace .claude/settings.json could redirect ANTHROPIC_BASE_URL; one live job per VM.\nTests: LA1-LA4 and LA6 (LA5 opt-in pinned codex); LA2 also spies fchown to close a non-root blind spot. 25 scratch mutants, 24 killed, 1 equivalent (drop O_NOFOLLOW alone; O_EXCL covers). Other modes byte-identical (AST). ~244 changed lines (cap 400). No verified-local or isolation claim; executionReady unchanged; no .moe edits."
 }

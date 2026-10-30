@@ -1341,12 +1341,14 @@ test('LA1 each CLI and role gets the exact fixed headless argv, never a credenti
 });
 
 test('LA2 only the shim config exists in the fresh home, with private modes and agent ownership', { skip: NO_GUEST }, t => {
+  // As a non-root test the real fchown is a no-op, so a spy proves each created entry is handed to the job uid and gid.
+  const chowns = "os.fchown = lambda fd, uid, gid, chown=os.fchown: print('fchown', uid, gid, file=sys.stderr) or chown(fd, uid, gid)\n";
   for (const frame of [JOB, QA_JOB]) {
-    const run = bridgeJob(jobFrame(frame));
+    const run = bridgeJob(jobFrame(frame), { setup: chowns });
     t.after(() => rmSync(run.dir, { recursive: true, force: true }));
-    assert.equal(run.status, 42, String(run.stderr));
-    const job = JSON.parse(run.stdout)[6], home = job.env.HOME;
     const paths = frame.cli === 'claude' ? ['.moe-mcp.json'] : ['.codex', '.codex/config.toml'];
+    assert.deepEqual([run.status, String(run.stderr)], [42, `fchown ${process.getuid()} ${process.getgid()}\n`.repeat(paths.length)]);
+    const job = JSON.parse(run.stdout)[6], home = job.env.HOME;
     assert.equal(dirname(home), run.sessions);
     assert.deepEqual(readdirSync(home), [paths[0]]);
     if (frame.cli === 'codex') {
@@ -1391,6 +1393,25 @@ m.session_home = planted_home
     t.after(() => rmSync(run.dir, { recursive: true, force: true }));
     assert.deepEqual([run.status, run.stdout.length, run.stderr.length], [71, 0, 0], `${frame.cli} ${planted} ${run.stderr}`);
     assert.equal(readFileSync(join(run.dir, 'untouched'), 'utf8'), 'original');
+  }
+});
+
+// Pinned codex 0.166 exec loads <workspace>/.codex/config.toml (MCP servers, providers) even with a fresh CODEX_HOME and
+// no trusted project (probed with the pinned member), so a candidate tree holding any `.codex` entry is refused before
+// a home exists. claude's --strict-mcp-config already ignores every workspace MCP file (probed against pinned 2.1.308).
+test('LA6 a codex job refuses a workspace holding any .codex entry with no frame, home or job; claude is unaffected', { skip: NO_GUEST }, t => {
+  for (const planted of ['directory', 'config', 'file', 'dangling symlink']) for (const frame of [JOB, QA_JOB]) {
+    const setup = `path = os.path.join(workspace, '.codex')
+if ${JSON.stringify(planted)} in ('directory', 'config'): os.mkdir(path)
+if ${JSON.stringify(planted)} == 'config': open(os.path.join(path, 'config.toml'), 'w').write('[mcp_servers.evil]\\ncommand = "/bin/true"\\n')
+elif ${JSON.stringify(planted)} == 'file': open(path, 'w').close()
+elif ${JSON.stringify(planted)} == 'dangling symlink': os.symlink('absent', path)
+`;
+    const run = bridgeJob(jobFrame(frame), { setup });
+    t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+    const refused = frame.cli === 'codex';
+    assert.deepEqual([run.status, run.stdout.length > 0, run.stderr.length, run.homes?.length ?? 0], refused ? [65, false, 0, 0] : [42, true, 0, 1],
+      `${frame.cli} ${planted} ${run.stderr}`);
   }
 });
 

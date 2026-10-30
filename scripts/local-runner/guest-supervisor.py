@@ -868,7 +868,8 @@ def prepare_launch(cli, role, home, uid, gid, exe):
 # (uid, gid, groups): by default the AGENT_IDENTITY account with groups [], which is setgroups([]); None keeps the
 # caller's groups, for a non-root test only. workspace, sessions, identity, jobs, agent_socket and peer_uid are
 # injectable from Python only (tests). A refusal writes no frame, starts no job and echoes nothing from the frame: 74
-# host EOF, 65 a malformed or disallowed frame, 71 no account, 66 no workspace owned by the job uid, 71 no home or config.
+# host EOF, 65 a malformed or disallowed frame or a codex workspace holding .codex, 71 no account, 66 no workspace owned by
+# the job uid, 71 no home or config.
 def start_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=None, jobs=JOBS, agent_socket=AGENT_SOCKET,
               peer_uid=peer_uid):
     try:
@@ -890,6 +891,10 @@ def start_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=No
         return os.EX_NOINPUT
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
         return os.EX_NOINPUT
+    # codex exec loads <workspace>/.codex/config.toml (MCP servers, providers) even for a fresh CODEX_HOME, so a candidate
+    # that holds any .codex entry never reaches it; claude's --strict-mcp-config already ignores workspace MCP files.
+    if frame['cli'] == 'codex' and os.path.lexists(os.path.join(workspace, '.codex')):
+        return os.EX_DATAERR
     try:
         home = session_home(sessions, uid, gid)
         argv, extra_env = prepare_launch(frame['cli'], frame['role'], home, uid, gid, jobs[frame['cli']][0])
