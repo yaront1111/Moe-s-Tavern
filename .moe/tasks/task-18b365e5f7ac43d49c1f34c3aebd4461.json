@@ -91,7 +91,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -115,16 +115,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:24:24.874Z",
-  "updatedAt": "2026-10-30T00:35:26.582Z",
+  "updatedAt": "2026-10-30T00:44:15.410Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:26:08.269Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T00:44:15.410Z",
+    "wallClockMs": 22687141
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-093a65d0"
+    "worker-093a65d0",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -250,5 +253,9 @@
     "kind": "completion",
     "sessionId": "worker-093a65d0@2026-10-30T00:04:27Z",
     "at": "2026-10-30T00:35:26.582Z"
-  }
+  },
+  "completedAt": "2026-10-30T00:44:15.410Z",
+  "reviewCompletedAt": "2026-10-30T00:44:15.410Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 09cbd1d (on moe/work-2026-10-24, recorded) via git show: runner-client.mjs +120, local-runner-channel.test.mjs +280, ci.yml +1/-1 = net 400 non-board LOC (at, not over, the cap); rest is daemon-driven board JSON. No daemon change.\n\nRe-ran verification in a Linux snapshot of HEAD with a fresh daemon build (shared dist is stale; CI builds first); both files cmp-identical to 09cbd1d. `env -i node --test scripts/tests/local-runner-channel.test.mjs` -> 27 pass, 0 fail, 0 skipped, exit 0, incl. real-daemon C4-C9 (result; TASK_NOT_FOUND tool error rpcCode -32001; wrong key RUNNER_AUTH_REFUSED; parked chat_wait RUNNER_CALL_TIMEOUT with channel still usable; daemon stop -> RUNNER_DISCONNECTED for pending and later calls; key never leaked, positive control present). Six sibling CI files run in repo: 386 tests, 384 pass, 0 fail, 2 pre-existing skips.\n\nOwn mutation probes, all killed: accept trailing newline (C2), hash caller path (C2 vector), 1008 as DISCONNECTED (C6), accept localhost/0.0.0.0 (C1), no reject on close() (C8). Baseline 27/27.\n\nDoD 1-4 met. Code read adversarially: pending calls settle once via take() (timer + abort listener removed); frame built before timers; hostile codeName filtered; open only after ping round trip (daemon closes bad key with 1008 post-upgrade); O_NOFOLLOW/O_NONBLOCK/isFile/size caps on both reads.\n\nNon-blocking notes: (a) description allows a key newline and localhost, but the approved plan/executionContract match the daemon (KEY_RE on raw file; guest-session 127.0.0.1/::1 list), which is correct. (b) Accepted risks: key goes to whatever listens on the daemon.json loopback port, no inbound payload cap, callers must close(). (c) Ponytail: dense but lean, no deps.",
+  "requiredCheckAtDone": null
 }
