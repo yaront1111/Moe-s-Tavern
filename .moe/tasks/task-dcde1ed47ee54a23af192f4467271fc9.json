@@ -8,9 +8,66 @@
     "moe-vscode tests and compile pass."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED: add the cancellation regression test rows to moe-vscode/tests/daemon-identity.test.cjs (reuse its fixture/server/metadata/original helpers; no new test file).\n(a) Give the fixture's vscode EventEmitter stub a no-op `dispose() {}` (line 21): client.dispose() disposes 19 emitters, so without it every dispose row dies on a TypeError instead of asserting. Change nothing else in sections A-D.\n(b) Append section E after the D loop. Declare its helpers ABOVE the first E row, because a narrow --test-name-pattern starts matched rows synchronously while the module is still evaluating (mem:decision-node-test-narrow-selection-fixtures). The helpers:\n- deferred()\n- until(predicate, label): a bounded poll, 400 x 5 ms, then assert.ok\n- settled(p): resolves to the string 'resolved', or to the rejection error\n- assertIdle(f): connectionState 'disconnected', connectInProgress false, pingInterval undefined, ws undefined\n- cancel(f, how): calls dispose() or disconnect()\n- startupGated(t): metadata(t), plus a server answering {projectPath: project} that counts /health, plus fixture(project) with t.after(() => f.client.disconnect()), plus a f.client.waitForDaemonInfo that awaits a gate, then writes daemon.json {...original, projectPath: project, port: s.port}. Returns {f, s, file, gate, health}.\n(c) Ten rows:\n1-2. `E ${how} during daemon startup opens nothing`, how = disconnect | dispose: connect(); until(spawns.length === 1); cancel; gate.resolve(); settled === 'resolved'; health 0 (a cancelled attempt never probes); s.connections() 0; assertIdle.\n3-4. `E ${how} during the identity probe opens nothing`: daemon.json names a server whose /health handler stores its reply and resolves `arrived`. connect(); await arrived; cancel; answer {projectPath: project}. Then: resolved; 0 WebSocket connections; 0 spawns; daemon.json bytes unchanged; assertIdle.\n5-6. `E disconnect during a foreign ${endpoint} probe acts on nothing`, endpoint = metadata | configured (configured passes the server port as fixture configPort): the same held probe, answered {projectPath: '/foreign/project'} after disconnect(). Then: resolved, not rejected; 0 WebSocket connections; 0 spawns; daemon.json bytes unchanged; warnings and errors both empty; assertIdle.\n7-8. `E disconnect during foreign recovery ${phase} opens nothing`, phase = respawn | reprobe: server s answers '/foreign/project' at once. Replacement server r counts /health. waitForDaemonInfo writes daemon.json naming r.port: for respawn after a gate, for reprobe at once while r holds its reply.\n- respawn: until(spawns.length === 1); disconnect; release the gate; r /health count 0.\n- reprobe: await r's request; disconnect; answer '/foreign/project'. connect must resolve instead of rejecting with \"could not find this workspace's daemon\".\n- Both: s and r 0 WebSocket connections; assertIdle.\n9. `E connect after disconnect re-arms the pending attempt (moe.reconnect)`: startupGated; first = connect(); until spawned; disconnect(); second = connect(); release. Both resolve; s.connections() === 1; connectionState 'connected'; pingInterval set. This row PASSES at HEAD by design: it guards extension.ts moe.reconnect (disconnect(); await connect() back to back) against a generation-counter fix.\n10. `E dispose is terminal: a later connect() opens nothing`: startupGated; first = connect(); until spawned; dispose(); second = connect(); release; both resolve. Then fs.unlinkSync(file) (with no daemon.json, a live connect() would spawn again) and await a third connect(). Assert [health, spawns.length, s.connections()] deepEqual [0, 1, 0]; assertIdle.\nAcross the vm realm, compare only primitives or test-realm arrays (mem:gotcha-vscode-vm-test-harness); that is why settled() maps to strings.\n(d) At HEAD, run `cd moe-vscode && node --test --test-name-pattern='^E ' tests/daemon-identity.test.cjs` and record the result in the step note: 9 rows fail by AssertionError (WebSocket or /health count 1, or a rejection) and row 9 passes. A TypeError or MODULE_NOT_FOUND means the harness is wrong, not RED.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/daemon-identity.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/daemon-identity.test.cjs"
+      ],
+      "note": "Added only the EventEmitter dispose stub and appended section E helpers/10 rows. Fresh RED: cd moe-vscode && node --test --test-name-pattern='^E ' tests/daemon-identity.test.cjs exits 1: 10 tests, 1 pass (re-arm), 9 fail, all AssertionError (startup probes, opened sockets, foreign recovery rejection); no harness errors. Existing shared board/debris paths left untouched; working in project root for wrapper landing.",
+      "startedAt": "2026-10-30T17:41:39.051Z",
+      "completedAt": "2026-10-30T17:42:11.713Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN: fence connect() in moe-vscode/src/services/MoeDaemonClient.ts. About +27/-1, and NO new imports: seven node:vm test harnesses load this file through closed require maps.\n(1) Add the field `private disposed = false;` next to `manualDisconnect` (:535).\n(2) Add a private helper next to setConnectionState: `private connectCancelled(): boolean { return this.disposed || this.manualDisconnect; }`. Its doc comment says: connect() awaits daemon startup and the /health identity probe before it opens /ws; a manual disconnect() or a dispose() during those awaits cancels it; a later connect() clears manualDisconnect, so the latest call wins; a disposed client never reconnects.\n(3) In connect() (:567):\n- Make the first line `if (this.disposed) { return; }`, ahead of `this.manualDisconnect = false`, so a disposed client cannot re-arm.\n- After `await this.ensureDaemonRunning()`, add `if (this.connectCancelled()) { log('Connect cancelled during daemon startup'); return; }`.\n- After `await this.getVerifiedDaemonInfo()` and BEFORE the `!daemonInfo` throw, add the same check, logging 'Connect cancelled during the daemon identity check'.\n(4) In getVerifiedDaemonInfo() (:942):\n- Right after the first probeDaemonIdentity, before `identity.kind !== 'foreign'`, add `if (this.connectCancelled()) return undefined;`. Its comment: cancelled while probing, act on nothing the probe found (no notice, no removal, no respawn).\n- After the recovery `await this.startDaemon('start', project)`, add the same line.\n- Hoist the replacement probe out of the condition: `const replacementKind = replacement && (await probeDaemonIdentity(replacement.host, replacement.port, project)).kind; if (this.connectCancelled()) return undefined; if (!replacement || replacementKind === 'foreign') throw <same text>`. It still probes only when a replacement exists.\n(5) In dispose() (:1584), set `this.disposed = true;` before `this.disconnect()`.\nWHY intent flags, not a generation counter: connectInProgress makes a concurrent connect() a no-op. A counter bumped by disconnect() would therefore abort the pending attempt, while moe.reconnect's follow-up connect() returns without starting one, so the client stays disconnected while the command reports 'Reconnected'. This mirrors JetBrains MoeProjectService.probeThenOpen (:286, `disposed.get() || isManualDisconnect` after the probe and before handleForeignDaemon).\nerror handling:\n- A cancelled attempt RESOLVES and never rejects, so it produces no 'Auto-connect failed' log, no moe.connect command error and no reconnect loop.\n- It changes no connection state: disconnect() already set 'disconnected', and the existing finally still clears connectInProgress.\n- disconnect({manual:false}) is not a cancel. Its two callers (the STATE_SNAPSHOT mismatch and DAEMON_SHUTTING_DOWN) handle frames on a live socket, never during a pre-socket attempt.\nLeave these UNCHANGED:\n- probeDaemonIdentity, removeDaemonJsonIfUnchanged and pathsMatch\n- the refusal and warning texts\n- the recovery flow of a non-cancelled attempt\n- the WebSocket promise block: its handshake window is already fenced by `this.ws !== ws`\nRun the step-1 command: 10/10 E rows pass. Then run the whole file: 45/45.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Implemented approved intent flags, terminal dispose, and startup/identity/recovery fences without imports or identity-policy/text/WS-handshake changes. GREEN: cd moe-vscode && node --test --test-name-pattern='^E ' tests/daemon-identity.test.cjs && node --test tests/daemon-identity.test.cjs exits 0: E 10/10 and whole file 45/45, 0 failures.",
+      "startedAt": "2026-10-30T17:42:11.747Z",
+      "completedAt": "2026-10-30T17:42:31.547Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification: run it once, fresh, from the repo root:\n`cd moe-vscode && npm test && npm run compile`\nExpect 334 tests, 331 pass, 0 fail, 3 skipped (the baseline at cd522777 was 324/321/0/3), then tsc exit 0. This exact command, its exit code and its output tail are the complete_task evidence.\n- Linux tsc works because node_modules/@typescript/typescript-linux-x64 is present. If compile fails only because a native tsc platform package is missing (not a type error), run the identical gate natively with `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && npm test && npm run compile\"` and report that command. Native Windows has 4 platform skips (mem:gotcha-vscode-vm-test-harness).\n- Nothing platform-specific changes: only flags and awaits. The E rows use 127.0.0.1 servers and os.tmpdir(), like the D rows that already run on both platforms.\n- This row's isEpicFinal comes from the highest-order fallback on a rolling bug-bucket epic whose other rows are still WORKING. The DoD's moe-vscode test-and-compile gate is the full regression for this change, since no shared type, schema or wire protocol changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-identity.test.cjs"
+      ],
+      "note": "Fresh root command cd moe-vscode && npm test && npm run compile completed with exit 0: 334 tests, 331 pass, 0 fail, 3 existing platform skips; tsc -p ./ exit 0. No files modified in this verification-only step. Same run retained for complete_task verification evidence.",
+      "startedAt": "2026-10-30T17:42:31.580Z",
+      "completedAt": "2026-10-30T17:43:02.178Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (final step). Work in scratch only; never mutate the checkout.\nSetup (recipe in mem:gotcha-vscode-vm-test-harness): copy src/services/MoeDaemonClient.ts and tests/daemon-identity.test.cjs into a scratch dir that mirrors moe-vscode/{src/services,tests}. There, run `NODE_PATH=<repo>/moe-vscode/node_modules node --test tests/daemon-identity.test.cjs` and prove the UNMUTATED baseline passes 45/45 first.\nThen apply one exact replacement per mutant, asserting count == 1. Each mutant must fail by AssertionError in the named test row:\n- M1 drop the startup fence in connect(): both 'during daemon startup' rows.\n- M2 drop the post-probe fence in getVerifiedDaemonInfo: both 'foreign ... probe' rows.\n- M3 drop the post-respawn fence: 'recovery respawn'.\n- M4 drop the post-reprobe fence: 'recovery reprobe', which rejects.\n- M5 drop the identity-check fence in connect(): the 'identity probe' rows, which reject with 'Daemon not running'.\n- M6 drop `if (this.disposed) return`: 'dispose is terminal', with spawns 2.\n- M7 drop `this.disposed = true`: 'dispose is terminal'.\n- M8 move `this.manualDisconnect = false` below the connectInProgress check: the re-arm row, with 0 connections.\nDelete the scratch dir afterwards.\nThen check:\n- connect() twice, and disconnect/connect/disconnect interleavings, leave at most one attempt in flight.\n- dispose during each await opens no WebSocket and no ping timer.\n- No new import was added.\n- Rows A-D are byte-identical except for the stub's dispose().\n- The D rows still pass, so identity policy for non-cancelled attempts is unchanged.\n- `cd moe-vscode && npx eslint src/services/MoeDaemonClient.ts` exits 0 (baseline 0).\nIf any finding changes a file, rerun the step-3 gate fresh and submit that output as the evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-identity.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-identity.test.cjs"
+      ],
+      "note": "Adversarial review read scoped diff; no checkout edits. Unmutated scratch baseline 45/45 and every selected pattern clean first; M1-M8 each assertion-killed expected rows (2/2/1/1/2/1/1/1), including M6 spawns2 and M8 connections0; scratch deleted. Extra scratch dispose variants for foreign metadata/configured and recovery respawn/reprobe plus duplicate-connect and disconnect/connect/disconnect startup checks 6/6; removed. Imports unchanged; A-D byte-identical except dispose stub; all D rows passed. Scoped diff --check and cd moe-vscode && npx eslint src/services/MoeDaemonClient.ts exit0. Reviewed concurrency, inputs/failures, cleanup and scope; bounded waits finish before cancellation returns, handshake behavior remains deliberately unchanged. Full step-3 gate remains fresh (no changes afterward): 334 total/331 pass/0 fail/3 skipped, compile0. Serena handoff and harness memory updated; own task paths repeated for explicit wrapper attribution; peers untouched.",
+      "startedAt": "2026-10-30T17:43:02.218Z",
+      "completedAt": "2026-10-30T17:45:37.792Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,10 +80,104 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T17:09:56.990Z",
-  "updatedAt": "2026-10-30T17:23:35.457Z",
+  "updatedAt": "2026-10-30T17:45:44.715Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T17:23:35.457Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T17:24:09.241Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-6fc3dd5c",
+    "worker-262588d0"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T17:40:31.225Z",
+  "executionContract": {
+    "intendedBehavior": "A manual disconnect() or a dispose() while MoeDaemonClient.connect() awaits daemon startup or the /health identity probe (including foreign-daemon recovery) cancels that attempt. The attempt opens no /ws socket, starts no ping timer, shows no notice, removes no daemon.json, spawns no further daemon, and resolves without rejecting. A connect() issued after a disconnect() re-arms the still-pending attempt (the latest call wins; one attempt is in flight at a time). A disposed client never connects again.",
+    "acceptanceCriteria": [
+      "The 10 new section-E rows in moe-vscode/tests/daemon-identity.test.cjs pass: startup and identity-probe cancellation via disconnect and dispose, foreign metadata and configured probes acting on nothing, recovery respawn and reprobe, the moe.reconnect re-arm, and terminal dispose.",
+      "Rows A-D of tests/daemon-identity.test.cjs pass unchanged; the only fixture edit is a no-op EventEmitter dispose().",
+      "`cd moe-vscode && npm test && npm run compile` exits 0 with 0 failing tests."
+    ],
+    "invariants": [
+      "A foreign daemon never receives a /ws connection.",
+      "Identity classification, refusal texts and the recovery flow of a non-cancelled attempt are unchanged.",
+      "At most one connect attempt is in flight.",
+      "MoeDaemonClient.ts gains no import."
+    ],
+    "compatibility": [
+      "The public connect()/disconnect(options)/dispose() signatures and extension.ts callers are unchanged.",
+      "disconnect({manual:false}) keeps its reconnect semantics and is not a cancel.",
+      "Same-identity and unknown-identity connects behave exactly as before."
+    ],
+    "approvedScope": [
+      "MoeDaemonClient: new private field disposed, new private connectCancelled(), and the fences in connect() and getVerifiedDaemonInfo(); dispose() sets disposed first.",
+      "tests/daemon-identity.test.cjs: a no-op dispose() on the fixture EventEmitter stub, plus the appended section E."
+    ],
+    "reuse": [
+      "The existing manualDisconnect intent flag (already set by disconnect(), cleared by connect()).",
+      "The existing finally clearing connectInProgress.",
+      "The existing fixture/server/metadata/original test helpers.",
+      "The JetBrains probeThenOpen fence pattern."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/services/MoeDaemonClient.ts:567 connect() awaits ensureDaemonRunning() then getVerifiedDaemonInfo() before setConnectionState('connecting') and new WebSocket.",
+      "MoeDaemonClient.ts:942 getVerifiedDaemonInfo() probes, then on foreign removes daemon.json if unchanged, calls startDaemon and re-probes.",
+      "MoeDaemonClient.ts:1584 dispose() calls disconnect().",
+      "moe-vscode/src/extension.ts:407-409 moe.reconnect calls disconnect() then await connect().",
+      "moe-jetbrains MoeProjectService.kt:286 probeThenOpen checks `disposed.get() || isManualDisconnect` after the probe."
+    ],
+    "checkRefs": [
+      "cd moe-vscode && npm test && npm run compile"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Generation counter bumped by disconnect(): REJECTED. connectInProgress makes the follow-up connect() in moe.reconnect (extension.ts:407-409, disconnect(); await connect()) a no-op, so the pending attempt aborts and nothing reconnects. If disconnect() also reset connectInProgress, two attempts would overlap, and the second would hit startDaemon's startInProgress early return and throw 'Daemon not running'. Test row 9 kills this design.\n2. One fence just before new WebSocket: REJECTED. A probe that resolved after cancellation would still show the foreign notice or error, delete daemon.json and respawn, and a cancelled recovery could still reject.\n3. A try/catch in connect() that swallows errors of a cancelled attempt: REJECTED. It hides real errors; explicit fences after each await read clearer and are each mutation-pinned.\n4. Threading an AbortSignal through probeDaemonIdentity/startDaemon: REJECTED. It widens the diff and changes the probe signature the B rows test, and every await is already bounded (probe about 3 s, startup 10 s).\nCHOSEN: intent flags. connectCancelled() = disposed || manualDisconnect, checked after every await on the pre-socket path. The latest call wins, one attempt is in flight at a time, and dispose is terminal. This is parity with JetBrains MoeProjectService.probeThenOpen.\nOUT OF SCOPE (pre-existing, not in DoD):\n- The WS handshake window (after new WebSocket, before 'open') is already fenced by `this.ws !== ws`. It rejects with 'WebSocket closed before connection opened'.\n- Concurrent connect() callers resolve immediately instead of awaiting the in-flight attempt, so moe.reconnect can announce 'Reconnected' early.\n- A daemon-side project parameter on the WS upgrade (deferred per mem:decision-daemon-identity-probe).",
+    "codebaseInsights": "- connect() runs synchronously up to its first await, so `p = connect(); disconnect()` lands in the first fence.\n- ensureDaemonRunning() can spawn and await waitForDaemonInfo (up to 10 s). It catches its own errors; startDaemon shows its own toast.\n- getVerifiedDaemonInfo() has up to three awaits after the first probe in foreign recovery: startDaemon, getDaemonInfo(false) and the re-probe.\n- disconnect() defaults to manual=true and sets manualDisconnect. dispose() calls disconnect() and then disposes 19 emitters.\n- The daemon-identity fixture stubs vscode.EventEmitter without dispose().\n- Seven harnesses transpile MoeDaemonClient.ts with closed require maps, so add no imports.\n- vm-realm objects fail deepStrictEqual; compare primitives.\n- Linux `npm run compile` works now (typescript-linux-x64 is present).\n- Baseline at cd522777: npm test 324/321/0/3 skips (19 s), tsc exit 0, eslint MoeDaemonClient.ts exit 0, moe-vscode tree clean.\nPROTOTYPE EVIDENCE (architect scratch, now deleted):\n- The exact step-1 rows go 9 RED and 1 pass at HEAD, all by AssertionError.\n- With the step-2 fix, the file passes 45/45.\n- M1-M8 are each killed by assertion. M6 needed the unlink in row 10, because otherwise the fence's disposed term hides the missing early return.\n- A whole-suite run on a scratch mirror gave 334/331/0/3, with tsc 0 and eslint 0.",
+    "risks": "- Cancelling does not shorten a pending await. The attempt finishes its probe or startup wait and then stands down. A connect() in that window re-arms instead of starting a second attempt; that is by design, and row 9 pins it.\n- Do NOT turn disconnect({manual:false}) into a cancel. Its callers run only on a live socket, and changing it alters the reconnect semantics.\n- Keep the fence BEFORE the `!daemonInfo` throw in connect(). Otherwise a cancelled probe rejects with 'Daemon not running' (M5).\n- Keep `if (this.disposed) return` ahead of `manualDisconnect = false`, or a post-dispose connect() re-arms the pending attempt.\n- Hoisting the replacement probe must keep it conditional on `replacement`. The D 'replaced' row proves that no probe runs when the metadata names another project.\n- The test servers must answer held replies only after cancelling. Assign `respond` before resolving `arrived`.\n- The shared checkout has peer dirty paths (scripts/moe-agent.*, scripts/CLAUDE.md, docs/TROUBLESHOOTING.md, .moe/tasks/*, untracked scripts/tests/agent-git-guard.test.mjs). They are not this task's: never stage, revert or stash them.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/daemon-identity.test.cjs",
+      "moe-vscode/src/extension.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T17:40:31.256Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T17:41:39.051Z",
+  "reviewStartedAt": "2026-10-30T17:45:44.712Z",
+  "verification": {
+    "command": "cd moe-vscode && npm test && npm run compile",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 334\nℹ suites 0\nℹ pass 331\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 18266.59915\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./\n",
+    "reportedAt": "2026-10-30T17:45:44.712Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/daemon-identity.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts"
+  ],
+  "completionSummary": "Delivered intent-based cancellation for pre-socket VS Code connects: startup/identity/recovery fences, terminal disposal and latest-call re-arm preserving moe.reconnect. Added 10 regression rows; RED 9 assertion failures/1 guard pass, GREEN 45/45 identity rows. Full fresh gate 334 total, 331 pass, 0 fail, 3 skipped; compile and eslint exit 0. Scratch-only M1-M8 each assertion-killed; six additional concurrency/dispose checks passed; scratch removed. No imports, identity policy/text, handshake changes, or A-D edits except EventEmitter dispose stub. Handoff recorded in Serena task-task-dcde1ed47ee54a23af192f4467271fc9-handoff; only two approved paths modified."
 }

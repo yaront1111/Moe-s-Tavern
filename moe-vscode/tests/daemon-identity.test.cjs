@@ -18,7 +18,7 @@ function fixture(projectPath = '/home/project', configPort = 0, platform = proce
     const logs = [], warnings = [], errors = [], spawns = [];
     const module = { exports: {} };
     const vscode = {
-        EventEmitter: class { event = () => ({ dispose() {} }); fire() {} },
+        EventEmitter: class { event = () => ({ dispose() {} }); fire() {} dispose() {} },
         workspace: {
             workspaceFolders: [{ uri: { fsPath: projectPath } }],
             getConfiguration: () => ({ get: (key, fallback) => key === 'daemon.port' ? configPort
@@ -207,3 +207,175 @@ for (const mode of ['foreign', 'same', 'configured', 'unknown', 'second-foreign'
         assert.equal(health, mode === 'second-foreign' ? 2 : 1, 'recovery must not loop');
     });
 }
+
+// E: Cancellation before /ws opens, including foreign-daemon recovery.
+function deferred() {
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    return { promise, resolve };
+}
+
+async function until(predicate, label) {
+    for (let i = 0; i < 400 && !predicate(); i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(predicate(), label);
+}
+
+function settled(promise) {
+    return promise.then(() => 'resolved', error => error);
+}
+
+function assertIdle(f) {
+    assert.equal(f.client.connectionState, 'disconnected');
+    assert.equal(f.client.connectInProgress, false);
+    assert.equal(f.client.pingInterval, undefined);
+    assert.equal(f.client.ws, undefined);
+}
+
+function cancel(f, how) {
+    if (how === 'dispose') f.client.dispose();
+    else f.client.disconnect();
+}
+
+async function startupGated(t) {
+    const { project, file } = metadata(t);
+    let health = 0;
+    const s = await server(t, (_, res) => { health++; res.end(JSON.stringify({ projectPath: project })); });
+    const f = fixture(project);
+    t.after(() => f.client.disconnect());
+    const gate = deferred();
+    f.client.waitForDaemonInfo = async () => {
+        await gate.promise;
+        fs.writeFileSync(file, JSON.stringify({ ...original, projectPath: project, port: s.port }));
+    };
+    return { f, s, file, gate, health: () => health };
+}
+
+for (const how of ['disconnect', 'dispose']) {
+    test(`E ${how} during daemon startup opens nothing`, async t => {
+        const { f, s, gate, health } = await startupGated(t);
+        const attempt = f.client.connect();
+        await until(() => f.spawns.length === 1, 'startup spawned');
+        cancel(f, how);
+        gate.resolve();
+        assert.equal(await settled(attempt), 'resolved');
+        assert.equal(health(), 0, 'cancelled startup must not probe');
+        assert.equal(s.connections(), 0);
+        assertIdle(f);
+    });
+
+    test(`E ${how} during the identity probe opens nothing`, async t => {
+        const { project, file } = metadata(t);
+        const arrived = deferred();
+        let respond;
+        const s = await server(t, (_, res) => {
+            respond = () => res.end(JSON.stringify({ projectPath: project }));
+            arrived.resolve();
+        });
+        const text = JSON.stringify({ ...original, projectPath: project, port: s.port });
+        fs.writeFileSync(file, text);
+        const f = fixture(project);
+        t.after(() => f.client.disconnect());
+        const attempt = f.client.connect();
+        await arrived.promise;
+        cancel(f, how);
+        respond();
+        assert.equal(await settled(attempt), 'resolved');
+        assert.equal(s.connections(), 0);
+        assert.equal(f.spawns.length, 0);
+        assert.equal(fs.readFileSync(file, 'utf8'), text);
+        assertIdle(f);
+    });
+}
+
+for (const endpoint of ['metadata', 'configured']) {
+    test(`E disconnect during a foreign ${endpoint} probe acts on nothing`, async t => {
+        const { project, file } = metadata(t);
+        const arrived = deferred();
+        let respond;
+        const s = await server(t, (_, res) => {
+            respond = () => res.end(JSON.stringify({ projectPath: '/foreign/project' }));
+            arrived.resolve();
+        });
+        const text = JSON.stringify({ ...original, projectPath: project, port: s.port });
+        fs.writeFileSync(file, text);
+        const f = fixture(project, endpoint === 'configured' ? s.port : 0);
+        t.after(() => f.client.disconnect());
+        const attempt = f.client.connect();
+        await arrived.promise;
+        f.client.disconnect();
+        respond();
+        assert.equal(await settled(attempt), 'resolved');
+        assert.equal(s.connections(), 0);
+        assert.equal(f.spawns.length, 0);
+        assert.equal(fs.readFileSync(file, 'utf8'), text);
+        assert.deepEqual(f.warnings, []);
+        assert.deepEqual(f.errors, []);
+        assertIdle(f);
+    });
+}
+
+for (const phase of ['respawn', 'reprobe']) {
+    test(`E disconnect during foreign recovery ${phase} opens nothing`, async t => {
+        const { project, file } = metadata(t);
+        const s = await server(t, (_, res) => res.end(JSON.stringify({ projectPath: '/foreign/project' })));
+        const arrived = deferred(), gate = deferred();
+        let health = 0, respond;
+        const r = await server(t, (_, res) => {
+            health++;
+            respond = () => res.end(JSON.stringify({ projectPath: '/foreign/project' }));
+            if (phase === 'respawn') res.end(JSON.stringify({ projectPath: project }));
+            arrived.resolve();
+        });
+        fs.writeFileSync(file, JSON.stringify({ ...original, projectPath: project, port: s.port }));
+        const f = fixture(project);
+        t.after(() => f.client.disconnect());
+        f.client.waitForDaemonInfo = async () => {
+            if (phase === 'respawn') await gate.promise;
+            fs.writeFileSync(file, JSON.stringify({ ...original, projectPath: project, port: r.port }));
+        };
+        const attempt = f.client.connect();
+        if (phase === 'respawn') {
+            await until(() => f.spawns.length === 1, 'recovery spawned');
+            f.client.disconnect();
+            gate.resolve();
+        } else {
+            await arrived.promise;
+            f.client.disconnect();
+            respond();
+        }
+        assert.equal(await settled(attempt), 'resolved');
+        if (phase === 'respawn') assert.equal(health, 0, 'cancelled recovery must not reprobe');
+        assert.equal(s.connections(), 0);
+        assert.equal(r.connections(), 0);
+        assertIdle(f);
+    });
+}
+
+test('E connect after disconnect re-arms the pending attempt (moe.reconnect)', async t => {
+    const { f, s, gate } = await startupGated(t);
+    const first = f.client.connect();
+    await until(() => f.spawns.length === 1, 'startup spawned');
+    f.client.disconnect();
+    const second = f.client.connect();
+    gate.resolve();
+    assert.equal(await settled(first), 'resolved');
+    assert.equal(await settled(second), 'resolved');
+    assert.equal(s.connections(), 1);
+    assert.equal(f.client.connectionState, 'connected');
+    assert.notEqual(f.client.pingInterval, undefined);
+});
+
+test('E dispose is terminal: a later connect() opens nothing', async t => {
+    const { f, s, file, gate, health } = await startupGated(t);
+    const first = f.client.connect();
+    await until(() => f.spawns.length === 1, 'startup spawned');
+    f.client.dispose();
+    const second = f.client.connect();
+    gate.resolve();
+    assert.equal(await settled(first), 'resolved');
+    assert.equal(await settled(second), 'resolved');
+    fs.unlinkSync(file);
+    assert.equal(await settled(f.client.connect()), 'resolved');
+    assert.deepEqual([health(), f.spawns.length, s.connections()], [0, 1, 0]);
+    assertIdle(f);
+});

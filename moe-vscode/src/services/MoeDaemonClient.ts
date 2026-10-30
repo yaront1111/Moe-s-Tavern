@@ -533,6 +533,7 @@ export class MoeDaemonClient implements vscode.Disposable {
 
     private daemonShuttingDown = false;
     private manualDisconnect = false;
+    private disposed = false;
 
     private state: StateSnapshot | undefined;
 
@@ -565,6 +566,9 @@ export class MoeDaemonClient implements vscode.Disposable {
     }
 
     async connect(): Promise<void> {
+        if (this.disposed) {
+            return;
+        }
         this.manualDisconnect = false;
         if (this._connectionState !== 'disconnected') {
             return;
@@ -582,7 +586,15 @@ export class MoeDaemonClient implements vscode.Disposable {
             this.daemonShuttingDown = false;
 
             await this.ensureDaemonRunning();
+            if (this.connectCancelled()) {
+                log('Connect cancelled during daemon startup');
+                return;
+            }
             const daemonInfo = await this.getVerifiedDaemonInfo();
+            if (this.connectCancelled()) {
+                log('Connect cancelled during the daemon identity check');
+                return;
+            }
             if (!daemonInfo) {
                 throw new Error('Daemon not running. Start daemon first.');
             }
@@ -944,6 +956,8 @@ export class MoeDaemonClient implements vscode.Disposable {
         const project = this.getWorkspacePath();
         if (!info || !project) return undefined;
         const identity = await probeDaemonIdentity(info.host, info.port, project);
+        // Cancelled while probing: act on nothing found (no notice, removal or respawn).
+        if (this.connectCancelled()) return undefined;
         if (identity.kind !== 'foreign') return info;
         const message = `Moe: the daemon on ${info.host}:${info.port} serves ${identity.projectPath}, not this workspace (${project}).`;
         log(message);
@@ -954,9 +968,12 @@ export class MoeDaemonClient implements vscode.Disposable {
         vscode.window.showWarningMessage(`${message} Starting this project's daemon on the next free port.`);
         removeDaemonJsonIfUnchanged(path.join(project, '.moe', 'daemon.json'), info);
         await this.startDaemon('start', project);
+        if (this.connectCancelled()) return undefined;
         // A concurrent replacement must survive, including metadata naming another project.
         const replacement = await this.getDaemonInfo(false);
-        if (!replacement || (await probeDaemonIdentity(replacement.host, replacement.port, project)).kind === 'foreign') {
+        const replacementKind = replacement && (await probeDaemonIdentity(replacement.host, replacement.port, project)).kind;
+        if (this.connectCancelled()) return undefined;
+        if (!replacement || replacementKind === 'foreign') {
             throw new Error('Moe could not find this workspace\'s daemon after refusing a foreign daemon.');
         }
         return replacement;
@@ -1506,6 +1523,16 @@ export class MoeDaemonClient implements vscode.Disposable {
         this.sendMessage('GET_STATE');
     }
 
+    /**
+     * connect() awaits startup and the /health identity probe before opening /ws.
+     * Manual disconnect() or dispose() during those awaits cancels the attempt.
+     * A later connect() clears manualDisconnect, so the latest call wins;
+     * a disposed client never reconnects.
+     */
+    private connectCancelled(): boolean {
+        return this.disposed || this.manualDisconnect;
+    }
+
     private setConnectionState(state: ConnectionState): void {
         this._connectionState = state;
         this._onConnectionChanged.fire(state);
@@ -1582,6 +1609,7 @@ export class MoeDaemonClient implements vscode.Disposable {
     }
 
     dispose(): void {
+        this.disposed = true;
         this.disconnect();
         this._onStateChanged.dispose();
         this._onConnectionChanged.dispose();
