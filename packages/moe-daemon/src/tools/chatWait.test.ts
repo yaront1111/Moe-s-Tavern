@@ -199,6 +199,25 @@ describe('moe.chat_wait', () => {
     });
   });
 
+  describe('routine presence lines', () => {
+    it('a #governors filter drains no other channel\'s presence lines, only #governors traffic and real mentions', async () => {
+      // Busy seats are what a mention-less system line used to be routed to,
+      // and routed channels join the filter's drain through the unread union.
+      await state.updateWorker(WORKER_ID, { status: 'GOVERNING' });
+      await post(channels.workers, 'worker-gone left (wrapper_restart)', 'system');
+      await post(channels.architects, 'worker-gone left (wrapper_restart)', 'system');
+      await post(channels.workers, '🔌 worker-gone deregistered (wrapper_restart); (no tasks held)', 'system');
+      await post(channels.architects, '🔌 worker-gone deregistered (wrapper_restart); (no tasks held)', 'system');
+      const governors = await post(channels.governors, 'queue is long today');
+      const mention = await post(channels.workers, `@${WORKER_ID} can you check task-1`, PEER_ID);
+
+      const result = await wait({ channels: [channels.governors] });
+
+      expect(result.messages?.map((m) => m.id)).toEqual([governors.id, mention.id]);
+      expect(state.getUnreadSummary(WORKER_ID)).toBeNull();
+    });
+  });
+
   describe('burst on wake', () => {
     for (const mention of ['direct', 'role'] as const) {
       it(`wakes for a routed ${mention} mention outside the watched channels`, async () => {

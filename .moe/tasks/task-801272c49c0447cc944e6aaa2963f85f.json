@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:32:46.880Z",
-  "updatedAt": "2026-10-30T07:56:26.015Z",
+  "updatedAt": "2026-10-30T07:57:29.490Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:35:07.652Z",
     "plannedStepCount": 5,
@@ -215,7 +215,13 @@
     "docs/CONFIGURATION.md",
     "docs/TROUBLESHOOTING.md",
     ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
-    ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json"
+    ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json",
+    ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+    ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+    ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json",
+    ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+    ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json"
   ],
   "completionSummary": "The daemon's WSS now refuses, with HTTP 403 and before 'connection', any upgrade on any path (/ws, /mcp, /runner, others) that carries an Origin header outside a frozen, empty allowed set. 'null' and '' count as present and are refused. An absent Origin is accepted.\n\nWebSocketServer.ts (+51/-1):\n- ALLOWED_WS_ORIGINS, with no knob, as the comment says.\n- exported isAllowedUpgradeOrigin.\n- verifyClient in the 2-argument form in the WSS options, so forwarded upgrades from 2f2484b4 are checked too.\n- verifyUpgradeOrigin and upgradeOriginAllowed. The body is the fixed 'Forbidden' and never echoes the origin. A warn log carries remoteAddress, path and the origin truncated to 120. An exception fails closed.\n\nBeyond the plan:\n- Both Origin and Sec-WebSocket-Origin are checked via req.headersDistinct, because ws's info.origin reads only sec-websocket-origin on a version-8 handshake.\n- done(true) stays outside the try, so a throw in onConnection can never 403 an already-upgraded socket.\n- onConnection, /runner key auth and /health are unchanged.\n\nNew webSocketOrigin.test.ts, 24 tests:\n- Refusal rows: /ws, /mcp, /, a query path, 'null', '', a mixed-case name, v8+Origin, v13+Sec-WebSocket-Origin, /runner with a valid key, the ws origin option, truncation and fail-closed. Each asserts onConnection is never called and no client set grows.\n- Accepted rows: ws with no options on /ws and /mcp; the claude-plugin's raw bytes; Node's global WebSocket; the Java-WebSocket 1.6.0 header set, verified from the jar (no 'Origin' string; TreeMap order) and cited; /runner key auth with and without the key.\n- RED before the impl: 17 failed, 7 passed. 5 mutants, all killed.\n\nDocs: a CONFIGURATION.md 'WebSocket Origin rule' paragraph and a TROUBLESHOOTING.md 'WebSocket upgrade refused with HTTP 403' entry, at problem-class level.\n\nNet own LOC: 293 (runtime+docs 62, tests 231).\n\nThe gate ran in a Linux-native snapshot of HEAD 5f62b98f with the 4 owned files overlaid and cmp-equal; the shared checko",
   "commits": [
@@ -248,6 +254,28 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "1267b319c23947c401d84ecd2ee2ec60c38205fa",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T07:51:53Z",
+      "paths": [
+        ".moe/tasks/task-60626bee13034a178fed55c697d14d06.json",
+        ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+        ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+        ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json",
+        ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json",
+        ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+        ".moe/tasks/task-a61d4f3522ab47b7b7df34534cd291b1.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T07:57:29.490Z",
+      "treeId": "3f14ada9f729a693ade5c0748b21985ebe3c8775",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -259,9 +287,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e60b90bd@2026-10-30T07:37:49Z",
-    "at": "2026-10-30T07:48:55.310Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T07:51:53Z",
+    "at": "2026-10-30T07:57:29.490Z"
   },
   "completedAt": "2026-10-30T07:56:26.014Z",
   "reviewCompletedAt": "2026-10-30T07:56:26.014Z",

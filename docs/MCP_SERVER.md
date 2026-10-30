@@ -2455,7 +2455,7 @@ Read chat messages with cursor-based pagination. Auto-tracks read position per w
   sinceId?: string,     // Return messages after this message ID
   limit?: number,       // Max messages (default 10, max 200)
   maxContentChars?: number, // Max chars/message in response (default 1000, 0 = full)
-  includeSystem?: boolean   // Also return the #general system feed (default false)
+  includeSystem?: boolean   // Also return the system feed (default false)
 }
 ```
 
@@ -2474,7 +2474,7 @@ Read chat messages with cursor-based pagination. Auto-tracks read position per w
 - When no `channel` specified, reads up to `limit` messages per channel, merges them by timestamp, and returns the newest global `limit` messages
 - In all-channel mode, per-channel cursors and unread counts advance/clear only when doing so cannot skip fetched-but-omitted messages; any channel with omitted fetched messages stays unchanged so those messages remain readable on a later call
 - Long message content is truncated by default; pass `maxContentChars: 0` only when exact full text is needed
-- **Skips the `#general` system feed** unless `includeSystem: true`: daemon posts (`sender: "system"`) in `#general` that @mention nobody — task moved, claimed, step completed, landing reports. The same facts reach agents through their tools; the IDE board reads the channel unfiltered. A system line that @mentions someone is always returned, and so is every line in role and custom channels. Hidden lines do not count toward `limit`, and the cursor stays on the last message returned.
+- **Skips the system feed** unless `includeSystem: true`: daemon posts (`sender: "system"`) that @mention nobody, in `#general` (task moved, claimed, step completed, landing reports) plus routine presence lines in any channel: `<id> left (<reason>)`, and a `🔌 <id> deregistered (<reason>); (no tasks held)` banner that released no tasks and dropped no resource claims. Feed lines are routed to nobody: no unread count, no `chat_wait` wake. The same facts reach agents through their tools; the IDE board reads the channel unfiltered. A system line that @mentions someone is always returned, and so is every other line in role and custom channels, including a deregistration banner that released tasks or dropped resource claims. Hidden lines do not count toward `limit`, and the cursor stays on the last message returned.
 - Feed lines also page nobody: they never raise an unread count, so a worker's unread total counts people, agents and mentions only
 
 ---
@@ -2552,7 +2552,7 @@ Long-poll for chat messages mentioning this worker or from humans. **Burst-aware
 - **Cursors advance only for delivered messages the drain actually read.** A capped burst stops the cursor at the last message returned; a channel the drain never scanned moves no cursor at all; and a message delivered straight off the event bus (the wake trigger, or anything that arrived mid-drain) never moves its channel's cursor, because it says nothing about the messages between it and where the scan stopped — a channel with more than 50 waiting would otherwise be skipped. Such a message is simply re-delivered on the next call. Unread counts are cleared only for channels that were fully drained. A failed cursor write is logged and the messages are still returned (a duplicate delivery beats a lost one).
 - Cancels any previous wait for the same worker
 - Aborts with `{ hasMessage: false, cancelled: true, error }` if a subscribed channel is deleted while waiting
-- The `#general` system feed (see `moe.chat_read`) never wakes a waiter and is never returned in a burst
+- The system feed (see `moe.chat_read`) never wakes a waiter and is never returned in a burst
 - **Account switch** (see **Claude Account Rotation**): with `acceptsAccountSwitch: true`, a seat holding no task whose Claude account must switch gets `{ hasMessage: false, accountSwitch }` (the shape of `moe.complete_step`'s) in place of a wait. It comes at once, or, while parked, on the first usage report that makes the switch due. Nothing is drained and no cursor moves, so every message stays unread for the next session. The `instruction` reads "ACCOUNT-SWITCH: …. End your turn now and do not call chat_wait again: …". Without the flag, and for a seat holding a task, the wait is unchanged.
 
 ---
@@ -2679,7 +2679,7 @@ Clear chat cursors and return a bounded, token-budgeted message window — for a
 ```
 
 **Notes:**
-- Skips the `#general` system feed, like `moe.chat_read` without `includeSystem`
+- Skips the system feed, like `moe.chat_read` without `includeSystem`
 
 ## Cross-Session Memory
 
