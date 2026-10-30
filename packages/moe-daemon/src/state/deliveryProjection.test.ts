@@ -3,7 +3,7 @@ import fs from 'fs';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import { deliveryProjection, type TaskDelivery } from './deliveryProjection.js';
 import { recordCandidate } from './candidateStore.js';
-import { recordCheckRun } from './checkRunStore.js';
+import { CHECK_OUTCOMES, recordCheckRun } from './checkRunStore.js';
 import { recordDeliveryReceipt } from './receiptStore.js';
 import type { Candidate, CheckRun, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
 import { createServer } from 'http';
@@ -201,6 +201,21 @@ describe('deliveryProjection', () => {
     seed();
     h.state.checkRuns.set(check.id, { ...check, source } as unknown as CheckRun);
     expect(deliveryProjection(h.state, task)).toStrictEqual({ ...expected, latestCheckRun: { command: check.command, exitCode: -1 } });
+  });
+
+  it.each(CHECK_OUTCOMES)('O1: serves the recorded %s outcome beside the exit code', outcome => {
+    seed();
+    h.state.checkRuns.set(check.id, { ...check, exitCode: 0, outcome });
+    expect(deliveryProjection(h.state, task)).toStrictEqual({
+      ...expected, latestCheckRun: { command: check.command, exitCode: 0, source: 'runner-observed', outcome },
+    });
+  });
+
+  // Display only: an unrecognised outcome is dropped here, never judged (gating stays in delivery/policy.ts).
+  it.each([undefined, null, 'PASSED', 7])('O2/O3: serves no outcome key for an absent or unrecognised outcome %s', outcome => {
+    seed();
+    h.state.checkRuns.set(check.id, { ...check, outcome } as unknown as CheckRun);
+    expect(deliveryProjection(h.state, task)).toStrictEqual(expected);
   });
 
   describe('required check verdict', () => {

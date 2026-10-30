@@ -1,8 +1,8 @@
 // Serving-only evidence. Never attach it to a stored Task or write it to disk.
-import type { Candidate, CheckRun, CheckRunSource, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
+import type { Candidate, CheckOutcome, CheckRun, CheckRunSource, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
 import type { StateManager } from './StateManager.js';
 import { listCandidatesForTask, SHA_RE, REVISION_RE } from './candidateStore.js';
-import { listCheckRunsForCandidate } from './checkRunStore.js';
+import { CHECK_OUTCOMES, listCheckRunsForCandidate } from './checkRunStore.js';
 import { getDeliveryReceiptForCandidate } from './receiptStore.js';
 import { currentAttempt, getAttempt } from './attemptStore.js';
 import {
@@ -13,8 +13,11 @@ import { logger } from '../util/logger.js';
 
 export interface TaskDelivery {
   currentCandidate?: Pick<Candidate, 'id' | 'treeSha' | 'baseRevision'> & { shortSha: string };
-  /** The LAST run reported on the current candidate, counted or not. A stored source that is not a CheckRunSource is omitted. */
-  latestCheckRun?: Pick<CheckRun, 'command' | 'exitCode'> & Partial<Pick<CheckRun, 'source'>>;
+  /**
+   * The LAST run reported on the current candidate, counted or not. A stored source that is not a CheckRunSource,
+   * or an outcome that is not a CheckOutcome (absent on rows recorded without one), is omitted. Display only.
+   */
+  latestCheckRun?: Pick<CheckRun, 'command' | 'exitCode'> & Partial<Pick<CheckRun, 'source' | 'outcome'>>;
   /**
    * delivery/policy.ts on the required check and protected required checks: false
    * while it reports either missing or drifted, true once every owed check is satisfied. Absent under the legacy policy
@@ -30,6 +33,7 @@ const isCandidateSha = (value: unknown): value is string => typeof value === 'st
 const isLandedRevision = (value: unknown): value is string => typeof value === 'string' && REVISION_RE.test(value);
 const isString = (value: unknown): value is string => typeof value === 'string';
 const isCheckSource = (value: unknown): value is CheckRunSource => value === 'runner-observed' || value === 'agent-reported';
+const isCheckOutcome = (value: unknown): value is CheckOutcome => CHECK_OUTCOMES.includes(value as CheckOutcome);
 
 /** Bad persisted metadata must not take down a board connection. No record is repaired here. */
 function readEvidence<T>(taskId: string, kind: string, read: () => T | undefined | null): T | undefined {
@@ -63,6 +67,7 @@ function checkFor(state: StateManager, task: Task, candidate: Candidate): TaskDe
       Number.isSafeInteger(c.exitCode) && c.treeSha === candidate.treeSha);
     return check ? {
       command: check.command, exitCode: check.exitCode, ...(isCheckSource(check.source) ? { source: check.source } : {}),
+      ...(isCheckOutcome(check.outcome) ? { outcome: check.outcome } : {}),
     } : undefined;
   });
 }
