@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -79,7 +79,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:48:43.431Z",
-  "updatedAt": "2026-10-30T14:19:57.013Z",
+  "updatedAt": "2026-10-30T14:33:15.574Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:49:12.702Z",
@@ -89,11 +89,14 @@
     "firstClaimAt": "2026-10-30T14:04:39.055Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T14:33:15.574Z",
+    "wallClockMs": 1716519
   },
   "contextFetchedBy": [
     "architect-eb7de546",
-    "worker-6e57c4f8"
+    "worker-6e57c4f8",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -193,5 +196,9 @@
     "kind": "completion",
     "sessionId": "worker-6e57c4f8@2026-10-30T14:09:29Z",
     "at": "2026-10-30T14:19:57.013Z"
-  }
+  },
+  "completedAt": "2026-10-30T14:33:15.574Z",
+  "reviewCompletedAt": "2026-10-30T14:33:15.574Z",
+  "reviewSummary": "Reviewed completion 51a62457 (on moe/work-2026-10-24, pushed). Only non-board file: repositorySource.test.ts, +83/-3 (80 net), under the 400 cap; other 8 paths are daemon .moe/tasks board JSON. No production, dependency or timeout changes.\n\nDoD:\n1. Capped-search test untouched (its hunk is absent from the diff), not skipped.\n2. Teardown awaits fs.promises.rm({recursive,force,maxRetries:5,retryDelay:100}). The afterEach restores mocks and real timers, then removeRoots uses allSettled and throws an AggregateError after all roots are attempted, so EPERM, EBUSY and unexpected errors still fail. Unit tests cover the rm options, every root attempted, aggregation, and idempotence.\n3. Native-Windows owned-child cwd-hold regressions (ready signal, deadlines, kill+await close+rm in finally) cover transient hold, persistent hold rejecting EPERM or EBUSY, and assertion-failure cleanup.\n4. My mutation check on native Windows (Node 24.16, isolated snapshot of HEAD 921f81a6): swapping removeRoot to sync rmSync gave 2 failed, 136 passed. The transient-hold and rm-options tests both failed.\n\nRe-ran `(cd packages/moe-daemon && npm test && npm test)` myself in isolated snapshots with platform-native npm ci, no MOE_* env:\n- Linux Node 24.21: both runs exit 0, 208 files, 5963 passed, 19 skipped.\n- Native Windows: both runs exit 0, 207 files passed, 1 skipped, 5934 passed, 47 skipped. repositorySource.test.ts passed 138/138 on both runs.\n- No leaked holder processes; moe-source-* roots went from 7 to 7. EBUSY log lines are unrelated workerType WARNs.\n- Logs: /tmp/moe-qa-24a5-{linux,win}-gate.log.\n\nComplexity: withHeldRoot is about 30 lines, justified by the DoD. Not a defect.",
+  "requiredCheckAtDone": null
 }
