@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:27:38.551Z",
-  "updatedAt": "2026-10-30T14:34:25.445Z",
+  "updatedAt": "2026-10-30T14:35:59.853Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:33:18.537Z",
     "plannedStepCount": 5,
@@ -172,7 +172,41 @@
     "scripts/tests/local-runner-check.test.mjs",
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/check-evidence.mjs",
+    "scripts/local-runner/check-lifecycle.mjs",
+    ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+    ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json"
+  ],
+  "completionSummary": "CQ-R11e delivered: the check lifecycle wires in the pinned toolchain and offline dependencies, and the environment identity names both. 4 files, 325 changed lines (+267/-58).\n\ncheck-evidence.mjs:\n- checkEnvironment requires toolchainSha256 (sha256 hex) and dependencyDigest (hex, or null when there is no dependency phase), each read once.\n- CHECK_BOUNDARIES gains filesystem.toolchain and a dependencies descriptor; the prefix stays v1.\n\ncheck-lifecycle.mjs:\n- runCheckJob takes a REQUIRED `dependencies`: 0-16 unique dirs, each '.' or validateImportPath-clean, read once, each with a package-lock.json in the MERGED snapshot view. [] is the caller's explicit choice of no dependency phase.\n- New injected steps: toolchain=fetchNodeToolchain, dependencies=buildDependencyCache, installToolchain, installDependencies.\n- Order: provision, toolchain, dependencies, environment, materialize, installToolchain, installDependencies, onReady, session, verify, remove.\n- The arch is guest.image.source.arch only. An unpinned arch gives CHECK_TOOLCHAIN_FAILED with no fetch.\n- TOOLCHAIN_, DEPENDENCY_ and TRANSFER_ codes pass through; anything else is CHECK_TOOLCHAIN_FAILED or CHECK_DEPENDENCIES_FAILED. A malformed result fails closed, an abort is checked after each step, and the VM is always deleted.\n\nTests:\n- E1-E5 extended and E9 added: stale evidence across a toolchain or dependency change.\n- CJ2/3/4/5/7/8 adjusted, CJ7 extended.\n- New CJ11-CJ14 (CJ9/CJ10 were already R11f's):\n  - CJ11: input refusals;\n  - CJ12: order and args for x64 and arm64, overlay bytes, read once;\n  - CJ13: failure codes, no arch, abort per step;\n  - CJ14: the real session with a supervisor exit of 81 gives infra-failure, failure null.\n\nMutation: 13 probes, 12 killed. The survivor was a redundant abort check; I removed it and pinned environment in its test row.\n\nVerification:\n- DoD command: exit 0, 426/423/0 fail/3 pre-existing skips.\n- 6-file CI line in an archive snapshot: exit 0, 449/446/0/3.\n\nFiled task-da1d95",
+  "commits": [
+    {
+      "sha": "7a7f1044c0d7fdc34591ad6fb035de4c826d3069",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T14:13:56Z",
+      "paths": [
+        ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+        ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/tests/local-runner-check.test.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T14:35:59.853Z",
+      "treeId": "9512c83146ff4abae74f59bde6bd9cbe3f858624",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "scripts/local-runner/check-lifecycle.mjs"
   ],
-  "completionSummary": "CQ-R11e delivered: the check lifecycle wires in the pinned toolchain and offline dependencies, and the environment identity names both. 4 files, 325 changed lines (+267/-58).\n\ncheck-evidence.mjs:\n- checkEnvironment requires toolchainSha256 (sha256 hex) and dependencyDigest (hex, or null when there is no dependency phase), each read once.\n- CHECK_BOUNDARIES gains filesystem.toolchain and a dependencies descriptor; the prefix stays v1.\n\ncheck-lifecycle.mjs:\n- runCheckJob takes a REQUIRED `dependencies`: 0-16 unique dirs, each '.' or validateImportPath-clean, read once, each with a package-lock.json in the MERGED snapshot view. [] is the caller's explicit choice of no dependency phase.\n- New injected steps: toolchain=fetchNodeToolchain, dependencies=buildDependencyCache, installToolchain, installDependencies.\n- Order: provision, toolchain, dependencies, environment, materialize, installToolchain, installDependencies, onReady, session, verify, remove.\n- The arch is guest.image.source.arch only. An unpinned arch gives CHECK_TOOLCHAIN_FAILED with no fetch.\n- TOOLCHAIN_, DEPENDENCY_ and TRANSFER_ codes pass through; anything else is CHECK_TOOLCHAIN_FAILED or CHECK_DEPENDENCIES_FAILED. A malformed result fails closed, an abort is checked after each step, and the VM is always deleted.\n\nTests:\n- E1-E5 extended and E9 added: stale evidence across a toolchain or dependency change.\n- CJ2/3/4/5/7/8 adjusted, CJ7 extended.\n- New CJ11-CJ14 (CJ9/CJ10 were already R11f's):\n  - CJ11: input refusals;\n  - CJ12: order and args for x64 and arm64, overlay bytes, read once;\n  - CJ13: failure codes, no arch, abort per step;\n  - CJ14: the real session with a supervisor exit of 81 gives infra-failure, failure null.\n\nMutation: 13 probes, 12 killed. The survivor was a redundant abort check; I removed it and pinned environment in its test row.\n\nVerification:\n- DoD command: exit 0, 426/423/0 fail/3 pre-existing skips.\n- 6-file CI line in an archive snapshot: exit 0, 449/446/0/3.\n\nFiled task-da1d95"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-0062feec@2026-10-30T14:13:56Z",
+    "at": "2026-10-30T14:35:59.853Z"
+  }
 }
