@@ -50,7 +50,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -70,7 +70,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:56:28.663Z",
-  "updatedAt": "2026-10-30T08:18:18.750Z",
+  "updatedAt": "2026-10-30T08:28:43.384Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:59:25.159Z",
@@ -80,11 +80,14 @@
     "firstClaimAt": "2026-10-30T08:07:04.888Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-30T08:28:43.384Z",
+    "wallClockMs": 1298496
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-262588d0"
+    "worker-262588d0",
+    "qa-952969be"
   ],
   "tier": "light",
   "effort": "medium",
@@ -196,5 +199,9 @@
     "kind": "completion",
     "sessionId": "worker-262588d0@2026-10-30T08:15:22Z",
     "at": "2026-10-30T08:17:27.488Z"
-  }
+  },
+  "completedAt": "2026-10-30T08:28:43.384Z",
+  "reviewCompletedAt": "2026-10-30T08:28:43.384Z",
+  "reviewSummary": "Verified in a fresh git-archive HEAD snapshot with lock-matched native Linux node_modules, MOE_* env unset. RED at HEAD: the typecheck half prints exactly `src/tools/chatWait.test.ts(71,7): error TS2322: Type 'null' is not assignable to type 'string'.` and exits 1. GREEN: copied the shared-tree chatWait.test.ts into the snapshot (cmp identical) and re-ran the exact task.verification command. tsc printed nothing; vitest: Test Files 1 passed (1), Tests 29 passed (29); exit 0. Count equals the pre-edit 29. DoD/contract: the diff is `epicId: null` -> `''` plus an added `teamId: null`, both inside the beforeEach `const worker: Worker` literal (2 insertions, 1 deletion). schema.ts diff is 0 lines, so Worker keeps epicId: string and teamId: string | null. No assertion, skip or test name changed; grep finds no read of worker.epicId/teamId in chatWait.ts or its test; the 'routine presence lines' block is untouched. Size is far under the cap. DELIVERY NOTE per the governor's comment: completion e4992075 on moe/work-2026-10-24 carries only the two board records. The fix file packages/moe-daemon/src/tools/chatWait.test.ts is still a dirty ` M` path, held as MOE_CONTESTED_HELD behind task-48edc21b. That task is now DONE (checkpoint aae91b68), so the hold should lift and this session's landing should carry the file. I did not self-land: a completion commit exists and wrappers are the only Git-write actors. Governor follow-up: after this session exits, confirm `git log -1 -- packages/moe-daemon/src/tools/chatWait.test.ts` shows Moe-Task task-a61d4f35; if not, the bytes are stranded and need a re-land.",
+  "requiredCheckAtDone": null
 }

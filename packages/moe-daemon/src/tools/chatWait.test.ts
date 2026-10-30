@@ -68,7 +68,7 @@ describe('moe.chat_wait', () => {
       id: WORKER_ID,
       type: 'CLAUDE',
       projectId: 'proj-test',
-      epicId: null,
+      epicId: '',
       currentTaskId: null,
       status: 'IDLE',
       branch: 'main',
@@ -77,6 +77,7 @@ describe('moe.chat_wait', () => {
       lastActivityAt: new Date().toISOString(),
       lastError: null,
       errorCount: 0,
+      teamId: null,
     };
     fs.writeFileSync(path.join(moePath, 'workers', `${WORKER_ID}.json`), JSON.stringify(worker, null, 2));
     fs.writeFileSync(path.join(moePath, 'workers', `${PEER_ID}.json`), JSON.stringify({ ...worker, id: PEER_ID }, null, 2));
