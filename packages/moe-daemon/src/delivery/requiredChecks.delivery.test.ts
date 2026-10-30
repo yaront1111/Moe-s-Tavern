@@ -155,6 +155,20 @@ describe('protected required checks in the shared delivery predicate', () => {
     expect(missing()).toEqual(['protected-checks-unmeasured', `required-check:${UNIT}`, `required-check:${LINT}`]);
   });
 
+  it('fails closed on a corrupt requiredChecks entry', () => {
+    candidate(tree1, entriesAt(tree1));
+    h.state.tasks.set('task-1', { ...task(), executionContract: { requiredChecks: [{ ...defs[0], bogus: 1 } as never, defs[1]] } });
+    expect(missing()).toStrictEqual(['protected-checks-unapproved']);
+    expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBe(false);
+  });
+
+  it.each(['first', 'last'])('reads a duplicate candidate protected path as unmeasured (%s)', (where) => {
+    const entries = entriesAt(tree1);
+    const dup = { path: entries[0].path, oid: OID };
+    candidate(tree1, where === 'first' ? [dup, ...entries] : [...entries, dup]);
+    expect(missing()).toStrictEqual(['protected-checks-unmeasured']);
+  });
+
   it('owes a command shared with qualityGate once, gate first', () => {
     settings({ autoCommit: true, qualityGate: ` ${UNIT} `, qualityGateScope: 'everyTask' });
     candidate(tree1, entriesAt(tree1), []);

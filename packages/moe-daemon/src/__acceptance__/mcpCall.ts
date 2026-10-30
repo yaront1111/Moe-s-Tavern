@@ -10,10 +10,15 @@
 // Nothing here imports a tool module or invokes a handler. A test that needs an
 // unregistered tool deletes the entry from its own adapter instance (see
 // producerConsumer.acceptance.test.ts); McpAdapter itself is never modified.
+//
+// options.runner reaches the runner-only tools through the dispatch /runner uses;
+// it must come from authenticateRunner over a temp host key, never a literal. The
+// real /runner upgrade is proven separately (runnerChannel.test.ts W1 and
+// deliveryBypass.acceptance.test.ts W1).
 // =============================================================================
 
 import type { StateManager } from '../state/StateManager.js';
-import { McpAdapter } from '../server/McpAdapter.js';
+import { McpAdapter, type McpHandleOptions } from '../server/McpAdapter.js';
 
 /** JSON-RPC internal error: the code for a reply this harness cannot read. */
 const MALFORMED_REPLY = -32603;
@@ -44,8 +49,9 @@ function codeNameOf(data: unknown): string | undefined {
 }
 
 /** The single response to `request`; a missing or batch reply is malformed, never a pass. */
-async function exchange(adapter: McpAdapter, method: string, params: unknown, id: number): Promise<unknown> {
-  const reply = await adapter.handle({ jsonrpc: '2.0', id, method, params });
+async function exchange(adapter: McpAdapter, method: string, params: unknown, id: number,
+  options: McpHandleOptions): Promise<unknown> {
+  const reply = await adapter.handle({ jsonrpc: '2.0', id, method, params }, options);
   if (reply === null || Array.isArray(reply)) {
     throw new McpCallError(`${method}: expected one JSON-RPC response`, MALFORMED_REPLY);
   }
@@ -71,15 +77,16 @@ function parseToolResult(name: string, result: unknown): unknown {
  * pass your own to unwire or wrap a registry entry for one test. The rate
  * limiter is per adapter instance, so each test gets a fresh budget.
  */
-export function createMcpCaller(state: StateManager, adapter: McpAdapter = new McpAdapter(state)): McpCaller {
+export function createMcpCaller(state: StateManager, adapter: McpAdapter = new McpAdapter(state),
+  options: McpHandleOptions = {}): McpCaller {
   let nextId = 0;
   return {
     async call(name, args = {}) {
-      const result = await exchange(adapter, 'tools/call', { name, arguments: args }, ++nextId);
+      const result = await exchange(adapter, 'tools/call', { name, arguments: args }, ++nextId, options);
       return parseToolResult(name, result);
     },
     async listTools() {
-      const result = (await exchange(adapter, 'tools/list', {}, ++nextId)) as { tools?: Array<{ name?: unknown }> } | null;
+      const result = (await exchange(adapter, 'tools/list', {}, ++nextId, options)) as { tools?: Array<{ name?: unknown }> } | null;
       if (!Array.isArray(result?.tools)) throw new McpCallError('tools/list: result has no tools array', MALFORMED_REPLY);
       return result.tools.map((tool) => String(tool.name));
     },
