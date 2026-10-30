@@ -99,7 +99,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -142,14 +142,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:38:47.791Z",
-  "updatedAt": "2026-10-30T05:58:37.606Z",
+  "updatedAt": "2026-10-30T06:14:36.754Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:43:34.854Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T06:14:36.754Z",
+    "wallClockMs": 45061900
   },
   "contextFetchedBy": [
     "worker-0062feec",
@@ -310,7 +312,7 @@
     "sessionId": "qa-952969be@2026-10-30T05:41:45Z",
     "at": "2026-10-30T05:50:13.815Z"
   },
-  "reviewCompletedAt": "2026-10-30T05:19:10.467Z",
+  "reviewCompletedAt": "2026-10-30T06:14:36.754Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -345,5 +347,8 @@
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "QA park, size waiver pending. The substance is green. Only the 400 net-LOC review cap blocks approval, and no rail waives it yet. Waiver proposal prop-77f189b18e6145d080a447131f2dfa15 (EPIC ADD_RAIL on epic-f5c1c2ea674e40bcad8ab16d7657ccc0) has been PENDING since 05:22Z, and only a human can resolve it.\nBytes: completion 1cf1b47 (tree dc659992) is +474/-0 over packages/: checkObservationStore.test.ts +241, checkObservationStore.ts +202, schema.ts +31. This equals the proposal text. d62694d is board-only.\nFresh QA gate on a git archive of HEAD f7867a2 (no overlay; owned files cmp-equal to 1cf1b47; native npm ci; env -i; node v24.21.0):\n- npm test EXIT 0: 194 files, 5456 passed, 16 skipped.\n- tsc --noEmit EXIT 0; test-file typecheck EXIT 0.\n- DoD 1-5 verified; 5 new QA mutants, all killed. The evidence is in QA comment-02d18c4d.\nResume:\n- When the proposal is APPROVED, set_task_status REVIEW. The next QA confirms the rail in allRails.epic, re-runs the gate and approves, naming 474 net.\n- If it is REJECTED, set_task_status PLANNING for a review-scope split.\nunblock_worker cannot reach this unassigned row.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-30T06:14:36.754Z",
+  "reviewSummary": "CQ-V03b round 3 APPROVE (qa-952969be). SIZE: the CQ-V03b size-exception rail (human-approved prop-77f189b1) is in allRails.epic. Completion 1cf1b47 (tree dc659992, on moe/work-2026-10-24) re-measured with `git show --numstat --format=`: +474/-0, net 474 non-board LOC, equal to the rail text (checkObservationStore.test.ts +241, checkObservationStore.ts +202, schema.ts +31; runtime 233, tests 241). No growth: `git log 1cf1b47..HEAD` (3254c2d) touches none of the 3 owned paths nor checkRunStore/recordCheckRun/policy/StateManager; owned blobs equal at 1cf1b47, HEAD and worktree. d62694d and 9d5623a are board-only.\nGATE (fresh): git archive of the whole repo at HEAD 3254c2d, no overlay, owned files cmp-equal to 1cf1b47, lock = worktree modulo CR; native npm ci; env -i, node v24.21.0. `cd packages/moe-daemon && npm test` EXIT 0: 196 files, 5480 passed | 16 skipped; focused file 42/42. `npx tsc --noEmit` EXIT 0; test-file typecheck EXIT 0.\nDoD (read module, schema hunk, tests in full): 1 real record_check_run handler forgery (both sources) false, observed run true. 2 identical replay duplicate with byte snapshot, CHECK_RUN_IMMUTABLE, CHECK_DISPATCH_ALREADY_OBSERVED. 3 NOT_FOUND/RUNNER/ENVIRONMENT refusals write nothing; superseded dispatch binds cand-k1 rev 1; new dispatch CHECK_DISPATCH_NOT_CURRENT. 4 restart reload, EIO crash retry completes marker. 5 task.verification reproduced.\nNew QA mutants on the snapshot copy, all KILLED, module restored: planRevision from params; drop approvedPlanRevision clause; maps cached per moePath; skip environment guard.\nRails: task-rail files byte-unchanged, no forbidden patterns, no .moe hand edits, verified-local untouched. Accepted deviation: StateManager.ts (1497/1500 cap) unedited; maps module-owned, so V03/V04 use getCheckDispatch/getCheckObservation.\nPonytail: checkObservationStore.ts:L191-193 stdlib: hand-rolled key-set compare, util.isDeepStrictEqual(run, stored). net: -2 lines possible (non-blocking).",
+  "requiredCheckAtDone": null
 }

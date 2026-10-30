@@ -1,0 +1,34 @@
+{
+  "id": "task-ec64165c85f246088a7224cf70b04670",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "[CQ-RF03] Replace an unverified running daemon",
+  "description": "Objective: when a protected project finds a running daemon whose provenance does not verify, the IDE can stop it with the INSTALLED CLI's `stop` and start its own installed daemon, rather than only refusing. A daemon that VS Code shares is never stopped without asking. This is CQ-R01 follow-up 3.\n\nCreated by architect-e4b7eee0 on 2026-10-30, when the human moved the non-gating R01 follow-ups out of CQ-R13. It edits MoeDaemonSupervisor.kt after CQ-RF01.\n\nDeliverable: MoeDaemonSupervisor.kt.\n- On an unverified daemon, run the installed daemon CLI's `stop --project <path>`, never a repository binary.\n- Wait, within a fixed bound, for the daemon to exit and daemon.json to clear.\n- Then spawn the installed daemon with fresh provenance.\n- If another client is registered on that daemon, ask first through an injectable confirmer.\n- A failed or timed-out stop keeps today's refusal.\n- Tests in MoeDaemonSupervisorTest use an injected process runner.\n\nOut of scope:\n- CQ-RF01, RF02 and RF04;\n- VS Code changes;\n- .moe edits;\n- enabling verified-local.\n\nVerification command (fresh, exit 0 required): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+  "definitionOfDone": [
+    "An unverified running daemon is stopped only through the installed CLI's stop command, and the installed daemon is then started with fresh provenance. Shown by tests with an injected process runner.",
+    "A daemon with another registered client is never stopped without explicit confirmation, and a failed or timed-out stop leaves today's refusal in place. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:06:32.776Z",
+  "updatedAt": "2026-10-30T06:08:02.014Z",
+  "dependsOn": [
+    "task-fd653cfbaea541c39569dfed9452cf5c"
+  ]
+}

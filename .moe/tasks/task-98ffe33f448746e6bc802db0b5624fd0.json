@@ -1,0 +1,36 @@
+{
+  "id": "task-98ffe33f448746e6bc802db0b5624fd0",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "[CQ-RF06] VS Code protected runtime parity",
+  "description": "Objective: under the protected profile, the VS Code extension applies the same runtime-selection rules as JetBrains:\n- a strict, fail-closed profile read;\n- installed-only daemon, proxy and wrapper selection;\n- MOE_DAEMON_PATH, MOE_PROXY_PATH and MOE_RUNTIME_PROTECTED=1 (CQ-R13c1's marker) passed to agent launches;\n- refusal instead of fallback.\nThis is CQ-R01 follow-up 7. JetBrains stays primary, so this row follows CQ-RF01..RF04 and CQ-R13c1, and mirrors their final behavior.\n\nCreated by architect-e4b7eee0 on 2026-10-30, when the human moved the non-gating R01 follow-ups out of CQ-R13.\n\nDeliverable:\n- The moe-vscode daemon spawn and agent launch paths implement the rules above under the protected profile.\n- The legacy profile is unchanged.\n- Add a unit test for the selection, and keep the startup regression tests passing.\n\nOut of scope:\n- JetBrains changes;\n- persistent provenance for VS Code, unless CQ-RF01's store is shareable as-is (note it if so);\n- .moe edits;\n- enabling verified-local.\n\nVerification command (fresh, exit 0 required): cd moe-vscode && npm test && npm run compile",
+  "definitionOfDone": [
+    "Under the protected profile, VS Code launches agents only with installed daemon and proxy paths plus MOE_RUNTIME_PROTECTED=1, and refuses when an installed artifact is missing. Shown by tests.",
+    "The legacy profile behaves exactly as before. Shown by the existing startup tests passing.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:06:52.423Z",
+  "updatedAt": "2026-10-30T06:08:02.093Z",
+  "dependsOn": [
+    "task-f3485ac9d4384664870d88db876ddd54",
+    "task-de91373a5ed84530b29fc4cfbcee974a",
+    "task-10af73355e1b4748b1e07491a7a891cb"
+  ]
+}

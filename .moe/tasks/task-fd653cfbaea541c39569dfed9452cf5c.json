@@ -1,0 +1,31 @@
+{
+  "id": "task-fd653cfbaea541c39569dfed9452cf5c",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "[CQ-RF01] Persistent daemon provenance across IDE restarts",
+  "description": "Objective: after an IDE restart, a protected-profile project can reconnect to a daemon that the IDE itself spawned earlier, instead of refusing it. Today it is refused by design, because spawn provenance (pid plus start instant, or the direct parent) lives only in memory. This is CQ-R01's follow-up 1, from the architect note on CQ-R13. Its design is in Serena memory decision-protected-runtime-selection.\n\nCreated by architect-e4b7eee0 on 2026-10-30, when the human moved the non-gating R01 follow-ups out of CQ-R13 into this epic.\n\nDeliverable:\n- In the JetBrains plugin, change MoeDaemonSupervisor.kt and RuntimeSelectionPolicy.kt as CQ-R01 landed them, under moe-jetbrains/src/main/kotlin/com/moe/.\n- Persist each protected spawn record outside the repository, in the IDE system directory, with owner-only access: {project path, pid, process start instant, installed daemon path}.\n- In doConnect, accept an already-running daemon only when its live pid and start instant match a stored record for this project and the installed daemon.\n- A missing, mismatched, foreign-project or unreadable record refuses exactly as today.\n- Prune records whose process is gone.\n- Tests go in the existing Kotlin test classes: MoeDaemonSupervisorTest and RuntimeSelectionPolicyTest.\n\nOut of scope:\n- the downgrade pin (CQ-RF02);\n- replacing an unverified daemon (CQ-RF03);\n- the Windows restart race (CQ-RF04);\n- VS Code (CQ-RF06);\n- .moe edits;\n- enabling verified-local.\n\nVerification command (fresh, exit 0 required): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" (= cd moe-jetbrains && ./gradlew test; this WSL host has no Linux JDK)",
+  "definitionOfDone": [
+    "After an IDE restart, a daemon the IDE spawned under the protected profile is accepted only when its live pid and start instant match a stored provenance record for this project and the installed daemon. Shown by tests.",
+    "A missing, mismatched, foreign-project or unreadable record refuses the connection exactly as today. The store is outside the repository with owner-only access. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:06:18.870Z",
+  "updatedAt": "2026-10-30T06:06:18.870Z"
+}

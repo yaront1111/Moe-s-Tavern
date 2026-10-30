@@ -1,0 +1,36 @@
+{
+  "id": "task-f3f364a6c6864054901ec27f342a87f6",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "[CQ-RF07] Protected runtime follow-ups integration",
+  "description": "Objective: the CQ-RF epic's one final integration-and-hardening task. It owns the epic's full regression, its docs sweep and an adversarial review of the whole epic diff.\n\nCreated by architect-e4b7eee0 on 2026-10-30. It depends on CQ-RF01..RF06.\n\nDeliverable:\n- Full regression, with counts:\n  - the daemon's vitest suite;\n  - JetBrains `./gradlew test`, through cmd.exe on this WSL host;\n  - VS Code `npm test` and `npm run compile`;\n  - bash scripts/tests/postflight.sh;\n  - root `npm run lint`.\n- Docs sweep:\n  - docs/ARCHITECTURE.md and docs/TROUBLESHOOTING.md describe the persistent provenance and downgrade-pin state, the daemon replacement flow and the Windows restart behavior, and link the CQ-RF05 decision;\n  - docs/CONFIGURATION.md lists any new state locations.\n- An adversarial pass over the whole CQ-RF diff, looking for any way to reach a repository-supplied runtime, or a silent downgrade, under the protected profile.\n\nOut of scope:\n- new behavior beyond fixes the review finds;\n- enabling verified-local;\n- .moe edits.\n\nVerification commands (fresh, each exit 0): cd packages/moe-daemon && npm test; cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"; cd moe-vscode && npm test && npm run compile; bash scripts/tests/postflight.sh; npm run lint.",
+  "definitionOfDone": [
+    "The full regression is green, with counts: daemon vitest, JetBrains gradle test, VS Code npm test and compile, the postflight harness and role lint.",
+    "The docs describe the persistent provenance and downgrade-pin state, the daemon replacement flow and the Windows restart behavior, and they link the CQ-RF05 decision.",
+    "An adversarial review of the whole epic diff finds no protected-profile bypass, or files a row for each finding.",
+    "The verification commands exit 0 with their output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:07:00.327Z",
+  "updatedAt": "2026-10-30T06:08:02.129Z",
+  "dependsOn": [
+    "task-b439d7fb2c3443789fe91971cad4ed04",
+    "task-98ffe33f448746e6bc802db0b5624fd0"
+  ]
+}

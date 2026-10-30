@@ -1,0 +1,30 @@
+{
+  "id": "task-b439d7fb2c3443789fe91971cad4ed04",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "[CQ-RF05] daemon.json binding threat-model decision",
+  "description": "Objective: decide, in writing, whether same-user host processes stay outside the protected profile's threat model. Two open points depend on it:\n- CQ-R01 follow-up 5: daemon.json's port↔pid binding is not portably verifiable.\n- CQ-R08's handoff on CQ-R13, point 3: the per-request daemon.json re-check before a forward has a theoretical TOCTOU window.\n\nCreated by architect-e4b7eee0 on 2026-10-30, when the human moved the non-gating R01 follow-ups out of CQ-R13. This is a spike: its deliverable is a decision, not code.\n\nDeliverable: one decision document under docs/, linked from docs/ARCHITECTURE.md's security notes. It contains:\n- the threat-model statement;\n- both open points, with references to the code (readDaemonInfo, the guest-session forward path);\n- the options considered, each with its reason:\n  - a per-platform OS lookup of the port's owner;\n  - a daemon-issued nonce over /health;\n  - accepting and documenting the gap;\n- the decision;\n- the follow-up rows to create, if the decision changes behavior.\n\nOut of scope:\n- implementing any option;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): npm run lint (repo root), and the decision document exists with those sections.",
+  "definitionOfDone": [
+    "A decision document under docs/ states whether same-user host processes are in the protected profile's threat model. It covers both the daemon.json port↔pid binding and the CQ-R08 per-request TOCTOU window.",
+    "It lists the options considered with reasons, records the decision, and names every follow-up row the decision requires. docs/ARCHITECTURE.md links it.",
+    "npm run lint exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:06:45.773Z",
+  "updatedAt": "2026-10-30T06:06:45.773Z"
+}

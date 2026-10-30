@@ -1,0 +1,18 @@
+{
+  "id": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "projectId": "proj-3830fac7",
+  "title": "CQ-RF: Protected runtime follow-ups",
+  "description": "Non-gating follow-ups to CQ-R01 (protected installed runtime selection), moved out of CQ-R13 (task-f4811a72) by the human's decision in the architect REPL on 2026-10-30. They harden the IDE and client side of the protected (strong) profile:\n- persistent daemon provenance across IDE restarts;\n- a persistent downgrade pin with a human confirmation;\n- replacement of an unverified running daemon;\n- the Windows Restart Daemon supervisor race;\n- the daemon.json binding threat-model decision;\n- VS Code parity.\nThey do NOT gate CQ-R isolation certification. verified-local stays unavailable.",
+  "architectureNotes": "Source: the architect note on CQ-R13 from planning CQ-R01 (2026-10-24, architect-26ba32c3) lists seven follow-ups. Follow-up 6, wrapper fallbacks under strong, stays in CQ-R as CQ-R13c1/R13c2, which add the MOE_RUNTIME_PROTECTED=1 marker set by the JetBrains launcher. The other six are this epic's rows.\n\nR01's design (Serena memory decision-protected-runtime-selection):\n- a strict fail-closed profile read;\n- a JVM-session downgrade pin;\n- installed-only daemon, wrapper and proxy selection;\n- spawn-record provenance (pid + startInstant, or the direct parent) checked in doConnect.\nAny state these rows persist lives outside the repository, in the IDE system directory, with owner-only access. JetBrains is primary: implement and test it first, and VS Code follows. Kotlin tests run from WSL through cmd.exe gradlew.bat, because there is no Linux JDK; CQ-R01's verification records the exact command.",
+  "epicRails": [
+    "Use original Moe source; the daemon owns state and the wrappers own host Git writes. Never directly edit .moe. Preserve legacy behavior and existing dirty bytes. The strong profile stays disabled until isolation, evidence and client gates pass.",
+    "Every task owns tests; exactly one final integration/hardening task per epic. Shared schema/protocol changes get broad regression.",
+    "Preserve legacy policy. No unsupported isolation downgrade or caller-minted trusted evidence.",
+    "Parallelize only file-disjoint implementations. Serialize overlapping affectedFiles through explicit dependencies; preserve peer/pre-existing bytes. No Git writes outside wrappers.",
+    "Protected-profile state persisted by these rows lives outside the repository, with owner-only access. A missing, unreadable or mismatched record always fails closed to today's refusal."
+  ],
+  "status": "PLANNED",
+  "order": 1106,
+  "createdAt": "2026-10-30T06:05:59.229Z",
+  "updatedAt": "2026-10-30T06:05:59.229Z"
+}

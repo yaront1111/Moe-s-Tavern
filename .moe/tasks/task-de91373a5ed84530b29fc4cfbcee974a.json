@@ -1,0 +1,33 @@
+{
+  "id": "task-de91373a5ed84530b29fc4cfbcee974a",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "[CQ-RF04] Windows Restart Daemon supervisor race",
+  "description": "Objective: on Windows, Restart Daemon must leave no old supervisor that can respawn its `_run` child. Today Process.destroy is TerminateProcess, which kills only the supervisor and orphans `_run`. An old supervisor can then respawn `_run` after the restart. This is CQ-R01 follow-up 4.\n\nCreated by architect-e4b7eee0 on 2026-10-30, when the human moved the non-gating R01 follow-ups out of CQ-R13. It edits MoeDaemonSupervisor.kt after CQ-RF03.\n\nDeliverable: the Windows restart path in MoeDaemonSupervisor.kt.\n- Stop through the installed daemon CLI's `stop` first, so the supervisor exits without respawning.\n- Then terminate the old supervisor's whole process tree (ProcessHandle descendants).\n- Confirm that no old `_run` remains before starting the new daemon. Otherwise refuse with a fixed message.\n- Other platforms are unchanged.\n- Tests in MoeDaemonSupervisorTest use injected process handles.\n\nOut of scope:\n- CQ-RF01, RF02 and RF03;\n- VS Code;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+  "definitionOfDone": [
+    "On Windows, Restart Daemon stops the old supervisor and every descendant before starting a new one, and no old `_run` survives to respawn. Shown by tests with injected process handles.",
+    "Restart behavior on Linux and macOS is unchanged. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:06:39.223Z",
+  "updatedAt": "2026-10-30T06:08:02.048Z",
+  "dependsOn": [
+    "task-ec64165c85f246088a7224cf70b04670"
+  ]
+}
