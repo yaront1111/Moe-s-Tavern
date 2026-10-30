@@ -72,7 +72,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -85,16 +85,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T08:25:16.140Z",
-  "updatedAt": "2026-10-30T08:48:52.678Z",
+  "updatedAt": "2026-10-30T08:54:10.898Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T08:26:22.281Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T08:54:10.897Z",
+    "wallClockMs": 1668616
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-262588d0"
+    "worker-262588d0",
+    "qa-ba3f4f35"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -178,7 +181,51 @@
   },
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+    ".moe/tasks/task-2e8dda26dd9848c5bbb02e31424b99b8.json",
+    ".moe/tasks/task-bf4debb34a0241d2be0f764a2a68158b.json"
   ],
-  "completionSummary": "Root-first ProtectedStateStore.read validation now refuses existing invalid roots and missing roots below non-directory ancestors while preserving fresh stores and linked IDE-system parents. Added unconditional PS6 plus link/ACL PS7; all prior tests/helpers and every other store member unchanged. Windows TDD: expected RED had exactly PS6/PS7/D4 failures; fresh focused GREEN passed 48/48, 0 failures/errors/skips, including unchanged D4. Scoped diff check clean, adversarial review complete, lease released, Serena handoff/gotcha saved. Full suite deferred per plan to parent tasks after both fixes land. Only two approved paths modified; wrapper owns landing, and QA should check contested test path held= after session exit."
+  "completionSummary": "Root-first ProtectedStateStore.read validation now refuses existing invalid roots and missing roots below non-directory ancestors while preserving fresh stores and linked IDE-system parents. Added unconditional PS6 plus link/ACL PS7; all prior tests/helpers and every other store member unchanged. Windows TDD: expected RED had exactly PS6/PS7/D4 failures; fresh focused GREEN passed 48/48, 0 failures/errors/skips, including unchanged D4. Scoped diff check clean, adversarial review complete, lease released, Serena handoff/gotcha saved. Full suite deferred per plan to parent tasks after both fixes land. Only two approved paths modified; wrapper owns landing, and QA should check contested test path held= after session exit.",
+  "commits": [
+    {
+      "sha": "610206c9c6f7d603539035b8171c6e2e574fdae9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-262588d0@2026-10-30T08:43:42Z",
+      "paths": [
+        ".moe/tasks/task-2e8dda26dd9848c5bbb02e31424b99b8.json",
+        ".moe/tasks/task-bf4debb34a0241d2be0f764a2a68158b.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-262588d0",
+      "recordedAt": "2026-10-30T08:49:13.442Z",
+      "treeId": "b48be62f74b8288ef717eeef0a254104798afc0d",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+          "taskId": "task-f3485ac9d4384664870d88db876ddd54"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-262588d0@2026-10-30T08:43:42Z",
+    "at": "2026-10-30T08:49:13.442Z"
+  },
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-30T08:54:10.897Z",
+  "reviewCompletedAt": "2026-10-30T08:54:10.897Z",
+  "reviewSummary": "Reviewed recorded completion 610206c9c6f7d603539035b8171c6e2e574fdae9 via git show and git branch --contains: on moe/work-2026-10-24; both owned paths landed, wrapper ended with no held/unattributed paths. Source/test delta +56/-4 (52 net); whole commit +264/-9 including daemon-owned board metadata. git diff --check clean. Independently reran exact command under jetbrains-gradle: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --rerun\". Exit 0, BUILD SUCCESSFUL in 5s; fresh Windows XML 2026-10-30T08:52:35.302Z: 48 tests, 0 failures/errors/skips. PS1-PS7 and D1-D5 all present/pass; PS6/PS7 not skipped. Evidence /tmp/bf4debb3-qa-green.{log,xml}; lease released. DoD: file roots and non-directory ancestors refused without mutation; valid fresh/absent records and linked parents preserved; owner/link/size/atomic-write regression green. Byte-compared old tests/helpers, RuntimeSelectionPolicy.kt, and store write/delete/permission code unchanged. Name guard first, only NoSuchFileException treated as absent, callers catch other errors and fail closed. Working gate inputs matched recorded source/test blobs before/after. No added race/silent-failure or complexity finding; existing owner-only root-swap TOCTOU unchanged. Full suite NOT run here per scoped plan: audited RF02/task-f3485ac9 and task-90664db1 step-5 full gates still pending on both fixes; integration remains unverified here. No docs/migration/config changes required.",
+  "requiredCheckAtDone": null
 }
