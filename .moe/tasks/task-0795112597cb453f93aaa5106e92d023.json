@@ -88,7 +88,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -120,7 +120,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:17.777Z",
-  "updatedAt": "2026-10-29T23:26:24.753Z",
+  "updatedAt": "2026-10-30T00:04:25.330Z",
   "dependsOn": [
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
     "task-23a5563cea384d56abb8da1551435455",
@@ -141,13 +141,11 @@
     "worker-5ebbf433",
     "qa-952969be"
   ],
-  "blockedReason": "QA (qa-952969be): delivery gap, not a code defect. Substance passes: code reviewed vs DoD 1-3; QA mutants q1-q10 killed by CJ1-CJ8/deleteOwned. Non-blocking: q11 survives (ready() timer not cleared after onReady resolves).\n\nGap: completion commit bbcd13d omits scripts/tests/local-runner.test.mjs. The wrapper held it as contested with task-9faf1ef3 (CQ-R10d1, WORKING). The Moe-Contested trailer names it, but `git show --stat` lacks it. So:\n- At HEAD 5143b4c (git archive, env -i, node 24.21), `node --test scripts/tests/local-runner.test.mjs` exits 1: 7 provisionGuest rows fail deepStrictEqual on the new supervisorSha256 key. DoD 4 fails on the delivered bytes.\n- The CJ1-CJ8 and deleteOwned tests are not on the branch (rail: every task owns tests).\nHEAD + the worker's 2 test hunks: exit 0, 231 pass, 1 skip. Check/vm-control/snapshot suites: 58 pass, 1 skip.\n\nNo reject or self-land: rails forbid agent Git writes, and the file now also holds ~10 live task-9faf1ef3 hunks (~926-1485). A whole-file landing by R11's worker would ship the peer's unfinished bytes.\n\nUnblock: task-9faf1ef3's landing stages the whole file, with R11's 2 hunks (provisioned() supervisorSha256 ~1773; the deleteOwned + CJ block after AJ6). The peer was told in #general. Backup: /tmp/qa-r11/r11-tests-only.patch (sha256 557f1230), which applies cleanly to HEAD.\n\nOn return to REVIEW: at HEAD via git archive, confirm CJ1-CJ8 and 'deleteOwned purges' are present and the DoD command exits 0, then approve citing the carrying commit. Otherwise qa_reject: once the file holds only R11's hunks, the assignee re-touches it with Edit so the wrapper lands it.",
-  "blockedOnTaskIds": [
-    "task-9faf1ef30b0a4264b6dccce1e7bf5b1d"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-29T22:54:27.684Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",

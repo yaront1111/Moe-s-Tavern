@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -118,14 +118,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:47:49.228Z",
-  "updatedAt": "2026-10-29T23:49:02.830Z",
+  "updatedAt": "2026-10-30T00:04:25.233Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:50:19.899Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 7,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T00:04:25.233Z",
+    "wallClockMs": 22445334
   },
   "contextFetchedBy": [
     "worker-fe18a9a9",
@@ -234,9 +236,9 @@
   "workStartedAt": "2026-10-29T22:28:14.035Z",
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-fe18a9a9@2026-10-29T23:23:09Z",
-    "at": "2026-10-29T23:32:54.221Z"
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-29T23:33:27Z",
+    "at": "2026-10-29T23:49:30.305Z"
   },
   "reviewStartedAt": "2026-10-29T23:49:02.828Z",
   "verification": {
@@ -248,7 +250,10 @@
   },
   "filesModified": [
     "scripts/tests/local-runner-agents.test.mjs",
-    "scripts/tests/local-runner.test.mjs"
+    "scripts/tests/local-runner.test.mjs",
+    ".moe/tasks/task-16628bef427b426aa9d8fc6ac1d19534.json",
+    ".moe/tasks/task-9faf1ef30b0a4264b6dccce1e7bf5b1d.json",
+    ".moe/tasks/task-edda38a1b19d41fa8bc09d424edee81d.json"
   ],
   "completionSummary": "CQ-R10d1 guest MCP stdio shim. Reopen round 1 fixes QA's delivery gap; the code is unchanged.\n\nDELIVERY\n- Code: completion 036a901.\n- scripts/tests/local-runner.test.mjs landed in WIP checkpoint cac652b (Moe-Task trailer, numstat 270/4: R10d1 +22/-3 plus R11's carried +248/-1). The hold was released by one Edit-tool edit inside R10d1's own R07 line 1360, which adds the 'an uppercase digest' shim digest row.\n- R11's hunks are intact: `git apply --reverse --check /tmp/qa-r11/r11-tests-only.patch` passes.\n- This completion has no further source diff, because all 7 files have been byte-identical to HEAD since cac652b. Please check `git log --stat --grep task-9faf1ef3` for cac652b instead of the completion's stat.\n\nQA's non-blocking mutants are killed in place, with no size growth:\n- TOOL/KEY fullmatch->match (SH1);\n- CODE fullmatch->match and \"id\": true isinstance (SH7).\n\nSIZE (rail at most 650): ci 1+1, bootstrap 18+3, shim 269, tools.json 1, readiness 14+10, agents test 306, own test delta 22+3. Total 648.\n\nSELF-REVIEW (step 5)\n- 31 mutants, run fresh on the delivered bytes and scored by exit code.\n- 30 are killed by their named rows: the plan's 15, QA's 4 and 11 extras.\n- One is equivalent: 'non-str role accepted', because main() passes str|None.\n- Theoretical notes are in the step-5 note: a timed-out queued frame may still run later; connect() blocks for up to 5 s.\n\nVERIFICATION, fresh, 6-file CI command under env -i, Node 24.21.0:\n- Shared tree: exit 0; 365 tests, 363 pass, 0 fail, 2 skipped (K9 needs root; macOS smoke).\n- git archive of HEAD 90a97db: exit 0; 363 pass, 0 fail.\n\nexecutionReady stays false and verified-local stays unavailable; no isolation claim.",
   "commits": [
@@ -302,6 +307,23 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "cadaaaaac1d47d183381f88fec1f2775a998ee0c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T23:33:27Z",
+      "paths": [
+        ".moe/tasks/task-16628bef427b426aa9d8fc6ac1d19534.json",
+        ".moe/tasks/task-9faf1ef30b0a4264b6dccce1e7bf5b1d.json",
+        ".moe/tasks/task-edda38a1b19d41fa8bc09d424edee81d.json"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T23:49:30.305Z",
+      "treeId": "6d97412f5000c9c27ec7e089cbf67f73582b618a",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -310,7 +332,7 @@
     "scripts/tests/local-runner.test.mjs"
   ],
   "unattributedPaths": [],
-  "reviewCompletedAt": "2026-10-29T23:23:08.047Z",
+  "reviewCompletedAt": "2026-10-30T00:04:25.233Z",
   "rejectionDetails": {
     "failedDodItems": [
       "buildUserData installs the shim root:root 0555 and tools.json root 0444, and readiness fails on a hash mismatch of either. Shown by tests.",
@@ -375,5 +397,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T00:04:25.233Z",
+  "reviewSummary": "APPROVED (reopen round 1), reviewed on landed bytes.\nDELIVERY on moe/work-2026-10-24: 036a901 (shim, tools.json, bootstrap, readiness, agents test, ci.yml); cac652b (local-runner.test.mjs 270/4 = own +22/-3, plus R11's +248/-1); cadaaaa (board only). Shared tree matches HEAD for all 7 files. R11 hunks intact (reverse-check of r11-tests-only.patch passes).\nVERIFY (QA re-run): 6-file CI command, env -i, Node 24.21.0, on a git archive of cadaaaa: exit 0; 365 tests, 363 pass, 0 fail, 2 skipped (K9 root; macOS smoke). SH1-SH9 ran on Linux.\nSIZE 648/650: ci 2, bootstrap 21, shim 269, tools 1, readiness 24, agents test 306, own R07 delta 25.\nDoD1 SH1: byte-equal projection; per-role tools/list; absent/''/admin/WORKER/constructor serve none; bad tools files load {}.\nDoD2 SH3/SH5/SH6/SH7: refusals open no socket and echo no input; exact frame; result unchanged; REFUSED data; bounds; reconnect.\nDoD3 R07 rows + SH9: 0555/0444 root:root; LAYOUT_INVALID; SHIM_HASH_MISMATCH and SHIM_TOOLS_HASH_MISMATCH (digest, uppercase, path, failed run); BOOTSTRAP_INPUT_INVALID.\nDoD4: SH4 pins the CI line; exit 0 supplied.\nMUTATION (QA's own): 24/24 killed, including round 1's 4 survivors (CODE/TOOL/KEY fullmatch, id isinstance), sendall, every bound, env socket path, each removed digest check, 0755/0644 writes.\nX-PLATFORM: eol=lf; 3-OS matrix, Python rows skip on win32; bundlers ship the assets; no __pycache__.\nINVARIANTS: executionReady false; verified-local unavailable; reads only MOE_ROLE; AF_UNIX to AGENT_SOCKET only.\nNOTES (non-blocking): a timed-out queued frame may still run (TIMEOUT means outcome unknown); connect() can block 5 s.\nPonytail: lean already. net: -0 lines possible.",
+  "requiredCheckAtDone": null
 }

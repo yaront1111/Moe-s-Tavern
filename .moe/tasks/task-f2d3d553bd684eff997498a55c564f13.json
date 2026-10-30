@@ -113,7 +113,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:33:55.625Z",
-  "updatedAt": "2026-10-29T23:53:43.347Z",
+  "updatedAt": "2026-10-29T23:54:14.747Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:52:30.571Z",
     "plannedStepCount": 5,
@@ -203,7 +203,8 @@
     "moe-vscode/tests/plan-review.test.cjs",
     "moe-vscode/media/planReview.js",
     ".moe/tasks/task-5e816f2cafe8490596af56d9a5108efe.json",
-    ".moe/tasks/task-3287014af13b4d1dbaac5622de4c1fc6.json"
+    ".moe/tasks/task-3287014af13b4d1dbaac5622de4c1fc6.json",
+    ".moe/tasks/task-f2d3d553bd684eff997498a55c564f13.json"
   ],
   "completionSummary": "CQ-I06b round 2, fixing the QA reject (latched vs rearmed).\n\n1. Probes are identical in both clients. 'latched' is checked in this order: Approve unusable; an AA probe at `rendered` must not re-arm it, and a click sends nothing; then a WORKING probe must not confirm. The AA probe runs first because a WORKING frame ends the review in both clients. Changed: ClientVerdictCorpusTest.kt (+4/-1) and plan-review.test.cjs section L (+6). Sections A-K are unchanged.\n2. Fix-forward in media/planReview.js (+14/-6, 8 net; closes task-3287014a). The page latches on taskRemoved, and on any updateTask whose token is null: the task left AA, or its stamp is unreadable. A latch with no notice yet gets NOT_APPROVABLE_NOTICE. No imports. RED: with only the probe, exactly A23 and A24 failed. GREEN after the fix.\n\nEvidence (scratch copies, restored, cmp-verified, deleted):\n- Full flip matrix, all 25 approval rows rotated +1/+2/+3: 25/25 rows fail in every rotation in BOTH clients. This covers QF1-QF8 and MC1.\n- VS Code mutants: MV1 A07; MV2 A24; MV3 A18; MV4 V11; MV5 V05; QM1 A15 (and H); MP1 (no latch on null token) A23; MP2 (no latch on taskRemoved) A24.\n- JetBrains MJA (INVALIDATED re-arms on an AA return): the round-1 test passed every row; the round-2 test fails all 12 latched rows.\n\nPushback (task comment): QM1 cannot fail A14. Its AA \"5\" frame latches both clients before the error arrives, so the stale flag is unobservable there. A15 pins stale vs non-stale.\n\nFiled: task-5e816f2c (LOW, dependsOn this task). The VS Code panel keeps a pending approval through a PLANNING frame, so a later WORKING@4 says 'Plan approved', while JetBrains latches. It fails only in VS Code with scratch rows A26/A27.\n\nGate as above. Size: 366 net over 6 files (round 2: 17 net).",
   "commits": [
@@ -230,20 +231,40 @@
       "treeId": "306583794337d11a604e49fe1d06bc216d0afc93",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "45a4ac0bc9da00b44b21247d9ad63138d77c0c0c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T23:34:57Z",
+      "paths": [
+        ".moe/tasks/task-3287014af13b4d1dbaac5622de4c1fc6.json",
+        ".moe/tasks/task-f2d3d553bd684eff997498a55c564f13.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt",
+        "moe-vscode/media/planReview.js",
+        "moe-vscode/tests/plan-review.test.cjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T23:54:14.747Z",
+      "treeId": "29a53a41d399bcc2e3e889d1a5b4d2f4c4de9791",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt",
     "moe-vscode/src/panels/PlanReviewPanel.ts",
-    "moe-vscode/tests/managed-vm-verdicts.test.cjs"
+    "moe-vscode/tests/managed-vm-verdicts.test.cjs",
+    "moe-vscode/tests/plan-review.test.cjs",
+    "moe-vscode/media/planReview.js"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "refused",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
-    "sessionId": "qa-952969be@2026-10-29T23:26:49Z",
-    "at": "2026-10-29T23:35:23.018Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-29T23:34:57Z",
+    "at": "2026-10-29T23:54:14.747Z"
   },
   "reviewCompletedAt": "2026-10-29T23:34:43.467Z",
   "rejectionDetails": {
