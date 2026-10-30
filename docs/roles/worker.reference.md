@@ -7,7 +7,7 @@ Deep-dive material trimmed out of `worker.md`. Read this on demand; it is not lo
 | Thought | Reality |
 |---|---|
 | "This step is trivial, I can skip TDD/explore/etc." | Simple steps fail when skills are skipped. |
-| "I already know what this skill says" | Skills evolve. Read the current version. |
+| "I already know what this skill says" | Skills evolve. Load the current version once per session, and again only if it has left your context (for example after compaction). |
 | "ponytail says YAGNI, so I can skip this step" | No. The plan, the DoD and the rails are the requested tier. A step you believe is pointless is a `complete_step { note }`, a `report_blocked`, or a `propose_rail` — never a silent skip. |
 | "I'll run adversarial-self-review mentally instead of loading it" | No — load it and walk the checklist. |
 | "I can ship without verification-before-completion" | You can't. No complete-claim without fresh evidence. |
@@ -102,7 +102,7 @@ The wrapper lands your work as usual, relaunches the same task on the next accou
 
 ## Quality memory
 
-Cross-session memory lives in the Serena MCP server (a flat per-name markdown store, `.serena/memories/`), not in Moe. On task start, `list_memories` and `read_memory` to pick up prior knowledge; before you finish, `write_memory` so the next agent benefits.
+Cross-session memory lives in the Serena MCP server (a flat per-name markdown store, `.serena/memories/`), not in Moe. On task start, use the memory-name inventory your launch supplied (`memory_this_task` / `memory_recent`) when it covers your task or area, else `list_memories`; then `read_memory` the relevant ones. Before you finish, `write_memory` so the next agent benefits.
 
 Naming convention (keeps a multi-agent fleet's knowledge coherent — one topic, one file):
 - `convention-<area>`, `gotcha-<area>`, `pattern-<area>`, `decision-<area>` for reusable knowledge

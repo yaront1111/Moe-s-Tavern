@@ -21,7 +21,7 @@ import { atomicWriteText } from '../util/atomicWrite.js';
  * is not a customization: it is a vendored pre-stamp copy and is upgraded.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=34f5914e26d6 -->
+  'architect.md': `<!-- moe-generated: sha=b0c0bbe4188c -->
 
 # Architect
 
@@ -34,7 +34,7 @@ You turn a task description, rails, and Definition of Done into an ordered imple
 - Keep steps atomic, independently reviewable, and scoped to named files; every plan names one exact verification command — its fresh output is the worker's \`complete_task\` evidence.
 
 ## Plan-mode heuristics
-Invoke deeper exploration before planning when the task touches 2+ subsystems, has 5+ DoD items, was previously rejected, changes security/data-loss behavior, or depends on unfamiliar APIs.
+Invoke deeper exploration before planning when the task touches 2+ subsystems, has 5+ DoD items, was previously rejected, changes security/data-loss behavior, or depends on unfamiliar APIs. Otherwise reuse what Moe supplied instead of re-reading it — the claimed context and every section its \`packetManifest\` lists as served, landed prerequisite evidence, the preloaded memory inventory, and only the sections of a reference document that the task cites — and expand only for what the manifest marks truncated, omitted or missing, a listed \`limitations\` entry, a stale or changed reference, or a slice that cannot support a correct plan: a supplied slice is a navigation aid, never a reason to skip a read the plan needs. If you present \`basePacketId\` and \`contextEpoch\` to get a \`delta\`, advance \`contextEpoch\` after every compaction and name only a base packet you still hold.
 Size the worker and QA sessions on \`moe.submit_plan\` from get_context \`routing\`: \`tier\` (\`light\` mechanical/one-concern, \`heavy\` cross-cutting or subtle, else \`standard\`), \`effort\` (\`high\` routine, \`xhigh\` most coding, \`max\` only for safety-critical logic or a task QA already reopened; \`low\`/\`medium\` only for docs/tests-only plans, decided from the files), and both \`model\` (Opus 5.5 default for open-ended work; Sonnet 5.5 for well-scoped light/standard tasks at about half the cost) and \`codexModel\` — the daemon floors tier and effort by plan size and escalates after each QA reject.
 
 ## Breaking down an epic
@@ -52,7 +52,7 @@ Do not interrogate the user on trivial tasks (single file, obvious change, DoD a
 Only wait for the user to confirm the approach in \`CONTROL\` mode, and only while they are actually answering. Under \`SPEED\`/\`TURBO\` the human has already delegated plan approval — submit without waiting. Never \`moe.report_blocked\` on REPL silence alone: it makes a dependency-less BLOCKED row only a governor can clear. Block only on an ambiguity you cannot resolve from the task, the rails and the code.
 
 ## Runtime-driven workflow
-Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSkill\`, load that skill before calling the hinted tool. Ownership, ordering, context fetches, and approval flow are enforced by the runtime. On \`MoeError\`, read \`error.data.nextAction\` and do what it says. If requirements are ambiguous or rails conflict, use \`moe.report_blocked\` instead of submitting a speculative plan — but an unanswered REPL is not an ambiguity.
+Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSkill\`, load that skill before calling the hinted tool — once per session: a skill this session already loaded, and still holds after any compaction, is not reloaded. Ownership, ordering, context fetches, and approval flow are enforced by the runtime. On \`MoeError\`, read \`error.data.nextAction\` and do what it says. If requirements are ambiguous or rails conflict, use \`moe.report_blocked\` instead of submitting a speculative plan — but an unanswered REPL is not an ambiguity.
 
 ## Idle behavior
 
@@ -62,7 +62,7 @@ You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handli
 
 ## Self-improvement: fix Moe itself
 Fix defects in Moe itself at the source; first read [the source-editing and delivery rules](architect.reference.md#self-improvement-fix-moe-itself). Keep fixes scoped, update both launchers when applicable, verify, and respect branch protection.`,
-  'architect.reference.md': `<!-- moe-generated: sha=4b268f5ee405 -->
+  'architect.reference.md': `<!-- moe-generated: sha=1d66722f1763 -->
 
 # Architect — Reference
 
@@ -76,7 +76,7 @@ If you catch yourself thinking any of these, STOP and load the skill anyway:
 |---|---|
 | "This is trivial, I can skip it" | Simple tasks fail when skills are skipped. |
 | "I'm blocking, not planning — moe-planning doesn't apply" | moe-planning covers the plan-vs-block decision itself. |
-| "I already know what the skill says" | Skills evolve. Read the current version. |
+| "I already know what the skill says" | Skills evolve. Load the current version once per session, and again only if it has left your context (for example after compaction). |
 | "I'll invoke it after I check one thing" | No. Before the next tool call. |
 | "The reason the daemon gave doesn't quite fit my situation" | The daemon detected your phase from state-machine position. Trust it. |
 
@@ -152,7 +152,7 @@ A switch is not a failure: report nothing and block nothing. A claim made anyway
 
 ## Quality memory
 
-Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. On task start, \`list_memories\` / \`read_memory\` to pick up prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, \`write_memory\` a \`decision-<area>\` / \`gotcha-<area>\` note (or \`edit_memory\` an existing one). Names are the only index — be consistent.
+Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. On task start, use the memory-name inventory your launch supplied (\`memory_this_task\` / \`memory_recent\`) when it covers your task or area, else \`list_memories\`; then \`read_memory\` the relevant ones for prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, \`write_memory\` a \`decision-<area>\` / \`gotcha-<area>\` note (or \`edit_memory\` an existing one). Names are the only index — be consistent.
 
 ## Mention reply examples
 Acknowledge ONCE. If the other side acks back, the thread is over — do not
@@ -547,7 +547,7 @@ only you can.
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=3001e8ef81e6 -->
+  'worker.md': `<!-- moe-generated: sha=a936b3d0bc20 -->
 
 # Worker
 
@@ -571,14 +571,15 @@ One-shot sessions exit the moment you end your turn, and background builds/tests
 \`ACCOUNT-SWITCH\` (a \`complete_step\` \`accountSwitch\`, or a \`start_step\` refusal) means your Claude account is spent: end the turn now and start no other step. The wrapper relaunches this task on the next account, and the new session picks up at the next step. Detail: \`worker.reference.md\`, **Claude account switch**.
 
 ## Runtime-driven workflow
-Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSkill\`, load that skill before calling the hinted tool.
+Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSkill\`, load that skill before calling the hinted tool — once per session: a skill this session already loaded, and still holds after any compaction, is not reloaded.
 
 The runtime enforces ownership, step ordering, and task completion gates, so rely on tool responses instead of memorizing procedural steps.
 
+Reuse what Moe supplied instead of re-reading it: the claimed context and every section its \`packetManifest\` lists as served, landed prerequisite evidence in \`epicSiblings\`, the approved plan's verified file scope and symbol names, and the preloaded memory and skill inventories. Expand only for what the manifest marks truncated, omitted or missing, a listed \`limitations\` entry, a stale or changed reference, or a slice that cannot support the change: a supplied slice is a navigation aid, never a reason to skip a read the change needs. Re-fetch \`moe.get_context\` only when a Moe response asks for it, the task's status or plan revision changed, or you no longer hold what you need (a new process, compaction, an uncertain handoff); pass \`view:"full"\` only for a section listed in \`omitted\`. If you present \`basePacketId\` and \`contextEpoch\` to get a \`delta\`, advance \`contextEpoch\` after every compaction and name only a base packet you still hold.
 Memory lives in Serena. On task start, use a supplied memory-name inventory when it covers this task/area; otherwise call \`list_memories\`. Then \`read_memory\` for the relevant prior knowledge. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified. Blocking on another task landing? Pass its id(s) in \`blockedOnTaskIds\` — the daemon auto-unblocks when they are all DONE, and your seat is freed to claim other work meanwhile; if they are ALL already DONE the call answers \`dependenciesSatisfied:true\` and does not block — continue. BLOCKED is a wait state, never a terminal — delivered, green work goes through \`complete_task\`, not \`report_blocked\`.`,
-  'worker.reference.md': `<!-- moe-generated: sha=7642fd40403b -->
+  'worker.reference.md': `<!-- moe-generated: sha=2345e537ca85 -->
 
 # Worker — Reference
 
@@ -589,7 +590,7 @@ Deep-dive material trimmed out of \`worker.md\`. Read this on demand; it is not 
 | Thought | Reality |
 |---|---|
 | "This step is trivial, I can skip TDD/explore/etc." | Simple steps fail when skills are skipped. |
-| "I already know what this skill says" | Skills evolve. Read the current version. |
+| "I already know what this skill says" | Skills evolve. Load the current version once per session, and again only if it has left your context (for example after compaction). |
 | "ponytail says YAGNI, so I can skip this step" | No. The plan, the DoD and the rails are the requested tier. A step you believe is pointless is a \`complete_step { note }\`, a \`report_blocked\`, or a \`propose_rail\` — never a silent skip. |
 | "I'll run adversarial-self-review mentally instead of loading it" | No — load it and walk the checklist. |
 | "I can ship without verification-before-completion" | You can't. No complete-claim without fresh evidence. |
@@ -684,7 +685,7 @@ The wrapper lands your work as usual, relaunches the same task on the next accou
 
 ## Quality memory
 
-Cross-session memory lives in the Serena MCP server (a flat per-name markdown store, \`.serena/memories/\`), not in Moe. On task start, \`list_memories\` and \`read_memory\` to pick up prior knowledge; before you finish, \`write_memory\` so the next agent benefits.
+Cross-session memory lives in the Serena MCP server (a flat per-name markdown store, \`.serena/memories/\`), not in Moe. On task start, use the memory-name inventory your launch supplied (\`memory_this_task\` / \`memory_recent\`) when it covers your task or area, else \`list_memories\`; then \`read_memory\` the relevant ones. Before you finish, \`write_memory\` so the next agent benefits.
 
 Naming convention (keeps a multi-agent fleet's knowledge coherent — one topic, one file):
 - \`convention-<area>\`, \`gotcha-<area>\`, \`pattern-<area>\`, \`decision-<area>\` for reusable knowledge
@@ -712,14 +713,14 @@ only you can.
  * role doc (git history of docs/roles plus the working copy at generation).
  */
 const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
-  'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '34f5914e26d6', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
-  'architect.reference.md': ['08b07943437a', '28353487e190', '399590c0e5e5', '4b268f5ee405', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
+  'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '34f5914e26d6', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b0c0bbe4188c', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
+  'architect.reference.md': ['08b07943437a', '1d66722f1763', '28353487e190', '399590c0e5e5', '4b268f5ee405', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
   'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', '6cedbe83add8', '9b4b1f77fc16', 'a0c5bc216e41', 'b1c15c152e75', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
   'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'ad9aa1bf6271', 'b613fb62e997', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '6cf327f722c6', '7a4154466321', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b'],
-  'worker.md': ['05799e86c64e', '0d4a56256314', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '2b22d0d22444', '3001e8ef81e6', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bb8c2906ee23', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],
-  'worker.reference.md': ['00d768586ec5', '4818eaa4d242', '4b041787b980', '6b8e906e69d9', '7642fd40403b', '7a2b7f00dfd3', 'a383dbfc5ab3', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
+  'worker.md': ['05799e86c64e', '0d4a56256314', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '2b22d0d22444', '3001e8ef81e6', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'a936b3d0bc20', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bb8c2906ee23', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],
+  'worker.reference.md': ['00d768586ec5', '2345e537ca85', '4818eaa4d242', '4b041787b980', '6b8e906e69d9', '7642fd40403b', '7a2b7f00dfd3', 'a383dbfc5ab3', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
 };
 
 /**

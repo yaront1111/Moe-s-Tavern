@@ -1090,7 +1090,7 @@ The template enables \`compile_commands.json\` export for IDE support:
 ln -s build/compile_commands.json .
 \`\`\``,
   'explore-before-assume/SKILL.md': `---
-# moe-generated: sha=9f64d49809db
+# moe-generated: sha=2d705d327503
 name: explore-before-assume
 description: Use before referencing any function, model, method, relationship, constant, or import in a plan or implementation. Verifies things actually exist in the codebase before building on top of them. Eliminates an entire class of hallucinated-API bugs.
 when_to_use: Architect during planning before naming symbols in implementationPlan; worker on first start_step before editing unfamiliar code.
@@ -1104,6 +1104,10 @@ Before referencing a symbol — any symbol — verify it exists. The cheapest bu
 ## The rule
 
 For every function, class, method, model, attribute, relationship, constant, env var, file path, or import you're about to reference: **grep for it first**. If it doesn't show up, either it doesn't exist or you have the name wrong. Either way, stop and find out before writing a line that depends on it.
+
+## Reuse what was already verified
+
+Moe may already have checked a reference for you: the approved plan names a symbol with its file, \`moe.get_context\` serves a section, or a landed prerequisite carries its evidence. Start from that instead of searching again: a supplied location needs no fresh grep. Still read a definition before you depend on its signature, and verify anything the context marks truncated, omitted, missing or stale, anything a listed limitation leaves out (\`no-repository-source\`: no source was served), and anything the supplied slice does not cover. A supplied slice is a navigation aid, never a reason to skip a read the change needs.
 
 ## Why this matters
 

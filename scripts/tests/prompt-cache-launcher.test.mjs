@@ -500,3 +500,86 @@ for (const engine of psEngines) {
     });
   }
 }
+
+// CQ-C10: the stable system prefix (role line, tool naming, approval mode and
+// the role doc) is identical for every claimed packet, and the packet reaches
+// the per-task part intact. Real launcher blocks over the repo's role docs.
+const PACKET_DIRECTIVES = ['re-fetch it if it is missing or stale', 'only if you need a section listed in omitted',
+  "call list_memories only if they don't cover your area"];
+const claimedPacket = (role, label) => {
+  const base = scopedContext(role);
+  const id = `task-${(label === 'A' ? 'a1' : 'b2').repeat(16)}`;
+  const nonce = `packet-nonce-${label}-${label === 'A' ? '7f3c' : '9e1d'}`;
+  return { ...base, task: { ...base.task, id, title: nonce },
+    packetManifest: { ...base.packetManifest, provenance: { ...base.packetManifest.provenance, task: { id, planRevision: 3 } } },
+    servedContext: { ...base.servedContext, taskId: id }, nonce };
+};
+const trimLf = s => s.replaceAll('\r\n', '\n').replace(/\n+$/, '');
+
+function renderPrefixAndPacket(ext, engine, dir, role, packet) {
+  const fixture = path.join(dir, `packet-${packet.nonce}.json`);
+  const out = path.join(dir, `out-${packet.nonce}.txt`);
+  writeFileSync(fixture, JSON.stringify(packet));
+  const env = { MOE_TEST_DIR: dir.replaceAll('\\', '/'), MOE_TEST_FIXTURE: fixture.replaceAll('\\', '/'), MOE_TEST_OUT: out.replaceAll('\\', '/') };
+  const src = read(ext);
+  let result;
+  if (ext === 'ps1') {
+    const script = `$moeDir=Join-Path $env:MOE_TEST_DIR '.moe'\n$pluginRoot=$null\n$Role='${role}'\n$AutoClaim=$true\n$cliType='claude'\n`
+      + `$approvalMode='TURBO'\n$WorkerId='worker-prefix'\n$preflightTaskId='${packet.task.id}'\n$generalCount=0\n$taskCount=0\n`
+      + `$mentionsCount=0\n$memTotal=0\n$memTaskLine='none'\n$memRecentLine='none'\n$pendingJson='{}'\n`
+      + `$ctxJson=[IO.File]::ReadAllText($env:MOE_TEST_FIXTURE)\n`
+      + `${between(src, '$systemAppendPre = "Role: $Role. Always use Moe MCP tools. "', '# The daemon surfaces a phase-recommended skill via nextAction.recommendedSkill')}\n`
+      + `${between(src, 'function Get-RoleDoc {', '\n$roleDoc = Get-RoleDoc')}\n`
+      + `${between(src, '    $roleDoc = Get-RoleDoc\n    $systemAppend = $systemAppendPre', '    $dynamicContext = ""')}\n$dynamicContext = ""\n`
+      + `${between(src, '        $dynamicContext += @"\n# Pre-flight Complete', '        # JIT reminder:')}\n`
+      + '[IO.File]::WriteAllText($env:MOE_TEST_OUT, $systemAppend + [char]0x1e + $dynamicContext, (New-Object Text.UTF8Encoding $false))';
+    result = runPs(engine, dir, `prefix-${packet.nonce}.ps1`, script, env);
+  } else {
+    const script = `MOE_DIR=${quote(env.MOE_TEST_DIR + '/.moe')}\nROOT_DIR=${quote(env.MOE_TEST_DIR)}\nROLE=${role}\n`
+      + `ROLE_STATUS_DESC='You handle tasks.'\nAUTO_CLAIM=true\nCLI_TYPE=claude\nAPPROVAL_MODE=TURBO\nWORKER_ID=worker-prefix\n`
+      + `PREFLIGHT_TASK_ID=${packet.task.id}\nPREFLIGHT_CONTEXT=$(cat "$MOE_TEST_FIXTURE")\nPREFLIGHT_GENERAL_COUNT=0\n`
+      + `PREFLIGHT_TASK_COUNT=0\nPREFLIGHT_ROUTED_MENTIONS_COUNT=0\nMEM_TOTAL=0\nMEM_TASK_NAMES=none\nMEM_RECENT_NAMES=none\nPREFLIGHT_PENDING='{}'\n`
+      + `${between(src, 'load_role_doc() {', '\nload_role_doc\n')}\n`
+      + `${between(src, '    SYSTEM_APPEND="Role: $ROLE. $ROLE_STATUS_DESC Always use Moe MCP tools."', '    # Team identity and live issue context are not part of the reusable prefix.')}\n`
+      + `${between(src, '        DYNAMIC_CONTEXT="# Pre-flight Complete', '        # JIT reminder:')}\n`
+      + `printf '%s\\036%s' "$SYSTEM_APPEND" "$DYNAMIC_CONTEXT" > "$MOE_TEST_OUT"`;
+    result = runSh(engine, dir, `prefix-${packet.nonce}.sh`, script, env);
+  }
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const parts = readFileSync(out, 'utf8').split('\x1e');
+  assert.equal(parts.length, 2, 'one separator between the stable prefix and the per-task part');
+  return { system: trimLf(parts[0]), dynamic: trimLf(parts[1]) };
+}
+
+for (const [ext, engine] of engines) {
+  test(`${engine}: stable role prefix carries the role doc and never the claimed packet`, t => {
+    for (const role of ['worker', 'architect', 'qa']) {
+      const dir = mkdtempSync(path.join(tmpdir(), `moe prefix ${role} `));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      const roleBytes = readFileSync(new URL(`docs/roles/${role}.md`, root));
+      mkdirSync(path.join(dir, '.moe', 'roles'), { recursive: true });
+      writeFileSync(path.join(dir, '.moe', 'roles', `${role}.md`), roleBytes);
+      const roleDoc = trimLf(roleBytes.toString('utf8'));
+      const opening = roleDoc.split('\n\n')[1] ?? '';
+      assert.ok(opening.length > 40, `${role}.md has an opening paragraph to look for`);
+      const [a, b] = [claimedPacket(role, 'A'), claimedPacket(role, 'B')];
+      const A = renderPrefixAndPacket(ext, engine, dir, role, a);
+      const B = renderPrefixAndPacket(ext, engine, dir, role, b);
+      assert.equal(A.system, B.system, `${role}: T1 the stable prefix must not vary with the packet`);
+      assert.ok(A.system.includes(roleDoc), `${role}: T2 the stable prefix carries the exact role doc`);
+      if (role !== 'qa') assert.ok(A.system.includes('what Moe supplied'), `${role}: T3 targeted guidance reaches the prefix`);
+      for (const leak of [a.task.id, a.nonce, b.task.id, b.nonce, '<claimed_task_context>']) {
+        assert.ok(!A.system.includes(leak), `${role}: T4 the stable prefix carries per-task "${leak}"`);
+      }
+      const injected = A.dynamic.match(/<claimed_task_context>\s*([\s\S]*?)\s*<\/claimed_task_context>/);
+      assert.ok(injected, `${role}: T5 the per-task part injects the claimed context`);
+      assert.deepEqual(JSON.parse(injected[1]), a, `${role}: T5 packet A arrives intact`);
+      assert.ok(!A.dynamic.includes(b.nonce), `${role}: T5 packet B never reaches packet A's launch`);
+      for (const directive of PACKET_DIRECTIVES) {
+        assert.ok(A.dynamic.includes(directive), `${role}: T6 the per-task part keeps "${directive}"`);
+      }
+      assert.ok(!A.dynamic.includes(opening), `${role}: T7 the role doc is not duplicated into the per-task part`);
+    }
+  });
+}
