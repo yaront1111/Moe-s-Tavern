@@ -1,0 +1,31 @@
+{
+  "id": "task-142415f4cad3435a94bb879399eba160",
+  "epicId": "epic-be924fb8",
+  "title": "docs: make mem:<name> pointers in plan steps the standard, and retire a task's Serena handoff when QA approves it",
+  "description": "Requested by the human on 2026-10-30 after a governor audit of Serena usage, covering Serena logs for 10-27 to 10-30: 980 Serena sessions and 4,112 tool calls.\n\nWhat works: architects already write `mem:<name>` pointers into plan steps, for example `mem:gotcha-daemon-linux-snapshot-gate` and `mem:gotcha-proxy-npm-test-shared-checkout-deletes-dist`, so workers read exactly the right memory. That is why only 82 of 980 sessions needed list_memories. It is done ad hoc, though; no role doc asks for it.\n\nWhat leaks: task-<id>-handoff memories never get retired. 304 of 349 belong to DONE or ARCHIVED tasks, and nothing in the lifecycle removes them.\n\nChange, keeping the role docs inside npm run lint's 40-line cap for architect/worker/qa .md, with the detail in the .reference.md files and docs/MEMORY.md:\n1. Architect (docs/roles/architect.md, plus the moe-planning skill where plan steps are described): when a Serena memory bears on a step, name it in that step as `mem:<name>` instead of expecting workers to scan list_memories.\n2. QA (docs/roles/qa.md / qa.reference.md): after moe.qa_approve, fold anything reusable from the task's handoff into a gotcha-/pattern-/decision- memory, then retire the handoff. Archive it into .serena/memories/_archive/, which the companion cleanup task hides from list_memories through ignored_memory_patterns, or delete it if nothing reusable remains. A rejected task keeps its handoff.\n3. docs/MEMORY.md: document the handoff lifecycle (written while the task is open, retired at QA approval), the `_archive/` convention, and the `mem:` pointer convention.\n\nRole docs reach running seats only after the daemon is rebuilt, because .moe/roles is re-synced at daemon boot, and after a plugin rebuild for IDE users. Say so in the completion summary.",
+  "definitionOfDone": [
+    "docs/roles/architect.md (or the moe-planning skill it points to) tells architects to name relevant Serena memories in plan steps as `mem:<name>`. docs/MEMORY.md describes the convention.",
+    "docs/roles/qa.md / qa.reference.md tell QA, after qa_approve, to fold reusable facts from task-<id>-handoff into a gotcha/pattern/decision memory and then retire the handoff (archive to .serena/memories/_archive/, or delete). A rejected task keeps its handoff. docs/MEMORY.md documents this lifecycle.",
+    "`npm run lint` at the repo root passes (the 40-line cap holds), the daemon prebuild still regenerates initFiles.ts and skillFiles.ts cleanly, and the completion summary notes that seats pick the change up at the next daemon or plugin rebuild."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 284.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:17:43.360Z",
+  "updatedAt": "2026-10-30T07:17:56.187Z",
+  "dependsOn": [
+    "task-78ba155c350f4927ab5bdf53c21a4468"
+  ]
+}

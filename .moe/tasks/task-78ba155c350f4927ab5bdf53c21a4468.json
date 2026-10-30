@@ -1,0 +1,28 @@
+{
+  "id": "task-78ba155c350f4927ab5bdf53c21a4468",
+  "epicId": "epic-be924fb8",
+  "title": "chore: prune the Serena memory store — archive the handoffs of finished tasks out of list_memories, and merge duplicate gotcha memories",
+  "description": "Requested by the human on 2026-10-30 after a governor audit of Serena usage, covering Serena's own logs for 10-27 to 10-30 and .serena/memories.\n\nThe audit:\n- .serena/memories holds 758 files (~2 MB).\n- 349 are task handoffs (task-task-<id>-handoff). 304 of them belong to tasks that are already DONE (203) or ARCHIVED (101); only 45 belong to live tasks.\n- 277 are gotcha-* files, which likely overlap heavily. docs/MEMORY.md says to prefer edit_memory over near-duplicates, but nothing enforces it.\n- One list_memories call now returns about 36 KB of names (~9k tokens), mostly dead handoffs.\n\nSerena 1.6.2 (WSL, ~/.local/bin/serena) supports `ignored_memory_patterns` in .serena/project.yml. These are regexes, fullmatched against the memory name, and a match is excluded from listing, reading and writing (serena/memories/memory_manager.py). So archived files can be kept on disk but hidden from the tools.\n\nScope:\n1. Move every task-*-handoff memory whose task is DONE or ARCHIVED on the board (read status through moe tools, never by hand-editing .moe) into .serena/memories/_archive/, keeping its name. Then add the pattern `_archive/.*` to .serena/project.yml ignored_memory_patterns. Never move the handoff of a task in PLANNING, AWAITING_APPROVAL, WORKING, REVIEW or BLOCKED.\n2. Merge duplicate or near-duplicate gotcha-* (and decision-*) memories. Fold each group into one file named per docs/MEMORY.md, keeping every distinct fact, and archive the merged-away files the same way. Re-point any `mem:<name>` reference you find in the task plans you touch.\n\nSafety: .serena/ is untracked but NOT gitignored, and no commit has ever touched .serena/memories. A landing with attribution.undeclared 'solo' could sweep hundreds of moved files into git. Declare nothing under .serena, and confirm after landing that `git log --oneline -- .serena` is still empty. Whether .serena/memories should be gitignored or added to attribution.exclude is a human call, so ask; don't decide it.",
+  "definitionOfDone": [
+    "Every task-*-handoff memory whose task is DONE or ARCHIVED is in .serena/memories/_archive/, and no live task's handoff moved. The completion summary gives both counts (before and after) and the list of moved names.",
+    ".serena/project.yml ignored_memory_patterns contains `_archive/.*`. A fresh Serena session's list_memories (or an equivalent MemoryManager check) shows none of the archived names, and the listing is measurably smaller (state the before and after size).",
+    "Duplicate gotcha-*/decision-* groups are merged into single files with no distinct fact dropped, each merge listed as 'kept <name> <- merged <names>'. No path under .serena is committed: `git log --oneline -- .serena` is still empty after the landing."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 283.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:17:33.972Z",
+  "updatedAt": "2026-10-30T07:17:33.972Z"
+}
