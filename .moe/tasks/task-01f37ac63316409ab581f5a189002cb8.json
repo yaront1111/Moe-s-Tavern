@@ -1,0 +1,37 @@
+{
+  "id": "task-01f37ac63316409ab581f5a189002cb8",
+  "epicId": "epic-be924fb8",
+  "title": "Contested landing consumes per-path peer lists from get_commit_scope",
+  "description": "Objective: make the wrapper's contested-path landing act on the peer data that task-f943b6877b5f48aeb282d819f9da013d adds to moe.get_commit_scope. Each peerDeclared entry gains taskIds (every contributing nonterminal task, id order, taskIds[0] === taskId) and editingTaskIds (contributing tasks with an IN_PROGRESS plan step naming the path and an active session by the peerActive rule). Incident: completion e67ca0e (task-574c0b36, 06:22:35Z) landed the whole of docs/MCP_SERVER.md on its own TOOL witness while task-9cc13170 was mid-step-4 on that file. It swept 9cc13170's unfinished hunks (HEAD documented 2 unregistered tools until cd2160e9). Its Moe-Contested trailer named only the first claimant, the idle task-66e8d7d1.\n\nDeliverable, in scripts/moe-agent.sh and its scripts/moe-agent.ps1 twin (string parity kept):\n1. resolve_attribution (and the ps1 twin) builds, per path, the union of every entry's taskIds and of its editingTaskIds. A missing or non-list taskIds falls back to [taskId], and a missing or non-list editingTaskIds counts as []. An older daemon therefore lands exactly as today.\n2. Under attribution.contested=skip-untouched, an own contested path with a non-empty editing list is skipped as MOE_ATTR_CONTESTED_EDITING(<first editing task id>), even when this session's editing tool wrote it. This check runs before the TOOL and idle-peer checks. 'skip' keeps MOE_ATTR_CONTESTED, and 'commit' still lands.\n3. Every contesting task is named:\n   - the contested ledger (ATTR_DIR/contested, sent to record_commit as contested) has one row per (task, path);\n   - a landed path gets one trailer line, `Moe-Contested: <path> (<id1>, <id2>)`;\n   - held= names the peer of the hold.\n4. attr_held_list and Get-MoeHeldList recognise MOE_ATTR_CONTESTED_EDITING(...) and add a remedy sentence: a peer was mid-step, so coordinate, let its step finish, then re-edit with a witnessed tool, or let the peer's own landing carry the bytes.\n5. The disk-fallback scope (daemon unreachable) builds taskIds from every contributing open task, and editingTaskIds from any IN_PROGRESS step naming the path. It has no activity data, so it fails closed.\n6. Add postflight.{sh,ps1} scenarios, adding fake-proxy scope knobs in scripts/tests/postflight-fake-proxy.js if needed. Update the docs:\n   - scripts/CLAUDE.md, Land on every exit / CONTESTED;\n   - docs/CONFIGURATION.md, attribution.contested;\n   - docs/TROUBLESHOOTING.md, the MOE_ATTR_* table;\n   - docs/SCHEMA.md, the settings comment, if it still says a TOOL witness alone releases.\n\nNOT in scope:\n- Any daemon change. task-f943b687 owns get_commit_scope and record_commit, including record_commit's MOE_CONTESTED_HELD handling of MOE_ATTR_CONTESTED_EDITING.\n- Hunk-level staging.\n- Changing the TOOL-witness, idle-peer or declare_files rules beyond the new editing hold.\n\nSerialization: this task depends on task-f943b687 (the contract) and task-a2f243a1 (it has the same four wrapper files dirty now). Rerun the overlap scan before submit_plan:\n- the CQ-V chain task-16bbf8ff -> task-2720c13b -> task-7f82e200 -> task-c4e076cd, and task-6f5cf10f, plan the same four files;\n- task-b621ddc9 plans scripts/CLAUDE.md and docs/CONFIGURATION.md.\n\nVerification: `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`, plus `pwsh -NoProfile -File scripts/tests/postflight.ps1` where pwsh is installed.",
+  "definitionOfDone": [
+    "postflight.sh: a TOOL-witnessed own contested path whose scope entry has editingTaskIds [\"task-peer\"] is skipped as MOE_ATTR_CONTESTED_EDITING(task-peer), stays dirty, and the session-ended line carries held=<path>(task-peer) plus the editing remedy",
+    "postflight.sh: the same path with editingTaskIds [] and with the field absent lands exactly as before (legacy daemon parity)",
+    "postflight.sh: a landed contested path whose entry has taskIds [\"task-a\",\"task-b\"] gets the single trailer `Moe-Contested: <path> (task-a, task-b)` and record_commit contested rows for both tasks",
+    "postflight.ps1 carries the same scenarios and passes under pwsh where installed",
+    "`bash scripts/tests/parity-check.sh` passes",
+    "scripts/CLAUDE.md, docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md document MOE_ATTR_CONTESTED_EDITING and the per-task trailer list"
+  ],
+  "taskRails": [
+    "The editing hold only adds holds: never weaken the existing skip, skip-untouched, idle-peer or declare_files rules, and an older daemon's scope (no taskIds/editingTaskIds) must land byte-for-byte as today."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-f943b6877b5f48aeb282d819f9da013d",
+    "task-a2f243a111654c7fbb2a28848a923e8c"
+  ],
+  "priority": "MEDIUM",
+  "order": 275.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:11:20.155Z",
+  "updatedAt": "2026-10-30T07:11:20.155Z"
+}

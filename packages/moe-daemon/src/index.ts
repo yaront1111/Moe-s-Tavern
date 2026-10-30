@@ -20,6 +20,7 @@ import { ensureRunnerKey } from './server/runnerChannel.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
 import { reconcileRunningAttempts } from './state/attemptStore.js';
 import { runDoctor } from './commands/doctor.js';
+import { runCheckArchitecture } from './commands/checkArchitecture.js';
 import { logger } from './util/logger.js';
 import { VERSION } from './util/version.js';
 import { writeInitFiles } from './generated/initFiles.js';
@@ -1191,9 +1192,17 @@ async function main() {
       process.exit(result.exitCode);
       break;
     }
+    case 'check-architecture': {
+      // One JSON line on stdout; exit 0 passed, 1 failed, 2 inconclusive or unavailable.
+      const { exitCode, report } = await runCheckArchitecture(process.argv.slice(3), process.cwd());
+      process.stdout.write(`${JSON.stringify(report)}\n`);
+      process.exitCode = exitCode;
+      break;
+    }
     default:
       logger.info('Usage: moe-daemon [start|stop|status|init|doctor|version] [--project <path>] [--port <port>] [--host <addr>] [--name <name>]');
       logger.info('       moe-daemon accounts [list|add|login|logout|check|remove] (Claude subscription accounts; see `accounts help`)');
+      logger.info('       moe-daemon check-architecture --rules <repo path> [--base <rev>] [--tree <rev>] (run from the repository root)');
       logger.info('Note: `init` now starts the daemon and keeps running.');
   }
 }

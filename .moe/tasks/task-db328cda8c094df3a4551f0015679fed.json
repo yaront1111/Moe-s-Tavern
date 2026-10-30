@@ -17,53 +17,87 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Build on the LANDED V10a module packages/moe-daemon/src/delivery/architectureRules.ts (task-2cd62d2c): parseArchitectureRules, extractImports, resolveImport, evaluateArchitecture. Adapt to its landed names. If V04 (task-a9d1a74d) lands a dispatch hook for required checks, note it, but keep this task's surface a plain CLI command.\n\nCreate packages/moe-daemon/src/commands/checkArchitecture.test.ts.\n- Use real temp Git repos, with GIT_* masked and fixed identities, as in repositorySource.test.ts.\n- The fixture is a base commit plus a CANDIDATE commit whose first parent is base, mirroring the wrapper's frozen candidate (commit-tree tree -p base).\n- arch.json holds rule 'state-no-tools': from ['src/state'], forbid ['src/tools'].\n- Assert the exact exit code and the exact JSON report, never truthiness.\n\nCases:\n- A1, DoD1. The candidate adds `import { t } from '../tools/t.js'` to src/state/s.ts. The plan prose for it passes checkPlanRails with the project's rails (util/rails.ts). The check still exits 1, reporting a violation {ruleId:'state-no-tools', file:'src/state/s.ts', line, specifier, resolved:'src/tools/t.ts'}.\n- A2, DoD2. A changed file has `await import(name)`: exit 2, outcome 'inconclusive', with the dynamic-import entry surfaced in `uncertain`.\n- A3, DoD3 (immutable candidate). The forbidden import exists only as an uncommitted worktree edit: exit 0. Only committed bytes are read.\n- A4, DoD3 (protected definitions). A task whose executionContract.requiredChecks is {id:'arch', command:'node packages/moe-daemon/dist/index.js check-architecture --rules arch.json', configs:['arch.json'], scripts:['packages/moe-daemon/src/delivery/architectureRules.ts','packages/moe-daemon/src/commands/checkArchitecture.ts']}. A candidate whose protectedEntries change arch.json gives evaluateDeliveryEvidence 'protected-check-changed:arch.json' under deliveryPolicy 'local-branch'. Reuse V01's requiredChecks.delivery.test.ts helpers.\n- A5, selection. A candidate touching only docs/ gives selectedRules [] and exit 0.\n- A6, errors: a missing or malformed arch.json at the tree, an unresolvable revision, and a changed JS/TS file over the source cap. Each gives exit 2 with a named reason, and never 0.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/commands/checkArchitecture.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/checkArchitecture.test.ts"
+      ],
+      "note": "Red: checkArchitecture.test.ts fails at import (module absent), run in a Linux snapshot of HEAD b1b6d7d8. Cases A1 (rails pass yet exit 1, plus a 6-file batch and a rename), A2 (dynamic/non-literal surfaced; kept beside a violation), A3 (worktree+index edits ignored), A4 (ToolTestHarness + submit_plan requiredChecks arch {configs arch.json, scripts checker+engine}: weakened arch.json passes the CLI but gives protected-check-changed:arch.json; checker/engine edits likewise), A5 (docs-only selects nothing; explicit --base/--tree), A6 (missing/malformed rules, >64KiB covered file, covered symlink, root commit/no-such-ref, 8 usage/injection argv, non-root cwd). Decision: only changed scanned files covered by some rule's `from` are read (exactly the set evaluateArchitecture scans), so a huge uncovered file (src/other/huge.ts in A5) cannot make the check inconclusive. V01 helpers are file-local, so A4 mirrors their pattern. Shared tree has ~817 dirty peer paths; untouched.",
+      "startedAt": "2026-10-30T07:01:13.131Z",
+      "completedAt": "2026-10-30T07:05:08.068Z"
     },
     {
       "stepId": "step-2",
       "description": "Implement packages/moe-daemon/src/commands/checkArchitecture.ts:\n`export async function runCheckArchitecture(argv: string[], cwd: string): Promise<{ exitCode: 0 | 1 | 2; report: object }>`.\n\nError handling: every Git, read or parse failure gives exitCode 2 with report.reason. It never throws, and never gives exit 0 on uncertainty.\n\nArguments: `--rules <repo-path>` (required), `--base <rev>` and `--tree <rev>`.\n- tree defaults to HEAD^{commit} of cwd: the frozen candidate in the gate workspace.\n- base defaults to tree^1, the candidate's baseRevision.\n\nUse only bounded, read-only Git through openProjectGit (util/cachedPlanPaths.ts), and NEVER read the worktree:\n- `diff-tree -r -z --no-renames --no-ext-diff --no-textconv --name-status <base> <tree>` gives the A, M and T paths to scan; deleted paths are skipped.\n- `ls-tree -r -z --name-only --full-tree <tree>` gives treePaths.\n- Read the rules and the changed .ts, .tsx, .js, .mjs and .cjs files at the tree through readRepositorySource (context/repositorySource.ts), in batches of at most 32 queries. Any non-'served' item gives exit 2, with an `unreadable` entry.\n- parseArchitectureRules, then evaluateArchitecture.\n\nExit 0 means passed, 1 failed, 2 inconclusive or unavailable. Print the report as one JSON line on stdout, so the runner's output tail carries it.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/commands/checkArchitecture.test.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/commands/checkArchitecture.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/checkArchitecture.ts",
+        "packages/moe-daemon/src/commands/checkArchitecture.test.ts"
+      ],
+      "note": "checkArchitecture.ts: runCheckArchitecture(argv, cwd) never throws; exit 0/1/2; report keys {base,tree,rules,selectedRules,violations,uncertain,outcome[,reason=sorted uncertainty reasons]} or {...,outcome:'unavailable',reason:<usage|repository-unavailable|revision-unresolved|diff-unavailable|tree-unavailable|rules-unreadable|rules-invalid|source-unreadable|changed-invalid|internal>, detail|unreadable}. Git only via openProjectGit (30s budget): rev-parse --verify --end-of-options, diff-tree -r -z --no-renames --no-ext-diff --no-textconv --ignore-submodules=none --name-status (4 MiB cap, A/M/T kept, D skipped, other status refused), ls-tree -r -z --name-only --full-tree (16 MiB). Reads via readRepositorySource in batches of 4 (4x64KiB = the 256KiB total cap, so a served file is never omitted); --rules validated with validateSourceRequest; leading '-' values refused. Deviation (fail-safe): only covered scanned files are read; unread paths pass text '' and only select rules (exactly the engine's scan set). Test fix: symlink fixture committed via update-index after add -A. Linux snapshot: checkArchitecture.test.ts 21/21; tsc --noEmit 0; scratch tsconfig over the test file 0.",
+      "startedAt": "2026-10-30T07:05:10.453Z",
+      "completedAt": "2026-10-30T07:06:56.179Z"
     },
     {
       "stepId": "step-3",
       "description": "In packages/moe-daemon/src/index.ts, add `case 'check-architecture'` beside `case 'doctor'` (about line 1075):\n- await runCheckArchitecture(process.argv.slice(3), process.cwd());\n- write the report;\n- process.exit(exitCode).\nAdd one usage or help line, the way doctor's is documented. No other change; preserve peers' bytes in index.ts.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "index.ts +9/-0 (was clean vs HEAD b1b6d7d8, LF preserved): static import beside runDoctor; `case 'check-architecture'` after doctor writes JSON.stringify(report)+'\\n' to stdout and sets process.exitCode (deviation from process.exit: same as the accounts branch, so a piped stdout is never cut before flush; verified the process exits promptly); one usage line after the accounts line. E2E via tsx in a Linux snapshot on a temp repo: dynamic import -> exit 2, forbidden -> 1, empty diff -> 0, missing rules -> 2; one stdout line each, 0 bytes stderr.",
+      "startedAt": "2026-10-30T07:06:56.959Z",
+      "completedAt": "2026-10-30T07:07:35.286Z"
     },
     {
       "stepId": "step-4",
       "description": "Verify once.\n- Iterate with `npx vitest run src/commands/checkArchitecture.test.ts`.\n- Then run the gate fresh in an isolated Linux snapshot of HEAD: whole-repo git archive, overlay only this task's files plus the landed V10a module if it is not yet in HEAD, native deps, MOE_* unset, Linux-only PATH (mem:gotcha-daemon-linux-snapshot-gate). The gate is `cd packages/moe-daemon && npm test` plus `npx tsc --noEmit`, and both must exit 0. Supply the npm test command, exit code and output tail to complete_task.\n\nMutants, on scratch copies, restored and cmp'd afterwards:\n1. read the worktree file instead of the tree: A3;\n2. treat inconclusive as exit 0: A2;\n3. scan every file instead of the changed ones: A5;\n4. a parse failure giving exit 0: A6.\nKeep the diff at or under 400 net lines.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/commands/checkArchitecture.ts",
         "packages/moe-daemon/src/commands/checkArchitecture.test.ts",
         "packages/moe-daemon/src/index.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/checkArchitecture.ts",
+        "packages/moe-daemon/src/commands/checkArchitecture.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "Gate fresh: git archive of HEAD 5aec4971 (whole repo) + only the 3 owned files (cmp ok), npm ci native, env -i, NO_COLOR=1, node v24.21.0. `cd packages/moe-daemon && npm test` exit 0: Test Files 200 passed (200); Tests 5571 passed | 16 skipped (5587); checkArchitecture 21/21. `npx tsc --noEmit` exit 0. Mutants (scratch copy, restored, cmp-equal): M1 worktree read -> A3 red; M2 inconclusive exit 0 -> A2 red; M3 scan all tree files -> both A5 red; M4 rules-invalid exit 0 -> A6 malformed red; plus M5 leading '-' accepted -> 2 usage rows red; M6 deletions scanned -> rename row red; M7 read set narrowed to .ts -> batch row red. 7/7 killed with real failures. Size: 159 + 199 + 9 = 367 net lines (<= 400).",
+      "startedAt": "2026-10-30T07:07:36.148Z",
+      "completedAt": "2026-10-30T07:09:09.125Z"
     },
     {
       "stepId": "step-5",
       "description": "One adversarial self-review of this task's diff, the last step (load adversarial-self-review). Check:\n- Can a candidate pass by editing arch.json or the checker itself? A4 must refuse it through V01 protected drift; a plain run of the command alone cannot see that.\n- Path traversal or option injection through --rules, --base or --tree (use --end-of-options and reject a leading '-').\n- A huge diff: buffer caps give exit 2.\n- Gitlinks or symlinks among the changed paths: refused, never followed.\n- A rename seen as delete plus add with --no-renames.\n- No .moe edits, no Git writes, no forbidden-pattern tokens.\n- verified-local is not enabled.\nWrite the handoff memory, noting that dispatching the command as a required check is V04's job.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/commands/checkArchitecture.ts",
         "packages/moe-daemon/src/commands/checkArchitecture.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/checkArchitecture.ts",
+        "packages/moe-daemon/src/commands/checkArchitecture.test.ts"
+      ],
+      "note": "Adversarial review. Fixes:\n(1) unread paths now carry the sentinel `import(unread);\\n` instead of '' (tsx probe: extractImports gives dynamic-import), so engine scan-set drift fails closed;\n(2) the A1 rails fixture no longer spells out the project's forbidden-pattern tokens; it uses forbiddenPatterns ['src/tools'], which plan prose still passes;\n(3) a gitlink row was added (covered src/state/sub.ts -> refused:submodule).\n\nChecklist:\n- Edits to arch.json, the checker or the engine are refused by V01 drift (A4).\n- --rules/--base/--tree: a leading '-' is refused, rev-parse uses --end-of-options, and only verified hex ids reach diff-tree/ls-tree.\n- Diff over 4 MiB or tree over 16 MiB: runGit throws on maxBuffer, giving diff-/tree-unavailable exit 2 (not tested: needs ~40k paths).\n- Symlinks and gitlinks are refused, never followed. Renames are handled as delete + add (--no-renames).\n- Only read-only Git runs. No .moe edits, no settings change, verified-local untouched. The forbidden-token grep is clean.\n\nDesign gap filed as task-efbf1742544b44cb81d6057eb4d2884f (MEDIUM, dependsOn this task): the self-hosted dist/index.js loads non-protected modules.\n\nTheoretical: a refused batch marks all 4 of its paths unreadable (still exit 2).\n\nMutants M1-M7 re-run after the fixes: all killed, source restored cmp-equal.\n\nFresh gate, HEAD 917f5a3d + 3 files: npm test exit 0 (200 files, 5571 passed, 16 skipped); tsc 0; scratch tsc over the test file 0.\n\nHandoff memory: task-task-db328cda…-handoff, plus gotcha-git-fixture-cacheinfo-entries.",
+      "startedAt": "2026-10-30T07:09:10.122Z",
+      "completedAt": "2026-10-30T07:12:13.124Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -101,7 +135,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:07.154Z",
-  "updatedAt": "2026-10-29T23:31:11.022Z",
+  "updatedAt": "2026-10-30T07:12:25.794Z",
   "dependsOn": [
     "task-a9d1a74d845b4d3d83f359bf864f8651",
     "task-9ef257f58b7f4c4191f206f67bf3d865",
@@ -113,16 +147,24 @@
   "metrics": {
     "firstClaimAt": "2026-10-29T17:00:43.546Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-5ebbf433"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T17:03:43.106Z",
   "planningNotes": {
@@ -144,5 +186,20 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T17:03:43.211Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:01:13.131Z",
+  "reviewStartedAt": "2026-10-30T07:12:25.795Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh Linux snapshot: git archive HEAD 917f5a3d (whole repo) + the 3 owned files (cmp ok), native npm ci, env -i, NO_COLOR=1, node v24.21.0.\n ✓ src/commands/checkArchitecture.test.ts (21 tests) 1781ms\n ...\n Test Files  200 passed (200)\n      Tests  5571 passed | 16 skipped (5587)\n   Start at  09:11:08\n   Duration  33.84s (tests 91%, transform 4%, import 4%)\nAlso: npx tsc --noEmit exit 0; scratch tsconfig over checkArchitecture.test.ts exit 0.",
+    "reportedAt": "2026-10-30T07:12:25.795Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/commands/checkArchitecture.test.ts",
+    "packages/moe-daemon/src/commands/checkArchitecture.ts",
+    "packages/moe-daemon/src/index.ts"
+  ],
+  "completionSummary": "CQ-V10: a check-architecture CLI over the landed V10a engine. Net 371 lines.\n\nFiles:\n- commands/checkArchitecture.ts (160, new)\n- checkArchitecture.test.ts (202, new, 21 tests)\n- index.ts (+9: a case after doctor, plus a usage line)\n\nCommand: `node packages/moe-daemon/dist/index.js check-architecture --rules <path> [--base <rev>] [--tree <rev>]`\n- Reads committed bytes of HEAD (the candidate) against HEAD^ through openProjectGit/readRepositorySource. The worktree and index are never read.\n- Prints one JSON line with `outcome` last.\n- Exit 0 passed, 1 failed, 2 inconclusive or unavailable, always with a named reason:\n  - inconclusive: the uncertainty kinds, ambiguous-syntax included;\n  - unavailable: usage, repository-unavailable, revision-unresolved, diff-unavailable, tree-unavailable, rules-unreadable, rules-invalid, source-unreadable, changed-invalid or internal.\n\nDoD:\n1. A1: plan prose passes checkPlanRails, yet a committed forbidden import exits 1 with the exact violation. Holds across batched reads, all 5 extensions, and a rename.\n2. A2: dynamic-import exits 2 inconclusive. non-literal-require stays listed beside a real violation.\n3. Immutable candidate (A3): worktree and index edits are ignored. Protected definitions (A4): through submit_plan requiredChecks (configs arch.json; scripts are the checker and the engine), a weakened arch.json passes the CLI but gives protected-check-changed:arch.json. Checker or engine edits are flagged likewise.\n4. Gate below.\n\nAlso covered (A5/A6): docs-only changes select no rule; a huge uncovered file is not read; missing or malformed rules, a >64KiB covered file, a symlink, a gitlink, a root commit, a bad ref, 8 usage/option-injection argv and a non-root cwd each exit 2.\n\nDeviations (fail-safe):\n- Only covered, scanned files are read. Unread paths get the sentinel `import(unread);`, so any drift in the engine's scan set surfaces as inconclusive.\n- index.ts sets process.exitCode instead of calling process.exit, as the accounts "
 }
