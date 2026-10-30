@@ -64,7 +64,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -80,7 +80,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T04:25:41.871Z",
-  "updatedAt": "2026-10-30T06:36:57.418Z",
+  "updatedAt": "2026-10-30T07:42:53.771Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T05:55:44.769Z",
@@ -90,11 +90,14 @@
     "firstClaimAt": "2026-10-30T06:25:59.845Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T07:42:53.771Z",
+    "wallClockMs": 4613926
   },
   "contextFetchedBy": [
     "architect-32ff5555",
-    "worker-73c29a03"
+    "worker-73c29a03",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -229,5 +232,9 @@
     "kind": "completion",
     "sessionId": "worker-73c29a03@2026-10-30T06:30:29Z",
     "at": "2026-10-30T06:36:57.418Z"
-  }
+  },
+  "completedAt": "2026-10-30T07:42:53.771Z",
+  "reviewCompletedAt": "2026-10-30T07:42:53.771Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 6954f853 (on moe/work-2026-10-24, pushed): ci.yml +7, daemon-json-cap.test.mjs +18, seat-registration.test.mjs +18, pure insertions (43 LOC, no existing assertion touched).\n\nRe-ran task.verification (MOE_*/CLAUDE* env scrubbed, portable pwsh 7 on PATH): tests 73, pass 49, fail 0, skipped 24; every skip is 'PowerShell 5.1 is Windows-only' (no other skip reasons). Both new 'CI runs this suite on Linux and Windows' tests pass.\n\nDoD 1: build-all-platforms has exactly one new step running node --test on both files, `if: runner.os != 'macOS'`. PyYAML parses it (one matching step, if matches). ci.yml is LF (0 CR bytes), ASCII.\nDoD 2: Linux leg (bash + pwsh 7) re-run by me, 0 failed. The Windows leg (73 pass/0 fail/0 skipped) is the worker's reported evidence; I did not re-run it. CI cannot be triggered here (push/PR to main only), so neither leg was seen on a real runner.\n\nGuard tests are not vacuous: on a scratch copy of scripts/ + ci.yml, baseline 2 pass/0 fail; file dropped -> 1 fail; longer name '.bak' -> 1 fail; `if: runner.os == 'Windows'` -> 2 fail; step moved into build-plugin job -> 2 fail. (My first scratch attempt was invalid: copy lacked scripts/moe-agent.sh and my first 'move' mutant stayed in the last job. I redid both before relying on them.) Nothing in the repo was modified.\n\nNon-blocking: macOS exclusion is deliberate and commented. Still not in CI (worker flagged for governor): account-trust-docs.test.mjs, local-runner-vm-control.test.mjs, postflight-owner-scope.test.mjs, wave1-pilot.mjs.",
+  "requiredCheckAtDone": null
 }

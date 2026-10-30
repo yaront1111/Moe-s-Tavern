@@ -75,7 +75,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:49:24.162Z",
-  "updatedAt": "2026-10-30T07:39:44.808Z",
+  "updatedAt": "2026-10-30T07:42:22.417Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T06:51:58.935Z",
@@ -193,7 +193,8 @@
     ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
     ".moe/tasks/task-78ba155c350f4927ab5bdf53c21a4468.json",
     ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
-    ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json"
+    ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json",
+    ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json"
   ],
   "completionSummary": "Fix for bug task-43088e9b (option b): evaluateDeliveryEvidence now judges a verified-local task's checks under every deliveryPolicy (legacy set, absent or null) with the CQ-V04 strong rules, so a verified-local task is never satisfied without trusted required-check evidence.\n- delivery/policy.ts: `trusted` is computed above the legacy return; legacy is excused only when `trusted === null` (an empty env list stays strict); legacy owes no landing evidence for any profile; `policy` still reports 'legacy'; isVerifiedLocal exported; header/JSDoc updated.\n- state/deliveryProjection.ts: requiredCheckSatisfiedFor returns undefined under legacy only for a non-verified-local task, so the board agrees with qa_approve and dependency readiness (both read evaluateDeliveryEvidence, with no shortcut of their own).\n- requiredChecks.strong.test.ts: +74 lines, 9 rows.\nDoD 1 (verified-local never satisfied without trusted evidence, whatever deliveryPolicy is): V1 x3 (legacy|absent|null: both required-check tokens, no landing token with commits [], projection false, an untrusted record_check_run copy changes nothing, DONE withholds dependents), V2 (authenticated pass satisfies; an absent env list brings tokens back), V3 (live rollback vs stored snapshot), V4 (required-checks-undeclared), V5 (malformed env list: INVALID_INPUT, DONE withholds). Mutants M1 (original ordering restored), M2, M3, M4, M5, M6, M9 each killed by real failures in those rows.\nDoD 2 (legacy and observe unchanged, regression covered): L2 x2 (satisfied with no run even with a malformed env list; projection absent), plus every pre-existing case passing unchanged. Mutants M7, M8, M10 killed by L2.\nRed before fix: 7 failed | 27 passed (V1 x3, V2, V3, V4, V5). Green after: 34/34. Full gate EXIT 0: 200 files, 5602 passed, 16 skipped.\nNotes: assertExecutionProfileReady untouched (only this test file mocks it), so verified-local stays unreachable in production; no .moe edits, no Git writes; qaApprove.ts, dependencyUnblock.t",
   "commits": [
@@ -240,6 +241,21 @@
       "treeId": "09e35eedc1ed138f5ec8b8d01d094f1be2f8226b",
       "status": "DONE",
       "pushed": true
+    },
+    {
+      "sha": "9309f0b7262c072996aa2377c5d3dbb1b159a55c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-e4b7eee0@2026-10-30T06:53:56Z",
+      "paths": [
+        ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json"
+      ],
+      "recordedBy": "architect-e4b7eee0",
+      "recordedAt": "2026-10-30T07:42:22.417Z",
+      "treeId": "6e737cf67af7893b1a167e134acac4e0660a4dfd",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -251,8 +267,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-952969be@2026-10-30T07:36:58Z",
-    "at": "2026-10-30T07:39:44.808Z"
+    "sessionId": "architect-e4b7eee0@2026-10-30T06:53:56Z",
+    "at": "2026-10-30T07:42:22.417Z"
   },
   "completedAt": "2026-10-30T07:39:14.471Z",
   "reviewCompletedAt": "2026-10-30T07:39:14.471Z",
