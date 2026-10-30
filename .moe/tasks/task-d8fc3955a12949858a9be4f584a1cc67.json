@@ -1,0 +1,31 @@
+{
+  "id": "task-d8fc3955a12949858a9be4f584a1cc67",
+  "epicId": "epic-be924fb8",
+  "title": "bug: local-runner vm-control canonicalProjectPath matches /mnt/<d> on the raw string, so a relative or non-normalized WSL project path gets a different VM ledger dir and readDaemonInfo refuses its live daemon",
+  "description": "Found by architect-4ae016fb while planning task-ea57601d (the moe-proxy comparableProjectPath fix). scripts/local-runner/vm-control.mjs canonicalProjectPath (about line 31) is a port of moe-proxy's comparableProjectPath, added by CQ-I03a (task-c0b0775f), and it has the same flaw. It detects the drive-letter and /mnt/<d> forms on the raw trimmed string only.\n\nOn WSL that gives two wrong results:\n- A relative path, e.g. \".\" run from /mnt/d/projexts/moes, misses both raw regexes. It goes through path.resolve, and the result \"/mnt/d/projexts/moes\" is returned unconverted instead of \"d:/projexts/moes\".\n- A non-normalized /mnt path keeps its raw rest, e.g. \"/mnt/d/projexts/../projexts/moes\" or \"/mnt/d//projexts/moes\".\n\nEffects:\n- ownedLedgerDir (about line 44) hashes the canonical string, so the same project gets a different ~/.moe/runner-state/<hash>/vms ledger dir.\n- readDaemonInfo (line 126) compares canonicalProjectPath(info.projectPath) with canonicalProjectPath(projectPath), so it throws unreachable for the project's own live daemon.\n\nFix shape: mirror whatever rule task-ea57601d lands: resolve or normalize before detecting the special forms, and POSIX-normalize the /mnt rest. That way the proxy and its port agree; ideally a shared test table pins both.\n\nCompatibility, the reason this is its own row: changing the canonical form changes ownedLedgerDir's hash for the inputs that were mis-keyed. An input that is already canonical (an absolute, normalized D:/x, D:\\x, /mnt/d/x or POSIX path) must hash to the byte-identical ledger dir it does today, so no existing VM ledger is orphaned.",
+  "definitionOfDone": [
+    "canonicalProjectPath maps a relative path that resolves under /mnt/<d>/..., and a non-normalized /mnt/<d> path (\"..\" or \".\" segments, doubled or trailing slashes), to the same key as the normalized absolute form. Each case is a test in scripts/tests/local-runner-vm-control.test.mjs.",
+    "For already-canonical inputs (D:/x, D:\\x, /mnt/d/x and a POSIX absolute path), canonicalProjectPath and ownedLedgerDir return results byte-identical to the pre-fix code, pinned as literal expected values in a test.",
+    "readDaemonInfo accepts a daemon.json whose projectPath differs from the caller's only by those forms, and still throws unreachable for a different project. Both cases are tested."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-ea57601db42448dabefbbbe6557a0b9d"
+  ],
+  "priority": "LOW",
+  "order": 267.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:11:11.654Z",
+  "updatedAt": "2026-10-30T06:11:11.654Z"
+}

@@ -13,9 +13,48 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST: the replacement-attempt and unsupported-certification regression, for DoD 2 and 3. Load test-driven-development. Every module named here has landed by the time this row is claimed. Re-read the landed bytes of lifecycle.mjs, provision.mjs, guest-readiness.mjs, guest-session.mjs, source-export.mjs, check-lifecycle.mjs and certify.mjs, and do not re-derive them from this plan.\n\nIn scripts/tests/local-runner.test.mjs, add one group, RX. Each row drives a replacement attempt through the real module and asserts its fixed refusal:\n- RX1 host key (the supervisor credential): in a fake-provider provision, the credential bytes appear in no provider argv, no file under cacheDir or the ledger, and no certify report. A second provision gets a different credential.\n- RX2 state:\n  - a ledger record rewritten to another owner, or to a non-owned instance name, is never launched, deleted or cleaned by provisionOwned, deleteOwned or cleanupOwned;\n  - a guest-session forward refuses a daemon.json whose bindHost is not loopback, both before the spawn and before each forward (R08).\n- RX3 ref: exportSourceSnapshot pinned to a full commit id yields the same snapshot digest after the branch ref moves, and after a replace object is added (R09b, E7).\n- RX4 controller:\n  - readiness refuses a guest whose reported supervisor sha256 differs from the installed bytes;\n  - certify's 'controller-replacement' maps that refusal to contained;\n  - the wrapper side is CQ-R13c2's postflight harness rows, which step 4 runs.\n- RX5, unsupported certification stays blocked:\n  - certify on a host with no platform module gives CERTIFY_UNSUPPORTED_HOST and certified false, with no fallback platform;\n  - the injected transport never certifies;\n  - validateCertificationReport refuses a report with a missing, extra or reordered check id, with transport 'injected', or with certified true while a check failed;\n  - no module under scripts/local-runner/ sets executionReady to true: scan every .mjs source for an `executionReady: true` literal, and assert executionReady === false on every result these rows produce.\n\nIf any RX row shows a replacement that SUCCEEDS, stop. Do not patch the owning module in this task. Call moe.report_blocked with the failing row, the module and a repro, so a fix row is filed, and continue once it lands.\n\nError handling: assertions name fixed codes, never messages. Scratch git repositories and directories are removed in t.after.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Docs sweep for the CQ-R epic. The slices held it back so the same docs are not re-edited per slice.\n\nNew docs/CERTIFICATION.md:\n- What certification proves: each certify check from CQ-R13d/e/f/h/g, by id, with what it shows.\n- What it never claims: certification is not activation, and verified-local stays unavailable until the client gates in other epics pass.\n- How to run it on each OS:\n  - `node scripts/local-runner/cli.mjs prerequisites --cache-dir <a directory under home with no hidden segment>` (the Linux snap rule);\n  - `node scripts/local-runner/cli.mjs certify --work-dir <absolute directory>`;\n  - the expected duration, and the network needed: the pinned image, the Node toolchain and one registry tarball;\n  - cleanup.\n- The report schema, and how CQ-R13 validates a report with validateCertificationReport.\n- A 'Certified platforms' table, empty until step 5.\n\ndocs/ARCHITECTURE.md, the local-runner isolation section. Read each module's header for the facts rather than restating code:\n- the protected control plane;\n- the owned VM lifecycle and ledger;\n- the pinned guest bootstrap and readiness;\n- the supervisor modes and their exit codes: bridge, check, materialize, export, verify, agents, toolchain and dependencies;\n- the check lifecycle, with the toolchain, the offline dependency install and workspace verify;\n- environment identity and evidence freshness;\n- certification, linking docs/CERTIFICATION.md.\n\ndocs/TROUBLESHOOTING.md: certify failure codes and their fixes, at least:\n- the snap cache-dir rule;\n- cloud-init degraded at boot;\n- mounts present;\n- a 0.0.0.0 daemon bind in WSL agent mode failing 'guest-network';\n- a lockfile entry with neither resolved nor integrity failing the dependency phase, which is packages/moe-claude-plugin's case today.\n\nEvery claim must come from the landed code, and no TODO may remain.\n\nError handling: a doc that cannot be sourced from landed code is left out and named in the step note, never guessed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "newFiles": [
+        "docs/CERTIFICATION.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "ADVERSARIAL REVIEW of the whole CQ-R epic diff. Load adversarial-self-review.\n\nIt runs BEFORE the single verification and the operator runs, because the certification reports must be produced on the final reviewed code. Step 5 changes only the evidence record.\n\nDiff the epic's landed range, looking for what the slices got wrong about each other:\n- Producer/consumer drift:\n  - supervisor exit codes vs the check-session and transfer mappings;\n  - fetchNodeToolchain and buildDependencyCache shapes vs runCheckJob;\n  - runCheckJob's result vs certify and CQ-V04b's consumer contract;\n  - CHECK_BOUNDARIES vs the guest's actual spawn.\n- Duplicated helpers.\n- Error paths that fail only in combination, such as abort plus delete-failed, or an install timeout plus the host budget.\n- Any path that enables verified-local or sets executionReady.\n- Secrets in reports, logs or messages.\n- Every guest-supervisor.py mode's refusal leaving no partial state.\n- The accepted-risk list: the R08 per-request daemon.json TOCTOU belongs to CQ-RF05.\n\nFix in-scope defects in this step, with tests. When a fix touches a file this plan does not list, record it with moe.amend_plan_step first.\n\nError handling: out-of-scope findings go through moe.report_blocked for the governor to file as rows, and are listed in the completion summary. None is silently dropped.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh, on the reviewed code. On WSL, run everything under env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\", so Windows Node is never used.\n\n1. `node --test scripts/tests/local-runner.test.mjs`: the DoD command, and the complete_task evidence.\n2. `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs`: CI's local-runner line.\n3. `cd packages/moe-daemon && npm test` and `cd packages/moe-proxy && npm test`: the epic's daemon and proxy fixes, and the execution-profile gate (verified-local stays EXECUTION_PROFILE_NOT_READY).\n4. `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`: CQ-R13c2.\n5. `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`: CQ-R13c1. There is no Linux JDK here.\n6. `npm run lint` at the repo root, and `git diff --check` over this task's files.\n\nRecord every command's pass and fail counts in the step note.\n\nError handling: a failure is fixed in code before step 5. Never weaken a test. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "OPERATOR CERTIFICATION (DoD 1), on the code verified in step 4. This step changes no code; only docs/CERTIFICATION.md changes.\n\n1. Post in #general with moe.chat_send:\n   - the exact per-OS commands from docs/CERTIFICATION.md;\n   - the commit under test;\n   - a request for the three report files that `cli.mjs certify --work-dir <abs>` writes on Windows, Linux and macOS hardware, attached as task comments or placed at a path the operator names.\n2. Call moe.report_blocked naming what is awaited. No agent here can run Multipass, so this block is legitimate.\n3. When the reports arrive, check each one:\n   - validateCertificationReport accepts it;\n   - certified === true and transport === 'native';\n   - supervisorSha256 equals the sha256 of guest-supervisor.py at the verified commit;\n   - together, the reports cover win32, linux and darwin.\n4. A failing or stale report is never recorded. Block again with its failing check ids and codes so a fix row is filed. After that fix lands, re-run step 4 and then this step.\n5. Record each passing report in docs/CERTIFICATION.md:\n   - one table row: platform, arch, Multipass version, image sha256, supervisor sha256, finishedAt, and the sha256 of the report bytes;\n   - the report verbatim, in a fenced json block.\n   An arch with no report, such as the other macOS arch, stays listed as unsupported.\n6. Call moe.complete_task. The evidence is step 4's DoD command, and the summary lists the report validation.\n\nError handling: never edit, synthesize or accept an injected or out-of-schema report, and never enable verified-local.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -61,11 +100,17 @@
       "author": "qa-952969be",
       "content": "QA follow-up from CQ-R11c (task-53daa94f, approved at 2f2b5e48). It does not block that task, so it goes here for the hardening pass.\n\nIn scripts/tests/local-runner-check.test.mjs, C5's row 'close before EOF' emits proc.emit('close', 0, null) synchronously, before the PassThrough delivers HELLO and OBS. That row is infra-failure through !s.opened, so check-session.mjs outcomeOf's `|| !s.ended` guard is never pinned: a mutant that drops it survives `^C[1-7] `. The guard itself works, as a QA probe shows: frames parsed, then close 0 with stdout open, gives infra-failure.\n\nFix: defer the close, e.g. `setImmediate(() => proc.emit('close', 0, null))`. It changes one line and still kills the stop-after-settle mutant the row was added for.\n\nDetails are in comment-997358d583ff4f2b9c0f9c779df7172f on task-53daa94f.",
       "timestamp": "2026-10-29T20:00:09.789Z"
+    },
+    {
+      "id": "comment-cc9c85467be54cbcbd28903bfb6bb952",
+      "author": "architect-e4b7eee0",
+      "content": "R13 split by architect-e4b7eee0 on 2026-10-30, after two human decisions in the architect REPL.\n\n1. Evidence: agents run in WSL with no Multipass, so the human runs certification on real hardware. An agent builds `node scripts/local-runner/cli.mjs certify --work-dir <abs>`, which writes a fixed-schema report. The human runs it on Windows, Linux and macOS and attaches the reports. R13 completes only once all three pass. verified-local stays off; activation is out of R13's scope.\n\n2. The deferred hardening items split by whether they gate certification.\n\nGating rows, all in this epic and all dependsOn of R13:\n- R13a task-6dd3ce1f: Linux prerequisites --cache-dir, plus the provider.executable precedence test (R04 QA relay).\n- R13b task-7fffec67: the H4 Node 20 resolver and C5's deferred close (QA notes).\n- R13c1 task-10af7335 and R13c2 task-6f5cf10f: the MOE_RUNTIME_PROTECTED marker and fail-closed wrapper runtime paths (R01 follow-up 6).\n- The certify chain, R13d task-a8a3a502 → R13e task-d00dafdf → R13f task-d45d52c0 → R13h task-4132ab1c → R13g task-ea8b44c9:\n  - R13d: the harness, report and provisioning/readiness checks, including R07's clean done/done boot;\n  - R13e: the R08 native bridge EOF, framing and guest-network probes;\n  - R13f: writer and check containment, and in-guest controller replacement;\n  - R13h: cancellation and recovery;\n  - R13g: the canary toolchain check.\nR13's dependsOn hit the 20-id cap, so it names R13g for the certify chain.\n\nNon-gating: R01 follow-ups 1-5 and 7 moved to the new epic CQ-RF (epic-5f4acf0a), as RF01-RF07 in BACKLOG. Follow-up 5 is now CQ-RF05's decision record, which also covers R08's per-request daemon.json TOCTOU.\n\nR13 itself keeps the epic-final work:\n- the host-side replacement-attempt matrix (DoD 2) and the unsupported-stays-blocked rows (DoD 3);\n- the docs sweep, including a new docs/CERTIFICATION.md;\n- the whole-epic adversarial review;\n- the full regression;\n- the operator certification step: request, block, then validate and record the three reports.",
+      "timestamp": "2026-10-30T06:08:02.162Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-29T22:21:03.240Z",
+  "updatedAt": "2026-10-30T06:09:27.200Z",
   "dependsOn": [
     "task-8ef993cf26ec4708bae7f510af545eb0",
     "task-120b6a11e9db4012964e865974696e59",
@@ -82,11 +127,53 @@
     "task-2f16aba7f340439a86a41ae98c3173f1",
     "task-90847011452544dc868039ff435b018b",
     "task-001d8ab383ef41088e045b2e41ed0e1e",
-    "task-5b0a2bcf70f34c62ba29df0f7ff99988"
+    "task-5b0a2bcf70f34c62ba29df0f7ff99988",
+    "task-ea8b44c9964442e3a5ca80b2a1cc2ad7",
+    "task-7fffec67fbb44d1e9a509f214105e2bb",
+    "task-10af73355e1b4748b1e07491a7a891cb",
+    "task-6f5cf10f78184c38a46e6973cadda817"
   ],
   "contextFetchedBy": [
     "architect-bb003851",
     "worker-b5749787",
-    "qa-952969be"
-  ]
+    "qa-952969be",
+    "architect-e4b7eee0"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T23:06:03.532Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:09:27.178Z",
+  "planningNotes": {
+    "approachesConsidered": "- Agents producing the real-hardware evidence: impossible. This WSL host has no Multipass, so the human decided (architect REPL, 2026-10-30) that an agent builds `cli.mjs certify` (CQ-R13d-g) and the human runs it on each OS. R13 completes only once all three reports pass.\n- Per-OS human-run rows: rejected. No agent could claim them usefully. One blocking step in R13 gathers the evidence and validates it mechanically with validateCertificationReport.\n- Recording support claims as code, such as a certified-platforms JSON that activation reads: rejected. Activation is out of R13's scope. The record is docs/CERTIFICATION.md, with each report verbatim and its byte digest.\n- Review as the very last step: moved earlier, before the single verification and the operator runs. The reports must be produced on the final reviewed code, and the last step changes only the evidence record.\n- Fixing a replacement gap inside R13: rejected as out of scope. It is filed as a row and blocks R13.\n- The non-gating R01 follow-ups went to the CQ-RF epic (epic-5f4acf0a), per the human.",
+    "codebaseInsights": "- native-smoke.mjs is the precedent: operator-only, its injected evidence never establishes support, and its header says 'CQ-R13 consumes its evidence'.\n- certify.mjs (CQ-R13d) holds CERTIFY_CHECKS and validateCertificationReport. CQ-R13e/f/h/g append checks to it.\n- The modules behind the RX rows: lifecycle.mjs (owner validation, deleteOwned/cleanupOwned), provision.mjs (credential via --cloud-init - stdin), guest-session.mjs (loopback daemon.json bindHost), source-export.mjs (full commit id, no replace objects) and guest-readiness.mjs (supervisor sha256).\n- CI's local-runner list is ci.yml:236. Kotlin tests run through cmd.exe gradlew.bat, as CQ-R01's verification recorded.\n- R13's dependsOn hits the 20-id cap, so it names CQ-R13g for the whole certify chain R13a → R13d → R13e → R13f → R13h → R13g.",
+    "risks": "- A real boot may report cloud-init degraded (R07's QA note). Readiness then refuses and the report fails, which needs a fix row rather than a looser check.\n- A report is valid only for the verified commit: its supervisorSha256 must match.\n- macOS has two arches, and only those with a passing report are claimed.\n- Docs must be sourced from the landed code; the R11e and R10d families land late.\n- RX3 needs a real temporary git repository, as the E rows have.\n- The certify run needs host network (image, toolchain, one registry tarball) and takes minutes per OS.\n- verified-local must stay EXECUTION_PROFILE_NOT_READY throughout.",
+    "keyFiles": [
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/local-runner/certify.mjs",
+      "scripts/local-runner/native-smoke.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/source-export.mjs",
+      "docs/ARCHITECTURE.md",
+      "docs/TROUBLESHOOTING.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:09:27.200Z",
+  "approvedPlanRevision": 1
 }

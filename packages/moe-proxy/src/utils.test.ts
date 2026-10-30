@@ -208,6 +208,31 @@ describe('utils', () => {
   });
 
   describe('comparableProjectPath', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    // Emulates win32 off Windows: flips process.platform and swaps path.resolve for a
+    // win32 stand-in (posix resolve of an absolute /mnt path is already normalized,
+    // so flipping the platform alone would not tell resolve from posix.normalize).
+    function onWin32<T>(fn: () => T): T {
+      if (process.platform === 'win32') {
+        return fn();
+      }
+      const saved = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      const resolveSpy = vi.spyOn(path, 'resolve')
+        .mockImplementation((...parts: string[]) => path.win32.resolve('C:\\work', ...parts));
+      try {
+        return fn();
+      } finally {
+        resolveSpy.mockRestore();
+        if (saved) {
+          Object.defineProperty(process, 'platform', saved);
+        }
+      }
+    }
+
     it('maps Windows and WSL forms of the same directory to one canonical form', () => {
       expect(comparableProjectPath('D:\\projexts\\px4swarm')).toBe('d:/projexts/px4swarm');
       expect(comparableProjectPath('D:/projexts/px4swarm')).toBe('d:/projexts/px4swarm');
@@ -235,6 +260,24 @@ describe('utils', () => {
         .not.toBe(comparableProjectPath('D:\\projexts\\other'));
       expect(comparableProjectPath('/mnt/c/projexts/px4swarm'))
         .not.toBe(comparableProjectPath('D:\\projexts\\px4swarm'));
+    });
+
+    it.skipIf(process.platform === 'win32')(
+      'maps /mnt/<d> after resolving relative and non-normalized paths',
+      () => {
+        vi.spyOn(process, 'cwd').mockReturnValue('/mnt/d/x');
+        const same = ['.', '/mnt/d/x/.', '/mnt/d/x/sub/..', '/mnt/d//x', 'sub/..', '/mnt/d/x/./', '/mnt/d/x', 'D:\\x'];
+        expect(same.map((p) => [p, comparableProjectPath(p)])).toEqual(same.map((p) => [p, 'd:/x']));
+        expect(['sub', '..'].map((p) => [p, comparableProjectPath(p)]))
+          .toEqual([['sub', 'd:/x/sub'], ['..', 'd:']]);
+      },
+    );
+
+    it('on win32 posix-normalizes a raw /mnt/<d> path before mapping it', () => {
+      const rows = ['/mnt/d/x/sub/..', '/mnt/d/x/./', '/mnt/d//x', 'D:\\x'];
+      expect(onWin32(() => rows.map((p) => [p, comparableProjectPath(p)])))
+        .toEqual(rows.map((p) => [p, 'd:/x']));
+      expect(onWin32(() => comparableProjectPath('/mnt/d/x/sub/../..'))).toBe('d:');
     });
   });
 

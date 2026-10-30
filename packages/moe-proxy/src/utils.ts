@@ -20,23 +20,28 @@ export interface DaemonInfoReadResult {
  * proxy resolves the same directory as `/mnt/d/projexts/app`; both reduce to
  * `d:/projexts/app`. Paths without a drive-letter equivalent keep the old
  * behavior (resolve; case-insensitive only on win32).
+ *
+ * A drive-letter path is detected on the raw string (path.resolve would treat
+ * it as relative on Linux). `/mnt/<d>` is mapped only after normalizing, so
+ * '.', 'sub/..' and '/mnt/d/x/./' match '/mnt/d/x': on POSIX after
+ * path.resolve, on win32 after a posix normalize of the raw string
+ * (path.resolve would prefix it with the cwd drive). The daemon's
+ * comparableProjectPath follows the same rule.
  */
 export function comparableProjectPath(projectPath: string): string {
   const raw = projectPath.trim();
 
-  // Both special forms are detected on the RAW string: path.resolve would
-  // mangle a Windows-drive path on Linux (treated as relative) and a /mnt
-  // path on Windows (prefixed with the cwd drive).
   if (/^[a-zA-Z]:[\\/]/.test(raw)) {
     return normalizeWindowsDrivePath(raw);
   }
-  const wslMatch = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(raw);
+  const resolved = path.resolve(raw);
+  const wslSource = process.platform === 'win32' ? path.posix.normalize(raw) : resolved;
+  const wslMatch = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(wslSource);
   if (wslMatch) {
     const rest = (wslMatch[2] ?? '').replace(/\/+$/, '');
     return `${wslMatch[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();
   }
 
-  const resolved = path.resolve(raw);
   if (/^[a-zA-Z]:[\\/]/.test(resolved)) {
     return normalizeWindowsDrivePath(resolved);
   }
