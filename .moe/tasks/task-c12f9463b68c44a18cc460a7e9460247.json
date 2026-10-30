@@ -169,7 +169,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:52:07.306Z",
-  "updatedAt": "2026-10-30T21:36:04.247Z",
+  "updatedAt": "2026-10-30T21:38:25.148Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:04.205Z",
@@ -267,7 +267,38 @@
   },
   "filesModified": [
     "scripts/tests/worktree-landing.sh",
+    "scripts/tests/worktree-landing.ps1",
+    ".moe/tasks/task-54fe1615fb3e49b8ac6dd384108d6ef5.json"
+  ],
+  "completionSummary": "Two new files; no other file changed; not registered in CI (WT-09):\n- scripts/tests/worktree-landing.sh (557 lines): bash launcher plus the node suite between the WTJS markers.\n- scripts/tests/worktree-landing.ps1 (58 lines, with BOM): extracts the same suite and pins the case list in $expectedCases. Drift is an ERROR (exit 2).\n615 added lines (≤ 700), LF only.\n\n18 cases. `--only local|remote` selects each subset. Assertions are on refs, reflogs, parents, file bytes, push argv and ledger rows.\n- local: hunks-merge, conflict, reflog-linear, cas-contains-c, relanding-idempotent, branch-sync, target-checked-out, board-path\n- remote: push-first-no-force, race-fetch-fails, push-transport-fails, push-applied-client-fails, push-outcome-unknown, push-rejected-retry, diverged, push-unanswered-repush, push-remote-rejected, push-unanswered-peer-lands\n\nRED against current code:\n- sh: 0 passed, 18 failed, 0 errors, exit 1 (the fresh verification run exits 0).\n- Windows PS 5.1: 18 FAIL, 0 ERROR, exit 1.\n- parity-check PASS. No moe-wl-* temp dirs left behind.\n\nDeviations:\n- 18 cases, per planner note 2. push-transport-fails is retargeted to §2.6: 3 pushes of the same C, then MOE_PUSH_OUTCOME_UNKNOWN.\n- push-outcome-unknown phase 2 replays with FAKE_CLAIM_MODE=finalizing (not idle). It asserts a committed row for C with no `pushed` key (note 3).\n- The cas act finds C by parents [main] and its absence from the task branch, never by journal field names.\n- Case TMP is space-free; case dirs keep their space. Reason: PS 5.1 mangles the guard's GetTempPath argument (a space plus a trailing backslash). Filed as bug task-54fe1615.\n\nDoD parse item: the literal command exits 1 on ANY file on PS 5.1 and pwsh 7.6.9, because `[ref]$e` names an unset variable. With `$e = $null;` first, this file parses with 0 errors on both engines. Evidence is in my task comment.",
+  "commits": [
+    {
+      "sha": "8ad04de7468d5cd5e7e45224d3e818c165e53d8c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-30T20:31:05Z",
+      "paths": [
+        ".moe/tasks/task-54fe1615fb3e49b8ac6dd384108d6ef5.json",
+        "scripts/tests/worktree-landing.ps1",
+        "scripts/tests/worktree-landing.sh"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-30T21:38:25.148Z",
+      "treeId": "09837cc2abee7148cdba219d4d9b3c1f12664c83",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/worktree-landing.sh",
     "scripts/tests/worktree-landing.ps1"
   ],
-  "completionSummary": "Two new files; no other file changed; not registered in CI (WT-09):\n- scripts/tests/worktree-landing.sh (557 lines): bash launcher plus the node suite between the WTJS markers.\n- scripts/tests/worktree-landing.ps1 (58 lines, with BOM): extracts the same suite and pins the case list in $expectedCases. Drift is an ERROR (exit 2).\n615 added lines (≤ 700), LF only.\n\n18 cases. `--only local|remote` selects each subset. Assertions are on refs, reflogs, parents, file bytes, push argv and ledger rows.\n- local: hunks-merge, conflict, reflog-linear, cas-contains-c, relanding-idempotent, branch-sync, target-checked-out, board-path\n- remote: push-first-no-force, race-fetch-fails, push-transport-fails, push-applied-client-fails, push-outcome-unknown, push-rejected-retry, diverged, push-unanswered-repush, push-remote-rejected, push-unanswered-peer-lands\n\nRED against current code:\n- sh: 0 passed, 18 failed, 0 errors, exit 1 (the fresh verification run exits 0).\n- Windows PS 5.1: 18 FAIL, 0 ERROR, exit 1.\n- parity-check PASS. No moe-wl-* temp dirs left behind.\n\nDeviations:\n- 18 cases, per planner note 2. push-transport-fails is retargeted to §2.6: 3 pushes of the same C, then MOE_PUSH_OUTCOME_UNKNOWN.\n- push-outcome-unknown phase 2 replays with FAKE_CLAIM_MODE=finalizing (not idle). It asserts a committed row for C with no `pushed` key (note 3).\n- The cas act finds C by parents [main] and its absence from the task branch, never by journal field names.\n- Case TMP is space-free; case dirs keep their space. Reason: PS 5.1 mangles the guard's GetTempPath argument (a space plus a trailing backslash). Filed as bug task-54fe1615.\n\nDoD parse item: the literal command exits 1 on ANY file on PS 5.1 and pwsh 7.6.9, because `[ref]$e` names an unset variable. With `$e = $null;` first, this file parses with 0 errors on both engines. Evidence is in my task comment."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-30T20:31:05Z",
+    "at": "2026-10-30T21:38:25.148Z"
+  }
 }

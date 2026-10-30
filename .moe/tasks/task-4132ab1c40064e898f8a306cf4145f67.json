@@ -103,7 +103,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -129,7 +129,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:04:25.134Z",
-  "updatedAt": "2026-10-30T21:36:38.331Z",
+  "updatedAt": "2026-10-30T21:45:44.754Z",
   "dependsOn": [],
   "metrics": {
     "firstClaimAt": "2026-10-30T06:34:26.929Z",
@@ -137,7 +137,9 @@
     "plannedDistinctFileCount": 5,
     "executedStepCount": 14,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T21:45:44.753Z",
+    "wallClockMs": 54677824
   },
   "tier": "heavy",
   "effort": "max",
@@ -198,7 +200,10 @@
   },
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
-    "scripts/local-runner/certify-lifecycle.mjs"
+    "scripts/local-runner/certify-lifecycle.mjs",
+    ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+    ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+    ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json"
   ],
   "completionSummary": "CQ-R13h reopen-1 fix (DoD 2). QA's mutation probes showed every conjunct of recovery's recovered() predicate survived deletion. LC5 in scripts/tests/local-runner.test.mjs gains 4 rows, #6-#9. Each makes exactly one conjunct false through the REAL reconcileOwned and cleanupOwned, with no production seam, and asserts CERTIFY_RECOVERY_CLEANUP_FAILED.\n- #6: the foreign record nameAt(3) is settled 'deleted' just before the child VM's delete --purge. Pins `theirs.phase !== 'deleted'`.\n- #7: the child `twice` seeds a 2nd 'owned' record, nameAt(5), under its attempt. It has no VM, so the infoFails row cannot leak one, but cleanup still purges and reports it, so report.deleted = [n4, n5]. Pins `deleted.length === 1`.\n- #8: twice, plus the child's record and VM settled mid-reconcile, so cleanup deletes only nameAt(5). Pins `deleted[0] === record.instance`.\n- #9: twice, plus every info nameAt(5) rejects, so cleanup reports an error. Pins `errors.length === 0`.\n\nEach row keeps LC5's kills/closed/no-live-child-VM checks. It also asserts its own end state, the ledger phases and h.deletes, so a degraded tamper cannot pass on another conjunct's account. Re-pointing each tamper at a wrong name turns its row red.\n\nMutation re-run on a /tmp snapshot, --test-name-pattern='^(LC|CF|CC)': A is killed by #6, B by #7, C by #8 and D by #9. `mine.phase === 'deleted'` survives as an equivalent mutant: purgeOwned's update to 'deleted' resolves before report.deleted.push, and the reaped child is the only other writer, so C implies it. It is kept, not dropped, and a 2-line comment in certify-lifecycle.mjs says why. The predicate is unchanged.\n\nFresh verification: exit 0, 346 tests, 345 pass, 1 skipped (the opt-in macOS smoke). diff --check is clean. This round is +29/-6; the task total is about 353 net. DoD 1, 3 and 4 are unchanged from round 0.",
   "commits": [
@@ -245,20 +250,40 @@
       "treeId": "439d1705afb9d2d75c29ba978fb3d03c5290dae7",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "5fb1eef73f47956ef251df7fdd9a65009e9ec1df",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-30T21:14:35Z",
+      "paths": [
+        ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+        ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+        ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json",
+        "scripts/local-runner/certify-lifecycle.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-30T21:37:23.788Z",
+      "treeId": "40bb03939ec28e9c5566c9529e40e74e26ef697a",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
     "scripts/local-runner/certify-recovery-child.mjs",
-    "scripts/local-runner/certify-lifecycle.mjs"
+    "scripts/local-runner/certify-lifecycle.mjs",
+    "scripts/tests/local-runner.test.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-b29f7b3d@2026-10-30T21:04:44Z",
-    "at": "2026-10-30T21:14:38.436Z"
+    "kind": "completion",
+    "sessionId": "worker-25da16b2@2026-10-30T21:14:35Z",
+    "at": "2026-10-30T21:37:23.788Z"
   },
-  "reviewCompletedAt": "2026-10-30T21:13:33.606Z",
+  "reviewCompletedAt": "2026-10-30T21:45:44.753Z",
   "rejectionDetails": {
     "failedDodItems": [
       "'recovery' passes only when, after its controller child is SIGKILLed mid-provision, reconcile and cleanup delete exactly that orphaned VM and leave a foreign record intact. Shown by tests."
@@ -309,5 +334,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T21:45:44.753Z",
+  "reviewSummary": "Reviewed completion commit 5fb1eef7 (on moe/work-2026-10-24) from a /tmp git-archive snapshot, not the shared tree.\n\n- Verification, re-run on the snapshot (env -i, Node 24.21.0): `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs` exits 0. 346 tests: 345 pass, 1 skipped (the macOS smoke). LC1-LC7 green.\n- DoD 2 (the round-1 failure) now holds. I deleted each recovered() conjunct alone and ran `--test-name-pattern='^(LC|CF|CC)'`:\n  - A, the foreign guard: killed by LC5 #6.\n  - B, deleted.length===1: killed by #7.\n  - C, deleted[0]===record.instance: killed by #8.\n  - D, errors.length===0: killed by #9.\n  - E, mine.phase==='deleted': survives. It is an equivalent mutant, documented at certify-lifecycle.mjs:86-88. purgeOwned writes 'deleted' before cleanup reports it, and certifyCore builds its own ledger with no seam. Any later provider call already fails B or D. Keeping E as a guard is what reject issue 3 allowed.\n  - Each new row also pins its end state (ledger phases + deletes), so a tamper that silently failed would be caught.\n- DoD 1, 3, 4: production code changed only by a comment. LC1/LC2, LC4, LC6 and LC5's reap rows are unchanged and green. task.verification exit 0.\n- No test deleted or weakened. The existing LC5 rows and assertions are unchanged; only the message changed.\n- git diff --check clean, no forbidden patterns.\n- Size: this round +29/-6. Task total over its 5 code files vs 2cd85cc0^ is +386/-33 = 353 net, under 400.\n- Rails held: no agent .moe edits, wrapper landing, verified-local untouched.\n- Complexity (non-blocking): failsOnce and infoFails could share one rejects(match, times) helper. net: -2 lines possible.",
+  "requiredCheckAtDone": null
 }
