@@ -1353,7 +1353,8 @@ moe_block_lines.extend([
     'MOE_RUNNER_PROCESS_STARTED_AT = "${MOE_RUNNER_PROCESS_STARTED_AT:-}"',
     'MOE_RUNNER_HOST = "${MOE_RUNNER_HOST:-}"',
     # The seat's execution identity, which moe-proxy stamps onto
-    # get_context/start_step; empty (unset, to the proxy) outside a task.
+    # get_context/start_step/complete_step/complete_task (the attempt pair only on
+    # the last three); empty (unset, to the proxy) outside a task.
     'MOE_SESSION_ID = "${MOE_SESSION_ID:-}"',
     'MOE_ATTEMPT_ID = "${MOE_ATTEMPT_ID:-}"',
     'MOE_ATTEMPT_GENERATION = "${MOE_ATTEMPT_GENERATION:-}"',
@@ -2179,7 +2180,8 @@ except Exception as e:
 PY
 }
 
-# Exported for the CLI's moe-proxy, which stamps the pair onto start_step. The
+# Exported for the CLI's moe-proxy, which stamps the pair onto
+# start_step/complete_step/complete_task (CQ-F09, F12a). The
 # pair moves together: only an identity verified against the store is kept.
 pin_attempt_identity() {
     export MOE_ATTEMPT_ID="" MOE_ATTEMPT_GENERATION=""
@@ -6504,7 +6506,8 @@ while [ "$LOOP_RUNNING" = true ]; do
     # as `sessionId`, and an isolated-clone delivery can read it from nowhere else (the
     # wrapper writes no preflight scope.json when settings.autoCommit is false). Twin:
     # moe-agent.ps1 sets $env:MOE_SESSION_ID from $moeSid at the same point.
-    # moe-proxy (CQ-F09) also stamps it, with the attempt pair, onto the CLI's get_context/start_step.
+    # moe-proxy (CQ-F09/F12a) also stamps it onto the CLI's get_context/start_step/complete_step/complete_task,
+    # and the attempt pair onto the last three.
     export MOE_SESSION_ID="$MOE_SID"
     MOE_TOP=""
     MOE_REL=""

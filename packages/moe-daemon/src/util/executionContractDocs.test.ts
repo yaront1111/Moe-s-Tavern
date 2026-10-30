@@ -30,6 +30,30 @@ function section(doc: string, heading: string): string {
   return lines.slice(start, end < 0 ? undefined : end).join('\n');
 }
 
+function readRepoFile(rel: string): string {
+  const file = path.join(repoRoot, rel);
+  if (!fs.existsSync(file)) throw new Error(`missing file: ${file}`);
+  return fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+}
+
+/** The anchor's line plus the next `span - 1` lines; throws when the anchor is missing. */
+function window(text: string, anchor: string, span: number): string {
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => line.includes(anchor));
+  if (start < 0) throw new Error(`missing anchor: ${anchor}`);
+  return lines.slice(start, start + span).join('\n');
+}
+
+/** Property names of the `executionContract?: { ... }` object literal inside a fenced parameter block. */
+function contractProperties(block: string): string[] {
+  const lines = block.split('\n');
+  const start = lines.findIndex((line) => /^\s*executionContract\?: \{/.test(line));
+  if (start < 0) throw new Error('missing executionContract parameter block');
+  const end = lines.findIndex((line, i) => i > start && /^\s{2}\}/.test(line));
+  if (end < 0) throw new Error('unterminated executionContract parameter block');
+  return lines.slice(start + 1, end).flatMap((line) => /^\s{4}(\w+)\??:/.exec(line)?.[1] ?? []);
+}
+
 const mcp = readDoc('MCP_SERVER.md');
 const schema = readDoc('SCHEMA.md');
 const freshness = readDoc('PLAN_APPROVAL_FRESHNESS.md');
@@ -51,7 +75,7 @@ describe('execution contract docs: stale statements are gone', () => {
   it.each([
     ['PLAN_APPROVAL_FRESHNESS.md', freshness, ['is still a legal approval', 'approval without the field still works', 'token-free by design', 'still send `{taskId}` only']],
     ['SCHEMA.md', schema, ['remains a legal legacy approval']],
-    ['MCP_SERVER.md', mcp, ['Unchanged and still token-free: **SPEED/TURBO auto-approval**', 'do not enforce it yet', 'A number means a revision-checked human approval']],
+    ['MCP_SERVER.md', mcp, ['Unchanged and still token-free: **SPEED/TURBO auto-approval**', 'do not enforce it yet', 'A number means a revision-checked human approval', 'canonical eight-field object']],
   ])('%s', (_name, doc, stale) => {
     for (const text of stale) expect(doc.includes(text), `stale: ${text}`).toBe(false);
   });
@@ -87,5 +111,40 @@ describe('execution contract docs: landed contract is documented', () => {
 
   it('section() fails loudly on a missing heading', () => {
     expect(() => section(mcp, 'moe.no_such_tool')).toThrow('missing heading: ### moe.no_such_tool');
+  });
+});
+
+describe('execution contract docs: submit_plan parameter block', () => {
+  const submitPlan = section(mcp, 'moe.submit_plan');
+
+  it('documents exactly the EXECUTION_CONTRACT_FIELDS properties', () => {
+    expect([...contractProperties(submitPlan)].sort()).toEqual([...EXECUTION_CONTRACT_FIELDS].sort());
+  });
+
+  it('documents requiredChecks as at most 20 definition objects, apart from the string lists', () => {
+    const listed = window(submitPlan, 'requiredChecks?:', 5);
+    expectAll(listed, ['id: string', 'command: string', 'configs?', 'scripts?', 'assertionRoots?', 'ProtectedCheckDefinition', 'at most 20']);
+    expect(submitPlan.includes('canonical nine-field object'), 'nine-field wording').toBe(true);
+  });
+});
+
+describe('source comments: CQ-F statements match the code', () => {
+  const FOUR_TOOLS = 'get_context/start_step/complete_step/complete_task';
+  const PIN_TOOLS = 'start_step/complete_step/complete_task';
+
+  it('schema.ts approvedPlanRevision no longer claims an omitted-token human approval', () => {
+    const comment = window(readRepoFile('packages/moe-daemon/src/types/schema.ts'), 'Absent means an unchecked or legacy approval', 6);
+    expect(comment.includes('omitted-token'), 'stale omitted-token claim').toBe(false);
+    expectAll(comment, ['expectedPlanRevision', 'INVALID_INPUT']);
+  });
+
+  it.each(['moe-agent.sh', 'moe-agent.ps1'])('%s names the tools moe-proxy stamps', (name) => {
+    const launcher = readRepoFile(`scripts/${name}`);
+    expectAll(window(launcher, "The seat's execution identity, which moe-proxy stamps", 3), [FOUR_TOOLS]);
+    const pin = window(launcher, "Exported for the CLI's moe-proxy, which stamps the pair", 3);
+    expectAll(pin, [PIN_TOOLS]);
+    expect(pin.includes('onto start_step.'), 'stale start_step-only pin header').toBe(false);
+    const sid = window(launcher, 'moe-proxy (CQ-F09', 2);
+    expectAll(sid, [FOUR_TOOLS, 'attempt pair']);
   });
 });
