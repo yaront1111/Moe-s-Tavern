@@ -9,9 +9,49 @@
     "JetBrains tests pass under the jetbrains-gradle lease; coordinate MoeDaemonSupervisor.kt edits with the RF sequence."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "SUPERVISOR READER: bounded, read-only, cross-OS. Load test-driven-development: write each test row, watch it fail for the expected reason, then implement.\n\nPrerequisites. dependsOn gates the claim, not the bytes. Confirm that task-ec64165c (CQ-RF03) and task-90664db1 are DONE. Then read their landed MoeDaemonSupervisor.kt, MoeProjectService.kt, DaemonIdentity.kt and test files, and these memories:\n- mem:task-task-ec64165c85f246088a7224cf70b04670-handoff\n- mem:task-task-90664db1e08a45f7b63c1e0f44eeee09-handoff\n- mem:gotcha-jetbrains-read-daemon-info-deletes\n- mem:gotcha-jetbrains-replacement-retry-guard\n- mem:gotcha-daemon-lifecycle-wsl-foreign\nWhere the landed names differ from this plan's, use the landed names. Never add a second parser, path normalizer or stop runner.\n\nmoe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:\n1. One bounded, read-only parse: private parseDaemonInfo(file: File): DaemonInfo?.\n   - It is exactly today's read: readNBytes(MAX_DAEMON_JSON_BYTES + 1), today's 'larger than 64 KiB' warn, then gson.fromJson of the UTF-8 text.\n   - It returns null when the file is absent, oversize, unreadable, malformed or JSON null. It never deletes and never throws.\n   - replacementMetadataCleared (RF03) uses it instead of its own copy, with the same semantics: absent gives true; unparseable gives false; parsed gives pid > 0 && !isProcessAlive(pid). Fix its comment: readDaemonInfo no longer deletes, but its null still also means unreadable or another project.\n2. The same-project rule, a companion `internal fun isSameProject(path: String, base: String): Boolean`.\n   - First check DaemonIdentityProbe.comparableProjectPath(path) == comparableProjectPath(base). It is pure, with no IO, and covers the drive, forward-slash, case, trailing-separator, /mnt/<d>, //wsl$ and wsl.localhost spellings.\n   - Only then check today's File(path).canonicalPath == File(base).canonicalPath, which covers symlinks, relative paths and 8.3 names.\n   - Checking the comparable form first keeps a /mnt or //wsl$ spelling from ever reaching canonicalPath on Windows. Exceptions propagate to the caller.\n3. readDaemonInfo() becomes read-only. It parses with (1).\n   - An empty projectPath is accepted, as today.\n   - The same project returns the info.\n   - Another project logs a warn ('Ignoring .moe/daemon.json: it names <path>, not <base>') and returns null. Nothing is deleted.\n   - Any exception logs at debug and returns null, as today. Gson leaves an absent projectPath null, and an invalid path throws.\n4. `fun deleteDaemonInfoIfUnchanged(expected: DaemonInfo): Boolean`.\n   - Re-parse with (1). Delete only when the result == expected: data-class equality over port, pid, startedAt and projectPath.\n   - It returns true only when this call removed the file.\n   - A blank basePath returns false, so a relative .moe/daemon.json is never touched.\n   - Error handling: it never throws. A failed delete is logged at warn and returns false.\n5. ensureDaemonRunningImpl keeps today's self-heal, without readDaemonInfo's side effect.\n   - Where today's cleanup sits (before the spawn-attempt and cooldown checks), remove the daemon.json it read through (4) when that file either:\n     - names this project but is not reachable (today's branch), or\n     - names another project (formerly readDaemonInfo's delete).\n   - Keep a daemon.json that is absent or unparseable, or whose sameness check threw, as today.\n   - Parse once and classify the file (this project / another project / unjudgeable) rather than parsing twice.\n\nmoe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt. Build every alternative spelling from the exact string passed as basePath, and pass root.canonicalPath: Windows TEMP may hold 8.3 names.\n- Replace `readDaemonInfo deletes a daemon file for another project` with `readDaemonInfo ignores but keeps a daemon file for another project`: two calls each return null, and the file stays byte-identical.\n- `readDaemonInfo reads this project in every spelling`.\n  - Drive base: as given, with forward slashes, lower-cased, with a trailing separator, and as /mnt/<d>/<rest>.\n  - POSIX base: as given, with a trailing slash, with a /./ segment, as //wsl$/Ubuntu<path>, and in the backslash \\\\wsl.localhost\\Ubuntu share form.\n  - For each spelling, write daemon.json with that projectPath. readDaemonInfo returns that port, pid, startedAt and projectPath, and the file stays byte-identical.\n  - Per row, assert comparableProjectPath(spelling) == comparableProjectPath(base), so a broken fixture fails loudly.\n  - A small private helper builds the other side's spelling, by the same rule as MoeProjectForeignDaemonTest's wslSpelling.\n- An isSameProject literal table, the same on every host.\n  - True: (/mnt/d/proj, D:\\proj), (D:/proj/, D:\\proj), (d:\\PROJ, D:\\proj), (D:\\proj, /mnt/d/proj), (\\\\wsl$\\Ubuntu\\home\\me\\p, /home/me/p).\n  - False: (D:\\other, D:\\proj), (/mnt/d/other, D:\\proj).\n  - No false row may use a UNC literal: on Windows its canonicalPath would touch the network.\n- `ensureDaemonRunning removes another project's daemon file and spawns`, under LEGACY with a live pid and an open port: it returns true, processStarter is called once, and the file is gone.\n- deleteDaemonInfoIfUnchanged:\n  - an unchanged file is removed (true);\n  - a file differing in exactly one of pid, port, startedAt or projectPath is kept byte for byte (false);\n  - an oversize file is kept, and an absent one gives false.\n\nNo test starts or signals a real process: processStarter, processAliveProbe and portProbe are all injected.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "SUPERVISOR: the other side of the Windows/WSL boundary.\n\nA daemon.json written by a daemon on the other side carries a pid from another pid namespace (mem:gotcha-daemon-lifecycle-wsl-foreign). On a Windows IDE, a /mnt/<d> daemon.json comes from a WSL daemon whose pid Windows cannot see. Without this step, step 1 would hand that file to:\n- the dead-pid branches, which delete it before the probe;\n- LEGACY Restart Daemon, which would destroy whatever local process has that pid number.\n\nmoe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:\n1. A companion `internal fun isOtherSideOfWsl(projectPath: String, windows: Boolean): Boolean`. Port the two regexes of packages/moe-daemon/src/index.ts isForeignDaemonInfo verbatim:\n   - windows: the path starts with one slash that is not followed by a second slash or a backslash (an absolute POSIX path);\n   - otherwise: a drive letter, a colon and a slash or backslash; or two slashes/backslashes followed by a non-slash (a drive or UNC path).\n   Relative and empty paths are local. Call sites pass isWindows().\n2. `fun isReachable(info: DaemonInfo): Boolean = (other side || isProcessAlive(info.pid)) && isPortOpen(info.port)`. An other-side daemon is judged by its port here, then by doConnect's /health probe.\n3. ensureDaemonRunningImpl uses isReachable.\n   - A reachable other-side info returns false BEFORE replacedUnverified. Nothing is spawned, and RF03 never looks up, captures, confirms or stops that pid. The installed CLI's stop refuses an other-side daemon.json anyway.\n   - An unreachable one falls through to step 1's compare-delete cleanup and the spawn, as today. That covers the leftover file after wsl --shutdown.\n4. stopDaemonForRestart(info) gets a new first line, before any pid check or lookup, in both profiles. An other-side info returns this fixed refusal:\n   Restart Daemon did not stop pid <pid>, which .moe/daemon.json names on the other side of the Windows/WSL boundary: this IDE can neither see nor signal processes there. Check what that process is and stop it there yourself if it is a Moe daemon, then use Restart Daemon.\n   - The text never calls that pid a Moe daemon.\n   - Leave everything below that line byte-identical. CQ-RF04 (task-de91373a) rewrites it after this task and keeps this line first (comment-663bd16c on that row).\n\nTests in moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt:\n- isOtherSideOfWsl.\n  - windows = true: /mnt/d/x and /home/u/x are true. //server/share/x, \\\\server\\share, D:\\x, D:/x, x, . and the empty string are false.\n  - windows = false: //server/share/x, \\\\server\\share, D:\\x and D:/x are true. /mnt/d/x, /home/u/x, x, . and the empty string are false.\n- isReachable.\n  - Same side: a dead pid or a closed port each give false.\n  - Other side: only the port counts. Record the pids processAliveProbe receives, and assert that the other-side pid never reaches it.\n- `ensureDaemonRunning leaves an open other-side daemon of this project alone`, under LEGACY. projectPath is the other side's spelling of base, processAliveProbe = { false }, and the port is open.\n  - Result: false, processStarter is never called, and the file stays byte-identical.\n  - With the port closed: true (spawned), and the file is removed.\n- PROTECTED, using RF03's ReplacementFixture. daemon.json is f.info.copy(projectPath = the other side's spelling of f.root.path), f.targetAlive = false, and the port is open. Expect ensureDaemonRunning() to return false, f.asked and f.commands to be empty, and the file to stay byte-identical.\n- stopDaemonForRestart with an other-side info, under LEGACY and under PROTECTED.\n  - processAliveProbe records its calls and returns true; processLookup returns a fake that counts destroy.\n  - The result equals the refusal text exactly, with zero probe calls, zero lookups and zero destroys.\n  - A same-side info under LEGACY still destroys once, as today.\n\nError handling: isReachable never throws, because isProcessAlive and isPortOpen already catch. The refusal path touches no process.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "SERVICE. Edit moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt on task-90664db1's landed bytes:\n1. connect(): the reachability check becomes !daemonSupervisor.isReachable(daemonInfo).\n   - Its stale branch removes daemon.json through daemonSupervisor.deleteDaemonInfoIfUnchanged(daemonInfo) instead of an unconditional File.delete, and logs whether it did.\n   - The status text and scheduleReconnect are unchanged.\n2. connectWithRetry(): daemonInfo != null && daemonSupervisor.isReachable(daemonInfo).\n3. handleForeignDaemon:\n   - Drop the reread and its pid/port/startedAt compare.\n   - Call daemonSupervisor.deleteDaemonInfoIfUnchanged(daemonInfo). Its full equality also counts projectPath (DoD 2).\n   - Log 'Removed stale daemon.json naming that daemon' or 'Kept daemon.json: it no longer names that daemon'.\n   - Delete the private rereadDaemonInfo, and any import only it used.\n   - Leave the probe, the status text, and the connecting = false before scheduleReconnect unchanged.\n\nNothing else in the file changes. restartDaemon belongs to CQ-RF04 (task-de91373a), which runs after this task.\n\nmoe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt: add `a daemon json changed in one identity field since it was read is kept byte for byte`.\n- Use one withFixture per change:\n  - pid becomes 5252;\n  - port becomes port + 1;\n  - startedAt becomes S2;\n  - projectPath becomes OTHER.\n- In each fixture:\n  - health replies 200 naming OTHER;\n  - read = writeDaemonJson(S1);\n  - the file is rewritten with only that one change;\n  - then call doConnect(read).\n- Assert that the file holds exactly the replacement bytes, wsClient is null, and no /ws request arrives.\n- The projectPath row fails on the three-field guard; it must.\n- The existing rows pass unchanged: F1 still removes an unchanged file, and the rewritten, replacement and oversize rows, S1, U1 and U2 behave as before.\n\nError handling: deleteDaemonInfoIfUnchanged never throws and logs its own failed delete, so handleForeignDaemon's try/catch around the delete goes away with it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each one to a scratch copy (mem:gotcha-jetbrains-qa-mutants-in-archive-copy), then restore the original and cmp it. A kill counts only when an assertion fails, never on a compile error.\n   - readDaemonInfo deletes another project's file again: the keep row fails.\n   - Canonical-only sameness: the spelling rows and the isSameProject table fail.\n   - isReachable checks the pid of an other-side info: the open other-side ensure row fails (spawn and delete).\n   - No other-side early return in ensureDaemonRunningImpl: the PROTECTED row fails (asked or commands).\n   - No restart guard: the restart row fails (a lookup or a destroy).\n   - Equality over pid, port and startedAt only: both projectPath rows fail.\n   - An unconditional delete in deleteDaemonInfoIfUnchanged: the one-field rows fail.\n   - No another-project cleanup at spawn: the spawn-cleanup row fails.\n2. Hold the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease).\n   - Take it with moe.acquire_resource {resourceId: 'jetbrains-gradle'}.\n   - If it is queued, call moe.report_blocked with that resourceId.\n   - Release it on every exit path, even on failure.\n3. Record a Windows-clock start (mem:gotcha-jetbrains-wsl-windows-clock-skew). Then run fresh from WSL:\n   cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n   - It must exit 0.\n   - Count tests from build/test-results/test/TEST-com.moe.services.MoeDaemonSupervisorTest.xml and TEST-com.moe.services.MoeProjectForeignDaemonTest.xml, plus the suite totals. Every XML timestamp must come after the recorded start.\n   - If peers' dirty bytes break compilation, gate in a snapshot instead (mem:gotcha-jetbrains-gate-snapshot): overlay only this task's 4 files and cmp them.\n4. git diff --check over the 4 files must be clean.\n5. complete_task verification: that command, exit code 0 and the output tail, labelled as Windows evidence. The summary maps:\n   - DoD 1 to the spelling rows, the ensure rows and the isReachable rows;\n   - DoD 2 to the keep row and the one-field rows;\n   - DoD 3 to this run and to the RF ordering: this task dependsOn RF03 and task-90664db1, and RF04 dependsOn this task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the 4-file diff twice: once as someone who controls .moe/daemon.json, and once as a user who runs WSL agents next to a Windows IDE.\n\n- List every remaining File.delete of daemon.json in moe-jetbrains. Does each one compare against the DaemonInfo it decided on? Two are out of scope; name both in the handoff:\n  - MoeMessageDispatcher's STATE_SNAPSHOT delete, owned by follow-up task-007c0ea856e546d2a619e012815cd89f;\n  - restartDaemon's post-stop delete, owned by CQ-RF04.\n- Can a pid from an other-side daemon.json still reach isProcessAlive, processLookup, destroy, RF03's replacement or the restart path?\n- Can a same-project spelling still be judged another project? Check case, a trailing separator, '.', '..', 8.3 names, /mnt, //wsl$ and wsl.localhost. Can another project be judged the same?\n- If two IDE windows, or a WSL agent, rewrite daemon.json concurrently, can any compare-delete remove the newer file?\n- Edge inputs: a null, empty, oversize or malformed daemon.json; a projectPath that Gson leaves null; a pid of 0 or below.\n- Is LEGACY same-side behavior unchanged? Check RF03's RP rows, R1-R4 and task-90664db1's rows.\n- Rails:\n  - regression tests for every change;\n  - error handling: no new path throws;\n  - no .moe edits and no Git writes;\n  - none of the global forbidden patterns;\n  - existing daemon.json files stay readable.\n- Would I be embarrassed if this shipped?\n\nFix any finding, then re-run step 4's gate fresh before complete_task.\n\nThen write the Serena memory 'task-task-6fc0096b9fff4c45904cfbce7833ad2d-handoff', with the landed names, the rows, the evidence and the out-of-scope deleters. Update mem:gotcha-jetbrains-read-daemon-info-deletes to say the reader is now read-only.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -20,9 +60,99 @@
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "HIGH",
-  "order": 292.6,
+  "order": 2,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:04:29.281Z",
-  "updatedAt": "2026-10-30T09:04:29.281Z"
+  "updatedAt": "2026-10-30T10:19:35.456Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T09:54:41.573Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T09:54:55.047Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "dependsOn": [
+    "task-ec64165c85f246088a7224cf70b04670",
+    "task-90664db1e08a45f7b63c1e0f44eeee09"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T10:19:35.425Z",
+  "executionContract": {
+    "intendedBehavior": "The JetBrains plugin stops deleting or signaling on the strength of a path-string mismatch or a pid it cannot see.\n(1) MoeDaemonSupervisor.readDaemonInfo is bounded and read-only. It returns daemon.json's info when projectPath names this project in any spelling (DaemonIdentityProbe.comparableProjectPath first, then canonicalPath). It returns null when the file is absent, oversize, malformed or names another project. It never deletes.\n(2) A daemon.json written on the other side of the Windows/WSL boundary carries a pid from another pid namespace. That is an absolute POSIX projectPath read on Windows, or a drive or UNC one read elsewhere (the daemon's isForeignDaemonInfo). Its liveness is its port alone (isReachable). A reachable one is never spawned over, replaced by RF03 or signaled (Restart Daemon refuses with a fixed text), and doConnect's /health probe judges it.\n(3) Every removal of daemon.json in MoeDaemonSupervisor and in MoeProjectService.connect()/handleForeignDaemon is a compare-delete (deleteDaemonInfoIfUnchanged). The file goes only while it still parses to the exact DaemonInfo (port, pid, startedAt, projectPath) the decision used.\n(4) A daemon.json naming another project is still removed before this project's daemon is spawned, as today. ensureDaemonRunningImpl's compare-delete now does it, instead of readDaemonInfo.",
+    "acceptanceCriteria": [
+      "readDaemonInfo returns null for another project's daemon.json on repeated calls, and the file stays byte-identical.",
+      "readDaemonInfo returns the info, leaving the file byte-identical, for these spellings of this project: drive, forward-slash, lower-case, trailing-separator and /mnt/<d> on a Windows host; trailing-slash, dot-segment, //wsl$ and wsl.localhost-share on a POSIX host.",
+      "ensureDaemonRunning with an other-side spelling of this project, whose pid is not alive here and whose port is open, returns false. It starts nothing, prompts nothing, runs no stop and keeps the file byte-identical, under both LEGACY and PROTECTED. Under LEGACY with the port closed, it removes the file and spawns.",
+      "ensureDaemonRunning removes another project's daemon.json and spawns, as today.",
+      "stopDaemonForRestart on an other-side info returns the fixed refusal, under both profiles. It never calls processAliveProbe or processLookup and destroys nothing.",
+      "handleForeignDaemon keeps, byte for byte, a daemon.json that changed in exactly one of pid, port, startedAt or projectPath since it was read. It still removes an unchanged one."
+    ],
+    "invariants": [
+      "Outside two deletes that this task does not touch, the plugin removes .moe/daemon.json only by compare-delete against the DaemonInfo its decision used. The two are restartDaemon's post-stop delete (CQ-RF04's) and MoeMessageDispatcher's STATE_SNAPSHOT delete (task-007c0ea8).",
+      "No pid read from an other-side daemon.json reaches isProcessAlive, processLookup, destroy or RF03's replacement.",
+      "activationRefusal, verifyProvenance, the protected start/stop commands and RF03's same-side replacement flow are unchanged.",
+      "Every daemon.json read stays bounded by MAX_DAEMON_JSON_BYTES and never throws to its caller."
+    ],
+    "compatibility": [
+      "Existing daemon.json files parse as before. Invalid JSON, JSON null, an oversize file or a missing projectPath still read as null, and the file is kept.",
+      "The public signatures of readDaemonInfo, getDaemonInfo, isProcessAlive, isPortOpen and stopDaemonForRestart are unchanged; new members are additive.",
+      "RF03's RP rows, RuntimeSelectionPolicyTest R1-R4 and task-90664db1's MoeProjectForeignDaemonTest rows pass unchanged."
+    ],
+    "approvedScope": [
+      "MoeDaemonSupervisor: private parseDaemonInfo(file); companion isSameProject(path, base) and isOtherSideOfWsl(projectPath, windows); isReachable(info); deleteDaemonInfoIfUnchanged(expected); a read-only readDaemonInfo; ensureDaemonRunningImpl's other-side branch and compare-delete cleanup; stopDaemonForRestart's other-side refusal; replacementMetadataCleared on the shared parser.",
+      "MoeProjectService: connect() and connectWithRetry() go through isReachable; connect()'s unreachable branch and handleForeignDaemon delete through deleteDaemonInfoIfUnchanged; rereadDaemonInfo is removed.",
+      "Tests: the MoeDaemonSupervisorTest rows and MoeProjectForeignDaemonTest's one-field-change rows."
+    ],
+    "reuse": [
+      "DaemonIdentityProbe.comparableProjectPath (task-90664db1) for every cross-OS spelling; there is no second normalizer.",
+      "One bounded Gson parse replaces three copies: readDaemonInfo's, replacementMetadataCleared's and MoeProjectService.rereadDaemonInfo's.",
+      "The rule of packages/moe-daemon/src/index.ts isForeignDaemonInfo, ported as isOtherSideOfWsl.",
+      "RF03's ReplacementFixture for the PROTECTED row, and MoeProjectForeignDaemonTest's Fixture for the one-field rows."
+    ],
+    "sourceAssumptions": [
+      "MoeDaemonSupervisor.readDaemonInfo compares File(info.projectPath).canonicalPath with File(base).canonicalPath and deletes daemon.json on a mismatch (HEAD 8f62fa0f, about lines 62-87).",
+      "ensureDaemonRunningImpl treats info as running only when isProcessAlive(pid) && isPortOpen(port). Otherwise it deletes daemon.json unconditionally before spawning (about lines 113-126).",
+      "MoeProjectService.connect() deletes daemon.json unconditionally when !isProcessAlive || !isPortOpen. connectWithRetry adopts the daemon when isProcessAlive && isPortOpen.",
+      "task-90664db1's reopen moves handleForeignDaemon onto a private rereadDaemonInfo with a pid/port/startedAt guard. Those bytes were uncommitted at planning time; build on the landed version.",
+      "Under LEGACY, stopDaemonForRestart destroys processLookup(info.pid) whenever isProcessAlive(info.pid).",
+      "The daemon CLI's start removes a same-side daemon.json that names another project, but refuses an other-side one (exit 1, never removing it). Its stop sends no signal for an other-side daemon.json. See packages/moe-daemon/src/index.ts existingDaemonBlocksStart and stopDaemon."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Swap only readDaemonInfo's path compare, the task's literal scope. Rejected. A /mnt/<d> daemon.json on a Windows IDE comes from a WSL daemon whose pid Windows cannot see. ensureDaemonRunningImpl's and connect()'s dead-pid branches would still delete it before the probe. Worse, once readDaemonInfo returns such infos, LEGACY Restart Daemon would destroy whatever local process has that pid number. That would be a new hazard, so step 2 is part of this task.\n- Make readDaemonInfo read-only and stop there. Rejected: nothing would remove another project's daemon.json any more. The daemon CLI's start removes a same-side one itself, but it refuses an other-side one (exit 1, and it never removes it), so the IDE would wedge on a moved or copied project. Step 1.5 moves today's removal to spawn time, as a compare-delete.\n- Judge other-side metadata by /health inside isReachable. Rejected: connect() can run on the EDT. doConnect already probes off the EDT, so a port check here plus that probe reaches the same verdict without a blocking HTTP call.\n- For Restart Daemon on other-side metadata, return null, so restartDaemon deletes and spawns (today's outcome). Rejected in favour of a fixed refusal, like the daemon CLI's stop ('stop it from there'). Deleting and spawning puts two daemons on one .moe/ while the WSL daemon is alive.\n- Also fix MoeMessageDispatcher's STATE_SNAPSHOT canonical compare. Split out to task-007c0ea8 (BACKLOG, HIGH): it is a post-probe deleter in another class with its own test file, and it would push this plan past 5 files.\n- Compare pid, port and startedAt only, as in the identity-probe decision. Rejected: DoD 2 names projectPath, and data-class equality covers all four fields with less code.",
+    "codebaseInsights": "- Readers of .moe/daemon.json in moe-jetbrains:\n  - readDaemonInfo, called from connect, connectWithRetry, ensureDaemonRunningImpl, restartDaemon and getDaemonInfo. getDaemonInfo backs the status popup on the EDT, which today can delete the file.\n  - replacementMetadataCleared (RF03).\n  - task-90664db1's rereadDaemonInfo.\n  - MoeMessageDispatcher's STATE_SNAPSHOT check, which deletes (follow-up task-007c0ea8).\n- Today's deleters:\n  - readDaemonInfo, on a mismatch;\n  - ensureDaemonRunningImpl, for a stale file;\n  - connect(), for a stale file;\n  - handleForeignDaemon, guarded;\n  - restartDaemon, after the stop;\n  - the STATE_SNAPSHOT check.\n- DaemonIdentityProbe.comparableProjectPath (DaemonIdentity.kt, landed by task-90664db1) already maps D:\\x, D:/x, /mnt/d/x, //wsl$/<distro>/x and \\\\wsl.localhost\\<distro>\\x to one form. Reuse it.\n- The daemon's own rules (packages/moe-daemon/src/index.ts; see mem:gotcha-daemon-lifecycle-wsl-foreign):\n  - isForeignDaemonInfo defines the other side;\n  - validateDaemonInfoForProject;\n  - existingDaemonBlocksStart cleans a same-side mismatch and proceeds, but blocks an other-side mismatch with exit 1 and never removes it;\n  - stopDaemon sends no signal for an other-side file.\n- Gson builds Kotlin data classes without calling their constructor, so an absent projectPath arrives as a runtime null in a non-null String. Today that reads as null through an exception; keep it so.\n- The test helper supervisor(root, ...) leaves profile at its default. New rows that need LEGACY pass profile = { RuntimeProfile.LEGACY } explicitly, as the rows near lines 181, 202 and 220 do.\n- Kotlin tests run from WSL through cmd.exe gradlew.bat, under the jetbrains-gradle lease.",
+    "risks": "- 8.3 names: Windows TEMP can hold short names. Build every test spelling from the exact basePath string, and pass root.canonicalPath.\n- canonicalPath of a UNC path on Windows touches the network or WSL. isSameProject checks comparableProjectPath first, and no false-row literal is UNC.\n- A WSL-hosted IDE with a Windows-owned daemon.json still probes only 127.0.0.1. In WSL2 NAT mode that daemon looks unreachable, so the file is removed, as today. moe-agent.sh also tries the WSL gateway; the IDE does not. This is a known limit, outside this task.\n- An unrelated non-Moe process holding a dead WSL daemon's port makes an other-side daemon.json look reachable. /health is then Unknown, and the IDE keeps reconnecting instead of spawning. The other-side Restart refusal blocks that escape hatch, so the user removes the file by hand. It needs a stale WSL file plus a port collision, so it is rare.\n- Until task-007c0ea8 lands, the STATE_SNAPSHOT check can still delete a WSL-hosted daemon's file after connecting. That is no worse than today, which deletes it before connecting.\n- RF04 (task-de91373a) rewrites stopDaemonForRestart after this task and must keep the other-side line first. comment-663bd16c on that row tells it so.\n- task-90664db1 is in reopen. Build on its landed handleForeignDaemon, whatever QA made of it.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T10:19:35.456Z",
+  "approvedPlanRevision": 1
 }
