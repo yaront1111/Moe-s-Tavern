@@ -14,6 +14,11 @@ function between(source, start, end) {
   assert.ok(from >= 0 && to > from, `missing boundaries: ${start} / ${end}`);
   return source.slice(from, to);
 }
+// The launcher's own Git guard, cut from its source with empty guard state (the non-Git
+// project path), so a cut launch line runs as the launcher has it and passes straight through.
+const guard = ext => ext === 'ps1'
+  ? `$script:AgentGitGuard=$null\n${between(read('ps1'), 'function Invoke-MoeGuardedCommand {', 'function Remove-MoeAgentGitGuard')}`
+  : `AGENT_GIT_GUARD_ENV=()\n${between(read('sh'), 'agent_git_exec() (', '\n)\n')}\n)\n`;
 const engines = process.platform === 'win32'
   ? [['ps1', 'powershell.exe'], ['ps1', 'pwsh.exe'], ['sh', 'C:/Program Files/Git/bin/bash.exe']]
   : [['sh', '/bin/bash']];
@@ -346,15 +351,15 @@ process.exitCode=23;
     let script;
     if (ext === 'ps1') {
       const source = read('ps1');
-      const at = source.indexOf('& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"');
+      const at = source.indexOf('Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"');
       const from = source.lastIndexOf('                & {', at);
       assert.ok(at >= 0 && from >= 0, 'missing real Codex stream invocation');
       const block = source.slice(from, source.indexOf('            } else {', at));
       const encoding = between(source, '    # Native stream filters', '\n}');
-      script = `\ufeff$ErrorActionPreference='Continue'\n${encoding}\n$Command=$env:MOE_TEST_NODE\n$CommandArgs=@($env:MOE_TEST_FAKE)\n$codexSeatArgs=@()\n$codexExecOverrides=@()\n$codexSandboxArgs=@()\n$projectPath=$env:MOE_TEST_DIR\n$shortPrompt='pointer with spaces'\n$promptCacheHelper=$env:MOE_TEST_HELPER\n${block}\n[Console]::Write('CHILD_EXIT=' + $script:CliExitCode)`;
+      script = `\ufeff$ErrorActionPreference='Continue'\n${encoding}\n$Command=$env:MOE_TEST_NODE\n$CommandArgs=@($env:MOE_TEST_FAKE)\n$codexSeatArgs=@()\n$codexExecOverrides=@()\n$codexSandboxArgs=@()\n$projectPath=$env:MOE_TEST_DIR\n$shortPrompt='pointer with spaces'\n$promptCacheHelper=$env:MOE_TEST_HELPER\n${guard('ps1')}\n${block}\n[Console]::Write('CHILD_EXIT=' + $script:CliExitCode)`;
     } else {
-      const block = between(read('sh'), '            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \\\n', '            set -e');
-      script = `set +e\nCOMMAND_BIN=${quote(process.execPath.replaceAll('\\', '/'))}\nCOMMAND_ARGV=(${quote(fake.replaceAll('\\', '/'))})\nNODE_CMD="$COMMAND_BIN"\nPROMPT_CACHE_HELPER=${quote(helper.replaceAll('\\', '/'))}\nPROJECT=${quote(dir.replaceAll('\\', '/'))}\nCODEX_SEAT_INSTRUCTIONS_FILE=stable\nWORKER_ID=worker\nCODEX_EXEC_OVERRIDES=()\nCODEX_SANDBOX_ARGS=()\nSHORT_PROMPT='pointer with spaces'\n${block}\nprintf 'CHILD_EXIT=%s' "$CLI_EXIT_CODE"`;
+      const block = between(read('sh'), '            agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \\\n', '            set -e');
+      script = `set +e\nCOMMAND_BIN=${quote(process.execPath.replaceAll('\\', '/'))}\nCOMMAND_ARGV=(${quote(fake.replaceAll('\\', '/'))})\nNODE_CMD="$COMMAND_BIN"\nPROMPT_CACHE_HELPER=${quote(helper.replaceAll('\\', '/'))}\nPROJECT=${quote(dir.replaceAll('\\', '/'))}\nCODEX_SEAT_INSTRUCTIONS_FILE=stable\nWORKER_ID=worker\nCODEX_EXEC_OVERRIDES=()\nCODEX_SANDBOX_ARGS=()\nSHORT_PROMPT='pointer with spaces'\n${guard('sh')}${block}\nprintf 'CHILD_EXIT=%s' "$CLI_EXIT_CODE"`;
     }
     const file = path.join(dir, `stream.${ext}`);
     writeFileSync(file, script);
