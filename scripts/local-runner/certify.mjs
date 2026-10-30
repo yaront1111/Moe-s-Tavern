@@ -5,7 +5,8 @@
 // 'injected' and the native entry takes exactly { workDir }, so mocks never certify. Certification is not activation:
 // executionReady stays false and verified-local stays unavailable. Reports carry fixed codes and hashes only. CQ-R13e1 adds
 // the bridge checks (certify-bridge.mjs) after 'no-mounts', with BRIDGE_BOUNDS, or certifyCore's validated overrides, on c.bounds.
-// CQ-R13f1 adds 'check-containment' (certify-containment.mjs) after them; its runs read c.platform, c.cacheDir and c.supervisor.
+// CQ-R13f1 and CQ-R13f add the certify-containment.mjs checks after them: 'writer-containment', 'check-containment' (its runs
+// read c.platform, c.cacheDir and c.supervisor) and 'controller-replacement', which replaces this VM's supervisor, so it is last on it.
 // CQ-R13h adds 'cancellation' and 'recovery' (certify-lifecycle.mjs) last before 'teardown', with LIFECYCLE_BOUNDS in BOUNDS.
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, open, readFile, unlink } from 'node:fs/promises';
@@ -141,7 +142,8 @@ function boundsOf(bounds) {
   throw certifyError('CERTIFY_INPUT_INVALID');
 }
 
-/** Injected transports (tests): {provider, fetch, digest, sleep, random, doctor, now, bounds, containment, checkSteps, spawn}. Its evidence can never certify. */
+/** Injected transports (tests): {provider, fetch, digest, sleep, random, doctor, now, bounds, containment, checkSteps, spawn, writer,
+ * replacement}. Its evidence can never certify. */
 export async function certifyCore(input) {
   const { platform, workDir, deps = {} } = isRecord(input) ? input : {};
   if (!validWorkDir(workDir) || !isRecord(platform) || !PLATFORM_IDS.includes(platform.id) || typeof platform.prerequisites !== 'function'

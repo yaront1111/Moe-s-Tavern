@@ -5,14 +5,25 @@
 // edit of the tracked file must verify 'changed'. Every run must delete its VM, and the first failing run stops the check.
 // runCheckJob fetches the pinned Node toolchain into cacheDir, so the operator run needs host network. Fixed codes only; no
 // guest byte reaches the report. Certification is not activation: executionReady stays false and verified-local stays
-// unavailable. CQ-R13f adds 'writer-containment' and 'controller-replacement' around it.
+// unavailable. CQ-R13f adds two checks around it. Before it, 'writer-containment': in the certify VM the agent identity can
+// read neither the supervisor credential nor the root-only workspace manifest, and can write neither /opt/moe, another job's
+// session home, the supervisor nor the installed toolchain. After it, 'controller-replacement': the certify VM's supervisor,
+// replaced as root, must fail readiness, and this run's cleanup must leave a ledger record rewritten to another owner alone.
+// It taints the certify VM, so it runs last among the checks that use it.
 import { spawn as spawnProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { probe as guestExec } from './certify-bridge.mjs';
 import { CHECK_BOUNDARIES } from './check-evidence.mjs';
 import { runCheckJob } from './check-lifecycle.mjs';
 import { runCheckSession } from './check-session.mjs';
-import { invoker, QUERY_TIMEOUT_MS } from './lifecycle.mjs';
+import { buildUserData, GUEST_LAYOUT, JOB_IDENTITIES } from './guest-bootstrap.mjs';
+import { waitForGuestReady } from './guest-readiness.mjs';
+import { deleteOwned, invoker, QUERY_TIMEOUT_MS, queryOwnedInstance } from './lifecycle.mjs';
+import { installToolchain } from './snapshot-transfer.mjs';
 import { validateImport } from './source-snapshot.mjs';
+import { fetchNodeToolchain } from './toolchain-cache.mjs';
 
 const { network, resources: { rlimits }, filesystem: { supervisorCredential } } = CHECK_BOUNDARIES;
 const PROTECTED = 'moe-certify/protected.txt';
@@ -127,5 +138,60 @@ async function checkContainment(c) {
   return passed;
 }
 
-/** Spliced into certify.mjs's BODY after BRIDGE_CHECKS; CQ-R13f adds its two checks around it. */
-export const CONTAINMENT_CHECKS = Object.freeze([Object.freeze({ id: 'check-containment', run: checkContainment })]);
+// guest-supervisor.py's own paths: SESSIONS holds each job's home, as session_home makes it (0700, owned by the job's identity);
+// this one, made the same way for the other job identity under a name mkdtemp never draws, stands in for another job's home.
+const OTHER_HOME = '/var/lib/moe/sessions/home-certify';
+const HOME_ARGV = Object.freeze(['sudo', '-n', 'install', '-d', '-m', '0700', '-o', JOB_IDENTITIES[1], '-g', JOB_IDENTITIES[1], OTHER_HOME]);
+// [code, target, access(2) mode: 4 R_OK or 2 W_OK]: WORKSPACE_MANIFEST is root-only; TOOLCHAIN/bin is first on a check job's PATH.
+const WRITER_TARGETS = Object.freeze([['CREDENTIAL', GUEST_LAYOUT.credential, 4], ['MANIFEST', '/var/lib/moe/workspace.manifest.json', 4],
+  ['CONTROL_PLANE', GUEST_LAYOUT.supervisorDirs[0], 2], ['HOME', OTHER_HOME, 2], ['SUPERVISOR', GUEST_LAYOUT.supervisor, 2],
+  ['TOOLCHAIN', '/opt/moe/toolchain/bin', 2], ['TOOLCHAIN', '/opt/moe/toolchain/bin/node', 2]]);
+/** One line, no quote, run as the agent identity: exits 10+i for the first target it may access, 20+i for one it cannot see
+ * (absence is never evidence), else 0. A target that exists and that access(2) refuses is a permission refusal. */
+export const WRITER_PROBE = `import os,sys;T=${JSON.stringify(WRITER_TARGETS.map(([, file, mode]) => [file, mode]))};sys.exit(next((10+i if `
+  + 'os.path.exists(p) else 20+i for i,(p,m) in enumerate(T) if not os.path.exists(p) or os.access(p,m)),0))';
+// Root, in the certify VM: another program's bytes over the supervisor. cp keeps its inode, owner and mode, so only its hash changes.
+const REPLACE_ARGV = Object.freeze(['sudo', '-n', 'cp', '/usr/bin/true', GUEST_LAYOUT.supervisor]);
+
+// Every target is made real first: the other job's home, then the pinned toolchain (R11e1's cache, R11e2's install). deps.writer
+// = { toolchain, installToolchain } is a test-only seam, absent natively; their refusals keep their own codes.
+async function writerContainment(c) {
+  const seam = c.deps?.writer ?? {};
+  if ((await guestExec(c, HOME_ARGV)).code !== 0) return failed('CERTIFY_WRITER_SETUP_FAILED');
+  const toolchain = await (seam.toolchain ?? fetchNodeToolchain)({ arch: c.outcome?.image?.source?.arch, cacheDir: c.cacheDir });
+  await (seam.installToolchain ?? installToolchain)({ name: c.name, toolchain, provider: c.provider, timeoutMs: c.bounds.transferMs });
+  const { code } = await guestExec(c, ['sudo', '-n', '-u', JOB_IDENTITIES[0], 'python3', '-I', '-c', WRITER_PROBE]);
+  if (code === 0) return passed;
+  const [allowed, missing] = [WRITER_TARGETS[code - 10], WRITER_TARGETS[code - 20]];
+  return failed(allowed ? `CERTIFY_WRITER_${allowed[0]}_ALLOWED` : missing ? 'CERTIFY_WRITER_TARGET_MISSING' : 'CERTIFY_WRITER_UNKNOWN');
+}
+
+// Readiness, re-run as provisioning ran it with buildUserData's digests of the real bytes (its throwaway credential is never sent),
+// must refuse the replaced supervisor by its hash alone. Then this VM's own ledger record, rewritten on disk to another attempt as a
+// replacement controller would leave it: this run's cleanup (teardown's deleteOwned) must refuse it, and the VM and the rewritten
+// record must stay. The original bytes go back on every path, so teardown still deletes the VM. deps.replacement = { deleteOwned }
+// is a test-only seam, absent natively.
+async function controllerReplacement(c) {
+  if ((await guestExec(c, REPLACE_ARGV)).code !== 0) return failed('CERTIFY_REPLACEMENT_NOT_REPLACED');
+  const { supervisorSha256, shimSha256, shimToolsSha256 } = buildUserData({ supervisor: c.supervisor, credential: randomBytes(32) });
+  const ready = await waitForGuestReady({ ledger: c.ledger, name: c.name, owner: c.owner, sourceImage: c.outcome.image.source,
+    bootstrap: { supervisorSha256, shimSha256, shimToolsSha256 }, provider: c.provider, sleep: c.deps.sleep });
+  if (ready.bootstrapReady !== false) return failed('CERTIFY_REPLACEMENT_ACCEPTED');
+  if (ready.failures.length !== 1 || ready.failures[0] !== 'SUPERVISOR_HASH_MISMATCH') return failed('CERTIFY_REPLACEMENT_UNKNOWN');
+  const file = path.join(c.ledgerDir, `${c.name}.json`);
+  const [original, attemptId] = [await readFile(file), `attempt-${randomBytes(16).toString('hex')}`];
+  try {
+    await writeFile(file, `${JSON.stringify({ ...JSON.parse(original), attemptId })}\n`);
+    const cleanup = c.deps.replacement?.deleteOwned ?? deleteOwned;
+    const refusal = await Promise.resolve().then(() => cleanup({ ledger: c.ledger, name: c.name, owner: c.owner, provider: c.provider }))
+      .then(() => null, error => error?.code);
+    const kept = await c.ledger.read(c.name).catch(() => null);
+    const vm = await queryOwnedInstance(c.name, c.provider).catch(() => null);
+    return refusal === 'LIFECYCLE_NOT_OWNER' && kept?.phase === 'owned' && kept.attemptId === attemptId && vm?.present === true ? passed
+      : failed('CERTIFY_REPLACEMENT_RECORD_NOT_KEPT');
+  } finally { await writeFile(file, original); }
+}
+
+/** Spliced into certify.mjs's BODY after BRIDGE_CHECKS, in this order: 'controller-replacement' taints the certify VM, so it is last. */
+export const CONTAINMENT_CHECKS = Object.freeze([['writer-containment', writerContainment], ['check-containment', checkContainment],
+  ['controller-replacement', controllerReplacement]].map(([id, run]) => Object.freeze({ id, run })));

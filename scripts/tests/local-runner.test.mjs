@@ -2773,15 +2773,24 @@ if (typeof answer === 'string') process.stdout.write(answer); else process.exitC
 import { CERTIFY_CHECKS, certifyCore, runIsolationCertify, validateCertificationReport } from '../local-runner/certify.mjs';
 
 const REAL_SUPERVISOR_SHA256 = createHash('sha256').update(readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url))).digest('hex');
-const CERTIFY_IDS = ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'guest-network', 'check-containment', 'cancellation', 'recovery', 'teardown'];
+const CERTIFY_IDS = ['provision', 'readiness', 'no-mounts', 'bridge-framing', 'bridge-eof', 'guest-network', 'writer-containment', 'check-containment',
+  'controller-replacement', 'cancellation', 'recovery', 'teardown'];
 const CERTIFY_DELETES = [nameAt(2), nameAt(4), GUEST].map(name => ['delete', '--purge', name]); // cancellation, recovery child, then teardown
-const BRIDGE_NOT_RUN = [['bridge-framing', 'not-run'], ['bridge-eof', 'not-run'], ['guest-network', 'not-run'], ['check-containment', 'not-run'], ['cancellation', 'not-run'],
-  ['recovery', 'not-run']];
+const BRIDGE_NOT_RUN = ['bridge-framing', 'bridge-eof', 'guest-network', 'writer-containment', 'check-containment', 'controller-replacement', 'cancellation',
+  'recovery'].map(id => [id, 'not-run']);
 // CQ-R13f1 check-containment: deps.containment's fake runCheckJob records each call and resolves runCheckJob's frozen result,
 // call i's defaults merged with runs[i]. The integrity call (1) drives given.session, the real runCheckSession over the harness
 // router, as runCheckJob would; {session: false} skips it and {reject: code} rejects with that code.
 const CHANGE_ARGV = ['sudo', '-n', 'truncate', '-s', '0', '/var/lib/moe/workspace/moe-certify/protected.txt'];
 const isChange = args => args[0] === 'exec' && args[4] === 'sudo' && args[6] === 'truncate';
+// CQ-R13f: writer-containment's home and probe, and controller-replacement's replace, each one `multipass exec` on the certify VM.
+const WRITER_LITERAL = 'import os,sys;T=[["/etc/moe/supervisor.credential",4],["/var/lib/moe/workspace.manifest.json",4],["/opt/moe",2],'
+  + '["/var/lib/moe/sessions/home-certify",2],["/opt/moe/bin/moe-supervisor",2],["/opt/moe/toolchain/bin",2],["/opt/moe/toolchain/bin/node",2]];'
+  + 'sys.exit(next((10+i if os.path.exists(p) else 20+i for i,(p,m) in enumerate(T) if not os.path.exists(p) or os.access(p,m)),0))';
+const GUEST_EXECS = { home: ['sudo', '-n', 'install', '-d', '-m', '0700', '-o', 'moe-check', '-g', 'moe-check', '/var/lib/moe/sessions/home-certify'],
+  probe: ['sudo', '-n', '-u', 'moe-agent', 'python3', '-I', '-c', WRITER_LITERAL], replace: ['sudo', '-n', 'cp', '/usr/bin/true', '/opt/moe/bin/moe-supervisor'] };
+const guestExecOf = args => (args[0] === 'exec' && args[2] === GUEST ? Object.keys(GUEST_EXECS).find(kind => JSON.stringify(args.slice(4)) === JSON.stringify(GUEST_EXECS[kind])) : undefined);
+const REPLACED_HASH = `${'0'.repeat(64)}  /opt/moe/bin/moe-supervisor\n`;
 function containmentRig(runs = []) {
   const calls = [];
   const runCheckJob = async (input, given) => {
@@ -2828,13 +2837,18 @@ const TOOLCHAIN_STUB = Object.freeze({ file: '/cache/node-v24.tar.xz', sha256: '
 /** smokeHarness whose guest holds the REAL supervisor (R07 checks its hash), with an injected doctor and clock; `run` wraps the provider,
  * `bridge` configures the CQ-R13e1 spawn router (bridgeRouter) and `network` overrides NETWORK_ANSWERS, each recorded in `probes`.
  * CQ-R13h: deps.checkSteps runs the cancellation's real runCheckJob here with no Node download (`checkSteps` overrides a step);
- * deps.spawn hands out recoveryChild(`child`) fakes, recorded in `children`; deps.bounds keeps the lifecycle waits short. */
+ * deps.spawn hands out recoveryChild(`child`) fakes, recorded in `children`; deps.bounds keeps the lifecycle waits short.
+ * CQ-R13f: `writer` answers writer-containment's home and probe execs and fakes its toolchain and installToolchain steps; `replace`
+ * answers controller-replacement's exec, by default replacing the certify VM's supervisor so its later hash probes see REPLACED_HASH
+ * (each certify-VM hash probe records in `hashed` whether it came after that). All are recorded in `ops`. */
 function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run, random = sequence(), bridge, network = {}, containment, change, checkSteps, child,
-  ...fakeOptions } = {}) {
+  writer = {}, replace, ...fakeOptions } = {}) {
   const workDir = scratch(t);
   const [rig, changes] = [containmentRig(containment), []];
   const fake = fakeVm({ ...fakeOptions, answers: healthy({ supervisorHash: { code: 0, stdout: `${REAL_SUPERVISOR_SHA256}  /opt/moe/bin/moe-supervisor\n` }, ...guest }) });
-  const [download, deletes, probes] = [fakeFetch(), [], []];
+  const [download, deletes, probes, ops, hashed] = [fakeFetch(), [], [], [], []];
+  let replaced = false;
+  const replacing = async () => { replaced = true; return { stdout: '', stderr: '' }; };
   // CQ-R13h: every other VM this run launched answers as a clone of the fake guest, under its own name.
   const clone = (executable, args, options) => {
     const name = args.find(arg => arg !== GUEST && fake.present.has(arg));
@@ -2843,6 +2857,12 @@ function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run,
   };
   const run = wrap((executable, args, options) => {
     if (isChange(args)) { changes.push([[...args], options]); return (change ?? answering(''))(args); }
+    const kind = guestExecOf(args);
+    if (kind) { ops.push([kind, [...args], options]); return (kind === 'replace' ? replace ?? replacing : writer[kind] ?? answering(''))(args); }
+    if (args[0] === 'exec' && args[2] === GUEST && JSON.stringify(args.slice(4)) === JSON.stringify(EXPECTED_PROBES.supervisorHash)) {
+      hashed.push(replaced);
+      if (replaced) return answering(REPLACED_HASH)();
+    }
     const probe = networkProbe(args);
     if (probe) { probes.push([probe, [...args], options]); return (network[probe] ?? NETWORK_ANSWERS[probe])(args); }
     if (args[0] !== 'delete') return clone(executable, args, options);
@@ -2861,9 +2881,11 @@ function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run,
   t.after(() => children.forEach(({ proc }) => proc.close(null, 'SIGKILL')));
   const deps = { provider: { run, spawn: router.spawn }, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {}, random,
     doctor: async () => ({ providerReady: true, version: '1.17.0' }), now: () => new Date(STARTED), containment: rig.containment, spawn,
+    writer: { toolchain: async input => { ops.push(['toolchain', input]); return (writer.toolchain ?? (async () => TOOLCHAIN_STUB))(input); },
+      installToolchain: async input => { ops.push(['install', input]); return writer.installToolchain?.(input); } },
     bounds: { cancelBudgetMs: 5_000, launchMs: 1_000, pollMs: 1, reapMs: 1_000 }, checkSteps: { toolchain: async () => TOOLCHAIN_STUB,
       installToolchain: async () => {}, provision: input => provisionGuest({ ...input, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {} }), ...checkSteps } };
-  return { workDir, fake, download, deletes, probes, changes, rig, deps, router, children,
+  return { workDir, fake, download, deletes, probes, changes, rig, deps, router, children, ops, hashed,
     certify: (platform = onWindows()) => certifyCore({ platform, workDir, deps }) };
 }
 const checksOf = (...rows) => rows.map(([id, result, code = null]) => ({ id, result, code }));
@@ -2916,7 +2938,8 @@ test('CF3 a provision refusal or a codeless throw fails only its own check; tear
   assert.deepEqual([await thrower.certify(), thrower.deletes], [certification({ checks: threw }), [['delete', '--purge', GUEST]]]);
   const stuck = certifyHarness(t, { deleteFails: true });
   const undeleted = checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'], ['bridge-framing', 'passed'], ['bridge-eof', 'passed'],
-    ['guest-network', 'passed'], ['check-containment', 'passed'], ['cancellation', 'failed', 'CERTIFY_CANCEL_VM_NOT_DELETED'], ['recovery', 'not-run'],
+    ['guest-network', 'passed'], ['writer-containment', 'passed'], ['check-containment', 'passed'], ['controller-replacement', 'passed'],
+    ['cancellation', 'failed', 'CERTIFY_CANCEL_VM_NOT_DELETED'], ['recovery', 'not-run'],
     ['teardown', 'failed', 'CERTIFY_TEARDOWN_FAILED']);
   assert.deepEqual([await stuck.certify(), stuck.deletes], [certification({ checks: undeleted }), [nameAt(2), GUEST].map(name => ['delete', '--purge', name])]);
 });
@@ -2942,6 +2965,7 @@ test('CF5 validateCertificationReport returns a frozen copy of exactly the curre
   const mutate = change => { const value = structuredClone(native()); change(value); return value; };
   // A failed or not-run row, with certified consistent, so only the row's own rule can refuse it.
   const failing = (at, row) => mutate(v => { v.checks[at] = row; v.certified = false; });
+  const last = CERTIFY_IDS.length - 1; // teardown's own index, so each row below fails only its own rule
   const getter = mutate(() => {});
   Object.defineProperty(getter, 'kind', { enumerable: true, get() { throw new Error('/private/path secret'); } });
   for (const [label, value] of Object.entries({
@@ -2957,10 +2981,10 @@ test('CF5 validateCertificationReport returns a frozen copy of exactly the curre
     supervisorHash: mutate(v => { v.supervisorSha256 = 7; }), checksObject: mutate(v => { v.checks = { ...v.checks }; }), certifiedNoArch: mutate(v => { v.arch = null; }),
     missingCheck: mutate(v => { v.checks.pop(); }), extraCheck: mutate(v => { v.checks.push({ id: 'canary', result: 'passed', code: null }); }),
     reversed: mutate(v => { v.checks.reverse(); }), swapped: mutate(v => { [v.checks[0], v.checks[1]] = [v.checks[1], v.checks[0]]; }),
-    renamed: mutate(v => { v.checks[2].id = 'no_mounts'; }), result: failing(6, { id: 'teardown', result: 'skipped', code: null }),
-    lowerCode: failing(6, { id: 'teardown', result: 'failed', code: 'lower_case' }), numberCode: failing(6, { id: 'teardown', result: 'failed', code: 7 }),
-    passedWithCode: mutate(v => { v.checks[0].code = 'CERTIFY_CHECK_FAILED'; }), failedWithoutCode: failing(6, { id: 'teardown', result: 'failed', code: null }),
-    notRunFirst: failing(1, { id: 'readiness', result: 'not-run', code: null }), teardownNotRun: failing(6, { id: 'teardown', result: 'not-run', code: null }),
+    renamed: mutate(v => { v.checks[2].id = 'no_mounts'; }), result: failing(last, { id: 'teardown', result: 'skipped', code: null }),
+    lowerCode: failing(last, { id: 'teardown', result: 'failed', code: 'lower_case' }), numberCode: failing(last, { id: 'teardown', result: 'failed', code: 7 }),
+    passedWithCode: mutate(v => { v.checks[0].code = 'CERTIFY_CHECK_FAILED'; }), failedWithoutCode: failing(last, { id: 'teardown', result: 'failed', code: null }),
+    notRunFirst: failing(1, { id: 'readiness', result: 'not-run', code: null }), teardownNotRun: failing(last, { id: 'teardown', result: 'not-run', code: null }),
     notRunWithCode: failing(1, { id: 'readiness', result: 'not-run', code: 'X' }),
     ranAfterFailure: certification({ transport: 'native', checks: checksOf(['provision', 'failed', 'X'], ['readiness', 'passed'], ['no-mounts', 'not-run'], ...BRIDGE_NOT_RUN, ['teardown', 'passed']) }),
     nativeUncertified: mutate(v => { v.certified = false; }), injectedCertified: mutate(v => { v.transport = 'injected'; }),
@@ -3313,7 +3337,7 @@ test('GN4 a confirmed connect is REACHABLE, anything short of two exact closed a
 });
 
 test('GN5 guest-network runs after bridge-eof and before teardown; a bridge-eof failure leaves it not-run with no probe', async t => {
-  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(-7), [...BRIDGE_NOT_RUN.map(([id]) => id), 'teardown']);
+  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(3), [...BRIDGE_NOT_RUN.map(([id]) => id), 'teardown']);
   const h = certifyHarness(t, { bridge: { onEof: proc => proc.exit(0) } });
   assert.deepEqual([await h.certify(), h.deletes, h.probes], [certification({ checks: checksOf(['provision', 'passed'], ['readiness', 'passed'],
     ['no-mounts', 'passed'], ['bridge-framing', 'passed'], ['bridge-eof', 'failed', 'CERTIFY_BRIDGE_EOF_EXIT'], ...BRIDGE_NOT_RUN.slice(2), ['teardown', 'passed']) }),
@@ -3345,7 +3369,7 @@ test('GN6 a completed connect with a pending accept beats closed, unknown and pr
 
 // CQ-R13f1 check-containment: the generated snapshot, the probe's decision logic with every guest primitive stubbed, and the
 // check over deps.containment's fake runCheckJob (containmentRig) inside the whole certify flow.
-import { containmentSnapshot } from '../local-runner/certify-containment.mjs';
+import { containmentSnapshot, WRITER_PROBE } from '../local-runner/certify-containment.mjs';
 
 const CC_ENTRY = { path: 'moe-certify/protected.txt', oid: 'c847a247be38418490fff92ebf0fa678d21f99da' }; // `git hash-object` of its bytes
 const CC_COMMANDS = ['python3 -I -B moe-certify/probe.py', 'printf x 2>/dev/null >moe-certify/protected.txt && exit 3; i=0; while [ -s moe-certify/protected.txt ] && '
@@ -3479,6 +3503,93 @@ test('CC6 the runs get certify\'s base ledger, never its capturing one, and a gu
   assert.deepEqual([await gone.certify(), gone.rig.calls.length, gone.changes], [networkFailed('CERTIFY_GUEST_NETWORK_UNKNOWN'), 0, []]);
 });
 
+// CQ-R13f writer-containment and controller-replacement, inside the whole certify flow. The writer probe's decision logic runs in
+// python3 with os.path.exists and os.access stubbed; the native run is operator-only.
+const inGuest = argv => ['exec', '--no-map-working-directory', GUEST, '--', ...argv];
+// The probe with its two primitives stubbed: s.present lists what exists, s.allowed the [path, mode] pairs access(2) grants.
+const WRITER_STUB = 'import json,os,sys;s=json.loads(sys.argv[1]);os.path.exists=lambda p:p in s["present"];os.access=lambda p,m:[p,m] in s["allowed"];'
+  + 'exec(sys.stdin.read())';
+
+test('WC1 writer-containment makes the other job\'s home, installs the pinned toolchain, then runs one fixed agent-identity probe, all on the certify VM', async t => {
+  assert.deepEqual([WRITER_PROBE, /['\x00-\x1f\x7f]/.test(WRITER_PROBE)], [WRITER_LITERAL, false]);
+  const h = certifyHarness(t);
+  assert.deepEqual(await h.certify(), certification());
+  const query = lifecycleOptions(QUERY_TIMEOUT_MS);
+  assert.deepEqual(h.ops, [['home', inGuest(GUEST_EXECS.home), query], ['toolchain', { arch: 'x64', cacheDir: path.join(h.workDir, 'images') }],
+    ['install', { name: GUEST, toolchain: TOOLCHAIN_STUB, provider: { ...h.deps.provider, executable: undefined }, timeoutMs: 120_000 }],
+    ['probe', inGuest(GUEST_EXECS.probe), query], ['replace', inGuest(GUEST_EXECS.replace), query]]);
+  // The supervisor's own paths the targets name: its manifest, sessions and toolchain, and a check job's PATH.
+  const supervisor = readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url), 'utf8');
+  for (const line of [/^WORKSPACE_MANIFEST = '\/var\/lib\/moe\/workspace\.manifest\.json'$/m, /^SESSIONS = '\/var\/lib\/moe\/sessions'$/m,
+    /^TOOLCHAIN = '\/opt\/moe\/toolchain'  #/m, /'PATH': toolchain \+ '\/bin:' \+ JOB_PATH/, /mkdtemp\(prefix='home-', dir=sessions\)/]) assert.match(supervisor, line);
+});
+
+test('WC2 the writer probe exits 0 only when every target exists and is refused, else 10+i or 20+i for the first that is not',
+  { skip: process.platform === 'win32' && 'python3 is POSIX-only here' }, () => {
+  const targets = JSON.parse(WRITER_LITERAL.slice(WRITER_LITERAL.indexOf('=') + 1, WRITER_LITERAL.indexOf(';sys.exit')));
+  const files = targets.map(([file]) => file);
+  const exit = (present, allowed = []) => spawnSync('python3', ['-I', '-B', '-c', WRITER_STUB, JSON.stringify({ present, allowed })], { input: WRITER_PROBE, encoding: 'utf8' }).status;
+  assert.equal(exit(files), 0);
+  for (const [at, [file, mode]] of targets.entries()) {
+    assert.deepEqual([exit(files, [[file, mode]]), exit(files.filter(other => other !== file)), exit(files, [[file, 6 - mode]])], [10 + at, 20 + at, 0], file);
+  }
+  assert.deepEqual([exit(files.filter(file => file !== files[4]), [[files[2], 2]]), exit([])], [12, 20]);
+});
+
+test('WC3 writer-containment fails with one fixed code per outcome; every later body check is not-run and teardown still deletes the VM', async t => {
+  const refused = code => async () => { throw failWith({ code }); };
+  const kinds = ['CREDENTIAL', 'MANIFEST', 'CONTROL_PLANE', 'HOME', 'SUPERVISOR', 'TOOLCHAIN', 'TOOLCHAIN'];
+  for (const [writer, code, ran = ['home', 'toolchain', 'install', 'probe']] of [
+    ...kinds.map((kind, at) => [{ probe: probeExit(10 + at, '') }, `CERTIFY_WRITER_${kind}_ALLOWED`]),
+    [{ probe: probeExit(20, '') }, 'CERTIFY_WRITER_TARGET_MISSING'], [{ probe: probeExit(26, '') }, 'CERTIFY_WRITER_TARGET_MISSING'],
+    ...[1, 9, 17, 19, 27, 127].map(exit => [{ probe: probeExit(exit, '') }, 'CERTIFY_WRITER_UNKNOWN']), [{ probe: KILLED }, 'PROVIDER_TIMEOUT'],
+    [{ home: probeExit(1, '') }, 'CERTIFY_WRITER_SETUP_FAILED', ['home']], [{ home: KILLED }, 'PROVIDER_TIMEOUT', ['home']],
+    [{ toolchain: refused('TOOLCHAIN_DOWNLOAD_FAILED') }, 'TOOLCHAIN_DOWNLOAD_FAILED', ['home', 'toolchain']],
+    [{ installToolchain: refused('TRANSFER_DIGEST_MISMATCH') }, 'TRANSFER_DIGEST_MISMATCH', ['home', 'toolchain', 'install']]]) {
+    const h = certifyHarness(t, { writer });
+    assert.deepEqual([await h.certify(), h.ops.map(([kind]) => kind), h.rig.calls.length, h.children, h.deletes],
+      [failedAt('writer-containment', code), ran, 0, [], [['delete', '--purge', GUEST]]], code);
+  }
+});
+
+test('CR1 controller-replacement replaces the supervisor through one fixed root argv, readiness refuses it by its hash, and this run\'s cleanup keeps its own record rewritten to another owner', async t => {
+  const [h, seen] = [certifyHarness(t), []];
+  h.deps.replacement = { deleteOwned: async input => { seen.push((await input.ledger.read(input.name)).attemptId); return deleteOwned(input); } };
+  assert.deepEqual([await h.certify(), h.hashed, h.deletes], [certification(), [false, true], CERTIFY_DELETES]);
+  const main = await createLedger(path.join(h.workDir, 'ledger')).read(GUEST);
+  assert.deepEqual([seen.length, /^attempt-[0-9a-f]{32}$/.test(seen[0]), seen[0] !== main.attemptId, main.phase], [1, true, true, 'deleted']);
+  assert.deepEqual(h.ops.filter(([kind]) => kind === 'replace'), [['replace', inGuest(GUEST_EXECS.replace), lifecycleOptions(QUERY_TIMEOUT_MS)]]);
+});
+
+test('CR2 controller-replacement fails with one fixed code unless readiness refuses by the hash alone and the rewritten record and its VM both stay', async t => {
+  const notOwner = async () => { throw failWith({ code: 'LIFECYCLE_NOT_OWNER' }); };
+  const writeBack = async ({ name, owner: who }, dir) => {
+    const file = path.join(dir, 'ledger', `${name}.json`);
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), attemptId: who.attemptId }));
+    return notOwner();
+  };
+  for (const [label, options, cleanup, code, hashes = [false, true]] of [
+    ['replace refused', { replace: probeExit(1, '') }, undefined, 'CERTIFY_REPLACEMENT_NOT_REPLACED', [false]],
+    ['replace killed', { replace: KILLED }, undefined, 'PROVIDER_TIMEOUT', [false]],
+    ['hash unchanged', { replace: answering('') }, undefined, 'CERTIFY_REPLACEMENT_ACCEPTED', [false, false]],
+    ['another failure too', { guest: { layout: [layout(), layout(['x'])] } }, undefined, 'CERTIFY_REPLACEMENT_UNKNOWN'],
+    ['a later failure too', { guest: { shimHash: [healthy().shimHash, { code: 0, stdout: `${'0'.repeat(64)}  /opt/moe/bin/moe-mcp-shim\n` }] } }, undefined,
+      'CERTIFY_REPLACEMENT_UNKNOWN'],
+    ['cleanup trusts the record', {}, async input => deleteOwned({ ...input, owner: await input.ledger.read(input.name) }), 'CERTIFY_REPLACEMENT_RECORD_NOT_KEPT'],
+    ['cleanup resolves', {}, async () => 'deleted', 'CERTIFY_REPLACEMENT_RECORD_NOT_KEPT'],
+    ['refused, record marked deleted', {}, async ({ ledger, name }) => { await ledger.update(await ledger.read(name), { phase: 'deleted' }); return notOwner(); },
+      'CERTIFY_REPLACEMENT_RECORD_NOT_KEPT'],
+    ['refused, VM deleted', {}, async ({ name, provider }) => { await deleteOwnedInstance(name, provider); return notOwner(); }, 'CERTIFY_REPLACEMENT_RECORD_NOT_KEPT'],
+    ['refused, owner written back', {}, 'write back', 'CERTIFY_REPLACEMENT_RECORD_NOT_KEPT'],
+    ['refused for another reason', {}, async () => { throw failWith({ code: 'LEDGER_RECORD_INVALID' }); }, 'CERTIFY_REPLACEMENT_RECORD_NOT_KEPT']]) {
+    const h = certifyHarness(t, options);
+    if (cleanup) h.deps.replacement = { deleteOwned: cleanup === 'write back' ? input => writeBack(input, h.workDir) : cleanup };
+    assert.deepEqual([await h.certify(), h.hashed, h.children], [failedAt('controller-replacement', code), hashes, []], label);
+    // The original record went back, so teardown still deleted this run's VM.
+    assert.equal((await createLedger(path.join(h.workDir, 'ledger')).read(GUEST)).phase, 'deleted', label);
+  }
+});
+
 // CQ-R13h cancellation and recovery: the cancellation's real runCheckJob, materialize and runCheckSession run on the harness provider;
 // recovery's controller child is a recoveryChild fake. The real child module is spawned only on bad input; the native run is operator-only.
 const RECOVERY_ARGV = [process.execPath, [fileURLToPath(new URL('../local-runner/certify-recovery-child.mjs', import.meta.url))],
@@ -3594,8 +3705,8 @@ test('LC6 the real recovery child exits 64 with no output on any bad stdin, befo
   assert.deepEqual(readdirSync(dir), []);
 });
 
-test('LC7 cancellation and recovery run after check-containment, before teardown; each lifecycle bound outside 1..its constant refuses before any call', async t => {
-  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(-4), ['check-containment', 'cancellation', 'recovery', 'teardown']);
+test('LC7 cancellation and recovery run after controller-replacement, before teardown; each lifecycle bound outside 1..its constant refuses before any call', async t => {
+  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id).slice(-4), ['controller-replacement', 'cancellation', 'recovery', 'teardown']);
   for (const bounds of [{ cancelBudgetMs: 0 }, { cancelBudgetMs: 300_001 }, { launchMs: 900_001 }, { pollMs: 1_001 }, { pollMs: 0.5 }, { reapMs: 30_001 }, { reapMs: '1' }]) {
     const h = certifyHarness(t);
     await assert.rejects(certifyCore({ platform: onWindows(), workDir: h.workDir, deps: { ...h.deps, bounds } }), error => assertSanitized(error, 'CERTIFY_INPUT_INVALID'));

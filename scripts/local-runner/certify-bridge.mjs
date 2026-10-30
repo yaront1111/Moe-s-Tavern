@@ -121,8 +121,8 @@ export function gatewayOf(stdout) {
 }
 
 // runGuestProbe's handling (guest-readiness.mjs): a remote exit is {code, stdout}; a kill, spawn or other provider failure
-// throws its PROVIDER_* code.
-async function probe({ name, provider }, argv) {
+// throws its PROVIDER_* code. certify-containment.mjs runs its fixed argv through it too.
+export async function probe({ name, provider }, argv) {
   const invoke = invoker(name, provider);
   try {
     const { stdout } = await invoke(['exec', '--no-map-working-directory', name, '--', ...argv], QUERY_TIMEOUT_MS);

@@ -113,7 +113,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:47:51.273Z",
-  "updatedAt": "2026-10-30T21:56:30.930Z",
+  "updatedAt": "2026-10-30T21:56:55.294Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T17:23:37.820Z",
@@ -221,20 +221,42 @@
       "treeId": "65e74b6a02b28397ae08c281c8d8ffaa4996ce2b",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "1f6c272119d7845ecf37f366e1d88d028a8c96a2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c75a6f39@2026-10-30T21:34:04Z",
+      "paths": [
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+        ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "recordedBy": "worker-c75a6f39",
+      "recordedAt": "2026-10-30T21:56:55.294Z",
+      "treeId": "0bc817609fbc558b89bc317249cba2f4f91eb9dd",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "moe-vscode/tests/protected-daemon-spawn.test.cjs",
     "moe-vscode/src/services/MoeDaemonClient.ts",
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+    ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-bd1eb82d@2026-10-30T17:24:25Z",
-    "at": "2026-10-30T17:51:44.935Z"
+    "kind": "completion",
+    "sessionId": "worker-c75a6f39@2026-10-30T21:34:04Z",
+    "at": "2026-10-30T21:56:55.294Z"
   },
   "workStartedAt": "2026-10-30T21:34:42.245Z",
   "reviewStartedAt": "2026-10-30T21:56:30.927Z",
@@ -245,5 +267,11 @@
     "reportedAt": "2026-10-30T21:56:30.927Z",
     "source": "agent-reported"
   },
-  "completionSummary": "On a Windows host under protected, a PATH entry that does not exist yet is now judged by its nearest existing ancestor, in both IDEs. POSIX and LEGACY are unchanged.\n- VS Code, MoeDaemonClient.ts +22: on realpath ENOENT for a non-alias spelling, pathForms adds missingRealPath: the ancestor's realpath.native plus the missing tail. A level that exists but does not resolve (a dangling link) throws, as does a missing ancestor or a non-ENOENT error. The isOutsideProject catch turns every throw into false. No imports added.\n- JetBrains, RuntimeSelectionPolicy.kt +15/-1: one trailing conjunct, `!strict || real != null || ancestorOutside(...)`. The new private ancestorOutside returns false for !notExists(NOFOLLOW). Otherwise it walks up and re-runs isOutsideProject on the ancestor, which inherits the 1c2bfeca, 52fb and 08bb drive logic. Supervisor and store files are not touched.\nTests (+98, no existing row changed):\n- VS Code Windows row: 8 inside entries dropped (junction to the project and to a project folder, dir symlink, dangling link and its leaf, 8.3, subst to p\\sub, admin-share real path through an fs seam) and 4 kept. The PATH is asserted exactly. whoami spawn proof: raw PATH status 0, filtered PATH ENOENT.\n- JetBrains N15: whole-map answers, a parity map (A vs A\\later), exact supervisor env, the mapped-share seam, a LEGACY control.\nRED on the unchanged code:\n- VS Code: all 8 inside entries read outside (scratch D:\\moe-scratch\\dd545-red).\n- JetBrains: 3 entries wrong, dangling, dangling\\bin and the mapped share. to-sub, link, 8.3 and S: were already right through 08bb's physicalFolder walk. The plan predicted to-sub would fail; it was written before 1c2bfeca rev 2.\nEvidence: gate exit 0. VS Code native 348 tests, 344 pass, 4 existing skips; the new row ran; tsc OK. Gradle 496 tests, 0 skipped/failed/errored; RSPT 70, MDST 79. Linux npm test 344 pass, 4 skipped (including the new row). subst empty; eslint OK; bytes sha-checked unchanged during the gate.\nResiduals fo"
+  "completionSummary": "On a Windows host under protected, a PATH entry that does not exist yet is now judged by its nearest existing ancestor, in both IDEs. POSIX and LEGACY are unchanged.\n- VS Code, MoeDaemonClient.ts +22: on realpath ENOENT for a non-alias spelling, pathForms adds missingRealPath: the ancestor's realpath.native plus the missing tail. A level that exists but does not resolve (a dangling link) throws, as does a missing ancestor or a non-ENOENT error. The isOutsideProject catch turns every throw into false. No imports added.\n- JetBrains, RuntimeSelectionPolicy.kt +15/-1: one trailing conjunct, `!strict || real != null || ancestorOutside(...)`. The new private ancestorOutside returns false for !notExists(NOFOLLOW). Otherwise it walks up and re-runs isOutsideProject on the ancestor, which inherits the 1c2bfeca, 52fb and 08bb drive logic. Supervisor and store files are not touched.\nTests (+98, no existing row changed):\n- VS Code Windows row: 8 inside entries dropped (junction to the project and to a project folder, dir symlink, dangling link and its leaf, 8.3, subst to p\\sub, admin-share real path through an fs seam) and 4 kept. The PATH is asserted exactly. whoami spawn proof: raw PATH status 0, filtered PATH ENOENT.\n- JetBrains N15: whole-map answers, a parity map (A vs A\\later), exact supervisor env, the mapped-share seam, a LEGACY control.\nRED on the unchanged code:\n- VS Code: all 8 inside entries read outside (scratch D:\\moe-scratch\\dd545-red).\n- JetBrains: 3 entries wrong, dangling, dangling\\bin and the mapped share. to-sub, link, 8.3 and S: were already right through 08bb's physicalFolder walk. The plan predicted to-sub would fail; it was written before 1c2bfeca rev 2.\nEvidence: gate exit 0. VS Code native 348 tests, 344 pass, 4 existing skips; the new row ran; tsc OK. Gradle 496 tests, 0 skipped/failed/errored; RSPT 70, MDST 79. Linux npm test 344 pass, 4 skipped (including the new row). subst empty; eslint OK; bytes sha-checked unchanged during the gate.\nResiduals fo",
+  "touchedFiles": [
+    "moe-vscode/tests/protected-daemon-spawn.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+  ]
 }
