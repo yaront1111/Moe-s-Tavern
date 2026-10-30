@@ -1,0 +1,28 @@
+{
+  "id": "task-6fc0096b9fff4c45904cfbce7833ad2d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains readDaemonInfo deletes same-project Windows/WSL daemon.json spellings before the live identity probe",
+  "description": "In MoeDaemonSupervisor.readDaemonInfo (lines 58–63), File(info.projectPath).canonicalPath is compared to File(base).canonicalPath and mismatch deletes daemon.json. Repro on Windows: base D:/proj, daemon.json projectPath /mnt/d/proj; these canonical paths differ although they identify the same cross-OS project, so connect never reaches DaemonIdentityProbe.\nThe same reader can delete a newly rewritten metadata file during handleForeignDaemon's re-read before its pid/port/startedAt guard. Found in task-90664db1 review; MoeDaemonSupervisor.kt is explicitly outside that task's scope. Add bounded/read-only identity parsing and cross-OS path regression coverage without changing RF activation rules.",
+  "definitionOfDone": [
+    "Windows drive, slash, and /mnt/<drive> spellings of the same project do not delete live daemon metadata before health probing.",
+    "The foreign-daemon compare-delete path cannot remove a rewritten file through side effects of readDaemonInfo; test changed pid/port/startedAt/projectPath.",
+    "JetBrains tests pass under the jetbrains-gradle lease; coordinate MoeDaemonSupervisor.kt edits with the RF sequence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 292.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T09:04:29.281Z",
+  "updatedAt": "2026-10-30T09:04:29.281Z"
+}

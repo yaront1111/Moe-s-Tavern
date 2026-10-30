@@ -113,7 +113,7 @@
   ],
   "planRevision": 3,
   "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-55e6716a",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -134,11 +134,23 @@
       "author": "worker-c2da129d",
       "content": "Steps 1–4 implemented, step 5 gate FAILED (not passing), step 6 not started. Exact required cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" ran fresh under jetbrains-gradle and exited 1, BUILD FAILED in 17s, 380 tests / 2 failures. Failures: supervisor legacy no-store test expected 0 provider calls but got 3 (profile now necessarily consults persistent state); D4 root-as-file after restart expected PROTECTED but got LEGACY (ProtectedStateStore.read converts child NoSuchFileException to null before root checks on Windows). Filed out-of-scope blockers task-bf4debb34a0241d2be0f764a2a68158b (store) and task-f23c4464c8f24efeb8d62973111839ce (fixture). No assertions weakened or overlapping files edited. Lease released. Main implementation/test diff is 297 changed lines (+293/-4 including 43-line new dialog). Proposed follow-up verification can be focused per bug to avoid each waiting on the other's red; this parent owns required final full gate.",
       "timestamp": "2026-10-30T08:27:18.625Z"
+    },
+    {
+      "id": "comment-fdcb4de67c8e43f6b44fc02897b54457",
+      "author": "qa-ba3f4f35",
+      "content": "QA approved child task-f23c4464c8f24efeb8d62973111839ce (completion 8183aaf5 on moe/work-2026-10-24), warnings=[]; bf4debb3 is also DONE. Independent exact focused Windows gate 21/21, plus fresh completion-archive GREEN/MA write kill/MB read-only kill/restored GREEN. All other supervisor rows/helper and RF02 policy/tests unchanged. Both child fixes are landed, so RF02 still owes its exact full Windows `gradlew.bat test --rerun` gate under jetbrains-gradle plus its remaining adversarial step; child-focused evidence is not a full-suite pass. QA evidence /mnt/d/moe-scratch/f23c4464/qa/; reusable note mem:gotcha-legacy-supervisor-provenance-test-vacuity.",
+      "timestamp": "2026-10-30T09:00:54.378Z"
+    },
+    {
+      "id": "comment-4fbaaa768c284f7b9e3f152e7a64a009",
+      "author": "worker-55e6716a",
+      "content": "Resumed steps 5–6; checkpoint 91eb0d14 source/test diff re-read and scoped diff-check clean; no source changes. Current source has both child fixes. Full gate not run yet: queued #1 for jetbrains-gradle behind worker-262588d0/task-90664db1. Potential in-scope adversarial finding to reproduce in step 6: profile() checks pinned only before store IO; a delayed weaker-profile reader could read the newly confirmed legacy record after a concurrent caller pins and confirms, then return LEGACY within the still-pinned session. Use existing store-provider seam/latches to prove the interleaving before fixing; do not treat this static suspicion as a tested failure.",
+      "timestamp": "2026-10-30T09:04:14.752Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:25.972Z",
-  "updatedAt": "2026-10-30T08:51:37.117Z",
+  "updatedAt": "2026-10-30T09:04:29.559Z",
   "dependsOn": [
     "task-fd653cfbaea541c39569dfed9452cf5c"
   ],
@@ -156,7 +168,8 @@
   "contextFetchedBy": [
     "architect-4ae016fb",
     "worker-c2da129d",
-    "qa-ba3f4f35"
+    "qa-ba3f4f35",
+    "worker-55e6716a"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -199,14 +212,11 @@
     "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt",
     ".serena/memories/gotcha-protected-state-absent-root.md"
   ],
-  "blockedReason": "Steps 1–4 implemented; required fresh Windows Gradle gate exited 1: 380 tests, 2 failures, 0 errors/skips (26 fresh XML classes). RuntimeSelectionPolicyTest D4 exposes ProtectedStateStore.read returning absent for a regular-file root on Windows; after restart this wrongly permits LEGACY. MoeDaemonSupervisorTest legacy no-store assertion expects 0 provider calls but gets 3 because persistent profile selection must now consult state. Both fixes are outside RF02's approved three-file scope (supervisor tests also overlap RF03), so filed the two named bug tasks rather than weakening assertions or editing overlapping files. Step 5 remains incomplete, step 6 not started, no completion claimed. Lease released, source/metadata paths declared, full evidence and resume instructions saved in task comments and Serena handoff.",
-  "blockedOnTaskIds": [
-    "task-bf4debb34a0241d2be0f764a2a68158b",
-    "task-f23c4464c8f24efeb8d62973111839ce"
-  ],
-  "blockedResourceId": null,
+  "blockedReason": "Required fresh full Windows test gate is waiting for jetbrains-gradle; queued #1 behind worker-262588d0/task-90664db1. Steps 1–4 checkpointed, step 5 in progress, step 6 pending. No tests run or passing claim this session; handoff and in-scope potential concurrency review finding recorded. Auto-resume on lease grant.",
+  "blockedOnTaskIds": null,
+  "blockedResourceId": "jetbrains-gradle",
   "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T08:27:33.369Z",
+  "blockedAt": "2026-10-30T09:04:29.559Z",
   "commits": [
     {
       "sha": "91eb0d14ebb34d521930f5f2a3a2ee6252584444",
