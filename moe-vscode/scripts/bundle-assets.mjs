@@ -102,7 +102,7 @@ async function main() {
   const scriptsOut = path.join(outputRoot, 'scripts');
   await mkdir(scriptsOut, { recursive: true });
   const agentScripts = ['moe-agent.ps1', 'moe-agent.sh', 'moe-call.sh', 'prompt-cache.mjs', 'prompt-cache-policy.mjs', 'prompt-cache-usage.mjs',
-    'usage-receipt.mjs', 'usage-session.mjs', 'usage-report.mjs', 'analyze-usage.mjs', 'moe-account-lease.mjs'];
+    'prompt-cache-witness.mjs', 'usage-receipt.mjs', 'usage-session.mjs', 'usage-report.mjs', 'analyze-usage.mjs', 'moe-account-lease.mjs'];
   for (const script of agentScripts) {
     const src = path.join(repoRoot, 'scripts', script);
     if (await exists(src)) {

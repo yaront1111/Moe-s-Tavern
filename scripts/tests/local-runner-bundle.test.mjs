@@ -35,7 +35,7 @@ function fixture(t) {
     'packages/moe-proxy/dist/utils.spec.js', 'packages/moe-daemon/dist/tools/sample.test.js']) put(name, 'export {};\n');
   for (const name of ['packages/moe-proxy/dist/latest.js', 'packages/moe-daemon/dist/tools/attestation.js']) put(name, 'export {};\n');
   for (const name of ['moe-agent.ps1', 'moe-agent.sh', 'moe-call.sh', 'prompt-cache.mjs', 'prompt-cache-policy.mjs', 'prompt-cache-usage.mjs',
-    'usage-receipt.mjs', 'usage-session.mjs', 'usage-report.mjs', 'analyze-usage.mjs', 'moe-account-lease.mjs']) {
+    'prompt-cache-witness.mjs', 'usage-receipt.mjs', 'usage-session.mjs', 'usage-report.mjs', 'analyze-usage.mjs', 'moe-account-lease.mjs']) {
     put(`scripts/${name}`, readFileSync(path.join(root, 'scripts', name)));
   }
   put('scripts/mods/example/runtime.mjs');
@@ -79,6 +79,31 @@ test('actual VS Code bundler copies importable provider modules and pinned manif
   assert.equal(result.executionReady, false);
   const nested = await import(pathToFileURL(path.join(work.output, 'scripts/local-runner/nested/production.mjs')).href);
   assert.equal(nested.copied, true);
+});
+
+test('actual bundler ships the codex witness helper that prompt-cache.mjs imports', t => {
+  const work = fixture(t);
+  requireBundle(work);
+  const scripts = path.join(work.output, 'scripts');
+  const witness = path.join(scripts, 'prompt-cache-witness.mjs');
+  assert.ok(existsSync(witness), 'Missing bundled scripts/prompt-cache-witness.mjs');
+  assert.deepEqual(readFileSync(witness), readFileSync(path.join(root, 'scripts/prompt-cache-witness.mjs')));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^MOE_/i.test(key)));
+  const codex = () => spawnSync(process.execPath, [path.join(scripts, 'prompt-cache.mjs'), 'codex-stream'], {
+    input: '', env, encoding: 'utf8', timeout: 20_000, windowsHide: true,
+  });
+  const shipped = codex();
+  assert.equal(shipped.status, 0, shipped.stdout + shipped.stderr);
+  assert.match(shipped.stdout, /usage=unknown/);
+  // A bundle without it fails at import on every codex seat (mem:gotcha-clean-snapshot-missing-prompt-cache-helper).
+  rmSync(witness);
+  const missing = codex();
+  assert.notEqual(missing.status, 0, 'codex-stream ran without its witness module');
+  assert.match(missing.stderr, /prompt-cache-witness\.mjs/);
+  const gradle = readFileSync(path.join(root, 'moe-jetbrains/build.gradle.kts'), 'utf8');
+  const block = gradle.match(/from\(repoRoot\.resolve\("scripts"\)\)\s*\{([\s\S]*?)into\("\$pluginContentRoot\/scripts"\)/)?.[1];
+  assert.ok(block, 'Missing actual production scripts copy block');
+  assert.ok(block.includes('include("prompt-cache*.mjs")'), 'Gradle must ship every prompt-cache*.mjs helper');
 });
 
 test('actual bundler excludes root and nested tests/spec fixtures while retaining existing exclusions', t => {

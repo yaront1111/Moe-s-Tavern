@@ -1,0 +1,219 @@
+{
+  "id": "task-4b0609d1e037417aa2c68e15d039b2d9",
+  "epicId": "epic-be924fb8",
+  "title": "Codex stream helper records TOOL witnesses from codex exec --json events",
+  "description": "Split from task-7cc959e9b42043ba8009cdd9813103e0 (architect-e4b7eee0, 2026-10-30). This is the first slice, and it is independent of the wrappers.\n\nObjective. Both wrappers already pipe `codex exec --json` into `node scripts/prompt-cache.mjs codex-stream` (moe-agent.sh ~7875, moe-agent.ps1 ~7041). Make that helper append TOOL witnesses to the file named by MOE_TOOL_WRITES_FILE. Use the format the Claude stream parser writes: TOP-relative, one path per line. Apply the Claude parser's success-only rules. No wrapper sets that env until the follow-up wrapper slice, so landing behavior is unchanged by this task.\n\nDeliverable:\n1. Spike. Capture real `codex exec --json` JSONL from the installed codex-cli (0.166.x; record the version) in a scratch git repo:\n- an apply_patch file change that succeeds, and one that fails;\n- a Serena MCP editing call that succeeds and one that fails, plus one with no result if you can reproduce it.\nEmbed the captured lines, trimmed, in the new test as fixtures, with the version and capture date. Expected schema (codex-rs exec events): `item.completed` items of type 'file_change' (`changes[].path`, `changes[].kind`, `status` 'completed'|'failed') and 'mcp_tool_call' (`server`, `tool`, `arguments`, `result.content[]`, `error`, `status`). Confirm whether paths are absolute, and how an MCP isError result surfaces.\n2. New scripts/prompt-cache-witness.mjs. It builds a writer from the env names the Claude parser reads (moe-agent.sh STREAM_JSON_PARSER ~8238): MOE_TOOL_WRITES_FILE, MOE_GIT_TOP, MOE_GIT_REL and MOE_SERENA_PROJECT_ROOT. Port the parser's rules exactly:\n- to_top_rel: an absolute path only inside TOP (case-insensitive on win32/darwin; the Git-Bash /c/ form on win32); a relative path gets the MOE_GIT_REL prefix; any `..` is refused. A path outside the repo prints `  [WARN] tool write outside the repo not harvested: <raw>` and writes no line.\n- SERENA_TOOLS and serena_changed:\n  - safe_delete_symbol counts only on 'OK';\n  - rename_symbol counts only on 'Successfully renamed', and only its relative_path;\n  - replace_in_files counts only the files its applied 'Replaced N occurrence(s) in M file(s):' summary lists;\n  - a `{\"result\": ...}` wrapper is unwrapped first.\n  Serena relative paths are joined to MOE_SERENA_PROJECT_ROOT first.\n- A file_change witnesses each change path only when its status is 'completed'. An MCP call witnesses only when its status is 'completed', there is no error and a result is present.\n- Appending is best-effort error handling: an IO error never breaks the stream.\n3. scripts/prompt-cache.mjs codex-stream feeds each parsed event to the writer, which is a no-op when MOE_TOOL_WRITES_FILE is unset. Stdout and usage receipts stay unchanged.\n4. Ship it. Add the file to moe-vscode/scripts/bundle-assets.mjs agentScripts (JetBrains already globs prompt-cache*.mjs). Prove it ships with a scripts/tests/local-runner-bundle.test.mjs assertion: a bundle missing it makes prompt-cache.mjs fail at import on every codex seat (mem:gotcha-clean-snapshot-missing-prompt-cache-helper).\n\nNOT in scope:\n- Wrapper or harness changes (the wrapper slice that depends on this).\n- Remedy text and docs (task-7cc959e9).\n- Gemini, Grok or interactive harvest.\n\nVerification: `node --test scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache.test.mjs scripts/tests/local-runner-bundle.test.mjs`.",
+  "definitionOfDone": [
+    "scripts/tests/prompt-cache-witness.test.mjs embeds real `codex exec --json` lines captured from the installed codex-cli, with the version and date noted: a successful and a failed file change, and a successful and a failed Serena MCP editing call.",
+    "With MOE_TOOL_WRITES_FILE, MOE_GIT_TOP, MOE_GIT_REL and MOE_SERENA_PROJECT_ROOT set, `node scripts/prompt-cache.mjs codex-stream` appends TOP-relative lines, proven by node tests that spawn the helper. Each path of a completed file_change is appended, relative paths prefixed with MOE_GIT_REL. So are the paths of a successful Serena editing call, joined to MOE_SERENA_PROJECT_ROOT first.",
+    "These append nothing, proven by node tests: a failed file_change; a failed, errored or result-less MCP call; a non-editing tool; safe_delete_symbol without 'OK'; a replace_in_files dry run; and a path outside the repo, which prints the WARN line.",
+    "Without MOE_TOOL_WRITES_FILE, codex-stream stdout and usage receipts are byte-identical to before: the existing scripts/tests/prompt-cache.test.mjs passes unchanged.",
+    "prompt-cache-witness.mjs ships in the VS Code bundle (bundle-assets.mjs, plus a local-runner-bundle.test.mjs assertion), and `node --test scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache.test.mjs scripts/tests/local-runner-bundle.test.mjs` passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fixtures and failing tests first (TDD red). Create scripts/tests/prompt-cache-witness.test.mjs: node:test, LF, the spawnSync style of prompt-cache.test.mjs, and no top-level await (mem:gotcha-node-test-top-level-await-ends-root-early).\n(a) Spike. Run `codex --version` and note it. Real lines from codex-cli 0.166.0, captured 2026-10-30 on WSL x86_64 with model gpt-6-luna, are in .serena/memories/gotcha-codex-exec-json-event-shapes.md (mem:gotcha-codex-exec-json-event-shapes), with the recipe:\n- a successful and a failed file_change (a read-only file in a read-only dir);\n- a successful and a failed (isError) Serena replace_in_files;\n- item.started lines, a non-editing initial_instructions call, and two turn.completed lines.\nIf your CLI prints 0.166.0, embed those lines as captured. Otherwise rerun the recipe in a scratch git repo, never the project, with stdin from /dev/null (codex exec blocks on piped stdin), and embed your own. Try once for a result-less MCP call (for example a tiny mcp_servers.serena.tool_timeout_sec). Embed it only if it really happened; otherwise derive it.\n(b) Fixtures. One CAPTURED table of the trimmed lines, under a comment naming the CLI version, capture date, platform and model. <REPO> stands for the capture's repo root. Substitute it at the object level: JSON.parse, replace inside changes[].path, then JSON.stringify. Never substitute in the raw text, because a Windows temp path's backslashes would corrupt the JSON. Build every other variant from a captured object, and label it derived.\n(c) Harness. run(lines, vars) spawns process.execPath on scripts/prompt-cache.mjs with codex-stream. Input is lines joined by newline. The env is process.env minus every MOE_* key, plus vars, so a live seat's MOE_TOOL_WRITES_FILE or MOE_USAGE_RECEIPT_FILE never receives fixture data. TOP and the witness file's own dir are fresh mkdtemp dirs, removed in t.after. run returns status, stdout, stderr and the witness file's lines ([] when the file is absent).\n(d) Rows. Each asserts status 0 and the exact witnessed array with deepEqual.\n- Appended (DoD 2):\n  - W1: the captured completed add, with TOP as <REPO>, gives ['created.txt'].\n  - W2: the derived relative path 'lib/a.txt' with MOE_GIT_REL 'sub/' gives ['sub/lib/a.txt'].\n  - W3: the captured completed replace_in_files, with MOE_SERENA_PROJECT_ROOT set to TOP/sub, gives ['sub/mod.py'].\n  - W4: replace_content on relative_path 'pkg/x.py' gives ['sub/pkg/x.py'].\n  - W5: a Serena diagnostics envelope, the JSON text {result: <applied summary>, 'diagnostics[warning-or-higher]': {...}}, gives its file.\n  - W6: a summary line with a Windows backslash path, pkg\\y.py, gives ['sub/pkg/y.py'].\n  - W7: safe_delete_symbol answering 'OK' gives its relative_path.\n  - W8: rename_symbol answering 'Successfully renamed ...' gives only its relative_path.\n  - W9: one completed file_change with add, update and delete changes gives all three, in order.\n- Nothing appended (DoD 3):\n  - N1: the captured failed file_change.\n  - N2: the captured item.started lines (in_progress).\n  - N3: the captured failed replace_in_files (status failed, result present, error null).\n  - N4: a result-less call (status failed, result null, error {message}).\n  - N5: status completed with error set.\n  - N6: status completed with result null.\n  - N7: the captured non-editing initial_instructions.\n  - N8: safe_delete_symbol answering 'Cannot delete, the symbol X is referenced in: {...}'.\n  - N9: a replace_in_files dry run, 'Found 1 occurrence(s) in 1 file(s). DRY RUN - ...'.\n  - N10: a rename_symbol answer without 'Successfully renamed'.\n  - N11: a command_execution item, because a shell write leaves no witness.\n  - N12: an absolute path in another temp dir. stdout holds exactly the line '  [WARN] tool write outside the repo not harvested: <raw>'.\n  - N13: '../x.txt' and TOP + '/../x.txt', a WARN each.\n  - N14: malformed events today's renderer survives (null, a JSON string, a file_change without changes, a numeric path, an MCP call whose arguments is a string). No crash, status 0. A non-array changes already crashes renderCodexEvent before the writer runs. That is pre-existing and out of scope, so leave prompt-cache-usage.mjs alone and test that shape in-process only.\n- Compatibility:\n  - S1: the whole captured stream with MOE_TOOL_WRITES_FILE absent (the other three set) gives stdout byte-identical to the run with all four set (in-repo paths only), and leaves TOP empty.\n  - S2, error handling: MOE_TOOL_WRITES_FILE inside a missing directory, and pointing at a directory, gives status 0 and S1's stdout.\n- In-process rows, through createWitnessWriter(env, platform), with console.log mocked via t.mock.method:\n  - P1: win32 with TOP 'C:/Repo' turns c:\\repo\\A.txt into 'A.txt'.\n  - P2: win32 turns '/c/Repo/a.txt' into 'a.txt'.\n  - P3: darwin accepts a case-only mismatch.\n  - P4: linux refuses a case-only mismatch, with the WARN.\n  - P5: changes 'x', item null and a non-list result.content make event return without throwing or appending.\nRun `node --test scripts/tests/prompt-cache-witness.test.mjs` and confirm it is red because the module is missing.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/prompt-cache-witness.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/prompt-cache-witness.test.mjs"
+      ],
+      "note": "codex --version = codex-cli 0.166.0, so the 12 captured lines from mem:gotcha-codex-exec-json-event-shapes are embedded verbatim (String.raw, <REPO> swapped at object level after JSON.parse). Rows: W1-W9, N1-N14 (N2 also covers item.updated; N13 also a Serena '../' join; N14 ends with a valid add to prove the loop survives), S1, S2, P1-P6 (P6 = unset file prints/writes nothing). Spawn env drops every MOE_* key. Red run: 31 tests, 12 pass (refusal guards, vacuous until the writer exists), 19 fail: W*/N12-N14/S1 witness nothing, P* ERR_MODULE_NOT_FOUND for scripts/prompt-cache-witness.mjs. Dirty foreign paths in the shared tree (45, .moe/** etc.) untouched.",
+      "startedAt": "2026-10-30T11:32:57.467Z",
+      "completedAt": "2026-10-30T11:37:26.629Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create scripts/prompt-cache-witness.mjs. It ports STREAM_JSON_PARSER's harvest rules (scripts/moe-agent.sh ~8231-8395) to codex exec --json events. The header comment cites that block, and says codex has no Edit/Write, so a file_change item stands in for them.\n- Export createWitnessWriter(env = process.env, platform = process.platform), the idiom of createUsageReceiptWriter in usage-receipt.mjs. It returns { event(evt) }, a no-op when MOE_TOOL_WRITES_FILE is unset or empty.\n- Normalize exactly as the parser does. MOE_GIT_TOP and MOE_SERENA_PROJECT_ROOT have backslashes turned into '/' and a trailing '/' stripped. MOE_GIT_REL is used as given: git --show-prefix, so '' or 'sub/'. Matching is case-insensitive when platform is win32 or darwin.\n- toTopRel is to_top_rel:\n  - On win32, '/c/x' becomes 'C:/x'.\n  - An absolute path counts only under TOP + '/', and keeps its own spelling after that prefix.\n  - A relative path loses any leading './' and gets the MOE_GIT_REL prefix.\n  - A blank path, and a relative path with a '..' segment, are refused.\n  - One tightening, which the task text asks for: an absolute path whose remainder has a '..' segment is refused too. The Python checks '..' only in relative paths, and refusing more fails closed.\n- resultText is result_text: the text parts of result.content (a string, or a [{type:'text'}] list) joined by newline and trimmed, with a JSON {result: <string>} envelope unwrapped.\n- SERENA_TOOLS holds the parser's 12 names. Match them on item.tool whatever item.server says, as base_name ignores the server.\n- serenaChanged follows serena_changed:\n  - safe_delete_symbol counts only on text 'OK';\n  - rename_symbol counts only its relative_path, on text starting 'Successfully renamed';\n  - replace_in_files counts only the summary lines after a REPLACED_HEADER match, each matching REPLACED_FILE, stopping at the first that does not, with lines split on CRLF, LF or CR;\n  - every other tool counts its relative_path.\n  A relative Serena path is joined to the Serena root, when one is set, before toTopRel.\n- event(evt) acts only on evt.type 'item.completed':\n  - an item.type 'file_change' with status 'completed' yields every changes[].path, whatever its kind;\n  - an item.type 'mcp_tool_call' yields serenaChanged only with status 'completed', error null or absent, result a non-null object and arguments a plain object. Codex reports MCP isError as status failed with a result present, so the status check is what rejects it;\n  - nothing else yields.\n- For each yielded raw string, skip non-strings and blanks. A null toTopRel prints '  [WARN] tool write outside the repo not harvested: ' + raw with console.log. Any other result is appended with appendFileSync(file, r + newline, 'utf8').\n- Error handling: one try/catch around the event body, and one around each append. A malformed event or an IO error (a missing dir, EISDIR, EACCES) never throws into the stream loop, like the parser's `except Exception: pass`. No state carries between events.\nP1-P5 go green now. The spawned rows stay red until step 3.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/prompt-cache-witness.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/prompt-cache-witness.mjs"
+      ],
+      "note": "New scripts/prompt-cache-witness.mjs (~110 lines): createWitnessWriter(env, platform) -> { event }, porting to_top_rel/result_text/serena_changed/harvest. Tightening beyond the Python (fail closed): an absolute path whose TOP remainder is blank or has a '..' segment is refused with the WARN. MCP gate: status 'completed', error == null, result and arguments plain objects, tool in the 12 SERENA_TOOLS (server ignored). Outer try/catch per event, inner per append. P1-P6 green (18/31); W*/N12-N14/S1 spawned rows stay red until step 3 wires the helper, as planned.",
+      "startedAt": "2026-10-30T11:37:27.555Z",
+      "completedAt": "2026-10-30T11:39:19.787Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wire the writer into scripts/prompt-cache.mjs.\n- Import createWitnessWriter from './prompt-cache-witness.mjs' as a static import, like the other helpers.\n- For codex-stream only, create it once next to receipts. In the codex branch, call witness.event(event) after that event's rendered lines are printed, so a WARN follows its [files] line.\n- Leave everything else byte-for-byte: the claude-stream branch, the BOM strip, non-JSON passthrough, receipts.event, the usage lines and the exit codes.\n- Then run `node --test scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache.test.mjs`. Every row must pass, with prompt-cache.test.mjs unedited (DoD 4).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/prompt-cache.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/prompt-cache.mjs"
+      ],
+      "note": "prompt-cache.mjs +4 lines: static import of createWitnessWriter, `const witness = command === 'codex-stream' ? createWitnessWriter() : null` next to receipts, and `witness.event(event)` after the codex branch renders the event (so a WARN follows its [files] line). Claude branch, BOM strip, passthrough, receipts and usage lines unchanged. `node --test scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache.test.mjs`: 38/38 pass; `git diff --quiet HEAD -- scripts/tests/prompt-cache.test.mjs` exits 0.",
+      "startedAt": "2026-10-30T11:39:20.741Z",
+      "completedAt": "2026-10-30T11:40:18.794Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Ship it and keep its test in CI.\n(a) moe-vscode/scripts/bundle-assets.mjs: add 'prompt-cache-witness.mjs' to agentScripts, after 'prompt-cache-usage.mjs'.\n(b) scripts/tests/local-runner-bundle.test.mjs: add 'prompt-cache-witness.mjs' to the fixture's copied-script list (~line 37), then add one test that bundles for real and checks:\n- the bundled scripts/prompt-cache-witness.mjs exists with the source's bytes;\n- the bundled scripts/prompt-cache.mjs codex-stream, given input '' and an env stripped of MOE_*, exits 0 with /usage=unknown/;\n- after the bundled witness module is deleted, the same spawn exits non-zero with stderr naming prompt-cache-witness.mjs. This is the import failure every codex seat would hit (mem:gotcha-clean-snapshot-missing-prompt-cache-helper);\n- the Gradle scripts copy block, matched with the existing Gradle test's regex, still holds include(\"prompt-cache*.mjs\"), the glob that ships it in the JetBrains zip.\nExisting rows stay unchanged.\n(c) .github/workflows/ci.yml: add scripts/tests/prompt-cache-witness.test.mjs after prompt-cache.test.mjs in the 'Test agent runtime discovery' run of build-all-platforms, so the new rows run on ubuntu, windows and macos.\nDelivery: other tasks declare (b) and (c), so run moe.get_commit_scope {taskId, phase: 'postflight'} before editing them.\n- At planning time, ci.yml was declared by task-c61311dc (REVIEW, live QA) and by the idle task-4e412148 (CQ-I06) and task-4fdc7590. local-runner-bundle.test.mjs was declared by the idle CQ-R13d/e1/g/h: task-a8a3a502, task-b29d022e, task-ea8b44c9 and task-4132ab1c.\n- An editing call this session's wrapper witnesses lands them; today that is a one-shot Claude seat's Edit/Write.\n- Any other seat lands them only when the file was clean at this session's pre-flight and every contesting task reports peerActive false.\n- If a contesting task is active, leave that file untouched in this session and finish the rest. Then moe.report_blocked with blockedOnTaskIds naming the active peers. None of them depends on this task, even transitively, so the next session edits from a clean pre-flight.\n- Never hand-land and never weaken attribution.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "get_commit_scope postflight: only scripts/tests/local-runner-bundle.test.mjs is peer-declared (task-4132ab1c CQ-R13h: WORKING, unassigned, every step PENDING); ci.yml and bundle-assets.mjs are no longer peer-declared. All three files were clean at pre-flight, and every edit was made with this one-shot Claude seat's Edit tool (the witnessed path), per the plan's delivery rule. (a) agentScripts gains 'prompt-cache-witness.mjs' after prompt-cache-usage.mjs. (b) fixture copy list gains it; new row 'actual bundler ships the codex witness helper that prompt-cache.mjs imports': red first ('Missing bundled scripts/prompt-cache-witness.mjs'), then green: bundled bytes equal source, bundled codex-stream '' exits 0 with usage=unknown, deleting the bundled witness makes it exit non-zero with stderr naming prompt-cache-witness.mjs, and the Gradle scripts copy block still holds include(\"prompt-cache*.mjs\"). Existing rows unchanged; file 13/13. (c) ci.yml 'Test agent runtime discovery' runs prompt-cache-witness.test.mjs after prompt-cache.test.mjs. Other dirty paths in the tree (.moe/**, docs/plans, moe-jetbrains MoeDaemonSupervisor*) belong to other sessions and were not touched.",
+      "startedAt": "2026-10-30T11:40:18.818Z",
+      "completedAt": "2026-10-30T11:43:16.977Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, one fresh run from the repo root: `node --test scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache.test.mjs scripts/tests/local-runner-bundle.test.mjs`.\n- Expect exit 0 with every row passing. The two existing files ran 19/19 in about 2.5 s at planning.\n- The command, exit code and output tail are the complete_task verification.\n- Also show `git diff --quiet HEAD -- scripts/tests/prompt-cache.test.mjs` exits 0 (DoD 4).\n- Where Windows node is reachable from WSL, also run `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/prompt-cache-witness.test.mjs` from /mnt/d/projexts/moes, a drive cwd, because node --test treats a UNC path as a glob. Report it as extra win32 evidence, not a substitute.\n- If a row fails on another session's dirty bytes, rerun in a git archive HEAD snapshot with this task's six files overlaid, and report both runs.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh run from repo root (WSL, Node v24.21.0): `node --test scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache.test.mjs scripts/tests/local-runner-bundle.test.mjs` exit 0, tests 51 pass 51 fail 0 (31 witness + 7 prompt-cache + 13 bundle), ~2.9 s. `git diff --quiet HEAD -- scripts/tests/prompt-cache.test.mjs` exit 0 (DoD 4). Extra win32 evidence: `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/prompt-cache-witness.test.mjs` from /mnt/d/projexts/moes (win32 v24.16.0): exit 0, 31/31, so the spawned rows pass with real Windows temp paths (backslashes, drive letter). No failures, so no snapshot rerun was needed.",
+      "startedAt": "2026-10-30T11:43:17.987Z",
+      "completedAt": "2026-10-30T11:44:13.782Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's six-file diff, then complete_task.\n- Can any event shape forge a witness? Check item.started and item.updated, failed, isError with a result, result-less, errored-completed, a non-object arguments, a Serena dry run or refusal, a summary line after a non-matching line, '..', a case-only mismatch on linux, and an empty TOP.\n- Can anything break the stream? Check a huge or malformed line, and a witness file in a missing dir, on a directory, or one that becomes unwritable mid-run.\n- Two writers sharing one file append one short line per write.\n- Is anything printed or written when MOE_TOOL_WRITES_FILE is unset?\n- Do the tests strip MOE_* so a live seat's harvest file never gets fixture paths?\n- Mutation-check at least three changes and record the row each turns red:\n  - drop the status check;\n  - accept item.started;\n  - remove the agentScripts entry.\n- Leave the known gaps to the wrapper slice task-7db14e2d in the step note:\n  - Windows codex path spelling, because the capture is Linux only;\n  - an apply_patch move destination, because none was captured;\n  - rename_symbol reference files, the parser's documented gap.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/prompt-cache-witness.mjs",
+        "scripts/tests/prompt-cache-witness.test.mjs"
+      ],
+      "note": "Adversarial review of the 6-file diff. Fixed: a path holding a line break (e.g. a succeeding Serena create_text_file with relative_path 'b.py\\nforged.py', legal on Linux) appended a second forged line -> toTopRel now refuses any [\\u0000-\\u001f] path with the WARN (row N15). Python twin shares the hole: filed task-414eae5aa1f349f49852bf01f4e617db (bug, BACKLOG, no dependency). Strengthened rows after mutation exposed weak guards: N2 adds derived item.started/item.updated carrying status completed; N3 adds a derived isError replace_content (counts its relative_path whatever its text, so only the status check rejects it). Mutations in a git-archive HEAD snapshot + overlay, each red: M1 drop status check -> N1, N3, S1; M2 accept item.started -> N2; M3 remove agentScripts entry -> bundle 'ships the codex witness helper' + 3 onboarding rows; M4 drop error check -> N5; M5 drop control-char refusal -> N15; M6 Python-parity absolute '..' -> N13; M7 case-sensitive everywhere -> P1, P3; M8 no witness.event call -> all W rows, N12-N15, S1. Checked: empty TOP refuses every absolute path (relative still gets MOE_GIT_REL, as the Python); unset MOE_TOOL_WRITES_FILE prints/writes nothing (P6, S1); missing dir / directory target leave stdout and exit unchanged (S2); spawned tests drop every MOE_* key; two writers append one short O_APPEND line per write; sh pipes only codex stdout into codex-stream (no 2>&1), so codex stderr cannot inject events. Trimmed the module 7 lines to keep the task at 397 net LOC (cap 400). Known gaps left to wrapper slice task-7db14e2d: Windows codex path spelling (capture is Linux only; a //?/ prefix fails closed with a WARN), an apply_patch move destination (none captured), rename_symbol reference files (the parser's documented gap); also unicode case-fold length drift on win32/darwin, identical to the Python. Final gate: 52/52 exit 0; win32 node v24.16.0 witness file 32/32.",
+      "startedAt": "2026-10-30T11:44:14.812Z",
+      "completedAt": "2026-10-30T11:49:52.117Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 2.3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:11:41.618Z",
+  "updatedAt": "2026-10-30T11:50:20.404Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T11:11:44.518Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-093a65d0"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T11:31:49.037Z",
+  "executionContract": {
+    "intendedBehavior": "`node scripts/prompt-cache.mjs codex-stream` with MOE_TOOL_WRITES_FILE set appends one TOP-relative path per line for every path a codex exec --json event proves its session wrote. That is a completed file_change, or a completed, error-free, result-bearing Serena editing MCP call, under STREAM_JSON_PARSER's per-tool success rules and path mapping. A path outside the repo prints the parser's WARN line and is not appended. With the variable unset, nothing changes. No wrapper sets the variable yet; task-7db14e2d wires it in.",
+    "invariants": [
+      "Fail closed: only item.completed with status 'completed' witnesses. in_progress, failed, MCP isError (status failed with a result), errored or result-less MCP calls, non-editing tools, command_execution and malformed events never witness",
+      "A path outside TOP, a blank path, or one with a '..' segment is never appended",
+      "No IO error or malformed event throws out of the stream loop; the helper's exit status and rendered output are unaffected"
+    ],
+    "compatibility": [
+      "With MOE_TOOL_WRITES_FILE unset, codex-stream stdout, exit status and usage receipts are unchanged, and scripts/tests/prompt-cache.test.mjs passes unedited",
+      "claude-stream output stays byte-for-byte; the sh Python parser and the ps1 twin keep harvesting Claude events",
+      "The witness file format is the Claude parser's: UTF-8, one TOP-relative path per line, appended"
+    ],
+    "approvedScope": [
+      "scripts/prompt-cache-witness.mjs exports createWitnessWriter(env = process.env, platform = process.platform), which returns { event(evt) }",
+      "scripts/prompt-cache.mjs codex-stream calls witness.event(event) after rendering each parsed event",
+      "moe-vscode/scripts/bundle-assets.mjs agentScripts gains prompt-cache-witness.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs proves it ships (the VS Code bundle, plus the Gradle prompt-cache*.mjs glob)",
+      ".github/workflows/ci.yml runs scripts/tests/prompt-cache-witness.test.mjs in 'Test agent runtime discovery'"
+    ],
+    "reuse": [
+      "Rules ported from STREAM_JSON_PARSER in scripts/moe-agent.sh (to_top_rel, result_text, serena_changed, harvest), not redesigned",
+      "The factory idiom of createUsageReceiptWriter(provider, env = process.env) in scripts/usage-receipt.mjs",
+      "The fixture() and bundle() helpers already in scripts/tests/local-runner-bundle.test.mjs"
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh STREAM_JSON_PARSER (~8231-8395): SERENA_TOOLS (12 names), REPLACED_HEADER and REPLACED_FILE, to_top_rel, result_text, serena_changed, harvest and its WARN text",
+      "scripts/prompt-cache.mjs: the codex branch prints renderCodexEvent output, then marks turn.completed",
+      "codex-cli 0.166.0 exec --json (captured 2026-10-30, mem:gotcha-codex-exec-json-event-shapes): file_change {changes:[{path (absolute), kind}], status in_progress|completed|failed}; mcp_tool_call {server, tool, arguments (object), result {content[], structured_content} or null, error or null, status}; MCP isError is status failed with a result present and error null",
+      "moe-jetbrains/build.gradle.kts: the scripts copy block holds include(\"prompt-cache*.mjs\")",
+      "moe-agent.sh: MOE_REL comes from git rev-parse --show-prefix ('' or 'sub/')"
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache.test.mjs scripts/tests/local-runner-bundle.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Parse codex events inside the wrappers (Python in sh, PowerShell in ps1). Rejected: that makes two twins to keep in parity, while the node helper already sits in both codex exec pipelines and one witness file serves both wrappers. 2) Witness on item.started. Rejected: it precedes the apply (status in_progress), so a later failure would leave a forged witness. 3) Gate MCP calls on item.server === 'serena'. Rejected for parity: the Claude parser's base_name ignores the server name, and the tool list plus the per-tool success rules are the gate. 4) A dynamic import only for codex-stream. Rejected: static imports are the file's idiom, and the bundle test plus CI make an omission loud. 5) Leave CI wiring to a later task. Rejected: a scripts/tests file runs in CI only when ci.yml names it, and prompt-cache.test.mjs already sits in the 3-OS build-all-platforms job. The sixth file is what makes the daemon floor this plan at heavy.",
+    "codebaseInsights": "Spike done at planning (codex-cli 0.166.0, 2026-10-30, WSL x86_64, gpt-6-luna). The real lines and the recipe are in mem:gotcha-codex-exec-json-event-shapes (.serena/memories/gotcha-codex-exec-json-event-shapes.md); a transcription check found all 12 lines JSON-equal to the raw capture.\n- file_change paths are ABSOLUTE. item.started repeats changes with status in_progress, and item.completed has status completed or failed.\n- A real failure comes from a chmod 444 file inside a chmod 555 dir.\n- In mcp_tool_call, arguments is a JSON object. A success has result.content [{type:text}] plus structured_content {result}, and error null. An MCP isError arrives as status failed WITH result present and error null, so the status check is what rejects it.\n- Under --context codex, Serena answered a prompt that named replace_content with replace_in_files, whose applied summary the parser already handles.\n- STREAM_JSON_PARSER (moe-agent.sh ~8231-8395) is the spec. Its ps1 twin (Get-MoeToolWrittenPaths ~5426, Complete-MoeToolWrite ~5482) adds saturation caps and prints a different WARN; the task names the sh text.\n- Neither wrapper exports MOE_TOOL_WRITES_FILE today. sh sets it as a shell variable and hands it only to the Python parser's process (~8505); ps1 keeps an in-memory table. Landing therefore cannot change until task-7db14e2d passes the env.\n- prompt-cache.mjs is resolved next to the wrapper (sh ~650, ps1 ~905), so the new module must sit beside it in scripts/ and in every bundle's flat scripts dir.\n- The JetBrains Gradle block already has include(\"prompt-cache*.mjs\") (~line 175). Only VS Code's explicit agentScripts list needs the entry. The onboarding.mjs bundle smoke already runs the bundled codex-stream, so it fails loudly too.\n- MOE_REL comes from git rev-parse --show-prefix, with a trailing slash.\n- Every target file is LF, and the repo has core.autocrlf=false.",
+    "risks": "- Step 4 edits contested files; follow the delivery rule there. task-c61311dc's QA was live at planning.\n- Windows codex path spelling is unverified, because the capture is Linux only. A verbatim //?/ prefix would fail closed with a WARN; task-7db14e2d owns the Windows end-to-end check.\n- An apply_patch move is uncaptured, and its destination may be missing from changes[]. That fails closed.\n- Pre-existing: renderCodexEvent throws on a non-array changes ((item.changes || []).map), which ends the helper with exit 1 before the writer runs. It is out of scope, and DoD 4 freezes that output, so test the shape in-process only.\n- Spawned tests must drop MOE_* from the env, or a run inside a live seat could write fixture paths into its real harvest file.\n- node --test on Windows treats its path arguments as globs, so run it from a drive cwd, never a UNC path.\n- No top-level await after test() calls.\n- The WARN prints to stdout and shows in the seat console. That is intended, as on the Claude path.\n- The usage line's new cache_write_input_tokens and reasoning_output_tokens are out of scope; receipts stay untouched.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/prompt-cache.mjs",
+      "scripts/prompt-cache-usage.mjs",
+      "scripts/usage-receipt.mjs",
+      "scripts/tests/prompt-cache.test.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs",
+      "moe-vscode/scripts/bundle-assets.mjs",
+      "moe-jetbrains/build.gradle.kts",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T11:31:49.063Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T11:32:57.467Z",
+  "reviewStartedAt": "2026-10-30T11:50:20.402Z",
+  "verification": {
+    "command": "node --test scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ empty provider streams explicitly report unknown usage (97.348283ms)\nℹ tests 52\nℹ suites 0\nℹ pass 52\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 2963.129946\n(git diff --quiet HEAD -- scripts/tests/prompt-cache.test.mjs: exit 0; win32 node v24.16.0 --test scripts/tests/prompt-cache-witness.test.mjs: 32/32 exit 0)",
+    "reportedAt": "2026-10-30T11:50:20.402Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/prompt-cache-witness.test.mjs",
+    "scripts/prompt-cache-witness.mjs",
+    "scripts/prompt-cache.mjs",
+    "moe-vscode/scripts/bundle-assets.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    ".github/workflows/ci.yml"
+  ],
+  "completionSummary": "New scripts/prompt-cache-witness.mjs (createWitnessWriter(env, platform) -> { event }) ports STREAM_JSON_PARSER's to_top_rel/result_text/serena_changed/harvest to codex exec --json events; prompt-cache.mjs codex-stream calls witness.event(event) after rendering (no-op without MOE_TOOL_WRITES_FILE, so codex-stream stdout/receipts are unchanged and prompt-cache.test.mjs passes unedited). Witness gate: item.completed + status 'completed'; file_change yields every changes[].path; mcp_tool_call needs error==null, object result/arguments and one of the 12 Serena tools, with safe_delete 'OK', rename 'Successfully renamed', replace_in_files applied-summary rules. Fail-closed tightenings: absolute remainder blank or with '..' refused, and any control-character path refused (a line break would forge a second line; Python twin hole filed as task-414eae5aa1f349f49852bf01f4e617db). Tests: scripts/tests/prompt-cache-witness.test.mjs, 32 rows on real codex-cli 0.166.0 lines captured 2026-10-30 (WSL x86_64, gpt-6-luna): W1-9 appended, N1-15 refused (incl. WARN text), S1 byte-identical stdout when unset, S2 unwritable file, P1-6 win32/darwin/linux path rules in-process. Shipping: VS Code agentScripts entry + local-runner-bundle row (bundled bytes, codex-stream runs, deleting it fails import naming the module, Gradle prompt-cache*.mjs glob); CI 'Test agent runtime discovery' runs the new file. Mutation-checked 8 changes, each turns a named row red. 397 net LOC. Gaps left for task-7db14e2d: wrapper does not set MOE_TOOL_WRITES_FILE for codex yet, Windows codex path spelling (Linux-only capture), apply_patch move destination, rename_symbol reference files. Extra: win32 node v24.16.0 witness file 32/32."
+}
