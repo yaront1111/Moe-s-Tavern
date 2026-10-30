@@ -5,6 +5,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { getEventListeners, once } from 'node:events';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -53,13 +54,22 @@ const fakeSocket = () => class extends EventTarget {
   reply(message) { this.dispatchEvent(new MessageEvent('message', { data: typeof message === 'string' ? message : JSON.stringify(message) })); }
 };
 
+// The daemon: a fake /health reporting its loopback bind for the latest fixture's project (::1 best-effort; 0 where it cannot bind).
+let healthProject;
+const healthOn = host => new Promise(resolve => {
+  const server = http.createServer((req, res) => res.end(JSON.stringify({ status: 'healthy', projectPath: healthProject, bindHost: host })));
+  server.once('error', () => resolve(0)).listen(0, host, () => { after(() => { server.closeAllConnections(); server.close(); }); resolve(server.address().port); });
+});
+const [HEALTH_PORT, HEALTH_V6_PORT] = [await healthOn('127.0.0.1'), await healthOn('::1')];
+
 // A project whose daemon.json is the valid default merged with `info` (null: none; a string: verbatim) and a fresh key dir.
 function fixture({ info = {}, key, setup } = {}) {
   const [project, keys] = [scratch(), scratch()];
   process.env.MOE_RUNNER_KEY_DIR = keys;
   fs.mkdirSync(path.join(project, '.moe'));
+  healthProject = project;
   const file = path.join(project, '.moe', 'daemon.json');
-  const record = extra => JSON.stringify({ port: 9, projectPath: project, ...extra });
+  const record = extra => JSON.stringify({ port: HEALTH_PORT, projectPath: project, ...extra });
   if (info !== null) fs.writeFileSync(file, typeof info === 'function' ? info(record) : typeof info === 'string' ? info : record(info));
   if (key !== undefined) fs.writeFileSync(path.join(keys, keyName(project)), key);
   setup?.(file);
@@ -109,8 +119,10 @@ describe('C2 key file and C3 inputs and transport', () => {
     assert.deepEqual([{ MOE_RUNNER_KEY_DIR: ' /tmp/k ' }, {}, { MOE_RUNNER_KEY_DIR: '   ' }].map(env => runnerKeyFile('/srv/moe-project', env)),
       [path.join(path.resolve('/tmp/k'), `${VECTOR}.key`), home, home]);
   });
-  it('hashes daemon.json\'s projectPath, not the caller\'s spelling, and dials the loopback endpoint with the header', async () => {
-    const hosts = [[{}, 'ws://127.0.0.1:9/runner'], [{ bindHost: '127.0.0.1' }, 'ws://127.0.0.1:9/runner'], [{ bindHost: '::1' }, 'ws://[::1]:9/runner']];
+  it('hashes daemon.json\'s projectPath, not the caller\'s spelling, and dials the loopback endpoint with the header', async t => {
+    if (!HEALTH_V6_PORT) t.diagnostic('the ::1 row is skipped: ::1 cannot bind on this host');
+    const hosts = [[{}, `ws://127.0.0.1:${HEALTH_PORT}/runner`], [{ bindHost: '127.0.0.1' }, `ws://127.0.0.1:${HEALTH_PORT}/runner`],
+      ...(HEALTH_V6_PORT ? [[{ bindHost: '::1', port: HEALTH_V6_PORT }, `ws://[::1]:${HEALTH_V6_PORT}/runner`]] : [])];
     for (const [info, url] of hosts) {
       const { project, WebSocket } = fixture({ info, key: SENTINEL });
       const channel = await openRunnerChannel({ projectPath: `${project}${path.sep}.${path.sep}`, WebSocket });
@@ -127,8 +139,8 @@ describe('C2 key file and C3 inputs and transport', () => {
       await refused(openRunnerChannel({ WebSocket, ...input }), 'RUNNER_INPUT_INVALID');
     }
   });
-  it('a refused connection is RUNNER_CONNECT_FAILED', async () => {
-    await refused(openRunnerChannel({ projectPath: fixture({ info: { port: await freePort() }, key: SENTINEL }).project }), 'RUNNER_CONNECT_FAILED');
+  it('a refused connection is RUNNER_CONNECT_FAILED', async () => { // the fake /health has no /runner upgrade
+    await refused(openRunnerChannel({ projectPath: fixture({ key: SENTINEL }).project }), 'RUNNER_CONNECT_FAILED');
   });
   it('a socket that never opens is RUNNER_CONNECT_TIMEOUT, and an abort is RUNNER_ABORTED', async () => {
     const { project, WebSocket } = fixture({ key: SENTINEL });
@@ -228,6 +240,7 @@ describe('the real daemon /runner endpoint (C4-C9)', () => {
 
   before(async () => {
     assert.ok(fs.existsSync(path.join(path.dirname(daemonEntry), 'server', 'runnerChannel.js')), 'build packages/moe-daemon first: dist predates the runner channel');
+    assert.match(fs.readFileSync(daemonEntry, 'utf8'), /checks,\s*(?:\/\/.*\s+)?bindHost: host\b/, 'build packages/moe-daemon first: dist predates the /health bind report');
     [project, keys] = [scratch(), scratch()];
     fs.writeFileSync(path.join(keys, keyName(project)), SENTINEL, { mode: 0o600 });
     Object.assign(env, { HOME: profile, USERPROFILE: profile, NODE_ENV: 'production', LOG_LEVEL: 'warn', MOE_RUNNER_KEY_DIR: keys });

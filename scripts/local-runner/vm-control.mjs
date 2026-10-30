@@ -14,34 +14,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { hostPrerequisites } from './cli.mjs';
-import { MAX_DAEMON_INFO_BYTES } from './guest-session.mjs';
+import { canonicalProjectPath, loopbackDaemonHost, MAX_DAEMON_INFO_BYTES } from './guest-session.mjs';
 import { cleanupOwned, createLedger, queryOwnedInstance, reconcileOwned } from './lifecycle.mjs';
 
 const CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const CONTROL = /[\x00-\x1f\x7f]/;
-const LOOPBACK = new Set(['127.0.0.1', '::1']);
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const fixed = (key, value, pattern) => (typeof value === 'string' && pattern.test(value) ? { [key]: value } : {});
 const controlError = (code, fallback = 'VM_CONTROL_FAILED') =>
   Object.assign(new Error('VM control refused.'), { code: typeof code === 'string' && CODE.test(code) ? code : fallback });
 const unreachable = () => controlError('DAEMON_UNREACHABLE');
-const windowsDrive = value => path.win32.normalize(value).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-
-/** A port of comparableProjectPath (packages/moe-proxy/src/utils.ts, twin in packages/moe-daemon/src/index.ts):
- * D:/x, D:\x and /mnt/d/x are one project, and so are their relative and non-normalized spellings. */
-export function canonicalProjectPath(projectPath) {
-  const raw = projectPath.trim();
-  // A drive path is matched raw: off Windows, path.resolve would treat it as relative. /mnt/<d> is matched only after
-  // normalizing: path.resolve on POSIX, path.posix.normalize of the raw string on win32, where resolve prefixes the cwd drive.
-  if (/^[a-zA-Z]:[\\/]/.test(raw)) return windowsDrive(raw);
-  const resolved = path.resolve(raw);
-  const wsl = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(process.platform === 'win32' ? path.posix.normalize(raw) : resolved);
-  if (wsl) {
-    const rest = (wsl[2] ?? '').replace(/\/+$/, '');
-    return `${wsl[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();
-  }
-  return /^[a-zA-Z]:[\\/]/.test(resolved) ? windowsDrive(resolved) : process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
+export { canonicalProjectPath }; // its home is guest-session.mjs, which this module imports
 
 /** <MOE_RUNNER_STATE_DIR | ~/.moe/runner-state>/<first 32 hex of sha256(canonical project)>/vms, created 0700.
  * Mirrors runnerKeyPath (packages/moe-daemon/src/server/runnerChannel.ts); never inside the project or its .moe/. */
@@ -113,8 +96,9 @@ export const cleanupReport = ({ ledger, provider = {}, call }) => ledgerReport('
   return cleanupOwned({ ledger: { ...ledger, list: async () => listed }, provider, attemptPhase, leaseHeld });
 });
 
-/** The port of this project's own loopback daemon, from a bounded, regular daemon.json; else DAEMON_UNREACHABLE. */
-export async function readDaemonInfo(projectPath) {
+/** This project's own loopback daemon as {port, host}: a bounded, regular daemon.json supplies the port and can only
+ * refuse; the daemon's own /health bind report (loopbackDaemonHost) admits. Anything else is DAEMON_UNREACHABLE. */
+export async function readDaemonInfo(projectPath, { timeoutMs } = {}) {
   let handle;
   let info;
   try {
@@ -126,18 +110,20 @@ export async function readDaemonInfo(projectPath) {
     if ((await handle.stat()).isFile() && size <= MAX_DAEMON_INFO_BYTES) info = JSON.parse(bytes.toString('utf8', 0, size));
   } catch { throw unreachable(); } finally { await handle?.close().catch(() => {}); }
   const port = info?.port;
-  if (!isRecord(info) || !Number.isInteger(port) || port < 1 || port > 65535 || (Object.hasOwn(info, 'bindHost') && !LOOPBACK.has(info.bindHost))
+  if (!isRecord(info) || !Number.isInteger(port) || port < 1 || port > 65535
     || typeof info.projectPath !== 'string' || canonicalProjectPath(info.projectPath) !== canonicalProjectPath(projectPath)) throw unreachable();
-  return { port };
+  const host = await loopbackDaemonHost(info, projectPath, { timeoutMs });
+  if (!host) throw unreachable();
+  return { port, host };
 }
 
 /** call(tool, args) over this project's loopback /mcp: one socket per call, closed in finally. */
 export function mcpCaller(projectPath, { WebSocketImpl = globalThis.WebSocket, timeoutMs = 15_000 } = {}) {
   let lastId = 0;
   return async (name, args) => {
-    const { port } = await readDaemonInfo(projectPath);
+    const { port, host } = await readDaemonInfo(projectPath);
     if (typeof WebSocketImpl !== 'function') throw unreachable();
-    const [socket, id] = [new WebSocketImpl(`ws://127.0.0.1:${port}/mcp`), ++lastId];
+    const [socket, id] = [new WebSocketImpl(`ws://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/mcp`), ++lastId];
     let timer;
     return new Promise((resolve, reject) => {
       timer = setTimeout(() => reject(unreachable()), timeoutMs);

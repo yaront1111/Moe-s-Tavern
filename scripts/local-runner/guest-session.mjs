@@ -2,13 +2,14 @@
 // name, binding, sessionId, daemonInfoPath, forward, provider and the callbacks are trusted host-controller inputs
 // (R06 supplies ownership; forward must reach that same local daemon). Every guest byte is untrusted. The guest gets
 // no daemon address, port, token or setting: its argv is the constant bridgeArgv(name) and nothing is added to its
-// environment. A request reaches forward only after scopeRequest, a depth bound and a fresh loopback check of
-// daemon.json. Child output reaches only onOutput, as bytes; the observation comes only from a supervisor frame.
+// environment. A request reaches forward only after scopeRequest, a depth bound and a fresh loopback bind report from
+// the daemon itself. Child output reaches only onOutput, as bytes; the observation comes only from a supervisor frame.
 // Its stdin starts with the CQ-R10b job frame, the one place the job's credential goes.
 // This is local session logic, not VM, Multipass or network-isolation certification (CQ-R13): executionReady is false.
 import { spawn as spawnProcess } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
+import http from 'node:http';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { JOB_IDENTITIES } from './guest-bootstrap.mjs';
@@ -16,6 +17,7 @@ import { bridgeArgv, createFrameDecoder, encodeFrame, jobFrame, parseGuestFrame,
 import { invoker, QUERY_TIMEOUT_MS } from './lifecycle.mjs';
 
 export const MAX_DAEMON_INFO_BYTES = 16_384;
+export const MAX_HEALTH_BYTES = 65_536; // the daemon's own probeDaemonHealth cap
 export const MAX_PENDING_REQUESTS = 64; // the supervisor's MAX_CONNECTIONS * MAX_IN_FLIGHT
 export const MAX_ARGUMENT_DEPTH = 64;
 export const MAX_RESPONSE_BYTES = 1_048_576; // headroom under the supervisor's 4 MiB re-encode of each reply
@@ -63,7 +65,7 @@ export async function runGuestSession(input) {
     }
   } catch { options = undefined; }
   if (!options) throw sessionError('SESSION_INPUT_INVALID');
-  const refused = await daemonRefusal(options.daemonInfoPath);
+  const refused = await daemonRefusal(options.daemonInfoPath, { timeoutMs: options.timeoutMs });
   if (refused || options.signal?.aborted) throw sessionError(refused ?? 'SESSION_ABORTED');
   let child;
   try { child = options.start(); } catch { child = null; }
@@ -73,9 +75,65 @@ export async function runGuestSession(input) {
   return relay(child, options);
 }
 
-// Admits only an absent own bindHost (the daemon's 127.0.0.1 default) or a literal loopback address: no DNS,
-// coercion, environment fallback, wildcard or WSL exception. Returns null or the refusal code.
-async function daemonRefusal(file) {
+// --- daemon admission shared with runner-client.mjs and vm-control.mjs ---
+
+const windowsDrive = value => path.win32.normalize(value).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
+/** A port of comparableProjectPath (packages/moe-proxy/src/utils.ts, twin in packages/moe-daemon/src/index.ts):
+ * D:/x, D:\x and /mnt/d/x are one project, and so are their relative and non-normalized spellings. */
+export function canonicalProjectPath(projectPath) {
+  const raw = projectPath.trim();
+  // A drive path is matched raw: off Windows, path.resolve would treat it as relative. /mnt/<d> is matched only after
+  // normalizing: path.resolve on POSIX, path.posix.normalize of the raw string on win32, where resolve prefixes the cwd drive.
+  if (/^[a-zA-Z]:[\\/]/.test(raw)) return windowsDrive(raw);
+  const resolved = path.resolve(raw);
+  const wsl = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(process.platform === 'win32' ? path.posix.normalize(raw) : resolved);
+  if (wsl) {
+    const rest = (wsl[2] ?? '').replace(/\/+$/, '');
+    return `${wsl[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();
+  }
+  return /^[a-zA-Z]:[\\/]/.test(resolved) ? windowsDrive(resolved) : process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * Resolves '127.0.0.1' or '::1', the loopback host this project's daemon answered on, else null; it never rejects.
+ * info is daemon.json's parsed record: repository content, so it can only refuse. A non-record, an own bindHost other
+ * than '127.0.0.1' or '::1', or an unusable port resolves null with no request. Otherwise one GET /health goes to that
+ * port on loopback (no agent, proxy or redirect), under one total deadline and a MAX_HEALTH_BYTES body cap. Only a 200,
+ * healthy report naming projectPath (canonicalProjectPath) with its own bindHost exactly '127.0.0.1' or '::1' admits.
+ */
+export function loopbackDaemonHost(info, projectPath, { timeoutMs = 5_000, signal } = {}) {
+  const port = info?.port;
+  if (!isRecord(info) || (Object.hasOwn(info, 'bindHost') && !LOOPBACK.has(info.bindHost))
+    || !Number.isInteger(port) || port < 1 || port > 65_535) return Promise.resolve(null);
+  const host = info.bindHost === '::1' ? '::1' : '127.0.0.1';
+  return new Promise(resolve => {
+    let request;
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    function finish(value) { clearTimeout(timer); request?.destroy(); resolve(value); } // idempotent: resolve settles once
+    try {
+      request = http.get({ host, port, path: '/health', agent: false, signal }, response => {
+        if (response.statusCode !== 200) return finish(null);
+        const chunks = [];
+        let size = 0;
+        response.on('data', chunk => { size += chunk.length; if (size > MAX_HEALTH_BYTES) finish(null); else chunks.push(chunk); });
+        response.on('error', () => finish(null));
+        response.on('end', () => {
+          try {
+            const report = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            finish(isRecord(report) && report.status === 'healthy' && typeof report.projectPath === 'string'
+              && canonicalProjectPath(report.projectPath) === canonicalProjectPath(projectPath) && LOOPBACK.has(report.bindHost) ? host : null);
+          } catch { finish(null); }
+        });
+      });
+      request.on('error', () => finish(null));
+    } catch { finish(null); }
+  });
+}
+
+// daemonInfoPath, a trusted input, is <project>/.moe/daemon.json: it names the project, never the file's projectPath
+// field. The file may refuse (no record or port: info invalid); only the daemon's own report admits. Null or the code.
+async function daemonRefusal(file, { timeoutMs, signal } = {}) {
   let handle;
   let info;
   try {
@@ -92,8 +150,8 @@ async function daemonRefusal(file) {
   } finally {
     await handle?.close().catch(() => {});
   }
-  if (!isRecord(info)) return 'SESSION_DAEMON_INFO_INVALID';
-  return Object.hasOwn(info, 'bindHost') && !LOOPBACK.has(info.bindHost) ? 'SESSION_DAEMON_NOT_LOOPBACK' : null;
+  if (!isRecord(info) || !Number.isInteger(info.port) || info.port < 1 || info.port > 65_535) return 'SESSION_DAEMON_INFO_INVALID';
+  return (await loopbackDaemonHost(info, path.dirname(path.dirname(file)), { timeoutMs, signal })) ? null : 'SESSION_DAEMON_NOT_LOOPBACK';
 }
 
 function relay(child, options) {
@@ -170,8 +228,8 @@ async function reply(session, request) {
   let scoped;
   try { scoped = scopeRequest(request, binding); } catch (error) { return refusal(request.id, error.code); }
   if (!withinDepth(scoped.args)) return refusal(request.id, 'BRIDGE_ARGUMENT_TOO_DEEP');
-  const refused = await daemonRefusal(daemonInfoPath);
-  if (refused) stop(session, refused);
+  const refused = await daemonRefusal(daemonInfoPath, { timeoutMs: session.options.timeoutMs, signal: session.controller.signal });
+  if (refused && !session.closing) stop(session, refused); // a probe cut short by teardown never sets the failure code
   if (session.closing) return null;
   const identity = { attemptId: binding.attemptId, generation: binding.generation, sessionId };
   const args = { ...scoped.args };

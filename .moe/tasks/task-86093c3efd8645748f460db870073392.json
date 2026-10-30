@@ -101,7 +101,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:54:43.638Z",
-  "updatedAt": "2026-10-30T08:51:45.072Z",
+  "updatedAt": "2026-10-30T08:52:26.038Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:56:12.926Z",
     "plannedStepCount": 4,
@@ -195,7 +195,8 @@
     "source": "agent-reported"
   },
   "filesModified": [
-    ".moe/tasks/task-86093c3efd8645748f460db870073392.json"
+    ".moe/tasks/task-86093c3efd8645748f460db870073392.json",
+    ".moe/tasks/task-f23c4464c8f24efeb8d62973111839ce.json"
   ],
   "completionSummary": "No-byte re-verification of landed completion 4f2d53dd. moe-proxy GETs the daemon's /health before every /mcp connect and reconnect. If the daemon serves another project, it exits 1 naming both projects with a restart hint, and never upgrades. QA rejected only on the size gate: 455 net (daemonIdentity.ts +123, index.ts +31/-1, test +302). Waiver prop-ce253f8aee9742d0842fe0eb48868a0f is APPROVED (HUMAN, 08:46:44Z), so substantive QA can proceed. The 3 owned paths are unchanged since 4f2d53dd. utils.ts, README, daemon and wrappers are untouched (DoD 3).\n\nGate (DoD 4): the plan's command, run fresh once on pinned rev a0f538ff from a pure git archive. Exit 0, 6 files / 237 tests passed (daemonIdentity 49, index 15, utils 97, workerType 65, integration 8, framing 3). The trailing diff --stat vs 4f2d53dd was empty. I appended `> file; RC=$?; cat file; echo GATE-EXIT=$RC` only to capture the exit code. No moe-proxy commit since (HEAD 3c5af5e1).\n\nMutants, each alone on a scratch archive, killed by named tests:\n- M1 foreign branch off (index.ts:400): E1, E1b, E3. The plan's `&& false` fails tsc, so I used `&& reconnectAttempts < 0`.\n- M2 raw compare (daemonIdentity.ts:68): D:\\ and D:/ rows.\n- M3 unknown exits (:408): E4 + 13 index e2e.\n- M4 isAbsoluteAnyOs always true (:43): 12 rows.\n- M5 cap >= (:105): exact-cap row.\n- M6 has(200) (:58): 500/404.\n- M7 timer x1000 (:88): trickle row.\n- M8 delete the post-probe shuttingDown guard (:399): survives as planned. Reachable only on shutdown during a RECONNECT probe with queued messages, which then get the existing 'still queued' error at the 2 s cap. No test added.\n\nSelf-review found no defect. The owner daemon writes one variable to both daemon.json and /health, compared by the same comparableProjectPath, so it never reads as foreign. Limits stand: TOCTOU, foreign-on-reconnect is fatal by design, and the Windows exit mirrors :373. The test file is 302 lines, 2 over the soft cap, left as is in a no-byte round.",
   "commits": [
@@ -252,6 +253,21 @@
       "treeId": "17c146cdb316f92ad68a62f77d796d972b665b27",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "f90ff8505b4767c13985f6ecaafeae74aa8776db",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T08:34:00Z",
+      "paths": [
+        ".moe/tasks/task-f23c4464c8f24efeb8d62973111839ce.json"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T08:52:26.037Z",
+      "treeId": "1d4fe57c8e7ce75b3853dcaa8b966998edcf0ee0",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -262,9 +278,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-0062feec@2026-10-30T08:31:39Z",
-    "at": "2026-10-30T08:33:27.278Z"
+    "kind": "completion",
+    "sessionId": "worker-0062feec@2026-10-30T08:34:00Z",
+    "at": "2026-10-30T08:52:26.037Z"
   },
   "reviewCompletedAt": "2026-10-30T08:18:43.932Z",
   "rejectionDetails": {

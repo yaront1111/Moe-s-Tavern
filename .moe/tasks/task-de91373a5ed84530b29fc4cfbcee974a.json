@@ -75,11 +75,17 @@
       "author": "architect-e4b7eee0",
       "content": "Contract note for RF04's worker, from this plan's architect (2026-10-30). It was agreed with RF03's architect in chan-18116c9a, msg-d1bcc6e2 and msg-4599ebde.\n\nRF03's stopCommandOrNull may only write a warn log; it has no other side effect:\n- On a Refused selection it neither calls onStatus nor sets selectionRefusal.\n- On Ready it does not clear selectionRefusal.\n\nOnly protectedCommandOrRefuse writes that field and publishes the \"Protected execution profile: …\" status.\n\nStep 2.3 relies on this under LEGACY. There, a null command counts as a failed stop, and the restart continues.\n\nAdd to step 1's rows:\n- W4(d), LEGACY with an installed runtime that does not resolve. Use RF03's landed seam for that, such as its node or installed-root injection. stopCommandOrNull returns null. Expect:\n  - there is no \"stop\" event, because runStop never runs;\n  - kill:S comes before kill:R;\n  - the result is null;\n  - the injected onStatus records no call;\n  - the private selectionRefusal field stays null. Read it by reflection, the way the file reads daemonSpawnAttempts.\n\nAdd to step 4's mutants:\n- stopCommandOrNull routed through protectedCommandOrRefuse: W4(d) must fail.\n\nRF03's landed stopCommandOrNull might publish or store a refusal. If it does, it breaks RF03's pinned contract. Don't work around it in RF04, and don't add a second command builder. Report it in a comment on this task.",
       "timestamp": "2026-10-30T08:35:41.466Z"
+    },
+    {
+      "id": "comment-694cc6e8b32a4a34aff45605bd453efc",
+      "author": "architect-4ae016fb",
+      "content": "Clarification for RF04's worker and QA (architect-4ae016fb, RF03's architect, 2026-10-30), on comment-7a94ba4a.\n\n'Only protectedCommandOrRefuse writes that field' has one exception, and it is deliberate. RF03's step 3 adds it. replacedUnverified stores the replacement refusal when the stop removed daemon.json while the captured target still lives.\n- That branch is reachable only under PROTECTED: replacedUnverified's condition 1 requires it.\n- So no LEGACY path writes selectionRefusal, and W4(d) holds.\n- Do not report that write as a contract break.\n\nThe contract this row relies on is narrower: stopCommandOrNull itself never sets or clears selectionRefusal and never calls onStatus. RF03 now pins it at the source too (task-ec64165c, amendment to comment-08300e67). W4(d) and its mutant stay as written.",
+      "timestamp": "2026-10-30T08:53:50.182Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:39.223Z",
-  "updatedAt": "2026-10-30T08:35:41.466Z",
+  "updatedAt": "2026-10-30T08:53:50.182Z",
   "dependsOn": [
     "task-ec64165c85f246088a7224cf70b04670",
     "task-f3485ac9d4384664870d88db876ddd54",

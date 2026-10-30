@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, getEventListeners, once } from 'node:events';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
 import { connect } from 'node:net';
 import { constants, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -604,10 +605,18 @@ print(sorted({n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and
 const NAME = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
 const SESSION_ID = 'worker-1@2026-10-26T00:00:00.000Z';
 const SPAWNED = ['multipass', bridgeArgv(NAME), { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
-const DAEMON_DIR = mkdtempSync(join(tmpdir(), 'moe-r08-'));
-after(() => rmSync(DAEMON_DIR, { recursive: true, force: true }));
+const PROJECT = mkdtempSync(join(tmpdir(), 'moe-r08-'));
+const DAEMON_DIR = join(PROJECT, '.moe');
+mkdirSync(DAEMON_DIR);
+after(() => rmSync(PROJECT, { recursive: true, force: true }));
+// The project's daemon: a fake /health reporting its loopback bind for PROJECT (::1 best-effort; 0 where it cannot bind).
+const healthOn = host => new Promise(resolve => {
+  const server = createServer((req, res) => res.end(JSON.stringify({ status: 'healthy', projectPath: PROJECT, bindHost: host })));
+  server.once('error', () => resolve(0)).listen(0, host, () => { after(() => { server.closeAllConnections(); server.close(); }); resolve(server.address().port); });
+});
+const [HEALTH_PORT, HEALTH_V6_PORT] = [await healthOn('127.0.0.1'), await healthOn('::1')];
 const daemonFile = (name, info = {}) => {
-  writeFileSync(join(DAEMON_DIR, name), typeof info === 'string' ? info : JSON.stringify({ port: 9876, pid: 1, projectPath: '/p', ...info }));
+  writeFileSync(join(DAEMON_DIR, name), typeof info === 'string' ? info : JSON.stringify({ port: HEALTH_PORT, pid: 1, projectPath: '/p', ...info }));
   return join(DAEMON_DIR, name);
 };
 const DAEMON = daemonFile('daemon.json');
@@ -655,7 +664,7 @@ async function exchange(proc, run, frames, answers) {
   return run.promise;
 }
 
-test('H1 invalid input, unsafe daemon info and an aborted signal refuse before spawn', { timeout: 30_000 }, async () => {
+test('H1 invalid input, unsafe daemon info and an aborted signal refuse before spawn', { timeout: 30_000 }, async t => {
   const posix = process.platform !== 'win32';
   if (posix) {
     assert.equal(spawnSync('mkfifo', [join(DAEMON_DIR, 'fifo')]).status, 0);
@@ -680,8 +689,10 @@ test('H1 invalid input, unsafe daemon info and an aborted signal refuse before s
     assert.deepEqual([proc.calls.length, run.forwarded.length], [0, 0]);
   }
   // index.ts omits bindHost for its 127.0.0.1 default; a file of exactly MAX_DAEMON_INFO_BYTES is read whole.
-  for (const daemonInfoPath of [DAEMON, daemonFile('v4.json', { bindHost: '127.0.0.1' }), daemonFile('v6.json', { bindHost: '::1' }),
-    daemonFile('edge.json', `{}${' '.repeat(MAX_DAEMON_INFO_BYTES - 2)}`)]) {
+  if (!HEALTH_V6_PORT) t.diagnostic('v6.json skipped: ::1 cannot bind on this host');
+  const v6 = HEALTH_V6_PORT ? [daemonFile('v6.json', { bindHost: '::1', port: HEALTH_V6_PORT })] : [];
+  for (const daemonInfoPath of [DAEMON, daemonFile('v4.json', { bindHost: '127.0.0.1' }), ...v6,
+    daemonFile('edge.json', JSON.stringify({ port: HEALTH_PORT, pid: 1, projectPath: '/p' }).padEnd(MAX_DAEMON_INFO_BYTES))]) {
     const proc = fakeProvider();
     const run = openSession(proc, { daemonInfoPath });
     proc.send(HELLO, EXIT);

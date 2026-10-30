@@ -50,31 +50,53 @@
     {
       "stepId": "step-3",
       "description": "EXISTING SUITES onto a fake /health. These are fixture lines only, and behavior-neutral.\n\nHot files. Before the first edit of each file:\n- run `git status --porcelain -- <file>`;\n- if another live session's hunks are there, do not edit over them. Comment on that task or @mention its seat, then call moe.report_blocked naming it.\n- Edit only with the Edit tool, so the wrapper records a TOOL witness.\n\nEach file gets the same inline fake /health of about 8 lines: 127.0.0.1:0, plus ::1:0 best-effort. Its answer names the fixture's project, and it is closed in after(). No row may reach the probe with port 9876.\n\n- local-runner-bridge.test.mjs, H section:\n  - DAEMON_DIR becomes <mkdtemp>/.moe, so the project is its parent, and after() removes that mkdtemp root.\n  - daemonFile's default port is the fake's.\n  - 'edge.json' becomes a record carrying that port, padded with spaces to EXACTLY MAX_DAEMON_INFO_BYTES.\n  - 'v6.json' uses the ::1 fake's port, and skips with a reason where ::1 cannot bind.\n  - Everything else stays, including the H4 rebind row.\n- local-runner.test.mjs, agentHarness: daemonInfoPath becomes <scratch>/.moe/daemon.json with the fake's port, and the fake's answer names that scratch dir.\n- local-runner-channel.test.mjs:\n  - fixture()'s default port is the fake's, and the answer names each fixture's project.\n  - The C2 URL rows use the fake ports. The '::1' row skips where ::1 cannot bind.\n  - 'a refused connection is RUNNER_CONNECT_FAILED' points at the fake. Its /runner upgrade fails (a real WebSocket gets error and close 1006), so the row keeps its code.\n  - Extend before()'s dist-freshness assertion: a dist whose /health lacks the bind report fails fast with the same 'build packages/moe-daemon first' hint.\n- local-runner-vm-control.test.mjs:\n  - VC-M1's good record uses the fake's port, and the URL becomes ws://127.0.0.1:<port>/mcp.\n  - readDaemonInfo results become {port, host}. The '::1' row goes to the ::1 fake, skipped where ::1 is unavailable.\n  - VC-M2's fake answers '/mnt/d/x', and its rows expect {port, host:'127.0.0.1'}.\n\nRow names, refusal codes and every other assertion stay. On the pristine modules these edits keep every row green except the readDaemonInfo `host` assertions, which turn green in step 5.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-bridge.test.mjs",
         "scripts/tests/local-runner.test.mjs",
         "scripts/tests/local-runner-channel.test.mjs",
         "scripts/tests/local-runner-vm-control.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-channel.test.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "Three of the four suites now run against an inline fake /health on 127.0.0.1:0, plus ::1:0 best-effort with a t.diagnostic skip; every fake is closed in after():\n- bridge: DAEMON_DIR is <mkdtemp>/.moe; the default port is the fake's; edge.json is a port-carrying record padEnd'd to exactly MAX_DAEMON_INFO_BYTES; v6.json uses the ::1 fake's port.\n- channel: fixture() uses the fake's port and the fake names the latest fixture's project. The C2 URLs use the fake ports. 'a refused connection' now points at the fake, whose upgrade fails, so it stays RUNNER_CONNECT_FAILED. before() fast-fails on a dist whose /health lacks bindHost.\n- vm-control: VC-M1 and VC-M2 use fakes, and the readDaemonInfo results are {port, host}.\nRow names and codes are unchanged.\n\nRun on the unchanged modules: the bridge suite and channel C1-C3 pass; VC-M1/M2 fail only on the `host` assertions (step 5 turns them green); channel C4-C9 stop early with the 'build packages/moe-daemon first' message on the shared tree's stale dist, which is intended.\n\nDEFERRED: scripts/tests/local-runner.test.mjs (agentHarness) holds live uncommitted hunks from task-1e7f5a2d (worker-55e6716a, on its step 5 of 5). Following the hot-file rule, I left it untouched and commented on that task. I will make its fixture edit with the Edit tool once that task lands, before the step-6 gate, or block on task-1e7f5a2d if it has not landed by then. Other sessions' dirty paths in the shared tree are untouched.",
+      "startedAt": "2026-10-30T08:47:50.609Z",
+      "completedAt": "2026-10-30T08:48:02.268Z"
     },
     {
       "stepId": "step-4",
       "description": "SHARED ADMISSION + guest-session. Load ponytail.\n\nIn scripts/local-runner/guest-session.mjs add ONE section, 'daemon admission shared with runner-client.mjs and vm-control.mjs'.\n\n1. canonicalProjectPath moves here verbatim from vm-control.mjs, with windowsDrive and its doc comment.\n   - vm-control.mjs imports it and re-exports it (`export { canonicalProjectPath }`), so its tests and ownedLedgerDir keep working.\n   - guest-session cannot import vm-control, because vm-control already imports guest-session.\n2. `export const MAX_HEALTH_BYTES = 65_536`, the daemon's own probeDaemonHealth cap.\n3. `export function loopbackDaemonHost(info, projectPath, { timeoutMs = 5_000, signal } = {})` resolves '127.0.0.1', '::1' or null. It NEVER rejects or throws.\n   a. info is daemon.json's parsed record. It is repository content, so it may only refuse. A non-record, an own bindHost outside {'127.0.0.1','::1'}, or a port that is not an integer 1-65535 resolves null with no request.\n   b. host is '::1' when info.bindHost is '::1', else '127.0.0.1'.\n   c. Send one `http.get({host, port, path:'/health', agent:false, signal})`: no proxy, no redirect follow.\n      - ONE total deadline, set with setTimeout plus destroy. Never the socket idle timeout.\n      - A body cap of MAX_HEALTH_BYTES: stop reading and resolve null past it.\n   d. Admit only when all of these hold:\n      - statusCode is 200;\n      - the body is a JSON object whose status is 'healthy';\n      - its projectPath is a string, and canonicalProjectPath of it equals canonicalProjectPath(projectPath);\n      - its own bindHost is exactly '127.0.0.1' or '::1'.\n      Then resolve host.\n   e. error handling: every exit path clears the timer and destroys the request. A request or response error, an abort, a parse failure or a synchronous throw from http.get resolves null.\n4. daemonRefusal(file, {timeoutMs, signal}) keeps its bounded read.\n   - A non-record stays SESSION_DAEMON_INFO_INVALID, and so does a record without a usable port, since the port is needed to ask the daemon.\n   - Then it returns `(await loopbackDaemonHost(info, path.dirname(path.dirname(file)), {timeoutMs, signal})) ? null : 'SESSION_DAEMON_NOT_LOOPBACK'`.\n   - daemonInfoPath, the trusted input, is <project>/.moe/daemon.json. The file's own projectPath field is repository content and never names the project.\n5. Session start: the probe gets options.timeoutMs and NO caller signal. Keep `throw sessionError(refused ?? 'SESSION_ABORTED')`, so an aborted signal with an admitted daemon is still SESSION_ABORTED.\n6. Before every forward (reply): pass options.timeoutMs and session.controller.signal.\n   - After the await, check session.closing BEFORE acting on a refusal, so a probe cut short by teardown never sets the session's failure code.\n   - Otherwise call stop(session, refused).\n7. In the header comment, 'a fresh loopback check of daemon.json' becomes the daemon's own loopback bind report. MAX_DAEMON_INFO_BYTES stays exported.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/guest-session.mjs",
         "scripts/local-runner/vm-control.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/local-runner/vm-control.mjs"
+      ],
+      "note": "guest-session.mjs gains one section, 'daemon admission shared with runner-client.mjs and vm-control.mjs':\n- canonicalProjectPath and windowsDrive moved verbatim from vm-control.mjs, which imports them and re-exports with `export { canonicalProjectPath }`.\n- MAX_HEALTH_BYTES = 65_536.\n- loopbackDaemonHost(info, projectPath, {timeoutMs=5000, signal}):\n  - File refusals come first, with no request: a non-record, an own bindHost outside LOOPBACK, or a port outside 1-65535.\n  - One http.get of /health with agent:false and the signal, under ONE setTimeout total deadline plus destroy.\n  - A non-200 refuses at once; a body past MAX_HEALTH_BYTES refuses.\n  - It admits only a JSON record with status 'healthy', a string projectPath whose canonicalProjectPath equals the caller's, and LOOPBACK.has(report.bindHost). It then resolves the host it dialed.\n  - Every exit goes through finish(), which clears the timer, destroys the request and resolves once. A synchronous throw, an error, an abort or a parse failure all give null.\n- daemonRefusal(file, {timeoutMs, signal}): a non-record or unusable port is SESSION_DAEMON_INFO_INVALID. Otherwise the helper decides, with project = dirname(dirname(file)), and failure is SESSION_DAEMON_NOT_LOOPBACK.\n- Start probes with options.timeoutMs and no caller signal, so SESSION_ABORTED keeps its precedence. reply() probes with session.controller.signal and acts on a refusal only when !session.closing.\n- The header comment was updated.\n\nResults: DB1, DB1 ::1, DB2 x2 and DB5 pass, and the whole bridge suite stays green. DB3, DB4 and VC-M1/M2 wait for step 5.\n\nguest-session.mjs is now 355 lines, over the 300-line target. The plan put the helper here because a new module would be an 11th file, past the 10-file plan cap.",
+      "startedAt": "2026-10-30T08:48:04.551Z",
+      "completedAt": "2026-10-30T08:49:32.432Z"
     },
     {
       "stepId": "step-5",
       "description": "runner-client and vm-control onto the shared admission. No new error codes anywhere.\n\nscripts/local-runner/runner-client.mjs:\n- discover(projectPath, {timeoutMs, signal}) keeps every file check and its codes.\n- Drop its own bindHost line: the helper refuses a non-loopback file bindHost without sending a request.\n- After the file checks:\n  - an already-aborted signal is RUNNER_ABORTED;\n  - then `const host = await loopbackDaemonHost(info, projectPath, {timeoutMs, signal})`;\n  - on null, throw RUNNER_ABORTED if the signal aborted meanwhile, else RUNNER_DAEMON_NOT_LOOPBACK.\n- All of this happens BEFORE the key file is read.\n- openRunnerChannel passes its timeoutMs and signal, and dials `ws://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/runner`.\n- Update the header comment: it dials only a daemon that reported a loopback bind for this project.\n\nscripts/local-runner/vm-control.mjs:\n- readDaemonInfo(projectPath, {timeoutMs} = {}) keeps its bounded read and every file check, but drops its own bindHost check, which is now the helper's job.\n- It then requires loopbackDaemonHost(info, projectPath, {timeoutMs}) and resolves {port, host}. Any refusal is DAEMON_UNREACHABLE.\n- mcpCaller dials `ws://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/mcp`, the endpoint the daemon answered on. It does not pass its own call timeout to the probe; the helper's default applies.\n- Remove the now-unused LOOPBACK const, and update readDaemonInfo's doc comment.\n\nerror handling: every refusal is one of the module's existing fixed codes, thrown with its fixed message. No path, port, key byte or upstream text reaches an error, and the helper's null is the only signal used.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/runner-client.mjs",
         "scripts/local-runner/vm-control.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/runner-client.mjs",
+        "scripts/local-runner/vm-control.mjs"
+      ],
+      "note": "runner-client.mjs:\n- discover(projectPath, {timeoutMs, signal}) keeps every file check and code, and drops its own bindHost line.\n- After the file checks: an already-aborted signal is RUNNER_ABORTED; then loopbackDaemonHost runs; a null result is RUNNER_ABORTED if the signal aborted meanwhile, else RUNNER_DAEMON_NOT_LOOPBACK. All of this happens before the key read.\n- openRunnerChannel passes timeoutMs and signal, and dials `ws://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/runner`. The header comment is updated.\n\nvm-control.mjs:\n- readDaemonInfo(projectPath, {timeoutMs} = {}) keeps its bounded read and file checks (port, canonical projectPath) and drops its bindHost check. It then requires loopbackDaemonHost and resolves {port, host}; any failure is DAEMON_UNREACHABLE.\n- mcpCaller dials the admitted host, and the helper's default timeout applies.\n- The LOOPBACK const is removed and the doc comment updated.\n\nNo new codes, and errors stay fixed messages.\n\nResults, node v24.21.0 in the shared tree:\n- daemon-bind, bridge, vm-control and channel C1-C3 all pass (102 pass, 0 fail, 1 existing skip).\n- channel C4-C9 stop early on the shared tree's stale dist with the build hint; the step-6 gate builds first.\n- local-runner.test.mjs AJ3-AJ6 now fail as expected: agentHarness still points daemonInfoPath at port 9876 '/p'. That fixture edit is the deferred piece of step 3.\n\nSize so far vs eea1bcaf~1: +440/-64 (net 376), excluding the pending ~10-line local-runner.test.mjs fixture.",
+      "startedAt": "2026-10-30T08:49:33.352Z",
+      "completedAt": "2026-10-30T08:53:06.142Z"
     },
     {
       "stepId": "step-6",
@@ -107,12 +129,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:42:05.249Z",
-  "updatedAt": "2026-10-30T08:37:35.550Z",
+  "updatedAt": "2026-10-30T08:53:06.143Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:42:56.107Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 10,
-    "executedStepCount": 2
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
@@ -127,7 +149,10 @@
   ],
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T08:05:55.740Z",
@@ -221,20 +246,53 @@
       "treeId": "f79e6482f5f87676423d7641405d40905f7b2634",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "eea1bcaf43c563659a0236dd0394f59996c3ff36",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T08:26:34Z",
+      "paths": [
+        ".moe/tasks/task-142415f4cad3435a94bb879399eba160.json",
+        ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+        ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/server/bindHosts.test.ts",
+        "scripts/tests/local-runner-daemon-bind.test.mjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T08:38:07.919Z",
+      "treeId": "00b7b4389dbabc2d1f160c1df34d2a9ef5236318",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
     ".moe/tasks/task-7e39a63f6b024acf9f5f06c92bfafd59.json",
     ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
     ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
-    ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json"
+    ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json",
+    ".moe/tasks/task-142415f4cad3435a94bb879399eba160.json",
+    ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+    ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+    "packages/moe-daemon/src/index.ts",
+    "packages/moe-daemon/src/server/bindHosts.test.ts",
+    "scripts/tests/local-runner-daemon-bind.test.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "architect-e4b7eee0@2026-10-30T07:42:56Z",
-    "at": "2026-10-30T08:16:36.043Z"
+    "sessionId": "worker-fe18a9a9@2026-10-30T08:26:34Z",
+    "at": "2026-10-30T08:38:07.919Z"
   },
-  "workStartedAt": "2026-10-30T08:27:28.625Z"
+  "workStartedAt": "2026-10-30T08:27:28.625Z",
+  "touchedFiles": [
+    "packages/moe-daemon/src/server/bindHosts.test.ts",
+    "packages/moe-daemon/src/index.ts",
+    "scripts/tests/local-runner-daemon-bind.test.mjs"
+  ]
 }

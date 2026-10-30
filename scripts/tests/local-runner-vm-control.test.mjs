@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -183,12 +184,18 @@ function fakeSocket(reply) {
   return { made, FakeSocket };
 }
 const rejectsWith = async (promise, code) => assert.equal(await promise.then(() => 'resolved', error => error?.code), code);
+/** A fake daemon /health on host:0 reporting its loopback bind for projectPath; resolves its port, or 0 where host cannot bind. */
+const healthOn = (t, host, projectPath) => new Promise(resolve => {
+  const server = createServer((req, res) => res.end(JSON.stringify({ status: 'healthy', projectPath, bindHost: host })));
+  server.once('error', () => resolve(0)).listen(0, host, () => { t.after(() => { server.closeAllConnections(); server.close(); }); resolve(server.address().port); });
+});
 
 test('VC-M1 the daemon caller trusts only a bounded loopback daemon.json for this project and fails closed', async t => {
   const project = scratch(t);
   mkdirSync(path.join(project, '.moe'));
   const info = value => writeFileSync(path.join(project, '.moe', 'daemon.json'), typeof value === 'string' ? value : JSON.stringify(value));
-  const good = { port: 9876, pid: 1, startedAt: 'x', projectPath: `${project}${path.sep}` };
+  const [port, v6Port] = [await healthOn(t, '127.0.0.1', project), await healthOn(t, '::1', project)];
+  const good = { port, pid: 1, startedAt: 'x', projectPath: `${project}${path.sep}` };
   await rejectsWith(readDaemonInfo(project), 'DAEMON_UNREACHABLE');
   for (const bad of [{ ...good, port: 0 }, { ...good, port: 65536 }, { ...good, port: '9876' }, { ...good, bindHost: '0.0.0.0' },
     { ...good, projectPath: path.join(project, 'other') }, `${JSON.stringify(good)}${' '.repeat(16_384)}`, 'not json']) {
@@ -198,13 +205,15 @@ test('VC-M1 the daemon caller trusts only a bounded loopback daemon.json for thi
     await rejectsWith(mcpCaller(project, { WebSocketImpl: FakeSocket })('moe.list_resources', {}), 'DAEMON_UNREACHABLE');
     assert.equal(made.length, 0); // refused before any connection attempt
   }
-  info({ ...good, bindHost: '::1' });
-  assert.deepEqual(await readDaemonInfo(project), { port: 9876 });
+  if (v6Port) {
+    info({ ...good, bindHost: '::1', port: v6Port });
+    assert.deepEqual(await readDaemonInfo(project), { port: v6Port, host: '::1' });
+  } else t.diagnostic('the ::1 row is skipped: ::1 cannot bind on this host');
   info(good);
   const ok = fakeSocket(() => ({ result: { content: [{ type: 'text', text: '{"success":true,"resources":[]}' }] } }));
   assert.deepEqual(await mcpCaller(project, { WebSocketImpl: ok.FakeSocket })('moe.list_resources', {}), { success: true, resources: [] });
   const { url, sent, closed } = ok.made[0];
-  assert.deepEqual({ url, sent, closed }, { url: 'ws://127.0.0.1:9876/mcp', closed: 1,
+  assert.deepEqual({ url, sent, closed }, { url: `ws://127.0.0.1:${port}/mcp`, closed: 1,
     sent: [{ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'moe.list_resources', arguments: {} } }] });
   const refused = fakeSocket(() => ({ error: { code: -32602, message: '/secret', data: { tool: 'moe.get_context', codeName: 'NOT_FOUND' } } }));
   await rejectsWith(mcpCaller(project, { WebSocketImpl: refused.FakeSocket })('moe.get_context', { taskId: 'task-a' }), 'NOT_FOUND');
@@ -265,14 +274,15 @@ test('VC-L4 on win32 a raw /mnt path is posix-normalized before mapping', t => o
 test('VC-M2 readDaemonInfo accepts this project\'s daemon.json in another spelling and still refuses another project', { skip: process.platform === 'win32' && 'a Windows process never has a /mnt cwd' }, async t => {
   const project = scratch(t);
   mkdirSync(path.join(project, '.moe'));
+  const port = await healthOn(t, '127.0.0.1', '/mnt/d/x');
   const cwd = process.cwd();
   t.after(() => process.chdir(cwd));
   process.chdir(project); // the relative '.' reads this file through the OS cwd...
   t.mock.method(process, 'cwd', () => '/mnt/d/x'); // ...while canonicalization sees the WSL spelling
-  const info = projectPath => writeFileSync(path.join(project, '.moe', 'daemon.json'), JSON.stringify({ port: 9876, pid: 1, startedAt: 'x', projectPath }));
+  const info = projectPath => writeFileSync(path.join(project, '.moe', 'daemon.json'), JSON.stringify({ port, pid: 1, startedAt: 'x', projectPath }));
   for (const projectPath of ['/mnt/d/x', 'D:\\x', '/mnt/d//x/', '/mnt/d/x/sub/..']) {
     info(projectPath);
-    assert.deepEqual(await readDaemonInfo('.'), { port: 9876 }, projectPath);
+    assert.deepEqual(await readDaemonInfo('.'), { port, host: '127.0.0.1' }, projectPath);
   }
   for (const projectPath of ['/mnt/d/y', '/mnt/c/x']) {
     info(projectPath);

@@ -1,5 +1,6 @@
 // Client for the daemon's authenticated /runner channel (CQ-V04b1): the host's trusted check runner calls moe.* tools
-// through it, and it is the only local-runner code that reads the runner key. It dials only the loopback daemon named by
+// through it, and it is the only local-runner code that reads the runner key. It dials only a daemon whose own /health
+// reported a loopback bind for this project (guest-session.mjs's loopbackDaemonHost), at the port from
 // <projectPath>/.moe/daemon.json (guest-session.mjs's open, size and record discipline). The key is read once per open,
 // handed straight to the WebSocket and never stored, returned or logged; this module never logs. Every failure is one
 // fixed RUNNER_* code in a fixed message: never a path, a key byte or upstream text. A refused socket is accepted and
@@ -9,7 +10,7 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { MAX_DAEMON_INFO_BYTES } from './guest-session.mjs';
+import { loopbackDaemonHost, MAX_DAEMON_INFO_BYTES } from './guest-session.mjs';
 
 export const RUNNER_KEY_HEADER = 'x-moe-runner-key'; // mirrors server/runnerChannel.ts
 const KEY_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -43,12 +44,15 @@ async function readSmall(file, limit, missing, invalid) {
   }
 }
 
-async function discover(projectPath) {
+// daemon.json supplies the port and can only refuse; the daemon's own loopback bind report admits, before any key read.
+async function discover(projectPath, { timeoutMs, signal }) {
   let info;
   try { info = JSON.parse(await readSmall(path.join(projectPath, '.moe', 'daemon.json'), MAX_DAEMON_INFO_BYTES, INFO, INFO)); } catch { throw runnerError(INFO); }
   if (!isRecord(info) || info.projectPath !== projectPath || !Number.isInteger(info.port) || info.port < 1 || info.port > 65_535) throw runnerError(INFO);
-  if (Object.hasOwn(info, 'bindHost') && !['127.0.0.1', '::1'].includes(info.bindHost)) throw runnerError('RUNNER_DAEMON_NOT_LOOPBACK');
-  return info;
+  if (signal?.aborted) throw runnerError('RUNNER_ABORTED');
+  const host = await loopbackDaemonHost(info, projectPath, { timeoutMs, signal });
+  if (!host) throw runnerError(signal?.aborted ? 'RUNNER_ABORTED' : 'RUNNER_DAEMON_NOT_LOOPBACK');
+  return { ...info, host };
 }
 
 // The key exists only as this call's argument, so no longer-lived frame holds it.
@@ -103,8 +107,8 @@ export async function openRunnerChannel(input = {}) {
   if (typeof projectPath !== 'string' || projectPath === '' || projectPath.includes('\0') || !validTimeout(timeoutMs)
     || (signal !== undefined && !(signal instanceof AbortSignal))) throw runnerError('RUNNER_INPUT_INVALID');
   if (typeof WebSocket !== 'function') throw runnerError('RUNNER_WEBSOCKET_UNAVAILABLE');
-  const info = await discover(path.resolve(projectPath));
-  const link = wire(dial(WebSocket, `ws://${info.bindHost === '::1' ? '[::1]' : '127.0.0.1'}:${info.port}/runner`, await readSmall(runnerKeyFile(info.projectPath), 64, 'RUNNER_KEY_MISSING', 'RUNNER_KEY_INVALID')), timeoutMs);
+  const info = await discover(path.resolve(projectPath), { timeoutMs, signal });
+  const link = wire(dial(WebSocket, `ws://${info.host === '::1' ? '[::1]' : '127.0.0.1'}:${info.port}/runner`, await readSmall(runnerKeyFile(info.projectPath), 64, 'RUNNER_KEY_MISSING', 'RUNNER_KEY_INVALID')), timeoutMs);
   await link.request('ping', {}, { signal }).catch(error => {
     link.close();
     throw runnerError({ RUNNER_DISCONNECTED: 'RUNNER_CONNECT_FAILED', RUNNER_CALL_TIMEOUT: 'RUNNER_CONNECT_TIMEOUT' }[error.code] ?? error.code);
