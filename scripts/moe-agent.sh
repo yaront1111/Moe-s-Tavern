@@ -2913,8 +2913,9 @@ sys.stdout.write(("worktree" if ws.get("mode") == "worktree" else "shared") + "\
     w="$MOE_TOP/.worktrees/$tid"; branch="moe/task/$tid"
     case "${OSTYPE:-}" in
         msys*|cygwin*)
-            longest=$(git -C "$MOE_TOP" ls-tree -r -z --name-only "refs/heads/$target" 2>/dev/null | $PYTHON_CMD -c 'import sys; print(max([len(n.decode("utf-8", "replace").encode("utf-16-le")) // 2 for n in sys.stdin.buffer.read().split(b"\0") if n] or [0]))' 2>/dev/null) || longest=0
-            case "$longest" in ''|*[!0-9]*) longest=0 ;; esac
+            # A failed git or python step refuses: the budget is never assumed to fit.
+            longest=$(set -o pipefail; git -C "$MOE_TOP" ls-tree -r -z --name-only "refs/heads/$target" 2>/dev/null | $PYTHON_CMD -c 'import sys; print(max([len(n.decode("utf-8", "replace").encode("utf-16-le")) // 2 for n in sys.stdin.buffer.read().split(b"\0") if n] or [0]))' 2>/dev/null) \
+                && [[ "$longest" =~ ^[0-9]+$ ]] || worktree_stop MOE_WORKTREE_CREATE_FAILED "git ls-tree failed on $target; the Windows path budget cannot be checked"
             if [ $(( ${#w} + 1 + longest )) -gt 240 ] && [ "$(git -C "$MOE_TOP" config --bool core.longpaths 2>/dev/null)" != true ]; then
                 worktree_stop MOE_WORKTREE_PATH_TOO_LONG "$w plus its longest path ($longest characters) is over 240 characters and core.longpaths is off"
             fi ;;
@@ -2947,9 +2948,11 @@ sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
         if [ "$raw" != "$w" ]; then
             out=$(git -C "$MOE_TOP" worktree repair "$w" 2>&1) || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree repair failed: ${out##*$'\n'}"
         fi
-        # An empty index: a session died between the add and read-tree. Finish it.
-        out=$(git -C "$w" ls-files 2>/dev/null) || worktree_stop MOE_WORKTREE_CREATE_FAILED "git ls-files failed in $w"
-        [ -n "$out" ] || finish=true
+        # No index file: a session died between the add and read-tree. Finish it.
+        # An empty index proves nothing: an agent's `git rm -r .` empties one on purpose.
+        out=$(git -C "$w" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [ -n "$out" ] \
+            || worktree_stop MOE_WORKTREE_CREATE_FAILED "git rev-parse failed in $w"
+        [ -e "$out" ] || finish=true
     elif [ -e "$w" ] || [ -L "$w" ]; then
         worktree_stop MOE_WORKTREE_CREATE_FAILED "$w exists but is not a registered worktree; a human must inspect it"
     elif git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/$branch" > /dev/null; then

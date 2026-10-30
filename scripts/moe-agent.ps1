@@ -2700,9 +2700,11 @@ function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {
         }
         $w = "$top/.worktrees/$TaskId"
         if ($PSVersionTable.PSVersion.Major -le 5 -or $IsWindows) {
+            # A failed ls-tree refuses: the budget is never assumed to fit.
             $ls = Invoke-MoeGit -Top $top -GitArgs @('ls-tree', '-r', '-z', '--name-only', "refs/heads/$target")
+            if ($ls.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git ls-tree failed on $target; the Windows path budget cannot be checked" }
             $longest = 0
-            if ($ls.Rc -eq 0) { foreach ($n in ($ls.Out -join "`n").Split([char]0)) { if ($n.Length -gt $longest) { $longest = $n.Length } } }
+            foreach ($n in ($ls.Out -join "`n").Split([char]0)) { if ($n.Length -gt $longest) { $longest = $n.Length } }
             $lp = Invoke-MoeGit -Top $top -GitArgs @('config', '--bool', 'core.longpaths')
             if ($w.Length + 1 + $longest -gt 240 -and "$(@($lp.Out) | Select-Object -First 1)".Trim() -cne 'true') {
                 Stop-MoeWorktreeSeat 'MOE_WORKTREE_PATH_TOO_LONG' "$w plus its longest path ($longest characters) is over 240 characters and core.longpaths is off"
@@ -2740,10 +2742,12 @@ function Install-MoeTaskWorktree([string]$Top, [string]$W, [string]$Branch, [str
             $r = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'repair', $W) -MergeStderr
             if ($r.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git worktree repair failed: $(& $last $r)" }
         }
-        # An empty index: a session died between the add and read-tree. Finish it.
-        $r = Invoke-MoeGit -Top $W -GitArgs @('ls-files')
-        if ($r.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git ls-files failed in $W" }
-        $finish = -not (@($r.Out) -join '')
+        # No index file: a session died between the add and read-tree. Finish it.
+        # An empty index proves nothing: an agent's `git rm -r .` empties one on purpose.
+        $r = Invoke-MoeGit -Top $W -GitArgs @('rev-parse', '--path-format=absolute', '--git-path', 'index')
+        $index = "$(@($r.Out) | Select-Object -First 1)"
+        if ($r.Rc -ne 0 -or -not $index) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git rev-parse failed in $W" }
+        $finish = -not (Test-Path -LiteralPath $index)
     } elseif ((Test-Path -LiteralPath $W) -or (Test-MoeSymlink $W)) {
         Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "$W exists but is not a registered worktree; a human must inspect it"
     } else {

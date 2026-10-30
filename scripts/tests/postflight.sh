@@ -5078,4 +5078,81 @@ if grep -Fq 'reason=teamless' "$TMP_DIR/wrapper-teamheal.out"; then
 fi
 echo "[team heal] ok"
 
+# --- [worktree reuse] Worktree provisioning regressions beyond the shared suite
+# (twin: the [worktree reuse] block in postflight.ps1). Only a missing index file marks
+# a half-made W, so a W whose agent emptied its index with `git rm` is reused as
+# is, staged deletions and all. A failed Windows path-budget probe refuses with
+# CREATE_FAILED instead of passing as length 0; the probe is msys-only, so that
+# run sets OSTYPE=msys (bash keeps an inherited OSTYPE). ---
+echo "[worktree reuse] a half-made W is finished, an emptied index is kept, a failed budget probe refuses"
+WTR_DIR="$TMP_DIR/wtr-project"
+WTR_W="$WTR_DIR/.worktrees/task-postflight"
+mkdir -p "$WTR_DIR/src" "$WTR_DIR/.moe/messages"
+printf '.worktrees/\n.mcp.json\nlogs/\n' > "$WTR_DIR/.gitignore"
+printf 'seed a\n' > "$WTR_DIR/src/a.txt"
+printf '{"id":"proj-wtr","name":"postflight-wtr","settings":{"autoCommit":false}}\n' > "$WTR_DIR/.moe/project.json"
+: > "$WTR_DIR/.moe/messages/chan-general.jsonl"
+write_task_record "$WTR_DIR" '[]' WORKING
+wtr_git() { git -C "$WTR_DIR" -c user.name='Moe Test' -c user.email=moe@test.local "$@"; }
+wtr_git init -q; wtr_git symbolic-ref HEAD refs/heads/main
+wtr_git add .gitignore src .moe/project.json .moe/tasks; wtr_git commit -qm seed; wtr_git switch -q -c moe/control
+# wtr_run NAME [VAR=VALUE...] -- one worker seat whose claim says worktree mode.
+wtr_run() {
+  local name="$1"; shift
+  : > "$CLI_ARGS_FILE"; rm -rf "$WTR_DIR/.moe/evidence-rpcs.jsonl" "$WTR_DIR/.moe/attempts"
+  set +e
+  env PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 FAKE_TASK_STATUS=WORKING \
+    FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
+    "$WRAPPER" --project "$WTR_DIR" --worker-id worker-wtr --role worker --team Smoke --no-start-daemon \
+    --command "$FAKE_CLI" --no-loop --poll-interval 0 >"$TMP_DIR/wrapper-wtr-$name.out" 2>&1
+  wtr_code=$?
+  set -e
+}
+wtr_fail() { cat "$TMP_DIR/wrapper-wtr-$1.out" >&2 || true; echo "WORKTREE REUSE FAILED ($1): $2" >&2; exit 1; }
+wtr_blocks() { cat "$WTR_DIR/.moe/evidence-rpcs.jsonl" 2>/dev/null | grep -c '"tool":"report_blocked"' || true; }
+# wtr_reused NAME -- W was reused: its line, exit 0, the CLI ran, no refusal, no W/.moe.
+wtr_reused() {
+  [ "$wtr_code" -eq 0 ] || wtr_fail "$1" "exit $wtr_code, expected 0"
+  grep -Eq '^\[worktree\] reused .+ on moe/task/task-postflight$' "$TMP_DIR/wrapper-wtr-$1.out" || wtr_fail "$1" "no [worktree] reused line"
+  [ -s "$CLI_ARGS_FILE" ] && [ "$(wtr_blocks)" = 0 ] || wtr_fail "$1" "the CLI did not run, or report_blocked was called"
+  [ ! -e "$WTR_W/.moe" ] || wtr_fail "$1" "W/.moe exists"
+}
+# wtr_kept NAME STAGED -- W's index is still empty and its staged deletions are unchanged.
+wtr_kept() {
+  [ -z "$(git -C "$WTR_W" ls-files)" ] || wtr_fail "$1" "reuse refilled the emptied index"
+  [ "$(git -C "$WTR_W" diff --cached --name-status)" = "$2" ] || wtr_fail "$1" "the staged deletions changed"
+}
+# (b) A session died after sparse-checkout set, before read-tree: W has no index file yet.
+wtr_git worktree add -q --lock --reason "moe task-postflight" --no-checkout --no-track -b moe/task/task-postflight "$WTR_W" main
+printf '/*\n!/.moe/\n' | git -C "$WTR_W" sparse-checkout set --no-cone --stdin
+wtr_run half-made
+wtr_reused half-made
+[ -f "$WTR_W/src/a.txt" ] || wtr_fail half-made "W/src/a.txt is not checked out"
+# (a) The agent emptied the index on purpose, first with --cached, then by deleting the files.
+git -C "$WTR_W" rm -q --cached --sparse -r .
+wtr_staged="$(git -C "$WTR_W" diff --cached --name-status)"
+grep -q 'src/a.txt' <<< "$wtr_staged" || { echo "WORKTREE REUSE FAILED: the fixture staged no deletion" >&2; exit 1; }
+wtr_run emptied-cached
+wtr_reused emptied-cached
+wtr_kept emptied-cached "$wtr_staged"
+git -C "$WTR_W" reset -q; git -C "$WTR_W" rm -q --sparse -r .
+wtr_staged="$(git -C "$WTR_W" diff --cached --name-status)"
+wtr_run emptied-deleted
+wtr_reused emptied-deleted
+wtr_kept emptied-deleted "$wtr_staged"
+[ ! -e "$WTR_W/src/a.txt" ] && [ ! -e "$WTR_W/.gitignore" ] || wtr_fail emptied-deleted "reuse restored a deleted file"
+# (c) The path-budget probe's ls-tree fails: CREATE_FAILED before any W work, no CLI.
+wtr_git worktree remove --force --force "$WTR_W"
+mkdir -p "$TMP_DIR/wtr-git-stub"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" != ls-tree ] || { echo "fatal: stub fails ls-tree" >&2; exit 1; }; done\nexec %q "$@"\n' \
+  "$(command -v git)" > "$TMP_DIR/wtr-git-stub/git"
+chmod +x "$TMP_DIR/wtr-git-stub/git"
+wtr_run budget-probe PATH="$TMP_DIR/wtr-git-stub:$TMP_DIR:$PATH" OSTYPE=msys
+[ "$wtr_code" -eq 1 ] || wtr_fail budget-probe "exit $wtr_code, expected 1"
+grep -q '\[ERROR\].* MOE_WORKTREE_CREATE_FAILED: git ls-tree failed' "$TMP_DIR/wrapper-wtr-budget-probe.out" || wtr_fail budget-probe "no CREATE_FAILED line from the budget probe"
+[ "$(wtr_blocks)" = 1 ] && grep -q '"reason":"MOE_WORKTREE_CREATE_FAILED: git ls-tree failed' "$WTR_DIR/.moe/evidence-rpcs.jsonl" \
+  || wtr_fail budget-probe "not exactly one report_blocked naming CREATE_FAILED"
+[ ! -s "$CLI_ARGS_FILE" ] && [ ! -e "$WTR_W" ] || wtr_fail budget-probe "the CLI ran, or W was made"
+echo "[worktree reuse] ok"
+
 echo "PASS postflight.sh"

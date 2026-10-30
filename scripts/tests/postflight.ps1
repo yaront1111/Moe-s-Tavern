@@ -4580,6 +4580,96 @@ try {
     }
     Write-Host '[team heal] ok'
 
+    # --- [worktree reuse] Worktree provisioning regressions beyond the shared suite
+    # (twin: the [worktree reuse] block in postflight.sh). Only a missing index file
+    # marks a half-made W, so a W whose agent emptied its index with `git rm` is
+    # reused as is, staged deletions and all. A failed Windows path-budget probe
+    # refuses with CREATE_FAILED instead of passing as length 0. ---
+    Write-Host '[worktree reuse] a half-made W is finished, an emptied index is kept, a failed budget probe refuses'
+    $wtrDir = Join-Path $tempRoot 'wtr-project'
+    $wtrW = Join-Path $wtrDir '.worktrees\task-postflight'
+    New-Item -ItemType Directory -Force -Path (Join-Path $wtrDir 'src'), (Join-Path $wtrDir '.moe\messages') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $wtrDir '.gitignore'), ".worktrees/`n.mcp.json`nlogs/`n")
+    [IO.File]::WriteAllText((Join-Path $wtrDir 'src\a.txt'), "seed a`n")
+    [IO.File]::WriteAllText((Join-Path $wtrDir '.moe\project.json'), '{"id":"proj-wtr","name":"postflight-wtr","settings":{"autoCommit":false}}')
+    [IO.File]::WriteAllText((Join-Path $wtrDir '.moe\messages\chan-general.jsonl'), '')
+    Write-TaskRecord $wtrDir @() 'WORKING'
+    # Invoke-WtrGit ARGS -- one fixture git call's output lines; a failed call fails the case.
+    function Invoke-WtrGit([string[]]$GitArgs) {
+        $ErrorActionPreference = 'Continue'
+        $out = @(& git @GitArgs 2>$null)
+        if ($LASTEXITCODE -ne 0) { throw "WORKTREE REUSE FAILED: fixture git $GitArgs exited $LASTEXITCODE" }
+        return $out
+    }
+    foreach ($a in @(@('init', '-q'), @('symbolic-ref', 'HEAD', 'refs/heads/main'), @('config', 'core.autocrlf', 'false'),
+            @('config', 'user.name', 'Moe Test'), @('config', 'user.email', 'moe@test.local'), @('add', '.gitignore', 'src', '.moe/project.json', '.moe/tasks'),
+            @('commit', '-qm', 'seed'), @('switch', '-q', '-c', 'moe/control'))) {
+        $null = Invoke-WtrGit (@('-C', $wtrDir) + $a)
+    }
+    # Invoke-WtrRun NAME [PATHPREFIX] -- one worker seat whose claim says worktree mode: @{ Code; Text }.
+    function Invoke-WtrRun([string]$Name, [string]$PathPrefix = '') {
+        foreach ($f in 'session-new.txt', '.moe\evidence-rpcs.jsonl', '.moe\attempts') { Remove-Item -LiteralPath (Join-Path $wtrDir $f) -Recurse -Force -ErrorAction SilentlyContinue }
+        $knobs = @{ MOE_PROXY_PATH = $fakeProxy; USERPROFILE = $homeDir; MOE_DISABLE_HEARTBEAT = '1'; FAKE_TASK_STATUS = 'WORKING'
+            FAKE_CLAIM_WORKSPACE = '{"mode":"worktree","target":"main"}'; PATH = $PathPrefix + $env:PATH }
+        $saved = @{}
+        foreach ($k in $knobs.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $knobs[$k]) }
+        $out = Join-Path $tempRoot "wrapper-wtr-$Name.out"
+        try {
+            $code = Invoke-WrapperProcess @('-Project', $wtrDir, '-WorkerId', 'worker-wtr', '-Role', 'worker', '-Team', 'Smoke', '-NoStartDaemon', '-Command', $createFileCmd, '-NoLoop', '-PollInterval', '0') $out
+        } finally {
+            foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+        }
+        return @{ Code = $code; Text = [string](Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue) }
+    }
+    function Get-WtrBlocks { @(Get-Content -LiteralPath (Join-Path $wtrDir '.moe\evidence-rpcs.jsonl') -ErrorAction SilentlyContinue | Where-Object { $_.Contains('"tool":"report_blocked"') }) }
+    function Stop-Wtr([string]$Name, [string]$Why, $Run) { Write-Host $Run.Text; throw "WORKTREE REUSE FAILED ($Name): $Why" }
+    # Assert-WtrReused NAME RUN -- W was reused: its line, exit 0, the CLI ran, no refusal, no W/.moe.
+    function Assert-WtrReused([string]$Name, $Run) {
+        if ($Run.Code -ne 0) { Stop-Wtr $Name "exit $($Run.Code), expected 0" $Run }
+        if ($Run.Text -cnotmatch '(?m)^\[worktree\] reused .+ on moe/task/task-postflight\r?$') { Stop-Wtr $Name 'no [worktree] reused line' $Run }
+        if (-not (Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) -or @(Get-WtrBlocks).Count -ne 0) { Stop-Wtr $Name 'the CLI did not run, or report_blocked was called' $Run }
+        if (Test-Path -LiteralPath (Join-Path $wtrW '.moe')) { Stop-Wtr $Name 'W/.moe exists' $Run }
+    }
+    # Assert-WtrKept NAME STAGED -- W's index is still empty and its staged deletions are unchanged.
+    function Assert-WtrKept([string]$Name, [string]$Staged) {
+        if (@(Invoke-WtrGit @('-C', $wtrW, 'ls-files')).Count -ne 0) { throw "WORKTREE REUSE FAILED ($Name): reuse refilled the emptied index" }
+        if ((@(Invoke-WtrGit @('-C', $wtrW, 'diff', '--cached', '--name-status')) -join "`n") -cne $Staged) { throw "WORKTREE REUSE FAILED ($Name): the staged deletions changed" }
+    }
+    # (b) A session died after sparse-checkout set, before read-tree: W has no index file yet.
+    $null = Invoke-WtrGit @('-C', $wtrDir, 'worktree', 'add', '-q', '--lock', '--reason', 'moe task-postflight', '--no-checkout', '--no-track', '-b', 'moe/task/task-postflight', $wtrW, 'main')
+    $null = Invoke-WtrGit @('-C', $wtrW, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.moe/')
+    Assert-WtrReused 'half-made' (Invoke-WtrRun 'half-made')
+    if (-not (Test-Path -LiteralPath (Join-Path $wtrW 'src\a.txt'))) { throw 'WORKTREE REUSE FAILED (half-made): W/src/a.txt is not checked out' }
+    # (a) The agent emptied the index on purpose, first with --cached, then by deleting the files.
+    $null = Invoke-WtrGit @('-C', $wtrW, 'rm', '-q', '--cached', '--sparse', '-r', '.')
+    $wtrStaged = @(Invoke-WtrGit @('-C', $wtrW, 'diff', '--cached', '--name-status')) -join "`n"
+    if ($wtrStaged -cnotmatch 'src/a\.txt') { throw 'WORKTREE REUSE FAILED: the fixture staged no deletion' }
+    Assert-WtrReused 'emptied-cached' (Invoke-WtrRun 'emptied-cached')
+    Assert-WtrKept 'emptied-cached' $wtrStaged
+    $null = Invoke-WtrGit @('-C', $wtrW, 'reset', '-q')
+    $null = Invoke-WtrGit @('-C', $wtrW, 'rm', '-q', '--sparse', '-r', '.')
+    $wtrStaged = @(Invoke-WtrGit @('-C', $wtrW, 'diff', '--cached', '--name-status')) -join "`n"
+    Assert-WtrReused 'emptied-deleted' (Invoke-WtrRun 'emptied-deleted')
+    Assert-WtrKept 'emptied-deleted' $wtrStaged
+    if ((Test-Path -LiteralPath (Join-Path $wtrW 'src\a.txt')) -or (Test-Path -LiteralPath (Join-Path $wtrW '.gitignore'))) { throw 'WORKTREE REUSE FAILED (emptied-deleted): reuse restored a deleted file' }
+    # (c) The path-budget probe's ls-tree fails: CREATE_FAILED before any W work, no CLI.
+    # The stub is a git.ps1, which PowerShell finds on PATH before git.exe.
+    $null = Invoke-WtrGit @('-C', $wtrDir, 'worktree', 'remove', '--force', '--force', $wtrW)
+    $wtrStub = Join-Path $tempRoot 'wtr-git-stub'
+    New-Item -ItemType Directory -Force -Path $wtrStub | Out-Null
+    $wtrGit = (Get-Command git -CommandType Application | Select-Object -First 1).Source -replace "'", "''"
+    [IO.File]::WriteAllText((Join-Path $wtrStub 'git.ps1'), ("`$ErrorActionPreference = 'Continue'`r`n" +
+        "if (`$args -ccontains 'ls-tree') { [Console]::Error.WriteLine('fatal: stub fails ls-tree'); exit 1 }`r`n" +
+        "if (`$MyInvocation.ExpectingInput) { `$input | & '$wtrGit' @args } else { & '$wtrGit' @args }`r`n" +
+        "exit `$LASTEXITCODE`r`n"))
+    $run = Invoke-WtrRun 'budget-probe' ($wtrStub + [IO.Path]::PathSeparator)
+    if ($run.Code -ne 1) { Stop-Wtr 'budget-probe' "exit $($run.Code), expected 1" $run }
+    if ($run.Text -cnotmatch '\[ERROR\] MOE_WORKTREE_CREATE_FAILED: git ls-tree failed') { Stop-Wtr 'budget-probe' 'no CREATE_FAILED line from the budget probe' $run }
+    $blocks = @(Get-WtrBlocks)
+    if ($blocks.Count -ne 1 -or -not $blocks[0].Contains('"reason":"MOE_WORKTREE_CREATE_FAILED: git ls-tree failed')) { Stop-Wtr 'budget-probe' 'not exactly one report_blocked naming CREATE_FAILED' $run }
+    if ((Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) -or (Test-Path -LiteralPath $wtrW)) { Stop-Wtr 'budget-probe' 'the CLI ran, or W was made' $run }
+    Write-Host '[worktree reuse] ok'
+
     Write-Host 'PASS postflight.ps1'
 } catch {
     # CI keeps raw fixture output private. Emit only a line in this harness so
