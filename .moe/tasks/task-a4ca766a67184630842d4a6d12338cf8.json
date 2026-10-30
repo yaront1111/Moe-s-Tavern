@@ -9,9 +9,94 @@
     "The tool description, docs/MCP_SERVER.md and the worker role guidance describe the explicit-list-wins rule, and the daemon test suite passes."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test-first in existing reportBlocked.test.ts fixtures: replace the old mixed supplied+reason-union expectation with explicit-list precedence. Fresh call blockedOnTaskIds:[realBlocker] plus reason mentioning unrelated filed task must record only realBlocker; omission still parses both legacy reason ids with current boundary/case rules. Explicit [] must suppress parsing; invalid null/non-array/non-string retains INVALID_INPUT with zero writes/pages. Repeat calls preserve stored ids and union only explicit new ids, including [] with an informational reason; assert blockedFromStatus/blockedAt/seat and idempotent paging semantics unchanged. Include explicit already-satisfied ids plus unrelated unmet reason -> dependenciesSatisfied:true/no block; retain unknown/self/cycle/cap/filter controls. Verify runDependencyUnblock releases the incident-shaped row when the real blocker completes even while unrelated row remains WORKING. Assert new response provenance separately from actually recorded ids.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ],
+      "note": "Test-first regressions in existing fixture, preserving resource/seat/cycle/cap/idempotence coverage. Snapshot /tmp/moe-a4ca-worker.DAmWni with fresh native npm ci, env -i: npx vitest run src/tools/reportBlocked.test.ts -> exit 1, 11 failed / 44 passed (55). Expected RED: unrelated reason-only dependency retained, no early satisfied return, missing provenance, incident-shaped row fails to unblock. Null/non-array/non-string validation passes unchanged. Other sessions' pre-existing dirty paths left untouched. GREEN deferred to step-2 implementation, full named gate step-4.",
+      "startedAt": "2026-10-30T14:05:09.376Z",
+      "completedAt": "2026-10-30T14:06:42.480Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "In reportBlocked.ts use the existing presence criterion params.blockedOnTaskIds !== undefined, not array length: after unchanged validation, compute parsedFromReason only when no explicit list was supplied. Candidate merge is stored + (supplied OR parsed); preserve existing dedupe/order/cap, unknown handling, self/cycle guard, strict delivery satisfaction, resource-first behavior, status/ownership and error handling. Add additive response arrays suppliedBlockedOnTaskIds and parsedBlockedOnTaskIds to BOTH dependency-evaluating return shapes (dependenciesSatisfied and blocked/repeat). They contain first-occurrence unique normalized INPUT candidates before existence/cycle/satisfaction filtering; explicitly supplied [] yields both empty arrays, reason ids are never parsed in explicit mode. Existing blockedOnTaskIds/ignored/satisfied/dropped fields remain authoritative outcomes. Resource-granted early returns do not evaluate dependencies and therefore omit these arrays; queued-resource path uses the same selection. Update top regex comment, tool description, parameter description and dependenciesSatisfied nextAction wording so none falsely says explicit calls also parse reason. No schema/state migration or generic dependency helper refactor.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ],
+      "note": "Guarded reason parsing on params.blockedOnTaskIds !== undefined; explicit [] suppresses parsing, stored repeats still union. Added unique normalized input provenance to both dependency returns only; updated tool/parameter descriptions, regex comment and satisfied nextAction/message. Kept all filtering/resource/ownership/seat paths unchanged. Test scope touched to correct a fixture's absent-vs-null assertion (confirmed fresh task has omitted optional field), cover legacy satisfied provenance and use a real parseable id in queued-resource regression. Isolated native snapshot npx vitest run src/tools/reportBlocked.test.ts -> exit 0, 56 passed.",
+      "startedAt": "2026-10-30T14:06:52.999Z",
+      "completedAt": "2026-10-30T14:08:06.992Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update docs/MCP_SERVER.md report_blocked semantics, inputs and BOTH dependency response examples to distinguish supplied vs legacy-parsed candidates, explicit [] suppression, preserved stored ids on repeats, and filtering before recording. Update existing worker.md blocker guidance IN PLACE to say always pass blockedOnTaskIds explicitly (including [] for no task dependencies); worker.reference.md explains informational ids and repeat-union behavior. Keep worker.md <=40 lines; remove contradictory old union/auto-parse wording in these sections without rewriting unrelated seat lifecycle advice. No edits to generated initFiles.ts or .moe copies; generator picks up canonical role sources.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/roles/worker.md",
+        "docs/roles/worker.reference.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/roles/worker.md",
+        "docs/roles/worker.reference.md"
+      ],
+      "note": "Updated report_blocked semantics, params and BOTH dependency return examples for explicit-list wins/[] suppression, legacy-only parsing, repeat union, pre-filter provenance vs actual wait and free-resource omission. Worker blocker guidance updated in place; reference covers informational ids/stored holds. No generated/.moe edits. Isolated snapshot npm run docs:lint -> exit 0; worker.md remains 30 lines (<=40).",
+      "startedAt": "2026-10-30T14:08:07.014Z",
+      "completedAt": "2026-10-30T14:08:56.053Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Concentrated verification in an isolated snapshot with native dependencies and inherited MOE_* scrubbed, not the live linked dist: `(cd packages/moe-daemon && npm run build && npm test) && npm run docs:lint`. Full daemon suite is required by DoD and additive MCP response change. Submit fresh exact command/exitCode/outputTail with counts, no prior passing result substituted. Ensure tests fail against previous unconditional parsing, existing resource/seat/cycle/strict-delivery/idempotent tests stay passing, and build regenerates roles only in snapshot. Changes are OS-independent TS/docs; Windows-specific filesystem code is unchanged, but no shell-only test fixture dependency is introduced.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+        "docs/MCP_SERVER.md",
+        "docs/roles/worker.md",
+        "docs/roles/worker.reference.md"
+      ],
+      "note": "Verification-only step, no repository edits. Fresh exact gate `(cd packages/moe-daemon && npm run build && npm test) && npm run docs:lint` in /tmp/moe-a4ca-worker.DAmWni/repo with env -i/native Node v24.21.0 -> exit 0, 208 test files passed; 5961 passed / 16 skipped (5977), worker role 30/40 lines. Five owned files cmp-identical; live dist untouched, generators only snapshot (expected archive/no-history warnings). Compile-only test-file tsconfig npx tsc -p tsconfig.a4ca-tests.json -> exit 0. Snapshot unconditional-parsing mutant (keeping new response fields) -> exit 1, 7 failed / 49 passed: explicit/[]/queued-resource/repeat/satisfied/incident regression catches old bug; restored fixed source afterward. Full final gate will be rerun after adversarial review.",
+      "startedAt": "2026-10-30T14:08:56.077Z",
+      "completedAt": "2026-10-30T14:10:48.136Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review: absent vs [] vs invalid values, reason containing current/unknown/cyclic/satisfied/unrelated ids, repeated calls with stored dependencies, cap ordering, resource grant/queue, ownership rejection and chat failure. Confirm explicit reason-only mentions cannot become hard waits or cycle warnings, legacy behavior remains when omitted, provenance cannot be mistaken for persisted dependencies, and no accidental clearing of stored holds or extra paging occurs. Check concise five-file task diff <=400 net lines, fix findings and rerun the named gate before complete_task/QA.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+        "docs/MCP_SERVER.md",
+        "docs/roles/worker.md",
+        "docs/roles/worker.reference.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+        "docs/MCP_SERVER.md",
+        "docs/roles/worker.md",
+        "docs/roles/worker.reference.md"
+      ],
+      "note": "Adversarial review complete: global dispatch mutex and existing post-resource reread unchanged; absent/[]/invalid inputs, selected vs informational/self/unknown/cyclic/satisfied ids, stored repeat union/cap, resource grant/queue, ownership and chat failure checked. Preserved existing SAME-reason + new explicit-id test protection; clarified selected prerequisites vs all reason mentions in docs. No new state/schema/OS assumptions, no stored holds cleared, no added paging. Final exact gate `(cd packages/moe-daemon && npm run build && npm test) && npm run docs:lint` rerun after review in env-scrubbed native snapshot -> exit 0, 208 files / 5961 passed / 16 skipped (5977), role lint green (worker30/40). All five paths cmp match snapshot; scoped diff +127/-37 = net90 (<400), diff --check clean. Out-of-scope pre-existing worker.reference seat nextAction advice filed as task-054cc7c6a9b94f4d91ad4bfe15d50d6f, not changed inline or a blocker. Only snapshot generated outputs changed; peer dirty paths untouched.",
+      "startedAt": "2026-10-30T14:10:48.159Z",
+      "completedAt": "2026-10-30T14:12:39.583Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,10 +109,70 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:33:13.822Z",
-  "updatedAt": "2026-10-30T13:33:21.826Z",
+  "updatedAt": "2026-10-30T14:13:09.425Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:33:21.826Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:01:27.047Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-eb7de546",
+    "worker-262588d0"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:04:17.811Z",
+  "planningNotes": {
+    "approachesConsidered": "One conditional selecting reason fallback is enough; avoid new parsing modes/flags or migrating stored blocks. Explicit empty array is an intentional opt-out. New response provenance is additive, not persisted.",
+    "codebaseInsights": "Existing validation already distinguishes undefined from supplied values; parsedFromReason is unconditionally concatenated near169. Two later dependency responses need provenance, while resource-granted return precedes dependency evaluation. Existing test at420 intentionally asserts old mixed union and must be updated, not deleted; runDependencyUnblock fixture is available. Worker guidance sources generate initFiles; don't hand-edit output.",
+    "risks": "Five files/5steps but one small behavior change; <=60minutes/400net. Repeats remain monotone union per DoD, not replace-all. Filtering exceptions (unknown/cycle/satisfied) retain current semantics despite 'exact list' wording. Topic-filtered Serena memory searches block/dependency returned no entries; relevant existing source tests were read. No user ambiguity or dependency required.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+      "docs/MCP_SERVER.md",
+      "docs/roles/worker.md",
+      "docs/roles/worker.reference.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:04:17.835Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T14:05:09.376Z",
+  "reviewStartedAt": "2026-10-30T14:13:09.423Z",
+  "verification": {
+    "command": "(cd packages/moe-daemon && npm run build && npm test) && npm run docs:lint",
+    "exitCode": 0,
+    "outputTail": "Fresh final gate in /tmp/moe-a4ca-worker.DAmWni/repo with native Node v24.21.0/npm ci and env -i (MOE_* scrubbed); live dist untouched. All five owned paths cmp-identical. Log: /tmp/moe-a4ca-worker.DAmWni/gate-final.log\nBuild (including snapshot-only role/skill generation): exit 0\n Test Files  208 passed (208)\n      Tests  5961 passed | 16 skipped (5977)\n   Start at  16:11:20\n   Duration  28.39s\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 35 lines (max 40)\nGate exit 0. Separate final test-file typecheck: npx tsc -p tsconfig.a4ca-tests.json -> exit 0.",
+    "reportedAt": "2026-10-30T14:13:09.423Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+    "packages/moe-daemon/src/tools/reportBlocked.ts",
+    "docs/MCP_SERVER.md",
+    "docs/roles/worker.md",
+    "docs/roles/worker.reference.md"
+  ],
+  "completionSummary": "Explicit blockedOnTaskIds (including []) now wins over reason text; omission retains legacy parsing and repeats preserve stored holds. Added unique pre-filter supplied/parsed input provenance to both dependency responses, excluding free-resource returns. Updated tool and worker/API docs. Regression covers incident-shaped auto-unblock, normalization/filtering, []/invalid inputs, repeats/cap/resource/cycle/satisfied behavior. Five files, +127/-37 (net90). Final isolated build+full daemon suite+docs lint passed: 208 files, 5961 tests passed, 16 skipped; focused file 56 passed; test-file typecheck passed. Unconditional-parser mutant killed by 7 tests. Unrelated stale seat-lifecycle advice filed separately as task-054cc7c6a9b94f4d91ad4bfe15d50d6f. Handoff and reusable gotcha recorded in Serena; wrapper to land owned root changes."
 }

@@ -322,6 +322,8 @@ describe('moe.report_blocked', () => {
 
   it('resourceId: grants a free resource instead of blocking', async () => {
     const result = await report({ resourceId: 'benchmark-box' });
+    expect(result.suppliedBlockedOnTaskIds).toBeUndefined();
+    expect(result.parsedBlockedOnTaskIds).toBeUndefined();
     expect(result.granted).toBe(true);
     expect(result.lease).toMatchObject({ taskId: 'task-1', workerId: 'worker-1' });
     // Nothing blocked anywhere: the resource was free, so work proceeds.
@@ -352,7 +354,11 @@ describe('moe.report_blocked', () => {
     vi.spyOn(state, 'postToRoleChannel').mockImplementation(async () => {});
     await state.acquireResource({ resourceId: 'benchmark-box', taskId: 'task-holder', workerId: 'worker-holder' });
 
-    const result = await report({ resourceId: 'benchmark-box' });
+    const filed = await state.createTask({ epicId: 'epic-1', title: 'Informational', status: 'WORKING' });
+    const result = await report({ resourceId: 'benchmark-box', blockedOnTaskIds: [], reason: `filed ${filed.id}` });
+    expect(result.suppliedBlockedOnTaskIds).toEqual([]);
+    expect(result.parsedBlockedOnTaskIds).toEqual([]);
+    expect(result.blockedOnTaskIds).toBeUndefined();
     expect(result.granted).toBe(false);
     expect(result.taskStatus).toBe('BLOCKED');
     // Resource blocks emit NO nextAction: ending the session is the correct
@@ -417,35 +423,87 @@ describe('moe.report_blocked', () => {
 
   // ---- structured dependency ids (blockedOnTaskIds) ----
 
-  it('records validated blockedOnTaskIds, auto-parses ids out of the reason, and reports ignored strays', async () => {
+  it('records only explicit blockedOnTaskIds despite informational ids in the reason', async () => {
     const depA = await state.createTask({ epicId: 'epic-1', title: 'Dep A', status: 'WORKING' });
     const depB = await state.createTask({ epicId: 'epic-1', title: 'Dep B', status: 'BACKLOG' });
 
     const result = await report({
-      reason: `BUILD-ORDER BLOCK on ${depA.id}; also mentions task-eeeeee which was deleted, and itself task-1`,
-      blockedOnTaskIds: [depB.id, depB.id, 'task-nope'],
+      reason: `waiting on ${depB.id}; filed unrelated ${depA.id}, deleted task-eeeeee, itself task-1`,
+      blockedOnTaskIds: [` ${depB.id} `, depB.id, 'task-nope', 'task-1', ' '],
     }) as Record<string, unknown>;
 
     const task = state.getTask('task-1')!;
-    // Supplied ids first, then reason-parsed ids; deduped; own id and unknown
-    // ids never stored (a missing id counts as satisfied anyway).
-    expect(task.blockedOnTaskIds).toEqual([depB.id, depA.id]);
-    expect(result.blockedOnTaskIds).toEqual([depB.id, depA.id]);
-    // Only EXPLICITLY supplied unknown ids are reported back; parsed strays
-    // (deleted rows) vanish silently.
+    expect(task.blockedOnTaskIds).toEqual([depB.id]);
+    expect(result.blockedOnTaskIds).toEqual([depB.id]);
+    // Provenance is normalized input, not the filtered/persisted wait list.
+    expect(result.suppliedBlockedOnTaskIds).toEqual([depB.id, 'task-nope', 'task-1']);
+    expect(result.parsedBlockedOnTaskIds).toEqual([]);
     expect(result.ignoredBlockedOnTaskIds).toEqual(['task-nope']);
+  });
+
+  it('omission keeps legacy reason parsing with case, dedupe and boundary rules', async () => {
+    const a = await state.createTask({ epicId: 'epic-1', title: 'A', status: 'WORKING' });
+    const b = await state.createTask({ epicId: 'epic-1', title: 'B', status: 'WORKING' });
+    const result = await report({ reason: `sub${b.id} then (${a.id.toUpperCase()}), ${a.id}; ${b.id}; task-eeeeee` });
+    expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([a.id, b.id]);
+    expect(result.blockedOnTaskIds).toEqual([a.id, b.id]);
+    expect(result.suppliedBlockedOnTaskIds).toEqual([]);
+    expect(result.parsedBlockedOnTaskIds).toEqual([a.id, b.id, 'task-eeeeee']);
+    expect(result.ignoredBlockedOnTaskIds).toBeUndefined();
+  });
+
+  it('explicit [] suppresses reason parsing without creating cycle warnings', async () => {
+    const cycle = await state.createTask({ epicId: 'epic-1', title: 'Cycle', status: 'WORKING', dependsOn: ['task-1'] });
+    const result = await report({ reason: `informational ${cycle.id}, task-1 and task-eeeeee`, blockedOnTaskIds: [] });
+    expect(state.getTask('task-1')!.status).toBe('BLOCKED');
+    expect(state.getTask('task-1')!.blockedOnTaskIds ?? null).toBeNull();
+    expect(result.blockedOnTaskIds).toBeUndefined();
+    expect(result.suppliedBlockedOnTaskIds).toEqual([]);
+    expect(result.parsedBlockedOnTaskIds).toEqual([]);
+    expect(result.droppedCycleBlockedOnTaskIds).toBeUndefined();
+    expect(result.warnings).toBeUndefined();
+    expect(rolePosts.some(([, msg]) => msg.includes('dependency cycle'))).toBe(false);
+  });
+
+  it.each([{ value: null }, { value: 'task-abcdef' }, { value: [42] }])('rejects invalid explicit input $value before writes or pages', async ({ value }) => {
+    const taskBefore = structuredClone(state.getTask('task-1'));
+    const workerBefore = structuredClone(state.getWorker('worker-1'));
+    const updateTask = vi.spyOn(state, 'updateTask');
+    const updateWorker = vi.spyOn(state, 'updateWorker');
+    await expect(report({ blockedOnTaskIds: value })).rejects.toMatchObject({ code: -32602, codeName: 'INVALID_INPUT' });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(updateWorker).not.toHaveBeenCalled();
+    expect(state.getTask('task-1')).toEqual(taskBefore);
+    expect(state.getWorker('worker-1')).toEqual(workerBefore);
+    expect(generalPosts).toEqual([]);
+    expect(rolePosts).toEqual([]);
+  });
+
+  it('auto-unblocks on the real dependency while the informational filed bug stays WORKING', async () => {
+    const real = await state.createTask({ epicId: 'epic-1', title: 'Real blocker', status: 'WORKING' });
+    const filed = await state.createTask({ epicId: 'epic-1', title: 'Unrelated bug', status: 'WORKING' });
+    await report({ reason: `wait on ${real.id}; filed ${filed.id}`, blockedOnTaskIds: [real.id] });
+    expect(await runDependencyUnblock(state)).toEqual([]);
+    // Set the fixture status directly so this assertion exercises the sweep,
+    // not updateTask's event-driven unblock before the explicit scan.
+    state.tasks.set(real.id, { ...state.getTask(real.id)!, status: 'DONE' });
+    expect(await runDependencyUnblock(state)).toEqual(['task-1']);
+    expect(state.getTask('task-1')).toMatchObject({ status: 'WORKING', assignedWorkerId: null, blockedOnTaskIds: null });
+    expect(state.getTask(filed.id)!.status).toBe('WORKING');
   });
 
   it('a repeat carrying NEW blockedOnTaskIds is not an identical repeat — ids union, provenance survives', async () => {
     const depA = await state.createTask({ epicId: 'epic-1', title: 'Dep A', status: 'WORKING' });
     const depB = await state.createTask({ epicId: 'epic-1', title: 'Dep B', status: 'WORKING' });
+    const filed = await state.createTask({ epicId: 'epic-1', title: 'Informational', status: 'WORKING' });
 
-    await report({ reason: 'waiting on upstream', blockedOnTaskIds: [depA.id] });
+    const reason = `waiting on upstream; filed ${filed.id}`;
+    await report({ reason, blockedOnTaskIds: [depA.id] });
     const firstBlockedAt = state.getTask('task-1')!.blockedAt;
     expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([depA.id]);
 
-    // Same reason + a NEW id: a write, not a no-op.
-    const second = await report({ reason: 'waiting on upstream', blockedOnTaskIds: [depB.id] });
+    // Same reason + a NEW explicit id: a write, not a no-op.
+    const second = await report({ reason, blockedOnTaskIds: [depB.id] });
     expect(second.alreadyBlocked).toBe(true);
     expect(second.reasonUpdated).toBe(true);
     const corrected = state.getTask('task-1')!;
@@ -453,11 +511,21 @@ describe('moe.report_blocked', () => {
     expect(corrected.blockedOnTaskIds).toEqual([depA.id, depB.id]);
     expect(corrected.blockedAt).toBe(firstBlockedAt);
     expect(corrected.blockedFromStatus).toBe('WORKING');
+    expect(corrected.assignedWorkerId).toBeNull();
+    expect(second.suppliedBlockedOnTaskIds).toEqual([depB.id]);
+    expect(second.parsedBlockedOnTaskIds).toEqual([]);
 
     // Same reason + same ids (order/dupes irrelevant): identical repeat again.
-    const third = await report({ reason: 'waiting on upstream', blockedOnTaskIds: [depB.id, depA.id] });
+    const third = await report({ reason, blockedOnTaskIds: [depB.id, depA.id] });
     expect(third.alreadyBlocked).toBe(true);
     expect(third.reasonUpdated).toBe(false);
+    const postsBefore = [generalPosts.length, rolePosts.length];
+    const updateTask = vi.spyOn(state, 'updateTask');
+    const fourth = await report({ reason, blockedOnTaskIds: [] });
+    expect(fourth).toMatchObject({ alreadyBlocked: true, reasonUpdated: false, suppliedBlockedOnTaskIds: [], parsedBlockedOnTaskIds: [] });
+    expect(state.getTask('task-1')).toMatchObject({ blockedOnTaskIds: [depA.id, depB.id], blockedAt: firstBlockedAt, blockedFromStatus: 'WORKING', assignedWorkerId: null });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect([generalPosts.length, rolePosts.length]).toEqual(postsBefore);
   });
 
   it('caps the union at 20 dependency ids', async () => {
@@ -466,11 +534,12 @@ describe('moe.report_blocked', () => {
       const t = await state.createTask({ epicId: 'epic-1', title: `Dep ${i}`, status: 'BACKLOG' });
       ids.push(t.id);
     }
-    await report({ reason: 'waiting on the world', blockedOnTaskIds: ids });
-    expect(state.getTask('task-1')!.blockedOnTaskIds).toHaveLength(20);
+    const result = await report({ reason: 'waiting on the world', blockedOnTaskIds: ids });
+    expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual(ids.slice(0, 20));
+    expect(result.suppliedBlockedOnTaskIds).toEqual(ids);
   });
 
-  it('does NOT block when every named prerequisite is already DONE/ARCHIVED (no claim-thrash livelock)', async () => {
+  it.each([false, true])('does NOT block on already DONE/ARCHIVED prerequisites (explicit=%s)', async (explicit) => {
     // The measured moe-next pattern: "blocks point at tasks that are now DONE
     // and the block still stands". With the auto-unblock live, recording an
     // instantly-satisfied list is a livelock (flip → scan restores → next
@@ -478,17 +547,20 @@ describe('moe.report_blocked', () => {
     // nothing to wait on → not blocked, nothing written, nobody paged.
     const done = await state.createTask({ epicId: 'epic-1', title: 'Landed', status: 'DONE' });
     const archived = await state.createTask({ epicId: 'epic-1', title: 'Shelved', status: 'ARCHIVED' });
+    const unrelated = await state.createTask({ epicId: 'epic-1', title: 'Unrelated', status: 'WORKING' });
     await addWorker('architect-a', 'architect', 5);
 
     const result = await report({
-      reason: `cannot proceed until ${done.id} lands`,
-      blockedOnTaskIds: [archived.id],
+      reason: explicit ? `waiting on ${done.id}; filed unrelated ${unrelated.id}` : `waiting on ${archived.id}, ${done.id}, ${archived.id}`,
+      ...(explicit ? { blockedOnTaskIds: [archived.id, done.id, archived.id] } : {}),
     });
 
     expect(result.success).toBe(true);
     expect(result.blocked).toBe(false);
     expect(result.dependenciesSatisfied).toBe(true);
     expect(result.satisfiedBlockedOnTaskIds).toEqual([archived.id, done.id]);
+    expect(result.suppliedBlockedOnTaskIds).toEqual(explicit ? [archived.id, done.id] : []);
+    expect(result.parsedBlockedOnTaskIds).toEqual(explicit ? [] : [archived.id, done.id]);
     expect(result.taskStatus).toBe('WORKING');
     expect(result.seatFreed).toBeUndefined();
     expect(result.notified).toEqual({ target: null, via: 'not-blocked-dependencies-satisfied' });
@@ -518,6 +590,8 @@ describe('moe.report_blocked', () => {
     expect(result.dependenciesSatisfied).toBeUndefined();
     expect(result.blockedOnTaskIds).toEqual([open.id]);
     expect(result.satisfiedBlockedOnTaskIds).toEqual([done.id]);
+    expect(result.suppliedBlockedOnTaskIds).toEqual([done.id, open.id]);
+    expect(result.parsedBlockedOnTaskIds).toEqual([]);
     expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([open.id]);
   });
 
@@ -537,7 +611,7 @@ describe('moe.report_blocked', () => {
     expect(state.getTask('task-1')!.assignedWorkerId).toBeNull();
   });
 
-  it('drops an id that would close a dependency cycle (dependsOn ∪ blockedOnTaskIds), warns, and alerts #governors', async () => {
+  it.each([false, true])('drops dependency cycles and alerts #governors (explicit=%s)', async (explicit) => {
     // x is BLOCKED waiting on task-1; y (WORKING) declares dependsOn [task-1];
     // z is an honest prerequisite. Blocking task-1 on x or y closes a loop.
     const x = await state.createTask({ epicId: 'epic-1', title: 'X', status: 'WORKING' });
@@ -548,12 +622,14 @@ describe('moe.report_blocked', () => {
     const y = await state.createTask({ epicId: 'epic-1', title: 'Y', status: 'WORKING', dependsOn: ['task-1'] });
     const z = await state.createTask({ epicId: 'epic-1', title: 'Z', status: 'WORKING' });
 
-    const result = await report({ reason: `needs ${x.id} and ${z.id}`, blockedOnTaskIds: [y.id] });
+    const result = await report({ reason: `needs ${y.id}, ${x.id} and ${z.id}`, ...(explicit ? { blockedOnTaskIds: [y.id, x.id, z.id] } : {}) });
 
     expect(result.taskStatus).toBe('BLOCKED');
     expect(result.droppedCycleBlockedOnTaskIds).toEqual([y.id, x.id]);
     expect(result.blockedOnTaskIds).toEqual([z.id]);
     expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([z.id]);
+    expect(result.suppliedBlockedOnTaskIds).toEqual(explicit ? [y.id, x.id, z.id] : []);
+    expect(result.parsedBlockedOnTaskIds).toEqual(explicit ? [] : [y.id, x.id, z.id]);
     const warnings = result.warnings as string[];
     expect(warnings.some((w) => w.includes('DEPENDENCY_CYCLE') && w.includes(`task-1 → ${y.id} → task-1`))).toBe(true);
     expect(warnings.some((w) => w.includes('DEPENDENCY_CYCLE') && w.includes(`task-1 → ${x.id} → task-1`))).toBe(true);
