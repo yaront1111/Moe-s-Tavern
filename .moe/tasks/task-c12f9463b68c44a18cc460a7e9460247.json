@@ -92,7 +92,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -169,7 +169,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:52:07.306Z",
-  "updatedAt": "2026-10-30T21:38:25.148Z",
+  "updatedAt": "2026-10-30T22:16:22.785Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:04.205Z",
@@ -179,13 +179,16 @@
     "firstClaimAt": "2026-10-30T13:23:53.738Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T22:16:22.785Z",
+    "wallClockMs": 31949047
   },
   "contextFetchedBy": [
     "architect-6fc3dd5c",
     "architect-eb7de546",
     "architect-4ae016fb",
-    "worker-c0a1ac70"
+    "worker-c0a1ac70",
+    "qa-b29f7b3d"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -300,5 +303,9 @@
     "kind": "completion",
     "sessionId": "worker-c0a1ac70@2026-10-30T20:31:05Z",
     "at": "2026-10-30T21:38:25.148Z"
-  }
+  },
+  "completedAt": "2026-10-30T22:16:22.785Z",
+  "reviewCompletedAt": "2026-10-30T22:16:22.785Z",
+  "reviewSummary": "Approved. Completion 8ad04de7 is on moe/work-2026-10-24 and origin. Diff: the .sh +557 and the .ps1 +58, which is 615 lines (rail cap 700), plus a daemon board record staged by commitBoardState. Wrappers, the fake proxy and CI are untouched.\n\nRe-run on git-archive snapshots of 8ad04de7 and of HEAD dae149cd, after WT-04's retry:\n- task.verification, verbatim: exit 0. 18 tagged cases (8 local, 10 remote); suite exit 1; 18 FAIL, all on landing expectations; 0 ERROR; parity PASS, also in place.\n- A real `--only remote` run selected the 10 remote cases; `--only local` selected the 8 local ones; bad arguments exit 2.\n- Windows PS 5.1, on both snapshots: exit 1, 18 FAIL, 0 ERROR, the same messages as sh. The ps1 --list equals sh's. A scratch $expectedCases drift gives exit 2. No temp dirs are left.\n- DoD 4: the literal ParseFile command exits 1 on any file, postflight.ps1 included, because [ref]$e is unset. With `$e = $null;` first, this file parses with 0 errors, and a broken file still fails. Accepted on intent; the worker flagged it in comment-35013d61.\n- The hook string fires its act exactly once, under sh `bash -c` and under ps1 `cmd /d /s /c`, from a case dir with a space.\n- After a seat, W holds only the task's edit, so the clean-W check is reachable.\n\nDoD 1-5 met. The withdrawn case is replaced per comment-c942527c and planner note 2. Every case asserts refs, reflogs, parents or bytes before codes. The cases match design §2.2/2.3/2.6/2.7/2.9 and the S1-S5 seams posted on WT-08 and WT-09; ps1 Invoke-MoeGit calls bare git.\n\nNotes, non-blocking:\n1. Under pwsh 7 every seat fails MOE_AGENT_GIT_GUARD_FAILED. That is wrapper bug task-44b817f9 (PSModulePath), not these files; I noted it on WT-09.\n2. The hook uses bare `node` from PATH.\n3. A CLI that never launches reads as FAIL, not ERROR.",
+  "requiredCheckAtDone": null
 }
