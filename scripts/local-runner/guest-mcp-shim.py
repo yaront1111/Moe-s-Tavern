@@ -1,6 +1,7 @@
 #!/usr/bin/python3 -I
 # The in-guest agent CLI's only route to Moe: an MCP stdio server serving MOE_ROLE's tools.json allowlist and relaying each
 # allowed tools/call as one CQ-R08c request frame on the agent socket. It adds no trust; verified-local stays unavailable.
+# tools.json gives each key its daemon property schema without descriptions: codex defaults an untyped key to string.
 import json
 import math
 import os
@@ -17,6 +18,11 @@ MAX_GUEST_FRAME_BYTES = 262144  # mirrors guest-bridge.mjs
 MAX_HOST_FRAME_BYTES = 4194304  # mirrors guest-bridge.mjs
 MAX_LINE_BYTES = 262144
 MAX_TOOLS_BYTES = 262144  # guest-bootstrap.mjs MAX_SUPERVISOR_BYTES, the asset bound
+MAX_SCHEMA_DEPTH = 8  # each argument fragment starts at 1; items and properties add a level
+KEYWORDS = {
+    'string': {'enum'}, 'number': set(), 'integer': set(), 'boolean': set(),
+    'array': {'items'}, 'object': {'properties', 'required', 'additionalProperties'},
+}
 MAX_IN_FLIGHT = 8  # guest-supervisor.py's per-connection bound
 MAX_REQUEST_ID = 2147483647
 CALL_TIMEOUT_SECONDS = 120  # above the host's 60 s forward cap
@@ -41,21 +47,53 @@ def _finite(text):  # parse_float and parse_constant: NaN, Infinity and an overf
     return value
 
 
-def _decode(data):  # strict UTF-8 JSON: a BOM is refused, and UnicodeDecodeError is a ValueError
-    return json.loads(data.decode('utf-8'), parse_constant=_finite, parse_float=_finite)
+def _decode(data, object_pairs_hook=None):  # strict UTF-8 JSON: a BOM is refused, and UnicodeDecodeError is a ValueError
+    return json.loads(data.decode('utf-8'), parse_constant=_finite, parse_float=_finite, object_pairs_hook=object_pairs_hook)
+
+
+def _unique(pairs):  # the table must not hide a malformed fragment behind a duplicate key
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate key')
+        result[key] = value
+    return result
+
+
+def _strings(value):
+    return type(value) is list and all(type(item) is str for item in value) and len(set(value)) == len(value)
+
+
+def _properties(fragments, depth):
+    return type(fragments) is dict and all(
+        KEY.fullmatch(key) and _fragment(fragment, depth) for key, fragment in fragments.items())
+
+
+def _fragment(schema, depth):
+    if type(schema) is not dict or depth > MAX_SCHEMA_DEPTH:
+        return False
+    kind = schema.get('type')
+    if type(kind) is not str or kind not in KEYWORDS or schema.keys() - {'type'} - KEYWORDS[kind]:
+        return False
+    if kind == 'array':
+        return _fragment(schema.get('items'), depth + 1)
+    if kind == 'object':
+        properties, required = schema.get('properties'), schema.get('required', [])
+        return (_properties(properties, depth + 1) and _strings(required) and all(key in properties for key in required)
+                and ('additionalProperties' not in schema or type(schema['additionalProperties']) is bool))
+    return kind != 'string' or 'enum' not in schema or (bool(schema['enum']) and _strings(schema['enum']))
 
 
 def load_tools(path):
-    # role -> TOOL name -> unique KEY argument names. Anything else, a missing or oversized file included, serves none.
+    # role -> TOOL name -> KEY argument -> typed fragment. Any bad entry, missing or oversized file serves none.
     try:
         with open(path, 'rb') as file:
             data = file.read(MAX_TOOLS_BYTES + 1)
-        table = _decode(data) if len(data) <= MAX_TOOLS_BYTES else None
+        table = _decode(data, _unique) if len(data) <= MAX_TOOLS_BYTES else None
     except (OSError, ValueError, RecursionError):
         return {}
     valid = type(table) is dict and all(type(tools) is dict and all(
-        TOOL.fullmatch(name) and type(keys) is list and all(type(key) is str and KEY.fullmatch(key) for key in keys)
-        and len(set(keys)) == len(keys) for name, keys in tools.items()) for tools in table.values())
+        TOOL.fullmatch(name) and _properties(fragments, 1) for name, fragments in tools.items()) for tools in table.values())
     return table if valid else {}
 
 
@@ -70,8 +108,8 @@ class _Shim:
     def __init__(self, tools, socket_path, timeout, in_fd, out_fd):
         self.tools, self.path, self.timeout, self.in_fd, self.out_fd = tools, socket_path, timeout, in_fd, out_fd
         self.listed = {'tools': [{'name': name, 'inputSchema': {
-            'type': 'object', 'properties': {key: {} for key in keys}, 'additionalProperties': False}}
-            for name, keys in tools.items()]}
+            'type': 'object', 'properties': fragments, 'additionalProperties': False}}
+            for name, fragments in tools.items()]}
         self.selector = selectors.DefaultSelector()
         self.line, self.skipping = bytearray(), False
         self.sock, self.inbox, self.outbox = None, bytearray(), bytearray()

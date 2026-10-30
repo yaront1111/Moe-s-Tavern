@@ -17,6 +17,7 @@ import { createFrameDecoder, encodeFrame, MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_
 const NO_GUEST = process.platform === 'win32' && 'the MCP shim runs only in the Linux guest (POSIX python3)';
 const RUNNER = fileURLToPath(new URL('../local-runner/', import.meta.url));
 const [SHIM, TOOLS_FILE] = ['guest-mcp-shim.py', 'guest-mcp-tools.json'].map(name => join(RUNNER, name));
+const TABLE = JSON.parse(readFileSync(TOOLS_FILE, 'utf8'));
 const PROJECTION = Object.fromEntries(Object.entries(TOOLS).map(([role, tools]) => [role, Object.fromEntries(Object.entries(tools).map(([tool, { args }]) => [tool, args]))]));
 // -B: both IDE bundlers copy scripts/local-runner wholesale, so a __pycache__ there would ship.
 const LOAD = `import importlib.util, json, os, sys
@@ -34,7 +35,7 @@ const rpc = (id, method, params) => ({ jsonrpc: '2.0', ...(id !== undefined && {
 const call = (id, name, args) => rpc(id, 'tools/call', { name, ...(args !== undefined && { arguments: args }) });
 const heartbeat = id => call(id, 'moe.heartbeat');
 const listed = role => ({ tools: Object.entries(TOOLS[role]).map(([name, { args }]) =>
-  ({ name, inputSchema: { type: 'object', properties: Object.fromEntries(args.map(key => [key, {}])), additionalProperties: false } })) });
+  ({ name, inputSchema: { type: 'object', properties: Object.fromEntries(args.map(key => [key, TABLE[role][name][key]])), additionalProperties: false } })) });
 const response = (id, answer) => encodeFrame({ kind: 'response', id, ...answer }, MAX_HOST_FRAME_BYTES);
 const until = async (check, label) => { for (const end = Date.now() + 10_000; !check(); await sleep(10)) assert.ok(Date.now() < end, `timed out: ${label}`); };
 const scratch = () => { const dir = mkdtempSync(join(tmpdir(), 'moe-shim-')); dirs.push(dir); return dir; };
@@ -48,10 +49,10 @@ after(() => {
 });
 
 // serve() on a child python3 with MOE_ROLE (null: unset); setup runs first, e.g. to lower a module limit.
-function launch({ role = 'worker', socket = '/nonexistent/moe-shim/agent.sock', timeout = 'None', setup = '' } = {}) {
+function launch({ role = 'worker', socket = '/nonexistent/moe-shim/agent.sock', timeout = 'None', setup = '', tools = TOOLS_FILE } = {}) {
   const code = `${LOAD}${setup}\nsys.exit(m.serve(os.environ.get('MOE_ROLE'), m.load_tools(sys.argv[2]), sys.argv[3], timeout=${timeout}))`;
   const env = { PATH: process.env.PATH, ...(role !== null && { MOE_ROLE: role }) };
-  const proc = spawn('python3', ['-I', '-B', '-c', code, SHIM, TOOLS_FILE, socket], { env, stdio: ['pipe', 'pipe', 'inherit'] });
+  const proc = spawn('python3', ['-I', '-B', '-c', code, SHIM, tools, socket], { env, stdio: ['pipe', 'pipe', 'inherit'] });
   shims.push(proc);
   const shim = { text: '', exited: once(proc, 'exit'), get lines() { return this.text.split('\n').slice(0, -1).map(line => JSON.parse(line)); } };
   proc.stdout.setEncoding('utf8').on('data', chunk => { shim.text += chunk; });
@@ -79,25 +80,35 @@ async function fakePeer() {
 }
 const relay = async options => { const peer = await fakePeer(); return [peer, launch({ socket: peer.path, ...options })]; };
 
+const tableFiles = contents => { const dir = scratch(); return contents.map((content, index) => {
+  const file = join(dir, `${index}.json`); writeFileSync(file, content); return file;
+}); };
+const loadTables = files => {
+  const code = `${LOAD}print(json.dumps([m.load_tools(p) for p in sys.argv[2:]]))`;
+  const run = spawnSync('python3', ['-I', '-B', '-c', code, SHIM, ...files]);
+  assert.equal(run.status, 0, String(run.stderr));
+  return JSON.parse(run.stdout);
+};
+
 test('SH1 tools.json is the TOOLS projection, and tools/list serves exactly MOE_ROLE\'s tools', { timeout: 30_000 }, async t => {
-  assert.equal(readFileSync(TOOLS_FILE, 'utf8'), `${JSON.stringify(PROJECTION)}\n`);
+  assert.equal(readFileSync(TOOLS_FILE, 'utf8'), `${JSON.stringify(TABLE)}\n`);
+  assert.deepEqual(Object.fromEntries(Object.entries(TABLE).map(([role, tools]) => [role,
+    Object.fromEntries(Object.entries(tools).map(([tool, fragments]) => [tool, Object.keys(fragments)]))])), PROJECTION);
   if (NO_GUEST) return t.skip(NO_GUEST);
   for (const role of ['worker', 'qa']) assert.deepEqual(await exchange([rpc(1, 'tools/list')], { role }), [ok(1, listed(role))], role);
   for (const role of [null, '', 'admin', 'WORKER', 'constructor']) {
     assert.deepEqual(await exchange([rpc(1, 'tools/list'), call(2, 'moe.get_context')], { role }), [ok(1, { tools: [] }), fail('TOOL_DENIED', 2)], String(role));
   }
-  const dir = scratch();
-  const small = '{"worker":{"moe.x":[]}}';
-  const files = [
-    '{', '[]', '{"worker":[]}', '{"worker":{"moe.Get":[]}}', '{"worker":{"moe.x-y":[]}}', '{"worker":{"get_context":[]}}', '{"worker":{"moe.x":"view"}}',
-    '{"worker":{"moe.x":["a","a"]}}', '{"worker":{"moe.x":["1a"]}}', '{"worker":{"moe.x":["a-b"]}}', '{"worker":{"moe.x":[1]}}', '{"worker":{"moe.x":[]},"n":NaN}',
+  const small = '{"worker":{"moe.x":{}}}';
+  const files = tableFiles([
+    '{', '[]', '{"worker":[]}', '{"worker":{"moe.Get":{}}}', '{"worker":{"moe.x-y":{}}}', '{"worker":{"get_context":{}}}', '{"worker":{"moe.x":"view"}}',
+    '{"worker":{"moe.x":{"a":{"type":"string"},"a":{"type":"string"}}}}', '{"worker":{"moe.x":{}},"worker":{}}',
+    '{"worker":{"moe.x":{"1a":{"type":"string"}}}}', '{"worker":{"moe.x":{"a-b":{"type":"string"}}}}',
+    '{"worker":{"moe.x":{"a":1}}}', '{"worker":{"moe.x":{}},"n":NaN}',
     Buffer.from([0x7b, 0xff, 0x7d]), small.padEnd(MAX_SUPERVISOR_BYTES + 1), small.padEnd(MAX_SUPERVISOR_BYTES),
-  ].map((content, index) => { const file = join(dir, `${index}.json`); writeFileSync(file, content); return file; });
-  const code = `${LOAD}print(json.dumps([m.load_tools(p) for p in sys.argv[2:]]))`;
-  const run = spawnSync('python3', ['-I', '-B', '-c', code, SHIM, join(dir, 'missing.json'), ...files, TOOLS_FILE]);
-  assert.equal(run.status, 0, String(run.stderr));
+  ]);
   // The missing file and every invalid one serve none; only the file at the size bound and the repo table load.
-  assert.deepEqual(JSON.parse(run.stdout), [...Array(files.length).fill({}), JSON.parse(small), PROJECTION]);
+  assert.deepEqual(loadTables([join(scratch(), 'missing.json'), ...files, TOOLS_FILE]), [...Array(files.length).fill({}), JSON.parse(small), TABLE]);
 });
 
 test('SH2 initialize negotiates the protocol version, and notifications are never answered', { skip: NO_GUEST, timeout: 30_000 }, async () => {
@@ -576,4 +587,77 @@ test('AB11 invalid requests are refused before any fetch or cache write', async 
     [{ ...valid, cacheDir: `${cacheDir}\n` }, {}], [undefined, {}], [valid, { fetch: urlOf('claude', 'x64') }],
   ]) await assert.rejects(fetchAgentBinary(input, { fetch: server.fetch, ...options }), refused('AGENT_BINARY_INPUT_INVALID'), JSON.stringify([input, options]));
   assert.deepEqual([server.calls, existsSync(cacheDir)], [[], false]);
+});
+
+// CQ-R10d5 typed argument schemas
+const DAEMON_TOOLS = new URL('../../packages/moe-daemon/dist/tools/index.js', import.meta.url);
+const typed = ({ description, ...schema }) => ({ ...schema,
+  ...(schema.items && { items: typed(schema.items) }),
+  ...(schema.properties && { properties: Object.fromEntries(Object.entries(schema.properties).map(([key, value]) => [key, typed(value)])) }),
+});
+
+// tools.json is generated, never hand-edited: TOOLS keys plus built daemon inputSchemas, projected by typed().
+// Use the build, not src: heartbeat's ATTEMPT_PRESENCE_KINDS and qa_reject's VALID_ISSUE_TYPES enums are runtime values.
+// CI builds the daemon before this step on all three OSes; a local run must build it too.
+test('TY1 tools.json pins TOOLS keys and daemon property schemas without description annotations', { timeout: 60_000 }, async () => {
+  assert.ok(existsSync(DAEMON_TOOLS), 'build the daemon first: cd packages/moe-daemon && npm install && npm run build');
+  const daemon = new Map((await import(DAEMON_TOOLS.href)).getTools(null).map(tool => [tool.name, tool.inputSchema]));
+  const expected = Object.fromEntries(Object.entries(TOOLS).map(([role, tools]) => [role,
+    Object.fromEntries(Object.entries(tools).map(([tool, { args }]) => {
+      const schema = daemon.get(tool);
+      assert.equal(schema?.additionalProperties, false, tool);
+      return [tool, Object.fromEntries(args.map(key => {
+        assert.ok(Object.hasOwn(schema.properties, key), `${tool}.${key}`);
+        return [key, typed(schema.properties[key])];
+      }))];
+    }))]));
+  assert.equal(readFileSync(TOOLS_FILE, 'utf8'), `${JSON.stringify(expected)}\n`);
+  assert.deepEqual(expected.worker['moe.complete_step'].modifiedFiles, { type: 'array', items: { type: 'string' } });
+  assert.deepEqual(expected.worker['moe.complete_task'].verification, { type: 'object', properties: {
+    command: { type: 'string' }, exitCode: { type: 'number' }, outputTail: { type: 'string' },
+  }, required: ['command', 'exitCode'], additionalProperties: false });
+  assert.deepEqual(expected.worker['moe.get_context'].commentsLimit, { type: 'number' });
+  assert.deepEqual(expected.qa['moe.qa_reject'].issues.items.properties.description, { type: 'string' });
+});
+
+const untyped = (schema, path) => typeof schema?.type !== 'string' ? [path] : [
+  ...(schema.type === 'array' ? untyped(schema.items, `${path}[]`) : []),
+  ...Object.entries(schema.properties ?? {}).flatMap(([key, value]) => untyped(value, `${path}.${key}`)),
+];
+test('TY2 tools/list gives every property, array item and nested property a type', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  for (const role of ['worker', 'qa']) {
+    const [{ result: { tools } }] = await exchange([rpc(1, 'tools/list')], { role });
+    assert.deepEqual(tools.map(({ name, inputSchema }) => [name, Object.keys(inputSchema.properties)]),
+      Object.entries(TOOLS[role]).map(([name, { args }]) => [name, args]));
+    for (const { name, inputSchema } of tools) {
+      assert.deepEqual([inputSchema.type, inputSchema.additionalProperties], ['object', false], name);
+      assert.deepEqual(untyped(inputSchema, name), [], name);
+    }
+  }
+});
+
+test('TY3 load_tools refuses malformed typed fragments, accepts depth 8 and fails closed end to end', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  const S = { type: 'string' };
+  const nest = n => n === 1 ? S : { type: 'array', items: nest(n - 1) };
+  const object = extra => ({ type: 'object', properties: { b: S }, ...extra });
+  const fragments = [
+    null, false, 0, [], {}, ...['date', 'null', ['string', 'null'], 1, true, {}, null].map(type => ({ type })),
+    { type: 'array' }, { type: 'array', items: {} }, { ...S, items: S }, { type: 'number', enum: ['1'] },
+    ...['description', 'default', '$ref'].map(key => ({ ...S, [key]: 'x' })),
+    { type: 'object' }, object({ properties: [] }), object({ properties: { b: {} } }), object({ properties: { '1b': S } }),
+    ...[['c'], ['b', 'b'], 'b', [['b']], [{}], [true], null].map(required => object({ required })), object({ additionalProperties: {} }),
+    ...[[], [1], ['a', 'a'], 'a', [['a']], [{}], [false], null].map(enu => ({ ...S, enum: enu })), nest(9),
+  ];
+  const good = { worker: { 'moe.x': { s: { ...S, enum: ['a'] }, n: { type: 'number' }, i: { type: 'integer' },
+    b: { type: 'boolean' }, d: nest(8), o: { type: 'object', properties: { c: S }, required: ['c'], additionalProperties: false } }, 'moe.y': {} } };
+  // A bad fragment must refuse good siblings too, including depth 8 beside depth 9 and tools in another role.
+  const tables = [{ worker: { 'moe.x': ['a'] } }, { worker: { 'moe.x': { a: {} } } }, ...fragments.map(fragment => ({ worker: {
+    'moe.good': { s: S }, 'moe.x': { valid: nest(8), a: fragment },
+  }, qa: { 'moe.y': {} } }))];
+  const files = tableFiles([...tables, good].map(table => JSON.stringify(table)));
+  const loaded = loadTables(files);
+  for (const [at, table] of tables.entries()) assert.deepEqual(loaded[at], {}, JSON.stringify(table));
+  assert.deepEqual(loaded.at(-1), good);
+  assert.deepEqual(await exchange([rpc(1, 'tools/list'), call(2, 'moe.get_context')], { tools: files[1] }),
+    [ok(1, { tools: [] }), fail('TOOL_DENIED', 2)]);
 });
