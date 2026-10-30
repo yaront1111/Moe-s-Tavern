@@ -79,6 +79,8 @@ The worker's job ends at `moe.complete_task`. The QA agent reviews and may call 
 One step per phase is a fine starting point for non-trivial work. For larger tasks, Phase 4 (minimum implementation) usually expands into multiple steps — one per logical concern. **Only Phase 4 expands.** Phases 5 and 7 are one step each, at the end, no matter how many implementation steps precede them. Always:
 
 - Set `affectedFiles` tight per step.
+- When a Serena memory bears on a step, name it in that step's description as `mem:<name>` (for example `mem:gotcha-moe-doc-generated-artifacts`), so the worker calls read_memory on exactly that memory instead of scanning list_memories.
+- Cite only live names. A name under `_archive/` is hidden from Serena by .serena/project.yml ignored_memory_patterns, and read_memory refuses it.
 - Map every Definition-of-Done item to at least one step.
 - State non-obvious design choices in the step `description` so the worker doesn't re-derive them.
 

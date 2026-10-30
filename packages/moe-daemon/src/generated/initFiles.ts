@@ -435,7 +435,7 @@ All of these are rotation working, not a crash: never release a task over one.
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. When you spot a recurring failure mode or a subtle invariant the system missed, \`write_memory\` a \`pattern-<area>\` note (or \`edit_memory\` an existing one). Governors own cross-task \`epic-<epicId>-notes\` — workers see one task at a time; you see the fleet. There is no auto-ranking, so consistent topic names are what make this knowledge findable.`,
-  'qa.md': `<!-- moe-generated: sha=ed2d54b4a630 -->
+  'qa.md': `<!-- moe-generated: sha=546f3f3da3d2 -->
 
 # QA
 
@@ -456,6 +456,9 @@ Read current project/epic/task rails before running commands. All test and re-ru
 - Check cross-platform paths/scripts when the task touches wrappers, shell, PowerShell, or filesystem behavior.
 - Confirm required docs, migrations, or config updates landed.
 - Reject on any DoD gap, rail violation, unverifiable claim, silent failure path, or data-loss/race risk.
+
+## Handoff retirement
+- After \`moe.qa_approve\` only: fold any reusable fact from this task's \`task-<id>-handoff\` / \`task-<id>-qa-handoff\` memories into a gotcha-/pattern-/decision- memory (prefer edit_memory), write no new qa-handoff, then retire them by plain file move: \`mkdir -p .serena/memories/_archive && mv .serena/memories/task-<id>-*handoff.md .serena/memories/_archive/\` (never rename_memory: Serena refuses \`_archive/\` names; use delete_memory only when nothing is reusable and no live memory cites it). Never overwrite an archived file; if the move fails, say so in the \`qa_approve\` summary. After \`moe.qa_reject\`, keep the handoffs; never retire another task's. \`.serena/\` is untracked: never declare_files or commit it. Lifecycle: \`docs/MEMORY.md\`.
 
 ## Session discipline
 One-shot sessions exit the moment you end your turn, and background builds/tests die with the process — their "completion notification" can never arrive. Run every gate in the foreground (or poll it to completion) before you stop. If your prompt starts with RESUME, a prior session died mid-review: re-verify from disk/git; trust nothing it claimed in-flight.
@@ -717,7 +720,7 @@ const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
   'architect.reference.md': ['08b07943437a', '1d66722f1763', '28353487e190', '399590c0e5e5', '4b268f5ee405', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
   'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', '6cedbe83add8', '9b4b1f77fc16', 'a0c5bc216e41', 'b1c15c152e75', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
   'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'ad9aa1bf6271', 'b613fb62e997', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
-  'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '6cf327f722c6', '7a4154466321', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
+  'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '546f3f3da3d2', '6cf327f722c6', '7a4154466321', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b'],
   'worker.md': ['05799e86c64e', '0d4a56256314', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '2b22d0d22444', '3001e8ef81e6', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'a936b3d0bc20', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bb8c2906ee23', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],
   'worker.reference.md': ['00d768586ec5', '2345e537ca85', '4818eaa4d242', '4b041787b980', '6b8e906e69d9', '7642fd40403b', '7a2b7f00dfd3', 'a383dbfc5ab3', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']

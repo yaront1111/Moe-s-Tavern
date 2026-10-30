@@ -18,6 +18,9 @@ Read current project/epic/task rails before running commands. All test and re-ru
 - Confirm required docs, migrations, or config updates landed.
 - Reject on any DoD gap, rail violation, unverifiable claim, silent failure path, or data-loss/race risk.
 
+## Handoff retirement
+- After `moe.qa_approve` only: fold any reusable fact from this task's `task-<id>-handoff` / `task-<id>-qa-handoff` memories into a gotcha-/pattern-/decision- memory (prefer edit_memory), write no new qa-handoff, then retire them by plain file move: `mkdir -p .serena/memories/_archive && mv .serena/memories/task-<id>-*handoff.md .serena/memories/_archive/` (never rename_memory: Serena refuses `_archive/` names; use delete_memory only when nothing is reusable and no live memory cites it). Never overwrite an archived file; if the move fails, say so in the `qa_approve` summary. After `moe.qa_reject`, keep the handoffs; never retire another task's. `.serena/` is untracked: never declare_files or commit it. Lifecycle: `docs/MEMORY.md`.
+
 ## Session discipline
 One-shot sessions exit the moment you end your turn, and background builds/tests die with the process — their "completion notification" can never arrive. Run every gate in the foreground (or poll it to completion) before you stop. If your prompt starts with RESUME, a prior session died mid-review: re-verify from disk/git; trust nothing it claimed in-flight.
 

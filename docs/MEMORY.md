@@ -75,10 +75,15 @@ When you discover something reusable, or before you stop, persist it:
 
 There is no longer a dedicated session-summary tool. Instead, end-of-session continuity is a plain memory file named `task-<taskId>-handoff`. Write it before you wait or shut down; the next agent reads it on pickup. Use `epic-<epicId>-notes` for knowledge that spans multiple tasks in an epic.
 
+**Lifecycle.** `task-<taskId>-handoff` (and QA's `task-<taskId>-qa-handoff`) is written while the task is open. It is retired at `moe.qa_approve`: QA first folds any reusable fact into a `gotcha-` / `pattern-` / `decision-` memory (prefer `edit_memory`), then archives the handoff, or deletes it when nothing is reusable and no live memory cites it. A task that QA rejects keeps its handoff, since the worker reads it on the next pickup.
+
+**`_archive/` convention.** Retired or merged-away memories are moved to `.serena/memories/_archive/<same name>.md` with a plain file move (`mkdir -p .serena/memories/_archive && mv .serena/memories/task-<id>-*handoff.md .serena/memories/_archive/`), never overwriting an existing archived file. `.serena/project.yml` carries `ignored_memory_patterns: [_archive/.*]`, which hides them from `list_memories`, `read_memory` and `write_memory`; `read_file` still reads the raw file. Because Serena refuses `_archive/` names, do not use `rename_memory` to archive. The wrappers' pre-flight `<inbox>` name preload scans only the top level. `.serena/` is untracked: never declare or commit it.
+
 ## Role-Specific Guidance
 
 ### Architects
 - Before planning: `list_memories` + `read_memory` for relevant `convention-*` / `gotcha-*` / `pattern-*` / `decision-*` entries.
+- In the plan: when a memory bears on a step, name it in that step's description as `mem:<name>` so the worker reads exactly that one instead of scanning `list_memories`. Cite only live names, never an `_archive/` name.
 - During exploration: `write_memory` conventions, gotchas, and patterns discovered.
 - On plan submission: include `planningNotes` with analysis and reasoning (see below).
 - Before waiting: `write_memory { name: "task-<taskId>-handoff" }`.
@@ -91,7 +96,8 @@ There is no longer a dedicated session-summary tool. Instead, end-of-session con
 ### QA
 - Before reviewing: read relevant memories for known issues.
 - During review: `write_memory`/`edit_memory` recurring issue patterns as `gotcha-*` entries.
-- Before stopping: `write_memory { name: "task-<taskId>-handoff" }`.
+- After `moe.qa_approve` only: fold reusable facts from the task's handoffs into topic memories, then retire them to `_archive/` (rule in `docs/roles/qa.md`). After `moe.qa_reject`, keep them.
+- Otherwise, before stopping: `write_memory { name: "task-<taskId>-handoff" }`.
 
 ## Architect-to-Worker Handoff (planningNotes)
 
@@ -123,5 +129,5 @@ If a project still has a `.moe/memory/knowledge.jsonl` from the previous native 
 ## Caveats
 
 - **No auto-surfacing.** Memory never appears in `moe.get_context` automatically; agents must call `list_memories` / `read_memory`. Naming discipline is what makes the right file discoverable.
-- **No ranking, confidence, or dedup.** There is no relevance score and no automatic merging. Avoid near-duplicates by preferring `edit_memory`.
+- **No ranking, confidence, or dedup.** There is no relevance score and no automatic merging. Avoid near-duplicates by preferring `edit_memory`; merging stays manual, and merged-away files go to `_archive/`.
 - **No-op without Serena.** If Serena is not installed (`uv tool install -p 3.13 serena-agent`), the launchers skip injecting it and agents run without cross-session memory.
