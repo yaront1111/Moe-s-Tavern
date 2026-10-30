@@ -1,0 +1,30 @@
+{
+  "id": "task-dc833bfb10984e23a94ee047ae187c90",
+  "epicId": "epic-be924fb8",
+  "title": "Daemon contract for honest contested holds: record_commit remedy text, get_commit_scope activeTaskIds",
+  "description": "Split from task-9d27749421b045c18a6c6eb99694236d along the daemon/wrapper seam (architect-e4b7eee0, 2026-10-30). That task keeps the wrapper half (moe-agent.{sh,ps1} held= remedy and label, postflight.{sh,ps1}, docs/TROUBLESHOOTING.md) and depends on this one.\n\nObjective. The MOE_CONTESTED_HELD alert tells every seat to release a skip-untouched hold by editing the path \"with a wrapper-observed successful editing tool (Claude Edit/Write family or a supported Serena editor, not a shell write)\". Only one-shot Claude stream-json sessions feed the wrapper's TOOL witness (docs/CONFIGURATION.md \"Session touch evidence\", docs/TROUBLESHOOTING.md \"Current witness limit\"). A Codex, Gemini, Grok or interactive Claude seat that obeys stays held, and each round costs a QA reject (task-2cf1c6be and CQ-R11e2, 2026-10-30). Separately, held= names the peer entry's first claimant (taskIds[0]) even when an idle, dependency-gated task is first and a live one caused the hold (8f62fa0f named idle task-001d8ab3 while task-1e7f5a2d was live). The wrappers cannot fix that without per-task activity, which get_commit_scope does not serve today: peerActive is an OR over contributors.\n\nDeliverable, packages/moe-daemon only plus docs/MCP_SERVER.md:\n1. packages/moe-daemon/src/tools/recordCommit.ts:\n- HELD_REMEDY_UNTOUCHED names the three real release routes. Planned text: 'MOE_ATTR_CONTESTED_UNTOUCHED: verify these bytes are this task\\'s and coordinate any live peer. Before the next landing, either a one-shot Claude session of this task edits the path with a wrapper-observed successful editing tool (not a shell write), or a later session of this task that found the path clean at its pre-flight edits it while every contesting peer stays idle, or the stale peer task is legitimately completed or archived.'\n- In HELD_REMEDY_EDITING, \"either this task's own assignee session edits the path\" becomes \"either a one-shot Claude session of this task edits the path\". The rest stays.\n- New HELD_REMEDY_WITNESS, exactly: 'Only a one-shot (claude -p) Claude session\\'s Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session\\'s edits, Serena\\'s included, leave none.' It is appended after the editing remedy whenever the line has an untouched or editing hold, before the strict remedy and the never-clause. task-9d277494's wrappers reuse this exact sentence in their held= remedy, so keep it byte-stable.\n- Unchanged: HELD_REMEDY_STRICT, HELD_REMEDY_NEVER, hold classification, peer naming, the 5-path bound and the #governors rate limit.\n2. packages/moe-daemon/src/tools/getCommitScope.ts: each peerDeclared entry gains activeTaskIds: string[]. It lists the contributing tasks that are active by the peerActive rule, in id order; without `since`, that is every contributor.\n- Invariants: editingTaskIds is a subset of activeTaskIds, and peerActive === (activeTaskIds.length > 0).\n- Update the tool description string beside taskIds/editingTaskIds.\n- The field is additive. A wrapper that predates it ignores it. task-9d277494's wrappers read it to name editing, then active, peers before idle claimants. An absent field counts as [].\n3. packages/moe-daemon/src/tools/recordCommit.test.ts and getCommitScope.test.ts: exact-string and shape tests (see DoD).\n4. docs/MCP_SERVER.md:\n- In the get_commit_scope Returns block, add activeTaskIds to the peerDeclared type and its comment.\n- Update the record_commit \"Held contested paths\" bullets to the new remedy text. The EDITING bullet quotes its line verbatim, so update the quote too. Name the witness sentence and when it is appended.\n\nNOT in scope:\n- Any wrapper or harness file (task-9d277494).\n- Codex `--json` witness harvest (the split sibling filed with this row).\n- Which paths are held or landed, record_commit's classification or rate limits.\n- docs/roles/governor.md.\n\nVerification: `cd packages/moe-daemon && npm run build && npm test`. activeTaskIds is an additive wire field on a wrapper-facing tool, so this runs the full daemon suite, not one file.",
+  "definitionOfDone": [
+    "recordCommit.test.ts asserts the exact new lines. An untouched-only hold reads `... — <HELD_REMEDY_UNTOUCHED> <HELD_REMEDY_WITNESS> <HELD_REMEDY_NEVER>`, and an editing hold has the witness sentence after the editing remedy. Neither line contains 'Claude Edit/Write family or a supported Serena editor' or 'this task\\'s own assignee session edits'.",
+    "A strict-only (MOE_ATTR_CONTESTED) MOE_CONTESTED_HELD line is byte-identical to before this change, without the witness sentence, proven by an exact-string recordCommit.test.ts case.",
+    "get_commit_scope peerDeclared entries carry activeTaskIds, proven by new getCommitScope.test.ts cases. With `since`, an idle first contributor and an active second give taskIds [first, second], activeTaskIds [second] and peerActive true. Without `since`, every contributor is listed. editingTaskIds is a subset of activeTaskIds in every case.",
+    "docs/MCP_SERVER.md documents activeTaskIds in the get_commit_scope Returns block, and the record_commit held-path bullets match the new constants, quoted verbatim where the doc quotes.",
+    "`cd packages/moe-daemon && npm run build && npm test` passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 1.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T10:58:17.297Z",
+  "updatedAt": "2026-10-30T10:58:17.297Z"
+}

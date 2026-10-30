@@ -1,0 +1,32 @@
+{
+  "id": "task-7cc959e9b42043ba8009cdd9813103e0",
+  "epicId": "epic-be924fb8",
+  "title": "Codex exec seats earn TOOL witnesses from codex exec --json events",
+  "description": "Split from task-9d27749421b045c18a6c6eb99694236d, its item (3) (architect-e4b7eee0, 2026-10-30). That task makes the MOE_CONTESTED_HELD remedy honest that Codex seats cannot release a hold by editing; this one removes that limit for `codex exec` seats.\n\nObjective: a `codex exec` seat can land a contested own path it edited, under the same success-only witness rules as a one-shot Claude seat.\n- Today only Claude stream-json editing events feed the wrapper's per-session TOOL set. See STREAM_JSON_PARSER's harvest() in scripts/moe-agent.sh (~8238-8410: WRITE_TOOLS, SERENA_TOOLS, matching successful tool_result) and its moe-agent.ps1 twin.\n- A Codex seat's apply_patch and Serena edits are real, but leave $MOE_TOOL_WRITES_FILE empty. So a contested path stays held unless the idle-clean exception applies (Serena gotcha-codex-worker-unwitnessed-contested-path-delivery-gap; task-2cf1c6be and CQ-R11e2, 2026-10-30).\n- Both wrappers already launch `codex exec --json` and pipe its JSONL into `node scripts/prompt-cache.mjs codex-stream` (moe-agent.sh ~7875, moe-agent.ps1 ~7041).\n\nDeliverable:\n1. Spike first, recorded as test fixtures. Capture the real `codex exec --json` event shapes, from the codex-cli version the wrappers support, for:\n- an apply_patch / file-change item that succeeds and one that fails;\n- a Serena editing MCP tool call that succeeds, one that fails, and one with no result.\n2. Harvest witnesses from those events into $MOE_TOOL_WRITES_FILE, TOP-relative, the same file and format the Claude parser writes, in both wrappers:\n- each path of a completed, successful file change;\n- a successful Serena editing MCP call, with the Claude parser's tool list and per-tool success rules (safe_delete_symbol only on OK, replace_in_files only the files its applied summary lists, rename_symbol only its declaring path).\n- A failed, unmatched or result-less call witnesses nothing. A path outside the repo is not harvested.\n- Codex TUI seats (no JSON stream) and every Claude seat are unchanged.\n3. Count `codex exec` seats in the witness sentence of the MOE_CONTESTED_HELD remedy, introduced by task-dc833bfb10984e23a94ee047ae187c90 (recordCommit.ts HELD_REMEDY_WITNESS) and task-9d277494 (both wrappers' held= remedy). Also update docs/CONFIGURATION.md \"Session touch evidence\" and docs/TROUBLESHOOTING.md \"Current witness limit\".\n\nNOT in scope:\n- Gemini, Grok or interactive-session harvest.\n- Any change to attribution.contested, the idle-clean exception or the EDITING hold.\n- Codex TUI seats.\n\nSize: this likely exceeds one task's caps (two wrappers, the stream helper, two harnesses, docs and recordCommit.ts). The planner should SPIDR it further, for example the spike plus sh harvest first, then the ps1 twin, then the remedy and docs.\n\nSerialization: depends on task-9d277494, which changes the same four wrapper and harness files and the witness sentence. At planning, rerun the overlap scan. task-4fdc7590 and task-16bbf8ff also wait on 9d277494 and plan the same files.\n\nVerification: `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`, plus `pwsh -NoProfile -File scripts/tests/postflight.ps1` where pwsh is installed, and the stream helper's node test if one is added.",
+  "definitionOfDone": [
+    "A `codex exec` seat's successful apply_patch edit of a contested own path, dirty at pre-flight with a live peer, lands under skip-untouched. Proven by postflight.{sh,ps1} rows driven by a fake `codex exec --json` stream; the session-ended line carries no held=.",
+    "A successful Serena editing MCP call from a `codex exec` seat witnesses its path. A failed apply_patch, a failed or result-less MCP call and a path outside the repo witness nothing. Postflight rows prove each case.",
+    "The MOE_CONTESTED_HELD witness sentence (both wrappers and recordCommit.ts), docs/CONFIGURATION.md 'Session touch evidence' and docs/TROUBLESHOOTING.md 'Current witness limit' count `codex exec` seats. recordCommit.test.ts and `bash scripts/tests/parity-check.sh` pass.",
+    "Existing Claude-stream and codex TUI postflight scenarios stay green unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-9d27749421b045c18a6c6eb99694236d"
+  ],
+  "priority": "MEDIUM",
+  "order": 2.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T10:58:35.132Z",
+  "updatedAt": "2026-10-30T10:58:35.132Z"
+}
