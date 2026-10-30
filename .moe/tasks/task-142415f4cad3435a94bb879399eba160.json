@@ -17,12 +17,9 @@
       "affectedFiles": [
         "docs/skills/moe-planning/SKILL.md"
       ],
-      "modifiedFiles": [
-        "docs/skills/moe-planning/SKILL.md"
-      ],
-      "note": "Added mem:<name> pointer bullets to moe-planning SKILL.md; architect.md untouched.",
-      "startedAt": "2026-10-30T08:18:51.090Z",
-      "completedAt": "2026-10-30T08:19:07.215Z"
+      "note": "Rework round (reopen 1): no change. The QA rejection doesn't touch docs/skills/moe-planning/SKILL.md, and its mem:<name> rule from 4d6b371 is clean in git status. skillFiles.ts stays untouched, as QA asked. 58 dirty paths from other sessions exist in the shared tree; none were touched.",
+      "startedAt": "2026-10-30T08:27:30.058Z",
+      "completedAt": "2026-10-30T08:27:56.633Z"
     },
     {
       "stepId": "step-2",
@@ -34,9 +31,9 @@
       "modifiedFiles": [
         "docs/roles/qa.md"
       ],
-      "note": "qa.md now 35 lines (<=40) with Handoff retirement section.",
-      "startedAt": "2026-10-30T08:19:08.060Z",
-      "completedAt": "2026-10-30T08:19:14.849Z"
+      "note": "QA fix for qa.md:22. Plain `mv` is replaced by a subshell that checks every `_archive/<name>` destination first and exits 1 on any collision, so nothing is retired; only then does it run `mv -n`, which backstops a race. Scratch tests: no collision moves both handoffs (exit 0); one collision exits 1, moves neither file, and the archive still reads OLD; no match exits 1 with 'cannot stat'. The `mv -n` alone is not enough: Git Bash's coreutils 8.32 `mv -n` skips with exit 0, and only 9.4 exits 1. The doc now says never use a plain mv. qa.md is 35 lines (cap 40), and the edited line is ASCII.",
+      "startedAt": "2026-10-30T08:27:57.602Z",
+      "completedAt": "2026-10-30T08:28:16.547Z"
     },
     {
       "stepId": "step-3",
@@ -48,8 +45,9 @@
       "modifiedFiles": [
         "docs/MEMORY.md"
       ],
-      "startedAt": "2026-10-30T08:19:15.702Z",
-      "completedAt": "2026-10-30T08:19:30.710Z"
+      "note": "QA fix for MEMORY.md:80. The `_archive/` convention now carries the same check-then-move command as qa.md; the two backtick spans are byte-identical (checked by grep). It also explains why a plain `mv` is forbidden (it silently overwrites) and why `mv -n` alone isn't enough (8.32 exits 0, 9.4 exits 1), and says a non-zero exit leaves every file in place and must be reported. I ran the doc's literal command with <id> substituted. On a collision it exited 1: neither file moved, the archive kept OLD. On a clean run it exited 0: both of this task's handoffs moved, another task's handoff stayed. The added line is ASCII (the 7 non-ASCII lines were already at HEAD). MEMORY.md is not vendored, so it needs no generator.",
+      "startedAt": "2026-10-30T08:28:17.430Z",
+      "completedAt": "2026-10-30T08:28:35.651Z"
     },
     {
       "stepId": "step-4",
@@ -60,12 +58,11 @@
         "packages/moe-daemon/src/generated/skillFiles.ts"
       ],
       "modifiedFiles": [
-        "packages/moe-daemon/src/generated/initFiles.ts",
-        "packages/moe-daemon/src/generated/skillFiles.ts"
+        "packages/moe-daemon/src/generated/initFiles.ts"
       ],
-      "note": "Generated initFiles.ts (8 role docs + 3 subagents, sha-stamped); Generated skillFiles.ts (65 skill files across 17 skills). Diffs hold only qa.md entry (marker sha, new section, shipped-body sha) and moe-planning marker + 2 bullets. No foreign hunks.",
-      "startedAt": "2026-10-30T08:19:31.498Z",
-      "completedAt": "2026-10-30T08:19:43.161Z"
+      "note": "Pre-check: `git status -- docs/roles docs/skills docs/agents` showed only ` M docs/roles/qa.md`. I saved both generated files to /tmp/moe-142415f4 first. I regenerated only initFiles.ts, as QA asked, through Windows Git Bash `npm run generate-init-files`, which printed 'Generated D:\\projexts\\moes\\packages\\moe-daemon\\src\\generated\\initFiles.ts (8 role docs + 3 subagents, sha-stamped)' and exited 0. The diff against the saved copy is 3 lines, all qa.md: marker 546f3f3da3d2 -> 3d85e1e8146a, the line-22 body, and 3d85e1e8146a added to the shipped-body list; there are no foreign hunks. skillFiles.ts is byte-identical (cmp) and wasn't regenerated, since SKILL.md didn't change. I ran no build or prebuild.",
+      "startedAt": "2026-10-30T08:28:36.599Z",
+      "completedAt": "2026-10-30T08:28:55.319Z"
     },
     {
       "stepId": "step-5",
@@ -76,9 +73,13 @@
         "packages/moe-daemon/src/generated/initFiles.ts",
         "packages/moe-daemon/src/generated/skillFiles.ts"
       ],
-      "note": "lint OK (architect 39, worker 30, qa 35); tsc clean; 4 test files / 38 tests pass; both greps pass; exit 0.",
-      "startedAt": "2026-10-30T08:19:44.041Z",
-      "completedAt": "2026-10-30T08:19:51.959Z"
+      "modifiedFiles": [
+        "docs/roles/qa.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Ran the exact step-5 command fresh; EXIT=0. Lint OK (architect 39, worker 30, qa 35, all max 40), tsc --noEmit clean, and vitest passed 4 files / 38 tests (qaCommitPolicy 8, targetedContextGuidance 6, initFiles 13, skillFiles 11). Both greps matched. Extra check: generated initFiles.ts holds the new `mv -n task-<id>-*handoff.md _archive/` command once, and the old plain `mv .serena/memories/task-<id>` appears 0 times in qa.md, MEMORY.md and initFiles.ts. I added no new test because the approved scope has no test file; I proved the behavior with scratch runs of the doc's literal command.",
+      "startedAt": "2026-10-30T08:28:56.310Z",
+      "completedAt": "2026-10-30T08:29:18.380Z"
     },
     {
       "stepId": "step-6",
@@ -90,15 +91,13 @@
         "docs/MEMORY.md"
       ],
       "modifiedFiles": [
-        "docs/skills/moe-planning/SKILL.md",
         "docs/roles/qa.md",
         "docs/MEMORY.md",
-        "packages/moe-daemon/src/generated/initFiles.ts",
-        "packages/moe-daemon/src/generated/skillFiles.ts"
+        "packages/moe-daemon/src/generated/initFiles.ts"
       ],
-      "note": "Self-review: rules consistent (retire only after approve, keep on reject, _archive/ via mv, no rename_memory); architect.md untouched (39); added text ASCII; no .moe edits or .serena commits advised; generated diffs only this task's entries.",
-      "startedAt": "2026-10-30T08:19:52.770Z",
-      "completedAt": "2026-10-30T08:19:58.323Z"
+      "note": "Adversarial self-review. (a) The rules agree: retire only after approve, keep on reject, use the _archive/ path, never rename_memory. The qa.md and MEMORY.md commands are byte-identical; SKILL.md is unchanged. (b) qa.md has 35 lines; architect.md and qa.reference.md are untouched (empty diff). (c) Nothing tells an agent to edit .moe or commit .serena. (d) The generated diff is only qa.md's entry, and skillFiles.ts is byte-identical. (e) The added lines are ASCII. Failure modes I checked: an unsubstituted `<id>` is a bash syntax error that exits 2 and moves nothing; a wrong cwd makes the subshell's cd fail with exit 1 and nothing moved; a glob over a full 32-hex id can't match another task. One theoretical race: if a same-name archive file appears between the pre-check and `mv -n`, 8.32 would skip it with exit 0 and leave the source unretired (not overwritten). That needs two seats retiring the same task at once, so I left it as a note. Diff vs HEAD: qa.md +1/-1, MEMORY.md +1/-1, initFiles.ts +3/-3.",
+      "startedAt": "2026-10-30T08:29:19.263Z",
+      "completedAt": "2026-10-30T08:29:54.019Z"
     }
   ],
   "planRevision": 1,
@@ -106,8 +105,8 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD 2's retirement command overwrites an existing archive. docs/roles/qa.md:22 and docs/MEMORY.md:80 both say to run `mkdir -p .serena/memories/_archive && mv .serena/memories/task-<id>-*handoff.md .serena/memories/_archive/` and, in the same sentence, never overwrite an archived file and report a failed move. On GNU coreutils 9.4, plain `mv` onto an existing `_archive/<same name>.md` exits 0 and replaces the archived bytes (reproduced: archive content changed from OLD to NEW). `mv -n` on the same binary exits 1, prints `not replacing`, and leaves the archive and the source in place. A multi-file `mv -n` can still move the non-colliding names; check each destination before moving so a collision retires nothing. Update both lines, regenerate initFiles.ts only (Windows Git Bash `npm run generate-init-files`; no build/prebuild; MEMORY.md is not vendored; leave skillFiles.ts alone unless SKILL.md changes), and re-run the step-5 command.\n\nEverything else checked out. Re-ran task.verification: exit 0. lint OK (architect 39, worker 30, qa 35). tsc clean. 4 files / 38 tests passed. Both greps matched. Completion 4d6b371 is on moe/work-2026-10-24 (tree ef7e6d83, ancestor of origin/moe/work-2026-10-24 at 8d977add). Non-board +21/-5, net 16. architect.md and qa.reference.md untouched. Generated diffs are only the qa.md entry and the moe-planning marker plus two bullets. Added text is ASCII. moe-planning has the `mem:<name>` rule and architect.md still points at that skill. MEMORY.md has the lifecycle, `_archive/` convention, and pointer rule. `.serena/project.yml` has `ignored_memory_patterns: [_archive/.*]`. Completion summary names the daemon and plugin rebuild. Ponytail: lean already, net 0.",
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "priority": "LOW",
@@ -115,7 +114,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:17:43.360Z",
-  "updatedAt": "2026-10-30T08:20:05.690Z",
+  "updatedAt": "2026-10-30T08:30:10.642Z",
   "dependsOn": [
     "task-78ba155c350f4927ab5bdf53c21a4468"
   ],
@@ -123,16 +122,18 @@
     "firstClaimAt": "2026-10-30T07:31:36.068Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 12,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-bd1eb82d",
-    "worker-5ebbf433"
+    "worker-093a65d0",
+    "qa-8e551ac8"
   ],
-  "tier": "standard",
-  "effort": "high",
-  "model": "claude-sonnet-5-5",
-  "codexModel": "gpt-6.1-sol",
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
     "step-2",
@@ -141,7 +142,13 @@
     "step-5",
     "step-6"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "docs/roles/qa.md / qa.reference.md tell QA, after qa_approve, to fold reusable facts from task-<id>-handoff into a gotcha/pattern/decision memory and then retire the handoff (archive to .serena/memories/_archive/, or delete). A rejected task keeps its handoff. docs/MEMORY.md documents this lifecycle.",
+      "rejectedAt": "2026-10-30T08:25:59.707Z",
+      "rejectedBy": "qa-8e551ac8"
+    }
+  ],
   "planSubmittedAt": "2026-10-30T07:34:46.956Z",
   "executionContract": {
     "intendedBehavior": "Architects name the Serena memories that bear on each plan step as `mem:<name>` (the moe-planning skill). QA, after qa_approve, folds reusable facts from the task's handoff memories into topic memories, then retires the handoffs into .serena/memories/_archive/ by file move, or deletes them; a rejected task keeps them (docs/roles/qa.md). docs/MEMORY.md documents the handoff lifecycle, the _archive/ convention and the mem: pointer convention. The vendored initFiles.ts and skillFiles.ts are regenerated.",
@@ -200,20 +207,97 @@
   "planApprovedAt": "2026-10-30T07:34:46.990Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T08:18:51.091Z",
-  "reviewStartedAt": "2026-10-30T08:20:05.687Z",
+  "reviewStartedAt": "2026-10-30T08:30:10.640Z",
   "verification": {
     "command": "npm run lint && \"/mnt/c/Program Files/Git/bin/bash.exe\" -lc 'cd /d/projexts/moes/packages/moe-daemon && npx tsc --noEmit && npx vitest run src/util/initFiles.test.ts src/util/skillFiles.test.ts src/util/qaCommitPolicy.test.ts src/util/targetedContextGuidance.test.ts' && grep -q 'mem:<name>' packages/moe-daemon/src/generated/skillFiles.ts && grep -q '_archive/' packages/moe-daemon/src/generated/initFiles.ts",
     "exitCode": 0,
-    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 35 lines (max 40)\nTest Files 4 passed (4)\nTests 38 passed (38)",
-    "reportedAt": "2026-10-30T08:20:05.687Z",
+    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 35 lines (max 40)\n RUN v5.0.5 D:/projexts/moes/packages/moe-daemon\n ✓ src/util/qaCommitPolicy.test.ts (8 tests)\n ✓ src/util/targetedContextGuidance.test.ts (6 tests)\n ✓ src/util/initFiles.test.ts (13 tests)\n ✓ src/util/skillFiles.test.ts (11 tests)\n Test Files 4 passed (4)\n Tests 38 passed (38)\nEXIT=0",
+    "reportedAt": "2026-10-30T08:30:10.640Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "docs/skills/moe-planning/SKILL.md",
     "docs/roles/qa.md",
     "docs/MEMORY.md",
-    "packages/moe-daemon/src/generated/initFiles.ts",
-    "packages/moe-daemon/src/generated/skillFiles.ts"
+    "packages/moe-daemon/src/generated/initFiles.ts"
   ],
-  "completionSummary": "Added the mem:<name> step-pointer rule to docs/skills/moe-planning/SKILL.md (architect.md untouched, 39 lines). Added a 'Handoff retirement' section to docs/roles/qa.md (35 lines): after qa_approve, fold reusable facts into a gotcha/pattern/decision memory, then mv the handoffs into .serena/memories/_archive/ (never rename_memory; delete only if nothing is reusable); keep them on qa_reject. docs/MEMORY.md now documents the handoff lifecycle, the _archive/ convention and the mem: pointer convention. qa.reference.md was intentionally left unchanged: the rule lives in the always-loaded qa.md and the detail in MEMORY.md. Regenerated via the generators only: 'Generated D:\\projexts\\moes\\packages\\moe-daemon\\src\\generated\\initFiles.ts (8 role docs + 3 subagents, sha-stamped)' and 'Generated ...skillFiles.ts (65 skill files across 17 skills)'; diffs hold only this task's entries. Verification: lint OK, tsc clean, 4 test files / 38 tests pass, both greps pass, exit 0. Running seats pick this up only after the daemon is rebuilt (.moe/roles and .moe/skills re-sync at daemon boot), and IDE users after a plugin rebuild."
+  "completionSummary": "Rework for the QA reject (reopen 1). docs/roles/qa.md:22 and docs/MEMORY.md:80 now carry one byte-identical, no-clobber retirement command: `(cd .serena/memories && mkdir -p _archive && for f in task-<id>-*handoff.md; do [ ! -e \"_archive/$f\" ] || { echo \"exists: _archive/$f\" >&2; exit 1; }; done && mv -n task-<id>-*handoff.md _archive/)`. It checks every destination first, so one collision retires nothing; `mv -n` is only a race backstop. Both docs forbid a plain `mv`, and MEMORY.md explains why `mv -n` alone is not enough: Git Bash ships coreutils 8.32, whose `mv -n` skips with exit 0 (verified), while 9.4 exits 1. I ran the docs' literal command in scratch trees. A collision exits 1, moves neither file and leaves the archive reading OLD. A clean run exits 0, moves both of this task's handoffs and leaves another task's alone. No match exits 1. An unsubstituted <id> is a syntax error (exit 2) that moves nothing. I regenerated only initFiles.ts, with Windows Git Bash `npm run generate-init-files`, which printed 'Generated D:\\projexts\\moes\\packages\\moe-daemon\\src\\generated\\initFiles.ts (8 role docs + 3 subagents, sha-stamped)'. Its delta is the qa.md entry only: marker 546f3f3da3d2 -> 3d85e1e8146a, the body line, and the shipped-sha list. skillFiles.ts is byte-identical, and I ran no build or prebuild. Round-1 content is unchanged: the moe-planning `mem:<name>` rule, and the MEMORY.md lifecycle and pointer convention. qa.reference.md and architect.md stay intentionally untouched: the rule lives in the always-loaded qa.md, with the detail in MEMORY.md. Diff: qa.md +1/-1 (35 lines), MEMORY.md +1/-1, initFiles.ts +3/-3; added text is ASCII. Verification: lint OK (39/30/35), tsc clean, 4 files / 38 tests pass, both greps match, exit 0. Running seats pick the change up only after the daemon is rebuilt (.moe/roles and .moe/skills re-sync at daemon boot), and IDE users after a plugin rebuild.",
+  "commits": [
+    {
+      "sha": "4d6b371041ae3bba0941e018368ea7993ceb6218",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T08:18:30Z",
+      "paths": [
+        ".moe/tasks/task-142415f4cad3435a94bb879399eba160.json",
+        ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+        "docs/MEMORY.md",
+        "docs/roles/qa.md",
+        "docs/skills/moe-planning/SKILL.md",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T08:20:27.540Z",
+      "treeId": "ef7e6d8379d8f56cce002b9ba622e56997623b82",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/skills/moe-planning/SKILL.md",
+    "docs/roles/qa.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-30T08:18:30Z",
+    "at": "2026-10-30T08:20:27.540Z"
+  },
+  "reviewCompletedAt": "2026-10-30T08:25:59.707Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "docs/roles/qa.md / qa.reference.md tell QA, after qa_approve, to fold reusable facts from task-<id>-handoff into a gotcha/pattern/decision memory and then retire the handoff (archive to .serena/memories/_archive/, or delete). A rejected task keeps its handoff. docs/MEMORY.md documents this lifecycle."
+    ],
+    "issues": [
+      {
+        "type": "other",
+        "file": "docs/roles/qa.md",
+        "line": 22,
+        "description": "The prescribed plain `mv` into `.serena/memories/_archive/` exits 0 and replaces an existing archived handoff (GNU coreutils 9.4, reproduced). The same bullet says never overwrite and to report a failed move. Use a move that leaves an existing `_archive/<same name>.md` unchanged and exits non-zero on that collision (`mv -n` does this here). A multi-file mv can still move the other matches; check each destination first so one collision retires nothing. Then regenerate initFiles.ts."
+      },
+      {
+        "type": "other",
+        "file": "docs/MEMORY.md",
+        "line": 80,
+        "description": "Same plain `mv` command as qa.md:22, with the same overwrite. Keep the two docs on one no-clobber command. MEMORY.md is not vendored, so this file needs no generator run."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 2's retirement command overwrites an existing archive. docs/roles/qa.md:22 and docs/MEMORY.md:80 both say to run `mkdir -p .serena/memories/_archive && mv .serena/memories/task-<id>-*handoff.md .serena/memories/_archive/` and, in the same sentence, never overwrite an archived file and report a failed move. On GNU coreutils 9.4, plain `mv` onto an existing `_archive/<same name>.md` exits 0 and replaces the archived bytes (reproduced: archive content changed from OLD to NEW). `mv -n` on the same binary exits 1, prints `not replacing`, and leaves the archive and the source in place. A multi-file `mv -n` can still move the non-colliding names; check each destination before moving so a collision retires nothing. Update both lines, regenerate initFiles.ts only (Windows Git Bash `npm run generate-init-files`; no build/prebuild; MEMORY.md is not vendored; leave skillFiles.ts alone unless SKILL.md changes), and re-run the step-5 command.\n\nEverything else checked out. Re-ran task.verification: exit 0. lint OK (architect 39, worker 30, qa 35). tsc clean. 4 files / 38 tests passed. Both greps matched. Completion 4d6b371 is on moe/work-2026-10-24 (tree ef7e6d83, ancestor of origin/moe/work-2026-10-24 at 8d977add). Non-board +21/-5, net 16. architect.md and qa.reference.md untouched. Generated diffs are only the qa.md entry and the moe-planning marker plus two bullets. Added text is ASCII. moe-planning has the `mem:<name>` rule and architect.md still points at that skill. MEMORY.md has the lifecycle, `_archive/` convention, and pointer rule. `.serena/project.yml` has `ignored_memory_patterns: [_archive/.*]`. Completion summary names the daemon and plugin rebuild. Ponytail: lean already, net 0.",
+      "rejectedAt": "2026-10-30T08:25:59.707Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "docs/roles/qa.md / qa.reference.md tell QA, after qa_approve, to fold reusable facts from task-<id>-handoff into a gotcha/pattern/decision memory and then retire the handoff (archive to .serena/memories/_archive/, or delete). A rejected task keeps its handoff. docs/MEMORY.md documents this lifecycle."
+      ],
+      "issues": [
+        {
+          "type": "other",
+          "file": "docs/roles/qa.md",
+          "line": 22,
+          "description": "The prescribed plain `mv` into `.serena/memories/_archive/` exits 0 and replaces an existing archived handoff (GNU coreutils 9.4, reproduced). The same bullet says never overwrite and to report a failed move. Use a move that leaves an existing `_archive/<same name>.md` unchanged and exits non-zero on that collision (`mv -n` does this here). A multi-file mv can still move the other matches; check each destination first so one collision retires nothing. Then regenerate initFiles.ts."
+        },
+        {
+          "type": "other",
+          "file": "docs/MEMORY.md",
+          "line": 80,
+          "description": "Same plain `mv` command as qa.md:22, with the same overwrite. Keep the two docs on one no-clobber command. MEMORY.md is not vendored, so this file needs no generator run."
+        }
+      ]
+    }
+  ]
 }
