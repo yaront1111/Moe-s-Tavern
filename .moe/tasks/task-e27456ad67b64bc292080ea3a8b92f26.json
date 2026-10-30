@@ -37,7 +37,17 @@
       "affectedFiles": [
         "packages/moe-daemon/src/tools/completeTask.ts",
         "packages/moe-daemon/src/tools/completeTask.test.ts"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "complete_task: worktree branch policy keyed on the owning attempt (design doc §2.8).\n\ncompleteTask.ts checkBranchPolicy:\n- Keep its call site and order: it runs before setAttemptPhase('finalizing') and updateTask, so a refusal leaves the task WORKING with no verification and the attempt 'running'.\n- Pass in, or read, the task's open attempt with currentAttempt (already imported). When it is non-null, get its workspace with WT-01's builder `resolveAttemptWorkspace(attempt, state.project?.settings)`, imported from '../state/validators.js' (see step 1 for the contract; if the landed names differ, use the landed ones).\n- Never call resolveWorktreeMode here: the mode is pinned on the attempt, and that helper throws on a hand-edited setting.\n- When workspace.mode === 'worktree', expected = workspace.branch (moe/task/<taskId>). This arm runs BEFORE the consolidationBranch read and its `if (!pattern) return null`: it applies whether or not consolidationBranch is set, and it never consults that pattern.\n- Error handling for the worktree arm:\n  - Missing, blank or non-string currentBranch: today's warning path, unchanged. Same warning text, same rate-limited #governors post (which now names the expected branch, and whose failure never blocks the completion); return { pattern: expected, matched: null, warning }.\n  - Trimmed currentBranch !== expected, compared by exact case-sensitive string equality (NOT matchesBranchPattern, no prefix test): throw new MoeError(MoeErrorCode.CONSTRAINT_VIOLATION, 'BRANCH-POLICY-FAIL: ...', { currentBranch, expectedPattern: expected }, 'CONSTRAINT_VIOLATION'). That is the same code, codeName and context keys as the shared refusal, so existing parsers read both.\n  - The message names the reported branch, \"moe/task/<taskId>\" and the attempt's worktree path (workspace.path), and says the attempt runs in worktree mode. Do NOT reuse describeBranchPolicyFailure: its advice to peel onto moe/work-<YYYY-MM-DD> is wrong in worktree mode.\n  - Match: return { pattern: expected, currentBranch, matched: true }.\n- Every other attempt (mode 'shared', which covers an absent or unknown workspaceMode on older or hand-edited records, or no attempt at all) takes today's path, with identical behavior: same pattern source, same glob matcher, same message and context.\n- Update checkBranchPolicy's doc comment and the inputSchema currentBranch description to state the worktree rule.\n\ncompleteTask.test.ts: add a new describe block next to 'consolidationBranch policy'. Reuse its setupMoe/writeEpic/writeTask/boot helpers and VERIFICATION, and call resetBranchPolicyGovernorRateLimit in beforeEach. Open the attempt after boot with openAttempt(state, { taskId: 'task-1', workerId: 'worker-a', runnerId: 'worker-a', workspace: path.join(testDir, '.worktrees', 'task-1'), workspaceMode: 'worktree' }); WT-01 adds the optional workspaceMode param. Cases:\n1. consolidationBranch 'moe/work-*', currentBranch 'moe/task/task-1': status REVIEW; branchPolicy toEqual { pattern: 'moe/task/task-1', currentBranch: 'moe/task/task-1', matched: true }.\n2. consolidationBranch 'moe/work-*', currentBranch 'moe/work-2026-07-31' (a branch the shared check accepts): refused.\n   - CONSTRAINT_VIOLATION; the message contains 'BRANCH-POLICY-FAIL' and 'moe/task/task-1' and does not contain 'moe/work-<YYYY-MM-DD>'.\n   - context toEqual { currentBranch: 'moe/work-2026-07-31', expectedPattern: 'moe/task/task-1' }.\n   - The task is still WORKING with no verification, and the attempt phase is still 'running'.\n3. No consolidationBranch, currentBranch 'main': refused, naming moe/task/task-1.\n4. it.each near misses, each refused the same way: 'moe/task/task-2', 'moe/task/task-10', 'moe/task/*', 'Moe/task/task-1'.\n5. No currentBranch: REVIEW, matched null, warning contains 'not enforced', and exactly one #governors post, containing 'moe/task/task-1'.\n6. Two attempts under consolidationBranch 'moe/work-*' with currentBranch 'moe/task/task-1', one with workspaceMode 'shared' and one opened without workspaceMode. Both are refused with the shared context { currentBranch: 'moe/task/task-1', expectedPattern: 'moe/work-*' }.\nDo not edit any existing test's body or assertions (DoD 3). Only add tests, and imports if needed.",
+          "reason": "This aligns the step with WT-01's published contract (#general msg-591400ac). Use resolveAttemptWorkspace from state/validators.ts, and use openAttempt's new optional workspaceMode as the test seam. Do not call resolveWorktreeMode in complete_task.",
+          "amendedBy": "architect-bc59d28a",
+          "amendedAt": "2026-10-30T13:13:15.621Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-3",
@@ -54,10 +64,20 @@
         "packages/moe-daemon/src/tools/getContext.test.ts",
         "packages/moe-daemon/src/tools/completeTask.ts",
         "packages/moe-daemon/src/tools/completeTask.test.ts"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Adversarial self-review of this task's own diff. Load the adversarial-self-review skill. Check each of the following, and fix anything that fails:\n1. Shared mode is unchanged:\n   - The consolidationBranch arm's statements, describeBranchPolicyFailure and the glob matcher behave exactly as before.\n   - `git diff -U0 -- packages/moe-daemon/src/tools/completeTask.test.ts packages/moe-daemon/src/tools/getContext.test.ts` shows only added lines, apart from import lines; no existing assertion changed.\n2. Refusal before any write: a refused completion leaves the task WORKING with no verification and the attempt 'running'.\n3. The worktree comparison is exact: no glob, no startsWith, case-sensitive, applied after the same trim as today.\n4. The mode comes from the attempt, never the live setting:\n   - An absent or unknown workspaceMode, or no attempt, takes the shared path.\n   - Both files get mode, branch and target only from WT-01's resolveAttemptWorkspace (state/validators.ts), called only with a non-null attempt.\n   - Neither file calls resolveWorktreeMode or re-derives the branch or target. grep both files for 'moe/task/' and 'resolveWorktreeMode'.\n5. get_context error handling:\n   - No `workspace` key without an open attempt.\n   - The currentAttempt read is guarded and never throws.\n   - The field sits inside `body`, so packetId covers it.\n   - The status view is unchanged, and the field is not role-trimmed.\n6. The refusal message names moe/task/<taskId> and never advises a moe/work-<date> peel.\n7. Concurrency: tool calls are serialized under the state mutex, so the only await between the attempt read and the check is the existing governors post.\n8. Cross-platform: paths come from the stored attempt or path.join, never a hand-written slash string.\nIf this step changed any byte, re-run step 3's command and submit THAT fresh output to complete_task.",
+          "reason": "This names WT-01's published builder in the self-review checklist (#general msg-591400ac): resolveAttemptWorkspace in state/validators.ts. It also adds a check that neither file calls resolveWorktreeMode.",
+          "amendedBy": "architect-bc59d28a",
+          "amendedAt": "2026-10-30T13:13:25.578Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     }
   ],
-  "planRevision": 2,
+  "planRevision": 4,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -78,11 +98,17 @@
       "author": "worker-0062feec",
       "content": "Spike self-review correction (epic rail 2: parity-check must pass on every task). Append this to this task's verification command, run from the repo root: `&& S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)`. Running it on a HEAD snapshot keeps a peer's mid-edit wrapper bytes from failing a task that never touches the wrappers.",
       "timestamp": "2026-10-30T12:03:27.427Z"
+    },
+    {
+      "id": "comment-45c944e477fa49b4beb876d603213ed9",
+      "author": "architect-bc59d28a",
+      "content": "Architect correction (plan revision 1, steps 1, 2 and 4 amended): WT-01 published its final contract in #general msg-591400ac after this plan was submitted.\n- The workspace builder is `resolveAttemptWorkspace(attempt, settings)`, exported from state/validators.ts. It returns `AttemptWorkspace` (types/schema.ts), reads mode and path from the attempt, takes target from `resolveWorktreeTarget(settings)`, and never throws.\n- `openAttempt` takes an optional `workspaceMode`.\n- planningNotes and executionContract (reuse, approvedScope) still name `attemptWorkspace` in tools/claimNextTask.ts. That name is superseded: follow the amended step text.\n- Never call `resolveWorktreeMode` in get_context or complete_task. The mode is pinned on the attempt, and that helper throws on a hand-edited setting.\n- If WT-01's landed code differs from msg-591400ac, the landed code wins. Never duplicate the rule.",
+      "timestamp": "2026-10-30T13:13:34.152Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:47:54.623Z",
-  "updatedAt": "2026-10-30T13:12:58.691Z",
+  "updatedAt": "2026-10-30T13:13:34.152Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:54.950Z",

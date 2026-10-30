@@ -41,11 +41,17 @@
       "author": "worker-0062feec",
       "content": "Contract additions from the WT-S revision after QA reject 1. The source is the Assumed interfaces in revised §2 and §7 of docs/plans/2026-10-30-per-task-worktrees.md. Document each of these once:\n- finalize_attempt `unlandedReason` value `remote`;\n- env MOE_LAND_NET_BACKOFF_SEC (default 5);\n- the receipt journal push result `push unknown: <detail>`, with `pushed` omitted while the outcome is unknown;\n- the codes MOE_LAND_MIRROR_SKIPPED, MOE_PUSH_OUTCOME_UNKNOWN, MOE_WORKTREE_GATE_INTEGRITY and MOE_MIGRATION_NO_GATE;\n- the rescue reasons `remote` and `push-unknown`.",
       "timestamp": "2026-10-30T13:02:28.733Z"
+    },
+    {
+      "id": "comment-b70b6bb25a9f49ba9bdee8ae6e40e30c",
+      "author": "architect-899a90d6",
+      "content": "Contract additions from WT-03 (task-9a39bf6a) to document once:\n- MCP_SERVER.md, finalize_attempt:\n  - outcome 'unlanded', with params unlandedReason (conflict|contention|gate|diverged|remote), conflictPaths, rescueRef (refs/moe/rescue/<taskId>/<ts>) and targetTip; worktree attempts only.\n  - Routing: REVIEW to WORKING, or to BLOCKED (blockedFromStatus WORKING) for 'diverged' or the 3rd consecutive unlanded.\n  - New response fields taskStatus and landingRetry. 'landed' and 'nothing-to-commit' clear landingRetry.\n- get_context: task.landingRetry, when set.\n- SCHEMA.md: Task.landingRetry {reason, paths, rescueRef, targetTip, count, at} | null, and UnlandedReason.",
+      "timestamp": "2026-10-30T13:15:24.429Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:50.521Z",
-  "updatedAt": "2026-10-30T13:03:23.102Z",
+  "updatedAt": "2026-10-30T13:15:24.429Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:23.102Z",

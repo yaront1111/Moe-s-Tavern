@@ -1,0 +1,31 @@
+{
+  "id": "task-3def080415d3495a8557b514d6a0ab2a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: launcher identity probes fold \\\\wsl$ / \\\\wsl.localhost project paths as plain UNC, unlike the shared path contract",
+  "description": "Follow-up split from task-25ba449ab87d4039a283426f07302cbc (planned 2026-10-30 by architect-bd1eb82d). That task makes packages/moe-proxy/src/utils.ts comparableProjectPath the shared project-path contract. The daemon twin and JetBrains DaemonIdentityProbe.comparableProjectPath follow it. Under the contract, a WSL share (\\\\wsl$\\<distro>\\x or \\\\wsl.localhost\\<distro>\\x, host in any ASCII case, distro not compared) names that distro's POSIX /x. The POSIX and /mnt/<d> rules then apply to it.\n\nThe launchers do not do this. moe-agent.sh probe_daemon_health comparable() (ntpath) and moe-agent.ps1 Get-MoeComparableProjectPath treat the share as a generic UNC path and lowercase it: //wsl$/ubuntu/home/u/p. Checked by the architect on 2026-10-30 with python3 and PS5.1 over the contract rows: the launchers agree on every row except the 4 WSL-share rows.\n\nEffects:\n- The documented setup in docs/DEVELOPMENT.md is JetBrains on Windows opening \\\\wsl$\\Ubuntu\\..., with the daemon in WSL serving /home/u/p. There, a native Windows ps1 seat refuses its own daemon with MOE_DAEMON_FOREIGN_PROJECT.\n- \\\\wsl$\\Ubuntu\\x and \\\\wsl.localhost\\Ubuntu\\x name the same share, yet they compare as foreign.\n\ntask-25ba449a adds path-contract tests to scripts/tests/daemon-json-cap.test.mjs. They mark the launchers' WSL-share rows todo and name this task. This task turns them into hard assertions.\n\nNot in scope (decide separately):\n- scripts/local-runner/guest-session.mjs canonicalProjectPath. Its key names persisted VM ledger dirs, so changing the key needs a migration decision.\n- JetBrains' two exotic deviations from the contract: it reads ///x as UNC, and it treats \\ as a separator inside POSIX paths.",
+  "definitionOfDone": [
+    "moe-agent.sh comparable() and moe-agent.ps1 Get-MoeComparableProjectPath map \\\\wsl$\\<distro>\\… and \\\\wsl.localhost\\<distro>\\… (host matched in any ASCII case, distro not compared, share root = /) to the POSIX remainder, then apply the POSIX and /mnt/<d> rules. Every path-contract row gets the same key as moe-proxy comparableProjectPath.",
+    "The launchers' WSL-share rows in the daemon-json-cap.test.mjs path-contract tests are hard assertions (no todo) and pass on bash, PS5.1 and PS7. Every existing identity row still passes.",
+    "bash scripts/tests/parity-check.sh passes, and moe-agent.ps1 keeps its UTF-8 BOM."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-25ba449ab87d4039a283426f07302cbc"
+  ],
+  "priority": "MEDIUM",
+  "order": 20.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:16:46.649Z",
+  "updatedAt": "2026-10-30T13:16:46.649Z"
+}

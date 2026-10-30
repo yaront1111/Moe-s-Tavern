@@ -122,7 +122,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -153,11 +153,23 @@
       "author": "architect-4ae016fb",
       "content": "Architect disposition, for QA and later sessions (full text: chat msg-21eeabd0, which replies to msg-32987c45).\n1. I concur with the governor's waiver (comment-09aa20ea). The plan's \"one Edit-tool edit\" meant one save plus a TOOL witness. The skip-untouched idle-peer exception covers the landing: the paths were clean at pre-flight, and all 12 contesting rows are idle and dep-gated behind this task. Using apply_patch or a Serena editor is not a deviation.\n2. Known residual, outside this task's approved scope (not a DoD-1 reopen reason). bash reads moe-agent.sh's post-loop tail from disk. A seat that is deferring a reload can run stale-offset bytes when its main loop exits after an in-place rewrite of the file (reproduced in scratch). Single-shot seats already had this before this task; for looping seats this task makes the window longer. The fix (a `{ …; exit; }` group around the loop and its tail) goes in a follow-up bug, which I've asked the governor to file.\n3. Any further save of scripts/moe-agent.sh in this task: write the full file in a D: scratch dir, run bash -n, then one same-filesystem `mv -f` over the target. No in-place write. moe-agent.ps1 and the other paths are unaffected.",
       "timestamp": "2026-10-30T12:23:40.891Z"
+    },
+    {
+      "id": "comment-e3cdb4fbb7624f7daa8be5660a66eb14",
+      "author": "governor-693b7073",
+      "content": "@qa-ba3f4f35 @architect-4ae016fb Governance scope disposition for QA's question (msg-7304d25f / msg-a6d1b7c9), recorded at 13:00Z. The planner hadn't answered in 8 minutes, and this row gates 42 others. The planner can overrule it here.\n1. The guarantee this row delivers is point-in-time. At each reload check, the seat verifies its wrapper against HEAD. If the file differs, it does not re-exec, and it logs MOE_WRAPPER_RELOAD_DEFERRED once per hash. That is DoD 1 as planned: the approved plan freezes the parse and handover bodies and specifies a point-in-time git check. It does NOT promise pinned-byte execution.\n2. A write that lands between a clean check and the exec, the check-to-exec race, is an ACCEPTED, TRACKED residual: task-69c02444. The human promoted it to PLANNING at 12:55Z, and it is laned behind f31d415d and 01f37ac6. The planner set the same precedent for this row's other residual, f31d415d: \"outside the approved scope... a known residual... not a reason to reopen\" (msg-21eeabd0).\n3. QA: judge DoD 1 as point-in-time. Name both residuals in the qa_approve summary, and do not describe execution as pinned to committed bytes. A defect inside the point-in-time contract is still a normal reject.",
+      "timestamp": "2026-10-30T12:58:50.504Z"
+    },
+    {
+      "id": "comment-61cca0493a214d568f6cd7e31925aeb3",
+      "author": "architect-4ae016fb",
+      "content": "Planner dispositions at REVIEW, for QA and later sessions (full text in #general msg-b28041b1 and msg-d25ff916).\n1. Check-to-exec race (task-69c02444) is an accepted residual of this slice, like f31d415d. It is not a reopen reason and not a DoD 1 failure.\n- The contract limits this slice to a point-in-time gate: intendedBehavior (re-exec only when ls-files rc 0, then diff --quiet HEAD rc 0) and invariants[0] (the parse/deregister/exec hand-over bodies stay byte-identical).\n- Both twins reload by path after the check, so a write in that window gets loaded. The parse guard always had the same window. Pinned-byte reload is 69c02444's design work.\n- Judge DoD 1 at the loop-top check, which the four [hot reload*] arms prove on both twins. Record it as a point-in-time committed check, not a pinned-byte guarantee.\n2. Step-6 setup substitution: I concur with comment-c649d4f9. The fixed path mattered only for the rm -rf reset. The mktemp/wslpath form (verification.command, snapshot v-5998f871.WhISiW) is the run of record for checkRefs[0], so QA reruns that form. I made no plan amendment: step 6 is COMPLETED.",
+      "timestamp": "2026-10-30T12:59:22.099Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:35:09.303Z",
-  "updatedAt": "2026-10-30T12:48:00.467Z",
+  "updatedAt": "2026-10-30T13:16:49.468Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T10:45:02.188Z",
@@ -167,12 +179,15 @@
     "firstClaimAt": "2026-10-30T10:45:24.440Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-10-30T13:16:49.468Z",
+    "wallClockMs": 9085028
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
     "worker-55e6716a",
-    "governor-693b7073"
+    "governor-693b7073",
+    "qa-ba3f4f35"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -259,9 +274,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-55e6716a@2026-10-30T12:04:17Z",
-    "at": "2026-10-30T12:06:21.737Z"
+    "kind": "completion",
+    "sessionId": "worker-55e6716a@2026-10-30T12:06:55Z",
+    "at": "2026-10-30T12:48:18.130Z"
   },
   "workStartedAt": "2026-10-30T12:05:15.780Z",
   "blockedReason": null,
@@ -284,6 +299,30 @@
       "treeId": "32a2398362a0e45c7760a2c7d78effc5fed0add2",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "9a5426ac15d456cfb790acf86bfcf7c8e180e354",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T12:06:55Z",
+      "paths": [
+        ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+        ".moe/tasks/task-69c024444381492c85878307df40c6e2.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T12:48:18.130Z",
+      "treeId": "cd2b30baea41ec512bc4ad5a9de3968f8a61b20f",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -293,7 +332,10 @@
     "scripts/tests/parity-check.ps1",
     "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
-    "scripts/CLAUDE.md"
+    "scripts/CLAUDE.md",
+    ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+    ".moe/tasks/task-69c024444381492c85878307df40c6e2.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json"
   ],
   "priorBlockedReason": "Approved plan revision 1 steps 1–4 explicitly mandate Claude Edit-tool saves/TOOL witnesses. This actual Codex session has apply_patch and Serena editors but no Edit/Write; current scripts/moe-agent.sh:8227–8231 still says Codex TOOL sets are empty. Cannot safely substitute an unwitnessed editor under that plan. Please reroute to an actual witnessed-editor seat or approve a tool-neutral atomic-edit amendment with a valid contested-path landing route. Architect notified in msg-32987c451ade489785f09b6a44167947. Step-1 started; no source edits, no tests run or claimed. All 7 owned paths clean; dependency e7f4026a DONE/landed, so neither peer dirtiness nor prerequisite is the blocker. Handoff and gotcha memories saved.",
   "blockedOnTaskIds": null,
@@ -305,5 +347,9 @@
     "reportedAt": "2026-10-30T12:48:00.464Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Implemented approved committed-bytes reload gate in both wrappers, once-per-hash dirty/git-failure deferrals, committed-edit test setup, four reload arms per twin, parity literals and documentation. Seven files +226/-8 net218; original parse/refusal/heartbeat/deregister/handover bodies byte-identical, BOMs preserved. Fresh full verification exit0: parity PASS; Bash postflight PASS (74 frozen,16 owner,42 commit-scope); Windows PS5.1 postflight PASS (74 frozen,16 owner,41 commit-scope). All four reload rows pass BOTH twins; existing Windows symlink-only skips disclosed. Both new rows separately assertion-fail pre-fix twins with improper restart/deregister; gate matrices Bash8/8, PS9/9. Snapshot /mnt/d/moe-scratch/v-5998f871.WhISiW; log /mnt/d/moe-scratch/r-5998f871/full-verification.log. Governor comment-c649d4f9 approved setup-only mktemp/wslpath substitution after terminal refused rm-rf; no checks skipped. Edit-tool waiver comment-09aa20ea uses idle-clean peer exception; seven paths clean at session preflight. Handoff saved. Separate residuals: architect-approved stale-offset Bash rewrite f31d415d (future sh saves via same-filesystem rename), plus filed check-to-exec race 69c02444; this approved gate is point-in-time, not a pinned-byte executor. No inline scope growth or peer edits."
+  "completionSummary": "Implemented approved committed-bytes reload gate in both wrappers, once-per-hash dirty/git-failure deferrals, committed-edit test setup, four reload arms per twin, parity literals and documentation. Seven files +226/-8 net218; original parse/refusal/heartbeat/deregister/handover bodies byte-identical, BOMs preserved. Fresh full verification exit0: parity PASS; Bash postflight PASS (74 frozen,16 owner,42 commit-scope); Windows PS5.1 postflight PASS (74 frozen,16 owner,41 commit-scope). All four reload rows pass BOTH twins; existing Windows symlink-only skips disclosed. Both new rows separately assertion-fail pre-fix twins with improper restart/deregister; gate matrices Bash8/8, PS9/9. Snapshot /mnt/d/moe-scratch/v-5998f871.WhISiW; log /mnt/d/moe-scratch/r-5998f871/full-verification.log. Governor comment-c649d4f9 approved setup-only mktemp/wslpath substitution after terminal refused rm-rf; no checks skipped. Edit-tool waiver comment-09aa20ea uses idle-clean peer exception; seven paths clean at session preflight. Handoff saved. Separate residuals: architect-approved stale-offset Bash rewrite f31d415d (future sh saves via same-filesystem rename), plus filed check-to-exec race 69c02444; this approved gate is point-in-time, not a pinned-byte executor. No inline scope growth or peer edits.",
+  "completedAt": "2026-10-30T13:16:49.468Z",
+  "reviewCompletedAt": "2026-10-30T13:16:49.468Z",
+  "reviewSummary": "Reviewed completion 9a5426ac15d456cfb790acf86bfcf7c8e180e354 via git show/branch --contains on moe/work-2026-10-24; prior 50ac4f00 is board-only. Seven source/docs/test paths +226/-8 (net 218); all 130 archived scripts blobs match completion, with no QA source edits.\nRe-ran exact task.verification.command (authorized mktemp/wslpath setup): exit 0. bash scripts/tests/parity-check.sh PASS; MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh PASS (74 frozen, 16 owner, 42 commit-scope); Windows PowerShell 5.1 postflight.ps1 PASS (74/16/41). All four reload arms pass BOTH twins: two dirty hashes/two deferrals then one restart; nonrepo defers once without deregister; committed changes reload; parse-refusal preserved. Existing Windows AD link/AE symlink capability skips remain unverified, not passed; no reload skips.\nAlso PASS parity-check.ps1, bash -n, git show --check and extracted committed-gate matrices (Bash 8/8, PS 9/9: clean/dirty/staged/untracked/nonrepo/unborn/corrupt index/missing git, PS empty parent). Gate uses wrapper checkout; dedupe only affects logs; complete post-condition handover tails byte-identical; docs/BOMs verified.\nScope per comments 61cca049/e3cdb4fb: point-in-time committed check, NOT pinned-byte execution. Accepted residuals: task-f31d415d5185424ca5f7e375a8b15134 stale-offset Bash tail and task-69c024444381492c85878307df40c6e2 check-to-exec race (independently reproduced).\nSnapshot /mnt/d/moe-scratch/v-5998f871.OLYHsN; evidence /mnt/d/moe-scratch/qa-5998f871.F32VC2/verification.log. Complexity: lean already; net 0 lines to cut.",
+  "requiredCheckAtDone": null
 }

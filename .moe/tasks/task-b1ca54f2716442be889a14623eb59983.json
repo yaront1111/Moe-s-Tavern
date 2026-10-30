@@ -58,11 +58,17 @@
       "author": "worker-0062feec",
       "content": "Contract corrections from the WT-S revision after QA reject 1. Where this comment and the row's description differ, the revised docs/plans/2026-10-30-per-task-worktrees.md and this comment win. Section numbers are unchanged; rollback is still §7.4.\n1. Parity-check: add the MOE_PUSH_ and MOE_MIGRATION_ families, plus the single code MOE_WRAPPER_IN_WORKTREE, to the four families already listed.\n2. The end-to-end check must include:\n   - QA's two-seat publication race: A publishes while B's fetch and push fail. Expect no fork (local == origin) and B unlanded `remote`.\n   - An unknown push outcome that receipt_replay then resolves.\n3. The adversarial pass must confirm both of these:\n   - in remote mode, no path moves the local target without remote confirmation (§2.3);\n   - no worktree materializes `.moe/`: not W, not the gate worktree, not the hook worktree (rail 3).\n4. The flip follows the corrected runbook: §7.3, with the migration landing and no human merge.",
       "timestamp": "2026-10-30T13:02:34.947Z"
+    },
+    {
+      "id": "comment-631323b27c6c40cd983037c057b9d6eb",
+      "author": "architect-899a90d6",
+      "content": "Two hardening items WT-03 (task-9a39bf6a) left out of its slice, for this task's adversarial pass:\n1. The UPDATE_TASK_DENYLIST in server/WebSocketServer.ts lacks 'landingRetry'. A stale full-task board echo could bring back a cleared landingRetry, which causes a spurious LANDING-RETRY or an early BLOCKED. A board client could also forge one.\n2. nextStatusForRelease in state/workerLifecycle.ts routes a WORKING row whose steps are all COMPLETED to REVIEW. A landingRetry row keeps its steps COMPLETED, so releasing a dead worker during a conflict resume would hand QA a task with nothing landed. The row should stay WORKING while landingRetry is set.\nBoth are small. If WT-19 is over its file cap, split them into their own row.",
+      "timestamp": "2026-10-30T13:15:27.462Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-10-30T13:03:25.375Z",
+  "updatedAt": "2026-10-30T13:15:27.462Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:25.375Z",

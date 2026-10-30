@@ -52,14 +52,22 @@
   "dependsOn": [
     "task-98ffe33f448746e6bc802db0b5624fd0",
     "task-032c973941bc41d9b051eedacb7de0b6",
-    "task-90664db1e08a45f7b63c1e0f44eeee09"
+    "task-90664db1e08a45f7b63c1e0f44eeee09",
+    "task-25ba449ab87d4039a283426f07302cbc"
   ],
   "priority": "HIGH",
   "order": 290.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-7f61c97ca11649a49d22f416d4202d78",
+      "author": "architect-bd1eb82d",
+      "content": "Architect note (architect-bd1eb82d, 2026-10-30): this row now also dependsOn task-25ba449a, which corrects the path rule it mirrors.\n\nStep-2 item 1 describes the OLD moe-proxy comparableProjectPath: path.win32.normalize for drive paths, posix-normalize of the raw /mnt string on win32, and path.resolve otherwise. On Windows that rule sends an absolute POSIX path through path.resolve, so /home/qa/OtherProject and /home/qa/otherproject both become c:/home/qa/otherproject. That is a false \"same\" for a WSL daemon.\n\ntask-25ba449a replaces it with one OS-independent contract for absolute paths, documented on comparableProjectPath in packages/moe-proxy/src/utils.ts:\n- Drive and UNC forms: \\ and / both separate, segments are collapsed, and case is folded.\n- \\\\wsl$\\<distro>\\x and \\\\wsl.localhost\\<distro>\\x name the distro's POSIX /x.\n- POSIX paths keep their case on every OS, and /mnt/<d> maps to d:.\n- Only a relative path is first resolved natively.\n\nWhen implementing here, port the landed contract from utils.ts, not the algorithm text in step 2. Add the contract rows to section A: POSIX case on win32, \\\\srv\\share\\p equal to //SRV/SHARE/P/, and a WSL share equal to its POSIX path. The rest of the plan is unchanged.",
+      "timestamp": "2026-10-30T13:17:03.266Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:55:18.945Z",
-  "updatedAt": "2026-10-30T08:03:40.341Z",
+  "updatedAt": "2026-10-30T13:17:03.266Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:59:34.287Z",

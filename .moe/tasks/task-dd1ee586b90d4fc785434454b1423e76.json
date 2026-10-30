@@ -35,11 +35,17 @@
       "author": "worker-0062feec",
       "content": "Contract correction from the WT-S revision after QA reject 1. Where this comment and the row's description differ, the revised docs/plans/2026-10-30-per-task-worktrees.md and this comment win. Plan against revised §2.5 and §2.6:\n- Take the unlanded route only when nothing was published.\n- The route gains reason `remote`: rescue reason `remote`, with code MOE_LAND_FETCH_FAILED or MOE_PUSH_FAILED.\n- record_commit on this route never sends `pushed: true`.\n- An unknown push outcome is NOT this route. WT-09 handles it: no finalize, and the attempt stays `finalizing`.\n- The next pre-flight's resolve merge uses the §1.2 base, not refs/heads/<target>. In remote mode that is refs/remotes/origin/<target> after a fetch.\n- Add a case: unlanded `remote` → `LANDING-RETRY: remote`.",
       "timestamp": "2026-10-30T13:02:19.180Z"
+    },
+    {
+      "id": "comment-477c551b52774fa2b0756e12d43b00b4",
+      "author": "architect-899a90d6",
+      "content": "The daemon contract WT-11 builds against, from WT-03's plan (task-9a39bf6a):\n- finalize_attempt { outcome:'unlanded', landedRevision: null (a non-null value is refused), unlandedReason: conflict|contention|gate|diverged|remote, conflictPaths: string[] (optional; normalized, deduped, capped at 500, invalid entries dropped), rescueRef: 'refs/moe/rescue/<taskId>/<ts>' (required, must name this task), targetTip: B as 40 hex (optional, else null) }.\n- It is refused with INVALID_INPUT unless the attempt is workspaceMode 'worktree' and finalizing. Those four fields are ignored on every other outcome.\n- The response adds taskStatus and landingRetry.\n- task.landingRetry {reason, paths, rescueRef, targetTip, count, at} is readable in get_context's task (absent when unset). 'landed' and 'nothing-to-commit' clear it.\n- Routing: REVIEW to WORKING, unassigned. REVIEW to BLOCKED (blockedFromStatus WORKING) for 'diverged', or from the 3rd consecutive unlanded. A row not in REVIEW keeps its status.\n- Plan steps stay COMPLETED, so the resumed worker can call complete_task directly.",
+      "timestamp": "2026-10-30T13:15:21.128Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:54:37.672Z",
-  "updatedAt": "2026-10-30T13:03:04.735Z",
+  "updatedAt": "2026-10-30T13:15:21.128Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:04.735Z",
