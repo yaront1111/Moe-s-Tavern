@@ -9,6 +9,7 @@ import { loadCertifiedProvider, runDoctor, validateManifest } from '../local-run
 import { probeMultipass, MAX_PROBE_BUFFER, MAX_PROBE_TIMEOUT_MS } from '../local-runner/multipass.mjs';
 import { runCli } from '../local-runner/cli.mjs';
 
+const AGENT_TMP_ROOT = tmpdir(); // Capture before any test can redirect the temp environment.
 const host = { platform: 'win32', arch: 'x64' };
 const version = { multipass: '1.17.0+win', multipassd: '1.17.0+win' };
 const commands = [['version', '--format', 'json'], ['get', 'local.driver'], ['get', 'client.primary-name']];
@@ -3852,7 +3853,7 @@ import { once } from 'node:events';
 import { after, before } from 'node:test';
 // Start without a late top-level await: earlier rows could finish and run root teardown during that await.
 // before() still waits for the bind, which an AJ row run on its own (a name filter or a rerun) would otherwise outrun.
-const AGENT_PROJECT = mkdtempSync(path.join(tmpdir(), 'moe-agent-session-'));
+const AGENT_PROJECT = mkdtempSync(path.join(AGENT_TMP_ROOT, 'moe-agent-session-'));
 const AGENT_DAEMON = path.join(AGENT_PROJECT, '.moe', 'daemon.json');
 mkdirSync(path.dirname(AGENT_DAEMON));
 const agentHealth = createServer((req, res) => res.end(JSON.stringify({ status: 'healthy', projectPath: AGENT_PROJECT, bindHost: '127.0.0.1' })))

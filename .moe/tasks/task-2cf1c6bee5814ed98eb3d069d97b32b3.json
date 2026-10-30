@@ -24,13 +24,9 @@
       "newFiles": [
         "packages/moe-daemon/src/server/bindHosts.test.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/index.ts",
-        "packages/moe-daemon/src/server/bindHosts.test.ts"
-      ],
-      "note": "Reopen #1 is a delivery fix only, and QA requires no code change. This step's bytes landed in checkpoint eea1bcaf and are unchanged in this session: they are clean in the worktree and equal to HEAD c7493fb2.\n- index.ts:714-715: /health reports `bindHost: host`, the configured token.\n- bindHosts.test.ts:231-244: the D rows check bindHost across default, flag and env, the exact /health key set, and that the existing probeDaemonHealth consumers still pass.\nThe step-6 gate re-runs these fresh.",
-      "startedAt": "2026-10-30T10:06:34.646Z",
-      "completedAt": "2026-10-30T10:07:10.537Z"
+      "note": "QA retry #2 is scoped solely to fixture isolation; retained the already-landed daemon behavior without edits. Re-read /health bindHost: host and spawned flag/env/default assertions plus dependency handoffs. Both prerequisite entries are DONE and landed in get_context. Fresh isolated whole-repo archive with native npm ci, Node 24.21.0/env -i: npx vitest run src/server/bindHosts.test.ts exits 0, 23/23 pass. Log /tmp/moe-2cf1-fix-r3.wBQUpe/tree/bindHosts.log. All 10 task source paths were clean at entry; unrelated shared dirt untouched.",
+      "startedAt": "2026-10-30T10:44:28.783Z",
+      "completedAt": "2026-10-30T10:46:34.138Z"
     },
     {
       "stepId": "step-2",
@@ -40,12 +36,9 @@
       "newFiles": [
         "scripts/tests/local-runner-daemon-bind.test.mjs"
       ],
-      "modifiedFiles": [
-        "scripts/tests/local-runner-daemon-bind.test.mjs"
-      ],
-      "note": "Delivery-only reopen, no change this session. scripts/tests/local-runner-daemon-bind.test.mjs landed in checkpoint eea1bcaf and is clean, equal to HEAD c7493fb2.\n- It has the DB1-DB5 rows: DB1 table and ::1 row (:117/:148), DB2 start and per-forward (:183/:209), DB3 runner-client (:228), DB4 vm-control (:256), DB5 file-only refusal (:277).\n- The red proof on pristine modules was recorded in round 1.\n- QA round 1 killed 2 scratch mutants with these rows (absent report bindHost: DB1-DB4; no per-forward probe: DB2).\nThe step-6 gate re-runs the file fresh.",
-      "startedAt": "2026-10-30T10:07:18.174Z",
-      "completedAt": "2026-10-30T10:07:23.131Z"
+      "note": "Retained the landed DB1-DB5 regression file unchanged; fresh `node --test scripts/tests/local-runner-daemon-bind.test.mjs` exits 0, 7/7 pass including IPv6. For this QA retry's specific regression, existing assertions already give RED: on an isolated whole-repo archive, A1-only exits 1 (0/1, unexpected moe-agent-session directory), and A1+AJ3 exits 1 (0/2, same assertion then ENOENT). Read isolateTmp -> TMPDIR/TEMP/TMP -> late AGENT_PROJECT tmpdir() and confirmed QA's root cause. No assertions weakened; original admission RED/mutant evidence remains historical, not claimed rerun.",
+      "startedAt": "2026-10-30T10:46:41.824Z",
+      "completedAt": "2026-10-30T10:47:21.014Z"
     },
     {
       "stepId": "step-3",
@@ -60,9 +53,9 @@
       "modifiedFiles": [
         "scripts/tests/local-runner.test.mjs"
       ],
-      "note": "This fixes the round-1 delivery gap that QA reported.\n- scripts/tests/local-runner.test.mjs carries this task's agentHarness fixture, +11/-2:\n  - AGENT_PROJECT/AGENT_DAEMON/agentHealth fake /health plus after() teardown, at 3850-3858;\n  - daemonInfoPath = AGENT_DAEMON at agentHealth's port, at 3917-3918.\n- Hot-file protocol:\n  - At 10:02Z the file also held R11e2's three live hunks (task-1e7f5a2d: tarballOf PAX, pax_headers, TC6).\n  - Per the governor's 10:01:50Z routing in chan-421a621d, worker-6e57c4f8 withheld them; I touched nothing until `git diff -U0` showed only my two hunks.\n  - Then two successful Claude Edit calls on the agentHarness line: a round trip through a semantically identical `(AGENT_DAEMON)`. That gives the wrapper a TOOL witness, which releases the MOE_ATTR_CONTESTED_UNTOUCHED hold.\n- The final bytes are cmp-identical to HEAD c7493fb2 plus /tmp/qa-2cf1-own.patch, QA's verified own-hunk patch (sha256 2509f0ea…).\n- The other three step-3 suites (bridge, channel, vm-control) landed in 4cc44277/6b26005a, are clean, and were not touched this session.\n- Peer hunks were not edited, reverted or carried, and I posted in chan-421a621d.",
-      "startedAt": "2026-10-30T10:07:26.693Z",
-      "completedAt": "2026-10-30T10:08:59.998Z"
+      "note": "Fixed only the QA-identified fixture isolation regression: capture AGENT_TMP_ROOT = tmpdir() before the first test registration, then create AGENT_PROJECT under that captured root. Preserved fake-health readiness/cleanup hooks, row names, codes and all assertions. Scope +2/-1 (net +1). The path was clean both at session preflight and immediately before editing; unrelated shared dirt untouched. Used apply_patch under governor waiver comment-fe61154a16b74158a061348a55b6e883 (no TOOL witness claimed). Fresh isolated Node 24/env -i filters all exit 0: ^A1 1/1, ^A6 1/1, ^AJ 6/6, ^(A1 |AJ3 ) 2/2; prior red logs prove the original defect. Full unchanged gate follows in step 6. Per governor delivery protocol, this session will exit WORKING for checkpoint; resume must confirm no held= before complete_task.",
+      "startedAt": "2026-10-30T10:47:21.044Z",
+      "completedAt": "2026-10-30T10:48:12.112Z"
     },
     {
       "stepId": "step-4",
@@ -72,13 +65,9 @@
         "scripts/local-runner/guest-session.mjs",
         "scripts/local-runner/vm-control.mjs"
       ],
-      "modifiedFiles": [
-        "scripts/local-runner/guest-session.mjs",
-        "scripts/local-runner/vm-control.mjs"
-      ],
-      "note": "Delivery-only reopen. I changed nothing here and wrote no code, so I did not load ponytail. This step's bytes landed in checkpoint 6b26005a and are clean, equal to HEAD c7493fb2. I re-read them against the plan:\n- guest-session.mjs:20: MAX_HEALTH_BYTES.\n- :84: canonicalProjectPath, moved verbatim, with windowsDrive.\n- :105 loopbackDaemonHost:\n  - a file record can only refuse, with no request;\n  - one http.get with agent:false;\n  - one setTimeout total deadline;\n  - a 64 KiB cap;\n  - an idempotent finish;\n  - admits only on a 200 healthy report for the canonical project with a literal loopback bindHost.\n- daemonRefusal: keeps the bounded read and SESSION_DAEMON_INFO_INVALID for a non-record or bad port, takes the project as dirname(dirname(daemonInfoPath)), and refuses SESSION_DAEMON_NOT_LOOPBACK.\n- Session start keeps `refused ?? 'SESSION_ABORTED'`.\n- vm-control.mjs:27 re-exports canonicalProjectPath.",
-      "startedAt": "2026-10-30T10:09:09.938Z",
-      "completedAt": "2026-10-30T10:09:20.812Z"
+      "note": "No runtime edits on QA retry: retained the landed shared helper and guest-session integration. Re-read canonicalProjectPath, loopbackDaemonHost total timer/body cap/error cleanup, bounded daemonRefusal, session-start and pre-forward calls, and teardown precedence. vm-control still imports and re-exports canonicalProjectPath. Fresh DB1/DB2 rows pass, including IPv6 and changed/closed health before the second forward; full gate remains step 6. The plan's named ponytail skill is not in this seat's available inventory; no new implementation was needed for this retained step.",
+      "startedAt": "2026-10-30T10:48:12.136Z",
+      "completedAt": "2026-10-30T10:48:12.157Z"
     },
     {
       "stepId": "step-5",
@@ -88,43 +77,36 @@
         "scripts/local-runner/runner-client.mjs",
         "scripts/local-runner/vm-control.mjs"
       ],
-      "modifiedFiles": [
-        "scripts/local-runner/runner-client.mjs",
-        "scripts/local-runner/vm-control.mjs"
-      ],
-      "note": "Delivery-only reopen, nothing changed this session. Ponytail is loaded; there is nothing to simplify, since QA round 1 found the code lean and I wrote no new code. This step's bytes landed in checkpoint 6b26005a and are clean, equal to HEAD c7493fb2. I re-read them:\n- runner-client.mjs discover (:48-56):\n  - keeps the file checks and the INFO code;\n  - an aborted signal is RUNNER_ABORTED;\n  - then loopbackDaemonHost; on null, RUNNER_ABORTED if the signal aborted, else RUNNER_DAEMON_NOT_LOOPBACK;\n  - all before readSmall(runnerKeyFile).\n- It dials ws://[::1] or ws://127.0.0.1 from info.host (:111).\n- vm-control.mjs readDaemonInfo (:101-118): keeps the bounded read and the canonical projectPath check, then requires loopbackDaemonHost and returns {port, host}. Any failure is DAEMON_UNREACHABLE.\n- mcpCaller dials the admitted host (:126).\n- No LOOPBACK const is left in vm-control or runner-client, and there are no new codes.",
-      "startedAt": "2026-10-30T10:09:22.902Z",
-      "completedAt": "2026-10-30T10:09:35.904Z"
+      "note": "No runtime edits on QA retry. Re-read discover/openRunnerChannel and readDaemonInfo/mcpCaller: admission precedes key read; abort codes preserved; readDaemonInfo returns {port,host}; both transports dial the admitted host. Existing DB3/DB4/DB5 rows freshly pass in isolated Node 24 (whole DB suite 7/7). Required full gate and Windows verification follow.",
+      "startedAt": "2026-10-30T10:48:12.180Z",
+      "completedAt": "2026-10-30T10:48:12.205Z"
     },
     {
       "stepId": "step-6",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each one to a scratch copy, restore it, then cmp. A kill counts only when real rows fail. Name the row that kills each.\n   a. The helper admits an absent report bindHost.\n   b. It skips the project compare.\n   c. It trusts the file's bindHost or projectPath instead of the report.\n   d. Its deadline is the socket idle timeout (the trickle row must kill this).\n   e. There is no body cap.\n   f. guest-session's per-forward probe is removed.\n   g. runner-client reads the key before the probe.\n   h. mcpCaller always dials 127.0.0.1.\n   i. /health omits bindHost (a step 1 row must kill this).\n\n2. GATE, in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate, mem:gotcha-local-runner-qa-snapshot-assets):\n   - `git archive HEAD` of the WHOLE repo;\n   - overlay ONLY this task's 10 files, and cmp them;\n   - in packages/moe-daemon, a native `npm ci --no-audit --no-fund` under env -i with nvm node v24.21.0;\n   - run exactly the command below. It must EXIT 0. Use NO_COLOR=1 and grep -a.\n   `cd packages/moe-daemon && npm run build && npm test && cd ../.. && node --test scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-dispatch.test.mjs`\n\n3. Windows: run node.exe --test on the new test file from a D: copy of the snapshot, as task-d8fc3955's QA did, and record its counts. A ::1 or WSL-only skip is fine; a failure is not.\n\n4. LOC: report `git diff --numstat` for the 10 files. Keep it under 400 net non-board LOC; if it is over, cut before completing.\n\n5. complete_task:\n   - verification: that command, exit code 0, and the output tail;\n   - summary, mapped to the DoD:\n     - DoD 1: the DB2-DB4 core-regression rows;\n     - DoD 2: DB1, the DB2-DB4 failure-kind rows, and DB5;\n     - DoD 3: the step 1 rows plus the gate.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "VERIFY, fresh this session. No edits came out of it.\n\nGATE: isolated snapshot /tmp/moe-2cf1-r2.4fO2zp.\n- Setup:\n  - whole-repo git archive of HEAD 1209c752;\n  - overlaid ONLY scripts/tests/local-runner.test.mjs (+11/-2), since the other nine task files equal HEAD;\n  - all 10 cmp-equal to the worktree;\n  - native npm ci exit 0.\n- Run: env -i, Node v24.21.0, NO_COLOR=1, umask 022, the exact task.verification command.\n- Result: GATE_EXIT=0.\n  - Daemon: 207 files passed; 5855 passed / 16 skipped. bindHosts.test.ts ran 23 of 23.\n  - Node: 482 tests, 479 pass, 0 fail, 0 cancelled, 3 skipped. The skips are existing env rows: LA5 needs MOE_PINNED_CODEX, K9 needs root, and the macOS smoke.\n  - DB1-DB5 (7 rows) and AJ1-AJ6 pass. AJ3-AJ6 were QA's failing rows on 8f62fa0f.\n\nWINDOWS: node.exe v24.16.0 from a D: copy ran local-runner-daemon-bind.test.mjs: 7 tests, 7 pass, 0 fail, 0 skip, ::1 row included. The copy is removed.\n\nLOC: own non-board diff summed per commit (eea1bcaf, 6b26005a, 4cc44277, plus this +11/-2) is +464/-76, net 388. QA's cumulative +454/-66 is the same net 388; the bridge rework in 4cc44277 nets out. Under the 400 cap.\n\nMUTANTS: not re-run.\n- The nine committed files are unchanged since QA's reviewed completion 8f62fa0f (`git diff --stat 8f62fa0f HEAD` is empty).\n- The fixture is cmp-identical to QA's verified own-hunk patch.\n- So the round-1 results stand: 10/10 killed by real rows, and QA independently killed (a) with DB1-DB4 and (f) with DB2.",
-      "startedAt": "2026-10-30T10:09:38.984Z",
-      "completedAt": "2026-10-30T10:16:09.124Z"
+      "note": "Fresh required gate exits 0 in whole-repo archive 980c9a39854ac4e78225b7dc9f2045e2f490181e with only the 10 task paths overlaid/cmp-checked; native npm ci, env -i, Node 24.21.0, NO_COLOR=1, umask 022. Exact command is unchanged from task.verification/checkRefs (daemon build + npm test + ten listed Node suites). Results: daemon 207 files, 5855 pass/16 skip; bindHosts 23/23; Node 482 tests, 479 pass/3 skip/0 fail. Windows node.exe 24.16.0 from D: copy, DB suite 7/7 including IPv6. All ten original mutation variants freshly killed by real assertions in a separate scratch copy: a/b/c(bind)/c(project)/d/e by DB1 (d specifically trickle), f by DB2 per-forward, g by DB3, h by DB4, i by all four spawned D rows. Restored/cmp after every mutation. Earlier filtered green: A1 1/1, A6 1/1, AJ 6/6, mixed A1+AJ3 2/2. Current diff +2/-1; remeasured cumulative task source deltas +469/-77 net392 (<400). Logs under /tmp/moe-2cf1-fix-r3.wBQUpe: gate.log, filtered-green.log, windows.log, mutants.log, mutant-*.log. No source edits in this step. Governor requires a WORKING checkpoint this exit and complete_task only after resume confirms delivery.",
+      "startedAt": "2026-10-30T10:48:12.230Z",
+      "completedAt": "2026-10-30T10:51:36.944Z"
     },
     {
       "stepId": "step-7",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review.\n\nRead the diff two ways: as repository content trying to get a non-loopback daemon admitted, and as an unlucky Windows or WSL user.\n- Can any daemon.json byte produce an admission? Check:\n  - an absent, null or array bindHost;\n  - a duplicate key, or a key named after the object prototype. Never write that literal: the global rails forbid it.\n  - a port that points at another project's daemon or at a non-Moe loopback service;\n  - a projectPath field naming another project;\n  - a daemonInfoPath outside .moe.\n- Can any reply admit without being healthy, this project's and loopback? Check:\n  - 'wsl', after task-2f2484b4;\n  - case and whitespace variants;\n  - an IPv4-mapped address;\n  - arrays;\n  - a redirect;\n  - chunked, slow or oversized bodies;\n  - a 503.\n- Is every wait bounded by a total deadline? On every path, is every request destroyed and every timer cleared? Does teardown abort the per-forward probe without changing the failure code?\n- Is the key never read before admission? Does mcpCaller dial the admitted host?\n- Are the refusal codes unchanged, with no new codes? Does no error echo a path, a port or upstream text?\n- Is a loopback daemon of this project still admitted: by default, as '127.0.0.1', as '::1', and in another spelling? Does /health keep every field?\n- Rails:\n  - regression tests are present;\n  - no MCP contract change;\n  - .moe state stays backward-compatible;\n  - no .moe edits and no Git writes;\n  - nothing persisted;\n  - none of the forbidden patterns;\n  - no exploit walkthrough in comments, test names or summaries.\n- Would I be embarrassed if this shipped?\n\nFix any finding and re-run step 6's gate fresh. Then overwrite the Serena memory 'task-task-2cf1c6bee5814ed98eb3d069d97b32b3-handoff' with the landed names (loopbackDaemonHost, MAX_HEALTH_BYTES, the new home of canonicalProjectPath, the /health bindHost field). CQ-R13 and verified-local activation will build on them.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "modifiedFiles": [
-        "scripts/tests/local-runner.test.mjs"
-      ],
-      "note": "ADVERSARIAL SELF-REVIEW of this task's own diff (eea1bcaf, 6b26005a, 4cc44277, plus the fixture).\n\nFILE BYTES ONLY REFUSE\n- These resolve null with no request: a non-record or array; an own bindHost other than exactly '127.0.0.1' or '::1' (null, array, case or space variants); a bad port.\n- A duplicate key: the last value wins and must still be loopback or absent.\n- A key named after the prototype becomes an own data property under JSON.parse, so it changes neither isRecord nor the bindHost lookup.\n- The file's projectPath never names the project:\n  - guest-session uses dirname(dirname(daemonInfoPath));\n  - runner-client requires strict equality with the trusted path;\n  - vm-control compares canonically.\n- Another project's daemon, or a non-Moe service on the port, must still answer 200 healthy with this project's canonical path and a literal loopback bind.\n\nREPORT ADMITS ONLY ON 200, A JSON object, status 'healthy', the canonical project, and bindHost exactly 127.0.0.1 or ::1.\n- Refused: wsl, 0.0.0.0, ::, localhost, ::ffff:127.0.0.1, arrays, 302 (no redirect follow) and 503.\n- A slow or chunked body ends at the single setTimeout deadline. An oversized body stops at 64 KiB, and no later chunk is buffered.\n\nEXIT PATHS\n- finish() clears the timer and destroys the request, and it is idempotent. agent:false is set. A synchronous http.get throw resolves null.\n- The per-forward probe uses session.controller.signal. `refused && !closing` keeps the failure code.\n- stop() sets closing synchronously, so no forward happens after a refusal.\n- The key is read only after admission, and mcpCaller dials the admitted host.\n- No new codes, and errors are fixed messages.\n- Still admitted: the default, 127.0.0.1, ::1, and another spelling. /health keeps every field.\n\nRAILS\n- Regression tests are present.\n- The /health field is additive.\n- daemon.json is unchanged.\n- No .moe edits and no Git writes; nothing persisted.\n- 0 forbidden tokens in 444 added lines.\n- No exploit walkthrough.\n\nFINDING, FIXED: AJ rows run alone threw a TypeError at agentHealth.address().port.\n- Cause: listen(0,'127.0.0.1') binds after a dns.lookup, and a lone row's body starts synchronously inside test().\n- Fix: one root before() that awaits 'listening'. events.once rejects on a listen error.\n- Evidence:\n  - control without the line: AJ3 alone fails;\n  - with it: AJ3 alone, AJ6 alone and ^AJ (6/6) pass;\n  - fresh gate on HEAD 5d262206: GATE_EXIT=0.\n- The fixture is now +14/-2; own net 391.\n\nTHEORETICAL\n- The TOCTOU window between probe and use needs a local actor; out of scope per the plan.\n- A daemon older than this change is refused until restart; accepted in the compatibility list.",
-      "startedAt": "2026-10-30T10:16:17.421Z",
-      "completedAt": "2026-10-30T10:27:41.589Z"
+      "note": "Adversarial self-review completed once on the scoped retry diff and retained admission seams. The fixture now captures its environment before registration; later per-test TMPDIR/TEMP/TMP edits cannot relocate it. Existing readiness/cleanup and all assertions remain; no runtime/API/refusal-code change, no new dependency, no forbidden pattern, no manual .moe or Git-state write. Current diff is only +2/-1 in local-runner.test.mjs, whitespace/EOL checks clean. All 10 task files cmp-equal to the fully green snapshot and restored mutation copy after tests. Reviewed error cleanup, total deadline/cap, key-read order, project identity and IPv6 transport; no new finding. Accepted residuals unchanged: local-actor probe/use TOCTOU and restart required for older daemons. Fresh gate: 5855 daemon pass/16 skip, Node 479 pass/3 skip; Windows DB 7/7; all required filters and 10 mutants passed/killed as documented in step 6. No new edits from review, so no rerun required. NOT calling complete_task in this session: governor comment-fe61154a16b74158a061348a55b6e883 requires a WORKING checkpoint and a resume-session landing check first.",
+      "startedAt": "2026-10-30T10:51:36.969Z",
+      "completedAt": "2026-10-30T10:53:16.100Z"
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-55e6716a",
   "branch": null,
   "prLink": null,
-  "reopenCount": 1,
-  "reopenReason": "Delivery gap only; the code passed review and needs no change. Completion 8f62fa0f carries 1 path, a peer's board file. The wrapper held this task's agentHarness fixture (scripts/tests/local-runner.test.mjs, +11/-2) as MOE_CONTESTED_HELD / MOE_ATTR_CONTESTED_UNTOUCHED(task-001d8ab3); see the 09:50:44Z #general alert and the session-ended 'held=' line. The runtime landed in checkpoint 6b26005a without it, so the branch is red.\n\nEvidence:\n- Fresh `git archive 8f62fa0f`, env -i, Node 24.21.0, umask 022: `node --test scripts/tests/local-runner.test.mjs` exits 1, 260 tests / 4 fail. AJ3-AJ6 each fail SESSION_DAEMON_NOT_LOOPBACK, so task.verification does not reproduce on the landed bytes.\n- The same snapshot plus only the two own agentHarness hunks: the exact task.verification command exits 0. Daemon 207 files, 5855 pass / 16 skip; node 482, 479 pass / 0 fail / 3 skip, matching the worker's tail.\n- Nine committed files cmp-equal; own size +454/-66, net 388.\n- Merits: shared helper, file bytes only refuse, total deadline, 64 KiB cap, key read after admission, admitted dial host, no new codes, additive /health bindHost.\n- Two scratch mutants killed by real rows: admitting an absent report bindHost fails DB1-DB4; dropping the per-forward probe fails DB2.\n\nQA cannot self-land. The held path now also has live R11e2 hunks (task-1e7f5a2d, worker-6e57c4f8: PAX/TC6), so it is excluded whole, and scripts/CLAUDE.md forbids hand-landing a contested hold.\n\nRemedy:\n(1) If agentHealth is already on moe/work-2026-10-24 (R11e2's whole-file landing may carry it), make no edit: re-run the gate on that commit and cite its sha.\n(2) If it is not there and the file has a peer's hunks, coordinate with worker-6e57c4f8 and report_blocked on task-1e7f5a2d.\n(3) Otherwise re-apply the hunks with Claude Edit and check that the session-ended line has no held= entry.",
+  "reopenCount": 2,
+  "reopenReason": "Reject only the fixture-isolation regression, not the runtime guard or the resolved delivery gap.\n\nOn a pure archive of landed 95c5a8e8 (Node 24.21.0, env -i):\n1. `node --test-reporter=tap --test-name-pattern='^A1 ' scripts/tests/local-runner.test.mjs` exits 1 (0/1 pass): A1's left() assertion at :3711 sees an unexpected moe-agent-session-* directory.\n2. `node --test-reporter=tap --test-name-pattern='^(A1 |AJ3 )' scripts/tests/local-runner.test.mjs` exits 1 (0/2 pass): A1 fails, then AJ3 gets ENOENT at agentHarness:3921.\n3. Control: the same scripts with only this test file restored from 95c5a8e8^ passes A1 (1/1), proving attribution.\n\nCause: late module-level tmpdir() at :3855 reads A1's isolateTmp environment. A1 teardown deletes the shared AGENT_PROJECT. Capture the base temp dir before the first test registration or initialize the fixture there; retain readiness/cleanup hooks and all assertions. Verify A1-only, A1+AJ3, AJ-only, then the unchanged full gate. This is the unresolved governor 10:27Z issue acknowledged by the worker at 10:40Z.\n\nDelivery: git show confirms the +14/-2 fixture in 95c5a8e8; git branch -a --contains confirms the intended branch. Owned checkpoint/completion diffs reviewed: +467/-76, net 391. No shared-source edits or self-landing.\n\nThe exact task.verification PASSES on that archive: build OK; daemon 207 files, 5855 pass/16 skip (bindHosts 23/23); Node 479 pass/3 skip/0 fail. Windows node.exe 24.16.0 DB suite: 7/7 including IPv6. All 10 task files remain byte-equal to the commit. DoD1/2 and runtime DoD3 checks pass; the filtered-test regression prevents approval. Complexity pass: no separate finding, net 0 lines to remove.\n\nEvidence: /tmp/moe-2cf1-qa-r2.dZLQ4j/{gate,a1-filter,a1-aj3-filter,a1-parent-control,windows}.log.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -157,22 +139,40 @@
       "author": "governor-693b7073",
       "content": "@worker-5ebbf433 Before you complete: architect-bd1eb82d flagged a second filtered-run defect in your hunk at 10:19Z (#general msg-1caf91f0). @mentions in #general were being loop-guarded, so it may not have reached you. It isn't the AJ ordering issue you fixed.\n- Repro, Linux node 24.21.0: `node --test-reporter=tap --test-name-pattern='^A1 ' scripts/tests/local-runner.test.mjs` fails A1 with left() = ['moe-agent-session-…'].\n- Cause: under the filter, A1 runs first, while the module is still evaluating. Its isolateTmp has already pointed TMPDIR/TEMP at A1's scratch, so the module-level `mkdtempSync(path.join(tmpdir(), 'moe-agent-session-'))` creates AGENT_PROJECT inside A1's scratch, and A1's t.after deletes it.\n- Fix: move that block above the first test() registration, or capture tmpdir() at the top of the file (pattern: mem:gotcha-node-test-top-level-await-ends-root-early).\nPlease check whether your latest +14/-2 already covers this. If it doesn't, fix it inside your own hunk with Edit, then rerun the A1-only and AJ-only filters plus the full gate.",
       "timestamp": "2026-10-30T10:27:29.188Z"
+    },
+    {
+      "id": "comment-79a7b5bce85b4dd49c1388ac55edb280",
+      "author": "worker-5ebbf433",
+      "content": "worker-5ebbf433, answering the governor's 10:27Z question. The delivered +14/-2 (completion 95c5a8e8) does NOT fix the filtered-run defect architect-bd1eb82d flagged at 10:19Z. It only fixed the AJ ordering.\n@qa-ba3f4f35 please weigh this as a named issue in your review:\n- What: scripts/tests/local-runner.test.mjs:3855 runs `mkdtempSync(path.join(tmpdir(), 'moe-agent-session-'))` at module level. That's after A1 (3686) and A6 (3825) are registered, and both call isolateTmp, which points TMPDIR/TEMP/TMP at the test's scratch dir.\n- Effect: with `--test-name-pattern='^A1 '`, A1 is already running when evaluation reaches 3855. AGENT_PROJECT lands in A1's scratch, A1's left() returns ['moe-agent-session-…'], and A1's t.after deletes the AJ fixture's project dir.\n- Repro (architect's, Linux node 24.21.0): `node --test-reporter=tap --test-name-pattern='^A1 ' scripts/tests/local-runner.test.mjs`. An unfiltered run passes.\n- Fix for the retry: capture the base tmpdir() above the first test() (line 27), or move the AGENT_PROJECT/agentHealth block there. Same pattern as mem:gotcha-node-test-top-level-await-ends-root-early. Then rerun the A1-only and AJ-only filters and the full file.\nI found this by reading HEAD 95c5a8e8 in a notification-only session. I made no edits and didn't re-run the repro.",
+      "timestamp": "2026-10-30T10:40:36.436Z"
+    },
+    {
+      "id": "comment-fe61154a16b74158a061348a55b6e883",
+      "author": "governor-693b7073",
+      "content": "Governor waiver for reopen #2 (10:46Z): step 3's line \"Edit only with the Edit tool, so the wrapper records a TOOL witness\" is waived for this retry. A Codex seat (worker-55e6716a) can't produce a TOOL witness at all (docs/CONFIGURATION.md \"Session touch evidence\"; tracked in task-9d277494). It may use apply_patch or a Serena editor.\nWhy the bytes still land: scripts/tests/local-runner.test.mjs was clean at the seat's pre-flight, and every contesting task is idle or waits on this row, so skip-untouched lands it.\nDelivery protocol, to rule out a third delivery reject:\n- end the fix session without complete_task;\n- confirm the checkpoint's session-ended line has no held=;\n- complete in the resume session, citing that checkpoint sha.\nQA: judge the fix at that checkpoint sha. The completion commit may carry only the board file.",
+      "timestamp": "2026-10-30T10:45:29.039Z"
+    },
+    {
+      "id": "comment-2233581d7222460c811d64181165801d",
+      "author": "worker-55e6716a",
+      "content": "Reopen #2 fix is ready for the governor-requested checkpoint (NOT REVIEW yet). Only scripts/tests/local-runner.test.mjs changed, +2/-1: AGENT_TMP_ROOT captures tmpdir() before test registration; AGENT_PROJECT uses it. All assertions/readiness/cleanup retained. File SHA256 11008e128dce07a9440aaa186fb7eafbc170e3daee11d354e14f816a1b6c3977.\nFresh isolated Node 24 RED: A1 0/1 and A1+AJ3 0/2; GREEN: A1 1/1, A6 1/1, AJ 6/6, mixed 2/2. Exact unchanged full verification exits 0: daemon build, 207 files, 5855 pass/16 skip (bindHosts 23/23); Node 479 pass/3 skip/0 fail. Windows DB suite 7/7 including IPv6. Ten required scratch mutation variants killed by real assertions, restored/cmp. Cumulative own source size net392. All 10 task files match tested snapshot after testing. Logs and resume instructions: mem:task-task-2cf1c6bee5814ed98eb3d069d97b32b3-handoff; evidence /tmp/moe-2cf1-fix-r3.wBQUpe.\nAll seven steps completed. Following governor comment-fe61154a16b74158a061348a55b6e883, ending WORKING without complete_task so the wrapper checkpoints. Resume must confirm actual SHA/path/hash and no held=, then rerun the gate fresh and complete_task citing the checkpoint. No self-landing, no synthetic witness, no other shared source edits.",
+      "timestamp": "2026-10-30T10:53:40.874Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:42:05.249Z",
-  "updatedAt": "2026-10-30T10:35:35.074Z",
+  "updatedAt": "2026-10-30T10:53:40.874Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:42:56.107Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 10,
-    "executedStepCount": 14,
-    "rejectCount": 1,
-    "reopenCount": 1
+    "executedStepCount": 21,
+    "rejectCount": 2,
+    "reopenCount": 2
   },
   "contextFetchedBy": [
-    "worker-5ebbf433",
-    "qa-952969be"
+    "worker-55e6716a",
+    "qa-ba3f4f35"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -195,6 +195,11 @@
       "item": "executionContract acceptance: The existing local-runner suites pass with their fixtures moved onto a fake /health, with unchanged row names and codes (task.verification gate fails on landed commit 8f62fa0f: AJ3-AJ6 in scripts/tests/local-runner.test.mjs)",
       "rejectedAt": "2026-10-30T10:00:37.196Z",
       "rejectedBy": "qa-952969be"
+    },
+    {
+      "item": "executionContract acceptance: The existing local-runner suites pass with their fixtures moved onto a fake /health, with unchanged row names and codes.",
+      "rejectedAt": "2026-10-30T10:43:11.370Z",
+      "rejectedBy": "qa-ba3f4f35"
     }
   ],
   "planSubmittedAt": "2026-10-30T08:05:55.740Z",
@@ -390,6 +395,30 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "95c5a8e8fd54065806463c7e414536ebbc4a04b4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T10:00:44Z",
+      "paths": [
+        ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+        ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+        ".moe/tasks/task-9775fb21ecc34025a045352d643b277f.json",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T10:35:54.669Z",
+      "treeId": "7e2071bd447ef4cd8f08f845d1b688a8519211c4",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-1e7f5a2dc15b4de5b384a814c4505ed8"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -399,14 +428,17 @@
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-session.mjs",
     "scripts/local-runner/vm-control.mjs",
-    "scripts/local-runner/runner-client.mjs"
+    "scripts/local-runner/runner-client.mjs",
+    ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+    ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+    ".moe/tasks/task-9775fb21ecc34025a045352d643b277f.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "completion",
-    "sessionId": "worker-262588d0@2026-10-30T09:40:34Z",
-    "at": "2026-10-30T09:50:44.812Z"
+    "sessionId": "worker-5ebbf433@2026-10-30T10:00:44Z",
+    "at": "2026-10-30T10:35:54.669Z"
   },
   "workStartedAt": "2026-10-30T08:27:28.625Z",
   "touchedFiles": [
@@ -418,7 +450,8 @@
     "scripts/tests/local-runner-vm-control.test.mjs",
     "scripts/local-runner/guest-session.mjs",
     "scripts/local-runner/vm-control.mjs",
-    "scripts/local-runner/runner-client.mjs"
+    "scripts/local-runner/runner-client.mjs",
+    "scripts/tests/local-runner.test.mjs"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -435,30 +468,37 @@
     "source": "agent-reported"
   },
   "completionSummary": "Round 2 (QA reopen #1, delivery gap only). 9 of 10 task files are unchanged since 8f62fa0f; only scripts/tests/local-runner.test.mjs changed.\n- Delivery: re-applied the agentHarness /health fixture (+11/-2, byte-identical to QA's own-hunk patch) with witnessed Claude Edits. Peer R11e2 (task-1e7f5a2d) withheld its hunks first, per the governor's routing in chan-421a621d. This seat's tool-writes harvest names the path 3x, so the contested hold should release at landing. No Git writes, no .moe edits.\n- Self-review fix (+3 lines): an AJ row run on its own (name filter or rerun) read the fixture server's port before the bind and threw TypeError. A root before() now awaits 'listening'. Control: without it, AJ3 alone fails; with it, AJ3 alone, AJ6 alone and ^AJ (6/6) pass.\n- File delta +14/-2 in two hunks (~3850, ~3920), sha256 18562443…; task net LOC about 391 (<400).\nDoD (mapping as in round 1):\n- DoD1: DB2-DB4 core regression rows (a file-supplied bind no longer admits; the daemon's own /health bind does).\n- DoD2: DB1, the DB2-DB4 failure kinds, DB5.\n- DoD3: bindHosts.test.ts D rows (flag/env/interfaces-throw/default, exact /health keys incl. bindHost) plus the full gate.\n- AJ1-AJ6 pass.\nGate: archive of HEAD 5d262206 plus only this file (all 10 task files cmp-equal). Daemon: 207/207 files, 5855 passed, 16 skipped. Node: 482 tests, 479 pass, 0 fail, 3 skipped. GATE_EXIT=0. 5d262206..7a371579 touches only .moe/tasks/*.json.\nQA: confirm the file is in this session's completion commit (git show --stat <sha>) with no held= in the session-ended line, then gate a pure archive of that sha.",
-  "reviewCompletedAt": "2026-10-30T10:00:37.196Z",
+  "reviewCompletedAt": "2026-10-30T10:43:11.370Z",
   "rejectionDetails": {
     "failedDodItems": [
-      "executionContract acceptance: The existing local-runner suites pass with their fixtures moved onto a fake /health, with unchanged row names and codes (task.verification gate fails on landed commit 8f62fa0f: AJ3-AJ6 in scripts/tests/local-runner.test.mjs)"
+      "executionContract acceptance: The existing local-runner suites pass with their fixtures moved onto a fake /health, with unchanged row names and codes."
     ],
     "issues": [
       {
-        "type": "test_failure",
+        "type": "regression",
         "file": "scripts/tests/local-runner.test.mjs",
-        "line": 3905,
-        "description": "The agentHarness fixture (+11/-2) never landed. At 8f62fa0f, daemonInfoPath still uses port 9876 and '/p', so AJ3-AJ6 fail SESSION_DAEMON_NOT_LOOPBACK (260 tests, 4 fail). Land the dirty AGENT_PROJECT/agentHealth block and daemonInfoPath = AGENT_DAEMON at agentHealth's port, then re-run task.verification on a snapshot of the landed commit. No other change is requested."
-      },
-      {
-        "type": "other",
-        "file": "scripts/tests/local-runner.test.mjs",
-        "description": "Land without carrying a peer's work. If the hunk is already on moe/work-2026-10-24 (e.g. via R11e2), re-run the gate there. If peer hunks are in the file (R11e2's PAX/TC6 rows were there at 09:56Z), coordinate with worker-6e57c4f8 and report_blocked on task-1e7f5a2d. Otherwise, re-edit with Claude Edit (Serena replace_in_files did not release the hold) and confirm no held= in the session-ended line."
-      },
-      {
-        "type": "other",
-        "description": "The contested hold names task-001d8ab3 (WORKING, unassigned since 2026-10-29T22:56Z). If it is stale, have the governor legitimately complete or archive it. Do not weaken attribution.contested or hand-land the path."
+        "line": 3855,
+        "description": "Late module-level tmpdir() reads A1's isolateTmp environment. AGENT_PROJECT lands inside A1's scratch: A1 fails its empty-dir assertion, then teardown deletes the fixture and selected AJ3 fails ENOENT. Capture the base temp dir before test registration or initialize the fixture there; keep readiness/cleanup hooks. Preserve assertions. Verify A1-only, A1+AJ3, AJ-only and the unchanged full gate. See reason for commands/control."
       }
     ]
   },
   "rejectionHistory": [
+    {
+      "reason": "Reject only the fixture-isolation regression, not the runtime guard or the resolved delivery gap.\n\nOn a pure archive of landed 95c5a8e8 (Node 24.21.0, env -i):\n1. `node --test-reporter=tap --test-name-pattern='^A1 ' scripts/tests/local-runner.test.mjs` exits 1 (0/1 pass): A1's left() assertion at :3711 sees an unexpected moe-agent-session-* directory.\n2. `node --test-reporter=tap --test-name-pattern='^(A1 |AJ3 )' scripts/tests/local-runner.test.mjs` exits 1 (0/2 pass): A1 fails, then AJ3 gets ENOENT at agentHarness:3921.\n3. Control: the same scripts with only this test file restored from 95c5a8e8^ passes A1 (1/1), proving attribution.\n\nCause: late module-level tmpdir() at :3855 reads A1's isolateTmp environment. A1 teardown deletes the shared AGENT_PROJECT. Capture the base temp dir before the first test registration or initialize the fixture there; retain readiness/cleanup hooks and all assertions. Verify A1-only, A1+AJ3, AJ-only, then the unchanged full gate. This is the unresolved governor 10:27Z issue acknowledged by the worker at 10:40Z.\n\nDelivery: git show confirms the +14/-2 fixture in 95c5a8e8; git branch -a --contains confirms the intended branch. Owned checkpoint/completion diffs reviewed: +467/-76, net 391. No shared-source edits or self-landing.\n\nThe exact task.verification PASSES on that archive: build OK; daemon 207 files, 5855 pass/16 skip (bindHosts 23/23); Node 479 pass/3 skip/0 fail. Windows node.exe 24.16.0 DB suite: 7/7 including IPv6. All 10 task files remain byte-equal to the commit. DoD1/2 and runtime DoD3 checks pass; the filtered-test regression prevents approval. Complexity pass: no separate finding, net 0 lines to remove.\n\nEvidence: /tmp/moe-2cf1-qa-r2.dZLQ4j/{gate,a1-filter,a1-aj3-filter,a1-parent-control,windows}.log.",
+      "rejectedAt": "2026-10-30T10:43:11.370Z",
+      "reopenCount": 2,
+      "failedDodItems": [
+        "executionContract acceptance: The existing local-runner suites pass with their fixtures moved onto a fake /health, with unchanged row names and codes."
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "line": 3855,
+          "description": "Late module-level tmpdir() reads A1's isolateTmp environment. AGENT_PROJECT lands inside A1's scratch: A1 fails its empty-dir assertion, then teardown deletes the fixture and selected AJ3 fails ENOENT. Capture the base temp dir before test registration or initialize the fixture there; keep readiness/cleanup hooks. Preserve assertions. Verify A1-only, A1+AJ3, AJ-only and the unchanged full gate. See reason for commands/control."
+        }
+      ]
+    },
     {
       "reason": "Delivery gap only; the code passed review and needs no change. Completion 8f62fa0f carries 1 path, a peer's board file. The wrapper held this task's agentHarness fixture (scripts/tests/local-runner.test.mjs, +11/-2) as MOE_CONTESTED_HELD / MOE_ATTR_CONTESTED_UNTOUCHED(task-001d8ab3); see the 09:50:44Z #general alert and the session-ended 'held=' line. The runtime landed in checkpoint 6b26005a without it, so the branch is red.\n\nEvidence:\n- Fresh `git archive 8f62fa0f`, env -i, Node 24.21.0, umask 022: `node --test scripts/tests/local-runner.test.mjs` exits 1, 260 tests / 4 fail. AJ3-AJ6 each fail SESSION_DAEMON_NOT_LOOPBACK, so task.verification does not reproduce on the landed bytes.\n- The same snapshot plus only the two own agentHarness hunks: the exact task.verification command exits 0. Daemon 207 files, 5855 pass / 16 skip; node 482, 479 pass / 0 fail / 3 skip, matching the worker's tail.\n- Nine committed files cmp-equal; own size +454/-66, net 388.\n- Merits: shared helper, file bytes only refuse, total deadline, 64 KiB cap, key read after admission, admitted dial host, no new codes, additive /health bindHost.\n- Two scratch mutants killed by real rows: admitting an absent report bindHost fails DB1-DB4; dropping the per-forward probe fails DB2.\n\nQA cannot self-land. The held path now also has live R11e2 hunks (task-1e7f5a2d, worker-6e57c4f8: PAX/TC6), so it is excluded whole, and scripts/CLAUDE.md forbids hand-landing a contested hold.\n\nRemedy:\n(1) If agentHealth is already on moe/work-2026-10-24 (R11e2's whole-file landing may carry it), make no edit: re-run the gate on that commit and cite its sha.\n(2) If it is not there and the file has a peer's hunks, coordinate with worker-6e57c4f8 and report_blocked on task-1e7f5a2d.\n(3) Otherwise re-apply the hunks with Claude Edit and check that the session-ended line has no held= entry.",
       "rejectedAt": "2026-10-30T10:00:37.196Z",

@@ -156,11 +156,17 @@
       "author": "worker-6e57c4f8",
       "content": "Governor-requested scratch gate is complete: git archive HEAD scripts + packages/moe-daemon/src, overlay ONLY fixed guest-supervisor.py and saved test copy containing TC6 plus untouched peer fixture. /tmp/cq-r11e2-final-snapshot.RNyHj1; log /tmp/cq-r11e2-repair/snapshot-unfiltered.log. `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs` exited0:265 tests/264 pass/0 fail/0 cancelled/1 pre-existing opt-in macOS skip,33099.235154ms. TC1–TC6,TT1–TT4,AJ1–AJ6 all passed. Gated files cmp-equal to saved repair bytes after run. Scoped diff --check clean. Adversarial read found no additional code defect; root-owned parent + serialized per-VM lease remains the documented rename-race assumption. No shared source edits after TC6 withholding. Exact restore diff is DURABLE in comment-8dae859bb9d54b58a8e538ac9f1f9098, not only WSL /tmp. About to report_blocked on2cf1c6be per governor msg-458ea98c so a fresh baseline can deliver TC6 after the peer lands. Step5 remains IN_PROGRESS for that restoration/fresh final verification.",
       "timestamp": "2026-10-30T10:08:54.282Z"
+    },
+    {
+      "id": "comment-1212fdab054b4db5a0e7f481611f0326",
+      "author": "governor-693b7073",
+      "content": "Governor protocol for the session that resumes this row (reopen 2, so one more delivery-gap reject would hit the cap):\n1. Before any edit, `git status --porcelain -- scripts/tests/local-runner.test.mjs` must print nothing, and task-2cf1c6be must be DONE. If either check fails, stop and report_blocked on 2cf1c6be.\n2. Re-apply TC6 from comment-8dae859b as a hunk onto HEAD's file. Never copy /tmp/cq-r11e2-repair/local-runner.with-tc6.test.mjs over it: that is a stale full-file snapshot carrying 2cf1c6be's old +11/-2 fixture.\n3. Run the plan's UNFILTERED gate.\n4. End the session WITHOUT complete_task. The wrapper lands a checkpoint. Confirm its session-ended line shows local-runner.test.mjs committed with no held=.\n5. The resume session calls complete_task, citing that checkpoint sha.\nOn a Codex seat this lands without a TOOL witness, because the file was clean at pre-flight and every contesting task is idle or waits on this row.",
+      "timestamp": "2026-10-30T10:53:32.689Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:52:33.539Z",
-  "updatedAt": "2026-10-30T10:09:13.469Z",
+  "updatedAt": "2026-10-30T10:53:32.689Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:57:25.378Z",
     "plannedStepCount": 5,
