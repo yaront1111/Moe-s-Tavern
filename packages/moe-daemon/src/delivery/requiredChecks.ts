@@ -24,6 +24,35 @@ export function protectedPaths(defs: readonly ProtectedCheckDefinition[]): { pat
   return pairs.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0);
 }
 
+/**
+ * The one architecture check a verified-local task may deliver on (task-efbf1742): the installed
+ * `moe-daemon` bin, which the runner provisions from a trusted install built at the base revision
+ * (CQ-V12 activation). Single spaces, and no quote, operator, variable, glob, redirection or newline,
+ * so nothing can run before or after it or change what runs.
+ */
+export const INSTALLED_ARCHITECTURE_CHECK = /^moe-daemon check-architecture(?: [A-Za-z0-9._\/=:@+^~-]+)*$/;
+const CHECKER_SOURCES = ['src/commands/checkArchitecture.ts', 'src/delivery/architectureRules.ts'];
+
+/**
+ * Ids, in definition order, of the architecture checks not in the installed form. `node
+ * packages/moe-daemon/dist/index.js check-architecture` runs code the candidate builds: index.ts loads
+ * every module the daemon imports, and a definition protects only the files it names, so an
+ * unprotected import (repositorySource, cachedPlanPaths, logger, ...) could serve '' content or
+ * override stdout and exitCode. A def is an architecture check when its command mentions the checker
+ * or it protects the checker's sources (an npm-script wrapper). Pure and never throws: a malformed
+ * def counts as an architecture check that is not installed.
+ */
+export function untrustedArchitectureChecks(defs: readonly ProtectedCheckDefinition[]): string[] {
+  return defs.filter((def) => {
+    const command: unknown = def?.command;
+    const lists: unknown[] = PATH_KINDS.map((kind) => def?.[kind] ?? []);
+    if (typeof command !== 'string' || !lists.every((l) => Array.isArray(l) && l.every((p) => typeof p === 'string'))) return true;
+    const architecture = /check-?architecture/i.test(command)
+      || (lists as string[][]).flat().some((p) => CHECKER_SOURCES.some((source) => p.endsWith(source)));
+    return architecture && !INSTALLED_ARCHITECTURE_CHECK.test(command.trim());
+  }).map((def) => String(def?.id));
+}
+
 const MAX_ENTRIES = 2000;
 const OID = /^[0-9a-f]{40}$/;
 export const requiredCheckGit = { run: runGit };

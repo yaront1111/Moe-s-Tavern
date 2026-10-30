@@ -12,46 +12,77 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. task-43088e9b (verified-local under deliveryPolicy legacy) and CQ-V06 (task-6a5d5a13) both edit policy.ts, and 43088e9b also edits requiredChecks.strong.test.ts. Both land before this row through dependsOn. Re-read policy.ts (evaluateDeliveryEvidence, protectedCheckShortfall, TOKEN_REASONS, describeMissingEvidence), requiredChecks.ts and the verified-local fixture in requiredChecks.strong.test.ts first.\n\nIn packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts, reuse its verified-local fixture: an approved snapshot, a candidate whose protectedEntries equal it, and a runner-observed exit-0 run of each approved command on the candidate's tree in an approved environment.\n\nROWS (prefix UC):\n- UC1, the classifier untrustedArchitectureChecks(defs), table-driven. Each case expects exactly the listed ids.\n  - Accepted (no id):\n    - 'moe-daemon check-architecture --rules arch.json';\n    - the same with --base <40-hex> --tree HEAD;\n    - the same with surrounding whitespace, which is trimmed;\n    - 'npm test', which neither mentions the checker nor protects its sources.\n  - Refused (its id). The command mentions check-architecture (case-insensitive), or its scripts include a path ending 'src/commands/checkArchitecture.ts' or 'src/delivery/architectureRules.ts', and it is not exactly the installed form:\n    - 'node packages/moe-daemon/dist/index.js check-architecture --rules arch.json';\n    - 'npx moe-daemon check-architecture ...';\n    - './node_modules/.bin/moe-daemon check-architecture';\n    - 'MOE_X=1 moe-daemon check-architecture';\n    - the installed form followed by '; true', '&& node x.js', '| cat', '$(id)', a backtick, or a newline;\n    - a quoted argument;\n    - two spaces between words;\n    - 'npm run arch' whose scripts list packages/moe-daemon/src/commands/checkArchitecture.ts.\n- UC2, delivery under verified-local (DoD 1). An approved def running 'node packages/moe-daemon/dist/index.js check-architecture --rules arch.json' has every other piece of evidence satisfied, including a passing runner run and equal protectedEntries. evaluateDeliveryEvidence answers satisfied false, and missingEvidence is exactly ['required-check-untrusted-checker:<id>']. This is the case of a candidate-built checker that passes because the candidate edited a module it imports: it can never deliver.\n- UC3: the same fixture with the installed form answers satisfied true.\n- UC4, legacy and observe unchanged (DoD 2): the UC2 definitions under the legacy profile, and under observe with a strict deliveryPolicy, give byte-identical results with and without the new rule. No new token appears.\n- UC5: describeMissingEvidence('required-check-untrusted-checker:<id>') names the id and the installed form, and quotes nothing from candidate data.\n\nRED proof: run the step-4 command. The UC rows fail for the expected reason; every other row passes. Record it.\n\nSize budget: 120 test lines or fewer, table-driven.\n\nError handling in the tests: assertions name fixed tokens, never messages, and no row spawns a process or reaches the network.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
+      ],
+      "note": "UC rows appended (+69 lines incl. 2 import lines). RED (Windows, `npx vitest run src/delivery/requiredChecks.strong.test.ts`): 33 failed | 37 passed. UC1 x31 TypeError untrustedArchitectureChecks is not a function; UC2 missing required-check-untrusted-checker:arch; UC5 'unrecognised evidence token'. UC3 + UC4 x2 pass (they pin unchanged behavior), all 34 pre-existing rows pass. Two hardenings over the plan, both fail-closed, applied in step 2: the mention signal is /check-?architecture/i (also catches a camelCase `node -e import(...checkArchitecture.js)`), and the source signal reads configs/scripts/assertionRoots, not only scripts. Prereqs V06 582fc160 and 43088e9b 55e4c4cc are ancestors of HEAD. Shared checkout has 873 peer dirty paths; untouched.",
+      "startedAt": "2026-10-30T08:05:54.747Z",
+      "completedAt": "2026-10-30T08:10:17.861Z"
     },
     {
       "stepId": "step-2",
       "description": "packages/moe-daemon/src/delivery/requiredChecks.ts: the installed-checker classifier. It is pure: no I/O and no state.\n\n- `export const INSTALLED_ARCHITECTURE_CHECK = /^moe-daemon check-architecture(?: [A-Za-z0-9._\\/=:@+^~-]+)*$/;`\n  - Single spaces between words.\n  - No quote, operator, variable, redirection or newline can appear, so nothing else can run before or after it, or change it.\n- `export function untrustedArchitectureChecks(defs: readonly ProtectedCheckDefinition[]): string[]` returns, in definition order, the ids of the defs that are architecture checks but whose trimmed command fails INSTALLED_ARCHITECTURE_CHECK.\n  - A def is an architecture check when its command matches /check-architecture/i, or when its scripts include a path ending 'src/commands/checkArchitecture.ts' or 'src/delivery/architectureRules.ts'.\n  - The second signal catches an npm-script wrapper whose approver listed the checker's sources.\n- The doc comment states why. `node packages/moe-daemon/dist/index.js check-architecture` is code the candidate builds: index.ts loads every module the daemon imports, and requiredChecks protects only the files it names. So any of those modules (repositorySource, cachedPlanPaths, logger, ...) could serve '' content or override stdout and exitCode. The installed form is the checker that the runner provisions from a trusted install built at the base revision (activation, CQ-V12).\n\nError handling: defs come from an approved snapshot that is already validated. Read command and scripts defensively anyway (typeof checks), so that a malformed def counts as an architecture check that is not in the installed form (refused) and never throws.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/requiredChecks.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.ts"
+      ],
+      "note": "requiredChecks.ts +29: INSTALLED_ARCHITECTURE_CHECK (plan regex verbatim) and untrustedArchitectureChecks(defs), pure. Mention signal /check-?architecture/i; source signal = any configs/scripts/assertionRoots path ending src/commands/checkArchitecture.ts or src/delivery/architectureRules.ts; malformed command or path list is refused, never throws (def?. access). Strong file now 68 passed | 2 failed (UC2, UC5 await step 3); all 31 UC1 rows green.",
+      "startedAt": "2026-10-30T08:10:20.329Z",
+      "completedAt": "2026-10-30T08:12:00.774Z"
     },
     {
       "stepId": "step-3",
       "description": "packages/moe-daemon/src/delivery/policy.ts: refuse a candidate-built architecture checker under verified-local only. EDIT the bytes 43088e9b and V06 landed.\n\n- `export const UNTRUSTED_CHECKER_PREFIX = 'required-check-untrusted-checker:'`, together with a token helper beside protectedCheckChangedToken.\n- In protectedCheckShortfall, when `trusted !== null` (the verified-local branch) and defs is a non-empty approved list, put one token per id from untrustedArchitectureChecks(defs) first in the result, then the existing drift and owed tokens.\n  - Every other branch is unchanged.\n  - Legacy still returns before this point in evaluateDeliveryEvidence, and observe (trusted === null) never sees the token.\n- describeMissingEvidence: a token with that prefix reads \"required check <id> runs the architecture checker from code the candidate builds; under verified-local its command must be exactly the installed `moe-daemon check-architecture ...`, which the runner provisions from the base revision\". The id comes from the approved snapshot, never from candidate data.\n- A short comment cites task-efbf1742. Every consumer of evaluateDeliveryEvidence (qa_approve, dependency satisfaction, the delivery projection) already reads a missing token as not satisfied, so no other edit is needed.\n\nNo submit_plan change. A plan-time refusal would mean editing the shared submitPlan.ts; the delivery refusal is the gate that matters, and V12's integration can add the plan-time message.\n\nError handling: the classifier never throws. If it did, the existing try/catch in protectedCheckShortfall already reports protected-checks-unmeasured, which fails closed.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/policy.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.ts"
+      ],
+      "note": "policy.ts: UNTRUSTED_CHECKER_PREFIX + untrustedCheckerToken; protectedCheckShortfall computes `untrusted` only when trusted !== null (verified-local) and puts it first in BOTH the normal and catch returns; describeMissingEvidence reason names only the id (from the approved snapshot) and the installed form; header + JSDoc cite task-efbf1742. SCOPE GROWTH (1 line + import): state/deliveryProjection.ts requiredCheckSatisfiedFor enumerates required-check token kinds, so without it the board projected requiredCheckSatisfied:true while qa_approve refused (UC2 asserts false). The plan's 'no other consumer edit needed' was wrong for this one consumer. V12b (task-6339299a, unassigned, file clean) plans a different hunk of that file (latestCheckRun outcome) - disjoint. GREEN (Windows): strong + deliveryProjection tests 126/126. Mutants, each killed then restored cmp-identical: M1 projection ignores token (1 fail, UC2), M2 token outside verified-local (2 fail, UC4), M3 token dropped from the normal path (1 fail, UC2).",
+      "startedAt": "2026-10-30T08:12:03.461Z",
+      "completedAt": "2026-10-30T08:17:33.643Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh.\n\nThe in-place packages/moe-daemon/node_modules holds only the win32 rolldown binding, so run on Windows through cmd.exe against the working tree:\n\ncmd.exe /d /c \"cd /d D:\\projexts\\moes\\packages\\moe-daemon && npx vitest run src/delivery && npx tsc --noEmit\"\n\nIt must exit 0. Its fresh command, exit code, counts and output tail are complete_task's verification evidence; label it Windows.\n\nIf Windows node is unavailable, use this fallback instead and say so:\n- git archive HEAD into a scratch dir;\n- copy the three changed files over it;\n- `npm ci && npx vitest run src/delivery && npx tsc --noEmit` there, under env -i with the nvm Node 24 PATH.\nNever npm install or npm ci inside the shared checkout.\n\nThen run `git diff --check` over the three files. A read-only `git status --short` must show only these three paths changed by this task. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code, never by weakening an assertion.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Windows, fresh: `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\packages\\moe-daemon && npx vitest run src/delivery src/state/deliveryProjection.test.ts && npx tsc --noEmit\"` EXIT 0: 16 files, 915 passed | 1 skipped; tsc clean. That is the plan's command plus deliveryProjection.test.ts for the step-3 scope growth. Scratch tsconfig (in %TEMP%, outside the repo) type-checking requiredChecks.strong.test.ts + toolTestHarness: EXIT 0 (--listFilesOnly confirms the files are included). git diff --check over my 4 files EXIT 0. My diff: requiredChecks.ts +29, policy.ts +21/-5, strong test +69/-1, deliveryProjection.ts +2/-1 = ~114 net. Peer dirt untouched: src/tools/chatWait.test.ts (M) and src/__acceptance__/ (??) are other sessions'.",
+      "startedAt": "2026-10-30T08:17:39.210Z",
+      "completedAt": "2026-10-30T08:18:53.711Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the three-file diff as an attacker who controls the candidate:\n- Can a verified-local candidate still deliver a pass produced by code it built?\n  - Check the indirect forms: an npm script, a shell wrapper file, `node -e`, an env prefix, a chained operator, a quoted path.\n  - Every command that mentions the checker, and every def that protects the checker's sources, must be the exact installed form.\n- Can the regex be bypassed with a tab, a newline, Unicode whitespace, a trailing operator or a glob?\n- Is legacy or observe affected anywhere? Check evaluateDeliveryEvidence's early return and the `trusted` branch.\n- Does the token or its reason ever echo candidate bytes?\n- Is there a false refusal of an innocent check (for example 'npm test') that would block every verified-local task?\n- Note for V12, without implementing it: the installed form is trusted only if the check guest's PATH resolves moe-daemon to a trusted install built at the base revision, with no workspace or '.' entries.\n- Would I be embarrassed if this shipped?\n\nFix any finding, then re-run step 4's command fresh before complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/requiredChecks.ts",
         "packages/moe-daemon/src/delivery/policy.ts",
         "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.ts",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.ts"
+      ],
+      "note": "Adversarial review, no code change needed. Bypass forms: tab, NBSP, double space, newline, quotes, ; && | $() backtick > glob, env prefix, npx, ./node_modules/.bin, uppercase and camelCase node -e are all refused (UC1). The regex class has no shell metacharacters. Trim matches what the runner executes, because dispatch admission requires command === d.command.trim(). Legacy and observe: trusted is null there, so no token (UC4, mutant M2 killed). An empty env list is truthy, so it stays strict. The token carries only the validated def id. 'npm test' is accepted.\nResidual gaps for V12. Each is approver-controlled, since defs come from the approved snapshot and never from the candidate:\n(a) a protected wrapper script, e.g. `bash scripts/arch.sh`, that internally runs dist/index.js. The pure classifier cannot read blob contents. A plan-time scan in submit_plan could catch it.\n(b) `npm run arch` without listing the checker sources. package.json is unprotected anyway, a general V01 limit.\n(c) a qualityGate set to the checker. The gate protects no files at all, so it is never tamper-proof.\n(d) the guest PATH must resolve moe-daemon to a trusted install built at the base revision, with no '.', workspace or node_modules/.bin entries.\nFresh wider regression on Windows, `npx vitest run src/delivery src/state src/commands src/tools/qaApprove.test.ts src/tools/qaReject.test.ts && npx tsc --noEmit`: EXIT 0, 47 files, 2228 passed | 1 skipped.",
+      "startedAt": "2026-10-30T08:18:56.229Z",
+      "completedAt": "2026-10-30T08:20:50.074Z"
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -69,7 +100,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:10:57.855Z",
-  "updatedAt": "2026-10-30T07:26:29.500Z",
+  "updatedAt": "2026-10-30T08:21:20.153Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:15:35.745Z",
@@ -78,17 +109,25 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T07:19:23.865Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "worker-093a65d0"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T07:24:31.518Z",
   "planningNotes": {
@@ -111,14 +150,11 @@
   },
   "planApprovedAt": "2026-10-30T07:24:31.539Z",
   "approvedPlanRevision": 1,
-  "blockedReason": "Unmet prerequisite: the approved plan (steps 1 and 3) edits the LANDED policy.ts bytes of CQ-V06 task-6a5d5a13257b48c9940ae3b22347ff7d and task-43088e9b504b49a5ae59c562fcc0c784, and says both land before this row through dependsOn. CQ-V06 is WORKING, unassigned, with 0 commits and nothing on moe/work-2026-10-24 (git log --grep 'Moe-Task: task-6a5d5a13' is empty). get_context lists dependsOnUnmet [43088e9b (REVIEW, landed 55e4c4cc), 6a5d5a13]. Editing policy.ts now would invert the planned serialization, and V06's worker would then edit the same file concurrently (epic rail: serialize overlapping affectedFiles). No bytes were written; step-1 was never started. Resume when V06 is DONE: re-read policy.ts after V06 and follow the plan unchanged.",
-  "blockedOnTaskIds": [
-    "task-6a5d5a13257b48c9940ae3b22347ff7d",
-    "task-43088e9b504b49a5ae59c562fcc0c784"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T07:26:03.653Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "eee420832def7ca5bb1b4937fdf661d4f03d6374",
@@ -139,9 +175,10 @@
     }
   ],
   "filesModified": [
-    ".moe/epics/epic-5f4acf0ae5d3427facd63346f125aec5.json",
-    ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
-    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json"
+    "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+    "packages/moe-daemon/src/delivery/requiredChecks.ts",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/state/deliveryProjection.ts"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -149,5 +186,15 @@
     "kind": "checkpoint",
     "sessionId": "worker-5ebbf433@2026-10-30T07:24:45Z",
     "at": "2026-10-30T07:26:29.500Z"
-  }
+  },
+  "workStartedAt": "2026-10-30T08:05:54.747Z",
+  "reviewStartedAt": "2026-10-30T08:21:20.151Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\packages\\moe-daemon && npx vitest run src/delivery src/state src/commands src/tools/qaApprove.test.ts src/tools/qaReject.test.ts && npx tsc --noEmit\"",
+    "exitCode": 0,
+    "outputTail": "Windows run against the working tree (a superset of the plan's `npx vitest run src/delivery && npx tsc --noEmit`, adding the token consumers). Test Files 47 passed (47); Tests 2228 passed | 1 skipped (2229); Duration 47.02s; tsc --noEmit clean (no output); EXIT 0.",
+    "reportedAt": "2026-10-30T08:21:20.151Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Bug efbf1742: under verified-local, a candidate-built architecture checker never delivers. 4 files, about 114 net non-board LOC (runtime about 46, tests 68).\n- delivery/requiredChecks.ts +29:\n  - INSTALLED_ARCHITECTURE_CHECK, the plan regex verbatim: single spaces, no quote, operator, variable, glob or redirection.\n  - untrustedArchitectureChecks(defs): pure and never throws. A def is an architecture check when its command matches /check-?architecture/i, or when any configs/scripts/assertionRoots path ends with the checker or engine source.\n  - Two deliberate widenings over the plan, both fail closed: camelCase is detected, and all three path kinds are read, not just scripts.\n  - Refused unless the trimmed command is the installed form. A malformed def is refused.\n- delivery/policy.ts:\n  - UNTRUSTED_CHECKER_PREFIX 'required-check-untrusted-checker:' plus untrustedCheckerToken.\n  - protectedCheckShortfall puts one token per refused id first, only when trusted !== null (verified-local), in both the normal and catch returns.\n  - describeMissingEvidence names only the approved def id and the installed form.\n- SCOPE GROWTH: state/deliveryProjection.ts gets +1 condition. requiredCheckSatisfiedFor enumerates token kinds, so without it the board projected requiredCheckSatisfied:true while qa_approve refused. V12b's planned hunk in that file (latestCheckRun outcome) is disjoint.\n- Tests (requiredChecks.strong.test.ts +69):\n  - UC1: 31 classifier rows plus order.\n  - UC2 (DoD1): the dist form with a passing authenticated run and equal protectedEntries gives missing [untrusted:arch]; the projection is false; dependents are withheld.\n  - UC3: the installed form delivers.\n  - UC4 (DoD2): legacy and observe verdicts are unchanged.\n  - UC5: the reason text.\n- RED: 33 failed / 37 passed. Mutants M1 (projection ignores the token), M2 (token outside verified-local) and M3 (token dropped) were each killed, and the sources restored cmp-identical.\n- Test-file tsc via a scratch tsconfig "
 }

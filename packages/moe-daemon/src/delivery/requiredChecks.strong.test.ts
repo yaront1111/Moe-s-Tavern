@@ -7,7 +7,8 @@ import { submitPlanTool } from '../tools/submitPlan.js';
 import { recordCheckDispatchTool } from '../tools/recordCheckDispatch.js';
 import { recordCheckObservationTool } from '../tools/recordCheckObservation.js';
 import { recordCheckRunTool } from '../tools/recordCheckRun.js';
-import { evaluateDeliveryEvidence, owedChecks } from './policy.js';
+import { describeMissingEvidence, evaluateDeliveryEvidence, owedChecks } from './policy.js';
+import { untrustedArchitectureChecks } from './requiredChecks.js';
 import { deliveryProjection } from '../state/deliveryProjection.js';
 import { dependencyShortfall, unmetDependsOn } from '../state/dependencyUnblock.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
@@ -305,5 +306,72 @@ describe('V verified-local under the legacy deliveryPolicy (bug task-43088e9b)',
     expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBeUndefined();
     setDone();
     expect(unmetDependsOn(h.state, { dependsOn: ['task-1'] })).toEqual([]);
+  });
+});
+
+const INSTALLED = 'moe-daemon check-architecture --rules arch.json';
+const BUILT = 'node packages/moe-daemon/dist/index.js check-architecture --rules arch.json';
+const CHECKER_SRC = 'packages/moe-daemon/src/commands/checkArchitecture.ts';
+const ENGINE_SRC = 'packages/moe-daemon/src/delivery/architectureRules.ts';
+const untrusted = (id: string) => `required-check-untrusted-checker:${id}`;
+const archDef = (command: unknown, extra: Partial<ProtectedCheckDefinition> = {}, id = 'x') =>
+  ({ id, command, ...extra }) as ProtectedCheckDefinition;
+
+describe('UC a candidate-built architecture checker under verified-local (bug task-efbf1742)', () => {
+  it.each([
+    [INSTALLED], [`${INSTALLED} --base ${'a'.repeat(40)} --tree HEAD`], [`  ${INSTALLED}\t`], ['npm test'],
+    ['npm run lint -- --max-warnings=0', { scripts: ['scripts/lint.sh'] }], [INSTALLED, { scripts: [CHECKER_SRC, ENGINE_SRC] }],
+  ] as [string, Partial<ProtectedCheckDefinition>?][])('UC1 accepts %j', (command, extra) => {
+    expect(untrustedArchitectureChecks([archDef(command, extra)])).toEqual([]);
+  });
+
+  it.each([
+    [BUILT], [`npx ${INSTALLED}`], [`./node_modules/.bin/${INSTALLED}`], [`MOE_X=1 ${INSTALLED}`],
+    [`${INSTALLED}; true`], [`${INSTALLED} && node x.js`], [`${INSTALLED} | cat`], [`${INSTALLED} $(id)`],
+    [`${INSTALLED} \`id\``], [`${INSTALLED}\nid`], [`${INSTALLED} > out.json`], [`${INSTALLED} --rules *.json`],
+    ['moe-daemon check-architecture --rules "arch.json"'], ["moe-daemon check-architecture --rules 'arch.json'"],
+    ['moe-daemon  check-architecture --rules arch.json'], ['moe-daemon\tcheck-architecture --rules arch.json'],
+    ['moe-daemon\u00a0check-architecture --rules arch.json'], ['MOE-DAEMON CHECK-ARCHITECTURE --rules arch.json'],
+    [`node -e "import('./packages/moe-daemon/dist/commands/checkArchitecture.js')"`],
+    ['npm run arch', { scripts: [CHECKER_SRC] }], ['npm run arch', { scripts: ['scripts/a.sh', ENGINE_SRC] }],
+    ['npm run arch', { configs: [CHECKER_SRC] }], [42], ['npm test', { scripts: 'scripts/a.sh' as never }],
+  ] as [unknown, Partial<ProtectedCheckDefinition>?][])('UC1 refuses %j and never throws', (command, extra) => {
+    expect(untrustedArchitectureChecks([archDef(command, extra)])).toEqual(['x']);
+  });
+
+  it('UC1 lists refused ids in definition order', () => {
+    const list = [archDef(BUILT, {}, 'a'), archDef('npm test', {}, 'b'), archDef(INSTALLED, {}, 'c'), archDef(`npx ${INSTALLED}`, {}, 'd')];
+    expect(untrustedArchitectureChecks(list)).toEqual(['a', 'd']);
+  });
+
+  it.each([
+    ['UC2 the candidate-built form never delivers', BUILT, [untrusted('arch'), token(BUILT)], [untrusted('arch')]],
+    ['UC3 the installed form delivers', INSTALLED, [token(INSTALLED)], []],
+  ] as const)('%s, even with a passing runner run and equal protectedEntries', async (_label, command, before, after) => {
+    await approve({}, [{ id: 'arch', command, configs: ['cfg/vitest.json'], scripts: ['scripts/lint.sh'] }]);
+    expect(missing()).toEqual(before);
+    await pass(command, 'arch');
+    expect(evaluateDeliveryEvidence(h.state, task())).toEqual({ policy: 'local-branch', satisfied: after.length === 0, missingEvidence: after });
+    expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBe(after.length === 0);
+    setDone();
+    expect(unmetDependsOn(h.state, { dependsOn: ['task-1'] })).toEqual(after.length === 0 ? [] : ['task-1']);
+  });
+
+  it.each(['legacy', 'observe'])('UC4 leaves %s verdicts unchanged: no untrusted-checker token appears', async (name) => {
+    profile(name);
+    settings({ checkEnvironments: undefined });
+    await approve({}, [{ id: 'arch', command: BUILT, scripts: ['scripts/lint.sh'] }]);
+    expect(missing()).toEqual([token(BUILT)]);
+    await recordCheckRunTool(h.state).handler({ id: 'run-built', candidateId: cand, treeSha: tree1, command: BUILT, exitCode: 0,
+      runnerId: 'runner-1', source: 'runner-observed' }, h.state);
+    expect(evaluateDeliveryEvidence(h.state, task())).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
+    legacyPolicy('legacy');
+    expect(evaluateDeliveryEvidence(h.state, task())).toEqual({ policy: 'legacy', satisfied: true, missingEvidence: [] });
+  });
+
+  it('UC5 names the id and the installed form, and nothing from candidate data', () => {
+    const reason = describeMissingEvidence(untrusted('arch'));
+    expect(reason).toContain('required check arch runs the architecture checker from code the candidate builds');
+    expect(reason).toContain('`moe-daemon check-architecture ...`');
   });
 });

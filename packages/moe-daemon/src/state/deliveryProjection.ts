@@ -7,6 +7,7 @@ import { getDeliveryReceiptForCandidate } from './receiptStore.js';
 import { currentAttempt, getAttempt } from './attemptStore.js';
 import {
   evaluateDeliveryEvidence, EVIDENCE_TOKENS, isVerifiedLocal, PROTECTED_CHECK_CHANGED_PREFIX, REQUIRED_CHECK_TOKEN_PREFIX, requiredCheckCommand,
+  UNTRUSTED_CHECKER_PREFIX,
 } from '../delivery/policy.js';
 import { logger } from '../util/logger.js';
 
@@ -87,7 +88,7 @@ function requiredCheckSatisfiedFor(state: StateManager, task: Task): boolean | u
     if (policy === 'legacy' && !isVerifiedLocal(state, task)) return undefined;
     if (missingEvidence.some(t => t.startsWith(REQUIRED_CHECK_TOKEN_PREFIX) || t === EVIDENCE_TOKENS.unreadableRequiredCheck
       || t.startsWith(PROTECTED_CHECK_CHANGED_PREFIX) || t === EVIDENCE_TOKENS.protectedChecksUnapproved
-      || t === EVIDENCE_TOKENS.protectedChecksUnmeasured)) return false;
+      || t === EVIDENCE_TOKENS.protectedChecksUnmeasured || t.startsWith(UNTRUSTED_CHECKER_PREFIX))) return false;
     return checkOwed(state, task) ? true : undefined;
   });
 }

@@ -34,7 +34,9 @@
 //     revokes its evidence), bound to a dispatch naming that check. Each protected
 //     definition needs its own dispatch. owedChecks is the frozen list such a task
 //     owes; assertCheckDispatchApproved admits only those dispatches. A strong
-//     task that owes nothing reports required-checks-undeclared. This holds
+//     task that owes nothing reports required-checks-undeclared. An architecture
+//     check not in the installed form runs code the candidate builds, so it never
+//     delivers (required-check-untrusted-checker, task-efbf1742). This holds
 //     under every deliveryPolicy, legacy (set, absent or null) included: legacy
 //     adds no landing evidence and never excuses the checks (task-43088e9b).
 //
@@ -66,7 +68,7 @@ import { hasControlChar, listCandidatesForTask, renderGot } from '../state/candi
 import { listCheckRunsForCandidate } from '../state/checkRunStore.js';
 import { getCheckDispatch, isAuthenticatedCheckRun } from '../state/checkObservationStore.js';
 import { validateExecutionContract } from '../state/validators.js';
-import { protectedPaths, readRequiredCheckSnapshot } from './requiredChecks.js';
+import { protectedPaths, readRequiredCheckSnapshot, untrustedArchitectureChecks } from './requiredChecks.js';
 import {
   DEFAULT_DELIVERY_POLICY,
   DELIVERY_POLICIES,
@@ -99,12 +101,18 @@ export const EVIDENCE_TOKENS = {
 
 export const REQUIRED_CHECK_TOKEN_PREFIX = 'required-check:';
 export const PROTECTED_CHECK_CHANGED_PREFIX = 'protected-check-changed:';
+export const UNTRUSTED_CHECKER_PREFIX = 'required-check-untrusted-checker:';
 /** Changed-path tokens beyond this are summarised as `protected-check-changed:+<n> more`. */
 const MAX_CHANGED_TOKENS = 10;
 
 /** `protected-check-changed:<path>`: a protected path whose blob differs from, is missing from, or was added to the approved snapshot. */
 export function protectedCheckChangedToken(path: string): string {
   return `${PROTECTED_CHECK_CHANGED_PREFIX}${path}`;
+}
+
+/** `required-check-untrusted-checker:<id>`: an approved verified-local architecture check not in the installed form. */
+export function untrustedCheckerToken(id: string): string {
+  return `${UNTRUSTED_CHECKER_PREFIX}${id}`;
 }
 
 /** `required-check:<command>`, the command exactly as the wrapper runs it (the trimmed qualityGate). */
@@ -360,7 +368,9 @@ function declaredChecks(task: Task): readonly ProtectedCheckDefinition[] | null 
  * (readRequiredCheckSnapshot), never from candidate data or live settings. The current
  * candidate's runner-reported protectedEntries must equal the snapshot, and each
  * approved command needs its own passing run on that candidate's tree: another command
- * never stands in for it. Under verified-local each definition needs its own.
+ * never stands in for it. Under verified-local each definition needs its own, and an
+ * architecture check must be the installed form, first (task-efbf1742): a candidate-built
+ * checker's pass is never evidence, since unprotected modules it imports can fake it.
  */
 function protectedCheckShortfall(state: StateManager, task: Task, defs: readonly ProtectedCheckDefinition[] | null,
   trusted: readonly string[] | null): string[] {
@@ -371,6 +381,7 @@ function protectedCheckShortfall(state: StateManager, task: Task, defs: readonly
   // Trimmed like qualityGate: the validator keeps padding no shell would see.
   const owed = (passed: (def: ProtectedCheckDefinition) => boolean) =>
     [...new Set(defs.filter((d) => !passed(d)).map((d) => requiredCheckToken(d.command.trim())))];
+  const untrusted = trusted ? untrustedArchitectureChecks(defs).map(untrustedCheckerToken) : [];
   try {
     const candidates = listCandidatesForTask(state, task.id);
     const current = candidates[candidates.length - 1];
@@ -379,10 +390,10 @@ function protectedCheckShortfall(state: StateManager, task: Task, defs: readonly
     const passed = (d: ProtectedCheckDefinition) => (trusted
       ? trustedPassedOn(state, task, current, { checkId: d.id, command: d.command.trim() }, trusted)
       : passedOn(state, current, d.command.trim()));
-    return [...(drift ?? [EVIDENCE_TOKENS.protectedChecksUnmeasured]), ...owed(passed)];
+    return [...untrusted, ...(drift ?? [EVIDENCE_TOKENS.protectedChecksUnmeasured]), ...owed(passed)];
   } catch (err) {
     logger.warn({ err, taskId: task.id }, 'Delivery policy: protected check evidence unreadable; reporting it missing');
-    return [EVIDENCE_TOKENS.protectedChecksUnmeasured, ...owed(() => false)];
+    return [...untrusted, EVIDENCE_TOKENS.protectedChecksUnmeasured, ...owed(() => false)];
   }
 }
 
@@ -608,6 +619,11 @@ export function describeMissingEvidence(token: string): string {
   if (token.startsWith(REQUIRED_CHECK_TOKEN_PREFIX)) {
     const command = token.slice(REQUIRED_CHECK_TOKEN_PREFIX.length);
     return `no runner-observed exit-0 run of "${command}" is recorded for the current candidate's tree`;
+  }
+  if (token.startsWith(UNTRUSTED_CHECKER_PREFIX)) {
+    // The id comes from the approved snapshot, never from candidate data.
+    return `required check ${token.slice(UNTRUSTED_CHECKER_PREFIX.length)} runs the architecture checker from code the candidate builds; ` +
+      'under verified-local its command must be exactly the installed `moe-daemon check-architecture ...`, which the runner provisions from the base revision';
   }
   if (token.startsWith(PROTECTED_CHECK_CHANGED_PREFIX)) {
     return 'a protected check file differs from the approved snapshot (changed, removed or added); only a new approval revision that re-measures it accepts the change';
