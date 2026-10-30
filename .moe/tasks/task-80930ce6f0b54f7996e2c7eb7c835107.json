@@ -117,7 +117,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:52:38.398Z",
-  "updatedAt": "2026-10-30T11:25:55.415Z",
+  "updatedAt": "2026-10-30T11:26:16.446Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:59:30.687Z",
@@ -228,7 +228,50 @@
     "packages/moe-daemon/src/server/healthHost.test.ts",
     "packages/moe-daemon/src/server/healthHost.ts",
     "packages/moe-daemon/src/index.ts",
+    "docs/ARCHITECTURE.md",
+    ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+    ".moe/tasks/task-f0abb6d69bd8466982d7bbb6543e31bc.json"
+  ],
+  "completionSummary": "Plain-HTTP GET /health now answers only no Host, localhost, 127/8 or [::1], or the IP literal of the arrival address (req.socket.localAddress, ::ffff: stripped); every other Host gets 403 text/plain 'Forbidden' with no body fields. New server/healthHost.ts (pure, total, 49 lines); index.ts imports it and calls it as the FIRST statement of the /health branch (+7); the 200/503 and 426 paths are unchanged; no Host is echoed or logged.\nDoD 1: real spawned `_run --host 127.0.0.1` rows: 127.0.0.1, localhost and absent Host (HTTP/1.0) answer 200 with status/projectPath/pid/version/uptime/stats/checks; a foreign name, a foreign IP and 'localhost.evil.example' answer 403 with no JSON; probeDaemonHealth is still true; /other and an absolute-form target still answer 426. Clients: the daemon CLI probe, doctor, JetBrains DaemonIdentity, moe-agent.ps1 and the local runner send 127.0.0.1; the Docker HEALTHCHECK sends localhost; moe-agent.sh and the proxy send the host they were given (127.0.0.1 or the WSL gateway IP, which is the connection's arrival address); the proxy maps a 403 to 'unknown' and still connects.\nDoD 2: table A, 44 rows: absent, localhost, 127/8, ::1, gateway IP equal to the local address (also ::ffff: dual-stack) allowed; names, foreign IPs and malformed values refused.\nDoD 3: one Security Notes bullet in docs/ARCHITECTURE.md.\nEvidence: red proof first (missing module; accept-all stub fails 27 table rows and the 3 real 403 rows); 12 mutants killed by real rows, restored and cmp-checked; fresh gate EXIT 0, 208 files, 5915 passed / 16 skipped; adversarial probes over real Node HTTP. Filed task-f0abb6d6 (--host <DNS name> CLI probe). Residuals: NAT or port-forward Host IPs; a link-local arrival address with a zone id. Part B rows skip win32.",
+  "commits": [
+    {
+      "sha": "898560a31dae32111dd36c75485837e9cf548c9e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T11:16:55Z",
+      "paths": [
+        ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+        ".moe/tasks/task-f0abb6d69bd8466982d7bbb6543e31bc.json",
+        "docs/ARCHITECTURE.md",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/server/healthHost.test.ts",
+        "packages/moe-daemon/src/server/healthHost.ts"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T11:26:16.446Z",
+      "treeId": "9015a117d4bf5c7d671b3dbc7e136794703df69e",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-b621ddc99fe44d50ab700b2aa51c84fc"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/server/healthHost.test.ts",
+    "packages/moe-daemon/src/server/healthHost.ts",
+    "packages/moe-daemon/src/index.ts",
     "docs/ARCHITECTURE.md"
   ],
-  "completionSummary": "Plain-HTTP GET /health now answers only no Host, localhost, 127/8 or [::1], or the IP literal of the arrival address (req.socket.localAddress, ::ffff: stripped); every other Host gets 403 text/plain 'Forbidden' with no body fields. New server/healthHost.ts (pure, total, 49 lines); index.ts imports it and calls it as the FIRST statement of the /health branch (+7); the 200/503 and 426 paths are unchanged; no Host is echoed or logged.\nDoD 1: real spawned `_run --host 127.0.0.1` rows: 127.0.0.1, localhost and absent Host (HTTP/1.0) answer 200 with status/projectPath/pid/version/uptime/stats/checks; a foreign name, a foreign IP and 'localhost.evil.example' answer 403 with no JSON; probeDaemonHealth is still true; /other and an absolute-form target still answer 426. Clients: the daemon CLI probe, doctor, JetBrains DaemonIdentity, moe-agent.ps1 and the local runner send 127.0.0.1; the Docker HEALTHCHECK sends localhost; moe-agent.sh and the proxy send the host they were given (127.0.0.1 or the WSL gateway IP, which is the connection's arrival address); the proxy maps a 403 to 'unknown' and still connects.\nDoD 2: table A, 44 rows: absent, localhost, 127/8, ::1, gateway IP equal to the local address (also ::ffff: dual-stack) allowed; names, foreign IPs and malformed values refused.\nDoD 3: one Security Notes bullet in docs/ARCHITECTURE.md.\nEvidence: red proof first (missing module; accept-all stub fails 27 table rows and the 3 real 403 rows); 12 mutants killed by real rows, restored and cmp-checked; fresh gate EXIT 0, 208 files, 5915 passed / 16 skipped; adversarial probes over real Node HTTP. Filed task-f0abb6d6 (--host <DNS name> CLI probe). Residuals: NAT or port-forward Host IPs; a link-local arrival address with a zone id. Part B rows skip win32."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-e60b90bd@2026-10-30T11:16:55Z",
+    "at": "2026-10-30T11:26:16.446Z"
+  }
 }
