@@ -123,7 +123,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -161,7 +161,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:25.972Z",
-  "updatedAt": "2026-10-30T09:12:43.337Z",
+  "updatedAt": "2026-10-30T09:29:40.674Z",
   "dependsOn": [
     "task-fd653cfbaea541c39569dfed9452cf5c"
   ],
@@ -174,13 +174,16 @@
     "firstClaimAt": "2026-10-30T06:56:52.610Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T09:29:40.673Z",
+    "wallClockMs": 9168063
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
     "worker-c2da129d",
     "qa-ba3f4f35",
-    "worker-55e6716a"
+    "worker-55e6716a",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -310,5 +313,9 @@
     "reportedAt": "2026-10-30T09:12:26.469Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Persistent protected-profile confirmation is implemented in JetBrains using RF01's external owner-only store, strict project-bound records and an injected async safe-default dialog. Decline/dismiss/throw stays protected; only the first explicit true persists legacy, effective after restart. Original three-file checkpoint retained; landed store-root and supervisor-test fixes verified. Final adversarial review reproduced and fixed a delayed-reader race: recheck the session pin after store IO before returning legacy. D6 was RED (expected PROTECTED, got LEGACY), then GREEN; RF02 test additions total 200 lines. Fresh exact Windows full gate under jetbrains-gradle exited 0: 26 XML classes, 383 tests, zero failures/errors/skips; RuntimeSelectionPolicyTest 49/49. XML timestamps and mtimes verified against Windows-clock start 09:09:45.284441Z. Evidence D:\\moe-scratch\\rf02-worker-55e6716a\\final.log and final-xml/; race-red proof alongside. Lease released. Scoped diff-check clean, required Serena handoff/gotcha updated and declared. All peer/pre-existing bytes preserved, no direct .moe edits or Git writes. Windows evidence only; POSIX branches not locally exercised. Verified-local remains disabled; no isolation claim."
+  "completionSummary": "Persistent protected-profile confirmation is implemented in JetBrains using RF01's external owner-only store, strict project-bound records and an injected async safe-default dialog. Decline/dismiss/throw stays protected; only the first explicit true persists legacy, effective after restart. Original three-file checkpoint retained; landed store-root and supervisor-test fixes verified. Final adversarial review reproduced and fixed a delayed-reader race: recheck the session pin after store IO before returning legacy. D6 was RED (expected PROTECTED, got LEGACY), then GREEN; RF02 test additions total 200 lines. Fresh exact Windows full gate under jetbrains-gradle exited 0: 26 XML classes, 383 tests, zero failures/errors/skips; RuntimeSelectionPolicyTest 49/49. XML timestamps and mtimes verified against Windows-clock start 09:09:45.284441Z. Evidence D:\\moe-scratch\\rf02-worker-55e6716a\\final.log and final-xml/; race-red proof alongside. Lease released. Scoped diff-check clean, required Serena handoff/gotcha updated and declared. All peer/pre-existing bytes preserved, no direct .moe edits or Git writes. Windows evidence only; POSIX branches not locally exercised. Verified-local remains disabled; no isolation claim.",
+  "completedAt": "2026-10-30T09:29:40.673Z",
+  "reviewCompletedAt": "2026-10-30T09:29:40.673Z",
+  "reviewSummary": "APPROVED. Reviewed checkpoint 91eb0d14 (policy +67/-4, ProfileDowngradeDialog +43, tests +183) and completion e936c4f9 (policy +4/-1 pin recheck, test +17 D6), both on moe/work-2026-10-24, pushed; RF02 net ~309 LOC. moe-jetbrains clean vs HEAD.\n\nQA gate under jetbrains-gradle lease: exact `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` EXIT 0, BUILD SUCCESSFUL. Fresh XML (earliest 09:27:19.9Z Windows > start, clock skew measured 2.6s): 26 classes, 383 tests, 0 fail/err/skip; RuntimeSelectionPolicyTest 49/49 incl D1-D6, D3 ACL row not skipped. Evidence /mnt/d/moe-scratch/rf02-qa-952969be/. Scoped diff --check clean.\n\nDoD1: verified-local pins+persists protected; weaker read with PROTECTED/UNTRUSTED record asks once (atomic pinned.add), first answer only, only explicit true persists legacy, effective after restart (D1, D6 race). DoD2: dismiss/decline/throw stay protected; record outside project + owner-only (D1 asserts); untrusted docs/dir/loosened ACL/root-as-file fail closed (D3, D4); failures never escape. DoD3 reproduced. Dialog: safe default, headless declines, non-blocking, basename only. Rails: no .moe edits, no agent Git writes, verified-local not enabled.\n\nNotes (non-blocking): Windows-only evidence, POSIX branches unexercised. Per plan step 3.1 the pinned early return means a verified-local read in the same session after a confirmed downgrade does not re-record protected; a flip back to legacy before restart then gives LEGACY without asking (narrow, human had allowed legacy) - candidate for epic-final hardening. A failed protected persist degrades to session-only by design (warn logged).",
+  "requiredCheckAtDone": null
 }
