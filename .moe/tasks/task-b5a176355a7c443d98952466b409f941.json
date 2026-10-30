@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:34:38.414Z",
-  "updatedAt": "2026-10-30T14:19:26.858Z",
+  "updatedAt": "2026-10-30T14:20:50.169Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:41:10.540Z",
@@ -205,7 +205,8 @@
     "docs/CONFIGURATION.md",
     ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
     ".moe/tasks/task-b5a176355a7c443d98952466b409f941.json",
-    ".moe/tasks/task-cf7f470818b34486b4e74bacc1b92c7a.json"
+    ".moe/tasks/task-cf7f470818b34486b4e74bacc1b92c7a.json",
+    ".moe/tasks/task-24a5ad5bb5d74180bb71f5cbff76225a.json"
   ],
   "completionSummary": "moe-proxy EOF drain for one-shot blocking calls + opt-in absolute deadline (packages/moe-proxy/src/index.ts). In a session that never sent `initialize` (the wrappers' moe_rpc / Invoke-MoeRpc / moe-call.sh), stdin EOF no longer cuts a pending moe.wait_for_task / chat_wait / wait_for_resource at 2s. It drains to sentAt + MOE_BLOCKING_TIMEOUT_MS (default 660000, unchanged) and gives `Request timed out after <n>ms`, or fails at once with the existing disconnect text if the socket drops. Initialized CLI sessions, ordinary calls and queued messages keep the 2s drain with unchanged texts. SIGINT/SIGTERM cap any drain at 2s, and a repeat shutdown call only tightens that cap; the old code stacked a second interval. Both tracking sites (stdin send, ws 'open' flush) record the blocking flag through trackRequest. MOE_PROXY_ONESHOT_DEADLINE_MS (epoch ms) bounds the whole process: one 'Proxy deadline exceeded' error per pending id, or one null-id error when none is pending, then exit 1. Blank means unset. Invalid values fail closed (null-id error, value escaped and capped at 64 chars, exit 1, no connect). Far deadlines re-arm past setTimeout's 2^31-1 clamp. Tests: 18 new spawned-proxy cases in src/index.test.ts. RED on HEAD: 4 tests failed (2s cut). Mutation probes confirm the flush-path and timer-overflow tests have teeth. Docs: README env entries and a One-shot calls section; vitest.config blanks both env names. Two CONFIGURATION.md rows are a docs scope addition noted in step 3. Verification ran in a Linux snapshot because the shared node_modules is Windows-only: HEAD proxy+daemon archive, the 4 proxy files cmp-identical, native lock-matching node_modules. Diff +373/-60.",
   "commits": [
@@ -236,6 +237,21 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "476e69c34bb1c690d286174fae4caffd1ccea637",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T14:15:09Z",
+      "paths": [
+        ".moe/tasks/task-24a5ad5bb5d74180bb71f5cbff76225a.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T14:20:50.169Z",
+      "treeId": "bbfdf1fdf62b8067a8343129f4a596ce1743d896",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -248,9 +264,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fe18a9a9@2026-10-30T13:47:38Z",
-    "at": "2026-10-30T14:07:15.220Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T14:15:09Z",
+    "at": "2026-10-30T14:20:50.169Z"
   },
   "completedAt": "2026-10-30T14:19:26.858Z",
   "reviewCompletedAt": "2026-10-30T14:19:26.858Z",

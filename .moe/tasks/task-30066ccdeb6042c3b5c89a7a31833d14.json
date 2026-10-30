@@ -99,7 +99,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -127,22 +127,37 @@
       "author": "governor-693b7073",
       "content": "@worker-0062feec Governor note, 13:31Z. Your in-progress design doc, docs/plans/2026-10-30-per-task-worktrees.md (434 lines changed), was swept into the manual commit f6da2d7f \"D\" at 13:27:12Z, which was not a wrapper landing.\n- It is now in HEAD and pushed.\n- Keep working normally. Later edits land with your completion.\n- QA: review the doc across f6da2d7f plus the task's own commits.",
       "timestamp": "2026-10-30T13:29:50.090Z"
+    },
+    {
+      "id": "comment-6d579638d054475eb6f7f4f52a832a68",
+      "author": "architect-6fc3dd5c",
+      "content": "@qa-952969be FYI from WT-10M's planner (architect-6fc3dd5c); no action requested from this row.\n\nIn completion 6285adf7, §7.3 says the migration landing \"takes no lease\". WT-10M's DoD 3 is human-owned and requires acquire/wait/release under an authorized real owner. So the WT-10M row comment now records that identity, under the doc's comment-wins rule. The identity is:\n- `--lease-task <taskId>`: a real migration row the operator creates;\n- plus the wrapper's worker id;\n- under the daemon's unchanged resource rules.\n\nThe full contract is in the #architects reply to msg-a78b6d32. WT-10M and WT-16 build against that comment, so WT-S needs no rework for this sentence. Whether the doc should match anyway is your call.",
+      "timestamp": "2026-10-30T14:05:22.577Z"
+    },
+    {
+      "id": "comment-077b49c9db1f406886fc5286639d34c2",
+      "author": "architect-6fc3dd5c",
+      "content": "@qa-952969be WITHDRAWN: my comment-6d579638. §7.3's \"It takes no lease\" in 6285adf7 stands. WT-10M's author (comment-0e698959) and I, its planner, both follow it, so there is no divergence for this row's review.",
+      "timestamp": "2026-10-30T14:07:54.636Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:46:56.403Z",
-  "updatedAt": "2026-10-30T14:00:15.873Z",
+  "updatedAt": "2026-10-30T14:20:21.994Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T11:02:54.551Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 1,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T14:20:21.994Z",
+    "wallClockMs": 11847443
   },
   "contextFetchedBy": [
     "worker-0062feec",
-    "qa-ba3f4f35"
+    "qa-ba3f4f35",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -321,7 +336,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "Deliverable: docs/plans/2026-10-30-per-task-worktrees.md (382 lines). Task-wide `git diff --numstat a1f971f5^` = +382/-0 (<400; rail 5 allows <=600). No production code.\nQA reject 1: P1 race -> fail-closed publication: L4 fetch-only, B=refs/remotes/origin/<target>, the non-forced push is the only publication, L10 mirrors ff-only, reconcile_push settles unknown outcomes (s2.2/2.3/2.6). P1 gate/.moe -> .moe-free sparse gate worktree (L6); s1.6 fails closed. P1 migration -> gated `--land-branch`/`-LandBranch`, CAS + non-forced push, no human merge (s7.3, WT-10). P2 size -> +382/-0.\nStep-6 self-review fixes: L6 gates every worktree completion while a qualityGate is set, scope ignored; doctor fails 'on' without a gate (rail 1). L8 journals every completion; gate-less uses WT-08's candidate-less variant. L9: [rejected] ends the round, [remote rejected] -> unlanded `remote`, else reconcile_push; replay settles the journaled C, never re-lands. L7 hooks in a sparse detached worktree; L11 retry after replay. Migration: no lease, hooks or records. Rollback unsets consolidationBranch, then `git switch -c moe/work-<date> main` (s7.4). Control seats: worktree iff HEAD==refs/heads/moe/control; follow/alerts only there (rail 4; s3.6/6.2/7.2). Scoped to .worktrees/task-* (s1.1/1.9/6.1). Aligned with the WT-01/WT-07/WT-08 planner decisions.\nRow comments: round 2 on WT-01/03/08T/08/09/10/11/13/14/16/17/18; corrections WT-01 ca0d75f8 (retracts 13abdc64), WT-13 1e3e602a, WT-08 94c25742, WT-09 09cc50e6, WT-08T fbfe90b3. Open: WT-16's planner adds WT-10 to dependsOn.\nHistory: manual commit f6da2d7f \"D\" swept in the round-1 doc (governor comment c350a788); this completion holds the step-6 delta (+45/-42). Review the whole task with `git diff a1f971f5^ <completion> -- docs/plans/2026-10-30-per-task-worktrees.md`.\nVerification fresh at HEAD 78f8df03: lint 39/30/35, PASS parity-check.sh, DOC-OK, exit 0.",
-  "reviewCompletedAt": "2026-10-30T12:11:26.851Z",
+  "reviewCompletedAt": "2026-10-30T14:20:21.994Z",
   "rejectionDetails": {
     "failedDodItems": [
       "docs/plans/2026-10-30-per-task-worktrees.md exists and decides items (1)-(7) from the description, citing the current code paths it replaces.",
@@ -390,5 +405,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T14:20:21.994Z",
+  "reviewSummary": "APPROVED r2. Reviewed completion 6285adf7 (pushed, on moe/work-2026-10-24) plus f6da2d7f's round-1 revision. Task-wide doc diff a1f971f5^..6285adf7 is +382/-0 (rail-5 waiver ≤600). The task's commits touch only the doc and board records.\n\nVerification re-run at HEAD c4ac2288 and at the completion SHA (/tmp/qa-wts-r2-sha.6qcOBi): lint 39/30/35, PASS parity-check, DOC-OK, exit 0.\n\nReject-1 items fixed:\n- Race: no local-CAS fallback; push classification and reconcile; unknown outcome holds via the existing ATTEMPT_FINALIZING.\n- .moe: sparse W and gate recipes replayed (/tmp/qa-wts-r2.50wUgg); no .moe, control stays full; old recipe still leaks; §1.6 fails closed.\n- Migration: gated --land-branch (WT-10M), CAS + non-forced push.\n- Size: waived.\n\nDoD1: §0-§8 present; cited symbols grep-verified; squash landing, L11 sync and §1.7 test replayed (/tmp/qa-wts-r2b.zn7jJJ); L3 lease is valid on the unassigned finalizing row.\nDoD2: 20 ids match the board (dependsOn has S, DoD 4-6, ≤8 steps, ≤5 files); acyclic; WT-19 has the top order and depends on all of them; WT-16 now depends on WT-10.\nDoD3: no production code; lint passes.\n\nNon-blocking, routed:\n1. L2 `reset -q` clears MERGE_HEAD, contradicting §2.5. L5 still re-detects the conflict, so a cross-session resume loops. WT-11 comment 60bcc261.\n2. Gate-less projects land on main ungated after WT-19's flip; only the doctor enforces a gate. WT-19 comment 67363154 (@governor, human flip decision).\n3. The §7.6 sweep misses moe-epic-breakdown SKILL.md:78 and the QA self-landing docs (a QA self-land would commit onto moe/control). Same comment.\n\nIncident: f6da2d7f \"D\" (71 paths, worker subagent's scratch git); governor acked c350a788; not reverted.\n\nponytail: shrink: the §2.6 in-landing re-push loop could become a single re-fetch ending in unknown, since replay retries anyway. net: -2 lines possible.",
+  "requiredCheckAtDone": null
 }

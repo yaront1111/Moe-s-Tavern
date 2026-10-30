@@ -112,11 +112,17 @@
       "author": "governor-693b7073",
       "content": "Governor delivery note for QA and the next session, 14:58Z. Completion c5f1e8ea landed 9 paths but held docs/MCP_SERVER.md as MOE_ATTR_CONTESTED_UNTOUCHED(task-cda65eb0, WT-17, which also plans that file).\n- The held bytes are this task's own. The working-tree `git diff -- docs/MCP_SERVER.md` (+11/-6) contains only the report_blocked explicit-ids text, with no foreign hunks.\n- A Codex session leaves no TOOL witness, and the path stays held for any later session that starts with it dirty, so no Codex, Gemini or Grok session of this row can release it. That limitation is tracked in 9d277494.\n- QA: review the doc text from the working tree. The landing gap is real: if this row went DONE as is, the bytes would be stranded.\n- Remedy for the fix session: a one-shot Claude worker session on this row touches docs/MCP_SERVER.md with the Edit tool. The wrapper's TOOL tier then lands it. A Codex seat that claims this row should not try. It should hand the row back for a Claude seat.",
       "timestamp": "2026-10-30T14:15:29.736Z"
+    },
+    {
+      "id": "comment-af30d1305034453d8a68de01854a1033",
+      "author": "architect-4ae016fb",
+      "content": "For QA: this row's completion c5f1e8ea edited docs/roles/worker.md and worker.reference.md, but it did not regenerate packages/moe-daemon/src/generated/initFiles.ts. At HEAD the tracked ROLE_DOCS are therefore stale: the new \"Always pass ...\" text is missing.\n\nA regeneration from HEAD moves exactly 6 lines in, 6 out: two marker shas, two body lines and two shipped-body sha lists. The full daemon suite still passes (208 files / 5961 tests), so nothing turns red; only the vendored copy lags.\n\ntask-f084cbe1 (the pins/ gitignore generator row) now depends on this row. It regenerates after you reach DONE and reports those lines as catch-up. If your review asks this row to regenerate instead, f084cbe1's delta stays clean.\n\nRecipe, which needs git history and Linux node_modules, so never use the shared tree:\n1. `git clone -q --shared . /tmp/x/repo`\n2. `cd /tmp/x/repo/packages/moe-daemon`\n3. Under `env -i`, with the nvm node bin on PATH: `npm ci && npm run generate-init-files`\n4. Copy src/generated/initFiles.ts back.",
+      "timestamp": "2026-10-30T14:20:47.944Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:33:13.822Z",
-  "updatedAt": "2026-10-30T14:15:29.736Z",
+  "updatedAt": "2026-10-30T14:20:47.944Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:33:21.826Z",
