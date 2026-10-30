@@ -72,7 +72,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,7 +92,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:37:19.825Z",
-  "updatedAt": "2026-10-30T06:53:36.394Z",
+  "updatedAt": "2026-10-30T07:05:14.023Z",
   "dependsOn": [
     "task-b799056d744749ba8ca9e4888f3452c4",
     "task-e40ad69f14194e2c89b43727588c2b25"
@@ -101,11 +101,14 @@
     "firstClaimAt": "2026-10-29T22:57:55.595Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T07:05:14.023Z",
+    "wallClockMs": 29238428
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -228,5 +231,9 @@
     "kind": "completion",
     "sessionId": "worker-5ebbf433@2026-10-30T06:39:18Z",
     "at": "2026-10-30T06:53:36.394Z"
-  }
+  },
+  "completedAt": "2026-10-30T07:05:14.023Z",
+  "reviewCompletedAt": "2026-10-30T07:05:14.023Z",
+  "reviewSummary": "Reviewed completion commit 4773404a (on moe/work-2026-10-24; working-tree bytes of both files == HEAD). Diff: 2 files, +291/-3 = 294 ≤ 400; scope matches plan (dependency-cache.mjs + DC1-DC5 only; agent-cache/admitLockfiles/DA/TC rows untouched).\n\nGate re-run fresh: env -i HOME PATH=nvm-node-24.21 node --test scripts/tests/local-runner-check.test.mjs → exit 0, 46 tests, 45 pass, 0 fail, 1 skip (K9 root-only, pre-existing). DC5 ran (no SKIP, 596ms, npm 12.2.0). Cross-platform: DC1-DC5 5/5 under native Windows Node 24.16 from WSL.\n\nDoD:\n1 Registry-only admission before any download: DC1 (git/sha1/location + input refusals, 0 fetches, no cacheDir); full refusal set (file/link/http/other-host/alias/integrity-less) is DA3, and admitLockfiles runs synchronously before mkdir/fetch.\n2 Verified bytes only: DC2 covers mismatch, declared+streamed oversize, 302→http, mid-stream error; each exact fixed code, no http/registry/cacheDir text, cacheDir empty (incl. .part), and a follow-up good build succeeds.\n3 Offline install: DC5 read-only tree, counting loopback registry 0 requests, root postinstall not run, aix optional skipped, listing unchanged; positive control (no --ignore-scripts) runs it; missing tarball fails with 0 requests (makes --offline load-bearing).\n4 Verification evidence present and reproduced.\n\nMutation probes (isolated git-archive copy): 18 run, 16 killed (mkdir-before-admit, content path, code maps x3, manifest bytes, control/absolute checks, error leak, packages/bytes/freeze/mode/executable, options guard, --no-update-notifier). Survivors: in-memory re-hash removal and O_NOFOLLOW removal in readKept. Both are defense-in-depth behind fetchPinnedFile's lstat + hash, with no deterministic swap seam. Non-blocking.\n\nNotes (non-blocking): the MAX_DEPENDENCY_BYTES total cap has no row (validateImport SNAPSHOT_LIMIT backs it). The cached() concurrent-corrupt race in agent-cache is already disclosed. No .moe edits, no verified-local claim.",
+  "requiredCheckAtDone": null
 }
