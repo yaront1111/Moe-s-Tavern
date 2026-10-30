@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Read-only provider and host prerequisites. Provisioning and execution readiness are separate gates.
-// The exception is `native-smoke`: an operator-invoked run that launches and deletes one owned VM.
+// Read-only provider and host prerequisites. Provisioning and execution readiness are separate gates. The exceptions are the
+// operator-invoked native runs that launch and delete one owned VM: `native-smoke` (provider support) and `certify` (CQ-R13d).
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runDoctor } from './doctor.mjs';
@@ -13,9 +13,11 @@ const FLAGS = Object.freeze({
   doctor: { '--executable': 'executable' },
   prerequisites: { '--executable': 'executable', '--cache-dir': 'cacheDir' },
   'native-smoke': { '--work-dir': 'workDir' },
+  certify: { '--work-dir': 'workDir' },
 });
+const READY = Object.freeze({ doctor: 'providerReady', prerequisites: 'ready', 'native-smoke': 'supportEstablished', certify: 'certified' });
 const ABSOLUTE = new Set(['cacheDir', 'workDir']);
-const USAGE = 'Usage: cli.mjs doctor [--executable <path>] | prerequisites [--executable <path>] [--cache-dir <absolute path>] | native-smoke --work-dir <absolute path>';
+const USAGE = 'Usage: cli.mjs doctor [--executable <path>] | prerequisites [--executable <path>] [--cache-dir <absolute path>] | native-smoke --work-dir <absolute path> | certify --work-dir <absolute path>';
 
 function argumentsFor(argv) {
   if (!Array.isArray(argv) || typeof argv[0] !== 'string' || !Object.hasOwn(FLAGS, argv[0]) || argv.length % 2 === 0) return null;
@@ -28,7 +30,7 @@ function argumentsFor(argv) {
         (ABSOLUTE.has(option) && !path.isAbsolute(value))) return null;
     options[option] = value;
   }
-  return argv[0] === 'native-smoke' && !Object.hasOwn(options, 'workDir') ? null : { command: argv[0], options };
+  return Object.hasOwn(FLAGS[argv[0]], '--work-dir') && !Object.hasOwn(options, 'workDir') ? null : { command: argv[0], options };
 }
 
 /** The platform module for a process.platform id, or null. */
@@ -66,13 +68,20 @@ const smokeReport = nativeSmoke => async options => {
   }
 };
 
-export async function runCli(argv, { doctor = runDoctor, prerequisites = hostPrerequisites, nativeSmoke, write = text => process.stdout.write(text) } = {}) {
+/** The certification report; a refusal is only its stable CERTIFY_* code. certify.mjs imports this module. */
+const certifyReport = certify => async options => {
+  try { return await (certify ?? (await import('./certify.mjs')).runIsolationCertify)(options); } catch (error) {
+    const code = typeof error?.code === 'string' && /^CERTIFY_[A-Z_]{1,40}$/.test(error.code) ? error.code : 'CERTIFY_UNAVAILABLE';
+    return { code, certified: false, executionReady: false };
+  }
+};
+
+export async function runCli(argv, { doctor = runDoctor, prerequisites = hostPrerequisites, nativeSmoke, certify, write = text => process.stdout.write(text) } = {}) {
   const parsed = argumentsFor(argv);
-  const smoke = parsed?.command === 'native-smoke';
-  const result = await reportFor(parsed, doctor, smoke ? smokeReport(nativeSmoke) : prerequisites);
+  const native = { 'native-smoke': smokeReport(nativeSmoke), certify: certifyReport(certify) };
+  const result = await reportFor(parsed, doctor, parsed !== null && Object.hasOwn(native, parsed.command) ? native[parsed.command] : prerequisites);
   write(`${JSON.stringify(result)}\n`);
-  const ready = smoke ? result.supportEstablished : parsed?.command === 'prerequisites' ? result.ready : result.providerReady;
-  return ready === true ? 0 : 2;
+  return parsed !== null && result[READY[parsed.command]] === true ? 0 : 2;
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {

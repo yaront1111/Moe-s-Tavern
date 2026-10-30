@@ -2115,7 +2115,7 @@ test('a launched guest that fails readiness keeps its record for reconcile and i
   assert.equal(exhausted.fake.commands().includes('delete'), false);
 });
 
-const USAGE = 'Usage: cli.mjs doctor [--executable <path>] | prerequisites [--executable <path>] [--cache-dir <absolute path>] | native-smoke --work-dir <absolute path>';
+const USAGE = 'Usage: cli.mjs doctor [--executable <path>] | prerequisites [--executable <path>] [--cache-dir <absolute path>] | native-smoke --work-dir <absolute path> | certify --work-dir <absolute path>';
 
 test('CLI prerequisites prints one JSON report and exits 0 only when every prerequisite is ready', async () => {
   const executable = 'C:\\Program Files\\Multipass\\bin\\multipass.exe';
@@ -2767,6 +2767,196 @@ if (typeof answer === 'string') process.stdout.write(answer); else process.exitC
   assert.deepEqual(await probe(), macReady());
   const virtualbox = await probe({ 'get local.driver': 'virtualbox\n' });
   assert.deepEqual([virtualbox.ready, virtualbox.prerequisites], [false, macItems([T, U, U, F], { combination: 'darwin/arm64 + virtualbox' })]);
+});
+
+// CQ-R13d native isolation certify: the injected core only (the native run is operator-only, never CI)
+import { CERTIFY_CHECKS, certifyCore, runIsolationCertify, validateCertificationReport } from '../local-runner/certify.mjs';
+
+const REAL_SUPERVISOR_SHA256 = createHash('sha256').update(readFileSync(new URL('../local-runner/guest-supervisor.py', import.meta.url))).digest('hex');
+const CERTIFY_IDS = ['provision', 'readiness', 'no-mounts', 'teardown'];
+const STARTED = '2026-01-02T03:04:05.000Z';
+const NO_IMAGE = { sourceSha256: null, providerImageHash: null };
+
+/** smokeHarness whose guest holds the REAL supervisor (R07 checks its hash), with an injected doctor and clock; `run` wraps the provider. */
+function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run, random = sequence(), ...fakeOptions } = {}) {
+  const workDir = scratch(t);
+  const fake = fakeVm({ ...fakeOptions, answers: healthy({ supervisorHash: { code: 0, stdout: `${REAL_SUPERVISOR_SHA256}  /opt/moe/bin/moe-supervisor\n` }, ...guest }) });
+  const [download, deletes] = [fakeFetch(), []];
+  const run = wrap((executable, args, options) => {
+    if (args[0] !== 'delete') return fake.run(executable, args, options);
+    deletes.push([...args]);
+    if (deleteFails) return Promise.reject(failWith({ code: 1 }));
+    fake.present.delete(args[2]);
+    return Promise.resolve({ stdout: '', stderr: '' });
+  });
+  const deps = { provider: { run }, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {}, random,
+    doctor: async () => ({ providerReady: true, version: '1.17.0' }), now: () => new Date(STARTED) };
+  return { workDir, fake, download, deletes, deps, certify: (platform = onWindows()) => certifyCore({ platform, workDir, deps }) };
+}
+const checksOf = (...rows) => rows.map(([id, result, code = null]) => ({ id, result, code }));
+const certification = changes => ({
+  kind: 'isolation-certification', version: 1, platform: 'win32', arch: 'x64', transport: 'injected', provider: { name: 'multipass', version: '1.17.0' },
+  image: { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH }, supervisorSha256: REAL_SUPERVISOR_SHA256, startedAt: STARTED, finishedAt: STARTED,
+  checks: CERTIFY_IDS.map(id => ({ id, result: 'passed', code: null })), certified: false, executionReady: false, ...changes,
+});
+const deepFrozen = value => value === null || typeof value !== 'object' || (Object.isFrozen(value) && Object.values(value).every(deepFrozen));
+
+test('CF1 an injected certification passes every check in registry order and still never certifies', async t => {
+  assert.deepEqual(CERTIFY_CHECKS.map(check => check.id), CERTIFY_IDS);
+  assert.equal(Object.isFrozen(CERTIFY_CHECKS) && CERTIFY_CHECKS.every(check => Object.isFrozen(check) && typeof check.run === 'function'), true);
+  const h = certifyHarness(t);
+  const report = await h.certify();
+  assert.deepEqual([report, deepFrozen(report), h.deletes], [certification(), true, [['delete', '--purge', GUEST]]]);
+  assert.equal((await createLedger(path.join(h.workDir, 'ledger')).read(GUEST)).phase, 'deleted');
+});
+
+test('CF2 a degraded cloud-init boot fails readiness with its own code; later body checks are not-run and teardown deletes only this run\'s VM', async t => {
+  const h = certifyHarness(t, { guest: { cloudInit: cloudInit(2, 'done', 'degraded done') } });
+  const foreign = createLedger(path.join(h.workDir, 'ledger'), { random: () => Buffer.alloc(10, 0xab) });
+  const other = await seed(foreign, 'owned');
+  h.fake.present.set(other.instance, 'Running');
+  const checks = checksOf(['provision', 'passed'], ['readiness', 'failed', 'BOOTSTRAP_FAILED'], ['no-mounts', 'not-run'], ['teardown', 'passed']);
+  assert.deepEqual([await h.certify(), h.deletes], [certification({ checks }), [['delete', '--purge', GUEST]]]);
+  assert.deepEqual([(await foreign.read(GUEST)).phase, (await foreign.read(other.instance)).phase, h.fake.present.get(other.instance)], ['deleted', 'owned', 'Running']);
+});
+
+test('CF3 a provision refusal or a codeless throw fails only its own check; teardown always runs and certifyCore resolves', async t => {
+  const notRun = [['readiness', 'not-run'], ['no-mounts', 'not-run']];
+  const conflict = certifyHarness(t, { primaryName: nameAt(9) });
+  assert.deepEqual(await conflict.certify(), certification({ image: NO_IMAGE, checks: checksOf(['provision', 'failed', 'PRIMARY_NAME_CONFLICT'], ...notRun, ['teardown', 'passed']) }));
+  assert.deepEqual([conflict.deletes, conflict.fake.launches.length, existsSync(path.join(conflict.workDir, 'ledger'))], [[], 0, false]);
+  const blocked = certifyHarness(t);
+  assert.deepEqual(await blocked.certify(onWindows(async () => false)), certification({ image: NO_IMAGE, checks: checksOf(['provision', 'failed', 'CERTIFY_PROVISION_UNAVAILABLE'], ...notRun, ['teardown', 'passed']) }));
+  assert.deepEqual([blocked.deletes, blocked.download.calls.length], [[], 0]);
+  // Reserved, then every launch failed: teardown still settles this run's own record, with nothing left to delete.
+  const exhausted = certifyHarness(t, { launch: () => ({ error: failWith({ code: 1 }), create: false }) });
+  assert.deepEqual(await exhausted.certify(), certification({ image: NO_IMAGE, checks: checksOf(['provision', 'failed', 'LIFECYCLE_RETRY_EXHAUSTED'], ...notRun, ['teardown', 'passed']) }));
+  assert.deepEqual([exhausted.deletes, (await createLedger(path.join(exhausted.workDir, 'ledger')).read(GUEST)).phase], [[], 'deleted']);
+  // After readiness probed mountinfo, the no-mounts check's info read throws an Error with no code.
+  let armed = false;
+  const thrower = certifyHarness(t, { run: base => (executable, args, options) => {
+    if (args.includes('/proc/self/mountinfo')) armed = true;
+    else if (armed && args[0] === 'info') { armed = false; return Promise.resolve({ get stdout() { throw new Error('/private/path secret-diagnostic'); } }); }
+    return base(executable, args, options);
+  } });
+  const threw = checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'failed', 'CERTIFY_CHECK_FAILED'], ['teardown', 'passed']);
+  assert.deepEqual([await thrower.certify(), thrower.deletes], [certification({ checks: threw }), [['delete', '--purge', GUEST]]]);
+  const stuck = certifyHarness(t, { deleteFails: true });
+  const undeleted = checksOf(['provision', 'passed'], ['readiness', 'passed'], ['no-mounts', 'passed'], ['teardown', 'failed', 'CERTIFY_TEARDOWN_FAILED']);
+  assert.deepEqual([await stuck.certify(), stuck.deletes], [certification({ checks: undeleted }), [['delete', '--purge', GUEST]]]);
+});
+
+test('CF4 the report carries no host path, credential or diagnostic text, and only stable codes', async t => {
+  for (const options of [{}, { guest: { cloudInit: cloudInit(2, 'done', 'degraded done') } }, { primaryName: nameAt(9) }, { deleteFails: true }]) {
+    const h = certifyHarness(t, options);
+    const json = JSON.stringify(await h.certify());
+    for (const forbidden of [h.workDir, tmpdir(), 'multipass.exe', 'secret', 'private', '\\']) assert.equal(json.includes(forbidden), false, forbidden);
+    assert.equal(/"(?:\/|[A-Za-z]:)/.test(json), false, json);
+    for (const { code } of JSON.parse(json).checks) assert.ok(code === null || /^[A-Z][A-Z0-9_]{0,63}$/.test(code), code);
+  }
+});
+
+test('CF5 validateCertificationReport returns a frozen copy of exactly the current schema and refuses anything else', () => {
+  const native = () => certification({ transport: 'native', certified: true });
+  const input = JSON.parse(JSON.stringify(native()));
+  const copy = validateCertificationReport(input);
+  assert.deepEqual([copy, copy === input, deepFrozen(copy), Object.isFrozen(input)], [native(), false, true, false]);
+  const failedRun = checksOf(['provision', 'failed', 'PRIMARY_NAME_CONFLICT'], ['readiness', 'not-run'], ['no-mounts', 'not-run'], ['teardown', 'passed']);
+  for (const report of [certification(), certification({ transport: 'native', checks: failedRun, arch: null, image: NO_IMAGE, supervisorSha256: null,
+    provider: { name: 'multipass', version: null } })]) assert.deepEqual(validateCertificationReport(structuredClone(report)), report);
+  const mutate = change => { const value = structuredClone(native()); change(value); return value; };
+  // A failed or not-run row, with certified consistent, so only the row's own rule can refuse it.
+  const failing = (at, row) => mutate(v => { v.checks[at] = row; v.certified = false; });
+  const getter = mutate(() => {});
+  Object.defineProperty(getter, 'kind', { enumerable: true, get() { throw new Error('/private/path secret'); } });
+  for (const [label, value] of Object.entries({
+    undefined, null: null, array: [native()], string: 'report', inherited: Object.assign(Object.create({ injected: true }), native()), getter,
+    missingKey: mutate(v => { delete v.kind; }), extraKey: mutate(v => { v.extra = 1; }), symbolKey: mutate(v => { v[Symbol('deps')] = 1; }),
+    missingProvider: mutate(v => { delete v.provider.version; }), extraProvider: mutate(v => { v.provider.executable = '/usr/bin/multipass'; }),
+    missingImage: mutate(v => { delete v.image.sourceSha256; }), extraImage: mutate(v => { v.image.path = null; }),
+    missingCheckKey: mutate(v => { delete v.checks[1].code; }), extraCheckKey: mutate(v => { v.checks[0].detail = null; }),
+    kind: mutate(v => { v.kind = 'native-provider-smoke'; }), version: mutate(v => { v.version = 2; }), versionText: mutate(v => { v.version = '1'; }),
+    platform: mutate(v => { v.platform = 'sunos'; }), arch: mutate(v => { v.arch = 'ia32'; }), transport: mutate(v => { v.transport = 'remote'; }),
+    providerName: mutate(v => { v.provider.name = 'lxd'; }), providerVersion: mutate(v => { v.provider.version = 'C:\\multipass'; }),
+    sourceHash: mutate(v => { v.image.sourceSha256 = 'AB'.repeat(32); }), imageHash: mutate(v => { v.image.providerImageHash = '/tmp/x'; }), certifiedNoHash: mutate(v => { v.image.providerImageHash = null; }),
+    supervisorHash: mutate(v => { v.supervisorSha256 = 7; }), checksObject: mutate(v => { v.checks = { ...v.checks }; }), certifiedNoArch: mutate(v => { v.arch = null; }),
+    missingCheck: mutate(v => { v.checks.pop(); }), extraCheck: mutate(v => { v.checks.push({ id: 'canary', result: 'passed', code: null }); }),
+    reversed: mutate(v => { v.checks.reverse(); }), swapped: mutate(v => { [v.checks[0], v.checks[1]] = [v.checks[1], v.checks[0]]; }),
+    renamed: mutate(v => { v.checks[2].id = 'no_mounts'; }), result: failing(3, { id: 'teardown', result: 'skipped', code: null }),
+    lowerCode: failing(3, { id: 'teardown', result: 'failed', code: 'lower_case' }), numberCode: failing(3, { id: 'teardown', result: 'failed', code: 7 }),
+    passedWithCode: mutate(v => { v.checks[0].code = 'CERTIFY_CHECK_FAILED'; }), failedWithoutCode: failing(3, { id: 'teardown', result: 'failed', code: null }),
+    notRunFirst: failing(1, { id: 'readiness', result: 'not-run', code: null }), teardownNotRun: failing(3, { id: 'teardown', result: 'not-run', code: null }),
+    notRunWithCode: failing(1, { id: 'readiness', result: 'not-run', code: 'X' }),
+    ranAfterFailure: certification({ transport: 'native', checks: checksOf(['provision', 'failed', 'X'], ['readiness', 'passed'], ['no-mounts', 'not-run'], ['teardown', 'passed']) }),
+    nativeUncertified: mutate(v => { v.certified = false; }), injectedCertified: mutate(v => { v.transport = 'injected'; }),
+    failedCertified: mutate(v => { v.checks[2] = { id: 'no-mounts', result: 'failed', code: 'TRANSFER_MOUNTS_PRESENT' }; }),
+    certifiedText: mutate(v => { v.certified = 'true'; }), executionReady: mutate(v => { v.executionReady = true; }),
+    startedAt: mutate(v => { v.startedAt = '2026-01-02'; }), finishedAt: mutate(v => { v.finishedAt = 'yesterday'; }),
+  })) assert.throws(() => validateCertificationReport(value), error => assertSanitized(error, 'CERTIFY_REPORT_INVALID'), label);
+});
+
+test('CF6 the native certify entry takes exactly an absolute workDir; certifyCore refuses bad input before any provider call', async t => {
+  const spy = () => assert.fail('an injected dependency ran');
+  const workDir = path.resolve(tmpdir(), 'moe native certify');
+  for (const options of [undefined, null, {}, [workDir], workDir, { workDir: '' }, { workDir: 'relative/dir' }, { workDir: `${workDir}\n` }, { workDir: `${workDir}\x7f` },
+    { workDir: 7 }, { workDir, provider: { run: spy } }, { workDir, deps: { fetch: spy } }, { workDir, [Symbol('deps')]: { fetch: spy } }]) {
+    await assert.rejects(runIsolationCertify(options), error => assertSanitized(error, 'CERTIFY_INPUT_INVALID'), String(options?.workDir));
+  }
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { ...platform, value: 'sunos' });
+  try {
+    await assert.rejects(runIsolationCertify({ workDir }), error => assertSanitized(error, 'CERTIFY_UNSUPPORTED_HOST'));
+  } finally { Object.defineProperty(process, 'platform', platform); }
+  assert.equal(existsSync(workDir), false);
+  const h = certifyHarness(t);
+  const deps = { ...h.deps, doctor: spy };
+  for (const input of [undefined, null, { platform: onWindows(), workDir: 'relative', deps }, { platform: onWindows(), workDir: `${h.workDir}\n`, deps },
+    { platform: null, workDir: h.workDir, deps }, { platform: [onWindows()], workDir: h.workDir, deps }, { platform: { id: 'win32' }, workDir: h.workDir, deps },
+    { platform: { ...onWindows(), id: 7 }, workDir: h.workDir, deps }, { platform: { ...onWindows(), id: '../x' }, workDir: h.workDir, deps },
+    { platform: onWindows(), workDir: h.workDir, deps: null }]) {
+    await assert.rejects(certifyCore(input), error => assertSanitized(error, 'CERTIFY_INPUT_INVALID'), String(input?.workDir));
+  }
+  assert.deepEqual([h.fake.commands(), h.download.calls.length, readdirSync(h.workDir)], [[], 0, []]);
+});
+
+test('CF7 the report file is created exclusively and owner-only, holds exactly the report, and is never overwritten', async t => {
+  const h = certifyHarness(t);
+  const report = await h.certify();
+  const files = readdirSync(h.workDir).filter(name => name.startsWith('certification-'));
+  assert.match(files.join('|'), /^certification-win32-x64-20260102T030405Z-[0-9a-f]{6}\.json$/);
+  const file = path.join(h.workDir, files[0]);
+  assert.deepEqual([JSON.parse(readFileSync(file, 'utf8')), readFileSync(file, 'utf8')], [report, `${JSON.stringify(report)}\n`]);
+  if (process.platform !== 'win32') assert.equal(statSync(file).mode & 0o777, 0o600);
+  // A fixed 3-byte suffix (the 10-byte draw still names GUEST, which the fake answers): its file already exists.
+  const taken = certifyHarness(t, { random: size => Buffer.alloc(size, size === 3 ? 0x11 : 0x01) });
+  const existing = path.join(taken.workDir, 'certification-win32-x64-20260102T030405Z-111111.json');
+  writeFileSync(existing, 'operator bytes');
+  await assert.rejects(taken.certify(), error => assertSanitized(error, 'CERTIFY_REPORT_WRITE_FAILED'));
+  assert.deepEqual([readFileSync(existing, 'utf8'), taken.deletes], ['operator bytes', [['delete', '--purge', GUEST]]]);
+  assert.deepEqual(readdirSync(taken.workDir).filter(name => name.startsWith('certification-')), [path.basename(existing)]);
+});
+
+test('CF8 CLI certify prints the report and exits 0 only when certified', async () => {
+  const workDir = path.resolve(tmpdir(), 'moe native certify');
+  const other = async () => assert.fail('not a certify dependency');
+  const cli = async (args, certify, writes = []) => [await runCli(args, { doctor: other, prerequisites: other, nativeSmoke: other, certify,
+    write: text => writes.push(text) }), writes.map(text => JSON.parse(text))];
+  for (const certified of [true, false, 'true']) {
+    const [seen, report] = [[], certification({ transport: 'native', certified })];
+    assert.deepEqual([...await cli(['certify', '--work-dir', workDir], async options => { seen.push(options); return report; }), seen],
+      [certified === true ? 0 : 2, [report], [{ workDir }]]);
+  }
+  for (const [code, error] of [['CERTIFY_UNSUPPORTED_HOST', failWith({ code: 'CERTIFY_UNSUPPORTED_HOST' })], ['CERTIFY_REPORT_WRITE_FAILED', failWith({ code: 'CERTIFY_REPORT_WRITE_FAILED' })],
+    ['CERTIFY_UNAVAILABLE', failWith({ code: 'EIO' })], ['CERTIFY_UNAVAILABLE', failWith({ code: 'NATIVE_SMOKE_INPUT_INVALID' })], ['CERTIFY_UNAVAILABLE', failWith({})]]) {
+    assert.deepEqual(await cli(['certify', '--work-dir', workDir], async () => { throw error; }), [2, [{ code, certified: false, executionReady: false }]], code);
+  }
+  for (const args of [['certify'], ['certify', '--work-dir'], ['certify', '--work-dir', 'relative'], ['certify', '--work-dir', `${workDir}\n`], ['certify', '--work-dir', ' '],
+    ['certify', '--work-dir', workDir, 'extra'], ['certify', '--work-dir', workDir, '--work-dir', workDir], ['certify', '--work-dir', workDir, '--executable', 'x'],
+    ['certify', '--work-dir', workDir, '--cache-dir', workDir], ['certify', '--executable', workDir], ['certify', 'hasOwnProperty', workDir], ['Certify', '--work-dir', workDir],
+    ['prerequisites', '--work-dir', workDir], ['native-smoke', '--work-dir', workDir, '--work-dir', workDir]]) {
+    const invalid = { code: 'CLI_INPUT_INVALID', providerReady: false, executionReady: false, message: USAGE };
+    assert.deepEqual(await cli(args, async () => assert.fail('no certify on invalid input')), [2, [invalid]], JSON.stringify(args));
+  }
 });
 
 // CQ-R09c copy-only snapshot materialization
