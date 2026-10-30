@@ -95,7 +95,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,7 +121,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T20:43:22.675Z",
-  "updatedAt": "2026-10-30T21:12:20.962Z",
+  "updatedAt": "2026-10-30T21:16:52.594Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T20:43:49.179Z",
@@ -131,11 +131,14 @@
     "firstClaimAt": "2026-10-30T20:54:52.649Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T21:16:52.594Z",
+    "wallClockMs": 1319945
   },
   "contextFetchedBy": [
     "architect-4ff0711c",
-    "worker-25da16b2"
+    "worker-25da16b2",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -268,5 +271,9 @@
     "kind": "completion",
     "sessionId": "worker-25da16b2@2026-10-30T21:06:41Z",
     "at": "2026-10-30T21:12:20.962Z"
-  }
+  },
+  "completedAt": "2026-10-30T21:16:52.594Z",
+  "reviewCompletedAt": "2026-10-30T21:16:52.594Z",
+  "reviewSummary": "Approved. Reviewed completion 757dcce4 (on moe/work-2026-10-24, pushed, in task.commits); own non-board bytes ~+192 net (<400).\n\nRe-ran task.verification verbatim in a fresh git-archive snapshot (overlay files cmp-verified): VERIFY-RC=0, tsc rc 0; joinTeam.deadMembers (7), joinTeam.notification (7), teamMembershipHeal (13), workerType (57) pass; full suite 215 files passed, 6249 tests passed, 20 skipped.\nRED proof: with the parent's teamStore.ts in the snapshot, deadMembers.test.ts gives 4 failed (all `Team Workers is full (max 3 members)`) and 3 passed (the pin-today cases). Restored afterwards.\n\nDoD 1: a full team with DEAD members accepts a new worker; live and total members stay <= maxSize after every join; a refused join leaves the team deep-equal (tests 1, 2).\nDoD 2: a DEAD member re-joining under its own id (wrapper_restart) keeps its seat via the idempotent early return, is revived to IDLE, nothing is evicted, and the live peer is deep-equal (test 3).\nDoD 3: evicted members land in formerMemberIds via withEvictionTombstones; records keep DEAD and lastActivityAt, teamId cleared; resolveEffectiveTeam still resolves them; a later deleteWorker leaves one tombstone (test 4). teamMembershipHeal.ts, claimEligibility.ts and claimNextTask.ts are not in the commit.\n\nCode read: the full branch reads only until the throw, so nothing is written before the refusal; the error text is unchanged; a missing record is not DEAD; the teamId pointer is cleared only when it names this team, with an explicit lastActivityAt so it is not presence; a failed repair is logged and never fails the join. Joins run under the mutex (WebSocketServer.ts:887 and tool dispatch). Scope matches approvedScope.\n\nNon-blocking: removeTeamMember (leave_team on a DEAD record) still bumps lastActivityAt; the architect scoped it out, so it needs its own row. healTeamMembership still skips a full team; the wrapper's join retry now evicts instead. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
