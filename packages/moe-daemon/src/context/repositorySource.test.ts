@@ -3,14 +3,13 @@ import { MoeErrorCode } from '../util/errors.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import type { GitHeadResult, PlanPathGitRunner } from '../util/cachedPlanPaths.js';
 import * as source from './repositorySource.js';
 
 const commit = 'a'.repeat(40);
 const read = (path = 'src/a.ts', id = 'r') => ({ id, purpose: 'source' as const, op: 'read' as const, path });
 const search = (paths?: string[]) => ({ id: 's', purpose: 'caller' as const, op: 'search' as const, literal: 'hello', paths });
-afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('request validation', () => {
   const cases: [string, unknown, unknown, string][] = [
@@ -109,7 +108,88 @@ describe('source slots', () => {
 });
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+async function removeRoot(root: string) {
+  // Windows can retain a child's cwd briefly; retry transient holds, not persistent failures.
+  await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+async function removeRoots(recorded: string[]) {
+  const results = await Promise.allSettled(recorded.map(removeRoot));
+  const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
+  if (failures.length) throw new AggregateError(failures, 'Failed to remove repository source fixtures');
+}
+
+async function withHeldRoot(exercise: (root: string, release: () => void, closed: Promise<number | null>) => Promise<void>) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-source-held-')); roots.push(root);
+  const child = spawn(process.execPath, ['-e', `
+    process.stdin.once('data', () => setTimeout(() => process.exit(0), 250));
+    process.stdout.write('ready\\n');
+    process.stdin.resume();
+  `], { cwd: root, stdio: ['pipe', 'pipe', 'ignore'], timeout: 5000, killSignal: 'SIGKILL' });
+  const closed = new Promise<number | null>(resolve => child.once('close', resolve));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('cwd holder readiness deadline')), 3000);
+      child.once('error', reject); child.stdin.once('error', reject);
+      child.once('close', () => reject(new Error('cwd holder exited before readiness')));
+      let output = '';
+      child.stdout.on('data', chunk => { output += chunk; if (output === 'ready\n') resolve(); });
+    });
+    clearTimeout(timer);
+    await exercise(root, () => child.stdin.end('release'), closed);
+  } finally {
+    clearTimeout(timer);
+    child.kill('SIGKILL');
+    await closed;
+    await removeRoot(root);
+  }
+}
+
+describe.skipIf(process.platform !== 'win32')('fixture cleanup: native Windows cwd holds (Windows-only lock semantics)', () => {
+  it('removes a root after a bounded transient hold ends', async () => {
+    await withHeldRoot(async (root, release, closed) => {
+      release();
+      await removeRoot(root);
+      expect(await closed).toBe(0);
+      expect(fs.existsSync(root)).toBe(false);
+    });
+  });
+  it('rejects a hold beyond the retry budget instead of hiding it', async () => {
+    await withHeldRoot(async root => {
+      await expect(removeRoot(root)).rejects.toMatchObject({ code: expect.stringMatching(/^(EPERM|EBUSY)$/) });
+      expect(fs.existsSync(root)).toBe(true);
+    });
+  });
+  it('closes its child and removes the root when an assertion fails', async () => {
+    const failure = new Error('exercise failed'); let held = '';
+    await expect(withHeldRoot(async root => { held = root; throw failure; })).rejects.toBe(failure);
+    expect(fs.existsSync(held)).toBe(false);
+  });
+});
+
+describe('fixture cleanup', () => {
+  it('removes every root and accepts already removed roots', async () => {
+    const recorded = [0, 1].map(() => fs.mkdtempSync(path.join(os.tmpdir(), 'moe-source-')));
+    roots.push(...recorded);
+    await removeRoots(recorded); await removeRoots(recorded);
+    expect(recorded.map(root => fs.existsSync(root))).toEqual([false, false]);
+  });
+  it('attempts every root before surfacing persistent and unexpected errors', async () => {
+    const held = Object.assign(new Error('held'), { code: 'EPERM' }); const unexpected = new Error('unexpected');
+    const later = deferred();
+    const rm = vi.spyOn(fs.promises, 'rm').mockRejectedValueOnce(held)
+      .mockImplementationOnce(() => later.promise).mockRejectedValueOnce(unexpected);
+    const pending = expect(removeRoots(['held', 'later', 'unexpected'])).rejects.toMatchObject({ errors: [held, unexpected] });
+    expect(rm.mock.calls).toEqual(['held', 'later', 'unexpected'].map(root =>
+      [root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }]));
+    later.resolve(); await pending;
+  });
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks(); vi.useRealTimers();
+  await removeRoots(roots.splice(0));
+});
 function fixture(files: Record<string, string | Buffer> = { 'src/a.ts': 'hello\n' }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-source-')); roots.push(root);
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));

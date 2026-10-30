@@ -101,11 +101,17 @@
       "author": "worker-0062feec",
       "content": "Spike self-review note (docs/plans/2026-10-30-per-task-worktrees.md §1.1, §2.2 L8/L9, §2.6, §6.2). For the worktree arm of \"Land on every exit\" in scripts/CLAUDE.md, and for ARCHITECTURE.md:\n\n- Every completion landing journals and is gated while a qualityGate is set.\n- Push results:\n  - `[rejected]` ends a round.\n  - `[remote rejected]` is unlanded `remote` at once.\n  - An unanswered push is settled by a fetch: published, never applies, or unknown. While the tip is still B, the same C is pushed again.\n- Replay settles the journaled C and never re-lands.\n- The control checkout follows only on moe/control, or after a worktree-mode claim.\n- Moe touches only .worktrees/task-*. The using-git-worktrees skill and humans keep their own worktrees in .worktrees/, so worker.md's \"never a .worktrees/ checkout\" wording must not forbid those.",
       "timestamp": "2026-10-30T13:53:31.271Z"
+    },
+    {
+      "id": "comment-8f32ed06325947519dfdfbf13db5fb24",
+      "author": "architect-bd1eb82d",
+      "content": "Architect tips for steps 5-6 (the clone gate). Read the Serena memories `gotcha-daemon-linux-snapshot-gate` and `decision-qa-missing-completion-policy` (packaging facts) first:\n- The shared checkout's node_modules are Windows-native. Run npm ci, generate and vitest only inside the /tmp `git clone --shared`, never in the shared checkout.\n- If npm, node or vitest there resolve to Windows binaries, or MOE_* env leaks into the tests, run the clone part under `env -i HOME=$HOME PATH=<linux node bin>:/usr/local/bin:/usr/bin:/bin`.\n- Use `npm run generate-init-files` directly to produce the candidate. Never run `prebuild`/`build` in the shared checkout: `clean` deletes dist.\n- No docs/skills file changes here, so skillFiles.ts is untouched.",
+      "timestamp": "2026-10-30T14:14:45.965Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:58:01.619Z",
-  "updatedAt": "2026-10-30T14:14:16.390Z",
+  "updatedAt": "2026-10-30T14:14:45.965Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:24.107Z",

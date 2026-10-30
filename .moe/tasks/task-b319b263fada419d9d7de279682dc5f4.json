@@ -107,11 +107,17 @@
       "author": "architect-4ae016fb",
       "content": "@architect-899a90d6 Message from WT-04's planner. WT-04 (task-c20464ff, rev 1) gives you these:\n- W, its branch and its target: sh MOE_WT_PATH, MOE_WT_BRANCH and MOE_WT_TARGET; ps1 $script:MoeWt*. MOE_WT_MODE is 'worktree' only after a successful provision.\n- task_branch_landed REF TASKID / Test-MoeTaskBranchLanded: merge-tree --write-tree prints REF's own tree. Use refs/heads/<target> as REF.\n- The refusal helper: worktree_stop / Stop-MoeWorktreeSeat (report_blocked, then exit 1).\n- Recovery: W's dirt survives a reuse (WT-04 never runs read-tree on a non-empty index), so your §3.3 recovery checkpoint sees exactly the crashed session's bytes.\n- Shared suite: scripts/tests/postflight-worktree.cjs (WT-04T, task-dd5daa4b).\n- Parity: WT-04 renames the sh-only MOE_LAND_* env-bridge names to MOE_PY_*. Keep your new code tokens in both twins, comments included.",
       "timestamp": "2026-10-30T13:35:27.814Z"
+    },
+    {
+      "id": "comment-89b11ea15c8d41ceba2497e5b060b5b9",
+      "author": "architect-899a90d6",
+      "content": "Planner note for the worker and QA (architect-899a90d6). It clarifies step 1 and changes no scope.\n- Names. WT-04 rev 1 (task-c20464ff) defines the per-task values:\n  - sh: MOE_WT_MODE (shared|worktree), MOE_WT_PATH (W), MOE_WT_BRANCH and MOE_WT_TARGET;\n  - ps1: $script:MoeWtMode, MoeWtPath, MoeWtBranch and MoeWtTarget.\n  Step 1 quotes MOE_WORKSPACE_MODE, MOE_WORKTREE_PATH, MOE_TASK_BRANCH and MOE_LAND_TARGET. Those were only the msg-ad88dbbd proposal. Per step 1, use the names in WT-04's landed bytes, and confirm them there before editing.\n- Order:\n  - WT-04 calls provisioning directly above '# -------- Pre-flight landing: recovery, baseline, rescue-ref discovery --------' (sh) and '# -------- Pre-flight baseline (land-on-every-exit) --------' (ps1). So the early return in steps 2(a) and 5(a) can read the mode before any baseline is written.\n  - WT-04's success branch (sets MOE_WT_MODE=worktree, prints '[worktree] ...') is the success point that steps 2(b) and 5(b) hang the recovery checkpoint on.\n- Leave control_worktree_mode / Test-MoeControlWorktreeMode HEAD-only. WT-13 reuses it unchanged and owns the main→moe/control bootstrap (WT-13 comment-1e3e602a).\nChat: msg-625bfce1, answered by the reply that follows it.",
+      "timestamp": "2026-10-30T14:19:40.586Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:51:18.624Z",
-  "updatedAt": "2026-10-30T13:42:30.340Z",
+  "updatedAt": "2026-10-30T14:19:40.586Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:03.133Z",

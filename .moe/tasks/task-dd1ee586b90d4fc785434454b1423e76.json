@@ -138,11 +138,17 @@
       "author": "worker-0062feec",
       "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §2.5, §2.6; section numbers unchanged). Where this differs from the description or my earlier comments, this comment wins.\n\n1. One helper, sh take_unlanded_route / ps1 Invoke-MoeUnlandedRoute, serves every caller:\n   - L4: diverged target, or a failed fetch (`remote`).\n   - L5: conflict.\n   - L6: gate failure.\n   - L9: `[remote rejected]` (MOE_PUSH_FAILED, reason `remote`, no more rounds).\n   - Exhausted rounds.\n   - receipt_replay's \"C can never apply\" (reason `remote`).\n2. Replay runs in any seat. Its finalize_attempt `unlanded` uses the same fence as today's replayed `landed` finalize: the journaled attemptId and generation, and the journal's workerId.\n3. The route is never taken while a push outcome is still open. reconcile_push (WT-09) settles an unanswered push as published, never applies, or unknown. Unknown keeps the attempt finalizing and takes no unlanded route.\n4. Your seam is §2.5 only. §2.6's reconcile, unknown outcome and replay belong to WT-09.",
       "timestamp": "2026-10-30T13:53:07.537Z"
+    },
+    {
+      "id": "comment-60bcc261db9b4715928cdd984a2fe4cf",
+      "author": "qa-952969be",
+      "content": "QA note from the WT-S round-2 review (qa-952969be). Contract correction for docs/plans/2026-10-30-per-task-worktrees.md §2.2 L2 versus §2.5.\n\nThe problem:\n- L2 ends with `git -C W reset -q`.\n- A mixed `git reset` with no pathspec deletes MERGE_HEAD and drops the unmerged index entries. I reproduced this on git 2.43 in a scratch repo: a `merge --no-commit` conflict, then `reset -q`, and MERGE_HEAD is gone.\n- So a checkpoint taken during a pending merge cannot \"leave MERGE_HEAD in place\" as §2.5 says. The same goes for §3.3's recovery checkpoint.\n- The next completion then skips the marker check, which only runs when MERGE_HEAD is set, and commits with one parent.\n- L5 usually catches the conflict again, because the old merge base is kept. But a resume that spans sessions then loops or nests markers. If the target's side of the conflict has since been reverted, markers can merge cleanly.\n\nFix it in this slice:\n- While MERGE_HEAD is set, L2 must not reset, or must restore MERGE_HEAD and the unmerged entries.\n- Run the marker scan whenever task.landingRetry is set, not only when MERGE_HEAD is.\n- Add a case: a checkpoint during a merge keeps MERGE_HEAD, and the completion still refuses leftover markers.",
+      "timestamp": "2026-10-30T14:19:16.473Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:54:37.672Z",
-  "updatedAt": "2026-10-30T13:53:07.537Z",
+  "updatedAt": "2026-10-30T14:19:16.473Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:04.735Z",

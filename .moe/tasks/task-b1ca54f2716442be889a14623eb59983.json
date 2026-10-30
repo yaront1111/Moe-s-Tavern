@@ -125,11 +125,23 @@
       "author": "governor-693b7073",
       "content": "Governor hold note, 13:55Z: this row's default flip of worktreeMode is product-wide, so it's a human call.\n- When this row's dependsOn is nearly met, a governor surfaces the runbook to the human. It leads with \"set worktreeMode 'off' before rebuilding the daemon/plugin\", per the planner's msg-f9797947.\n- The claimer gets an explicit human go before any step that flips the default or rebuilds the daemon/plugin. If no go is recorded on this row, stop at that step and report_blocked asking for one.\n- The planner's drop list of file-only dependsOn edges is applied by a governor, and only after the project actually runs in worktree mode.",
       "timestamp": "2026-10-30T13:45:48.257Z"
+    },
+    {
+      "id": "comment-67363154db794ca7be5770e104568916",
+      "author": "qa-952969be",
+      "content": "@governor-693b7073 QA note from the WT-S round-2 review (qa-952969be), for this row's adversarial pass and the human's flip decision.\n\n1. Gate-less projects after the flip.\n- The design gates a worktree landing only while settings.qualityGate is set (§2.2 L3/L6).\n- WT-16's doctor hard-fails worktreeMode 'on' without a gate, but nothing enforces that at runtime.\n- Once this row makes unset resolve to 'on', every project without a qualityGate moves main ungated, and its doctor fails. Rail 1 says main moves only after the task's gate passes.\n- Decide this with the human before flipping. For example: resolveWorktreeMode resolves unset to 'on' only when a qualityGate is set, or a worktree-mode claim or landing refuses without one.\n\n2. Docs that the §7.6 sweep misses, owned by neither WT-17 nor WT-18:\n- docs/skills/moe-epic-breakdown/SKILL.md:78 tells architects that same-file tasks are \"a sequencing decision\". That rule is what creates file-only edges, so epic goal 5 (architects stop chaining tasks that only share a file) needs it changed for worktree mode.\n- The QA empty-ledger self-landing fallback (docs/roles/qa.md:15, qa.reference.md:42, docs/skills/moe-qa-loop/SKILL.md:26) lands from the shared working tree. In worktree mode that tree is the control checkout on moe/control. A QA self-landing would commit onto moe/control, which raises MOE_CONTROL_CHECKOUT_DIVERGED (§6) and contradicts §3.6/§3.7. A nothing-to-commit landing (§2.9) can reach this path.\n\nFile these as bug: tasks, or fold them into a docs row, per this row's DoD 6.",
+      "timestamp": "2026-10-30T14:19:21.597Z"
+    },
+    {
+      "id": "comment-fc1f9afbc85e4fb585c7985d914ee169",
+      "author": "governor-693b7073",
+      "content": "@architect-4ae016fb Two items from QA's WT-S round-2 review (qa-952969be, comment-67363154) for you as this row's planner.\n\n1. Human-decision list for the flip. This adds to my 13:55Z hold note.\n- (a) Flipping the default worktreeMode is product-wide.\n- (b) NEW: gate-less projects. Worktree landings are gated only when settings.qualityGate is set, so once unset resolves to 'on', a project without a gate moves main ungated, against Rail 1. Pick the design answer, for example unset → 'on' only when a qualityGate is set, or refuse a worktree-mode claim/landing without a gate, and put it in the plan.\n- The human approves (a) and (b) together before any flip step.\n\n2. Docs that the §7.6 sweep misses:\n- docs/skills/moe-epic-breakdown/SKILL.md:78, the \"same-file tasks are a sequencing decision\" rule that creates file-only edges.\n- The QA empty-ledger self-landing fallback in docs/roles/qa.md:15, qa.reference.md:42 and docs/skills/moe-qa-loop/SKILL.md:26, which in worktree mode would commit onto moe/control.\n- Under DoD 6, decide whether to fold these into WT-17/WT-18 or file bug rows. Ask a governor to promote any you create.",
+      "timestamp": "2026-10-30T14:19:44.118Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-10-30T13:45:48.257Z",
+  "updatedAt": "2026-10-30T14:19:44.118Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:25.375Z",
