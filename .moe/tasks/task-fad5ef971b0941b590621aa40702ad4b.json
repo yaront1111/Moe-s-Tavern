@@ -10,9 +10,50 @@
     "cd moe-jetbrains && ./gradlew test exits 0 (run under the jetbrains-gradle lease)."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Add the pure exclusion decision and its JUnit4 tests (DoD1). New WorktreeExclusion.kt holds a small internal helper taking normalized project URL, content-root URL and existing excluded URLs; return the exact project-root `.worktrees` URL only if strictly inside that content root and not already covered, otherwise null. Convert platform paths with IntelliJ path/URL utilities at the adapter boundary; do not concatenate native backslashes into URLs or use locale-dependent case folding. Compare with slash boundaries and platform filesystem case sensitivity; trim trailing separators without damaging file/UNC roots. A containing ancestor root excludes project/.worktrees, never ancestor/.worktrees. Test expected exact URL, second application producing no addition, existing ancestor exclusion, null/missing project root, no matching root, unrelated nested/sibling roots and prefix collisions, trailing separators, spaces/Unicode, Windows drive/UNC and POSIX case-sensitive pairs. Directory absence is not a no-op: reserve its URL before first worker creates it. No filesystem mutation in helper.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Register and implement the project-open adapter (DoD2–3). In WorktreeExclusion.kt add the independent ProjectManagerListener and register it alongside the existing listener in plugin.xml, leaving MoeProjectService.kt and MoeProjectOpenListener.kt untouched. On open enqueue a short EDT write action, recheck project/module disposal, enumerate ModuleManager modules and their content entries, compute additions using step1 helper, and obtain each modifiable root model only when necessary. Recheck existing exclusions on that model before ContentEntry.addExcludeFolder(URL); commit only changed models and dispose uncommitted models in finally. Do not create roots/directories, modify VCS mappings, require a Moe daemon or gate on worktreeMode. Preserve user exclusions. Cancellation must propagate, ordinary model-update exceptions get bounded logger warning without aborting project open or leaking a model; this is explicit error handling. Extend tests using narrow callbacks/interface fakes to show adapter requests exactly one addition, second run none, disposed/no-root case no model write, and failure disposes without commit; assert plugin.xml registers the new class once. Use native exclusion to suppress VCS scanning (verified upstream source); do not add global ignore patterns or depend on internal scanner APIs. The sandbox gate below proves that choice against the installed SDK.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Single final verification gate (DoD3–4 plus epic parity). Acquire `jetbrains-gradle` via Moe with this task/worker, execute only after granted:true and release in finally (including build or sandbox failure); never clean shared build caches. From repo root in WSL/Git Bash run exactly `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" && (S=$(mktemp -d) && trap 'rm -rf \"$S\"' EXIT && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh))`. This is the honest Windows equivalent of cd moe-jetbrains && ./gradlew test; on Linux/macOS with JDK use that native command plus same archive parity subcommand. Confirm fresh XML timestamps and zero failures/errors/skips for the new tests, not an UP-TO-DATE success. Under the same lease also run sandbox `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat runIde\"` and open an owned throwaway Git project with `.worktrees/<id>` (real linked worktree/gitfile), another unrelated nested Git root, and a matching content root. Record folder excluded + no warning naming the worktree, unrelated VCS behavior preserved, reopening adds no duplicate, and creating the worktree after open still excludes it. Capture actual observed sandbox evidence in step note, do not substitute a guessed GUI result; if it contradicts exclusion-only suppression request a plan correction with concrete SDK evidence. Load regression-check and verification-before-completion, retain exact command/exitCode/fresh outputTail for complete_task. No wrapper source changes; archive parity avoids peers' uncommitted wrapper edits.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Final adversarial self-review, once. Load adversarial-self-review; attack path-prefix lookalikes, casing/UNC roots, missing folder then later creation, repeated open, overlapping module roots, disposed project while queued, cancellation and partial commit failure. Ensure no edits to .moe, no directory creation/deletion, no broad VCS ignores, no runtime service initialization, and exact project-level scope. Read only this task diff and confirm the sandbox result covers both indexing and the unregistered-root notification. If fixes are made refresh the same gate and affected sandbox scenario. Keep three-file scope; complete via Moe with accurate modifiedFiles and evidence, never stage peers' files or manually commit. WT17/18 own docs; WT19 owns whole-epic regression.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -35,10 +76,43 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:38.299Z",
-  "updatedAt": "2026-10-30T13:03:20.622Z",
+  "updatedAt": "2026-10-30T14:02:45.500Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:20.622Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:58:02.150Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-76a2c8bb"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:02:45.471Z",
+  "planningNotes": {
+    "approachesConsidered": "Use the native module excluded-folder model, a new independent project-open listener and a pure URL decision helper. Three files, <=60min/<400 net LOC. No new dependency, daemon/settings change, recursive walk or MoeProjectService edit. Reserve only <project.basePath>/.worktrees, not every nested directory with that name. Root containment (including a containing ancestor content root) and existing ancestor/exact exclusion determine no-op.",
+    "codebaseInsights": "Verified existing MoeProjectOpenListener implements ProjectManagerListener and plugin.xml has projectListeners. JUnit4 plain headless tests in util/. Build uses IDEA2026.2.3 and targetJava17. ContentEntry.addExcludeFolder(String) works on a ModifiableRootModel and need not materialize the directory. Native VCS scanning visitsDirsRecursivelyWithoutExcluded and DefaultVcsRootPolicy.shouldScanDirectory delegates to ProjectFileIndex.isInContent, so excluded descendants should not need an ignored-unregistered-root setting. Sources: https://github.com/JetBrains/intellij-community/blob/master/platform/projectModel-api/src/com/intellij/openapi/roots/ContentEntry.java ; https://github.com/JetBrains/intellij-community/blob/master/platform/vcs-impl/src/com/intellij/openapi/vcs/impl/DefaultVcsRootPolicy.kt . Confirm installed SDK behavior in sandbox, not just headless policy tests.",
+    "risks": "Windows URL separators/case versus Linux/macOS case-sensitive paths; project disposal before queued write; duplicate/overlapping roots; plugin must not create .worktrees, modify .moe or suppress unrelated VCS warnings. Read convention-jetbrains-gradle-lease and gotcha-jetbrains-gradle-from-wsl. All Gradle including runIde requires jetbrains-gradle lease, queued means no execution. PS command cwd must be absolute; WSL no JDK. Docs belong WT17/18.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
+      "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:02:45.500Z",
+  "approvedPlanRevision": 1
 }

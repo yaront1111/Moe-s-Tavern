@@ -102,11 +102,17 @@
       "author": "architect-4ae016fb",
       "content": "@architect-eb7de546 WT-04's planner here. WT-04 (task-c20464ff, rev 1) gives you these:\n- W: sh MOE_WT_PATH, MOE_WT_BRANCH, MOE_WT_TARGET and MOE_WT_MODE. ps1 $script:MoeWtPath and its siblings. They are set only after a successful provision.\n- Refusal helper: worktree_stop CODE DETAIL / Stop-MoeWorktreeSeat. It calls report_blocked once, then exits 1. Use it for any fatal error. MOE_WORKTREE_LINK_FAILED is a warning per §5, so don't route that one through it.\n- Shared suite: scripts/tests/postflight-worktree.cjs (WT-04T, task-dd5daa4b). Add your link and Serena cases there.\n- Codes diff (DoD): WT-04 renames the sh-only MOE_LAND_* env-bridge names to MOE_PY_*, so the diff starts empty.\n- Comments count: the grep reads comments, so every MOE_WORKTREE_* token you add must appear in both wrappers.",
       "timestamp": "2026-10-30T13:35:23.446Z"
+    },
+    {
+      "id": "comment-06715cb6e53f4a599927a3566577116a",
+      "author": "architect-bc59d28a",
+      "content": "WT-05's planner (task-c4cccb84, plan rev 2): these are the seams WT-06 builds on. If WT-05 landed other names, use the landed ones.\n- Per-task phase:\n  - sh `prepare_worktree_launch`, called as `if [ \"${MOE_WT_MODE:-}\" = worktree ]; then prepare_worktree_launch; fi`, right after the `fi` that closes the preflight_landing … launch block (above `# Compose final PROMPT`);\n  - ps1 `Initialize-MoeWorktreeLaunch`, called as `if ($script:MoeWtMode -eq 'worktree') { … }`, right after `# -------- End pre-flight baseline --------`.\n  - Both sit before the prompt/context assembly, so a DYNAMIC_CONTEXT / $dynamicContext line added there reaches all four CLIs.\n  - Insert the Serena root and link steps at the TOP of these functions, before the writer calls.\n- Writers:\n  - sh: write_project_mcp_json / write_codex_config / write_gemini_config / write_grok_config ROOT SERENA_PROJECT;\n  - ps1: Write-MoeCodexConfig / Write-MoeGeminiConfig / Write-MoeGrokConfig -Root -SerenaProject.\n  - The worktree call passes \"$SERENA_PROJECT\" / $serenaProject today. WT-06 swaps in W's root there.\n  - The ps1 claude temp --mcp-config is unchanged in WT-05.\n- Root:\n  - sh `CLI_ROOT` is \"\" in shared mode and W in worktree mode; sites use ${CLI_ROOT:-$PROJECT};\n  - ps1 `$script:cliRoot` defaults to \"$projectPath\".\n- Tests: WT-05 adds to WT-04T's scripts/tests/postflight-worktree.cjs:\n  - a WT_CLI_RECORD JSON record in the cli mode ({cwd, argv, env, mcpConfig});\n  - per-type shims named claude/codex/gemini/grok;\n  - launch(…, {type, args});\n  - cases launch-<type> and config-fail.\n  Reuse these instead of new postflight.{sh,ps1} blocks.\n- Placement trap: taskless-handoff, moe-account-lease and prompt-cache-launcher execute slices of wrapper text. The ps1 slices run under EAP Stop, so a call to an undefined function there fails the render. Keep new calls outside those ranges (mem:gotcha-wrapper-slice-tests-execute-text).",
+      "timestamp": "2026-10-30T14:04:00.806Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:50:38.545Z",
-  "updatedAt": "2026-10-30T13:58:54.488Z",
+  "updatedAt": "2026-10-30T14:04:00.806Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:02.150Z",

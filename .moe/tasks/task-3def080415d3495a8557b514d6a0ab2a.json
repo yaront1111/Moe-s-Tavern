@@ -9,9 +9,59 @@
     "bash scripts/tests/parity-check.sh passes, and moe-agent.ps1 keeps its UTF-8 BOM."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first using mem:gotcha-powershell-path-comparison-culture. In scripts/tests/daemon-json-cap.test.mjs turn only this task's launcher WSL-share todos into normal assertions (keep legitimate unavailable-engine skips, but require native Windows evidence). Extend WSL_SHARES with both host aliases and mixed ASCII case, share root/trailing separator, mixed separators, preserved POSIX case/Unicode, dot/parent collapse including a remainder beginning //, /mnt/d mapping and uppercase /MNT nonmapping. Add negative near-host/missing-distro rows proving generic UNC remains generic; keys must also match both built JS dists. Reuse existing childKeys/pythonKeys/powershellKeys and health/preflight fixtures instead of another harness. Add real identity cases where WSL UNC own path and POSIX served path are same, both share-host spellings are same, and case-distinct POSIX remainders are foreign; assert request count and unchanged daemon.json on refusal. Set UTF-8 output explicitly in generated PS key scripts for Unicode rows and preserve existing fixtures' BOM.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the minimal WSL-share branch in moe-agent.sh probe_daemon_health's comparable() and ps1 Get-MoeComparableProjectPath. After recognizing a Windows-form path and converting backslashes to slashes, match exactly //wsl$/<nonempty distro> or //wsl.localhost/<nonempty distro> with optional remainder; match host ASCII case only (Python re.IGNORECASE|re.ASCII, PS case-sensitive regex with explicit ASCII case pairs or equivalent). Extract remainder, default '/', discard distro, then use existing POSIX collapse and /mnt rules without lowercasing the POSIX tail. In Python force the extracted remainder to a SINGLE leading slash before posixpath.normpath so // remainder doesn't retain POSIX double-slash unlike JS. In PS reset the Windows/UNC classification before existing root/segment handling. Nonmatching drive/generic UNC/POSIX paths keep their current behavior; keep .Equals segment checks and final Ordinal identity equality. Error handling remains existing bounded unknown/foreign paths; no extra IO, no DNS/realpath, no native canonicalization of served values, no daemon deletion/start behavior changes. Maintain wrapper BOM, syntax and grouped-loop/reload fences.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update adjacent launcher comparison comments to state WSL-share stripping and case preservation. In packages/moe-proxy/src/utils.ts remove ONLY the obsolete two-line caveat saying launchers still treat WSL shares as UNC; keep its runtime and the getDaemonHost comment untouched. Do not edit guest-session persisted ledger keys, JetBrains, or the native-lifecycle fix from task-25ba449a. The existing transport contract is authoritative, including intentionally ignored distro names.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "packages/moe-proxy/src/utils.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Concentrated gate, fresh in an isolated snapshot with both proxy/daemon dists built from that snapshot and native lockfile-matched dependencies (never build globally-linked shared dist): `bash -n scripts/moe-agent.sh && node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh`. Use exact command/exitCode/outputTail for completion. Run the same suite using native Windows Node and Git Bash with both PowerShell5.1 and7 key/identity rows executing, not skipped; its existing parser test must pass and separately assert moe-agent.ps1 starts with EF BB BF. No WSL-share todo remains. New WSL hard assertions must fail with the branch removed from either launcher; existing identity/foreign/cap tests remain unchanged and passing. No full unrelated daemon regression: executable JS unchanged, task25ba449a owns its transport/lifecycle gate.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/daemon-json-cap.test.mjs",
+        "packages/moe-proxy/src/utils.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review: test near-host lookalikes, empty distro vs share root, mixed/duplicate separators, '..' at POSIX root, U+00AD/case-distinct tail, /mnt mapping and generic UNC non-regression. Confirm host matching does not case-fold tail or accept Unicode lookalikes, same project no longer refuses but genuinely foreign project still does, original bounded HTTP/error handling and ordinal equality are intact, and no persisted key/lifecycle policy changed. Stay within400 task-owned net lines; fix findings and rerun the named gate before complete_task/QA.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/daemon-json-cap.test.mjs",
+        "packages/moe-proxy/src/utils.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -20,17 +70,52 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-25ba449ab87d4039a283426f07302cbc"
+    "task-25ba449ab87d4039a283426f07302cbc",
+    "task-fbe8e3880ddf47dfa8546f220acea770"
   ],
   "priority": "MEDIUM",
   "order": 297.6,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:16:46.649Z",
-  "updatedAt": "2026-10-30T13:18:25.856Z",
+  "updatedAt": "2026-10-30T14:01:04.532Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:18:25.856Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:58:37.998Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-eb7de546"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:01:04.508Z",
+  "planningNotes": {
+    "approachesConsidered": "Small pre-normalization WSL-share branch reuses existing POSIX algorithms. Avoid rewriting all path normalizers or changing local-runner persisted keys. Explicit ASCII matching avoids PS5.1/PS7 Unicode ignore-case surprises.",
+    "codebaseInsights": "Bash currently returns ntpath-normalized/lowercased Windows forms before POSIX processing; PS has an ordinal segment collapse and a Windows boolean. Python posixpath.normpath retains exactly two leading slashes, so WSL remainder needs single-leading-slash normalization to match JS. Existing test block has WSL todo rows, built-dist comparison and native PS engines. Proxy utils comment alone is stale after this change. Prior task25ba449a rev2 isolates native lifecycle expected-path normalization; do not copy it into remote transport comparison.",
+    "risks": "Governor lane slot requested msg-57ec23d4; structural dependency25ba449a retained and governor adds wrapper-lane edge. Four files, five compact steps, well-scoped standard/xhigh. Native Windows PS5.1/PS7 required; Linux pwsh alone is insufficient. No persistent schema/wire change, no full-suite expansion or unrelated Unicode drive rewrite.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/daemon-json-cap.test.mjs",
+      "packages/moe-proxy/src/utils.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:01:04.532Z",
+  "approvedPlanRevision": 1
 }
