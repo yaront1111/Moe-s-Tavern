@@ -575,7 +575,11 @@ const coversAny = (prefixes: readonly string[], path: string) => prefixes.some(p
 /** Code-unit order: identical on every host locale. */
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-/** Map a relative specifier onto the tree; null for an external or unmatched one. */
+/**
+ * Map a relative specifier onto the tree; null for an external or unmatched one. A specifier that names a
+ * directory ('.', '..', or one ending in '/', '/.' or '/..') resolves to that directory's index only, as
+ * Node and TypeScript do, so a sibling file like src/state.ts cannot stand in for src/state/.
+ */
 export function resolveImport(fromPath: string, specifier: string, treePaths: ReadonlySet<string>): string | null {
   const spec = specifier.replaceAll('\\', '/');
   if (!isRelative(spec)) return null;
@@ -587,9 +591,11 @@ export function resolveImport(fromPath: string, specifier: string, treePaths: Re
   }
   const joined = segments.join('/');
   const index = joined ? `${joined}/index` : 'index';
+  const directory = ['', '.', '..'].includes(spec.slice(spec.lastIndexOf('/') + 1));
+  const indexes = RESOLVE_EXTENSIONS.map(ext => index + ext);
   const candidates = spec.endsWith('.js')
     ? RESOLVE_EXTENSIONS.map(ext => joined.slice(0, -3) + ext)
-    : [...(joined ? [joined, ...RESOLVE_EXTENSIONS.map(ext => joined + ext)] : []), ...RESOLVE_EXTENSIONS.map(ext => index + ext)];
+    : directory ? indexes : [...(joined ? [joined, ...RESOLVE_EXTENSIONS.map(ext => joined + ext)] : []), ...indexes];
   return candidates.find(candidate => treePaths.has(candidate)) ?? null;
 }
 

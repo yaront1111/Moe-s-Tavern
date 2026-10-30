@@ -11,35 +11,57 @@
     {
       "stepId": "step-1",
       "description": "Write the failing tests first, as a NEW file packages/moe-daemon/src/delivery/architectureRules.resolve.test.ts. Leave CQ-V10a's architectureRules.test.ts byte-identical: its V1 rows already pass with the fix, and the epic waiver freezes its bytes. Also leave task-16628bef's architectureRules.desync.test.ts alone.\n\nAdd an it.each of resolveImport(from, specifier, new Set(tree)) rows asserted with toBe. Let decoy = ['src/state.ts', 'src/state/index.ts'].\n(1) '.' from 'src/state/x.ts', tree decoy: 'src/state/index.ts'.\n(2) './' from 'src/state/x.ts', tree decoy: 'src/state/index.ts'.\n(3) '..' from 'src/state/sub/x.ts', tree decoy: 'src/state/index.ts'.\n(4) '../' from 'src/state/sub/x.ts', tree decoy: 'src/state/index.ts'.\n(5) '../state/' from 'src/ui/v.ts', tree decoy: 'src/state/index.ts'. This is the task repro.\n(6) '../state/.' from 'src/ui/v.ts', tree decoy: 'src/state/index.ts'.\n(7) '../state/..' from 'src/ui/v.ts', tree ['src.ts', 'src/index.ts']: 'src/index.ts'.\n(8) '..\\\\state\\\\', a backslash trailing separator, from 'src/ui/v.ts', tree decoy: 'src/state/index.ts'.\n(9) '../state/' with only the decoy, tree ['src/state.ts']: null.\n(10) '../state/' with tree ['src/state', 'src/state/index.tsx']: 'src/state/index.tsx'. The exact joined path is never a candidate for a directory form.\n(11) '../state/' with tree ['src/state/index.js', 'src/state/index.ts']: 'src/state/index.ts', following RESOLVE_EXTENSIONS order.\nControls that must stay as they are today:\n(12) '../state' with no trailing separator, tree decoy: 'src/state.ts'. Plain forms keep file-first order, as in Node.\n(13) './dir' with tree ['src/dir/index.ts']: 'src/dir/index.ts'.\n\nAdd one evaluateArchitecture case. Use parseArchitectureRules of {version 1, rules [{id 'ui-no-state', from ['src/ui'], forbid ['src/state'], reason 'r'}]} and changed [{ path: 'src/ui/v.ts', text: \"import x from '../state/';\" }].\n- With tree decoy, toStrictEqual { outcome: 'failed', selectedRules: ['ui-no-state'], violations: [{ ruleId: 'ui-no-state', file: 'src/ui/v.ts', line: 1, specifier: '../state/', resolved: 'src/state/index.ts' }], uncertain: [] }.\n- With tree ['src/state.ts'] only, toStrictEqual { outcome: 'inconclusive', selectedRules: ['ui-no-state'], violations: [], uncertain: [{ file: 'src/ui/v.ts', line: 1, reason: 'unresolved-relative' }] }.\n\nRun the file and record the red evidence. Today rows 1-10 give the decoy, src.ts, or the bare 'src/state', and the first evaluate case gives 'passed'. Rows 11-13 already pass.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/delivery/architectureRules.resolve.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/architectureRules.resolve.test.ts"
+      ],
+      "note": "New resolve test file. Red in Linux snapshot /tmp/moe-resolve.u6xIlK: 12 failed (rows 1-10, both evaluate cases), controls 11-13 pass. Shared checkout has many dirty peer paths; untouched.",
+      "startedAt": "2026-10-30T00:39:19.367Z",
+      "completedAt": "2026-10-30T00:39:51.159Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix resolveImport in packages/moe-daemon/src/delivery/architectureRules.ts. Keep the module's existing normalization and the escape-past-root null.\n\nAfter spec has been normalized ('\\\\' becomes '/') and the segments resolved, compute `directory`: true when the last '/'-separated part of spec is '', '.' or '..'. That covers '.', '..', a trailing '/', and a trailing '/.' or '/..'. These name a directory: Node's CommonJS resolver (its trailing-slash rule) and TypeScript's relative resolution (it treats '.' and '..' with an implied trailing separator) both load only that directory's index.\n\nFor a directory form, candidates are only RESOLVE_EXTENSIONS.map(ext => index + ext), using the existing index variable, so the repo root still maps to 'index.*'. Leave every other form unchanged: the '.js' swap branch, then joined, joined + ext, then index + ext.\n\nExtend the doc comment with one sentence: a specifier that names a directory resolves to that directory's index only, as Node and TypeScript do, so a sibling file like src/state.ts cannot stand in for src/state/.\n\nError handling: the function stays pure and total. A non-relative spec gives null, an escape past the root gives null, nothing throws, and nothing else is exported.\n\nRun both architectureRules test files until green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/architectureRules.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/architectureRules.ts"
+      ],
+      "note": "Directory forms now index-only. All 3 architectureRules files green in snapshot: 192 passed.",
+      "startedAt": "2026-10-30T00:39:52.142Z",
+      "completedAt": "2026-10-30T00:40:05.699Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification gate, run once and fresh, in a Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate). The in-tree node_modules is Windows-native.\n1. git archive HEAD of the WHOLE repo into /tmp. That HEAD includes task-16628bef's landed changes, because this task depends on it.\n2. Overlay ONLY architectureRules.ts and architectureRules.resolve.test.ts.\n3. Provide a native packages/moe-daemon/node_modules: symlink an install whose lock matches modulo CR, or run npm ci.\n4. Under env -i HOME=$HOME PATH=<nvm node v24 bin>:/usr/local/bin:/usr/bin:/bin NO_COLOR=1, run exactly: cd packages/moe-daemon && npm test && npx tsc --noEmit\n\nExpect exit 0, with every architectureRules test file green (landed, desync, resolve) and the skip set equal to the pre-existing one.\n\nBefore citing the run, cmp the overlaid files against the snapshot, and confirm architectureRules.test.ts is untouched (git diff --quiet HEAD on that path). Read the log with grep -a.\n\nSubmit that command, its exit code and the output tail as complete_task evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate in /tmp/moe-resolve.u6xIlK: npm test && tsc --noEmit exit 0; 189 files, 5272 passed, 16 skipped (pre-existing). Owned files cmp-equal; architectureRules.test.ts clean vs HEAD.",
+      "startedAt": "2026-10-30T00:40:06.604Z",
+      "completedAt": "2026-10-30T00:40:44.495Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this task's diff.\n\nMutation probes: apply each in a scratch copy, see it go red, restore, then cmp.\n- M1: drop '' from the directory set. Rows 2, 4, 5 and 8 go red.\n- M2: drop '.'. Rows 1 and 6 go red.\n- M3: drop '..'. Rows 3 and 7 go red.\n- M4: keep joined in the directory candidate list. Row 10 goes red.\n- M5: use index-only candidates for every specifier. Row 12 goes red.\n- M6: put index candidates first for directory forms but keep the file candidates after them. Row 9 and the decoy-only evaluate case go red.\n\nAlso check:\n- the diff carries none of the global forbidden tokens;\n- no new exports and no IO;\n- what happens with an empty specifier, '/' alone, './/' or './/.'? They must stay deterministic and never throw. Note the result: '' and '/' are not relative, so they give null.\n\nWrite the Serena handoff, noting that V10 (task-db328cda) now sees directory specifiers resolve to the index.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/architectureRules.ts",
+        "packages/moe-daemon/src/delivery/architectureRules.resolve.test.ts"
+      ],
+      "note": "M1-M6 all killed and restored (cmp equal). No forbidden tokens/new exports/IO. Edge specifiers deterministic, no throw. Handoff written.",
+      "startedAt": "2026-10-30T00:40:45.473Z",
+      "completedAt": "2026-10-30T00:41:05.757Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -56,10 +78,11 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T19:19:52.868Z",
-  "updatedAt": "2026-10-29T23:25:30.712Z",
+  "updatedAt": "2026-10-30T00:41:10.487Z",
   "contextFetchedBy": [
     "qa-952969be",
-    "architect-32ff5555"
+    "architect-32ff5555",
+    "worker-e60b90bd"
   ],
   "planningEntry": {
     "from": "BACKLOG",
@@ -69,13 +92,19 @@
   "metrics": {
     "firstClaimAt": "2026-10-29T23:23:12.843Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
   },
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T23:25:30.574Z",
   "executionContract": {
@@ -129,5 +158,19 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T23:25:30.711Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T00:39:19.367Z",
+  "reviewStartedAt": "2026-10-30T00:41:10.485Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test && npx tsc --noEmit",
+    "exitCode": 0,
+    "outputTail": "Test Files  189 passed (189)\n     Tests  5272 passed | 16 skipped (5288)\n  Duration  30.31s\nnpm notice run 'tsc' --noEmit (exit 0)",
+    "reportedAt": "2026-10-30T00:41:10.485Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/architectureRules.resolve.test.ts",
+    "packages/moe-daemon/src/delivery/architectureRules.ts"
+  ],
+  "completionSummary": "resolveImport now resolves directory-form specifiers ('.', '..', or ending in '/', '/.', '/..', after backslash normalization) to the directory index only, so a sibling file like src/state.ts can no longer stand in for src/state/ and bypass a forbid. Runtime: architectureRules.ts (a `directory` flag plus an `indexes` list, doc comment extended). Tests: new architectureRules.resolve.test.ts (13 rows plus 2 evaluateArchitecture decoy cases); architectureRules.test.ts is untouched. Red before the fix: 12 failed (rows 1-10 and both evaluate cases), controls 11-13 passed. Gate in a fresh Linux-native snapshot of HEAD with only the two owned files overlaid (cmp-equal): `cd packages/moe-daemon && npm test && npx tsc --noEmit` exit 0, 189 files, 5272 passed, 16 skipped (the pre-existing set). Mutants M1-M6 all killed and restored. Edge specifiers ('', '/', './/', './/.') are deterministic and never throw."
 }
