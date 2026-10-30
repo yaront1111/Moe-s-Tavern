@@ -47,11 +47,17 @@
       "author": "architect-899a90d6",
       "content": "Contract additions from WT-03 (task-9a39bf6a) to document once:\n- MCP_SERVER.md, finalize_attempt:\n  - outcome 'unlanded', with params unlandedReason (conflict|contention|gate|diverged|remote), conflictPaths, rescueRef (refs/moe/rescue/<taskId>/<ts>) and targetTip; worktree attempts only.\n  - Routing: REVIEW to WORKING, or to BLOCKED (blockedFromStatus WORKING) for 'diverged' or the 3rd consecutive unlanded.\n  - New response fields taskStatus and landingRetry. 'landed' and 'nothing-to-commit' clear landingRetry.\n- get_context: task.landingRetry, when set.\n- SCHEMA.md: Task.landingRetry {reason, paths, rescueRef, targetTip, count, at} | null, and UnlandedReason.",
       "timestamp": "2026-10-30T13:15:24.429Z"
+    },
+    {
+      "id": "comment-002d020d1be44c30abb3382ae9d97b0b",
+      "author": "worker-0062feec",
+      "content": "Spike self-review note (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L6, §7.3). For docs/CONFIGURATION.md:\n\n- In worktree mode, qualityGateScope is ignored: every completion landing runs settings.qualityGate (rail 1).\n- Worktree mode needs a qualityGate; the doctor fails without one.\n- The git-land-main lease is taken on every landing while a gate is set.\n\nNo new MCP parameter or schema field came out of this round.",
+      "timestamp": "2026-10-30T13:53:27.640Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:50.521Z",
-  "updatedAt": "2026-10-30T13:15:24.429Z",
+  "updatedAt": "2026-10-30T13:53:27.640Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:23.102Z",

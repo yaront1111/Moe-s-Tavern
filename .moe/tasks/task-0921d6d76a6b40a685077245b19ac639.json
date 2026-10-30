@@ -107,11 +107,17 @@
       "author": "worker-0062feec",
       "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L9, §2.3, §2.6; section numbers unchanged). Where this differs from the description or comment c837807a, this comment wins.\n\n1. L9 classification, on the target's porcelain line:\n   - ` `, `*` or `=`: published.\n   - `!` with `[rejected]`: the round ends.\n   - `!` with `[remote rejected]`: MOE_PUSH_FAILED, unlanded `remote`, no more rounds.\n   - Anything else (`[remote failure]`, a transport error, no line): reconcile_push.\n2. reconcile_push / Resolve-MoePushOutcome: wait MOE_LAND_NET_BACKOFF_SEC, then repeat L4's fetch.\n   - The tip contains C: published; continue at L10.\n   - The tip is neither B nor contains C: C can never apply, because the remote takes C only as a fast-forward from B and the target never moves backwards (rail 1). MOE_PUSH_FAILED, and the round ends.\n   - The tip is still B: push the SAME C again, then fetch again, up to 3 pushes in all. A repeat's refusal decides nothing; only the fetch does.\n   - The fetch fails, or the tip is still B after the third push: unknown. Print MOE_PUSH_OUTCOME_UNKNOWN, keep the journal, put C on a `push-unknown` rescue ref, and leave the attempt finalizing.\n3. receipt_replay's worktree arm, in remote mode, never merges, gates or builds a commit. \"Re-run L4-L12\" is dropped. It settles the journaled C with reconcile_push:\n   - Published: the L10 mirror, then the landed rows as today.\n   - Never applies: hand off to the unlanded route with reason `remote`, through WT-11's take_unlanded_route. Until WT-11 lands, print MOE_PUSH_FAILED and drop the journal, as today's \"ref never moved\" path does.\n   - Unknown: keep the journal for the next pre-flight.\n4. Journals now exist for every completion, with `candidateId: null` when there is no gate (WT-08), so the remote arm must accept them too.",
       "timestamp": "2026-10-30T13:52:57.934Z"
+    },
+    {
+      "id": "comment-09cc50e674a5484281997ec19a815fb3",
+      "author": "worker-0062feec",
+      "content": "Clarification of my comment b5e44191, point 4. The gate-less journal is WT-08's candidate-less worktree variant, under the discriminator WT-08's plan defines (Serena decision-worktree-ungated-receipt-journal), not a literal `candidateId: null`. The remote replay arm must accept that variant.",
+      "timestamp": "2026-10-30T13:56:04.162Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:53:21.112Z",
-  "updatedAt": "2026-10-30T13:52:57.934Z",
+  "updatedAt": "2026-10-30T13:56:04.162Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:06.410Z",

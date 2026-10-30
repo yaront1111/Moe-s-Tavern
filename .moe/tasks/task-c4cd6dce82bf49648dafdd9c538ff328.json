@@ -9,9 +9,77 @@
     "docs (scripts/CLAUDE.md Land on every exit, plus TROUBLESHOOTING) describe the guard and how a human bypasses it deliberately."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Read mem:task-task-c4cd6dce82bf49648dafdd9c538ff328-handoff and use test-driven-development. Add a compact parameterized node:test harness driving the REAL sh/ps1 wrappers with the existing postflight-fake-proxy.js and fake CLI, not just extracted guard functions. Every fixture is an absolute temp path; all setup git commands use explicit cwd/-C and check exit status. The fake CLI deliberately runs a nested shell with a failed scratch cd followed by ordinary git commit -am D (without errexit), plus staged-only commit, and attempts a push to a disposable local bare remote. Assert refusal text names wrapper landing, HEAD/remote refs and staged/dirty peer+human sentinels are unchanged before postflight. Include control subdirectory/git -C access, a separate scratch repo and linked worktree where ordinary hooks still operate, spaces/Unicode/path metacharacters, and native Windows Git/PowerShell 5.1 cases. Keep one shared fixture and bounded/redacted logs; do not edit the held-out or shared postflight suites.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/agent-git-guard.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement twin agent Git-guard preparation using native Git process-scoped configuration, never persistent git config or installed-hook replacement. Resolve the control checkout's absolute gitdir and existing effective hook directory BEFORE adding the overlay. In a per-seat secure temp directory generate LF/no-BOM shell hooks and a tiny config setting core.hooksPath. Append an includeIf.gitdir:<exact escaped absolute control gitdir>.path entry through GIT_CONFIG_COUNT/KEY_n/VALUE_n; use Git-compatible Windows paths/case handling, no trailing-slash recursive match, and escape Git wildmatch/config/shell syntax independently. Existing caller config entries remain intact. Generate pre-commit/pre-push refusal hooks with MOE_AGENT_GIT_REFUSED and 'the wrapper lands the work'; only explicit MOE_ALLOW_AGENT_GIT_WRITES=1 delegates to the original hook. Forward other installed executable hooks to their original absolute files with unchanged args/stdin/status, not copied bodies or eval. Preserve original hook failures on bypass. Validate the effective hooksPath using the actual prospective child env. Error handling: failed identity/config/temp/permission/validation means MOE_AGENT_GIT_GUARD_FAILED and no CLI launch, never an unprotected fallback. Non-Git projects remain supported without claiming Git protection.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Apply the prepared environment at every real CLI invocation (Claude/Codex/Gemini/Grok/custom command, interactive/headless, taskless notification and loop/reload paths), preserving command args, stdin/TTY, pipeline exit status and account environment. Use child subshell scope on sh; PS saves/restores only its own appended runtime-config entries in a finally before wrapper postflight/teardown, including launch failure/cancellation. Do not globally export the guard into wrapper Git or sidecars. Extend the new tests to prove normal completion with commitHooks=false and true, checkpoint plumbing, original hook denial, explicit one-command human bypass, ordinary human commit outside the session, concurrent seats with separate guard temps, and caller GIT_CONFIG_COUNT restoration (including existing core.hooksPath). Verify spawned descendant shells inherit the guard; document explicit env/config stripping as deliberate bypass, not a sandbox guarantee. Reuse existing secure-temp lifecycle; no .moe writes, no PATH git shim, no general Git protocol changes. Keep guard files alive through the CLI and remove only the seat's own temp files after exit.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "newFiles": [
+        "scripts/tests/agent-git-guard.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Document the accidental-write guard under scripts/CLAUDE.md 'Land on every exit' and a focused TROUBLESHOOTING entry. Explain control-only scope, wrapper-only landing, setup-failure diagnostic, settings.commitHooks unchanged, original human hooks unchanged, and that this is not a malicious-agent sandbox (--no-verify/explicit hooksPath or removing inherited Git config can bypass). Show a deliberately scoped human override in bash and PowerShell with restoration in finally; do not teach agents to use the bypass as their normal repair. Use cd ... && git ... or git -C absolute-path for all scratch examples.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/TROUBLESHOOTING.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Run the concentrated verification gate fresh: node --test scripts/tests/agent-git-guard.test.mjs && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh && npm run docs:lint . Submit its exact command/exitCode/outputTail as completion evidence. Also require native Windows execution of the new node test and node scripts/tests/postflight-safe.mjs powershell (no PS skip counted as a pass); inspect supported-launch argv/environment across all four CLI paths. New tests must fail with the guard removed and demonstrate the incident failure before the fix; current harnesses pass unchanged. Report platform availability honestly rather than substituting Linux pwsh for Windows Git/PS5.1.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/CLAUDE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "newFiles": [
+        "scripts/tests/agent-git-guard.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final adversarial self-review of this task's diff: can a failed cd/nested shell hit the control checkout, can an inherited config override silently disable hooks, can glob/case/path quoting affect another repo, can two seats remove each other's guards, and can cancellation leak the guard into wrapper hook commits? Confirm no persistent Git config/hook edits, no peer index changes, no credentials/config values in logs, and exact restoration on success/failure. Check task-owned net growth <=400 lines, no borrowed lane edits, and preserve Bash grouped-loop/reload fences. Correct any finding and rerun the named gate before complete_task; hand off to QA, never approve your own work.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/CLAUDE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "newFiles": [
+        "scripts/tests/agent-git-guard.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,10 +92,49 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:35:35.156Z",
-  "updatedAt": "2026-10-30T13:35:41.628Z",
+  "updatedAt": "2026-10-30T13:53:35.570Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:35:41.628Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:39:18.586Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-eb7de546"
+  ],
+  "dependsOn": [
+    "task-01f37ac63316409ab581f5a189002cb8"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:53:35.545Z",
+  "planningNotes": {
+    "approachesConsidered": "Chosen native process-scoped Git conditional include and temporary forwarding hooks. Persistent core.hooksPath install would race seats and alter human hooks; MOE_WORKER_ID alone also reaches wrapper hook-enabled commits; PATH git shims miss absolute Git and are unnecessary. Optional push guard shares the same small mechanism. No API/schema change.",
+    "codebaseInsights": "Wrappers export MOE_WORKER_ID globally, so it is insufficient to distinguish CLI from wrapper. sh apply_account_env is already child scoped but Codex/Gemini/Grok call sites differ; PS dispatch uses several try/finally paths. Existing postflight-fake-proxy.js can supply all fixture behavior without edits. Linux scratch probe with exact includeIf gitdir refused control commit, allowed scratch+human commits and left local config unchanged. Official Git githooks/git-config document config precedence, gitdir matching and bypass limits. Official Codex config reference documents shell_environment_policy filters: do not claim this guard survives deliberate custom removal of inherited runtime Git config.",
+    "risks": "Accidental peer-WIP publication/data loss justifies max effort. Governor msg-c25d45... assigns wrapper lane after task-01f37ac63316409ab581f5a189002cb8 and before task-724e31fadd3e4f5cb137abe9e4147f11; governor will wire edges from submitted files. WT-04T remains parallel because fixture untouched. Five files, six steps; keep implementation small via native Git config and shared parameterized tests, <=60 human-equivalent min/400 net lines. CLI/shell explicit config/environment stripping and no-verify remain deliberate bypasses; not an isolation security boundary. Windows CRLF, shell hook quoting, wildcard escaping and PS cleanup are required coverage.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/postflight-safe.mjs",
+      "scripts/CLAUDE.md",
+      "docs/TROUBLESHOOTING.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:53:35.570Z",
+  "approvedPlanRevision": 1
 }

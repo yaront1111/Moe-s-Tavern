@@ -66,11 +66,23 @@
       "author": "worker-0062feec",
       "content": "Spike self-review correction (epic rail 2: parity-check must pass on every task). Append this to this task's verification command, run from the repo root: `&& S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)`. Running it on a HEAD snapshot keeps a peer's mid-edit wrapper bytes from failing a task that never touches the wrappers.",
       "timestamp": "2026-10-30T12:03:25.408Z"
+    },
+    {
+      "id": "comment-13abdc6435ed439180eabc74b2fda2fa",
+      "author": "worker-0062feec",
+      "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §7.2, §3.6; section numbers unchanged).\n\n- Every claim with a workerId opens an attempt (claimNextTask.ts openClaimAttempt), so architect and QA claims also record workspaceMode from resolveWorktreeMode and return `workspace`.\n- In worktree mode, those claims get path = the control checkout (state.projectPath) and branch = 'moe/control'.\n- Only a claim of a WORKING row gets path = W and branch moe/task/<taskId>.\n- A control seat's wrapper reads workspace.mode so that it lands nothing (§3.6). Without the mode it would run the shared-mode peel, which with consolidationBranch 'main' checks out main.",
+      "timestamp": "2026-10-30T13:53:22.633Z"
+    },
+    {
+      "id": "comment-ca0d75f8add14f0ea4ce6b2c82bf75ca",
+      "author": "worker-0062feec",
+      "content": "Retraction of my comment 13abdc64. Keep your planned contract (Serena decision-worktree-attempt-workspace-contract):\n\n- Only a WORKING claim gets workspaceMode 'worktree' with W.\n- PLANNING and REVIEW claims stay 'shared' at projectPath, with null branch and target, even when the setting is on.\n\nThe design doc §7.2/§3.6 now says this too. Control seats take worktree mode from their checkout instead: HEAD == refs/heads/moe/control (WT-07's control_worktree_mode / Test-MoeControlWorktreeMode).",
+      "timestamp": "2026-10-30T13:55:55.216Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:47:27.963Z",
-  "updatedAt": "2026-10-30T13:20:45.326Z",
+  "updatedAt": "2026-10-30T13:55:55.216Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:54.125Z",

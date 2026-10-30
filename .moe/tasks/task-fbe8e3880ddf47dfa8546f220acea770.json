@@ -99,10 +99,23 @@
   ],
   "priority": "HIGH",
   "order": 21,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-e6073e9db590403984ec88531bcc6ae9",
+      "author": "worker-0062feec",
+      "content": "Spike self-review correction for rail 4 (docs/plans/2026-10-30-per-task-worktrees.md §6.1, §6.2, §6.4, §6.5; section numbers unchanged). Where this differs from the description, this comment wins.\n\n1. The follow runs in three places only:\n   - at L13;\n   - in a worker or QA pre-flight, after a claim whose workspace.mode is `worktree`;\n   - at the loop top, but ONLY while HEAD is refs/heads/moe/control.\n   A loop top on any other branch does nothing: no follow, no switch, no MOE_CONTROL_NOT_FOLLOWING alert. In shared mode that branch is moe/work-<date>, or main in a main-direct project. Add a case: a loop top on moe/work-<date> prints no MOE_CONTROL_ code and leaves HEAD alone.\n2. So the auto-switch and the NOT_FOLLOWING alert happen only after a worktree-mode claim or at L13. Your DoD cases \"control on main switches\" and \"another branch prints NOT_FOLLOWING\" run after such a claim.\n3. MOE_CONTROL_ADVANCED <old>..<new> is printed when the follow moves HEAD.\n4. In remote mode, the QA pre-flight runs sync_land_target (L4's fetch and mirror) before the follow, so a commit landed from another clone is in the control checkout's HEAD.\n5. MOE_WRAPPER_IN_WORKTREE fires only inside <git top>/.worktrees/task-*. The using-git-worktrees skill and humans keep their own worktrees under .worktrees/, and two such directories exist today.",
+      "timestamp": "2026-10-30T13:53:12.588Z"
+    },
+    {
+      "id": "comment-1e3e602ad3a943dca9ce83ca2842e068",
+      "author": "worker-0062feec",
+      "content": "Correction to my comment e6073e9d, points 1 and 2 (design doc §6.2/§6.5/§7.2 updated to match). A QA or architect claim always records workspace.mode 'shared' (WT-01's contract), so the QA pre-flight cannot gate on its claim.\n\n- The follow runs:\n  - at L13;\n  - in a WORKER pre-flight after a claim whose workspace.mode is 'worktree' (the only place the auto-switch and MOE_CONTROL_NOT_FOLLOWING can fire);\n  - in the QA pre-flight and at every loop top, only while the control checkout is in worktree mode, i.e. HEAD is exactly refs/heads/moe/control.\n- Reuse WT-07's predicate, sh control_worktree_mode / ps1 Test-MoeControlWorktreeMode (Serena decision-worktree-control-seat-mode-signal, #general msg-46da6ff7). Any git failure counts as shared.\n- For a control seat, a HEAD off moe/control means shared mode: nothing runs and nothing alerts (rail 4).\n- Points 3-5 stand.",
+      "timestamp": "2026-10-30T13:55:59.514Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:55:52.700Z",
-  "updatedAt": "2026-10-30T13:40:44.341Z",
+  "updatedAt": "2026-10-30T13:55:59.514Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:18.168Z",

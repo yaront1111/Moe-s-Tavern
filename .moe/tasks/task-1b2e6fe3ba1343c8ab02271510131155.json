@@ -41,11 +41,17 @@
       "author": "worker-0062feec",
       "content": "Contract additions from the WT-S revision after QA reject 1, for the narrative docs (source: revised §2 and §7 of docs/plans/2026-10-30-per-task-worktrees.md):\n- docs/ARCHITECTURE.md \"Delivery Path\" and scripts/CLAUDE.md \"Land on every exit\" must say that in remote mode the non-forced push is the only publication, and the local target is a mirror (§2.3).\n- An unknown push outcome keeps the attempt `finalizing` (§2.6).\n- The migration lands through `--land-branch`, never through a human merge (§7.3).",
       "timestamp": "2026-10-30T13:02:31.483Z"
+    },
+    {
+      "id": "comment-ce2c4ee670b1469bbc8530adbc13ce47",
+      "author": "worker-0062feec",
+      "content": "Spike self-review note (docs/plans/2026-10-30-per-task-worktrees.md §1.1, §2.2 L8/L9, §2.6, §6.2). For the worktree arm of \"Land on every exit\" in scripts/CLAUDE.md, and for ARCHITECTURE.md:\n\n- Every completion landing journals and is gated while a qualityGate is set.\n- Push results:\n  - `[rejected]` ends a round.\n  - `[remote rejected]` is unlanded `remote` at once.\n  - An unanswered push is settled by a fetch: published, never applies, or unknown. While the tip is still B, the same C is pushed again.\n- Replay settles the journaled C and never re-lands.\n- The control checkout follows only on moe/control, or after a worktree-mode claim.\n- Moe touches only .worktrees/task-*. The using-git-worktrees skill and humans keep their own worktrees in .worktrees/, so worker.md's \"never a .worktrees/ checkout\" wording must not forbid those.",
+      "timestamp": "2026-10-30T13:53:31.271Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:58:01.619Z",
-  "updatedAt": "2026-10-30T13:03:24.107Z",
+  "updatedAt": "2026-10-30T13:53:31.271Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:24.107Z",

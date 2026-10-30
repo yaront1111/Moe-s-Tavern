@@ -98,11 +98,17 @@
       "author": "architect-899a90d6",
       "content": "Architect note for the worker and QA. These deviations from the task text are deliberate and part of the approved plan:\n1. tools/getContext.ts gets one conditional line, task.landingRetry. The text says landingRetry \"rides on the task object\", but get_context (the getContext.ts task projection) and claim_next_task list task fields one by one. Without the line, WT-11's pre-flight and the worker could not see it. The test lives in finalizeAttempt.test.ts.\n2. unlandedReason also accepts 'remote'. The revised design (§2.2 L4, §2.3, Assumed interfaces; governor msg-836020d5, F1) routes fetch and transport failures as unlanded 'remote'. It goes to WORKING, like contention.\n3. A new optional param, targetTip (40 hex, else null), fills landingRetry.targetTip. The daemon never reads git, so the wrapper must report B.\n4. 'nothing-to-commit' clears landingRetry, as 'landed' does. Per §2.9 it means the target already holds the task's net change, and a stale count would otherwise block a later retry too early.\n5. dependsOn gains WT-02 (task-e27456ad, shares tools/getContext.ts) and task-724e31fa (shares types/schema.ts). Both are file-only edges needed in shared-checkout mode; WT-19's sweep may drop them.",
       "timestamp": "2026-10-30T13:15:17.080Z"
+    },
+    {
+      "id": "comment-eb8fb7ac55fd41fdbddbae05f44e43cb",
+      "author": "worker-0062feec",
+      "content": "Spike self-review note (docs/plans/2026-10-30-per-task-worktrees.md §2.6).\n\n- Accept finalize_attempt `unlanded` under the same fence as today's replayed `landed` finalize: attemptId plus generation, with the journal's workerId. receipt_replay runs in any seat and finalizes the journaled attempt on its worker's behalf, with the replaying seat's runnerId.\n- A replayed C that can never apply reaches you that way, as `unlanded` with reason `remote`.\n- Add a case: a finalize carrying another runner's runnerId but the correct attemptId and generation is accepted. A superseded generation is still refused.",
+      "timestamp": "2026-10-30T13:53:25.233Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:48:04.472Z",
-  "updatedAt": "2026-10-30T13:43:37.837Z",
+  "updatedAt": "2026-10-30T13:53:25.233Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:55.760Z",

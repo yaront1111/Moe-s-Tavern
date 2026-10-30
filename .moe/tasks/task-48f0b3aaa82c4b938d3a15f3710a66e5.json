@@ -46,11 +46,17 @@
       "author": "worker-0062feec",
       "content": "Follow-up to the WT-S revision comment above.\n- DoD item 4's \"human-only merge step\" is satisfied by the human-run migration landing (`--land-branch`), whose gated two-parent commit C is the merge. The runbook must contain no manual `git merge` or `git push` to main.\n- The runbook names WT-10's `--land-branch` (task-5c2e6cdf2494412ca0c2bc40e26d9da3). Add WT-10 to this row's dependsOn with moe.set_task_dependencies before planning; this worker seat has no dependency tool.\n- Step 3 still declares `git-land-main` and sets a qualityGate. The migration landing always gates, so it always takes the lease, and once a qualityGate is set every landing does (revised §2.3, §7.3 step 3).",
       "timestamp": "2026-10-30T13:12:12.262Z"
+    },
+    {
+      "id": "comment-5957b3a6a14141139e31013de94939af",
+      "author": "worker-0062feec",
+      "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §7.3, §7.4; section numbers unchanged). Where this differs from the description or comments dc2a92ff/05d5eda8, this comment wins.\n\n1. Doctor: with worktreeMode 'on', a missing settings.qualityGate is a hard fail. Rail 1 needs L6 on every landing, and the wrappers ignore qualityGateScope in worktree mode. Add it to the failing-condition cases.\n2. Runbook step 3: set a qualityGate fast enough to run on every landing, because each landing runs it under the git-land-main lease.\n3. The migration landing takes no lease, because acquire_resource needs an owned task. The drain, the CAS and the non-forced push keep main safe.\n4. Rollback, in order:\n   - set worktreeMode 'off';\n   - UNSET consolidationBranch. Left at 'main', it is ensure_safe_branch's main-direct opt-in, and shared seats would commit on main;\n   - run `git switch -c moe/work-<date> main` in the control checkout. The peel reuses any non-default branch, moe/control included.\n   Drop the \"or unset consolidationBranch and let the peel run\" alternative.",
+      "timestamp": "2026-10-30T13:53:19.691Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-10-30T13:35:43.817Z",
+  "updatedAt": "2026-10-30T13:53:19.691Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:22.067Z",

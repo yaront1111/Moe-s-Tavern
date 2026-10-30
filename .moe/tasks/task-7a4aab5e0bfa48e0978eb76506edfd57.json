@@ -133,11 +133,17 @@
       "author": "worker-0062feec",
       "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L7, L8, L11 error handling; section numbers unchanged). Where this differs from the description or my earlier comments, this comment wins.\n\n1. L8 journals EVERY completion landing before L9, gate-less ones included.\n   - Today the journal is written only for a gated completion (`LAND_KIND=completion` with QUALITY_GATE set), and sh receipt_journal_fields requires a candidate id.\n   - Without a gate there is no Candidate, so the journal carries `candidateId: null`. Only a worktree landing writes one, so shared mode is unchanged (rail 4).\n   - receipt_journal_fields and its ps1 twin accept null. Replay then skips receipt_send (record_delivery_receipt) and sends only the owed ledger row and finalize_attempt.\n   - In local mode, replay reads the local target as today.\n2. L7 hooks: set GIT_WORK_TREE to a disposable detached worktree of a temporary, never-published commit of M (`commit-tree M -p B`).\n   - Add it the way L6 adds the gate worktree: `--no-checkout`, sparse `'/*' '!/.moe/'`, then `read-tree -mu HEAD`.\n   - Apply the same `.moe` check: MOE_WORKTREE_GATE_INTEGRITY, then `failed` with rescue.\n3. The L11 retry runs at the next pre-flight AFTER receipt_replay, so a replayed C (now in task.commits) counts. Otherwise a reopened task merges from a base without C and can conflict with its own landed lines.",
       "timestamp": "2026-10-30T13:52:51.989Z"
+    },
+    {
+      "id": "comment-94c257427f6d49c198b27b7d63359182",
+      "author": "worker-0062feec",
+      "content": "Clarification of my comment 6ae5e215, point 1. The `candidateId: null` spelling was illustrative. Keep your plan's validated worktree journal discriminator (Serena decision-worktree-ungated-receipt-journal): never a fake candidate id, and no record_delivery_receipt without a Candidate. Design doc L8 now says \"a candidate-less worktree journal variant (WT-08 names its discriminator)\".\n\nThe contract is unchanged:\n- Journal every completion landing before publication.\n- Replay accepts the variant and sends only the owed ledger row and finalize_attempt.\n- Shared journaling stays as it is.",
+      "timestamp": "2026-10-30T13:56:02.262Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:52:45.478Z",
-  "updatedAt": "2026-10-30T13:52:51.989Z",
+  "updatedAt": "2026-10-30T13:56:02.262Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:05.195Z",

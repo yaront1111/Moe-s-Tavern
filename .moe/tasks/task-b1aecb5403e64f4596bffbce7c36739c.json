@@ -72,7 +72,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -110,7 +110,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:43:48.172Z",
-  "updatedAt": "2026-10-30T13:49:40.981Z",
+  "updatedAt": "2026-10-30T13:55:47.452Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:47.690Z",
@@ -120,12 +120,15 @@
     "firstClaimAt": "2026-10-30T13:18:51.455Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T13:55:47.451Z",
+    "wallClockMs": 2215996
   },
   "contextFetchedBy": [
     "architect-76a2c8bb",
     "worker-55e6716a",
-    "worker-c2da129d"
+    "worker-c2da129d",
+    "qa-ba3f4f35"
   ],
   "tier": "standard",
   "effort": "high",
@@ -184,20 +187,40 @@
       "treeId": "17e5316bebe5584e22256035a4e20e393b4c0564",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "33a806f10132c825ee2334b3ab79f8d0a829c695",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T13:45:01Z",
+      "paths": [
+        ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
+        ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+        ".moe/tasks/task-cf7f470818b34486b4e74bacc1b92c7a.json"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T13:49:55.996Z",
+      "treeId": "8db80dd80c4967ec4c4d66c52c9cd1ec54abe078",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/tools/proposeRail.ts",
     "packages/moe-daemon/src/tools/proposeRail.test.ts",
     "docs/MCP_SERVER.md",
-    "docs/SCHEMA.md"
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
+    ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+    ".moe/tasks/task-cf7f470818b34486b4e74bacc1b92c7a.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-55e6716a@2026-10-30T13:22:20Z",
-    "at": "2026-10-30T13:32:29.837Z"
+    "kind": "completion",
+    "sessionId": "worker-c2da129d@2026-10-30T13:45:01Z",
+    "at": "2026-10-30T13:49:55.996Z"
   },
   "priorBlockedReason": "Implementation/docs complete and own focused regression 33/33 passes. Required fresh root full daemon gate cannot pass while live peer proposal-replay work is red: latest `cd packages/moe-daemon && npm test` (Linux, matching NODE_PATH native bindings, VITEST_MAX_WORKERS=4) exits1 with only12 StateManager proposal-replay failures,5929pass,16skip. These are task-6f3f7fe97a91434c9143e52e57c6f302's concurrently added tests/source, not task-caused; peer files preserved and @worker-262588d0 notified. Prior default Linux run had only CLI timeout contention (focused rerun3/3pass); Windows full run exposed separate missing PowerShell test helper, filed task-cf7f470818b34486b4e74bacc1b92c7a. Need peer landing then fresh full gate and step4 final review. No unrun/failed check represented as passing.",
   "reviewStartedAt": "2026-10-30T13:49:40.979Z",
@@ -208,5 +231,9 @@
     "reportedAt": "2026-10-30T13:49:40.979Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Caller attribution fix, regression coverage and contract docs complete. Optional workerId takes precedence over assignee, then unknown; empty/omitted callers retain legacy behavior. No historical rewrites or approval/proxy/UI changes. Earlier four-path source/docs bytes are in manual commit f6da2d7f5fcf99185ce2b9fdfaefcf5cf50d8433 (D), plus task checkpoint52a459c3; QA must review those, not only completion commit. Resumed verification/review with no new source edits. Fresh full daemon gate:208 files passed,5953 tests passed,16 existing skips; exit0. Adversarial self-review and scoped diff/check clean. Handoff memory saved; shared peer dirt preserved."
+  "completionSummary": "Caller attribution fix, regression coverage and contract docs complete. Optional workerId takes precedence over assignee, then unknown; empty/omitted callers retain legacy behavior. No historical rewrites or approval/proxy/UI changes. Earlier four-path source/docs bytes are in manual commit f6da2d7f5fcf99185ce2b9fdfaefcf5cf50d8433 (D), plus task checkpoint52a459c3; QA must review those, not only completion commit. Resumed verification/review with no new source edits. Fresh full daemon gate:208 files passed,5953 tests passed,16 existing skips; exit0. Adversarial self-review and scoped diff/check clean. Handoff memory saved; shared peer dirt preserved.",
+  "completedAt": "2026-10-30T13:55:47.451Z",
+  "reviewCompletedAt": "2026-10-30T13:55:47.451Z",
+  "reviewSummary": "Verified all three DoD items and current rails against committed bytes: reviewed git show f6da2d7f5fcf99185ce2b9fdfaefcf5cf50d8433 (the actual four-path implementation/docs diff), checkpoint52a459c3d7122b8c37848ea2b044e50a8479f523, and recorded completion33a806f10132c825ee2334b3ab79f8d0a829c695 (board-only). git branch --contains confirms all three on moe/work-2026-10-24. Owned non-board diff +62/-4, net58 LOC; scoped diff --check clean. Optional string caller workerId is advertised without changing required/additionalProperties contract; explicit governor/QA/architect/unassigned/verbatim caller precedence, omitted/empty assignee/unknown fallback, persistence/reload and unchanged assignment are covered. Disk-full rejects without publication; existing validation/error handling and persist-before-publish remain intact. MCP_SERVER/SCHEMA document exact precedence, no historical rewrites and unchanged stored shape. No approval/proxy/UI scope drift, migration required, silent failure or new shared identity/race. Re-ran exact verification `cd packages/moe-daemon && npm test` myself: exit0,208 files passed,5953 tests passed,16 existing skips,162.26s; log /tmp/moe-b1aecb54-qa-gate.log. Environment prep only: unset all MOE_*; NODE_PATH=/tmp/moe-8012-final.C3TqDm/repo/packages/moe-daemon/node_modules (JSON package-lock equality checked), VITEST_MAX_WORKERS=4. No exclusions, installs or timeout changes. Daemon tree and reviewed four paths matched recorded completion before/after run; unrelated shared dirt untouched. Complexity pass: Lean already. Ship; net0 lines to cut. Reusable handoff facts folded into decision-rail-proposal-caller-attribution; safe archive preflight found no collision.",
+  "requiredCheckAtDone": null
 }

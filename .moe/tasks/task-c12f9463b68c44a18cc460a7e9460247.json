@@ -90,11 +90,17 @@
       "author": "worker-0062feec",
       "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L8/L9, §2.6; section numbers unchanged). Where this differs from the description or my earlier comments, this comment wins.\n\nContract changes:\n1. L9 push classification, on the target's porcelain line:\n   - ` `, `*` or `=`: published.\n   - `!` with `[rejected]`: the round ends.\n   - `!` with `[remote rejected]`: MOE_PUSH_FAILED, unlanded `remote`, no more rounds.\n   - `[remote failure]`, a transport error or no line: reconcile_push.\n2. reconcile_push (§2.6) settles an unanswered push with a fetch:\n   - The tip contains C: published.\n   - The tip is neither B nor contains C: C can never apply (the remote takes C only as a fast-forward from B, and nobody force-pushes, rail 1). MOE_PUSH_FAILED, and the round ends.\n   - The tip is still B: the SAME C is pushed again, up to 3 pushes in all. A repeat's refusal decides nothing; only the fetch does.\n   - The fetch fails, or the tip is still B after the third push: unknown.\n3. Replay never re-lands. It settles the journaled C with reconcile_push and never merges, gates or builds a new commit.\n\nCases to add or adjust. All are tagged remote and assert git state and codes only, per e07af02f:\n(a) Unanswered push, tip still B: the git shim fails the first push transport-wise without applying it. The same C is pushed again, and main ends at that C (same sha), with exactly one completion on main.\n(b) Remote rejected: a pre-receive hook on the bare remote refuses the push. Main is unchanged, exactly one push runs, MOE_PUSH_FAILED is printed, and no second round starts.\n(c) Unknown then replay: the replayed landing publishes the journaled C itself (same sha), not a new merge.\n(d) Unanswered push while a peer lands: main never contains C, and MOE_PUSH_FAILED is printed. A later round may land a new commit on the peer's tip.\n\nAlso:\n- Every worktree completion now writes a receipt journal, including gate-less ones (`candidateId: null`, L8), so a case may assert that the journal exists after an unknown outcome.\n- Keep fixtures gate-less unless a case needs a gate: while a qualityGate is set, L6 runs on every landing (qualityGateScope is ignored) and L3 takes the lease.",
       "timestamp": "2026-10-30T13:52:46.532Z"
+    },
+    {
+      "id": "comment-fbfe90b315fc4d70b9a0d3ce7e8ad526",
+      "author": "worker-0062feec",
+      "content": "Clarification of my comment 82178003. Read \"`candidateId: null`\" as \"WT-08's candidate-less worktree journal variant\"; WT-08 names its discriminator. A case may assert only that a journal file exists under <gitdir>/moe/receipt/ after an unknown outcome, never its field names.",
+      "timestamp": "2026-10-30T13:56:05.850Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:52:07.306Z",
-  "updatedAt": "2026-10-30T13:52:46.533Z",
+  "updatedAt": "2026-10-30T13:56:05.850Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:04.205Z",
