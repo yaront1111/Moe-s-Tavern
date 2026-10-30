@@ -75,7 +75,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T03:10:25.864Z",
-  "updatedAt": "2026-10-30T08:11:23.358Z",
+  "updatedAt": "2026-10-30T08:11:49.189Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T05:55:43.308Z",
@@ -191,7 +191,8 @@
     ".moe/tasks/task-7e39a63f6b024acf9f5f06c92bfafd59.json",
     ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
     ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
-    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json"
+    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+    ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json"
   ],
   "completionSummary": "ps1 nothing landings now send skipped/contested like sh's record_commit_rpc.\n\n- scripts/moe-agent.ps1: new Get-MoeRecordHeldFields($Attr,$Dropped,$Rel) is the single source of the two lists:\n  - skipped = non-EXCLUDED skips plus staging drops, first 100;\n  - contested = first 100;\n  - nulls filtered, paths root-relative, always JSON arrays.\n- It is merged with hashtable `+` into three sends:\n  - the no-candidate nothing/refused send (Dropped @(); adds the missing contested, so a strict MOE_ATTR_CONTESTED hold names its real peer, not '?');\n  - the unchanged-tree MOE_COMMIT_NOTHING_TO_COMMIT send (it had neither list);\n  - the committed $recArgs (same lists as before, except contested is now capped at 100 like sh).\n- scripts/moe-agent.sh: the nothing record_commit_rpc gets \"${LAND_DROPPED_FILE:-}\", so an unchanged-tree nothing row carries its drops as on ps1. The no-candidate row is byte-identical to before.\n\nTests: scenario AI in postflight.sh and postflight.ps1. AI1 is a completion under skip-untouched (unchanged tree), AI2 a completion under contested=skip, AI3 a checkpoint under contested=skip (no candidate). Each asserts:\n- nothing is committed;\n- held.txt stays untracked;\n- the last row is nothing/MOE_COMMIT_NOTHING_TO_COMMIT with the right kind;\n- skipped and contested are arrays;\n- skipped names held.txt under the run's code;\n- contested names {held.txt, task-peer};\n- ps1 also pins which send ran.\nCounters: sh 41/40, ps1 40/41.\n\nRED on HEAD ps1: AI1/AI2 rows had no lists; AI3 had skipped but no contested. sh passed on HEAD as the parity pin.\n\nChain on a snapshot of HEAD plus the 4 files: green under PS 5.1 and pwsh 7.6.9. Scope counts are sh 41 and ps1 40, because this host has no symlinks. PS 5.1 edge probe: $null, empty, one element and 150 entries all serialize as arrays, capped at 100.\n\nDaemon trace: heldContestedPaths plus alertGovernors fire on outcome nothing, so ps1 unchanged-tree holds now raise MOE_CONTESTED_HELD and the #governors alert.\n\nResidual ",
   "commits": [
@@ -236,6 +237,23 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "e344d65c902ec919ea2c44ebc267a7d2e811a02f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8e551ac8@2026-10-30T07:22:20Z",
+      "paths": [
+        ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
+        ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json"
+      ],
+      "recordedBy": "qa-8e551ac8",
+      "recordedAt": "2026-10-30T08:11:49.188Z",
+      "treeId": "fae8427128089877358998eee02c96eb2464490c",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -247,9 +265,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-0062feec@2026-10-30T06:26:05Z",
-    "at": "2026-10-30T07:17:32.872Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-8e551ac8@2026-10-30T07:22:20Z",
+    "at": "2026-10-30T08:11:49.188Z"
   },
   "completedAt": "2026-10-30T08:11:23.358Z",
   "reviewCompletedAt": "2026-10-30T08:11:23.358Z",

@@ -76,7 +76,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,16 +92,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:56:02.151Z",
-  "updatedAt": "2026-10-30T08:06:55.150Z",
+  "updatedAt": "2026-10-30T08:12:14.244Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:56:15.773Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T08:12:14.244Z",
+    "wallClockMs": 51358471
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-0062feec"
+    "worker-0062feec",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -231,5 +234,9 @@
     "kind": "completion",
     "sessionId": "worker-0062feec@2026-10-30T08:04:14Z",
     "at": "2026-10-30T08:06:55.150Z"
-  }
+  },
+  "completedAt": "2026-10-30T08:12:14.244Z",
+  "reviewCompletedAt": "2026-10-30T08:12:14.244Z",
+  "reviewSummary": "Reviewed recorded completion 93423c1b (tree de4045a9, on moe/work-2026-10-24, pushed) via git show: utils.ts +4/-2, utils.test.ts +54/-1, README.md +2/-1 plus 5 board JSONs; ~60 net non-board LOC. No daemon/launcher/bridge change (empty diff stat for scripts/, moe-daemon/, moe-jetbrains/). Re-ran `cd packages/moe-proxy && npm test` in an isolated Linux snapshot of `git archive 93423c1b` (native npm ci in proxy + npm ci --ignore-scripts in daemon, env -i, node v24.21.0; not the shared checkout, whose pretest rebuilds live dist): exit 0, 5 files / 188 tests passed, matching the worker. Mutant: dropping the qa_reject entry fails 4 new 'QA decision stamping' tests; restored and cmp'd. DoD: (1) qa_approve and qa_reject added to EXECUTION_IDENTITY_TOOLS with attempt+session groups; existing loop covers moe.x, moe_x, bare x; tests assert exact args with numeric generation. (2) Substituted attemptId/generation ('7', 8)/sessionId refused with EXECUTION_IDENTITY_SUBSTITUTED (-32003) without mutation; partial attempt env gives EXECUTION_IDENTITY_INVALID (-32602); empty env returns false, args unchanged; validation, === compare and codes untouched. (3) Only edited existing assertion is moe.qa_approve -> moe.add_comment in the not-stamped list (required by the behavior change); other stamp tests unchanged; README row + sentence present. (4) Verification reproduced. Rails: no .moe hand edits, no forbidden tokens; the Moe-Contested note on utils.ts names a peer task but the commit carries only this task's 6-line hunk. Not verified here: daemon-side QA identity requirement (CQ-V06, separate dependency) and R08 guest-bridge stamping for VM QA seats (R-series). Accepted consequence: a legacy QA seat with a stale MOE_ATTEMPT_ID now gets ATTEMPT_SUPERSEDED (same F07 rule as complete_task). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
