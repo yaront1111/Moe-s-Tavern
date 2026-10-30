@@ -21,6 +21,19 @@ import {
 } from '../local-runner/guest-session.mjs';
 import { ownedInstanceName, QUERY_TIMEOUT_MS } from '../local-runner/lifecycle.mjs';
 
+// The H section's project and daemon: a fake /health reporting its loopback bind for PROJECT (::1 best-effort; 0 where it
+// cannot bind). It is awaited before any test is registered: awaited after them, rows that all finish meanwhile (every
+// POSIX-only row skips on Windows) let the root's after() remove PROJECT mid-load.
+const PROJECT = mkdtempSync(join(tmpdir(), 'moe-r08-'));
+const DAEMON_DIR = join(PROJECT, '.moe');
+mkdirSync(DAEMON_DIR);
+after(() => rmSync(PROJECT, { recursive: true, force: true }));
+const healthOn = host => new Promise(resolve => {
+  const server = createServer((req, res) => res.end(JSON.stringify({ status: 'healthy', projectPath: PROJECT, bindHost: host })));
+  server.once('error', () => resolve(0)).listen(0, host, () => { after(() => { server.closeAllConnections(); server.close(); }); resolve(server.address().port); });
+});
+const [HEALTH_PORT, HEALTH_V6_PORT] = [await healthOn('127.0.0.1'), await healthOn('::1')];
+
 const refuses = (fn, expected, label) => assert.throws(fn, error => error?.code === expected, label);
 const header = length => { const bytes = Buffer.alloc(4); bytes.writeUInt32BE(length); return bytes; };
 const framed = body => Buffer.concat([header(body.length), Buffer.from(body)]);
@@ -605,16 +618,6 @@ print(sorted({n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and
 const NAME = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
 const SESSION_ID = 'worker-1@2026-10-26T00:00:00.000Z';
 const SPAWNED = ['multipass', bridgeArgv(NAME), { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
-const PROJECT = mkdtempSync(join(tmpdir(), 'moe-r08-'));
-const DAEMON_DIR = join(PROJECT, '.moe');
-mkdirSync(DAEMON_DIR);
-after(() => rmSync(PROJECT, { recursive: true, force: true }));
-// The project's daemon: a fake /health reporting its loopback bind for PROJECT (::1 best-effort; 0 where it cannot bind).
-const healthOn = host => new Promise(resolve => {
-  const server = createServer((req, res) => res.end(JSON.stringify({ status: 'healthy', projectPath: PROJECT, bindHost: host })));
-  server.once('error', () => resolve(0)).listen(0, host, () => { after(() => { server.closeAllConnections(); server.close(); }); resolve(server.address().port); });
-});
-const [HEALTH_PORT, HEALTH_V6_PORT] = [await healthOn('127.0.0.1'), await healthOn('::1')];
 const daemonFile = (name, info = {}) => {
   writeFileSync(join(DAEMON_DIR, name), typeof info === 'string' ? info : JSON.stringify({ port: HEALTH_PORT, pid: 1, projectPath: '/p', ...info }));
   return join(DAEMON_DIR, name);

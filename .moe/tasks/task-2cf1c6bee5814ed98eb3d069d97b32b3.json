@@ -101,8 +101,9 @@
     {
       "stepId": "step-6",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each one to a scratch copy, restore it, then cmp. A kill counts only when real rows fail. Name the row that kills each.\n   a. The helper admits an absent report bindHost.\n   b. It skips the project compare.\n   c. It trusts the file's bindHost or projectPath instead of the report.\n   d. Its deadline is the socket idle timeout (the trickle row must kill this).\n   e. There is no body cap.\n   f. guest-session's per-forward probe is removed.\n   g. runner-client reads the key before the probe.\n   h. mcpCaller always dials 127.0.0.1.\n   i. /health omits bindHost (a step 1 row must kill this).\n\n2. GATE, in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate, mem:gotcha-local-runner-qa-snapshot-assets):\n   - `git archive HEAD` of the WHOLE repo;\n   - overlay ONLY this task's 10 files, and cmp them;\n   - in packages/moe-daemon, a native `npm ci --no-audit --no-fund` under env -i with nvm node v24.21.0;\n   - run exactly the command below. It must EXIT 0. Use NO_COLOR=1 and grep -a.\n   `cd packages/moe-daemon && npm run build && npm test && cd ../.. && node --test scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-dispatch.test.mjs`\n\n3. Windows: run node.exe --test on the new test file from a D: copy of the snapshot, as task-d8fc3955's QA did, and record its counts. A ::1 or WSL-only skip is fine; a failure is not.\n\n4. LOC: report `git diff --numstat` for the 10 files. Keep it under 400 net non-board LOC; if it is over, cut before completing.\n\n5. complete_task:\n   - verification: that command, exit code 0, and the output tail;\n   - summary, mapped to the DoD:\n     - DoD 1: the DB2-DB4 core-regression rows;\n     - DoD 2: DB1, the DB2-DB4 failure-kind rows, and DB5;\n     - DoD 3: the step 1 rows plus the gate.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-10-30T08:59:00.748Z"
     },
     {
       "stepId": "step-7",
@@ -112,8 +113,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fe18a9a9",
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -129,7 +130,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:42:05.249Z",
-  "updatedAt": "2026-10-30T08:54:04.378Z",
+  "updatedAt": "2026-10-30T09:22:57.354Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:42:56.107Z",
     "plannedStepCount": 7,
@@ -291,6 +292,22 @@
       "treeId": "94584b44b895e5ca0c8f589e3747fef9e6b6a0dd",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "bb0e88208eaa74cc5ab523d51543ebce218316ce",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T08:54:37Z",
+      "paths": [
+        ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+        ".moe/tasks/task-bf4debb34a0241d2be0f764a2a68158b.json"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T08:56:45.756Z",
+      "treeId": "7b45bbc66697b8b808f611718688563c60e25ef1",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -312,14 +329,15 @@
     "scripts/local-runner/vm-control.mjs",
     "scripts/tests/local-runner-bridge.test.mjs",
     "scripts/tests/local-runner-channel.test.mjs",
-    "scripts/tests/local-runner-vm-control.test.mjs"
+    "scripts/tests/local-runner-vm-control.test.mjs",
+    ".moe/tasks/task-bf4debb34a0241d2be0f764a2a68158b.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-fe18a9a9@2026-10-30T08:38:41Z",
-    "at": "2026-10-30T08:54:04.378Z"
+    "sessionId": "worker-fe18a9a9@2026-10-30T08:54:37Z",
+    "at": "2026-10-30T08:56:45.756Z"
   },
   "workStartedAt": "2026-10-30T08:27:28.625Z",
   "touchedFiles": [
@@ -332,5 +350,12 @@
     "scripts/local-runner/guest-session.mjs",
     "scripts/local-runner/vm-control.mjs",
     "scripts/local-runner/runner-client.mjs"
-  ]
+  ],
+  "blockedReason": "This follows step 3's hot-file rule. scripts/tests/local-runner.test.mjs holds about 232 uncommitted added lines from task-1e7f5a2d (CQ-R11e2), which is back in WORKING under live seat worker-0062feec. My last piece is the agentHarness fixture edit (+12/-2) in that same file, and without it AJ3-AJ6 fail the gate. Editing over the peer's hunks would land 232 lines that are not mine under this task. I have commented on task-1e7f5a2d.\n\nEverything else in step 6 is done. With a draft of the edit, the gate exits 0 in an isolated snapshot (daemon 5826 passed; node 470 pass, 0 fail). All 10 mutants are killed. On Windows the new test file is 7/7. A Windows hang in the bridge suite was fixed with a fixture move, made with the Edit tool. The handoff with the exact edit and the evidence is in Serena: task-task-2cf1c6bee5814ed98eb3d069d97b32b3-handoff.\n\nTo resume: once task-1e7f5a2d lands that file, apply the edit, re-run the gate fresh, then do step 7 and complete_task.",
+  "blockedOnTaskIds": [
+    "task-1e7f5a2dc15b4de5b384a814c4505ed8"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-30T09:22:57.354Z"
 }

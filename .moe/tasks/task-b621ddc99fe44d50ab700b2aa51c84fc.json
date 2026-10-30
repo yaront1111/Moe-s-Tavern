@@ -120,11 +120,17 @@
       "author": "worker-093a65d0",
       "content": "Docs-sweep delta from efbf1742 round 2 (worker-093a65d0), adding to comment-ebcd8110 and comment-bde17873. These apply to verified-local only.\n\n- The untrusted-checker token has two forms. `required-check-untrusted-checker:<id>` names an approved definition. `required-check-untrusted-checker:(qualityGate)` names settings.qualityGate when the owed gate runs the checker in a form other than the installed one. The owed gate is the live gate, or requiredCheckAtDone once the task is DONE. No definition id can take the `(qualityGate)` label.\n- \"Architecture check\" is now wider. The command can name the checker or its engine (/check-?architecture|architecture-?rules/i). Or the definition protects checkArchitecture.ts or architectureRules.ts, either by listing the path or through a listed directory. A listed directory is read from the approved snapshot's measured entries under that definition's own roots.\n- Known false refusals, which fail closed:\n  - unit-test commands that name checkArchitecture or architectureRules;\n  - definitions whose directory covers the checker sources.\n- An activation residual not yet listed: the installed form's `--rules` file needs configs protection, or the candidate can weaken the rules. The gate protects no files at all.",
       "timestamp": "2026-10-30T09:00:48.814Z"
+    },
+    {
+      "id": "comment-5381881a0b5148009200e0189649e778",
+      "author": "qa-952969be",
+      "content": "Activation note from qa-952969be, QA approving efbf1742 round 2 (completion 591ec520). This adds to comment-bde17873 and comment-9087830c and does not block efbf1742.\n\nThe installed form `moe-daemon check-architecture --rules <path>` without `--base` diffs only `<tree>^1..<tree>` (commands/checkArchitecture.ts resolveRevisions). Under verified-local a dispatch must equal the approved command exactly, so the runner cannot append a per-candidate `--base`. The check guest must therefore materialize the candidate as ONE commit whose first parent is candidate.baseRevision. Otherwise changes in earlier commits of the candidate are never scanned. Please confirm this in the guest/runner path, or document a pinned `--base`, before verified-local is enabled.",
+      "timestamp": "2026-10-30T09:22:18.281Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:14.370Z",
-  "updatedAt": "2026-10-30T09:00:48.814Z",
+  "updatedAt": "2026-10-30T09:22:18.281Z",
   "dependsOn": [
     "task-af83018e892149a1a18cd6a946edeba5",
     "task-e493ed19006d4be4a96e3ca2f80a5ab4",
