@@ -2284,6 +2284,8 @@ Create a team or return an existing team with the same name+role (idempotent). I
 
 Add a worker to a team. Auto-registers the worker if it doesn't exist, and a successful join revives a `DEAD` record to `IDLE` (current task and chat cursors kept; the type follows a supplied `workerType`): the wrappers re-join at every pre-flight, before any chat read, so an idle seat whose record was pruned or deregistered (hot reload) can answer chat under its own id. A refused join leaves a `DEAD` record `DEAD`; heartbeats never revive one.
 
+**A `DEAD` member holds no seat.** When a join finds the team at `maxSize`, every `DEAD` member is first evicted to the team's `formerMemberIds` tombstone, the way the stale prune would later: its record keeps `DEAD` and its `lastActivityAt`, and its `teamId` is cleared. The join is refused only when the live, non-`DEAD` members already fill `maxSize`, and a refused join changes nothing. A `DEAD` member re-joining under its own id (the `wrapper_restart` path) keeps its seat. A team below `maxSize` never evicts.
+
 **Reported worker type (optional):** a successful join records `workerType` on a new or an existing record, with the same normalization as `moe.claim_next_task`: exactly `CLAUDE`, `CODEX`, `GEMINI` or `GROK` (case-sensitive) is kept, any other supplied value is recorded as `CLAUDE` and never refused, and omitted means a new record is `CLAUDE` while an existing record keeps its type. It changes no current task, status, membership or `lastActivityAt`. The team is checked first, so an unknown team is refused before any write. A full team is still refused after a missing record was auto-registered (as before), and an existing record keeps its type. A failed type write is logged and does not fail the join. Informational only: it is unauthenticated and nothing is gated on it.
 
 **Parameters:**
@@ -2302,7 +2304,7 @@ Add a worker to a team. Auto-registers the worker if it doesn't exist, and a suc
 
 **Errors:**
 - `Team not found: <teamId>`
-- `Team is full (max N members)`
+- `Team is full (max N members)` — when the live members already fill `maxSize`
 
 ---
 

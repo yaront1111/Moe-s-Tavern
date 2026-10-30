@@ -398,7 +398,9 @@ export interface Team {
    * Members whose WORKER RECORD was evicted (stale sweep, DEAD prune, startup
    * purge) while they still belonged to this team. The record — and with it
    * worker.teamId — dies on eviction, so the membership tombstone has to live
-   * on the team, which survives. Read only to auto-rejoin a returning worker;
+   * on the team, which survives. Also written when a join into a full team
+   * evicts its DEAD members: those records stay DEAD, with teamId cleared,
+   * until the stale prune. Read only to auto-rejoin a returning worker;
    * never counted toward maxSize and never routed to. Cleared the moment the
    * worker joins, or deliberately leaves, any team.
    */
