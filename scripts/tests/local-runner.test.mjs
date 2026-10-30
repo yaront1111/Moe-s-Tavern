@@ -3843,6 +3843,12 @@ const admitIn = (repo, entries, extra = {}) => admitCandidate({ repoDir: repo.di
   git: GIT_BIN, ...extra });
 
 test('A1 invalid input is refused before any temp dir or Git process: a bare git, a relative repo, a forged candidate', async t => {
+  // On Windows, path.relative across drive or UNC roots returns an absolute path, so the relative-git row below
+  // became an absolute non-git file that admission ran. Start from the test file's own directory so it stays
+  // relative and resolvable under any cwd.
+  const cwd = process.cwd();
+  t.after(() => process.chdir(cwd));
+  process.chdir(path.dirname(fileURLToPath(import.meta.url)));
   const repo = admitRepo(t, { a: 'a\n' });
   const logged = WIN ? null : logGit(t);
   const { left } = isolateTmp(t);

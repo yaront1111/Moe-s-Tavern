@@ -107,7 +107,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:53:09.580Z",
-  "updatedAt": "2026-10-30T13:34:28.830Z",
+  "updatedAt": "2026-10-30T13:35:32.177Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T23:01:14.250Z",
     "plannedStepCount": 5,
@@ -174,7 +174,16 @@
     "scripts/local-runner/guest-supervisor.py",
     "scripts/local-runner/snapshot-transfer.mjs",
     ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
-    ".moe/tasks/task-cf7f470818b34486b4e74bacc1b92c7a.json"
+    ".moe/tasks/task-cf7f470818b34486b4e74bacc1b92c7a.json",
+    ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+    ".moe/tasks/task-19cbba2272ee4a1c9f0a9c933f339f59.json",
+    ".moe/tasks/task-253884005a59471fb7c59ef38e1f3cc1.json",
+    ".moe/tasks/task-2c3e6170c6b7406f8136625781d327c6.json",
+    ".moe/tasks/task-a4ca766a67184630842d4a6d12338cf8.json",
+    ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+    ".moe/tasks/task-b5a176355a7c443d98952466b409f941.json",
+    ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+    ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json"
   ],
   "completionSummary": "QA reopen 1 (DoD2) repaired at the installDependencies API boundary only.\n- snapshot-transfer.mjs (+8/-2): the transfer() call is wrapped. A known TRANSFER_* code (a string own key of MESSAGES) is re-issued through transferError, keeping its fixed message and only the key 'code'. Any other error becomes the fixed TRANSFER_MOUNTS_UNKNOWN. Only the pre/post assertNoMounts calls throw non-TRANSFER errors there (PROVIDER_*/LIFECYCLE_*); supervise/feed/the acceptor already reject via transferError. The shared transfer(), assertNoMounts and materializeSnapshot are unchanged, so R11e2's ruled passthrough and T1-T7 hold.\n- local-runner.test.mjs TD2 (+10): new rows for info ENOENT (0 spawns), info stdout 'bad json' (0 spawns) and post-stream mountinfo ENOENT (1 spawn). Each asserts TRANSFER_MOUNTS_UNKNOWN, a sanitized message and own keys exactly ['code']. RED before the fix (actual PROVIDER_NOT_FOUND), GREEN after; focused TD+T1-T7 10/10.\n- guest-supervisor.py is unchanged.\nFresh full plan gate: exit 0; 271 tests, 270 pass, 0 fail, 1 existing opt-in macOS smoke skip; MD1-MD3/TD1-TD3 ran; log /tmp/r11e4-reopen1.log. Scoped diff --check is clean, no __pycache__.\nLanding note: human commit f6da2d7f (\"D\", 71 files) swept these exact repair hunks onto moe/work-2026-10-24 mid-session. The tree is clean vs HEAD for all three scoped paths, so the wrapper may land nothing new. Review b364044c..f6da2d7f scoped to snapshot-transfer.mjs and local-runner.test.mjs.\nAdversarial review found nothing to fix. Theoretical only: a throwing `code` getter on a trusted provider's error object.\nNo agent Git writes, no .moe edits, peer dirty paths untouched, no verified-local/isolation claim; executionReady:false.",
   "commits": [
@@ -215,14 +224,44 @@
       "treeId": "17cc94d30ec18cff507b19c1f385d70e0812e8b1",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "5a14e50917ef55eb3e93f234117f66f696d8adcd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T13:29:02Z",
+      "paths": [
+        ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+        ".moe/tasks/task-19cbba2272ee4a1c9f0a9c933f339f59.json",
+        ".moe/tasks/task-253884005a59471fb7c59ef38e1f3cc1.json",
+        ".moe/tasks/task-2c3e6170c6b7406f8136625781d327c6.json",
+        ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
+        ".moe/tasks/task-a4ca766a67184630842d4a6d12338cf8.json",
+        ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+        ".moe/tasks/task-b5a176355a7c443d98952466b409f941.json",
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+        ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T13:35:32.177Z",
+      "treeId": "b65930aab4ac5516f6cfb4cf95d4bdd68ac531e1",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-b294377dde9e4ab6b1d422163b941115"
+        }
+      ],
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fe18a9a9@2026-10-30T13:22:37Z",
-    "at": "2026-10-30T13:28:39.292Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T13:29:02Z",
+    "at": "2026-10-30T13:35:32.177Z"
   },
   "reviewCompletedAt": "2026-10-30T13:34:28.830Z",
   "rejectionDetails": {

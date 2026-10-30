@@ -1,0 +1,33 @@
+{
+  "id": "task-c4cd6dce82bf49648dafdd9c538ff328",
+  "epicId": "epic-be924fb8",
+  "title": "bug: nothing stops an agent session's porcelain `git commit` in the shared control checkout — a subagent's failed `cd` committed 4 peers' WIP as \"D\" and a landing pushed it",
+  "description": "Incident on 2026-10-30 at 13:27:12Z: worker-0062feec (task-30066ccd, WT-S) launched a review subagent. The subagent ran a scratch command in the repo root after its `cd` into a scratch dir failed, and that command made commit f6da2d7f \"D\" on moe/work-2026-10-24. The commit took every modified or staged tracked file, 71 in all:\n- unreviewed in-progress bytes from task-f31d415d (scripts/moe-agent.sh/.ps1, postflight.sh), task-b1aecb54 (proposeRail.ts/.test.ts, docs), task-71516084 (local-runner) and WT-S;\n- 2 human-staged root files;\n- 57 .moe/ paths.\n\nTwo minutes later the next wrapper landing (91eaa6ae) pushed it to origin. Every idle sh seat then hot-reloaded the unreviewed wrapper bytes, because 5998f871 now trusts \"committed\" bytes. Each affected task's own landing found its paths already clean, so per-task attribution and QA's commit evidence broke.\n\nThe rule \"wrappers are the only Git writers\" is prompt-only. Nothing in the checkout enforces it.\n\nExpected: a porcelain `git commit` (and, ideally, `git push`) run from inside an agent session in the control checkout is refused, with a message saying the wrapper lands the work.\n- The wrapper's own landings must still work. A human committing outside any agent session must still work.\n- One possible shape: a hook installed via core.hooksPath pointing at a tracked hooks dir, which refuses when MOE_WORKER_ID (or a dedicated marker the wrappers export to CLIs) is set and the wrapper's landing marker is not. The architect decides the shape.\n- Account for both launchers (sh and ps1 twins) and for the settings.commitHooks semantics.",
+  "definitionOfDone": [
+    "Inside a launched agent session (sh and ps1 seats), a porcelain `git commit` in the control checkout is refused with a message naming the wrapper landing rule. A regression test reproduces the 2026-10-30 shape: a scratch command run in the control checkout after a failed cd.",
+    "Wrapper completion and checkpoint landings, and a human's commit made outside any agent session, still succeed. Postflight harnesses (sh and ps1) and the parity check pass.",
+    "docs (scripts/CLAUDE.md Land on every exit, plus TROUBLESHOOTING) describe the guard and how a human bypasses it deliberately."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's 13:00Z delegation. This is the guard for the f6da2d7f \"D\" incident. The risk of a repeat is high while the WT epic runs many scratch-git tests. If the plan touches scripts/moe-agent.{sh,ps1}, it joins the serialized wrapper lane; ask a governor for the edge.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 301.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:35:35.156Z",
+  "updatedAt": "2026-10-30T13:35:41.628Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T13:35:41.628Z",
+    "seq": 1
+  }
+}

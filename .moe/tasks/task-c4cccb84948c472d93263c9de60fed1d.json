@@ -12,10 +12,71 @@
     "The verification command exits 0; postflight.ps1 passes via node scripts/tests/postflight-safe.mjs powershell."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-bc59d28a",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first, sh harness (design docs/plans/2026-10-30-per-task-worktrees.md §5.1, §5.2).\n\nBefore any edit:\n- Run moe.get_commit_scope { taskId, phase: 'postflight' }.\n- All five plan paths are also declared by later WT rows, so they are CONTESTED at landing.\n- They land without a wrapper-observed editing tool only if two conditions hold: each path was clean at THIS session's pre-flight, and every peerDeclared[].peerActive is false (mem:decision-contested-idle-peer-exception).\n- If either condition fails, stop and comment on the task. Never hand-land or weaken attribution.\n\nThe fixture builds on WT-04 (task-c20464ff), which is DONE before this row is claimable. Reuse:\n- its worktree-claim knob in scripts/tests/postflight-fake-proxy.js (agreed name FAKE_CLAIM_WORKSPACE, a JSON `workspace` returned by claim_next_task and get_context);\n- its project setup: a git repo whose HEAD is on refs/heads/moe/control.\nIf WT-04 landed other names, use them. This task does not edit the fake proxy. The project also needs a .moe/agents/<name>.md, and enableAgentTeams must not be false.\n\nAdd ONE compact scenario to scripts/tests/postflight.sh, e.g. `[scenario W5]`. It loops over the four CLI types: claude, codex (--codex-exec), gemini and grok (--grok-exec), each run as a worker seat in worktree mode.\n- Each fake CLI is named after its type, because the wrapper derives CLI_TYPE from the --command basename (moe-agent.sh ~417-428).\n- Each fake writes `pwd -P` and MOE_PROJECT_PATH, MOE_WORKTREE_PATH, MOE_TASK_BRANCH and MOE_LAND_TARGET (marking unset vs empty), plus argv for codex and grok, to an absolute record file under TMP_DIR. Never write through MOE_PROJECT_PATH.\n- W is the fixture's workspace path (<project>/.worktrees/<taskId>).\n\nAssert, per CLI:\n(a) The cwd equals W (compare with `cd W && pwd -P`). codex argv carries `-C <W>`; grok argv carries `--cwd <W>`.\n(b) MOE_PROJECT_PATH is the control project; MOE_WORKTREE_PATH is W; MOE_TASK_BRANCH is moe/task/<taskId>; MOE_LAND_TARGET is the claim's target.\n(c) W holds the same configs the pre-flight writes into the control for that CLI: W/.mcp.json for every CLI (ensure_mcp_config writes it for all types), plus W/.codex/config.toml, W/.gemini/settings.json or W/.grok/config.toml. Each names the control project as the moe server's MOE_PROJECT_PATH.\n(d) The control's copies are not rewritten for the task. Each writer banner names the control path exactly once (the pre-flight) and W's path exactly once: `Wrote project MCP config:`, `Codex MCP config written to:`, `Gemini MCP config written to:`, `Grok MCP config written to:`.\n(e) W/.claude/agents/*.md is the same file set as <control>/.moe/agents/*.md and byte-identical (cmp). For grok, the fake HOME's .grok/trusted_folders.toml trusts W.\n\nAdd one failure run. Use codex with W already registered (WT-04's reuse path) and W/.codex/config.toml pre-created as a DIRECTORY. Then:\n- output carries MOE_WORKTREE_CREATE_FAILED;\n- the fake codex never ran (no record file);\n- the fake proxy's RPC log shows report_blocked with that code.\n\nOther rules:\n- Edit no existing case.\n- If the new runs go through run_scope_wrapper, bump scope_expected_runs (~4905-4910) to match.\n- Run the new scenario once against the unchanged wrapper and keep the RED output: the cwd and config assertions must fail.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "sh wrapper, part 1: config writers and the per-task worktree phase, in scripts/moe-agent.sh.\n\nSave rule for EVERY moe-agent.sh save in steps 2-3:\n- Never patch the live file in place. Running bash seats read it at stale offsets (mem:gotcha-bash-hot-reload-incremental-parse, task-f31d415d).\n- Build the complete new file as a copy on the SAME filesystem, e.g. /mnt/d/moe-scratch/c4cccb84/moe-agent.sh, and run `bash -n` on it.\n- Check that the live file's sha256 is unchanged since you copied it, then make ONE `mv -f` onto scripts/moe-agent.sh.\n\n1. Wrap the writers in place, with no re-indentation, to keep the diff small.\n   - ensure_mcp_config's project `.mcp.json` part becomes `write_project_mcp_json ROOT SERENA_PROJECT`, writing ROOT/.mcp.json. ensure_mcp_config calls it with \"$PROJECT\" \"$SERENA_PROJECT\".\n   - The top-level codex (~918-1087), gemini (~1090-1155) and grok (~1284-1443) blocks become write_codex_config, write_gemini_config and write_grok_config, each taking ROOT and SERENA_PROJECT. For each block:\n     - The `if [ \"$CLI_TYPE\" = … ]; then` line becomes the function header (plus `local` for the two arguments).\n     - The body keeps its indentation. `$PROJECT/.<cli>` becomes `$root/.<cli>`, and the Serena argument comes from the parameter.\n     - `exit 1` becomes `return 1`, and grok's `grant_grok_folder_trust \"$PROJECT\"` becomes the root.\n     - The old site becomes `if [ \"$CLI_TYPE\" = codex ]; then write_codex_config \"$PROJECT\" \"$SERENA_PROJECT\" || exit 1; fi`. So the shared pre-flight writes the same files, prints the same banners and exits the same way as today.\n   - In every writer, the value written as the moe server's MOE_PROJECT_PATH stays \"$PROJECT\", the control, whatever ROOT is.\n2. Set CLI_ROOT=\"$PROJECT\" at the start of every loop iteration, next to the other per-iteration resets (~6595).\n3. Add `prepare_worktree_launch`. Call it directly after WT-04's provisioning succeeds (agreed: after `preflight_landing … launch`, ~7645), before the account lease and the CLI branch.\n   - Not worktree mode (WT-04's per-task MOE_WORKSPACE_MODE != worktree, or no workspace from an older daemon): `export -n MOE_WORKTREE_PATH MOE_TASK_BRANCH MOE_LAND_TARGET`, then return 0. Nothing else changes, so a shared launch keeps today's env, cwd and argv.\n   - Worktree mode:\n     - Set CLI_ROOT=\"$MOE_WORKTREE_PATH\" (W in this wrapper's path syntax, per WT-04) and export the three variables.\n     - Write into CLI_ROOT what the pre-flight writes into the control for this CLI: write_project_mcp_json, plus the CLI's own writer. The grok writer also grants grok folder trust for W.\n     - Copy <control>/.moe/agents/*.md into \"$CLI_ROOT/.claude/agents/\", overwriting, under the pre-flight mirror's gate (ENABLE_AGENT_TEAMS true and .moe/agents present).\n   - The per-task writers run after daemon-host discovery and already read an exported MOE_DAEMON_HOST, so W's TOML needs no extra upsert. Confirm it is exported.\n   - WT-06 will insert its Serena root and link step at the top of the worktree branch, before the writes. Leave no placeholder line.\n4. Error handling: a failed writer or copy prints `MOE_WORKTREE_CREATE_FAILED: <what> (<path>)`, takes WT-04's report_blocked plus no-launch exit path, and returns 1. It never falls back to the control's configs or a control launch.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "sh wrapper, part 2: every launch site and per-launch file follows CLI_ROOT (moe-agent.sh; save per step 2's rule).\n\nUse `${CLI_ROOT:-$PROJECT}`, never a bare $CLI_ROOT, at every changed site. scripts/tests/prompt-cache-launcher.test.mjs and moe-account-lease.test.mjs run slices of this text that define PROJECT only.\n\nSites to change:\n- claude: the four `(apply_account_env; cd \"$PROJECT\" && …)` launches (~8527, 8530, 8540, 8544), and the interactive `ACCOUNT_ARGS+=(--mcp-config \"$PROJECT/.mcp.json\")` (~8223), for both its `-f` test and its path.\n- codex:\n  - the argv probe (~7867), the exec pipeline (~7894-7897) and the TUI (~7910-7913), each `-C`, plus their `Command:` banners;\n  - `AGENT_INSTRUCTIONS_PATH=\"$PROJECT/.codex/agent-instructions.md\"` (~7737);\n  - `codex_moe_server_override \"$PROJECT/.codex/config.toml\"` (~7750).\n- gemini: both `(cd \"$PROJECT\" && …)` launches (~7972, 7984) and GEMINI_INSTRUCTIONS_PATH (~7936).\n- grok: both launches' `cd` and `--cwd` (~8074, 8087), plus their banners.\n- The account trust step (~6357): append `${MOE_WORKTREE_PATH:+\"$MOE_WORKTREE_PATH\"}` as moe-account-lease.mjs trust's third (launchDir) argument. Its signature is configDir projectDir [launchDir]. A shared seat's helper argv stays exactly as today, and an interactive worktree seat gets the trust key for W.\n\nUnchanged:\n- the MOE_PROJECT_PATH export (~699) and every RPC's MOE_PROJECT_PATH=\"$PROJECT\";\n- the proxy path and the heartbeat sidecar;\n- the stream parser's MOE_GIT_TOP, MOE_GIT_REL and MOE_SERENA_PROJECT_ROOT. Attribution inside W is WT-07.\n\nprompt-cache-launcher.test.mjs, sh side:\n- One sh slice starts at the literal `        AGENT_INSTRUCTIONS_PATH=\"$PROJECT/.codex/agent-instructions.md\"`. Re-anchor it to that line's new text. Its preamble already defines PROJECT.\n- Keep the exec-block anchors byte-identical: `            \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" \\` through `            set -e`.\n- No other test change on the sh side.\n- Make sure the taskless-handoff.test.mjs slice markers (`DYNAMIC_CONTEXT=\"\"` … `# -------- Pre-flight landing: recovery`) and the `# 5. Fetch context`/`# 6. Read task channel` markers still exist verbatim.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Tests, ps1 harness: the twin of step 1 in scripts/tests/postflight.ps1. Write it before step 5, and keep its RED output against the unchanged ps1.\n\nThe fakes are `.cmd` shims named claude, codex, gemini and grok, passed as -Command.\n- Follow the existing ones: grok.cmd records %CD% (~909-916), and codex is codex.cmd plus codex-impl.ps1 (~918-940).\n- Each records %CD%, the four variables (MOE_PROJECT_PATH, MOE_WORKTREE_PATH, MOE_TASK_BRANCH, MOE_LAND_TARGET) and argv for codex and grok.\n- Reuse WT-04's ps1 worktree fixture: the same fake-proxy knob and the moe/control repo.\n\nAssert (a)-(e) as in step 1, with the ps1 banners: `Codex MCP config written to:`, `Gemini MCP config written to:` and `Grok MCP config written to:`.\n- For claude, the config check is the pre-flight temp --mcp-config file. It is written once and carries MOE_PROJECT_PATH = the control. The DoD allows the ps1 temp config, so W gets no .mcp.json on ps1.\n- Compare paths after Resolve-Path / ProviderPath normalization, never as hand-built strings.\n\nAdd the same failure run (codex, W/.codex/config.toml pre-created as a directory). Expect MOE_WORKTREE_CREATE_FAILED, no codex record, and report_blocked carrying the code.\n\nOther rules:\n- Edit no existing case. [scenario Y]'s shared-mode `grok must run with cwd = project` stays as is.\n- Adjust the $scopeScenariosRun expectations (~4169-4173) only if the new runs go through the scope runner.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "ps1 wrapper, the twin of steps 2 and 3, in scripts/moe-agent.ps1. Keep it UTF-8 with a BOM (parity-check enforces this). After saving, the ParseFile errors must be empty.\n\n1. Wrap the inline codex (~972-1120), gemini (~1121-1231) and grok (~1232-1373) blocks in place, without re-indentation, as Write-MoeCodexConfig, Write-MoeGeminiConfig and Write-MoeGrokConfig, each with -Root and -SerenaProject. Call each at its old place with $projectPath and $serenaProject, so the pre-flight writes the same files and banners and fails the same way.\n   - The MOE_PROJECT_PATH written into each config stays the control ($projectPathForToml / $projectPath.ToString()).\n   - The grok writer's Grant-GrokFolderTrust (~1369) takes -Root.\n   - The claude temp --mcp-config (~478-559) is not changed.\n2. Set `$script:cliRoot` to $projectPath's string path at the start of every loop iteration. $projectPath is a PathInfo (~373).\n3. Add `Initialize-MoeWorktreeLaunch`. Call it directly after WT-04's provisioning (agreed: after Invoke-MoePreflightBaseline, ~6668), before the codex/gemini instruction files (~6719).\n   - Shared mode or no workspace: `Remove-Item Env:MOE_WORKTREE_PATH, Env:MOE_TASK_BRANCH, Env:MOE_LAND_TARGET -ErrorAction SilentlyContinue`. Nothing else.\n   - Worktree mode:\n     - Set $script:cliRoot = W, and set the three $env: values from WT-04's per-task variables.\n     - Run the active CLI's writer with -Root W. claude keeps the temp config.\n     - Copy the agents (overwrite) under the pre-flight gate ($enableAgentTeams and .moe/agents present).\n   - Error handling: wrap each step in try/catch. Under $ErrorActionPreference Stop, the writers' Write-Error throws, so a failure prints `MOE_WORKTREE_CREATE_FAILED: <what> (<path>)` and takes WT-04's report_blocked plus no-launch path. It never falls back to the control.\n4. Location:\n   - In worktree mode, `Push-Location -LiteralPath $script:cliRoot` directly before Clear-MoeAccountLease/Get-MoeAccountLease (~6878-6880).\n   - The trust step's (Get-Location).ProviderPath is then W, and claude and codex, which today run in the launcher's cwd, start in W. The lease text itself stays unchanged.\n   - Pop exactly once: when the CLI branch returns (before the post-flight landing), and in the loop's finally, tracked by one flag.\n5. Sites that move to $script:cliRoot:\n   - codex: `-C \"$projectPath\"` at the probe (~7047), exec (~7068) and TUI (~7089), plus their banners;\n   - gemini: `Push-Location $projectPath` (~7147, 7155);\n   - grok: `Push-Location $projectPath` and `--cwd \"$projectPath\"` (~7271-7283), plus their banners;\n   - the codex/gemini instruction files (~6723-6750);\n   - Get-CodexMoeServerOverride's config path (~6967).\n   Unchanged: $env:MOE_PROJECT_PATH, Invoke-MoeRpc, `Start-HeartbeatSidecar -ProjectPath $projectPath` and the stream parser.\n6. prompt-cache-launcher.test.mjs, ps1 side:\n   - Change the indexOf anchor `& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C \"$projectPath\" @codexSandboxArgs \"$shortPrompt\"` (~349) to the new exec line.\n   - Add `$cliRoot=$env:MOE_TEST_DIR` to the preambles of the two ps1 slices that now read it: `    $codexUsesFileContext = $false` … `} elseif ($cliType -eq \"gemini\")`, and the exec pipeline.\n   - No other test change.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verification: run ONE fresh command from the repo root in WSL. Its output is the complete_task evidence:\nmkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-c4cccb84.XXXXXX) && git archive HEAD scripts docs/roles | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/prompt-cache-launcher.test.mjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u) && node --test scripts/tests/prompt-cache-launcher.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/prompt-cache-launcher.test.mjs && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs powershell\n\nWhat it covers:\n- It is the description's command (postflight-safe bash, parity-check, and postflight-safe powershell for DoD 6), run on a HEAD snapshot plus exactly this task's five files.\n- It adds the DoD-5 code-family diff and the launcher anchor tests, under Linux node and under Windows node, which runs the ps1 engines.\n\nHow to run it:\n- The ps1 harness takes about 10-12 minutes. Run the command in the background and poll it to completion; never stop at the 600 s tool cap.\n- docs/roles is archived because prompt-cache-launcher.test.mjs reads it.\n- On a native Windows seat, run the same pieces from Git Bash, with the harness via `node scripts/tests/postflight-safe.mjs powershell`.\n- If a ps1 failure reproduces on HEAD's own scripts, it is the launch environment (mem:gotcha-qa-ps1-postflight-from-wsl). Say so with both outputs; never skip the check.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of this task's own diff. Load the adversarial-self-review skill. Check each of the following, and fix anything that fails:\n1. Shared-mode equivalence (epic rail 4): for a shared claim, the pre-flight writes, the banners, every launch's cwd, argv and env, and the trust-helper argv are what HEAD produces. Every existing postflight case passes with no edit to its assertions.\n2. MOE_PROJECT_PATH is never W anywhere: in the env, in any config written into W, or in any RPC. grep both wrappers.\n3. No W failure falls back to the control: no control-path config write, no launch in the control, and no `.moe/` path created inside W.\n4. ps1: every Push-Location pairs with exactly one Pop-Location on every exit path, including exceptions and the no-launch path.\n5. sh: every changed site uses `${CLI_ROOT:-$PROJECT}`. Every anchor that prompt-cache-launcher.test.mjs, taskless-handoff.test.mjs and moe-account-lease.test.mjs slice on still exists verbatim; grep each one.\n6. Saves: moe-agent.sh was only ever replaced by a checked same-filesystem rename, and moe-agent.ps1 keeps its BOM.\n7. Size (QA rejects more than 400 net changed LOC): `git diff --numstat` over the five files must come to a net added-minus-deleted of 400 or less; aim for 350 or less. If it is over, never cut a DoD test. Comment on the task with the numbers and ask the architect for a size decision before complete_task.\n8. Landing: re-run moe.get_commit_scope { taskId, phase: 'postflight' }. Each owned path must have been clean at this session's pre-flight, and every contesting peer must be idle; otherwise stop and comment.\nIf this step changed any byte, re-run step 6's command and submit THAT fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -28,20 +89,96 @@
   ],
   "priority": "HIGH",
   "order": 11,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-377106913c2043a1b07deaaa8999bb83",
+      "author": "architect-4ae016fb",
+      "content": "@architect-bc59d28a WT-04's planner here. Your plan builds on WT-04 (task-c20464ff, rev 1). Its contract:\n- Provisioned values: sh sets MOE_WT_MODE (worktree or shared), MOE_WT_PATH (W), MOE_WT_BRANCH and MOE_WT_TARGET, only after a successful provision. ps1 sets $script:MoeWtMode, MoeWtPath, MoeWtBranch and MoeWtTarget. W is derived from the seat's own git top. It is never taken from the claim's workspace.path, which a Windows daemon spells D:\\.\n- Seat-stopping refusal: worktree_stop CODE DETAIL (sh) / Stop-MoeWorktreeSeat -Code -Detail (ps1). It prints `[ERROR] CODE: detail`, calls report_blocked once and exits 1. Route your failed config write through it with MOE_WORKTREE_CREATE_FAILED.\n- Tests: the held-out suite is scripts/tests/postflight-worktree.cjs (WT-04T, task-dd5daa4b), which both harnesses run. Add your cwd/env cases there. The fake-proxy knobs are FAKE_CLAIM_WORKSPACE, FAKE_CTX_WORKSPACE and FAKE_CTX_COMMITS.\n- DoD 5: WT-04 renames moe-agent.sh's nine MOE_LAND_* env-bridge names to MOE_PY_*, so the codes diff starts empty. Any MOE_LAND_TARGET export you add must appear in both twins, comments included.",
+      "timestamp": "2026-10-30T13:35:18.841Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:50:02.706Z",
-  "updatedAt": "2026-10-30T13:20:25.134Z",
+  "updatedAt": "2026-10-30T13:36:04.616Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:00.875Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-10-30T13:14:01.009Z"
+    "firstClaimAt": "2026-10-30T13:14:01.009Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
     "architect-bc59d28a",
     "architect-eb7de546"
-  ]
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:36:04.557Z",
+  "executionContract": {
+    "intendedBehavior": "When the claim's workspace says worktree mode, a worker seat runs every CLI (claude, codex, gemini, grok) with cwd = W, and codex/grok are told W through -C/--cwd. W carries the per-CLI MCP configs the pre-flight writes for that CLI (sh W/.mcp.json plus the CLI's own config; ps1 the CLI's own config, with claude on the existing temp --mcp-config), all naming the control checkout as MOE_PROJECT_PATH, and a copy of <control>/.moe/agents/*.md in W/.claude/agents. The CLI env carries MOE_WORKTREE_PATH, MOE_TASK_BRANCH and MOE_LAND_TARGET; MOE_PROJECT_PATH stays the control. A failed W config write prints MOE_WORKTREE_CREATE_FAILED, calls report_blocked and launches nothing. Shared mode is unchanged.",
+    "acceptanceCriteria": [
+      "Worktree-mode fake CLIs of all four types record cwd W, MOE_PROJECT_PATH = control, and the three worktree vars matching the claim's workspace (both harnesses).",
+      "The CLI's config exists in W, and the writer banner names the control path exactly once and W's path exactly once.",
+      "W/.claude/agents/*.md is byte-identical to <control>/.moe/agents/*.md; a forced W config-write failure prints MOE_WORKTREE_CREATE_FAILED, launches no CLI, and report_blocked carries the code.",
+      "Every existing shared-mode postflight case passes unchanged; the MOE_WORKTREE_/LAND_/CONTROL_/BOARD_ code families match between the wrappers."
+    ],
+    "invariants": [
+      "MOE_PROJECT_PATH is never W: not in the env, any config or any RPC.",
+      "No W failure falls back to the control checkout or launches a CLI.",
+      "Shared-mode launches keep today's cwd, argv, env, banners and pre-flight writes (epic rail 4).",
+      "moe-agent.sh is replaced only by a checked same-filesystem rename; moe-agent.ps1 keeps its UTF-8 BOM.",
+      "No .moe/ path is created in W (epic rail 3)."
+    ],
+    "compatibility": [
+      "Without a workspace field (older daemon), the claim is shared mode.",
+      "The literal anchors in prompt-cache-launcher.test.mjs change only where this task rewrites the anchored line; the taskless-handoff and account-lease slices are untouched.",
+      "parity-check required strings stay in both wrappers."
+    ],
+    "approvedScope": [
+      "sh: write_project_mcp_json, write_codex_config, write_gemini_config and write_grok_config (ROOT SERENA_PROJECT), CLI_ROOT, prepare_worktree_launch, and the launch, instruction-file and trust sites.",
+      "ps1: Write-MoeCodexConfig, Write-MoeGeminiConfig and Write-MoeGrokConfig (-Root -SerenaProject), $script:cliRoot, Initialize-MoeWorktreeLaunch, the worktree Push-Location around lease plus launch, and the codex, gemini and grok sites.",
+      "New W5 scenarios in postflight.sh and postflight.ps1; anchor and preamble updates in prompt-cache-launcher.test.mjs."
+    ],
+    "reuse": [
+      "The existing writer bodies, grant_grok_folder_trust / Grant-GrokFolderTrust and the pre-flight agents-mirror gate.",
+      "WT-04's workspace variables, block path and FAKE_CLAIM_WORKSPACE fixture.",
+      "The fake-CLI patterns: sh scenario Z and Y; ps1 grok.cmd, and codex.cmd plus codex-impl.ps1."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh ensure_mcp_config writes $PROJECT/.mcp.json for every CLI; the codex, gemini and grok writers are inline blocks that exit 1 on failure.",
+      "scripts/moe-agent.ps1 runs claude and codex in the launcher's cwd; only gemini and grok Push-Location $projectPath.",
+      "scripts/moe-account-lease.mjs trust takes configDir projectDir [launchDir].",
+      "scripts/tests/prompt-cache-launcher.test.mjs anchors on the sh AGENT_INSTRUCTIONS_PATH line, the sh exec block and the ps1 exec line with -C \"$projectPath\"."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Re-running the pre-flight writers by copy-pasting them for W: rejected. It would create two definitions per CLI that drift. Each writer is wrapped as a function in place, without re-indentation; the shared pre-flight calls it with the control and the per-task phase with W.\n2. cwd = control with `--add-dir W`: rejected by design §5. Edits would default to the control.\n3. ps1: one Push-Location W per CLI branch: rejected in favour of one push before the account lease. That covers claude and codex, which run in the launcher's cwd today, and the lease's trust step (Get-Location), without editing the lease text that moe-account-lease.test.mjs runs.\n4. Writing W/.mcp.json only for claude in sh: rejected. Today's pre-flight writes the control's .mcp.json for every CLI type, so W mirrors that exactly.\n5. Re-writing the ps1 claude temp --mcp-config per task: deferred to WT-06. The DoD allows the temp config, and its content is unchanged in WT-05.\n6. Checking 'control not rewritten' by hash or mtime: rejected, because the shared pre-flight legitimately writes the control at startup. The writers' own banner lines give an exact count per path instead.",
+    "codebaseInsights": "Map from a full read on 2026-10-30. The line numbers drift.\n\nsh:\n- ensure_mcp_config (709-913) writes the global ~/.config/claude/mcp_servers.json and $PROJECT/.mcp.json for EVERY CLI.\n- The codex, gemini and grok writers are inline top-level blocks (918, 1090, 1284) that exit 1 on failure. grant_grok_folder_trust takes the folder as $1.\n- MOE_PROJECT_PATH is exported at 699.\n- The per-task order: claim, pin_attempt_identity, get_context (7032), prompt body, preflight_landing (7645), lease (7711), then the CLI branch (7727+). The branch writes .codex/agent-instructions.md and .gemini/GEMINI.md per launch.\n\nps1:\n- There is no project .mcp.json. claude uses a temp --mcp-config built once (478-559).\n- The codex, gemini and grok blocks are inline (972, 1121, 1232).\n- claude AND codex run in the launcher's cwd. Only gemini and grok Push-Location.\n- The trust step passes (Get-Location).ProviderPath (5817).\n- Per-task order: Invoke-MoePreflightBaseline (6668), instruction files (6719), lease (6878), then the branches (6896+).\n\nLiteral-anchor tests: prompt-cache-launcher.test.mjs (the sh AGENT_INSTRUCTIONS_PATH line, the sh exec block, the ps1 exec line at ~349, the ps1 codexUsesFileContext block), taskless-handoff.test.mjs and moe-account-lease.test.mjs.\n\nOther facts:\n- postflight-safe.mjs fails on any line starting with SKIP, and its lastScenario only tracks single-letter headers.\n- Both harnesses check a scope-run counter.\n- The fake CLI type comes from the command basename (sh 417-428, ps1 891-899).",
+    "risks": "WT-04 contract (planned in parallel by architect-4ae016fb; asks in #general msg-ad88dbbd and msg-ef695be0):\n- the per-task variables (MOE_WORKSPACE_MODE, MOE_WORKTREE_PATH, MOE_TASK_BRANCH, MOE_LAND_TARGET; sh unexported, ps1 $script:);\n- the provisioning position;\n- the MOE_WORKTREE_CREATE_FAILED block path;\n- the fake-proxy knob FAKE_CLAIM_WORKSPACE.\nIf WT-04 landed other names, use them and keep the exported env names from design §5.1.\n\nWT-06 (architect-eb7de546) builds on prepare_worktree_launch / Initialize-MoeWorktreeLaunch and on the writer names (msg-41343377, corrected in msg-ef695be0). Do not rename them.\n\nLanding:\n- All five files are contested by WT-06..WT-14. moe-agent.sh cannot carry a tool witness because it is saved by rename.\n- So landing needs a clean pre-flight and idle peers. Check get_commit_scope first and last.\n\nSize:\n- QA's 400 net-LOC cap is tight for a twin change. Wrap the writers in place, and use one looped scenario per harness.\n\nTesting:\n- ps1 postflight from WSL needs a /mnt/d cwd and a 180 s timeout, about 12 minutes in total.\n- The interactive worktree trust and --mcp-config branches have no dedicated test, because worker seats launch headless. Their argv stays unchanged in shared mode (self-review item 1).\n\nNot provisioned into W, and not needed: .claude/settings*.json. Headless -p connects W/.mcp.json unasked, and permissions are bypassed.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/moe-account-lease.mjs",
+      "docs/plans/2026-10-30-per-task-worktrees.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:36:04.616Z",
+  "approvedPlanRevision": 1
 }
