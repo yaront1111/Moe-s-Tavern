@@ -14,8 +14,11 @@ import { PassThrough, Writable } from 'node:stream';
 import { checkArgv, checkFrame as hostCheckFrame } from '../local-runner/guest-bridge.mjs';
 import { MAX_BUDGET_MS, MAX_CHECK_TAIL_BYTES, PROTECTED_CHANGED, PROTECTED_MISMATCH, runCheckSession } from '../local-runner/check-session.mjs';
 import { ownedInstanceName } from '../local-runner/lifecycle.mjs';
-import { MAX_DEPENDENCY_PACKAGES, MAX_LOCKFILE_BYTES, MAX_LOCKFILES, admitLockfiles, dependencyError } from '../local-runner/dependency-cache.mjs';
-import { MAX_IMPORT_ENTRIES } from '../local-runner/source-snapshot.mjs';
+import {
+  MAX_DEPENDENCY_BYTES, MAX_DEPENDENCY_PACKAGES, MAX_LOCKFILE_BYTES, MAX_LOCKFILES, MAX_PACKAGE_BYTES, OFFLINE_INSTALL_ARGS, admitLockfiles,
+  buildDependencyCache, dependencyError,
+} from '../local-runner/dependency-cache.mjs';
+import { MAX_IMPORT_BYTES, MAX_IMPORT_ENTRIES, validateImport } from '../local-runner/source-snapshot.mjs';
 
 const MESSAGE = 'Check environment input was invalid.';
 const sha = text => createHash('sha256').update(text).digest('hex');
@@ -1411,4 +1414,188 @@ test('TC7 invalid toolchain input is refused before any fetch or mkdir', async t
       refusedAs('TOOLCHAIN_INPUT_INVALID', TOOLCHAIN_MESSAGES), JSON.stringify([input, options]));
   }
   assert.deepEqual([server.calls, existsSync(cacheDir)], [[], false]);
+});
+
+// CQ-R11e3: the host's offline npm dependency cache (rows DC1-DC5). Tarballs come from an injected fetch over fixture
+// routes; only DC5 runs the host's own npm, against a counting loopback registry that must see no request.
+import { chmodSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { delimiter } from 'node:path';
+import { gzipSync } from 'node:zlib';
+
+// A minimal ustar archive (name, mode, size, typeflag, magic and checksum; two zero blocks at the end), gzipped.
+const tgz = files => gzipSync(Buffer.concat([...Object.entries(files).flatMap(([name, text]) => {
+  const [head, data] = [Buffer.alloc(512), Buffer.from(text)];
+  head.write(name, 0);
+  head.write('0000644\0', 100);
+  head.write(`${data.length.toString(8).padStart(11, '0')}\0`, 124);
+  head.write('0', 156);
+  head.write('ustar\x0000', 257);
+  head.fill(0x20, 148, 156);
+  head.write(`${head.reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, '0')}\0 `, 148);
+  return [head, data, Buffer.alloc((512 - (data.length % 512)) % 512)];
+}), Buffer.alloc(1024)]));
+const manifestOf = name => JSON.stringify({ name, version: '1.0.0' });
+const tarball = name => tgz({ 'package/package.json': manifestOf(name) });
+const sha512Hex = bytes => createHash('sha512').update(bytes).digest('hex');
+const entryOf = (name, bytes, extra) => ok(name, { integrity: sri(bytes), ...extra });
+const servedBy = tarballs => Object.fromEntries(Object.entries(tarballs).map(([name, bytes]) => [regUrl(name), [200, [bytes]]]));
+const dependencyRefusal = code => refusedAs(code, { [code]: dependencyError(code).message });
+const listing = dir => Object.fromEntries(readdirSync(dir, { recursive: true }).sort()
+  .map(name => [name, statSync(join(dir, name)).isDirectory() ? 'dir' : sha(readFileSync(join(dir, name)))]));
+
+test('DC1 input and admission refusals reach the caller before any fetch or cache write', async t => {
+  const cacheDir = join(scratchDir(t), 'cache');
+  const server = fixtureFetch({});
+  const withEntry = entry => [{ dir: '.', bytes: lock({ 'node_modules/moe-fixture-a': ok('moe-fixture-a'), ...entry }) }];
+  const good = { lockfiles: withEntry({}), cpu: 'x64', cacheDir };
+  const sha1 = `sha1-${createHash('sha1').update('s').digest('base64')}`;
+  for (const [label, input, code = 'DEPENDENCY_INPUT_INVALID', fetch = server.fetch] of [
+    ['null', null], ['an array', [good]], ['an extra key', { ...good, extra: 1 }], ['no cacheDir', { lockfiles: good.lockfiles, cpu: 'x64' }],
+    ['a relative cacheDir', { ...good, cacheDir: 'cache' }], ['an empty cacheDir', { ...good, cacheDir: '' }],
+    ['a cacheDir with a control character', { ...good, cacheDir: `${cacheDir}\n` }], ['a fetch that is not a function', good, undefined, 'fetch'],
+    ['a git entry', { ...good, lockfiles: withEntry({ 'node_modules/g': ok('g', { resolved: 'git+https://github.com/moe/g.git#0123abc' }) }) }, 'DEPENDENCY_SOURCE_UNSUPPORTED'],
+    ['a sha1 integrity', { ...good, lockfiles: withEntry({ 'node_modules/s': ok('s', { integrity: sha1 }) }) }, 'DEPENDENCY_INTEGRITY_INVALID'],
+    ['a key outside node_modules', { ...good, lockfiles: withEntry({ 'src/x': ok('x') }) }, 'DEPENDENCY_LOCATION_INVALID'],
+  ]) {
+    await assert.rejects(buildDependencyCache(input, { fetch }), dependencyRefusal(code), label);
+  }
+  await assert.rejects(buildDependencyCache(good, { get fetch() { throw new Error('getter-secret'); } }), dependencyRefusal('DEPENDENCY_INPUT_INVALID'));
+  assert.deepEqual([server.calls, existsSync(cacheDir)], [[], false]);
+});
+
+test('DC2 a mismatched, oversized, http-redirected or interrupted tarball fails closed, keeps nothing and poisons nothing', async t => {
+  const name = 'moe-fixture-a';
+  const [url, bytes, chunk] = [regUrl(name), tarball(name), Buffer.alloc(2 ** 20, 0x61)];
+  const http = url.replace('https:', 'http:');
+  const build = (cacheDir, route) => buildDependencyCache({ lockfiles: [{ dir: '.', bytes: lock({ [`node_modules/${name}`]: entryOf(name, bytes) }) }], cpu: 'x64', cacheDir },
+    { fetch: fixtureFetch({ [url]: route, [http]: [200, [bytes]] }).fetch });
+  for (const [label, route, code] of [
+    ['another tarball', [200, [tarball('moe-fixture-c')]], 'DEPENDENCY_CHECKSUM_MISMATCH'],
+    ['a declared length over the bound', [200, [bytes], { 'content-length': String(MAX_PACKAGE_BYTES + 1) }], 'DEPENDENCY_TOO_LARGE'],
+    ['a streamed body over the bound', [200, Array(MAX_PACKAGE_BYTES / chunk.length + 1).fill(chunk)], 'DEPENDENCY_TOO_LARGE'],
+    ['a redirect to http', [302, [], { location: http }], 'DEPENDENCY_DOWNLOAD_FAILED'],
+    ['a body that errors after its first chunk', [200, [bytes.subarray(0, 9), new Error(`${url} secret`)]], 'DEPENDENCY_DOWNLOAD_FAILED'],
+  ]) {
+    const cacheDir = join(scratchDir(t), 'cache');
+    await assert.rejects(build(cacheDir, route), error => {
+      for (const secret of ['http', 'registry', cacheDir]) assert.ok(!error.message.includes(secret), label);
+      return dependencyRefusal(code)(error);
+    }, label);
+    assert.deepEqual(readdirSync(cacheDir), [], label);
+    assert.equal((await build(cacheDir, [200, [bytes]])).packages, 1, label);
+  }
+});
+
+test('DC3 the tree is exactly the verified content-v2 files plus moe-dependencies.json, deterministic, deduplicated and reused', async t => {
+  const tarballs = Object.fromEntries(['moe-fixture-a', '@moe-fixture/b', 'moe-fixture-c'].map(name => [name, tarball(name)]));
+  const [a, b, c] = Object.values(tarballs);
+  const lockfiles = [
+    { dir: '.', bytes: lock({ 'node_modules/moe-fixture-a': entryOf('moe-fixture-a', a), 'node_modules/@moe-fixture/b': entryOf('@moe-fixture/b', b) }) },
+    { dir: 'sub', bytes: lock({ 'node_modules/moe-fixture-c': entryOf('moe-fixture-c', c), 'node_modules/moe-fixture-c/node_modules/@moe-fixture/b': entryOf('@moe-fixture/b', b) }) },
+  ];
+  const cacheDir = join(scratchDir(t), 'cache');
+  const build = (files, fetch) => buildDependencyCache({ lockfiles: files, cpu: 'x64', cacheDir }, { fetch });
+  const content = data => ({ kind: 'file', executable: false, data, path: ((h) => `_cacache/content-v2/sha512/${h.slice(0, 2)}/${h.slice(2, 4)}/${h.slice(4)}`)(sha512Hex(data)) });
+  const tree = validateImport([...[a, b, c].map(content), { kind: 'file', path: 'moe-dependencies.json', executable: false, data: Buffer.from('{"version":1,"dirs":[".","sub"]}') }]);
+  const want = { tree, digest: tree.digest, packages: 3, bytes: tree.entries.reduce((sum, { size }) => sum + size, 0) };
+  const first = fixtureFetch(servedBy(tarballs));
+  const result = await build(lockfiles, first.fetch);
+  assert.deepEqual([result, first.calls.length], [want, 3]);
+  for (const node of [result, result.tree, result.tree.entries, ...result.tree.entries]) assert.ok(Object.isFrozen(node));
+  assert.deepEqual(readdirSync(cacheDir).sort(), [a, b, c].map(data => `${sha512Hex(data)}.tgz`).sort());
+  if (process.platform !== 'win32') assert.equal(statSync(cacheDir).mode & 0o777, 0o700);
+  let offline = 0;
+  assert.deepEqual(await build([...lockfiles].reverse(), async () => { offline += 1; throw new Error('offline'); }), want);
+  assert.equal(offline, 0);
+  // A kept file swapped for other bytes never reaches the tree: the downloader re-verifies it and refetches it once.
+  writeFileSync(join(cacheDir, `${sha512Hex(b)}.tgz`), c);
+  const repair = fixtureFetch(servedBy(tarballs));
+  assert.deepEqual([await build(lockfiles, repair.fetch), repair.calls.map(([target]) => target)], [want, [regUrl('@moe-fixture/b')]]);
+  // A kept entry that is no regular file is a cache failure, never followed and never refetched over.
+  rmSync(join(cacheDir, `${sha512Hex(b)}.tgz`));
+  mkdirSync(join(cacheDir, `${sha512Hex(b)}.tgz`));
+  const blocked = fixtureFetch(servedBy(tarballs));
+  await assert.rejects(build(lockfiles, blocked.fetch), dependencyRefusal('DEPENDENCY_CACHE_FAILED'));
+  assert.deepEqual([blocked.calls, statSync(join(cacheDir, `${sha512Hex(b)}.tgz`)).isDirectory()], [[], true]);
+});
+
+test('DC4 OFFLINE_INSTALL_ARGS is the frozen offline npm ci flag set, and the byte bounds are fixed', () => {
+  assert.deepEqual(OFFLINE_INSTALL_ARGS, ['--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0']);
+  assert.ok(Object.isFrozen(OFFLINE_INSTALL_ARGS));
+  assert.deepEqual([MAX_PACKAGE_BYTES, MAX_DEPENDENCY_BYTES], [67_108_864, MAX_IMPORT_BYTES - 65_536]);
+});
+
+const NPM_CLI = join(dirname(process.execPath), ...(process.platform === 'win32' ? [] : ['..', 'lib']), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+const NO_NPM = (!existsSync(NPM_CLI) && 'the host has no npm-cli.js beside its node')
+  || (!['x64', 'arm64'].includes(process.arch) && 'the guest cpu is x64 or arm64 only');
+
+test('DC5 the host npm installs the fixture offline from the read-only tree, with no registry request and no script run', { skip: NO_NPM, timeout: 180_000 }, async t => {
+  const base = mkdtempSync(join(tmpdir(), 'moe-dc5-'));
+  const treeDir = join(base, 'tree');
+  const chmodTree = (file, folder) => {
+    for (const name of readdirSync(treeDir, { recursive: true })) chmodSync(join(treeDir, name), statSync(join(treeDir, name)).isDirectory() ? folder : file);
+    chmodSync(treeDir, folder);
+  };
+  t.after(() => {
+    if (existsSync(treeDir)) chmodTree(0o644, 0o755);
+    rmSync(base, { recursive: true, force: true });
+  });
+  const tarballs = Object.fromEntries(['moe-fixture-a', '@moe-fixture/b', 'moe-fixture-aix'].map(name => [name, tarball(name)]));
+  const [dependencies, optionalDependencies] = [{ 'moe-fixture-a': '1.0.0', '@moe-fixture/b': '1.0.0' }, { 'moe-fixture-aix': '1.0.0' }];
+  const scripts = { postinstall: `node -e "require('fs').writeFileSync('root-ran.txt','x')"` };
+  // The fixture project, optionally depending on more tarballs than the cache was built from.
+  const fixture = (more = {}) => {
+    const project = { name: 'moe-dc5', version: '1.0.0', dependencies: { ...dependencies, ...more }, optionalDependencies };
+    const all = { ...tarballs, ...Object.fromEntries(Object.keys(more).map(name => [name, tarball(name)])) };
+    return [{ ...project, scripts }, lock({ '': project, ...Object.fromEntries(Object.entries(all).map(([name, data]) => [`node_modules/${name}`,
+      entryOf(name, data, name.endsWith('aix') ? { optional: true, os: ['aix'] } : {})])) })];
+  };
+  const [, bytes] = fixture();
+  const { tree } = await buildDependencyCache({ lockfiles: [{ dir: '.', bytes }], cpu: process.arch, cacheDir: join(base, 'cache') }, { fetch: fixtureFetch(servedBy(tarballs)).fetch });
+  for (const { path, data } of tree.entries) {
+    mkdirSync(dirname(join(treeDir, path)), { recursive: true });
+    writeFileSync(join(treeDir, path), data);
+  }
+  if (process.platform !== 'win32') chmodTree(0o444, 0o555);
+  const before = listing(treeDir);
+  const requests = [];
+  const registry = createServer((request, response) => { requests.push(request.url); response.statusCode = 500; response.end(); });
+  await new Promise(resolve => registry.listen(0, '127.0.0.1', resolve));
+  t.after(() => { registry.closeAllConnections(); registry.close(); });
+  const home = join(base, 'home');
+  mkdirSync(home);
+  const win32 = process.platform === 'win32';
+  const env = {
+    PATH: [dirname(process.execPath), ...(win32 ? [join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')] : ['/usr/bin', '/bin'])].join(delimiter),
+    HOME: home, npm_config_registry: `http://127.0.0.1:${registry.address().port}/`,
+    npm_config_userconfig: join(base, 'no-userconfig'), npm_config_globalconfig: join(base, 'no-globalconfig'),
+    ...(win32 ? { USERPROFILE: home, TEMP: home, TMP: home, SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec } : {}),
+  };
+  // Async on purpose: spawnSync would block the in-process registry, so a request would hang instead of being counted.
+  const install = (name, args, more) => new Promise((resolve, reject) => {
+    const [cwd, [project, lockfile]] = [join(base, name), fixture(more)];
+    mkdirSync(cwd);
+    writeFileSync(join(cwd, 'package.json'), JSON.stringify(project));
+    writeFileSync(join(cwd, 'package-lock.json'), lockfile);
+    const child = spawnChild(process.execPath, [NPM_CLI, 'ci', ...args, '--cache', treeDir], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { output += data; });
+    child.on('error', reject);
+    child.on('close', code => resolve({ cwd, code, output }));
+  });
+  const plain = await install('project', OFFLINE_INSTALL_ARGS);
+  assert.equal(plain.code, 0, plain.output);
+  const installed = name => readFileSync(join(plain.cwd, 'node_modules', name, 'package.json'), 'utf8');
+  assert.deepEqual([installed('moe-fixture-a'), installed('@moe-fixture/b'), existsSync(join(plain.cwd, 'node_modules', 'moe-fixture-aix'))],
+    [manifestOf('moe-fixture-a'), manifestOf('@moe-fixture/b'), false]);
+  assert.deepEqual([existsSync(join(plain.cwd, 'root-ran.txt')), requests, listing(treeDir)], [false, [], before]);
+  // Positive control: without --ignore-scripts the root postinstall does run, so the marker's absence above is not vacuous.
+  const control = await install('control', OFFLINE_INSTALL_ARGS.filter(arg => arg !== '--ignore-scripts'));
+  assert.equal(control.code, 0, control.output);
+  assert.deepEqual([existsSync(join(control.cwd, 'root-ran.txt')), requests, listing(treeDir)], [true, [], before]);
+  // A tarball missing from the tree fails the install with still no registry request: --offline never falls back to it.
+  const missing = await install('missing', OFFLINE_INSTALL_ARGS, { 'moe-fixture-c': '1.0.0' });
+  assert.notEqual(missing.code, 0, missing.output);
+  assert.deepEqual([requests, listing(treeDir)], [[], before]);
 });

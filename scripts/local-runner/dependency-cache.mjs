@@ -12,12 +12,33 @@
 //   deliberately never filtered: an extra package is harmless, a missing one fails the offline install.
 // - Every other entry needs a semver version, a resolved that EQUALS the canonical registry.npmjs.org tarball URL for
 //   its name (an npm alias uses entry.name) and one canonical sha512 SRI token. Plain string equality: no URL parsing.
-import { MAX_IMPORT_ENTRIES, validateImportPath } from './source-snapshot.mjs';
+// The cache itself (CQ-R11e3): buildDependencyCache keeps each admitted tarball through agent-cache.mjs fetchPinnedFile in
+// cacheDir, the persistent controller-private store, and resolves the per-call tree in npm's cacache layout: each
+// tarball's bytes at _cacache/content-v2/sha512/<h[0:2]>/<h[2:4]>/<h[4:]> for its sha512 hex h, plus moe-dependencies.json
+// = {"version":1,"dirs":[the sorted lockfile dirs]}. That is enough: pacote reads a lockfile entry that has both integrity
+// and resolved by digest (cacache.get.stream.byDigest), so no index-v5 entry and no registry is needed (DC5 proves it).
+// validateImport seals the tree, so CQ-R11e4 streams it with snapshot-transfer.mjs hostFrames unchanged and CQ-R11e5
+// installs each listed dir. Building it never runs npm, a node script or candidate code, and only bytes re-hashed in
+// memory against the lockfile's sha512 enter the tree.
+import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
+import { mkdir, open } from 'node:fs/promises';
+import path from 'node:path';
+import { fetchPinnedFile } from './agent-cache.mjs';
+import { MAX_IMPORT_BYTES, MAX_IMPORT_ENTRIES, validateImport, validateImportPath } from './source-snapshot.mjs';
 
 export const MAX_LOCKFILES = 16;
 export const MAX_LOCKFILE_BYTES = 16_777_216;
 // One entry of the imported tree is spare: CQ-R11e3 adds the tree's own moe-dependencies.json.
 export const MAX_DEPENDENCY_PACKAGES = MAX_IMPORT_ENTRIES - 1;
+export const MAX_PACKAGE_BYTES = 67_108_864;
+// The tree's tarball bytes, leaving room within validateImport's bound for moe-dependencies.json.
+export const MAX_DEPENDENCY_BYTES = MAX_IMPORT_BYTES - 65_536;
+// The caller runs `<node> <npm-cli.js> ci ...OFFLINE_INSTALL_ARGS --cache <tree root>`; CQ-R11e5 mirrors it in Python.
+// --offline never fetches; --ignore-scripts runs no root or dependency lifecycle script; --no-update-notifier because the
+// update notifier ignores --offline and would reach the registry; --logs-max=0 writes no _logs into the cache;
+// --no-audit and --no-fund make no further registry calls.
+export const OFFLINE_INSTALL_ARGS = Object.freeze(['--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0']);
 const MESSAGES = {
   DEPENDENCY_INPUT_INVALID: 'Dependency input was invalid.',
   DEPENDENCY_LOCKFILE_INVALID: 'Dependency lockfile was invalid.',
@@ -25,7 +46,18 @@ const MESSAGES = {
   DEPENDENCY_SOURCE_UNSUPPORTED: 'Dependency lockfile entry source was not a supported registry tarball.',
   DEPENDENCY_INTEGRITY_INVALID: 'Dependency lockfile entry integrity was not one canonical digest.',
   DEPENDENCY_LIMIT_EXCEEDED: 'Dependency lockfile exceeded its size or package limit.',
+  DEPENDENCY_DOWNLOAD_FAILED: 'Dependency tarball could not be downloaded.',
+  DEPENDENCY_CHECKSUM_MISMATCH: 'Dependency tarball did not match its lockfile integrity.',
+  DEPENDENCY_TOO_LARGE: 'Dependency tarball exceeded its size bound.',
+  DEPENDENCY_CACHE_FAILED: 'Dependency cache could not be read or written.',
 };
+// fetchPinnedFile's PINNED_<kind> refusals. Its options are all admitted values, so its INPUT_INVALID can only mean a
+// cached entry that is a link or no regular file; anything else is a failed download.
+const PINNED_KINDS = {
+  CHECKSUM_MISMATCH: 'DEPENDENCY_CHECKSUM_MISMATCH', TOO_LARGE: 'DEPENDENCY_TOO_LARGE',
+  UNREADABLE: 'DEPENDENCY_CACHE_FAILED', INPUT_INVALID: 'DEPENDENCY_CACHE_FAILED',
+};
+const CONTROL = /[\x00-\x1f\x7f]/;
 // A name segment excludes '/', so the location regex has no ambiguous nesting and runs in linear time.
 const NAME = '(?:@[A-Za-z0-9~-][A-Za-z0-9._~-]*/)?[A-Za-z0-9~-][A-Za-z0-9._~-]*';
 const LOCATION = new RegExp(`^node_modules/(?:${NAME}/node_modules/)*(${NAME})$`);
@@ -139,4 +171,73 @@ export function admitLockfiles(input) {
   try { return admit(input); } catch (error) {
     throw OWN_ERRORS.has(error) ? error : dependencyError('DEPENDENCY_INPUT_INVALID');
   }
+}
+
+// Reads each input and option property once; a throwing getter or Proxy trap is the same refusal.
+function readInput(input, options) {
+  try {
+    if (isRecord(input) && hasExactKeys(input, ['lockfiles', 'cpu', 'cacheDir'])) {
+      const { lockfiles, cpu, cacheDir } = input;
+      const { fetch = globalThis.fetch } = options ?? {};
+      if (typeof cacheDir === 'string' && path.isAbsolute(cacheDir) && !CONTROL.test(cacheDir) && typeof fetch === 'function') return { lockfiles, cpu, cacheDir, fetch };
+    }
+  } catch { /* the refusal below */ }
+  throw dependencyError('DEPENDENCY_INPUT_INVALID');
+}
+
+// The kept file, read once through a no-follow descriptor and at most MAX_PACKAGE_BYTES + 1 bytes, so an entry swapped
+// for a link, a device or a larger file after the downloader's check is never followed or read unbounded.
+async function readKept(file) {
+  const handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) throw dependencyError('DEPENDENCY_CACHE_FAILED');
+    const data = Buffer.alloc(Math.min(stats.size, MAX_PACKAGE_BYTES) + 1);
+    let length = 0;
+    while (length < data.length) {
+      const { bytesRead } = await handle.read(data, length, data.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    return data.subarray(0, length);
+  } finally { await handle.close().catch(() => {}); }
+}
+
+// One admitted tarball's bytes: kept at <cacheDir>/<sha512>.tgz by fetchPinnedFile, then re-hashed here in memory.
+async function keep({ url, sha512 }, cacheDir, fetch) {
+  const file = path.join(cacheDir, `${sha512}.tgz`);
+  try { await fetchPinnedFile({ url, file, size: null, maxBytes: MAX_PACKAGE_BYTES, algorithm: 'sha512', digest: sha512 }, { fetch }); } catch (error) {
+    const kind = String(error?.code).replace(/^PINNED_/, '');
+    throw dependencyError(Object.hasOwn(PINNED_KINDS, kind) ? PINNED_KINDS[kind] : 'DEPENDENCY_DOWNLOAD_FAILED');
+  }
+  let data;
+  try { data = await readKept(file); } catch { throw dependencyError('DEPENDENCY_CACHE_FAILED'); }
+  if (data.length > MAX_PACKAGE_BYTES || createHash('sha512').update(data).digest('hex') !== sha512) throw dependencyError('DEPENDENCY_CHECKSUM_MISMATCH');
+  return data;
+}
+
+/**
+ * Admits the lockfiles before any I/O, keeps each admitted tarball in cacheDir in turn, and resolves the frozen
+ * { tree, digest, packages, bytes }: tree is validateImport's sealed { entries, digest }, packages the tarball count and
+ * bytes the sum of the tree's file sizes. Builds sharing cacheDir are safe: fetchPinnedFile writes an exclusive .part
+ * and renames it atomically, and one digest is one name with identical bytes. Rejects only with a fixed-code dependencyError.
+ */
+export async function buildDependencyCache(input, options) {
+  const { lockfiles, cpu, cacheDir, fetch } = readInput(input, options);
+  const { dirs, packages } = admitLockfiles({ lockfiles, cpu });
+  try { await mkdir(cacheDir, { recursive: true, mode: 0o700 }); } catch { throw dependencyError('DEPENDENCY_CACHE_FAILED'); }
+  const entries = [];
+  let total = 0;
+  for (const item of packages) {
+    const data = await keep(item, cacheDir, fetch);
+    if ((total += data.length) > MAX_DEPENDENCY_BYTES) throw dependencyError('DEPENDENCY_LIMIT_EXCEEDED');
+    const hex = item.sha512;
+    entries.push({ kind: 'file', path: `_cacache/content-v2/sha512/${hex.slice(0, 2)}/${hex.slice(2, 4)}/${hex.slice(4)}`, executable: false, data });
+  }
+  entries.push({ kind: 'file', path: 'moe-dependencies.json', executable: false, data: Buffer.from(JSON.stringify({ version: 1, dirs })) });
+  let tree;
+  try { tree = validateImport(entries); } catch (error) {
+    throw dependencyError(error?.code === 'SNAPSHOT_LIMIT_EXCEEDED' ? 'DEPENDENCY_LIMIT_EXCEEDED' : 'DEPENDENCY_INPUT_INVALID');
+  }
+  return Object.freeze({ tree, digest: tree.digest, packages: packages.length, bytes: tree.entries.reduce((sum, { size }) => sum + size, 0) });
 }
