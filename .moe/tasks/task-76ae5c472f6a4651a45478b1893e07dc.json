@@ -79,11 +79,17 @@
       "author": "governor-693b7073",
       "content": "Governor, 18:27Z: lane slot. This row edits scripts/moe-agent.ps1, which is in the serialized wrapper lane: 30+ open rows edit it in one shared checkout. Under the 13:45Z interleave ruling (pinned #general msg-6c3c0ede), a LOW wrapper row goes at the ps1 lane tail. So I added dependsOn 3ad573a7 (PS brackets), the current tail, which already orders after every other open ps1 row. Planning can proceed now. It starts once the lane drains, or earlier if worktree mode (WT-19) makes the lane edges droppable first.\n\nDocs overlap (TROUBLESHOOTING.md, CONFIGURATION.md with 724e31fa, 9d277494 and others) is handled the usual way by the contested-hold machinery.\n\nUndo: set_task_dependencies { taskId: 76ae5c47, removeDependsOn: [task-3ad573a754574dfd92083b2e813c0bff] }.",
       "timestamp": "2026-10-30T18:26:09.429Z"
+    },
+    {
+      "id": "comment-4326866d0e9240f395b05c99512a945e",
+      "author": "architect-6fc3dd5c",
+      "content": "Architect plan delta, from QA's acceptance list (chan-845e71c6, msg-0cbc8ccad4d6; architect reply msg-5d0b4818f693). Apply it together with the approved plan. Nothing else changes.\n\n1. Step 1, grok twin. Add a second 'non-ascii-temp' matrix element for grok: headless, -GrokExec / --grok-exec, REVIEW, commitHooks false. It uses the same env, the same assertions and the same RED proof as the gemini case. grok has the same exposure: moe-agent.ps1:934 switches only claude/codex to UTF-8. The guard suite goes from 24 to 26. `--test-name-pattern 'non-ASCII temp'` selects both.\n\n2. Step 1, temp dir name. Use a space-free non-ASCII name, e.g. path.join(root, 'témp'), not 'temp é'.\n- Measured 2026-10-30 on PS 5.1.26100.9711: legacy native-argv quoting delivers a spaced path ending in a backslash, as GetTempPath() returns, to node as `C:\\x y\"`.\n- The guard's fs.mkdtempSync(path.join(temp, 'moe-git-guard-')) then fails closed with MOE_AGENT_GIT_GUARD_FAILED, whatever the encoding fix does.\n- Do NOT fix that here. A spaced TEMP failing every PS 5.1 seat (any CLI) at moe-agent.ps1:5986 is a separate, pre-existing bug for its own task. Candidate fix: pass the temp root without the trailing backslash, e.g. GetTempPath() + '.'.\n\n3. Step 1, seat decoding unchanged. In this case's driver finally, record [Console]::OutputEncoding.CodePage BEFORE undoing the 850 pin. Assert it is 850 after exit for both gemini and grok: that proves the guard's UTF-8 switch never reaches the seat. Every other driver stays byte-identical.\n\n4. Step 4, the evidence QA will compare:\n- guard 26/26 with 0 skipped, on Linux bash and on native Windows PS 5.1;\n- the prompt-cache and usage launcher harnesses at Linux 38/0 (+2 PS-only skips) and Windows node.exe 126/0/0;\n- postflight-safe bash and powershell, both exit 0;\n- parity-check PASS.\nQA re-runs the new cases red on the completion's parent, so the RED proof must show 'CLI did not run' for both seats. DoD 2 stays docs-only (step 3). If any codexDescriptor literal has to be re-pinned, stop and report: that is outside this plan, and the daemon providers suite would become required evidence.",
+      "timestamp": "2026-10-30T18:51:56.053Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T18:19:53.148Z",
-  "updatedAt": "2026-10-30T18:43:56.945Z",
+  "updatedAt": "2026-10-30T18:53:20.782Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T18:25:23.864Z",
@@ -95,7 +101,8 @@
     "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-6fc3dd5c"
+    "architect-6fc3dd5c",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
