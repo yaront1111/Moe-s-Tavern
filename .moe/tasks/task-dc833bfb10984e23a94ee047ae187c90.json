@@ -11,9 +11,81 @@
     "`cd packages/moe-daemon && npm run build && npm test` passes."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "record_commit remedy text, TESTS FIRST. Load test-driven-development. Files: packages/moe-daemon/src/tools/recordCommit.test.ts, then packages/moe-daemon/src/tools/recordCommit.ts.\n\nThe runtime texts are below, exactly. The source writes each apostrophe as \\' like its neighbours.\n- HELD_REMEDY_UNTOUCHED replaces today's text: `MOE_ATTR_CONTESTED_UNTOUCHED: verify these bytes are this task's and coordinate any live peer. Before the next landing, either a one-shot Claude session of this task edits the path with a wrapper-observed successful editing tool (not a shell write), or a later session of this task that found the path clean at its pre-flight edits it while every contesting peer stays idle, or the stale peer task is legitimately completed or archived.`\n- HELD_REMEDY_EDITING: \"either this task's own assignee session edits the path\" becomes \"either a one-shot Claude session of this task edits the path\". Nothing else changes. The full new text: `MOE_ATTR_CONTESTED_EDITING: a contesting peer task was mid-step on the path with an active session at this landing, so this session's editing tool did not release it (the file can carry that peer's unfinished hunks). Coordinate that peer; after its step completes, either a one-shot Claude session of this task edits the path with a wrapper-observed successful editing tool before the next landing, or the peer's own landing carries these bytes (name its commit in the summary).`\n- New HELD_REMEDY_WITNESS: `Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none.` task-9d277494's wrappers will embed this sentence byte for byte.\n- HELD_REMEDY_STRICT and HELD_REMEDY_NEVER stay byte-identical.\nCopy these texts from the task description, not from memory.\n\n1. Tests, red first. In describe('held contested paths (MOE_CONTESTED_HELD)'), hoist literal constants UNTOUCHED_REMEDY, EDITING_REMEDY, WITNESS, STRICT_REMEDY and NEVER_REMEDY. NEVER_REMEDY moves up from the EDITING describe. Write them out as literals; never import or rebuild them from recordCommit.ts, or the test proves nothing.\n   - R1, untouched only (rewrite the first test's line check): the line toBe `MOE_CONTESTED_HELD task=task-1: src/held.ts(task-peer) — ${UNTOUCHED_REMEDY} ${WITNESS} ${NEVER_REMEDY}`. It contains neither 'Claude Edit/Write family or a supported Serena editor' nor \"this task's own assignee session edits\". Its #governors assertions stay.\n   - R2, strict only, byte-identical (rewrite the second test's line check): toBe this fully literal string, NOT built from the constants: `MOE_CONTESTED_HELD task=task-1: src/strict.ts(task-peer2), src/orphan.ts(?) — MOE_ATTR_CONTESTED (attribution.contested=skip) holds the path whatever the session's tools did: only resolving or legitimately completing or archiving the peer task releases it. declare_files, unblocking or a shell touch alone does not release a hold; never change the policy as the fix.` It does not contain WITNESS. Its other assertions stay.\n   - R3, editing only: the two existing exact lines become `... — ${EDITING_REMEDY} ${WITNESS} ${NEVER_REMEDY}`, with R1's two not-contains.\n   - R4, untouched plus editing (the existing order test): toBe `MOE_CONTESTED_HELD task=task-1: src/u.ts(task-a), docs/e.md(task-b) — ${UNTOUCHED_REMEDY} ${EDITING_REMEDY} ${WITNESS} ${NEVER_REMEDY}`. WITNESS occurs exactly once.\n   - R5, editing plus strict (the existing strict-after-editing test): toBe `... — ${EDITING_REMEDY} ${WITNESS} ${STRICT_REMEDY} ${NEVER_REMEDY}`.\n   - R6, new: untouched plus strict gives `... — ${UNTOUCHED_REMEDY} ${WITNESS} ${STRICT_REMEDY} ${NEVER_REMEDY}`.\n   Every other held test stays as it is.\n   How to run: from WSL the in-tree node_modules is Windows-native and vitest fails, so run cmd.exe /d /c \"cd /d D:\\projexts\\moes\\packages\\moe-daemon && npx vitest run src/tools/recordCommit.test.ts\". Red on today's code: R1, R3, R4, R5 and R6 fail. R2 passes, because it pins today's bytes. Record it.\n2. Implementation, recordCommit.ts only:\n   - the three constants above;\n   - heldContestedLine's remedy list: untouched (if any), editing (if any), HELD_REMEDY_WITNESS when there is an untouched or an editing hold, strict (if any), then HELD_REMEDY_NEVER.\n   Hold classification, peer naming, the 5-path bound, the #governors rate limit, the tool description, the response and the stored records stay unchanged.\n3. Green: the same command passes, and every pre-existing row is unchanged apart from the rewritten assertions above.\n\nError handling: unchanged. The line is still built only from validated skip codes, and a failed chat post still never fails the record; its existing test stays.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.test.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.ts",
+        "packages/moe-daemon/src/tools/recordCommit.test.ts"
+      ],
+      "note": "Red first: R1,R3,R4,R5,R6 failed on old code, R2 passed (pins old bytes). Green after impl: recordCommit.test.ts 73/73 via cmd.exe vitest. 51 other dirty paths belong to others; untouched.",
+      "startedAt": "2026-10-30T11:10:54.275Z",
+      "completedAt": "2026-10-30T11:11:35.586Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "get_commit_scope activeTaskIds, TESTS FIRST. Files: packages/moe-daemon/src/tools/getCommitScope.test.ts, then packages/moe-daemon/src/tools/getCommitScope.ts.\n\n1. Tests, red first.\n   - ScopeResult's peerDeclared type gains activeTaskIds: string[].\n   - Three existing whole-entry toEqual assertions gain the field, since toEqual fails on an unlisted key:\n     - 'ORs over every task contributing a path': activeTaskIds [activeId];\n     - the task-66e8/task-9cc1 test: ['task-9cc1'] on both entries;\n     - 'lists a task once per path': ['task-a', 'task-b'].\n   - New describe('peerDeclared[].activeTaskIds'):\n     - T1 (the DoD case), with since: an idle first contributor (unassigned, no attempt) and an active second (assignee worker-live, lastActivityAt now) on one path. The entry toEqual { path, taskId: <first>, peerActive: true, taskIds: [first, second], activeTaskIds: [second], editingTaskIds: [] }.\n     - T2, with since, every contributor idle: activeTaskIds [] and peerActive false.\n     - T3, without since: two contributors (one unassigned, one with a missing worker). activeTaskIds equals taskIds: every contributor is listed.\n     - T4, with since: an idle IN_PROGRESS contributor sorting first and an active IN_PROGRESS one. taskIds is [idle, active], and activeTaskIds and editingTaskIds are both [active].\n     - T5, a helper expectActiveInvariants(result). For every entry it checks: activeTaskIds is a subset of taskIds in the same order; editingTaskIds is a subset of activeTaskIds; peerActive === (activeTaskIds.length > 0). Call it in every test of the 'peerDeclared[].peerActive' and 'taskIds and editingTaskIds' describes, so it also covers the open, quiet, slack, late, stale and corrupt attempt rows, the waits-on-this rule and junk step data.\n     - T6: getCommitScopeTool(h.state).description contains 'activeTaskIds'.\n   Red: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\packages\\moe-daemon && npx vitest run src/tools/getCommitScope.test.ts\" fails T1-T6 and the three updated assertions on today's code. Record it.\n2. Implementation, getCommitScope.ts only.\n   - In the peer loop, the entry type gains activeTaskIds: string[], placed between taskIds and editingTaskIds.\n   - A new entry gets activeTaskIds: active ? [other.id] : []. An existing entry pushes other.id when active.\n   - Tasks are visited in id order and each contributes a path once, so the order is id order. editing is computed only when active, so the subset and peerActive invariants hold by construction. Do not add a second activity rule.\n   - Update the loop's comment and the tool description string beside taskIds/editingTaskIds: activeTaskIds lists the contributors active by the peerActive rule, in id order (every contributor without `since`); editingTaskIds is a subset of it; peerActive is true exactly when it is non-empty.\n3. Green: the same command passes. The top-level reply-keys test stays unchanged, because the field is nested.\n\nError handling: unchanged. Junk peer records still never fail the scope (existing junk-data tests, now with T5's invariants).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "note": "Red first: 19 getCommitScope tests failed (T1-T4, T6, whole-entry assertions, invariants) on old code. Green: getCommitScope+recordCommit 134/134 via cmd.exe vitest.",
+      "startedAt": "2026-10-30T11:11:36.230Z",
+      "completedAt": "2026-10-30T11:12:17.246Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/MCP_SERVER.md, two hunks only. The file is hot: re-read it just before editing, touch only these hunks, and keep every other byte.\n1. ### moe.get_commit_scope, Returns block:\n   - The peerDeclared type gains `activeTaskIds: string[]` between taskIds and editingTaskIds.\n   - Add to its comment: activeTaskIds is the contributing tasks that are active by the peerActive rule, in id order (every contributor without `since`); peerActive === (activeTaskIds.length > 0); editingTaskIds is a subset of activeTaskIds.\n   - Extend the additive sentence: a wrapper that finds activeTaskIds absent (older daemon) treats it as [].\n2. ### moe.record_commit, the 'Held contested paths' bullet and its sub-bullets:\n   - The join order becomes: untouched, editing, the witness sentence (only when the line has an untouched or editing hold), strict, then the never-clause.\n   - The MOE_ATTR_CONTESTED_UNTOUCHED sub-bullet quotes its new line verbatim, in the EDITING sub-bullet's '(the line reads):' style. Keep the pointer to the supported tools under `attribution.contested` in docs/CONFIGURATION.md as its own sentence.\n   - The MOE_ATTR_CONTESTED_EDITING sub-bullet's quote becomes the new EDITING text verbatim. Its task-01f37ac6 sentence stays.\n   - A new sub-bullet quotes HELD_REMEDY_WITNESS verbatim and says when it is appended: after the editing remedy whenever the line has an untouched or editing hold, and never on a strict-only line. Add that the agent wrappers' held= remedy reuses it byte for byte (task-9d277494).\n   - The strict and never sub-bullets stay unchanged.\n   Copy each quoted sentence from the landed constants, then prove it: grep -F each constant's runtime text in the doc and get exactly one hit.\n\nDelivery note: docs/MCP_SERVER.md is contested by the plans of CQ-V12 (task-b621ddc9) and CQ-M06 (task-ced85748). Both were WORKING, unassigned and idle when this plan was written. The path lands with a TOOL witness, or under the idle-peer exception when it was clean at your pre-flight and both peers stay idle (mem:decision-contested-idle-peer-exception). Before the first edit, confirm `git status --short -- docs/MCP_SERVER.md` was empty at your pre-flight. If the session-ended line later shows held=docs/MCP_SERVER.md, follow the MOE_CONTESTED_HELD remedy. Never hand-edit .moe/ or force a landing.\n\nError handling: docs only; nothing to handle.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md was clean at pre-flight (git status empty before edit). Two hunks only (+12/-9). Proof: each of the three constants' runtime text occurs exactly once in the doc (UNTOUCHED 1, EDITING 1, WITNESS 1).",
+      "startedAt": "2026-10-30T11:12:17.804Z",
+      "completedAt": "2026-10-30T11:12:35.925Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh. Edit only what this step's findings need, and report it in modifiedFiles.\n1. The gate runs in a Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate). The in-tree node_modules is Windows-native, and `npm run build` in the shared tree would delete dist/ and regenerate the tracked src/generated files.\n   - REV=$(git rev-parse HEAD); SNAP=$(mktemp -d /tmp/moe-dc833bfb-gate.XXXXXX); git archive \"$REV\" | tar -x -C \"$SNAP\". Archive the WHOLE repo: initFiles.test.ts reads the root .gitignore, and a benchmark test reads docs/.\n   - Copy ONLY this task's 5 files over it, and cmp each one against the shared tree.\n   - In $SNAP/packages/moe-daemon, run `npm ci --no-audit --no-fund` under `env -i HOME=$HOME NO_COLOR=1 PATH=<nvm node v24 bin>:/usr/local/bin:/usr/bin:/bin`.\n   - Under the same env, from $SNAP, run exactly: cd packages/moe-daemon && npm run build && npm test\n   - It must exit 0. Read the Tests line with grep -a after stripping ANSI.\n2. Mutants, in the same snapshot. Run the narrow file, then restore and cmp. A compile error or 'no tests' is not a kill.\n   - M1, the witness is appended unconditionally: R2 fails.\n   - M2, the witness is never appended: R1 and R3 fail.\n   - M3, the witness goes after the strict remedy: R5 and R6 fail.\n   - M4, every contributor is pushed into activeTaskIds: T1, T2 and T4 fail.\n   - M5, activeTaskIds is built from the editing set: T1 fails.\n3. A red row this task does not own is HEAD's, not yours: attribute it with a run on a pure archive of HEAD (mem:gotcha-shared-checkout-peer-red-tests). A filtered run is diagnostic only, never the evidence.\n4. git diff --check over the 5 files must be clean. No git add, commit, stash or revert: the wrapper lands.\n5. complete_task verification: the snapshot script you ran, with the exact inner command, exit code 0 and the output tail. The summary names REV and the cmp results, and maps DoD 1 to R1, R3 and R4-R6, DoD 2 to R2, DoD 3 to T1-T6, DoD 4 to step 3's grep proof, and DoD 5 to this gate.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate in Linux snapshot of HEAD 9fa1fcb3 with the 5 files overlaid (cmp ok on all 5): npm run build && npm test exit 0, 207 files / 5861 passed / 16 skipped. Mutants M1-M5 all killed (M1: R2; M2: R1,R3,R4,R5,R6; M3: R5,R6; M4: T1,T2,T4 +; M5: T1 +), snapshot restored+cmp each time. git diff --check clean.",
+      "startedAt": "2026-10-30T11:12:36.559Z",
+      "completedAt": "2026-10-30T11:13:55.418Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the 5-file diff as the wrapper author who will embed the witness sentence and read activeTaskIds:\n- Is HELD_REMEDY_WITNESS byte-identical to the task description's text? Diff the two programmatically.\n- Is a strict-only line byte-identical to before (R2)?\n- Can any line carry the witness twice, or still carry \"own assignee session\" or 'Claude Edit/Write family'?\n- activeTaskIds:\n  - is it always in id order and a subset of taskIds?\n  - is editingTaskIds a subset of it?\n  - does peerActive equal its non-emptiness?\n  - with and without since, and for a waits-on-this peer, a DEAD or missing assignee, an open, closed or corrupt attempt, and junk step data?\n- Additive only: no key removed or renamed, the top-level reply keys unchanged, and no input schema change.\n- Do the docs quote every constant verbatim, and is the join order stated correctly?\n- Rails:\n  - no .moe edits;\n  - no Git writes;\n  - none of the global rails' forbidden patterns;\n  - error handling unchanged on every path;\n  - a test for every behavior change.\n- Would I be embarrassed if this shipped?\nFix any finding, then rerun step 4's gate fresh before complete_task.\nThen write the Serena memory 'task-task-dc833bfb10984e23a94ee047ae187c90-handoff' with the landed constant names and texts, the field, the rows and the evidence. If a landed name differs, update mem:decision-contested-held-label-order.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.ts",
+        "packages/moe-daemon/src/tools/recordCommit.test.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review: witness byte-identical to description text (programmatic compare True); strict-only line pinned by literal R2; witness once (R4 split check); no 'own assignee session'/'Claude Edit/Write family'/'owning assignee' left in src or docs (grep none); activeTaskIds invariants asserted on every entry in peerActive/taskIds suites; additive only (no key removed, top-level keys test passes, no input schema change); no forbidden patterns, no .moe edits, no git writes. No findings, so no gate rerun needed (no edits since the gate).",
+      "startedAt": "2026-10-30T11:13:55.942Z",
+      "completedAt": "2026-10-30T11:14:06.192Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,5 +98,104 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:58:17.297Z",
-  "updatedAt": "2026-10-30T10:58:17.297Z"
+  "updatedAt": "2026-10-30T11:14:10.866Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T11:02:06.937Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-e60b90bd"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T11:10:32.499Z",
+  "executionContract": {
+    "intendedBehavior": "moe.record_commit's MOE_CONTESTED_HELD line names the real release routes and says which sessions can leave a TOOL witness. The untouched remedy lists three routes:\n- a one-shot Claude session of this task edits the path;\n- a later session of this task that found the path clean at its pre-flight edits it while every contesting peer stays idle;\n- the stale peer task is completed or archived.\nThe editing remedy says 'a one-shot Claude session of this task'. A fixed witness sentence follows the editing remedy whenever the line has an untouched or editing hold. A strict-only line is byte-identical to today's.\n\nmoe.get_commit_scope's peerDeclared entries gain activeTaskIds: the contributing tasks active by the peerActive rule, in id order (every contributor without since). editingTaskIds is a subset of activeTaskIds, and peerActive === (activeTaskIds.length > 0). docs/MCP_SERVER.md documents both.",
+    "acceptanceCriteria": [
+      "R1, an untouched-only line: '<paths> — <UNTOUCHED> <WITNESS> <NEVER>', with neither old phrase.",
+      "R3, an editing-only line: '<EDITING> <WITNESS> <NEVER>'. R4: untouched plus editing gives '<UNTOUCHED> <EDITING> <WITNESS> <NEVER>', with the witness exactly once. R5 and R6: the witness comes before the strict remedy.",
+      "R2: a strict-only line equals today's bytes, written as a literal string, with no witness.",
+      "T1: with since, an idle first and an active second contributor give taskIds [first, second], activeTaskIds [second] and peerActive true. T2: all idle gives [] and false. T3: without since, every contributor is listed.",
+      "T5: on every entry in the peerActive and editingTaskIds suites, activeTaskIds is a subset of taskIds in id order, editingTaskIds is a subset of activeTaskIds, and peerActive equals its non-emptiness. T6: the tool description names activeTaskIds.",
+      "docs/MCP_SERVER.md quotes the new constants verbatim (one grep -F hit each) and documents activeTaskIds and the join order.",
+      "`cd packages/moe-daemon && npm run build && npm test` exits 0 in a HEAD snapshot with the 5 files overlaid, and mutants M1-M5 are killed."
+    ],
+    "invariants": [
+      "Which paths are held or land is unchanged, as are hold classification, peer naming, the 5-path bound and the #governors rate limit.",
+      "HELD_REMEDY_STRICT and HELD_REMEDY_NEVER are byte-identical, and a strict-only line never carries the witness sentence.",
+      "HELD_REMEDY_WITNESS is byte-identical to the task description's sentence.",
+      "No get_commit_scope key is removed or renamed. record_commit's response and stored records are unchanged."
+    ],
+    "compatibility": [
+      "activeTaskIds is additive. A wrapper that predates it ignores it, and an absent field counts as [].",
+      "No MCP input schema changes. Only the get_commit_scope description string and record_commit's chat text change."
+    ],
+    "approvedScope": [
+      "recordCommit.ts: HELD_REMEDY_UNTOUCHED, HELD_REMEDY_EDITING, the new HELD_REMEDY_WITNESS, and heldContestedLine's remedy order.",
+      "getCommitScope.ts: the peer loop's activeTaskIds, its comment and the tool description string.",
+      "recordCommit.test.ts rows R1-R6, and getCommitScope.test.ts rows T1-T6 plus the three updated whole-entry assertions.",
+      "docs/MCP_SERVER.md: the get_commit_scope Returns block and the record_commit held-path bullets."
+    ],
+    "reuse": [
+      "The per-contributor active flag from peerTaskActive is reused. There is no second activity rule."
+    ],
+    "sourceAssumptions": [
+      "recordCommit.ts:24-28 defines HELD_REMEDY_UNTOUCHED/EDITING/STRICT/NEVER, and heldContestedLine joins [untouched?, editing?, strict?, never].",
+      "getCommitScope.ts: the peer loop visits sortedById tasks, sets active = peerTaskActive(state, other, nowMs, sinceMs), computes editing only when active, and ORs peerActive.",
+      "In-tree vitest fails under WSL because the rolldown binding is Windows-native. Windows node through cmd.exe, or a Linux-native snapshot, works (checked 2026-10-30)."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm run build && npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Export HELD_REMEDY_WITNESS so the tests import it. Rejected: an imported constant makes the exact-string tests tautological. The tests carry literal copies, and the wrappers embed the same literal.\n- Derive peerActive from activeTaskIds. Not needed: the loop already ORs the same per-contributor active flag, so both come from one computation. Keep the existing field logic and pin the equivalence in T5.\n- Run the full gate in the shared tree through cmd.exe. Rejected: prebuild deletes dist/ and regenerates the tracked src/generated files in the shared checkout. The Linux snapshot is the established route, and the narrow red/green runs still go through cmd.exe in-tree, which writes nothing tracked.",
+    "codebaseInsights": "- recordCommit.ts:24-28 holds the remedy constants. heldContestedLine (about line 154) joins [untouched?, editing?, strict?, never] and caps the shown paths at 5.\n- getCommitScope.ts visits tasks through sortedById. For each peer it computes active = peerTaskActive(...) once (always true without since), and computes editing only when active. Entries are {path, taskId, peerActive, taskIds, editingTaskIds}, with peerActive ||= active. A waits-on-this peer contributes only its asserted paths.\n- Existing whole-entry toEqual assertions (getCommitScope.test.ts around lines 525, 573-580 and 638) must gain the new key. The top-level key test (around line 880) is unaffected.\n- Only docs/MCP_SERVER.md quotes the remedy text. The wrappers (moe-agent.sh/.ps1) have their own held= text, which is task-9d277494's. scripts/tests fixtures ignore extra fields.\n- In-tree vitest fails under WSL (Windows-native rolldown binding, checked 2026-10-30). Windows node via cmd.exe works in-tree, and the Linux snapshot works for the full gate.\n- The design record is mem:decision-contested-held-label-order. task-9d277494 (the wrapper half) dependsOn this task.",
+    "risks": "- Text drift: a single changed byte in the witness sentence breaks the wrappers' byte-for-byte reuse. Copy it from the task description and diff it.\n- docs/MCP_SERVER.md is contested by idle peers CQ-V12 and CQ-M06. It lands only with a TOOL witness or through the idle-peer exception, so check that it was clean at pre-flight.\n- HEAD can be red from a peer's landed WIP. Attribute it with a pure-HEAD archive run; never substitute a filtered run as evidence.\n- vitest it.each spreads array rows. Use explicit objects for new table rows.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/recordCommit.ts",
+      "packages/moe-daemon/src/tools/recordCommit.test.ts",
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T11:10:32.524Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T11:10:54.275Z",
+  "reviewStartedAt": "2026-10-30T11:14:10.864Z",
+  "verification": {
+    "command": "bash /tmp/dc833bfb-gate.sh  # snapshot of HEAD + 5 files; inner: cd packages/moe-daemon && npm run build && npm test",
+    "exitCode": 0,
+    "outputTail": "Test Files  207 passed (207)\n      Tests  5861 passed | 16 skipped (5877)\n   Duration  37.52s",
+    "reportedAt": "2026-10-30T11:14:10.864Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/recordCommit.ts",
+    "packages/moe-daemon/src/tools/recordCommit.test.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "record_commit's MOE_CONTESTED_HELD line now names the real release routes and carries a byte-stable HELD_REMEDY_WITNESS sentence. get_commit_scope's peerDeclared entries gain activeTaskIds. Gate ran in a Linux snapshot of HEAD REV=9fa1fcb3d7ee1d1adb737098dd464507dc276fda with the 5 files overlaid (cmp ok on all 5). DoD 1 = R1, R3, R4-R6 in recordCommit.test.ts. DoD 2 = R2, a literal strict-only line with no witness. DoD 3 = T1-T6 in getCommitScope.test.ts, plus the three whole-entry assertions and the invariants helper on every entry of the peerActive and taskIds suites. DoD 4 = docs/MCP_SERVER.md: activeTaskIds is documented, and the UNTOUCHED, EDITING and WITNESS texts each occur exactly once, verbatim. DoD 5 = build and full suite exit 0, 207 files, 5861 passed, 16 skipped. Mutants M1-M5 all killed."
 }

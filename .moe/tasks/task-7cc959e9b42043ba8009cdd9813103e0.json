@@ -10,9 +10,56 @@
     "Existing Claude-stream and codex TUI postflight scenarios stay green unchanged."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "PRECONDITIONS, then TESTS FIRST (load test-driven-development).\n\nThis task is the last slice of the Codex witness chain:\n- task-4b0609d1: scripts/prompt-cache-witness.mjs harvests `codex exec --json` witnesses.\n- task-7db14e2d: both wrappers feed them into the TOOL tier. It also makes the wrappers' held= UNTOUCHED, EDIT and WITNESS clauses count codex exec sessions, and adds the postflight rows that prove DoD 1 and 2.\nThis task flips the daemon's alert text and the three docs, which until now still said only Claude witnesses. That stale text under-promises, so it was safe.\n\n(a) dependsOn guarantees 9d277494, 4b0609d1 and 7db14e2d are DONE; dc833bfb is DONE through 9d277494. Read the landed strings:\n- the wrappers' WITNESS clause, from attr_held_list in scripts/moe-agent.sh;\n- recordCommit.ts HELD_REMEDY_UNTOUCHED, HELD_REMEDY_EDITING and HELD_REMEDY_WITNESS, as dc833bfb landed them.\n\n(b) Hot-file check. `git status --porcelain -- packages/moe-daemon/src/tools/recordCommit.ts packages/moe-daemon/src/tools/recordCommit.test.ts docs/CONFIGURATION.md docs/TROUBLESHOOTING.md docs/MCP_SERVER.md` must print nothing.\n- If another session's hunks sit in one, do not edit over them: @mention that task's seat.\n- moe.report_blocked on that task only if it does not depend on this one; otherwise @mention the governor.\n- Edit with the Edit tool. After 7db14e2d, apply_patch from a codex exec seat also witnesses.\n\n(c) In packages/moe-daemon/src/tools/recordCommit.test.ts, change the exact-string expectations first:\n- HELD_REMEDY_WITNESS must equal the wrappers' WITNESS clause byte for byte. Planned text: `Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none.`\n- HELD_REMEDY_UNTOUCHED: `a one-shot Claude session of this task edits the path` becomes `a one-shot Claude or codex exec session of this task edits the path`.\n- HELD_REMEDY_EDITING: `either a one-shot Claude session of this task edits the path` becomes `either a one-shot Claude or codex exec session of this task edits the path`.\n- Everything else stays as dc833bfb landed it. The strict-only line stays byte-identical, with no witness sentence.\n- Add one assertion that an untouched hold's line contains `codex exec`, and one that a strict-only line does not.\n\nRED: `cd packages/moe-daemon && npx vitest run src/tools/recordCommit.test.ts` must fail on exactly these string cases. Note the failing test names in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN, in packages/moe-daemon/src/tools/recordCommit.ts: change only the three constants, to the step-1 strings.\n- HELD_REMEDY_STRICT, HELD_REMEDY_NEVER, heldContestedPaths, heldContestedLine (remedy order and when the witness sentence is appended), the 5-path bound and the #governors rate limit are unchanged.\n- error handling is unchanged: chat failures still never fail the record, and malformed skip codes are still ignored. This step adds no code path, only text.\n\nCheck: `cd packages/moe-daemon && npx vitest run src/tools/recordCommit.test.ts` is green, and `git diff --stat` shows only the three constants changed in recordCommit.ts.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs, with the Edit tool, after rerunning step 1(b)'s clean check for each doc. State the codex exec witness tersely, consistent with scripts/CLAUDE.md as 7db14e2d left it and with prompt-cache-witness.mjs (task-4b0609d1).\n\n1. docs/CONFIGURATION.md, Session touch evidence.\n- The opening sentence says witnesses come only from Claude one-shot stream-json events. Add `codex exec --json` events, which the wrapper pipes through scripts/prompt-cache.mjs codex-stream (prompt-cache-witness.mjs).\n- What counts from codex: each path of a completed file_change (Codex apply_patch), and a successful Serena editing MCP call, under the same per-tool rules already listed for Serena (safe_delete_symbol on OK, replace_in_files' applied summary, rename_symbol's declaring path).\n- A failed file_change, or a failed, errored or result-less MCP call, witnesses nothing. A shell write (command_execution) witnesses nothing.\n- Codex TUI, Gemini, Grok and interactive Claude sessions still supply none.\n- Update the closing \"Under skip-untouched ...\" sentence to name a one-shot Claude or codex exec session.\n\n2. docs/TROUBLESHOOTING.md:\n- the \"Current witness limit\" paragraph, as 9d277494 left it;\n- the MOE_ATTR_CONTESTED_UNTOUCHED and MOE_ATTR_CONTESTED_EDITING rows.\nEach now names a one-shot Claude or codex exec session, and the seats that still leave no witness (Codex TUI, Gemini, Grok, interactive Claude).\n\n3. docs/MCP_SERVER.md, the record_commit \"Held contested paths\" bullets: update every place that quotes or paraphrases HELD_REMEDY_UNTOUCHED, HELD_REMEDY_EDITING or HELD_REMEDY_WITNESS to the new constants, verbatim where the doc quotes.\n\nNever describe a policy change: attribution.contested, the idle-peer exception and the EDITING hold are unchanged.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE. Fresh output of this exact command is the complete_task verification evidence. Run it from this WSL seat.\n\n- The postflight legs run on a HEAD snapshot, because this task changes no script.\n- They are the DoD 1, 2 and 4 evidence: the codex witness rows that task-7db14e2d added, and the existing Claude-stream and codex TUI scenarios.\n- The vitest leg covers DoD 3's recordCommit.test.ts.\n\n```\ncd /mnt/d/projexts/moes && (cd packages/moe-daemon && npx vitest run src/tools/recordCommit.test.ts) && W=$(mktemp -d /mnt/d/moe-scratch/t7cc9-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && cd \"$W\" && env $(env | sed -n 's/^\\(\\(MOE\\|CLAUDE\\)[A-Za-z0-9_]*\\)=.*/-u \\1/p') bash -c 'set -e; bash scripts/tests/parity-check.sh; node --test scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache.test.mjs; MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh; for ps in powershell.exe pwsh.exe; do for t in parity-check postflight; do WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"$ps\" -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$PWD/scripts/tests/$t.ps1\")\"; done; done'\n```\n\n- It runs for about an hour. Start it in the background with a log file, then poll in foreground `timeout 570` loops.\n- The cwd must be a Windows drive (mem:gotcha-qa-ps1-postflight-from-wsl). PS 5.1 `*>` logs are UTF-16LE.\n- On a native Windows seat, run the same legs in the snapshot from Git Bash plus powershell.exe and pwsh.exe, with the Git Bash leg launched detached (mem:convention-postflight-scratch-harness).\n- Before blaming this task for a postflight failure, note that this task changes no script. A red postflight leg is a HEAD regression: report it to the governor with the failing scenario, and do not edit scripts here.\n- Record the codex-witness and scope-scenario counts each harness prints.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.ts",
+        "packages/moe-daemon/src/tools/recordCommit.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's own diff, the last step (load adversarial-self-review). Check and note each item:\n\n(1) Byte equality. HELD_REMEDY_WITNESS equals the wrappers' WITNESS clause in moe-agent.sh and moe-agent.ps1: compare with grep -F on the exact sentence, in all three files and both harnesses.\n\n(2) Only text changed. The strict-only line is unchanged, and no classification, ordering or rate-limit code moved (`git diff` of recordCommit.ts touches three constants only).\n\n(3) Honest scope. Nothing says Codex TUI, Gemini, Grok or interactive Claude sessions witness, and nothing says a shell write does. `git grep -n \"codex exec\" -- docs/CONFIGURATION.md docs/TROUBLESHOOTING.md docs/MCP_SERVER.md packages/moe-daemon/src/tools/recordCommit.ts` reads consistently.\n\n(4) No stale claim remains. `git grep -n \"only Claude one-shot\\|Only a one-shot (claude -p) Claude session\" -- docs packages/moe-daemon/src scripts/moe-agent.sh scripts/moe-agent.ps1` finds no sentence still saying only Claude witnesses.\n\n(5) The docs agree with prompt-cache-witness.mjs's actual rules: failed file_change, errored or result-less MCP calls, and the per-tool Serena rules.\n\n(6) Test quality: the new assertions fail if the constants revert. Check by temporarily reverting one constant locally, then restore it; never commit the revert.\n\nIn the completion summary, report:\n- the net non-board LOC;\n- whether each doc was clean before its first edit;\n- the gate result, with the codex-witness row counts.\nName the chain: task-4b0609d1 (the helper harvest) and task-7db14e2d (wrapper wiring and the postflight rows that carry DoD 1 and 2) delivered the harvest, and this task flipped the daemon text and docs.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.ts",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -21,12 +68,51 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-9d27749421b045c18a6c6eb99694236d"
+    "task-9d27749421b045c18a6c6eb99694236d",
+    "task-7db14e2df19949a8bfdb150e0f29ffcb"
   ],
   "priority": "MEDIUM",
   "order": 2.5,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:58:35.132Z",
-  "updatedAt": "2026-10-30T10:58:35.132Z"
+  "updatedAt": "2026-10-30T11:13:23.541Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T11:05:08.867Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T11:13:23.515Z",
+  "planningNotes": {
+    "approachesConsidered": "As filed, this task needed 11-12 files: a new helper, prompt-cache.mjs, bundle lists, node tests, both wrappers, both harnesses, recordCommit.ts and its test, and three docs. That is over the 10-file hard cap. SPIDR split by interface, in landing order:\n1. task-4b0609d1 (no deps): the shared Node helper prompt-cache-witness.mjs. Both wrappers already pipe `codex exec --json` through prompt-cache.mjs codex-stream, so one Node implementation serves sh and ps1, with no Python or PowerShell twin. It is inert until a wrapper passes MOE_TOOL_WRITES_FILE.\n2. task-7db14e2d (needs 4b0609d1 and 9d277494): the wrappers pass the env (sh) or a temp file merged into $script:MoeToolWritten (ps1). They also flip their own held= clauses and add the postflight rows (DoD 1, 2).\n3. This task, last: the daemon constants and docs, plus a full gate re-proving DoD 1, 2 and 4.\n\nWhy the text flips last. Flipping the daemon or docs before the harvest is live would repeat 9d277494's bug: telling codex seats an edit releases a hold when it does not. The reverse window (wrapper text updated, daemon and docs still Claude-only) under-promises, which is safe.\n\nWhy this task keeps its DoD. The DoD is human-owned and cannot be edited, so DoD 1 and 2 are delivered by prerequisite 7db14e2d's rows and re-verified by this task's gate.",
+    "codebaseInsights": "- recordCommit.ts: the HELD_REMEDY_* constants are at lines 22-28; heldContestedLine ~154 appends remedies in the order untouched, editing, [witness], strict, never (the witness from dc833bfb).\n- docs/CONFIGURATION.md: 'Session touch evidence' starts ~344.\n- docs/TROUBLESHOOTING.md: the MOE_ATTR table ~590, 'Current witness limit' ~610.\n- docs/MCP_SERVER.md: the record_commit held bullets ~804-808.\n- The codex exec pipeline is moe-agent.sh ~7875 and moe-agent.ps1 ~7041.\n- The Claude parser's harvest rules, mirrored by prompt-cache-witness.mjs, are in moe-agent.sh STREAM_JSON_PARSER ~8238-8410.\n- codex-cli 0.166.0 is installed at ~/.nvm/.../bin/codex.",
+    "risks": "- Exact-string drift between dc833bfb's landed constants, 7db14e2d's wrapper clauses and this task: step 1 reads the landed strings and changes only the session clause.\n- Hot docs: CONFIGURATION.md is also planned by 465ee875, b621ddc9, ced85748 and f3f364a6, all idle and far behind. TROUBLESHOOTING.md is planned by f4811a72 and f3f364a6 (waiting) and 724e31fa. The step-1 clean check covers them.\n- error handling: none added. The constants are data, and chat-failure tolerance in record_commit is untouched.\n- The postflight legs take about an hour, for a text-only task. They are the only fresh evidence for DoD 1, 2 and 4, and the cost is compute, not worker edits.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/recordCommit.ts",
+      "packages/moe-daemon/src/tools/recordCommit.test.ts",
+      "docs/CONFIGURATION.md",
+      "docs/TROUBLESHOOTING.md",
+      "docs/MCP_SERVER.md",
+      "scripts/prompt-cache-witness.mjs",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T11:13:23.541Z",
+  "approvedPlanRevision": 1
 }
