@@ -102,6 +102,7 @@ echo "@@ port=[$DAEMON_PORT] project=[$DAEMON_PROJECT] running=$RUNNING"
 const PROVIDER = 'Microsoft.PowerShell.Core\\FileSystem::';
 function psScript(infoPath, project) {
   return `$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $daemonInfoPath = ${psq(infoPath)}
 $projectPath = ${psq(project)}
 $running = $false
@@ -343,6 +344,24 @@ for (const engine of ENGINES) {
   });
 
   const psInfo = (port) => JSON.stringify({ pid: process.pid, port, startedAt: 'x', projectPath: PROJECT.ps1 });
+  for (const [name, project, served] of [
+    ['Unicode normalization', 'D:/qa/caf\u00e9', 'D:/qa/cafe\u0301'],
+    ['POSIX case', '/home/qa/OtherProject', '/home/qa/otherproject'],
+    ['uppercase MNT prefix', '/MNT/d/x/y', 'D:/x/y'],
+    ['ignorable segment', 'D:/qa/x', 'D:/qa/x/\u00ad'],
+    ['dot-like segment', 'D:/qa/x', 'D:/qa/x/.\u00ad'],
+    ['parent-like segment', 'D:/qa/x', 'D:/qa/x/sub/..\u00ad'],
+  ]) {
+    t(`identity: distinct ${name} paths are refused, untouched`, () =>
+      withHealth(200, healthy(served), async (port, requests) => {
+        const content = JSON.stringify({ ...INFO.ps1(port), projectPath: project });
+        const r = await runCheck(engine, content, { project });
+        assertRefused(r, port, served, project);
+        assert.ok(!r.out.includes('@@ running='), r.out);
+        assert.equal(r.after, content);
+        assert.deepEqual(requests, ['GET /health']);
+      }));
+  }
   t('identity: a live pid whose daemon serves another project is refused, untouched', () =>
     withHealth(200, healthy(OTHER), async (port, requests) => {
       const content = psInfo(port);
@@ -383,8 +402,8 @@ for (const engine of ENGINES) {
     withHealth(200, healthy(OTHER), async (port) => {
       assertRefused(await runCheck(engine, psInfo(port), { project: unc }), port, OTHER, unc);
     }));
-  t('identity: a UNC project whose daemon serves it as //srv/share/proj/ is adopted', () =>
-    withHealth(200, healthy('//srv/share/proj/'), async (port, requests) => {
+  t('identity: a UNC project whose daemon serves it as //SRV/SHARE/PROJ/ is adopted', () =>
+    withHealth(200, healthy('//SRV/SHARE/PROJ/'), async (port, requests) => {
       const r = await runCheck(engine, psInfo(port), { project: unc });
       assert.equal(r.status, 0, r.out);
       assert.ok(r.lines.includes(`@@ running=True port=${port} err=`), r.out);

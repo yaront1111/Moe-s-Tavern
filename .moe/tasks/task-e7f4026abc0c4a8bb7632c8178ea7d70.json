@@ -20,9 +20,9 @@
       "modifiedFiles": [
         "scripts/tests/daemon-json-cap.test.mjs"
       ],
-      "note": "Prereqs task-86093c3e (6c55aefa) and task-90664db1 (ff5933d9) are DONE and landed. Extended daemon-json-cap.test.mjs: runCheck is now async (spawn, not spawnSync) so an in-process fake /health (withHealth: http.createServer on 127.0.0.1:0, records 'GET /health') can answer; the sh script adds the probe segment ('\\nprobe_daemon_health() {' to '\\n# daemon.json is repository content'), PROJECT, an is_wsl stub, an EXIT trap printing MOE_DAEMON_HOST, and a $$ substitution for a __PID__ token; the ps1 script sets $projectPath. Existing ps1 fixtures moved from port 9876 to a reserved-then-closed port (closedPort). New rows: a static refusal-parity row; sh Windows-owned branch (Linux only; foreign refused/untouched/no host export, same spelling d:/projexts/px4swarm/ adopted, relative '.' adopted); sh PID branch on bash and Git Bash (foreign 200, foreign 503, same C:\\moe-id\\proj vs /mnt/c or cygpath form, unreachable); ps1 on 5.1 and 7 (foreign untouched, foreign 503, same as D:\\x\\.\\y, D:/x/y/, /mnt/d/x/y, d:\\X\\y, relative, unreachable). Same-project rows assert exactly one GET /health, so they are not vacuous. RED on HEAD launchers: Linux 5 failures (static + 4 sh); Windows 16 failures (static, 3 Git Bash, 6 on each PowerShell), log /tmp/e7f4-red-windows.log. Linux has no pwsh, so ps1 rows run on Windows only. Shared-tree dirt from other sessions was left untouched.",
-      "startedAt": "2026-10-30T10:25:53.684Z",
-      "completedAt": "2026-10-30T10:32:20.617Z"
+      "note": "Reopen tests-first: added 3 real-preflight rows per PowerShell engine: composed/decomposed Windows Unicode, case-distinct POSIX, uppercase /MNT vs drive. UTF-8 console output allows exact Unicode refusal assertions. Existing UNC equivalence now explicitly differs in case. Original production on archive+owned-file Windows snapshot fails all 6 new rows by assertions (running=True/exit 0, expected 1); red.log in C:/Users/Yaron/AppData/Local/Temp/e7f4-fix.Qz5NvY. Prerequisites DONE/landed from epicSiblings: 6c55aefa and ff5933d9. Proxy memory read; exact JetBrains handoff memory absent (read_memory not found, scoped list empty), so used supplied sibling summary/verification and source. No shared-tree tests.",
+      "startedAt": "2026-10-30T10:59:41.404Z",
+      "completedAt": "2026-10-30T11:00:43.000Z"
     },
     {
       "stepId": "step-2",
@@ -31,12 +31,9 @@
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
-      "modifiedFiles": [
-        "scripts/moe-agent.sh"
-      ],
-      "note": "moe-agent.sh pre-flight only (+79/-8).\n- probe_daemon_health takes an optional 3rd arg, the expected project. Exit 0 = healthy and same/unjudgeable. Exit 1 = unknown. Exit 3 = a 200 or 503 reply naming another absolute path; it prints that path on one line, control chars replaced by '?', cut at 300 chars (mirrors the proxy's displayServedPath).\n- comparable() mirrors comparableProjectPath with ntpath/posixpath: drive or UNC via ntpath.normpath, '\\' to '/', trailing '/' stripped, lowercased; POSIX via posixpath.normpath, then /mnt/<d> folded.\n- Bounds: read(65537), 3 s urlopen timeout, and a daemon threading.Timer watchdog that calls os._exit(1) at 3 s total. Ad-hoc check: a trickled reply ends at 3.03 s, rc 1. ProxyHandler({}) keeps an http_proxy env var off the loopback probe.\n- New daemon_identity_project: cygpath -m on msys/cygwin. If cygpath fails it passes nothing, so the verdict is unknown and a spelling difference never refuses.\n- New refuse_foreign_daemon prints the three plan sentences with printf, so a backslash in a served path is never interpreted, then exits 1. It deletes, starts and exports nothing.\n- Foreign-branch loop: rc 3 refuses at once, rc 0 adopts, anything else tries the next candidate.\n- PID branch: after kill -0, when DAEMON_PORT is numeric, it probes ${MOE_DAEMON_HOST:-127.0.0.1}:port. rc 3 refuses; anything else sets RUNNING=true as today.\n- rc is captured as `SERVED=$(...) || PROBE_RC=$?`, which is set -e safe.\nGREEN on Linux bash: all 9 identity sh rows pass. The static parity row stays red until step 3 (ps1). bash -n and git diff --check are clean. The fix-options wording is left for task-724e31fa.",
-      "startedAt": "2026-10-30T10:32:22.734Z",
-      "completedAt": "2026-10-30T10:35:09.665Z"
+      "note": "Reopen no-op: the sh pre-flight from landed 6a1b7953 already implements this step and QA found no sh defect. Inspected probe, ordinal Python comparison, case-sensitive /mnt regex, rc3 branches, bounded read/watchdog and cygpath conversion; kept all bytes unchanged. No tests repeated in this step; full snapshot Linux/Windows runs and mutants in step 5.",
+      "startedAt": "2026-10-30T11:00:57.700Z",
+      "completedAt": "2026-10-30T11:00:57.830Z"
     },
     {
       "stepId": "step-3",
@@ -47,12 +44,11 @@
       ],
       "modifiedFiles": [
         "scripts/moe-agent.ps1",
-        "scripts/moe-agent.sh",
         "scripts/tests/daemon-json-cap.test.mjs"
       ],
-      "note": "moe-agent.ps1 pre-flight only (+91/-1). The BOM is kept and the added text is pure ASCII.\n- Get-MoeComparableProjectPath: string-only segment collapse with the sh rule. Drive/UNC paths: '\\' to '/', '..' never climbs past the drive or server/share, lowercased. POSIX: /mnt/<d> folding.\n- Get-MoeDaemonIdentity returns same / foreign <served> / unknown. It strips the provider prefix (Microsoft.PowerShell.Core\\FileSystem::) from a UNC $projectPath that Resolve-Path qualified, and requires both paths absolute.\n- Check block: once Get-Process finds the pid, it probes 127.0.0.1:$info.port. Foreign prints the three byte-identical lines (ERROR in red) and exits 1 inside the if, never a throw. Otherwise $running = $true as today.\nDEVIATION from the plan: the probe uses a raw HTTP/1.0 TcpClient socket, not HttpWebRequest, the same design as the QA-approved JetBrains probe (mem:gotcha-jetbrains-http-header-deadline):\n- one 3 s deadline covers connect, headers and body, because ReceiveTimeout is set to the time left before every read; HttpWebRequest's ReadWriteTimeout restarts per trickled byte, and on pwsh 7 its timeouts map onto HttpClient differently;\n- no proxy and no redirect;\n- the reply is capped at 64 KiB body + 8 KiB head;\n- the connect waits with Task.WaitAny, so a refused port is unknown without logging an exception into $Error.\nAlso in this step:\n- sh: probe_daemon_health now also requires the expected project to be absolute, as Kotlin does.\n- Test: two ps1 UNC rows (a provider-qualified project is refused on a foreign daemon, and adopted when the daemon reports //srv/share/proj/).\nGREEN on Windows (snapshot of HEAD scripts/ and .github/ + the 3 files, cmp-verified): 43 tests, 40 pass, 0 fail, 3 skips (Git Bash Windows-owned branch, OSTYPE msys). Log /tmp/e7f4-green-windows.log.\nAd-hoc bounds on 5.1 and 7: header trickle 3.02-3.03 s unknown, body trickle 3.02 s unknown, 70 KB body unknown, control chars become '?' with the 300-char cap, same-project reply is same.\nOn Windows a refused loopback connect takes about 2.4 s (SYN retries), so a stale live-pid daemon.json costs that once per pre-flight.",
-      "startedAt": "2026-10-30T10:35:10.431Z",
-      "completedAt": "2026-10-30T10:43:22.572Z"
+      "note": "QA fix: ordinal final comparison, literal case-sensitive /mnt prefix; explicit drive/UNC ToLowerInvariant retained. Also fixed the same culture-sensitive comparison in normalization's empty/dot/parent segment checks (string.Equals ordinal + Length); 3 additional table rows first failed 6/6 on both engines, then all 12 new regressions passed (Windows node --test --test-name-pattern='identity: distinct' scripts/tests/daemon-json-cap.test.mjs in isolated snapshot). Original QA rows: red 6, ordinal-only 4 pass/2 fail, both fixes green. Windows logs red.log, ordinal-only.log, segment-red.log, green-distinct.log at C:/Users/Yaron/AppData/Local/Temp/e7f4-fix.Qz5NvY. Preserved BOM, raw-socket bounded probe and error handling. Delta +26/-6 net20; cumulative task net392. No implementation beyond the same path-identity root cause.",
+      "startedAt": "2026-10-30T11:01:07.232Z",
+      "completedAt": "2026-10-30T11:03:05.498Z"
     },
     {
       "stepId": "step-4",
@@ -61,39 +57,31 @@
       "affectedFiles": [
         "CLAUDE.md"
       ],
-      "modifiedFiles": [
-        "CLAUDE.md"
-      ],
-      "note": "Root CLAUDE.md: two insertions on one line (+1/-1), every other byte kept (word-diff shows only the two added clauses).\n1. The proxy discovery clause now reads 'exits immediately on a project-path mismatch in daemon.json or in the live daemon's /health reply (a daemon now serving another project)'.\n2. The WSL agent mode sentence: after 'when the probe fails' it adds ', and stops pre-flight with `MOE_DAEMON_FOREIGN_PROJECT`, naming both projects, when the reachable daemon's /health projectPath is another project (both launchers do the same for a live PID)'.\nWording deviation: the plan said '(moe-agent.ps1 does the same for a live PID)'. moe-agent.sh's PID branch also probes, so it says 'both launchers'.\nThe --host 0.0.0.0 wording is untouched and left to task-724e31fa. git diff --check is clean.",
-      "startedAt": "2026-10-30T10:43:23.504Z",
-      "completedAt": "2026-10-30T10:43:44.576Z"
+      "note": "Reopen no-op: both required CLAUDE.md clauses are already landed, read and verified: live /health mismatch and MOE_DAEMON_FOREIGN_PROJECT stopping pre-flight (both launchers for a live PID). No new docs needed for replacing incorrect comparison semantics; preserved every byte and left follow-up --host wording alone.",
+      "startedAt": "2026-10-30T11:03:12.241Z",
+      "completedAt": "2026-10-30T11:03:12.313Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\nNever run the launcher tests in the shared tree: its moe-agent.{sh,ps1} carry peers' dirty edits. First build a snapshot with git archive HEAD of scripts/ and .github/ (the CI row reads ci.yml). Overlay this task's four files only, and cmp-verify each one.\n\n1. Linux. In the snapshot, run `node --test scripts/tests/daemon-json-cap.test.mjs`. That covers bash, plus pwsh if installed.\n\n2. Windows. Copy the snapshot's scripts/ and .github/ to a Windows temp dir and run the same file with Windows node (mem:gotcha-qa-windows-launcher-tests-from-wsl). That covers Git Bash, PowerShell 5.1 and pwsh 7.\n- Report tests, pass, fail and skipped per engine.\n- No identity row may be skipped except by the documented engine or OS skips.\n\n3. Parity. Run `bash scripts/tests/parity-check.sh` in the snapshot, and parity-check.ps1 on Windows.\n\n4. Mutants, on snapshot copies only. A kill counts only when assertions fail.\n- M1: sh treats rc 3 as 0. The sh foreign rows fail.\n- M2: ps1 ignores the foreign verdict. The ps1 foreign rows fail.\n- M3: the comparable rule drops /mnt/<d> folding, in both sh and ps1. The same-project spelling rows fail.\n- M4: a relative served path is judged. The relative row fails.\n\n5. DoD 2 evidence. In a Linux-native snapshot of packages/moe-proxy (mem:gotcha-daemon-linux-snapshot-gate), run `npm ci`, then `npm test`. It must exit 0, and task-86093c3e's identity tests must run.\n\n6. DoD 3 evidence, under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). If the lease is queued, call moe.report_blocked with that resourceId. Release it in every exit path. Run:\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun --tests <task-90664db1's identity test classes>\"\nCite task-90664db1's commit.\n\n7. GATE for complete_task (DoD 1). In the snapshot, run fresh, exit 0:\nnode --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh\nSupply its output and the Windows run's counts, and cite task-86093c3e's and task-90664db1's commits for DoD 2 and DoD 3.",
-      "status": "COMPLETED",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
-      "note": "VERIFY: no source edits were needed. Evidence is in D:/moe-scratch/task-e7f4026a/.\nSnapshot: git archive HEAD of scripts/ and .github/, plus the 3 owned script files, cmp-verified. CLAUDE.md is docs-only and no gate reads it.\n1. Linux (bash; no pwsh installed): 43 tests, 13 pass, 0 fail, 30 skipped. All 30 skips are PowerShell rows: 5.1 is Windows-only and pwsh is absent. Every bash identity row ran.\n2. Windows node.exe: 43 tests, 40 pass, 0 fail, 3 skipped.\n   - Git Bash: 7 pass, 3 skips. The skips are the documented Windows-owned-branch rows: OSTYPE is msys, so that branch never runs there.\n   - PowerShell 5.1: 15/15. pwsh 7: 15/15. The 3 static rows pass.\n3. Parity: parity-check.sh PASS (Linux) and parity-check.ps1 PASS (Windows PowerShell 5.1).\n4. Mutants, on copies only. Every kill is an AssertionError and none is a syntax error.\n   - M1 (sh: sys.exit(3) becomes 0) is killed by 3 rows: Windows-owned foreign, PID foreign, PID 503 foreign.\n   - M2 (ps1 ignores foreign) is killed by 6 rows: foreign, 503 and UNC-foreign, on both PowerShells.\n   - M3 (no /mnt folding): in sh it kills 2 rows (the d:/projexts/px4swarm/ spelling row and the PID same row, C:\\moe-id\\proj vs /mnt/c); in ps1 it kills the /mnt/d/x/y row on both PowerShells.\n   - M4 (relative path judged): in sh it kills the relative row; in ps1 the relative row on both PowerShells.\n5. DoD 2: Linux-native whole-repo snapshot at HEAD 980c9a39, npm ci in daemon and proxy under env -i with node 24.21.0, then proxy npm test. Exit 0: 6 files, 263 tests; daemonIdentity.test.ts ran 75. task-86093c3e's completion is 6c55aefa.\n6. DoD 3, under the jetbrains-gradle lease (acquired, then released): gradlew.bat test --rerun --tests com.moe.services.DaemonIdentityTest --tests com.moe.services.MoeProjectForeignDaemonTest. Exit 0, BUILD SUCCESSFUL; XML is fresh after 10:44:52Z. DaemonIdentityTest 19/19 and MoeProjectForeignDaemonTest 10/10, 0 fail/err/skip, at HEAD c8a2a173. task-90664db1's completion is ff5933d9.\n7. Gate run fresh at HEAD 980c9a39: node --test daemon-json-cap and parity-check.sh both exit 0 (43/13/0/30). It will be re-run for complete_task.",
-      "startedAt": "2026-10-30T10:43:45.504Z",
-      "completedAt": "2026-10-30T10:49:43.070Z"
+      "startedAt": "2026-10-30T11:03:16.880Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read this row's diff together with task-86093c3e's and task-90664db1's, once as the px4swarm seat and once as a hostile process holding the port.\n\n- Can a seat still register, claim or bridge to a foreign daemon by any path? Check:\n  - --no-start-daemon;\n  - a resumed seat;\n  - a later loop iteration after the daemon changed (the proxy's per-RPC probe);\n  - MOE_DAEMON_HOST set;\n  - the foreign branch's gateway candidate.\n\n- Can a spelling difference refuse a seat's own daemon? Check:\n  - the D:\\, D:/, /mnt/d and msys /d forms;\n  - case;\n  - a trailing slash;\n  - '.' and '..';\n  - UNC;\n  - a relative served path.\n  Do the sh, ps1, proxy, Kotlin and daemon rules agree on every row?\n\n- Is every read bounded in time and bytes? Can a slow or endless /health stall pre-flight for longer than about 3 s per candidate?\n\n- Can set -e abort on the probe's exit code? Can the ps1 catch swallow the refusal and start a daemon?\n\n- Does the message print anything beyond the two paths and host:port? Is it byte-identical in sh and ps1?\n\n- Rails:\n  - regression tests exist for each slice;\n  - error handling: every failure is unknown and keeps today's behavior;\n  - no MCP contract change;\n  - existing daemon.json files still parse;\n  - no forbidden pattern.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "note": "Adversarial review of this row's diff alongside task-86093c3e/90664db1. No defect found, so nothing changed.\n\nLive end-to-end, read-only, against the real moes daemon (9876, D:/projexts/moes):\n- sh probe via the WSL gateway: /mnt/d/projexts/moes gives rc 0; /mnt/d/projexts/px4swarm gives rc 3 with served D:/projexts/moe. This is the incident scenario, now refused. 127.0.0.1 is unreachable from WSL NAT and gives rc 1 (unknown).\n- ps1 probe on 5.1 and 7: D:\\projexts\\moes gives same; D:\\projexts\\px4swarm gives foreign D:/projexts/moes. The real daemon accepts the HTTP/1.0 request with Host 127.0.0.1:port.\n\nPaths to a foreign daemon:\n- --no-start-daemon skips pre-flight, but every wrapper RPC spawns moe-proxy, which probes /health on each connect (task-86093c3e). The same holds for resumed seats and later loop iterations.\n- MOE_DAEMON_HOST is the first foreign-branch candidate and the PID-branch probe host.\n- The gateway candidate is probed the same way, and rc 3 on any candidate refuses at once.\n\nSpelling: D:\\, D:/, /mnt/d, msys /d (via cygpath -m; a cygpath failure gives unknown), case, trailing slash, '.', '..' and UNC all agree across sh, ps1, Kotlin and the daemon/proxy on Windows. A relative served path, or a relative expected project, is unknown everywhere. Known divergences, none of which can make a wrapper refuse its own correctly-configured daemon:\n- (a) A UNC \\\\wsl.localhost\\... project against a WSL daemon reporting /home/x is foreign for sh and ps1. The proxy and the daemon.json project check already refuse that combination; only Kotlin maps WSL shares.\n- (b) The Windows proxy lowercases non-/mnt POSIX paths, while sh, ps1 and Kotlin keep their case.\n- (c) The proxy on Linux treats '//srv' as POSIX; the wrappers and Kotlin treat it as UNC.\n\nBounds:\n- sh: a watchdog calls os._exit(1) at 3 s total, and the body is read with read(65537). A trickled reply took 3.03 s.\n- ps1: one deadline governs every read. Header and body trickles took about 3.02 s on 5.1 and 7, and the reply is capped at 64 KiB + 8 KiB.\n- Neither probe uses a proxy or follows redirects (ps1 uses a raw socket; sh uses ProxyHandler({})).\n\nControl flow:\n- sh: rc is captured with `|| PROBE_RC=$?`, so set -e is safe, and refuse_foreign_daemon exits in the main shell.\n- ps1: the refusal exits inside the try, and the foreign rows prove exit 1 with no '@@ running=' output, so the catch cannot swallow it. Get-MoeDaemonIdentity always returns exactly one string.\n\nThe message shows only host:port, the served path (control chars become '?', 300-char cap), this project and the daemon.json path. Its text is byte-identical in sh and ps1: the static row plus exact-line assertions on every engine.\n\nRails: regression rows cover each slice; every failure is unknown and keeps today's behavior; no MCP or wire change; daemon.json parsing is unchanged; no forbidden pattern. Size +414/-42, net 372: runtime sh 72, ps1 90, docs 0, tests 210.\n\nAccepted and pre-existing:\n- The /health to /mcp TOCTOU, and a hostile port holder that lies about projectPath; no client-side check can stop either.\n- A refused loopback connect costs about 2.4 s on Windows (SYN retries).",
-      "startedAt": "2026-10-30T10:49:43.965Z",
-      "completedAt": "2026-10-30T10:50:58.590Z"
+      "status": "PENDING",
+      "affectedFiles": []
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": null,
+  "status": "BLOCKED",
+  "assignedWorkerId": "worker-262588d0",
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": "Human-reported recurring bug (a seat adopts another project's daemon through a stale daemon.json). Root cause verified in code; queue it for planning.",
+  "reopenCount": 1,
+  "reopenReason": "Reviewed completion 6a1b7953522d20bd557c883b1c3acb80b718e0ae on moe/work-2026-10-24; non-board +414/-42 (net 372), docs and dependencies landed. DoD1 fails: PowerShell classifies distinct projects as the same. Snapshot-only real-preflight regressions fail 6/6 (3 cases on PS5.1 and PS7). Exact task.verification and commit-pinned Linux gate: 13 pass/30 documented PowerShell skips; Windows: 40 pass/3 documented Git Bash skips; both parity checks, bash -n and diff --check PASS. DoD2: npm ci in daemon+proxy then proxy npm test at the completion snapshot passes 6 files/263 tests, including 75 identity tests; initial missing-daemon-dependencies setup failure resolved by npm ci. DoD3: lease-protected gradlew.bat test --rerun --tests com.moe.services.DaemonIdentityTest --tests com.moe.services.MoeProjectForeignDaemonTest passes 19+10 tests, fresh XML, no failures/skips; Kotlin bytes match the commit; lease released. Repro: C:/Users/Yaron/AppData/Local/Temp/e7f4-qa.7POgax/scripts/tests/qa-posix-case.test.mjs; Windows node --test --test-name-pattern='QA identity:' on that file. qa-original-all.log records all 6 assertion failures. Both Unicode names were separately created on Windows disk and retained marker contents A/B; -eq=True AND -ceq=True, ordinal=False. Thus -ceq alone is insufficient. Add tests for composed/decomposed Windows names and case-distinct POSIX paths; use UTF-8 console output in the Unicode test harness. A snapshot-only ordinal comparison plus case-sensitive mount-prefix experiment passes all 6. Snapshot launchers restored to commit bytes; no shared source edits.",
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -104,11 +92,29 @@
       "author": "architect-bd1eb82d",
       "content": "Planning split (architect-bd1eb82d, 2026-10-30). The fix spans three clients and three packages, about 9 files, so I sliced it on the package seam. This row keeps the wrapper slice and verifies the whole bug last.\n\n- Proxy slice, DoD 2: task-86093c3e. Every wrapper RPC goes through the proxy, so this alone stops registering and claiming on a foreign daemon.\n- JetBrains slice, DoD 3: task-90664db1. I checked the plugin and the gap is real. MoeProjectService.connect/connectWithRetry adopt daemon.json's port whenever isProcessAlive(pid) && isPortOpen(port), with no identity check, so a reused PID attaches the window to another board. Under the PROTECTED profile, activationRefusal already refuses an unrecorded daemon; LEGACY does not.\n- VS Code has the same gap with no PID check at all. It is filed as BACKLOG task-80ed1fe8 for the human to schedule.\n\nThis row dependsOn task-86093c3e and task-90664db1. task-724e31fa now dependsOn this row, because both edit the foreign-daemon probe block of moe-agent.sh. CQ-RF04 (task-de91373a) now dependsOn task-90664db1, because both edit MoeProjectService.kt.\n\nRule shared by all slices: /health reports the daemon's raw --project, which can be relative. A relative served projectPath is 'unknown', never 'foreign'. Only an absolute path (drive, UNC or POSIX) that differs by the comparable-path rule refuses.",
       "timestamp": "2026-10-30T07:57:31.336Z"
+    },
+    {
+      "id": "comment-8d0b722caa504d3dab2fec1a3ee0a66c",
+      "author": "worker-262588d0",
+      "content": "Reopen-1 investigation confirms both QA issues in the real pre-flight: Get-MoeDaemonIdentity uses culture-aware -eq after normalization; Get-MoeComparableProjectPath matches /mnt case-insensitively. Added the three requested regression rows and explicit UTF-8 capture; original production gives 6 assertion failures (3 on PS5.1 + 3 on PS7), all exit 0/running=True rather than refusal. Evidence: C:/Users/Yaron/AppData/Local/Temp/e7f4-fix.Qz5NvY/red.log. Will use ordinal final equality and case-sensitive /mnt matching only; retain landed sh/docs and raw-socket bounded probe. Both prerequisites are DONE + landed per epicSiblings (proxy 6c55aefa, JetBrains ff5933d9).",
+      "timestamp": "2026-10-30T11:00:42.987Z"
+    },
+    {
+      "id": "comment-797b7d1f1bb84c7dbe02046b722a4c4b",
+      "author": "worker-262588d0",
+      "content": "The requested two changes pass the six QA regressions. Tracing the same root cause within Get-MoeComparableProjectPath found its segment -eq/-ne also ignores Unicode soft-hyphen: a distinct U+00AD, dot+U+00AD or dotdot+U+00AD segment collapses as empty/dot/parent. Added three table rows (6 assertions failing on both engines even after final ordinal equality) and replaced those two segment comparisons with string.Equals/Length. This is the same culture-dependent path normalization defect, inside the current step's function; no new files, API or broader normalization changes. Kept drive/UNC lowercasing. Evidence segment-red.log in the same Windows snapshot.",
+      "timestamp": "2026-10-30T11:02:50.263Z"
+    },
+    {
+      "id": "comment-b9b75a13829d412198801e318e31f035",
+      "author": "worker-262588d0",
+      "content": "Step 5 partial evidence (all isolated snapshots, bb2f846a + own 4-file overlay, cmp-matched): Linux node --test scripts/tests/daemon-json-cap.test.mjs: 55 tests, 13 pass/0 fail/42 documented PS skips (bash 10/10 + 3 static). Windows same suite: 55 tests, 52 pass/0 fail/3 documented Git Bash Windows-owned-branch skips; Git Bash 7/10, PS5.1 21/21, PS7 21/21, static 3/3. parity-check.sh, parity-check.ps1, bash -n and git diff --check pass. Proxy fresh npm ci daemon+proxy then npm test in /tmp/e7f4-proxy.y0kdQC: 6 files/263 pass, identity 75. Nine isolated mutants killed by named assertion failures: M1-sh 3, M3-sh 2, M4-sh 1, M2-ps 2, M3-ps 2, M4-ps 2; -ceq substitution 2; case-insensitive mount 2; culture-aware segments 6. Sources restored/cmp-checked. No JetBrains check run this session: jetbrains-gradle remains held by RF04 task-de91373a/worker-73c29a03; after doing the non-resource work per nextAction and rechecking, this row is still queue #1. Will park for that resource. Step 5 remains IN_PROGRESS; step 6 adversarial review and fresh completion gate remain. No unrun check is claimed passing.",
+      "timestamp": "2026-10-30T11:05:11.599Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:43:02.972Z",
-  "updatedAt": "2026-10-30T10:51:47.796Z",
+  "updatedAt": "2026-10-30T11:06:35.850Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:43:11.337Z",
@@ -118,30 +124,35 @@
     "firstClaimAt": "2026-10-30T07:45:40.066Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-bd1eb82d",
-    "architect-4ae016fb",
-    "worker-e60b90bd"
+    "worker-262588d0",
+    "qa-ba3f4f35"
   ],
   "dependsOn": [
     "task-86093c3efd8645748f460db870073392",
     "task-90664db1e08a45f7b63c1e0f44eeee09"
   ],
-  "tier": "standard",
-  "effort": "xhigh",
+  "tier": "heavy",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
     "step-2",
     "step-3",
-    "step-4",
-    "step-5",
-    "step-6"
+    "step-4"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "moe-agent.sh and moe-agent.ps1 never adopt a daemon whose live identity (/health projectPath) is another project. Pre-flight stops before registering, with a message naming both projects. The launcher tests cover a healthy-but-foreign daemon, and scripts/tests/parity-check.sh passes.",
+      "rejectedAt": "2026-10-30T10:58:46.460Z",
+      "rejectedBy": "qa-ba3f4f35"
+    }
+  ],
   "planSubmittedAt": "2026-10-30T07:59:43.680Z",
   "planningNotes": {
     "approachesConsidered": "- One task for all three clients: rejected. That would be three packages and about nine files, over the size cap. It is split on the package seam, as recorded in this row's first comment:\n  - task-86093c3e: proxy;\n  - task-90664db1: JetBrains;\n  - task-80ed1fe8: VS Code, in BACKLOG.\n- A project parameter on the /mcp upgrade, checked by the daemon: deferred.\n  - It is a wire change.\n  - It touches WebSocketServer.ts, which task-801272c4 and task-2f2484b4 are editing.\n  - Client-side /health probes close the bug without any daemon change, and the daemon's own probeDaemonHealth already uses the same rule.\n- Having the wrapper treat the mismatch as stale and start this project's daemon itself: rejected.\n  - DoD 1 says pre-flight stops and names both projects.\n  - From WSL, the wrapper can neither verify nor start the Windows daemon.\n- A new launcher test file: rejected.\n  - CI runs node --test files from an explicit list (task-b8b8faba).\n  - daemon-json-cap.test.mjs already extracts and runs the same check blocks on Linux and Windows.",
@@ -177,7 +188,103 @@
     "scripts/tests/daemon-json-cap.test.mjs",
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
+    "CLAUDE.md",
+    ".moe/epics/epic-dce3a64f31a44d948f771137a2c0dbed.json",
+    ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
+    ".moe/tasks/task-30066ccdeb6042c3b5c89a7a31833d14.json",
+    ".moe/tasks/task-6fc0096b9fff4c45904cfbce7833ad2d.json",
+    ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json",
+    ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json"
+  ],
+  "completionSummary": "DoD 1: both launchers refuse a live daemon whose /health projectPath is another project.\n- moe-agent.sh: probe_daemon_health takes the expected project. Exit 3 means foreign; the comparable rule (ntpath/posixpath) mirrors comparableProjectPath. The probe has a 3 s total watchdog, a 64 KiB cap and no env proxy. The Windows-owned branch refuses on rc 3, and so does the PID branch, which now probes after kill -0. Git Bash compares `cygpath -m` output; a cygpath failure counts as unknown.\n- moe-agent.ps1: Get-MoeComparableProjectPath and Get-MoeDaemonIdentity, probed after Get-Process. On foreign it exits 1 inside the try.\n- Both print the same three MOE_DAEMON_FOREIGN_PROJECT lines naming both projects. They delete, start and export nothing. Every probe failure is unknown and keeps today's behavior.\n- DEVIATION: the ps1 probe is a raw HTTP/1.0 TcpClient with one deadline, not HttpWebRequest. HttpWebRequest's per-read timeout restarts on every trickled byte, the defect QA rejected in the JetBrains probe. Ad-hoc trickle tests end at about 3.0 s on 5.1 and 7.\n- CLAUDE.md: two clauses. Size +414/-42, net 372.\nTests: daemon-json-cap.test.mjs gains 'identity:' rows. Runs are async with a fake /health that counts requests, and the ps1 fixtures moved off 9876.\n- RED on HEAD launchers: Linux 5 failures, Windows 16.\n- GREEN on Linux: 13 pass, 30 PowerShell skips.\n- GREEN on Windows: 40 pass, 0 fail, 3 documented Git Bash skips (Git Bash 7/3, PowerShell 5.1 15/15, pwsh 7 15/15).\n- parity-check.sh and parity-check.ps1 PASS.\n- Mutants M1-M4 for sh and ps1 are all killed by assertions.\n- Live check against the real moes daemon: px4swarm is refused (sh via the WSL gateway, ps1 on 5.1 and 7) and moes is judged same.\nDoD 2 (task-86093c3e, 6c55aefa): proxy npm test in a Linux-native snapshot at 980c9a39 passes, 6 files / 263 tests, daemonIdentity 75.\nDoD 3 (task-90664db1, ff5933d9): run under the jetbrains-gradle lease (released afterwards). DaemonIdentityTest 19/19 and MoeProjectForeig",
+  "commits": [
+    {
+      "sha": "6a1b7953522d20bd557c883b1c3acb80b718e0ae",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T10:23:33Z",
+      "paths": [
+        ".moe/epics/epic-dce3a64f31a44d948f771137a2c0dbed.json",
+        ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
+        ".moe/tasks/task-30066ccdeb6042c3b5c89a7a31833d14.json",
+        ".moe/tasks/task-6fc0096b9fff4c45904cfbce7833ad2d.json",
+        ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json",
+        ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json",
+        "CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T10:52:15.313Z",
+      "treeId": "245fc12c9fc6f18eeb9bf08b261dcec0facb9c32",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/daemon-json-cap.test.mjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
     "CLAUDE.md"
   ],
-  "completionSummary": "DoD 1: both launchers refuse a live daemon whose /health projectPath is another project.\n- moe-agent.sh: probe_daemon_health takes the expected project. Exit 3 means foreign; the comparable rule (ntpath/posixpath) mirrors comparableProjectPath. The probe has a 3 s total watchdog, a 64 KiB cap and no env proxy. The Windows-owned branch refuses on rc 3, and so does the PID branch, which now probes after kill -0. Git Bash compares `cygpath -m` output; a cygpath failure counts as unknown.\n- moe-agent.ps1: Get-MoeComparableProjectPath and Get-MoeDaemonIdentity, probed after Get-Process. On foreign it exits 1 inside the try.\n- Both print the same three MOE_DAEMON_FOREIGN_PROJECT lines naming both projects. They delete, start and export nothing. Every probe failure is unknown and keeps today's behavior.\n- DEVIATION: the ps1 probe is a raw HTTP/1.0 TcpClient with one deadline, not HttpWebRequest. HttpWebRequest's per-read timeout restarts on every trickled byte, the defect QA rejected in the JetBrains probe. Ad-hoc trickle tests end at about 3.0 s on 5.1 and 7.\n- CLAUDE.md: two clauses. Size +414/-42, net 372.\nTests: daemon-json-cap.test.mjs gains 'identity:' rows. Runs are async with a fake /health that counts requests, and the ps1 fixtures moved off 9876.\n- RED on HEAD launchers: Linux 5 failures, Windows 16.\n- GREEN on Linux: 13 pass, 30 PowerShell skips.\n- GREEN on Windows: 40 pass, 0 fail, 3 documented Git Bash skips (Git Bash 7/3, PowerShell 5.1 15/15, pwsh 7 15/15).\n- parity-check.sh and parity-check.ps1 PASS.\n- Mutants M1-M4 for sh and ps1 are all killed by assertions.\n- Live check against the real moes daemon: px4swarm is refused (sh via the WSL gateway, ps1 on 5.1 and 7) and moes is judged same.\nDoD 2 (task-86093c3e, 6c55aefa): proxy npm test in a Linux-native snapshot at 980c9a39 passes, 6 files / 263 tests, daemonIdentity 75.\nDoD 3 (task-90664db1, ff5933d9): run under the jetbrains-gradle lease (released afterwards). DaemonIdentityTest 19/19 and MoeProjectForeig"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-e60b90bd@2026-10-30T10:23:33Z",
+    "at": "2026-10-30T10:52:15.313Z"
+  },
+  "reviewCompletedAt": "2026-10-30T10:58:46.460Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "moe-agent.sh and moe-agent.ps1 never adopt a daemon whose live identity (/health projectPath) is another project. Pre-flight stops before registering, with a message naming both projects. The launcher tests cover a healthy-but-foreign daemon, and scripts/tests/parity-check.sh passes."
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "file": "scripts/moe-agent.ps1",
+        "line": 653,
+        "description": "DoD1: culture-aware -eq accepts distinct Windows directories D:/qa/caf\\u00e9 and D:/qa/cafe\\u0301 (actual Unicode chars); both PS5.1/7 return running=True/exit 0. QA created both on disk with separate markers. -ceq also equates them. Compare normalized paths ordinally; add real-preflight Unicode and case-distinct POSIX regressions (/home/qa/OtherProject versus /home/qa/otherproject), preserving explicit drive/UNC case folding."
+      },
+      {
+        "type": "missing_feature",
+        "file": "scripts/moe-agent.ps1",
+        "line": 603,
+        "description": "DoD1/path parity: case-insensitive -match folds /MNT/d/x/y into d:/x/y, unlike the sh/proxy/Kotlin rule. A real-preflight fixture with expected /MNT/d/x/y and served D:/x/y adopts on both PowerShell engines. Match the literal /mnt prefix case-sensitively. Add a regression showing /MNT stays distinct while existing /mnt/d drive-equivalence rows remain green."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Reviewed completion 6a1b7953522d20bd557c883b1c3acb80b718e0ae on moe/work-2026-10-24; non-board +414/-42 (net 372), docs and dependencies landed. DoD1 fails: PowerShell classifies distinct projects as the same. Snapshot-only real-preflight regressions fail 6/6 (3 cases on PS5.1 and PS7). Exact task.verification and commit-pinned Linux gate: 13 pass/30 documented PowerShell skips; Windows: 40 pass/3 documented Git Bash skips; both parity checks, bash -n and diff --check PASS. DoD2: npm ci in daemon+proxy then proxy npm test at the completion snapshot passes 6 files/263 tests, including 75 identity tests; initial missing-daemon-dependencies setup failure resolved by npm ci. DoD3: lease-protected gradlew.bat test --rerun --tests com.moe.services.DaemonIdentityTest --tests com.moe.services.MoeProjectForeignDaemonTest passes 19+10 tests, fresh XML, no failures/skips; Kotlin bytes match the commit; lease released. Repro: C:/Users/Yaron/AppData/Local/Temp/e7f4-qa.7POgax/scripts/tests/qa-posix-case.test.mjs; Windows node --test --test-name-pattern='QA identity:' on that file. qa-original-all.log records all 6 assertion failures. Both Unicode names were separately created on Windows disk and retained marker contents A/B; -eq=True AND -ceq=True, ordinal=False. Thus -ceq alone is insufficient. Add tests for composed/decomposed Windows names and case-distinct POSIX paths; use UTF-8 console output in the Unicode test harness. A snapshot-only ordinal comparison plus case-sensitive mount-prefix experiment passes all 6. Snapshot launchers restored to commit bytes; no shared source edits.",
+      "rejectedAt": "2026-10-30T10:58:46.460Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "moe-agent.sh and moe-agent.ps1 never adopt a daemon whose live identity (/health projectPath) is another project. Pre-flight stops before registering, with a message naming both projects. The launcher tests cover a healthy-but-foreign daemon, and scripts/tests/parity-check.sh passes."
+      ],
+      "issues": [
+        {
+          "type": "missing_feature",
+          "file": "scripts/moe-agent.ps1",
+          "line": 653,
+          "description": "DoD1: culture-aware -eq accepts distinct Windows directories D:/qa/caf\\u00e9 and D:/qa/cafe\\u0301 (actual Unicode chars); both PS5.1/7 return running=True/exit 0. QA created both on disk with separate markers. -ceq also equates them. Compare normalized paths ordinally; add real-preflight Unicode and case-distinct POSIX regressions (/home/qa/OtherProject versus /home/qa/otherproject), preserving explicit drive/UNC case folding."
+        },
+        {
+          "type": "missing_feature",
+          "file": "scripts/moe-agent.ps1",
+          "line": 603,
+          "description": "DoD1/path parity: case-insensitive -match folds /MNT/d/x/y into d:/x/y, unlike the sh/proxy/Kotlin rule. A real-preflight fixture with expected /MNT/d/x/y and served D:/x/y adopts on both PowerShell engines. Match the literal /mnt prefix case-sensitively. Add a regression showing /MNT stays distinct while existing /mnt/d drive-equivalence rows remain green."
+        }
+      ]
+    }
+  ],
+  "blockedReason": "Waiting for shared resource jetbrains-gradle, queue #1 behind worker-73c29a03/task-de91373a5ed84530b29fc4cfbcee974a. QA path-identity fix implemented and reported; step 5 non-resource checks pass (Linux 13/55 with 42 documented skips, Windows 52/55 with 3 documented skips, both parity, proxy 263 tests, nine assertion-killed mutants). Required fresh identity JUnit check has NOT run and is not claimed passing. Once granted, run planned DaemonIdentityTest + MoeProjectForeignDaemonTest --rerun, release lease, finish step 5 and final adversarial step 6, fresh completion gate then complete_task. Full evidence/resume commands in task-task-e7f4026abc0c4a8bb7632c8178ea7d70-handoff.",
+  "blockedOnTaskIds": [
+    "task-de91373a5ed84530b29fc4cfbcee974a"
+  ],
+  "blockedResourceId": "jetbrains-gradle",
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-30T11:06:35.850Z"
 }

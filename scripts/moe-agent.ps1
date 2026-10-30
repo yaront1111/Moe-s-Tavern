@@ -594,13 +594,13 @@ function Get-MoeComparableProjectPath([string]$Path) {
     $root = if (-not $windows) { 0 } elseif ($p.StartsWith('//')) { 2 } else { 1 }
     $kept = New-Object System.Collections.Generic.List[string]
     foreach ($segment in $p.Split('/')) {
-        if ($segment -eq '' -or $segment -eq '.') { continue }
-        if ($segment -ne '..') { $kept.Add($segment) }
+        if ($segment.Length -eq 0 -or $segment.Equals('.')) { continue }
+        if (-not $segment.Equals('..')) { $kept.Add($segment) }
         elseif ($kept.Count -gt $root) { $kept.RemoveAt($kept.Count - 1) }
     }
     $joined = $kept -join '/'
     if ($windows) { return $(if ($root -eq 2) { "//$joined" } else { $joined }).ToLowerInvariant() }
-    if ("/$joined" -match '^/mnt/([A-Za-z])(?:/(.*))?$') {
+    if ("/$joined" -cmatch '^/mnt/([A-Za-z])(?:/(.*))?$') {
         return $(if ($Matches[2]) { "$($Matches[1]):/$($Matches[2])" } else { "$($Matches[1]):" }).ToLowerInvariant()
     }
     return "/$joined"
@@ -650,7 +650,8 @@ function Get-MoeDaemonIdentity($Port, [string]$ProjectPath) {
         $ProjectPath = $ProjectPath -replace '^Microsoft\.PowerShell\.Core\\FileSystem::', ''
         $absolute = '^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]|/)'
         if ($served -isnot [string] -or $served -notmatch $absolute -or $ProjectPath -notmatch $absolute) { return 'unknown' }
-        if ((Get-MoeComparableProjectPath $served) -eq (Get-MoeComparableProjectPath $ProjectPath)) { return 'same' }
+        # -eq and -ceq are culture-aware: distinct Unicode directory names can compare equal.
+        if ([string]::Equals((Get-MoeComparableProjectPath $served), (Get-MoeComparableProjectPath $ProjectPath), [StringComparison]::Ordinal)) { return 'same' }
         $shown = $served -replace '[\x00-\x1f\x7f]', '?'
         if ($shown.Length -gt 300) { $shown = $shown.Substring(0, 300) + '...' }
         return "foreign $shown"
