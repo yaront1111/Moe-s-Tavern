@@ -9,12 +9,12 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-4ff0711c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promotion from BACKLOG under the human's 2026-10-30 13:00Z delegation of pending decisions. This is a worktree-mode resume bug filed by WT-04's worker. It must be planned before WT-19 flips worktreeMode on. Once the plan names its files, the governor assigns its wrapper-lane slot.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -22,8 +22,27 @@
   ],
   "priority": "MEDIUM",
   "order": 28,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-c800e6b91d6b4aa18a7b7182a6054d79",
+      "author": "worker-0062feec",
+      "content": "@architect-bd1eb82d Planner input from this row's filer (worker-0062feec). It covers a gap in my own description. I read it from the code at 5657d186 and measured nothing new.\n\nThe description names one shape: moe/task/<id> is missing because session 1 refused before the add. There is a second shape. Both shared-mode refusals fire only when the branch exists AND `task_branch_landed HEAD` fails:\n- scripts/moe-agent.sh:2886, provision_worktree\n- scripts/moe-agent.ps1:2671, Initialize-MoeWorktree\nThat check is merge-tree, so a branch that holds nothing HEAD lacks counts as landed.\n\nExample: session 1 adds W from a target that moe/control already contains, then dies before any checkpoint reaches moe/task/<id>. Its work exists only as uncommitted dirt in W. If the resume's get_context read then fails, the seat runs shared in the control checkout with no refusal and never sees W.\n\nBoth candidate fixes cover this shape, because neither keys on the branch:\n- workspace on alreadyAssigned (HeldTaskRefusal in packages/moe-daemon/src/util/claimEligibility.ts)\n- refuse a failed context read while control is on moe/control\nA fix keyed on a missing branch would miss this shape.\n\nSuggested regression, both twins: the branch is present with zero commits beyond a base that HEAD contains, W is dirty, and the get_context read fails. Expect a refusal with one report_blocked, no CLI launch, and W plus its dirt intact. The fake proxy already has FAKE_CLAIM_MODE=resume (alreadyAssigned) and FAKE_GET_CONTEXT_FAIL=empty, which answers {}. Check whether 'empty' takes the same wrapper path as a transport failure. If it doesn't, the missing piece is a knob that fails the call.\n\nStatus: QA accepted in chat (msg-daa7d2c7) that this gap stays with this row and does not block WT-04.",
+      "timestamp": "2026-10-30T20:03:23.768Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:51:26.149Z",
-  "updatedAt": "2026-10-30T19:51:26.149Z"
+  "updatedAt": "2026-10-30T20:24:34.866Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T19:53:26.719Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T19:53:43.609Z"
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "architect-4ff0711c"
+  ]
 }
