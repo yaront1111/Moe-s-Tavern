@@ -14,10 +14,11 @@
     {
       "stepId": "step-1",
       "description": "Committed-bytes gate in scripts/moe-agent.sh (DoD 1-3). This task depends on task-e7f4026a, which edits the same file: find the block by its header '# --- Self-restart when this script's own bytes change on disk', not by line number.\n\nNext to MOE_WRAPPER_REFUSED_HASH=\"\", add MOE_WRAPPER_DEFERRED_HASH=\"\" and a function `wrapper_reload_deferred` (comment 'Twin: Test-MoeWrapperReloadDeferred'). It returns 0 (defer the reload) unless the wrapper file is tracked in ITS OWN checkout and matches HEAD; in that case it returns 1.\n(a) `git -C \"$SCRIPT_DIR\" ls-files --error-unmatch -- \"${MOE_WRAPPER_PATH##*/}\"`. rc 0 = tracked. rc 1 = untracked, which counts as uncommitted. Any other rc = git failure.\n(b) Only when the file is tracked: `git -C \"$SCRIPT_DIR\" diff --quiet HEAD -- <same basename>`. rc 0 = committed, so return 1. rc 1 = uncommitted. Any other rc = git failure.\nSend both calls' stdout and stderr to /dev/null and capture the rc with `|| rc=$?`. set -e must never end the seat on the very failure this function reports.\nUse $SCRIPT_DIR (the absolute directory of BASH_SOURCE[0], line ~17), never $PROJECT: a px4swarm seat runs moes's wrapper. Never use a relative MOE_WRAPPER_PATH either.\n\nExit codes I measured on git 2.43 while planning (ls-files/diff):\n- tracked, clean: 0/0\n- edited: 0/1\n- staged but not committed: 0/1\n- untracked: ls-files 1. diff alone says 0, which is why ls-files is required.\n- not a repo: 128. diff alone falls back to --no-index mode and says 1.\n- unborn HEAD: 0/128\n- corrupt index: 128/128\n- git missing: 127\n\nLogging, once per hash: when MOE_WRAPPER_CURRENT_HASH differs from MOE_WRAPPER_DEFERRED_HASH, store it and print exactly one line:\n- uncommitted or untracked (stdout): `[INFO] MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits; staying on the current bytes until they are committed`\n- git failure (stderr): `[WARN] MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed (git <ls-files|diff> exited <rc>); staying on the current bytes`\nThe dedupe suppresses only the log line. Every loop top re-runs the git check, so committing the very bytes that were deferred reloads them.\n\nWire it in by appending `&& ! wrapper_reload_deferred` as the LAST test of the existing loop-top `if`, after the REFUSED_HASH test. The git check then runs only for a changed, unrefused hash; an unchanged wrapper starts no git process. The existing body stays byte-identical, with no re-indent: the bash -n parse guard, the refused-hash rule, the MOE_HEARTBEAT_STOP_TIMEOUT deferral, the wrapper_restart deregister and the exec.\nA deferral never deregisters, exits or `continue`s. The iteration goes on to pre-flight on the current bytes.\nExtend the block comment with the reason: on 2026-10-30, three seats re-exec'd onto task-e7f4026a's uncommitted, unreviewed +79/-8 edit.\nError handling: fail closed. Any unexpected git result defers the reload.\n\nHAZARD: until this lands, every sh seat launched from this checkout hot-loads each parseable save of this file, including this fix's own first save. Prepare the whole change, then apply it as ONE Edit-tool edit: a single save, and TOOL-witnessed for a CONTESTED landing (peers in the V chain plan this file too). Run `bash -n scripts/moe-agent.sh` right after. Never leave an intermediate state on disk. Never revert or absorb a peer's hunks.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "startedAt": "2026-10-30T12:05:15.780Z"
     },
     {
       "stepId": "step-2",
@@ -75,7 +76,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -91,7 +92,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:35:09.303Z",
-  "updatedAt": "2026-10-30T11:11:39.467Z",
+  "updatedAt": "2026-10-30T12:06:06.735Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T10:45:02.188Z",
@@ -103,7 +104,9 @@
     "plannedDistinctFileCount": 7
   },
   "contextFetchedBy": [
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-55e6716a",
+    "governor-693b7073"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -186,5 +189,10 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-4ae016fb@2026-10-30T10:45:24Z",
     "at": "2026-10-30T11:11:39.467Z"
-  }
+  },
+  "workStartedAt": "2026-10-30T12:05:15.780Z",
+  "blockedReason": "Approved plan revision 1 steps 1–4 explicitly mandate Claude Edit-tool saves/TOOL witnesses. This actual Codex session has apply_patch and Serena editors but no Edit/Write; current scripts/moe-agent.sh:8227–8231 still says Codex TOOL sets are empty. Cannot safely substitute an unwitnessed editor under that plan. Please reroute to an actual witnessed-editor seat or approve a tool-neutral atomic-edit amendment with a valid contested-path landing route. Architect notified in msg-32987c451ade489785f09b6a44167947. Step-1 started; no source edits, no tests run or claimed. All 7 owned paths clean; dependency e7f4026a DONE/landed, so neither peer dirtiness nor prerequisite is the blocker. Handoff and gotcha memories saved.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-30T12:06:06.735Z"
 }
