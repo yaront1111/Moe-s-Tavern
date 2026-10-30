@@ -84,7 +84,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -103,16 +103,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:33:14.135Z",
-  "updatedAt": "2026-10-30T09:31:57.157Z",
+  "updatedAt": "2026-10-30T09:33:32.900Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:37:59.978Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T09:33:32.900Z",
+    "wallClockMs": 6932922
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -161,7 +164,43 @@
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
-    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    ".moe/tasks/task-0c72d59aad37467fb49e5ad699692d78.json",
+    ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json"
   ],
-  "completionSummary": "WSL agent mode now starts the daemon with `--host wsl`. A new private WSL_BIND_HOST constant in MoeDaemonSupervisor is used at all three sites: the protected direct command, the legacy direct command and the legacy shell hostSuffix. buildDaemonCommand became internal as a test seam. The TerminalAgentLauncher KDoc and the MoeBundle wslAgents.on message were updated (the new words are ASCII).\n\nTests: the RuntimeSelectionPolicyTest S1 pin is now `--host wsl`. New MoeDaemonSupervisorTest rows W1 (legacy direct argv, wsl on and off) and W2 (legacy shell string, wsl on and off) use the literal \"wsl\", not the constant. W2 is guarded by an Assume that MOE_DAEMON_COMMAND is unset; it ran and was not skipped.\n\nMutants, all killed by assertion failures and then restored and cmp-checked:\n- M1, constant set to 0.0.0.0: S1, W1 and W2 fail.\n- M2, direct command ignores wslAgentsEnabled: W1 fails.\n- M3, hostSuffix unconditional: W2 fails.\n\nDoD 2: `grep -rn '0\\.0\\.0\\.0' moe-jetbrains/src/main` prints nothing and exits 1.\n\nNot covered by this change:\n- The MOE_DAEMON_COMMAND override stays verbatim by design and never carries --host.\n- An older daemon treats 'wsl' as a hostname, fails to bind, and exits through the existing spawn backoff. Nothing retries with 0.0.0.0.\n- A daemon already running from an older plugin keeps its 0.0.0.0 bind until the toggle's restart or an IDE restart. RF03 handles that."
+  "completionSummary": "WSL agent mode now starts the daemon with `--host wsl`. A new private WSL_BIND_HOST constant in MoeDaemonSupervisor is used at all three sites: the protected direct command, the legacy direct command and the legacy shell hostSuffix. buildDaemonCommand became internal as a test seam. The TerminalAgentLauncher KDoc and the MoeBundle wslAgents.on message were updated (the new words are ASCII).\n\nTests: the RuntimeSelectionPolicyTest S1 pin is now `--host wsl`. New MoeDaemonSupervisorTest rows W1 (legacy direct argv, wsl on and off) and W2 (legacy shell string, wsl on and off) use the literal \"wsl\", not the constant. W2 is guarded by an Assume that MOE_DAEMON_COMMAND is unset; it ran and was not skipped.\n\nMutants, all killed by assertion failures and then restored and cmp-checked:\n- M1, constant set to 0.0.0.0: S1, W1 and W2 fail.\n- M2, direct command ignores wslAgentsEnabled: W1 fails.\n- M3, hostSuffix unconditional: W2 fails.\n\nDoD 2: `grep -rn '0\\.0\\.0\\.0' moe-jetbrains/src/main` prints nothing and exits 1.\n\nNot covered by this change:\n- The MOE_DAEMON_COMMAND override stays verbatim by design and never carries --host.\n- An older daemon treats 'wsl' as a hostname, fails to bind, and exits through the existing spawn backoff. Nothing retries with 0.0.0.0.\n- A daemon already running from an older plugin keeps its 0.0.0.0 bind until the toggle's restart or an IDE restart. RF03 handles that.",
+  "commits": [
+    {
+      "sha": "71785a6a1d6d576587b0ce0e6808685400590ca6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T09:29:46Z",
+      "paths": [
+        ".moe/tasks/task-0c72d59aad37467fb49e5ad699692d78.json",
+        ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T09:32:15.200Z",
+      "treeId": "522763f3929cb769d8cf548a43e8c933afc17797",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-30T09:29:46Z",
+    "at": "2026-10-30T09:32:15.200Z"
+  },
+  "completedAt": "2026-10-30T09:33:32.900Z",
+  "reviewCompletedAt": "2026-10-30T09:33:32.900Z",
+  "reviewSummary": "Reviewed completion 71785a6a on moe/work-2026-10-24 (git show + branch --contains; moe-jetbrains src diff is ~+60/-8, non-board, well under the 400 LOC cap). Re-ran the verification command under the jetbrains-gradle lease (idle gradle daemon first): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> BUILD SUCCESSFUL, exit 0; build/test-results XML freshly written: 385 tests, 0 failures, 0 errors, 0 skipped. S1, W1 and W2 all ran (W2 not skipped by its Assume). Lease released. DoD 1: all three --host sites in MoeDaemonSupervisor.kt (protectedDaemonCommand line 231, buildDaemonCommand hostSuffix line 332, buildDirectDaemonCommand line 347) use WSL_BIND_HOST=\"wsl\", each gated on wslAgentsEnabled(); toggle off adds no --host. S1 pin updated to \"wsl\"; W1 (direct argv, wsl on/off, exact list equality, no 0.0.0.0) and W2 (shell string: endsWith \" --host wsl\", exactly one --host, quoted --project intact; off: no --host) assert the literal \"wsl\", not the constant, so a mutated constant fails them. DoD 2: grep -rn '0\\.0\\.0\\.0' moe-jetbrains/src/main -> no output, exit 1 (re-run by me). DoD 3: gate green as above. Scope: only the five planned source/resource files plus the task JSONs; no daemon/moe-agent.sh/docs/VS Code edits; buildDaemonCommand private->internal is the declared test seam. Daemon side (task-2f2484b4, bindHosts.ts WSL_BIND_HOST='wsl') is landed. Residual, by design and out of scope: MOE_DAEMON_COMMAND override stays verbatim; an older daemon rejects 'wsl' as a hostname and exits through the existing spawn backoff (no 0.0.0.0 retry); an already-running old-plugin daemon keeps its 0.0.0.0 bind until restart (RF03). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
