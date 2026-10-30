@@ -1469,6 +1469,51 @@ A failed write reaches the caller as an error, and the run is published nowhere.
 
 ---
 
+## CheckDispatch
+
+**File:** `.moe/checks/dispatches/{dispatch-id}.json` (one file per dispatch)
+
+Which check an authenticated runner was asked to run, pinned to the task's current [Candidate](#candidate), that candidate's tree and the task's current approved plan revision while they are current. The runner records one through `moe.record_check_dispatch` over the authenticated `/runner` channel (docs/MCP_SERVER.md, **Runner channel**). Only `packages/moe-daemon/src/state/checkObservationStore.ts` writes the file. `runnerId` comes from the channel, never from an argument, and `treeSha` from the candidate. Purely additive: no `schemaVersion` bump and no migration. The subdirectory is never loaded as check runs.
+
+```typescript
+interface CheckDispatch {
+  readonly id: string;           // "dispatch-<32 hex>" when the daemon generates it; a caller-supplied id
+                                 // matches [A-Za-z0-9_-]{1,128} and must not differ from a stored one only by case
+  readonly taskId: string;
+  readonly candidateId: string;  // The task's current candidate when recorded
+  readonly treeSha: string;      // That candidate's treeSha, copied from the candidate
+  readonly planRevision: number; // The task's planRevision, equal to its approvedPlanRevision, when recorded (>= 1)
+  readonly command: string;      // Verbatim, under the CheckRun command rule (non-blank, at most 500 chars)
+  readonly checkId?: string;     // Optional protected check id, [A-Za-z0-9][A-Za-z0-9._-]{0,63}
+  readonly environment: string;  // Opaque, verbatim, compared exactly (non-blank, at most 255 chars, no control chars)
+  readonly runnerId: string;     // The authenticated channel's runner-<16 hex>
+  readonly createdAt: string;    // ISO 8601, the daemon's clock
+}
+```
+
+**Immutability.** A dispatch is never edited or deleted. A same-id dispatch that repeats `taskId`, `candidateId`, `planRevision`, `command`, `checkId`, `environment` and `runnerId` returns the stored one; any difference is refused (`CHECK_DISPATCH_IMMUTABLE`). That check precedes the currency checks, so a crash retry still replays once its candidate is superseded. A superseded candidate never gets a new dispatch (`CHECK_DISPATCH_NOT_CURRENT`), but its existing dispatches stay answerable.
+
+## CheckObservation
+
+**File:** `.moe/checks/observations/{dispatch-id}.json` (at most one per dispatch)
+
+The marker naming the one [CheckRun](#checkrun) a runner observed for a [CheckDispatch](#checkdispatch). It is written by `moe.record_check_observation` after the run itself, which is a `runner-observed` CheckRun whose `candidateId`, `treeSha`, `command`, `planRevision`, `environment` and `dispatchId` are the dispatch's and whose `runnerId` is the channel's. Only `packages/moe-daemon/src/state/checkObservationStore.ts` writes the file.
+
+```typescript
+interface CheckObservation {
+  readonly id: string;           // The dispatch id (also the filename)
+  readonly checkRunId: string;   // The CheckRun that answers the dispatch
+  readonly runnerId: string;     // The channel runner that recorded it
+  readonly createdAt: string;    // ISO 8601, the daemon's clock
+}
+```
+
+**One observation per dispatch, never edited.** A run under another id for the same dispatch is refused (`CHECK_DISPATCH_ALREADY_OBSERVED`). An identical retry of the observed run returns it and writes nothing, except that it completes a marker a crash left unwritten.
+
+**Authenticated evidence.** `isAuthenticatedCheckRun(state, run)` is true only for a stored `runner-observed` run that a marker names, with the marker's runner and the dispatch's exact binding. A run recorded through `moe.record_check_run` has no marker, so it stays diagnostic whatever `source`, `runnerId` or `dispatchId` it carries.
+
+---
+
 ## DeliveryReceipt
 
 **File:** `.moe/receipts/{receipt-id}.json` (one file per landed candidate)
@@ -2068,6 +2113,18 @@ function generateId(prefix: string): string {
 - `outputTail` is optional and, when present, must be a string. It is stored as its final 16384 UTF-8 bytes, beginning on a whole character
 - An absent required field (`undefined` or `null`) is refused `MISSING_REQUIRED`; a present value of the wrong type or shape is refused `INVALID_INPUT`, never coerced. A `null` `id` or `outputTail` counts as present and is refused `INVALID_INPUT`, as is a report that is not an object
 - `createdAt` is always the daemon's clock; a caller cannot set it
+
+### CheckDispatch
+- Stored at `.moe/checks/dispatches/<id>.json`, recorded only over the authenticated `/runner` channel (`RUNNER_CHANNEL_REQUIRED` elsewhere). `runnerId` and `treeSha` are never arguments: an argument outside the tool's list is refused `INVALID_INPUT` by name
+- Immutable: a same-id dispatch that differs is refused (`CHECK_DISPATCH_IMMUTABLE`); an identical one returns the stored dispatch. An `id` that differs from a stored dispatch's id only by case is refused (`CHECK_DISPATCH_ID_CASE_COLLISION`)
+- `taskId` must name a task (`TASK_NOT_FOUND`) and `candidateId` a candidate (`CANDIDATE_NOT_FOUND`) of that task (`CHECK_DISPATCH_TASK_MISMATCH`) that is its current one (`CHECK_DISPATCH_NOT_CURRENT`)
+- `planRevision` must be a safe integer >= 1 equal to both the task's `planRevision` and `approvedPlanRevision` (`CHECK_DISPATCH_REVISION_MISMATCH`)
+- `command` and `environment` follow the CheckRun rules; `checkId` is optional and matches `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`
+
+### CheckObservation
+- Stored at `.moe/checks/observations/<dispatchId>.json`, recorded only over the authenticated `/runner` channel. `runnerId`, `source`, `candidateId`, `treeSha`, `command` and `planRevision` are never arguments
+- The dispatch must exist (`CHECK_DISPATCH_NOT_FOUND`), belong to the calling runner (`CHECK_RUNNER_MISMATCH`) and have exactly the sent `environment` (`CHECK_ENVIRONMENT_MISMATCH`)
+- One per dispatch: a run under another id is refused (`CHECK_DISPATCH_ALREADY_OBSERVED`). The run itself follows every CheckRun rule above, so a differing same-id run is `CHECK_RUN_IMMUTABLE`
 
 ### DeliveryReceipt
 - At most one per candidate, never rewritten, and there is no delete path. A report for a candidate that already has a receipt is refused when any field differs (`DELIVERY_RECEIPT_CONFLICT`); an identical one is an idempotent no-op that returns the stored receipt and writes nothing. When two receipts on disk already name one candidate, both the lookup and any new report are refused (`DELIVERY_RECEIPT_AMBIGUOUS`)

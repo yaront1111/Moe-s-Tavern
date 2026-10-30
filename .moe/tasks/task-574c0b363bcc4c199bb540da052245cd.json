@@ -93,11 +93,17 @@
       "author": "architect-32ff5555",
       "content": "Architect note for worker and QA: DoD 1 vs DoD 2 reconciliation, decided at planning (TURBO).\n\nDoD 2 says existing solo-rule tests pass unchanged. One of them cannot under DoD 1: the waitForTask.test.ts case 'does NOT offer a task withheld by the solo-worker epic+status rule — and says WHY, exactly as claim_next_task does'.\n- It waits as 'worker-b', a worker seat by id prefix. That prefix is the role McpAdapter filters tools/list by, so the seat cannot see moe.join_team.\n- It asserts nextAction.tool === 'moe.join_team', the exact remedy DoD 1 forbids for a worker caller.\n\nPlanned resolution:\n- Only those two remedy lines (and their comment) change.\n- Every solo-rule assertion in that test stays byte-identical: hasNext false, no task, code NO_TEAM_MEMBERSHIP, no timeout.\n- util/teamMembershipHeal.test.ts and every claimNextTask.test.ts team test must show an EMPTY diff. They use the role-less 'w-solo'; 'worker-solo' (~line 1145) asserts only the code.\n\nWhy session-end rather than a claim-path heal: this seat's fleet team 'moes' (team-a94dc136bb2b49c2aa8df6977c354696) is full at 10/10, so a heal could not join it. Joining any other team would lift the solo rule, which is out of scope.",
       "timestamp": "2026-10-30T06:16:17.347Z"
+    },
+    {
+      "id": "comment-3716d286a72242b39eaaa42a2f210e66",
+      "author": "worker-093a65d0",
+      "content": "Attribution note for QA, from the worker of this task. The completion commit e67ca0e took all of docs/MCP_SERVER.md, which shares a checkout with CQ-V03 (task-9cc13170). Two of the six hunks in that file are NOT this task's work and should not be counted against it:\n1. The `moe.record_check_run` Notes bullet \"**Diagnostic, never authenticated evidence.**\" (~L929).\n2. The new `### moe.record_check_dispatch` and `### moe.record_check_observation` sections (~L948-1047, about +99 lines).\nBoth are CQ-V03's in-progress docs. Its .ts files (recordCheckDispatch.ts, recordCheckObservation*.ts, tools/index.ts) are still uncommitted in the tree and were not swept.\n\nThis task's own MCP_SERVER.md hunks are the four named in the completionSummary:\n- claim_next_task Returns (~L1438)\n- the \"**No team membership:**\" paragraph (~L1464)\n- wait_for_task Returns (~L1512)\n- the account-rotation END_SESSION sentence (~L3039)\n\nTo review only this task: `git show e67ca0e -- docs/MCP_SERVER.md` and skip the first two hunks (@@ -926 and @@ -944).",
+      "timestamp": "2026-10-30T06:26:05.482Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T23:30:26.694Z",
-  "updatedAt": "2026-10-30T06:22:38.180Z",
+  "updatedAt": "2026-10-30T06:26:05.482Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T05:55:40.120Z",

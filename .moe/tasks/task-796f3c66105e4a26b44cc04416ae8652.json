@@ -1,0 +1,32 @@
+{
+  "id": "task-796f3c66105e4a26b44cc04416ae8652",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10d3a] Guest supervisor agents install mode",
+  "description": "Objective: give the protected guest supervisor (scripts/local-runner/guest-supervisor.py) a root, copy-only 'agents' mode. It installs the pinned agent CLI binaries the host streams on stdin at /opt/moe/agents/<cli>, root:root 0555 and never agent-writable, and it never leaves a partial install.\n\nThis is the guest half of CQ-R10d3 (task-b8e7ad92), split off on 2026-10-30 by architect-bd1eb82d so that each slice stays under QA's 400-line cap. CQ-R10d3 depends on this task. It adds the host installAgents stream, an end-to-end row through this mode, and the readiness probe.\n\nContract:\n- Input frames arrive on stdin and are read the way materialize reads them (snapshot_frames, MAX_HOST_FRAME_BYTES):\n  - per binary, one {kind:'agent', cli, size, sha256} header, then its {kind:'data', data} base64 frames;\n  - then one {kind:'end'}.\n- On success it writes one {kind:'installed', count} frame and exits 0.\n- /opt/moe/agents is created if missing and forced to root 0755 through an O_NOFOLLOW directory fd.\n- Each binary is written to a 0600 file, opened O_EXCL|O_NOFOLLOW inside a root 0700 staging directory beside the targets. Its size and sha256 must match its header. It is then made root:root 0555 and fsynced.\n- Only after the end frame, with no frame after it, is every binary renamed onto /opt/moe/agents/<cli>, atomically replacing an older install. The directory is then fsynced.\n- Exit codes:\n  - 65: an unknown cli (not a JOBS key; the type is checked first), a duplicate cli, a size outside 1..MAX_AGENT_BYTES (2^30, mirroring agent-cache.mjs MAX_AGENT_BINARY_BYTES), or a sha256 that is not 64 lowercase hex;\n  - 65: a malformed, empty, non-canonical or overlong data frame, a size or hash mismatch, an empty stream, EOF before end, or any frame after end;\n  - 74: an I/O failure, including an agents path that is a symlink or a file;\n  - 77: not root;\n  - 64: any other argv.\n- No refusal writes a frame. A handled refusal installs nothing and leaves no staging directory. A crash can leave only the root-only staging directory.\n\nOut of scope:\n- the host stream and readiness (CQ-R10d3);\n- the JOBS argv and MCP config (CQ-R10d4);\n- the cache (CQ-R10d2, done);\n- any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs. On WSL, run it with env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\".",
+  "definitionOfDone": [
+    "The 'agents' mode installs every streamed binary at <agents>/<cli> as 0555 (root:root in production; the owner is a test seam), only after its size and sha256 match its header. It answers one {kind:'installed', count} frame and replaces an older install atomically. Shown by tests through the real supervisor under python3.",
+    "Each refusal exits 65 with no frame, no installed file and no staging directory left: an unknown or non-string cli, a duplicate, a size or hash mismatch, a malformed or overlong data frame, an empty stream, EOF before end, a frame after end, and a valid binary followed by a bad one. An agents path that is a symlink exits 74. Shown by tests.",
+    "main accepts ['agents'] (77 when not root, 64 with extra arguments) and runs install_agents(0, 1) with its fixed defaults. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 252.25,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:24:18.022Z",
+  "updatedAt": "2026-10-30T06:24:18.022Z"
+}

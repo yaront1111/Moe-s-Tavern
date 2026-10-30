@@ -17,56 +17,96 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nThis task is the TOOL slice of CQ-V03. It builds on two LANDED prerequisites; adapt to their landed names, which should match:\n- CQ-V03a (task-3b4e3833): server/runnerChannel.ts with RUNNER_KEY_HEADER, RunnerIdentity, ensureRunnerKey and authenticateRunner; the `/runner` endpoint; ToolCallContext.runner.\n- CQ-V03b (task-c9fe2515): state/checkObservationStore.ts with recordCheckDispatch, recordCheckObservation and isAuthenticatedCheckRun, and the CheckDispatch and CheckObservation types.\n\nCreate packages/moe-daemon/src/tools/recordCheckObservation.test.ts (vitest).\n\nFixture:\n- a temp project StateManager, with fixtures built the way tools/recordCheckRun.test.ts builds them;\n- a task with planRevision === approvedPlanRevision === 1, plus its candidate;\n- MOE_RUNNER_KEY_DIR pointed at a temp directory and restored afterwards, so no test touches the real ~/.moe/runner-keys.\nCall handlers as `tool.handler(args, state, { runner })`. Assert exact codeName, field and record values, never truthiness.\n\nCases:\n- T1 (DoD 1, channel): either tool called with NO context.runner (the /mcp path) is NOT_ALLOWED with codeName RUNNER_CHANNEL_REQUIRED. This holds even with runnerId, source or a valid dispatch in the args. No file appears under .moe/checks.\n- T2 (DoD 1, forged arguments): with context.runner, these args are each INVALID_INPUT naming that exact key: runnerId and source on both tools, and candidateId, treeSha, command and planRevision on the observation tool. A caller can never set identity or binding.\n- T3 (DoD 1, diagnostic): moe.record_check_run with source 'runner-observed', the REAL channel runnerId and a recorded dispatchId gives a run for which isAuthenticatedCheckRun is false. The run recorded by moe.record_check_observation gives true. Its runnerId is the channel's, and its candidateId, treeSha, command, planRevision and environment are the dispatch's.\n- T4 (DoD 2, duplicates):\n  - the same observation id with an identical payload gives duplicate:true, with both files byte-identical;\n  - a conflicting payload gives CHECK_RUN_IMMUTABLE;\n  - a second observation id for the same dispatch gives CHECK_DISPATCH_ALREADY_OBSERVED;\n  - a dispatch replay gives duplicate:true, and a differing dispatch with the same id gives CHECK_DISPATCH_IMMUTABLE.\n- T5 (DoD 3, superseded): dispatch D on candidate K1 at revision 1, then record candidate K2. The observation for D binds to K1, with K1's tree and revision 1, never K2. A new dispatch for K1 gives CHECK_DISPATCH_NOT_CURRENT, and an observation for an unknown dispatch gives CHECK_DISPATCH_NOT_FOUND.\n- T6 (end-to-end over the real channel):\n  - start an http server with MoeWebSocketServer and McpAdapter on 127.0.0.1:0, and run ensureRunnerKey;\n  - a ws client on `/runner` with RUNNER_KEY_HEADER completes tools/call record_check_dispatch then record_check_observation, and the stored run is authenticated;\n  - the same calls over `/mcp` return the RUNNER_CHANNEL_REQUIRED error, and nothing is written;\n  - close every socket and the server in afterEach.\n- T7 registry: getTools lists moe.record_check_dispatch and moe.record_check_observation, neither marked blocking.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/recordCheckObservation.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckObservation.test.ts"
+      ],
+      "note": "T1-T7 written against the LANDED names: V03b checkObservationStore exports recordCheckDispatch/recordCheckObservation/isAuthenticatedCheckRun/getCheckDispatch, V03a runnerChannel exports RUNNER_KEY_HEADER/ensureRunnerKey. All match the plan. RED in Linux snapshot /tmp/moe-9cc1-dev.oiU5zq (git archive HEAD ced4869, native npm ci, env -i, node v24.21.0): the file fails at import of ./recordCheckDispatch.js, 'Test Files 1 failed, Tests no tests'. Added beyond the plan text: T7 also asserts TOOL_AUDIENCE[name]==='wrapper', because toolAudience.test.ts requires every registered tool to have an audience entry. Both tools are runner-only and must stay hidden from agent roles. Also T2 refuses treeSha on a dispatch and non-object args, and accepts and ignores workerId. Peer dirty paths in the shared tree were left untouched.",
+      "startedAt": "2026-10-30T06:15:42.753Z",
+      "completedAt": "2026-10-30T06:18:28.727Z"
     },
     {
       "stepId": "step-2",
       "description": "Create packages/moe-daemon/src/tools/recordCheckDispatch.ts, exporting recordCheckDispatchTool(state): ToolDefinition for 'moe.record_check_dispatch'. Model it on tools/recordCheckRun.ts: a thin delegate, with every store rule left in CQ-V03b's store.\n\nError handling, in this order, before anything is read or written:\n1. If context?.runner is absent, throw new MoeError(MoeErrorCode.NOT_ALLOWED, 'moe.record_check_dispatch requires the authenticated runner channel (/runner)', undefined, 'RUNNER_CHANNEL_REQUIRED').\n2. args must be a plain object. Every own key outside {id, taskId, candidateId, planRevision, command, checkId, environment, workerId} is invalidInput(key, 'is not a supported check dispatch field'). That covers runnerId and source.\n3. Delegate with recordCheckDispatch(state, context.runner, params), and return { success: true, dispatch, duplicate }. workerId is accepted and ignored: it is not evidence and is not stored.\n\ninputSchema:\n- type object, additionalProperties false;\n- required [taskId, candidateId, planRevision, command, environment];\n- planRevision is an integer with minimum 1.\n\nThe description must state:\n- runner-channel only, with runnerId taken from the channel and never an argument;\n- it pins the task's CURRENT candidate, tree and approved plan revision;\n- the refusals: RUNNER_CHANNEL_REQUIRED, CANDIDATE_NOT_FOUND, CHECK_DISPATCH_NOT_CURRENT, CHECK_DISPATCH_REVISION_MISMATCH, CHECK_DISPATCH_IMMUTABLE and INVALID_INPUT;\n- recording, not approval.\n\nNot blocking: the store's same-id check-then-write relies on the mutex. Never word a description as the daemon never running git; util/daemonGitDocs.test.ts guards that phrase.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/recordCheckDispatch.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckDispatch.ts"
+      ],
+      "note": "recordCheckDispatchTool is a thin delegate to the V03b store. The three-stage guard is exported as runnerToolCall(toolName, what, fields, args, context), so the observation tool reuses it instead of duplicating it:\n1. No context.runner gives NOT_ALLOWED with RUNNER_CHANNEL_REQUIRED, before args are read.\n2. A non-object gives INVALID_INPUT params; any key outside the allowlist gives INVALID_INPUT naming that key.\n3. Delegate.\nThe name does not match the registry.test `export function \\w+Tool` scan, so it is not mistaken for a tool factory. workerId is allowlisted and passed through; the store reads only named fields, so it is never stored.\nSchema: additionalProperties false; required [taskId, candidateId, planRevision, command, environment]; planRevision is an integer with minimum 1. The tool is not blocking.\nTests: the test file imports both tool modules, so it goes GREEN after step 3. Test results are reported there.",
+      "startedAt": "2026-10-30T06:18:31.015Z",
+      "completedAt": "2026-10-30T06:19:08.012Z"
     },
     {
       "stepId": "step-3",
       "description": "Create packages/moe-daemon/src/tools/recordCheckObservation.ts, exporting recordCheckObservationTool(state) for 'moe.record_check_observation'. It has the same three-stage error handling as step 2:\n1. Without context.runner, refuse with RUNNER_CHANNEL_REQUIRED and write nothing.\n2. Allowed keys are exactly {id, dispatchId, exitCode, outcome, outputTail, environment, workerId}. Any other key, including runnerId, source, candidateId, treeSha, command and planRevision, is INVALID_INPUT naming it.\n3. Delegate with recordCheckObservation(state, context.runner, params) and return { success: true, checkRun, duplicate }.\n\ninputSchema:\n- additionalProperties false;\n- required [id, dispatchId, exitCode, outcome, environment];\n- outcome enum from CHECK_OUTCOMES (state/checkRunStore.ts);\n- outputTail described as its final 16384 UTF-8 bytes.\n\nThe description must state:\n- only a RECORDED dispatch can be answered;\n- candidate, tree, command, revision and environment come from that dispatch and can never be retargeted; a superseded dispatch is still recoverable against its own binding;\n- one result per dispatch;\n- the replay and conflict rules;\n- the refusals: CHECK_DISPATCH_NOT_FOUND, CHECK_RUNNER_MISMATCH, CHECK_ENVIRONMENT_MISMATCH, CHECK_DISPATCH_ALREADY_OBSERVED and CHECK_RUN_IMMUTABLE.\n\nRegister both tools in packages/moe-daemon/src/tools/index.ts getTools(), next to recordCheckRunTool: two imports and two entries, nothing else changed. The guest bridge allowlist (scripts/local-runner/guest-bridge.mjs) is NOT edited: a guest can never call either tool.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/index.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/tools/recordCheckObservation.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckObservation.ts",
+        "packages/moe-daemon/src/tools/index.ts",
+        "packages/moe-daemon/src/tools/recordCheckObservation.test.ts"
+      ],
+      "note": "recordCheckObservationTool reuses runnerToolCall from recordCheckDispatch.ts. Its allowed keys are exactly {id, dispatchId, exitCode, outcome, outputTail, environment, workerId}, and the outcome enum is [...CHECK_OUTCOMES].\ntools/index.ts gains 6 lines: 2 imports, 2 getTools entries next to recordCheckRunTool, and 2 TOOL_AUDIENCE entries set to 'wrapper'. The audience entries are REQUIRED by toolAudience.test.ts and hide both tools from every agent role's tools/list. This is a scope note beyond the plan's 'two imports and two entries'.\nguest-bridge.mjs was not edited.\nTest-helper fix: a default parameter had turned an explicit undefined context into the runner context. The helpers now take a rest context.\nGREEN in snapshot /tmp/moe-9cc1-dev.oiU5zq (HEAD ced4869 + overlay, env -i, node v24.21.0):\n- recordCheckObservation.test.ts: 24/24 passed.\n- toolAudience, registry, taskTimeBudgetDocs and daemonGitDocs: 4 files, 25/25 passed.",
+      "startedAt": "2026-10-30T06:19:09.144Z",
+      "completedAt": "2026-10-30T06:20:03.699Z"
     },
     {
       "stepId": "step-4",
       "description": "Documentation of the contract that CQ-V04 builds against.\n\ndocs/MCP_SERVER.md:\n- Add `### moe.record_check_dispatch` and `### moe.record_check_observation` right after `### moe.record_check_run`, matching that section's structure: purpose, every argument, return shape, every refusal code, and the replay rules.\n- Add a short Runner channel paragraph:\n  - the `/runner` WebSocket path with header x-moe-runner-key, loopback only;\n  - the key file at <MOE_RUNNER_KEY_DIR or ~/.moe/runner-keys>/<first 32 hex of sha256(projectPath)>.key, mode 0600, never in the project tree or a guest;\n  - runnerId = runner-<16 hex>;\n  - its limit: under legacy and observe a host agent can read the key, so trust is meaningful only once agents are isolated, and verified-local stays unavailable.\n- In the record_check_run section, add one sentence: its runs are DIAGNOSTIC and never authenticated evidence, whatever source, runnerId or dispatchId they carry (isAuthenticatedCheckRun). Its existing legacy behavior is otherwise unchanged.\n\ndocs/SCHEMA.md:\n- Add `## CheckDispatch` and `## CheckObservation` beside `## CheckRun` (field tables, immutability, one observation per dispatch).\n- Add the .moe/checks/dispatches/ and .moe/checks/observations/ layout entries beside the existing `### CheckRun` layout entry.\n\nKeep the headings in the `### moe.<name>` form, so taskTimeBudgetDocs.test.ts matches them against the registry. Preserve peers' bytes in both docs.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md",
         "docs/SCHEMA.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "docs/MCP_SERVER.md:\n- New `### moe.record_check_dispatch` section, with a **Runner channel** paragraph covering the /runner path, loopback, one x-moe-runner-key header, the key path, mode 0600/0700, runnerId=runner-<16 hex>, refusal on /mcp and /ws, and the legacy/observe limit (verified-local stays unavailable).\n- New `### moe.record_check_observation` section. Both sections are placed after record_check_run and give purpose, params, returns, notes and errors in store order.\n- One record_check_run Notes bullet: its runs are diagnostic, never authenticated (isAuthenticatedCheckRun).\n\ndocs/SCHEMA.md:\n- New `## CheckDispatch` and `## CheckObservation` sections after CheckRun, with their file paths.\n- New `### CheckDispatch` and `### CheckObservation` validation-rule entries after `### CheckRun`. SCHEMA.md has no separate directory-layout tree; the **File:** lines carry the layout.\n\nEvery code name was checked against checkObservationStore.ts/errors.ts. Codes: RUNNER_CHANNEL_REQUIRED and CHECK_RUNNER_MISMATCH are -32003; NOT_FOUND names are -32001; conflicts are -32002.\n\nPEER BYTES: docs/MCP_SERVER.md already carried task-574c0b36's uncommitted NO_TEAM_MEMBERSHIP hunks. That task is in REVIEW. All 17 of its + lines are verified still present, unchanged. The wrapper may hold the path as contested; that is not this task's to resolve.\n\nNumstat: MCP_SERVER.md +118/-4, which includes the peer's hunks. Mine is about +101/-0. SCHEMA.md +57/-0.\n\nGate: executionContractDocs, taskTimeBudgetDocs, daemonGitDocs and recordCheckObservation.test all pass, 62/62, in the snapshot. No 'never runs git' phrasing and no forbidden tokens in either doc.",
+      "startedAt": "2026-10-30T06:20:04.940Z",
+      "completedAt": "2026-10-30T06:22:39.477Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Iterate with `cd packages/moe-daemon && npx vitest run src/tools/recordCheckObservation.test.ts`.\n\n2. Mutants. Apply each to a scratch copy, restore it, then `cmp` afterwards. Each must fail at least one test:\n   1. Drop the context.runner gate in either tool: T1 and T6 fail.\n   2. Pass runnerId through from args: T2 and T3 fail.\n   3. Accept unknown keys: T2 fails.\n   4. Register only one tool: T7 and T6 fail.\n\n3. The GATE runs fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate), because the in-tree node_modules is Windows-native.\n   - Take `git archive HEAD` of the WHOLE repo; the prerequisites V03a and V03b must be in HEAD.\n   - Overlay ONLY this task's 6 files.\n   - Run `npm ci --no-audit --no-fund` after checking that the lockfile matches the tree modulo CR.\n   - Use `env -i` with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH, so MOE_* is unset.\n   - Run `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`. Both must exit 0.\n   - `cmp` the overlay against the worktree.\n\n4. A red run outside this task is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n\n5. Supply the npm test command, its exit code and the output tail (the Test Files and Tests lines) to complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "No edits this step.\n\nMUTANTS (scratch snapshot copy /tmp/moe-9cc1-dev.oiU5zq, script /tmp/moe-9cc1-scripts/mutants.py): 7/7 KILLED, all restored cmp-equal:\n- M1a, drop the runner gate in the shared helper: 4 failed (T1 x3, T6 /mcp).\n- M1b, the observation tool ignores the channel: 5 failed (T1, T6 both).\n- M2, runnerId taken from args: 5 failed (T1, T2 runnerId x2, T6).\n- M3, accept unknown keys: 9 failed (T2).\n- M4, register only one tool: 4 failed (toolAudience, T6 x2, T7).\n- M5, observation tool marked blocking: T7 fails.\n- M6, workerId refused: T2 workerId fails.\n\nGATE, fresh: git archive of the whole repo at HEAD a474446 into /tmp/moe-9cc1-gate.euJEcP, with the 6 owned files overlaid and cmp-equal to the worktree. Lock and package.json equal modulo CR. Native npm ci; env -i, NO_COLOR=1, node v24.21.0.\n- `cd packages/moe-daemon && npm test`: EXIT 0. Test Files 198 passed (198); Tests 5518 passed | 16 skipped (5534).\n- `npx tsc --noEmit`: EXIT 0.\n- Test-file typecheck via a scratch tsconfig: EXIT 0.\n\nLANDING NOTE: the peer completion e67ca0e (task-574c0b36, 06:22:35Z) swept this task's docs/MCP_SERVER.md hunks (both tool sections, Runner channel, the record_check_run bullet) into its commit, 4s before step-4 reported them. The worktree's MCP_SERVER.md is now equal to HEAD, so this task's landing will carry SCHEMA.md, index.ts and the 3 new tool files only. HEAD a474446 documents 2 tools it does not yet register, until this task lands. Filed bug task-f943b687 (BACKLOG).",
+      "startedAt": "2026-10-30T06:22:40.757Z",
+      "completedAt": "2026-10-30T06:24:51.913Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as an agent trying to mint trusted evidence:\n\n1. Forgery:\n   - any path that sets runnerId, source, candidate, tree or revision from args;\n   - a /mcp or /ws call reaching the store;\n   - a tool's refusal leaving a partial write;\n   - a guest bridge entry added.\n2. Replay:\n   - a crash between the CheckRun write and the marker write, then an identical retry;\n   - two runners racing one dispatch (the mutex serializes them; the second gets ALREADY_OBSERVED).\n3. Recovery: a superseded dispatch answered after a new candidate exists still binds to its own candidate.\n4. Docs:\n   - every refusal code in the docs exists in code;\n   - no key material in docs, logs or examples;\n   - no 'daemon never runs git' wording.\n5. Rails:\n   - legacy policy, record_check_run and passedOn byte-unchanged;\n   - no forbidden-pattern tokens;\n   - no .moe edits and no Git writes;\n   - verified-local still unavailable.\n\nWrite the Serena handoff memory 'task-task-9cc131704d214e66afc8a51a524b35c2-handoff' for CQ-V04 (task-a9d1a74d). Name the two tools, the channel, isAuthenticatedCheckRun as the trust predicate V04 wires into policy, and the 500-character command cap a dispatched check inherits from CheckRun.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+        "packages/moe-daemon/src/tools/recordCheckObservation.ts",
+        "packages/moe-daemon/src/tools/recordCheckObservation.test.ts",
+        "packages/moe-daemon/src/tools/index.ts",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Adversarial self-review found no defects.\n\n1. Forgery:\n- McpAdapter.ts:304 is the ONLY handler invoke site that passes a context, and it spreads runner only from options.runner, which only the authenticated /runner branch sets. The WebSocketServer plugin paths call releaseTask and deregisterWorker without a context.\n- runnerId, source, candidate, tree, command and revision can never come from args. Unknown keys are refused by name, including constructor-like keys. Every refusal precedes any store call, and the store refuses before its first write.\n- guest-bridge.mjs has no record_check entry and is unchanged.\n\n2. Replay: a crash between the run write and the marker write is completed by an identical retry (V03b store, tested there). Racing observations are serialized by runExclusive, since neither tool is blocking; the second gets ALREADY_OBSERVED.\n\n3. Recovery: T5 shows a superseded dispatch answered at revision 2 still binds cand-k1, its tree and revision 1. A new dispatch for K1 gets NOT_CURRENT.\n\n4. Docs: all 14 refusal codes named exist in code. There is no key material and no forbidden git wording.\n\n5. Rails: checkRunStore.ts, recordCheckRun.ts, policy.ts, checkObservationStore.ts and server/* show no diff vs HEAD. No forbidden tokens. No .moe hand edits, no git writes. verified-local is untouched.\n\nTheoretical, not changed:\n(a) One key per project means all runners share one runnerId (V03a design).\n(b) A dispatch without an id regenerates on each retry; the docs say to reuse the id.\n(c) A /runner caller that names a workerId is tracked by trackMcpWorker, the same as on /mcp. This predates this task.\n\nMemories written: task-task-9cc131704d214e66afc8a51a524b35c2-handoff and gotcha-landing-peer-sweeps-shared-doc-hunks.",
+      "startedAt": "2026-10-30T06:24:53.043Z",
+      "completedAt": "2026-10-30T06:26:01.581Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -79,7 +119,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:54.656Z",
-  "updatedAt": "2026-10-29T17:50:32.175Z",
+  "updatedAt": "2026-10-30T06:26:18.397Z",
   "dependsOn": [
     "task-23a5563cea384d56abb8da1551435455",
     "task-0795112597cb453f93aaa5106e92d023",
@@ -91,12 +131,14 @@
   "metrics": {
     "firstClaimAt": "2026-10-26T08:22:53.949Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 6
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
     "architect-e4b7eee0",
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-e60b90bd"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -111,7 +153,14 @@
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T17:40:56.206Z",
   "executionContract": {
@@ -177,5 +226,23 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T17:40:56.332Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:15:42.753Z",
+  "reviewStartedAt": "2026-10-30T06:26:18.395Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Linux snapshot /tmp/moe-9cc1-gate.euJEcP: git archive of HEAD a474446 + the 6 owned files (cmp-equal to the worktree), native npm ci, env -i NO_COLOR=1, node v24.21.0.\n ✓ src/util/heartbeatStop.test.ts (9 tests | 3 skipped) 12770ms\n\n Test Files  198 passed (198)\n      Tests  5518 passed | 16 skipped (5534)\n   Start at  08:24:03\n   Duration  32.25s (tests 92%, transform 4%, import 4%)\n\nAlso: `npx tsc --noEmit` EXIT 0; the test file under a scratch tsconfig EXIT 0; recordCheckObservation.test.ts 24/24.",
+    "reportedAt": "2026-10-30T06:26:18.395Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/recordCheckObservation.test.ts",
+    "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+    "packages/moe-daemon/src/tools/recordCheckObservation.ts",
+    "packages/moe-daemon/src/tools/index.ts",
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md"
+  ],
+  "completionSummary": "CQ-V03 tool slice: two runner-channel tools, thin delegates over V03b's checkObservationStore.\n- tools/recordCheckDispatch.ts: moe.record_check_dispatch, plus the shared guard runnerToolCall. Missing context.runner gives NOT_ALLOWED RUNNER_CHANNEL_REQUIRED before args are read; non-object args give INVALID_INPUT params; an unknown key gives INVALID_INPUT naming it.\n- tools/recordCheckObservation.ts: moe.record_check_observation. Its binding comes from the recorded dispatch, and runnerId from the channel.\n- tools/index.ts +6: getTools entries, and TOOL_AUDIENCE 'wrapper' for both, which toolAudience.test requires; it hides them from agent roles.\n- Docs: SCHEMA.md (CheckDispatch/CheckObservation sections and rules); MCP_SERVER.md (both tools, a Runner channel paragraph with the legacy/observe limit, and a note that record_check_run is diagnostic).\nDoD -> tests (tools/recordCheckObservation.test.ts, 24):\n1. T1: /mcp and a {} context are refused, writing nothing. T2: runnerId, source, candidateId, treeSha, command and planRevision are each refused by name. T3: a record_check_run run with the real runnerId and dispatchId fails isAuthenticatedCheckRun; the observed run passes, bound to the dispatch. T6: a real /runner round trip is authenticated; /mcp with the key header writes nothing.\n2. T4: an identical replay gives duplicate:true with bytes unchanged; CHECK_RUN_IMMUTABLE; CHECK_DISPATCH_ALREADY_OBSERVED; CHECK_DISPATCH_IMMUTABLE.\n3. T5: a superseded dispatch at revision 2 still binds cand-k1, its tree and revision 1. NOT_CURRENT and NOT_FOUND are refused.\n4. Gate EXIT 0 (verification); tsc 0.\nMutants: 7/7 killed.\nSize: packages/ net +389 (runtime 147, tests 242). Rail files (checkRunStore, recordCheckRun, policy, the store, server/*, guest-bridge) are unchanged.\nLANDING: the peer completion e67ca0e (task-574c0b36) swept this task's MCP_SERVER.md sections into its commit 4 s before step 4 reported them. They are on the branch there; this landing carries SCHEMA.md, inde"
 }

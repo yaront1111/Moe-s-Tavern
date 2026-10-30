@@ -69,6 +69,8 @@ import { getCommitScopeTool } from './getCommitScope.js';
 import { recordCommitTool } from './recordCommit.js';
 import { recordCandidateTool } from './recordCandidate.js';
 import { recordCheckRunTool } from './recordCheckRun.js';
+import { recordCheckDispatchTool } from './recordCheckDispatch.js';
+import { recordCheckObservationTool } from './recordCheckObservation.js';
 import { recordDeliveryReceiptTool } from './recordDeliveryReceipt.js';
 import { declareFilesTool } from './declareFiles.js';
 import { setTaskDependenciesTool } from './setTaskDependencies.js';
@@ -167,6 +169,8 @@ export function getTools(state: StateManager): ToolDefinition[] {
     recordCommitTool(state),
     recordCandidateTool(state),
     recordCheckRunTool(state),
+    recordCheckDispatchTool(state),
+    recordCheckObservationTool(state),
     recordDeliveryReceiptTool(state),
     declareFilesTool(state),
     setTaskDependenciesTool(state),
@@ -251,6 +255,8 @@ export const TOOL_AUDIENCE: Readonly<Record<string, readonly Seat[] | 'wrapper'>
   'moe.record_commit': [W, Q],
   'moe.record_candidate': 'wrapper',
   'moe.record_check_run': [W, Q],
+  'moe.record_check_dispatch': 'wrapper',
+  'moe.record_check_observation': 'wrapper',
   'moe.record_delivery_receipt': 'wrapper',
   'moe.declare_files': [W],
   'moe.set_task_dependencies': [A],
