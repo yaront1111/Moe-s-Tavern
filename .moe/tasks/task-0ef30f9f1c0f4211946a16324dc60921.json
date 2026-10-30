@@ -71,7 +71,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -84,7 +84,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T15:22:33.524Z",
-  "updatedAt": "2026-10-30T15:52:04.066Z",
+  "updatedAt": "2026-10-30T16:00:14.864Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T15:40:19.659Z",
@@ -94,11 +94,14 @@
     "firstClaimAt": "2026-10-30T15:40:41.818Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T16:00:14.864Z",
+    "wallClockMs": 1173046
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-73c29a03"
+    "worker-73c29a03",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -228,5 +231,9 @@
     "kind": "completion",
     "sessionId": "worker-73c29a03@2026-10-30T15:49:26Z",
     "at": "2026-10-30T15:52:04.066Z"
-  }
+  },
+  "completedAt": "2026-10-30T16:00:14.864Z",
+  "reviewCompletedAt": "2026-10-30T16:00:14.864Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 2b0d3dee (on moe/work-2026-10-24, pushed) via git show: code diff = 2 files, +13/-5 (MoeDaemonSupervisor.kt, RuntimeSelectionPolicyTest.kt) plus board JSON. DoD1: protectedPathEntries maps each entry through unquoted (trim + one surrounding \") first, drops any entry still starting/ending with ' or \", then requires isOutsideProject on that same string, so kept entries are byte-identical to the validated spelling; nodeOnProtectedPath no longer double-unquotes; unquoted/isOutsideProject untouched; LEGACY never calls these. Consumers (protectedDaemonEnvironment, nodeOnProtectedPath, ManagedVmPanel:137) inherit the fix, signatures unchanged. S4 keeps its whole-map assertEquals (not weakened): kept = outsideA, padded (unpadded), spaced (unquoted), outsideB; dropped = <project>', '<project>, <outsideA>', <outsideA>\" plus all pre-existing S4 drops; NODE_OPTIONS/NODE_PATH removal unchanged. Worker recorded RED first, then GREEN. DoD2: I re-ran the verification command under the jetbrains-gradle lease (released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> exit 0, BUILD SUCCESSFUL 21s, :test executed (not UP-TO-DATE); 28 TEST-*.xml (RuntimeSelectionPolicyTest stamped 15:59:50Z = my run): total=469 skipped=0 failures=0 errors=0. Windows equivalent of ./gradlew test (WSL has no JDK). Small diff, no size rail. Note: on Windows `<outside>\"` (InvalidPathException) and `'<project>` (not absolute) were already dropped, so the Windows RED rests on `<project>'`, `<outside>'` and padded; the quote-edge guard covers the rest on POSIX. Peer dirty paths untouched.",
+  "requiredCheckAtDone": null
 }
