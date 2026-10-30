@@ -121,7 +121,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T20:43:22.675Z",
-  "updatedAt": "2026-10-30T21:16:52.594Z",
+  "updatedAt": "2026-10-30T21:17:11.335Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T20:43:49.179Z",
@@ -234,7 +234,8 @@
     "packages/moe-daemon/src/types/schema.ts",
     "docs/MCP_SERVER.md",
     ".moe/tasks/task-2c95c5d1d2bd4dcc9d16fbff1fdb9654.json",
-    ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json"
+    ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+    ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json"
   ],
   "completionSummary": "A join into a full team now evicts DEAD members first, so DEAD seats no longer hold a team at maxSize. addTeamMember (state/teamStore.ts) computes dead = memberIds whose record is DEAD and refuses with the unchanged `Team <name> is full (max N members)` only when live members fill maxSize, before any write. Otherwise the new local evictDeadMembers does one updateTeam (memberIds minus dead, formerMemberIds via withEvictionTombstones, the deleteWorker tombstone). It then clears teamId on each evicted record that points at this team, passing lastActivityAt back so the record stays DEAD and the repair is not presence. A failed pointer repair is logged and never fails the join. An existing member, including a DEAD one re-joining under its own id (wrapper_restart), still hits the idempotent early return and keeps its seat. A team below maxSize never evicts. A member with no worker record is not DEAD. Untouched: teamMembershipHeal.ts, claimEligibility.ts, claimNextTask.ts, MCP API, persisted fields. Also changed: Team.formerMemberIds doc comment (schema.ts) and the moe.join_team section of docs/MCP_SERVER.md. New joinTeam.deadMembers.test.ts has 7 cases; on the parent 4 fail with \"is full\" and 3 pin today's behavior. Mutants skip-tombstone, skip-teamId-reset and evict-below-maxSize were each killed. Not changed (outside approved scope): removeTeamMember still bumps a DEAD record's lastActivityAt (governor's planner input); noted in the handoff.",
   "commits": [
@@ -257,6 +258,22 @@
       "treeId": "2ca9cfb2a3a5bdced13003e4794636a1ccc51c5f",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "3296a35a902bf2490ae3ad0b8c9928c97accacb4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-30T21:15:12Z",
+      "paths": [
+        ".moe/tasks/task-2c95c5d1d2bd4dcc9d16fbff1fdb9654.json",
+        ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-30T21:17:11.335Z",
+      "treeId": "b57571f73426479f02fa7cedbeb5fc258a61acca",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -268,9 +285,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-25da16b2@2026-10-30T21:06:41Z",
-    "at": "2026-10-30T21:12:20.962Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-30T21:15:12Z",
+    "at": "2026-10-30T21:17:11.335Z"
   },
   "completedAt": "2026-10-30T21:16:52.594Z",
   "reviewCompletedAt": "2026-10-30T21:16:52.594Z",
