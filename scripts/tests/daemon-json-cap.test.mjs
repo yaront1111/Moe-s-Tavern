@@ -181,3 +181,21 @@ for (const engine of ENGINES) {
     assert.ok(!line.includes('larger than'), r.out);
   });
 }
+
+test('CI runs this suite on Linux and Windows', () => {
+  const file = 'scripts/tests/daemon-json-cap.test.mjs';
+  const lines = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n').split('\n');
+  const token = new RegExp(`^\\s*run:\\s+node --test\\b.*\\s${file.replace(/[.]/g, '\\.')}(?:\\s|$)`);
+  const run = lines.findIndex((line) => token.test(line));
+  assert.ok(run >= 0, `ci.yml has no \`run: node --test\` step listing ${file}`);
+  let name = run;
+  while (name >= 0 && !/^\s*-\s+name:/.test(lines[name])) name--;
+  assert.ok(name >= 0, `the ${file} step has no \`- name:\` line`);
+  const guards = lines.slice(name, run).filter((line) => /^\s+if:/.test(line));
+  assert.ok(guards.length <= 1, `the ${file} step has several if: lines`);
+  assert.ok(guards.length === 0 || guards[0].trim() === "if: runner.os != 'macOS'",
+    `the ${file} step must run on Linux and Windows, got: ${guards[0]}`);
+  let job = run;
+  while (job >= 0 && !/^ {2}[A-Za-z0-9_-]+:\s*$/.test(lines[job])) job--;
+  assert.equal(lines[job]?.trim(), 'build-all-platforms:', `the ${file} step must sit in build-all-platforms`);
+});
