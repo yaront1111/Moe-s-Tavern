@@ -137,6 +137,47 @@ describe('runDoctor — daemon health reachability', () => {
     expect(result.exitCode).toBe(1);
   });
 
+  it('passes when /health reports this project in a spelling only the shared path contract equates', async () => {
+    // VS Code lowercases the drive letter; a WSL daemon may be named through its share.
+    const flipped = testDir[0] === testDir[0].toLowerCase() ? testDir[0].toUpperCase() : testDir[0].toLowerCase();
+    const reported = process.platform === 'win32' ? flipped + testDir.slice(1) : `//wsl$/Ubuntu${testDir}`;
+    const port = await startHealthServer({ status: 'healthy', projectPath: reported, pid: process.pid });
+    writeDaemonJson(port);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon health reachability')).toContain('[OK]');
+    expect(result.exitCode).toBe(0);
+  });
+
+  it.skipIf(process.platform === 'win32')('still fails when /health reports the POSIX path in another case', async () => {
+    const port = await startHealthServer({ status: 'healthy', projectPath: testDir.toUpperCase(), pid: process.pid });
+    writeDaemonJson(port);
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon health reachability')).toContain('[FAIL]');
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('passes for a native alias of --project', async () => {
+    const port = await startHealthServer({ status: 'healthy', projectPath: testDir, pid: process.pid });
+    writeDaemonJson(port);
+    const cwd = process.cwd();
+    try {
+      // A drive-less Windows alias resolves against the cwd's drive.
+      process.chdir(path.dirname(testDir));
+      const alias = process.platform === 'win32' ? testDir.slice(2).replace(/\\/g, '/') : `/${testDir}`;
+
+      const result = await runDoctor(alias);
+
+      expect(line(result.output, 'daemon health reachability')).toContain('[OK]');
+      expect(result.exitCode).toBe(0);
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
   // daemon.json is repository content; the cap (64 KiB = 65536 bytes) is shared
   // with the other clients, so the boundary is pinned as literals.
   function writePaddedDaemonJson(port: number, bytes: number, startedAt: string): void {

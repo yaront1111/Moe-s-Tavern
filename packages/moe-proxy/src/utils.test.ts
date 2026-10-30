@@ -361,7 +361,28 @@ describe('utils', () => {
 
     it('returns MOE_PROJECT_PATH if set', () => {
       process.env.MOE_PROJECT_PATH = '/custom/path';
-      expect(getProjectPath()).toBe('/custom/path');
+      expect(getProjectPath()).toBe(path.resolve('/custom/path'));
+    });
+
+    it('resolves a native alias of its own project, so discovery finds its daemon', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-proxy-alias-'));
+      const cwd = process.cwd();
+      try {
+        // A drive-less Windows alias resolves against the cwd's drive.
+        process.chdir(path.dirname(dir));
+        const alias = process.platform === 'win32' ? dir.slice(2).replace(/\\/g, '/') : `/${dir}`;
+        expect([path.relative(dir, path.resolve(alias)), comparableProjectPath(alias) === comparableProjectPath(dir)])
+          .toEqual(['', false]);
+        const info: DaemonInfo = { port: 9876, pid: 1234, startedAt: '2026-10-30T00:00:00.000Z', projectPath: dir };
+        fs.mkdirSync(path.join(dir, '.moe'));
+        fs.writeFileSync(path.join(dir, '.moe', 'daemon.json'), JSON.stringify(info));
+        process.env.MOE_PROJECT_PATH = alias;
+
+        expect([getProjectPath(), readDaemonInfoResult(getProjectPath())]).toEqual([dir, { info, retryable: false }]);
+      } finally {
+        process.chdir(cwd);
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('returns cwd if MOE_PROJECT_PATH not set', () => {

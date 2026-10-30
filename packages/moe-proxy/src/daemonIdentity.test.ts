@@ -292,7 +292,7 @@ describe('moe-proxy bridges only to a daemon serving its own project', () => {
     return { server, port, wss, upgrades, healthRequests };
   }
 
-  function startProxy(port: number, host = HOST) {
+  function startProxy(port: number, host = HOST, spell = (dir: string) => dir) {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-proxy-identity-test-'));
     fs.mkdirSync(path.join(testDir, '.moe'));
     fs.writeFileSync(path.join(testDir, '.moe', 'daemon.json'), JSON.stringify({
@@ -302,8 +302,10 @@ describe('moe-proxy bridges only to a daemon serving its own project', () => {
       projectPath: testDir,
     }));
     const stdout: string[] = [];
+    // The cwd is on testDir's drive, which a drive-less Windows alias resolves against.
     const proxy = spawn('node', [PROXY_ENTRY], {
-      env: { ...process.env, MOE_PROJECT_PATH: testDir, MOE_DAEMON_HOST: host },
+      cwd: path.dirname(testDir),
+      env: { ...process.env, MOE_PROJECT_PATH: spell(testDir), MOE_DAEMON_HOST: host },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     proxy.stdout!.on('data', (chunk) => {
@@ -381,6 +383,18 @@ describe('moe-proxy bridges only to a daemon serving its own project', () => {
     const { proxy, exited } = startProxy(daemon.port, host);
 
     await waitFor(() => daemon.upgrades.length >= 1);
+    proxy.stdin!.end();
+    expect(await exited).toBe(0);
+    expect(daemon.healthRequests).toEqual(['GET /health']);
+  }, 12000);
+
+  it('E5: opens /mcp when MOE_PROJECT_PATH is a native alias of its project (//x on POSIX, /x on Windows)', async () => {
+    const daemon = await startFakeDaemon(() => testDir);
+    const alias = (dir: string) => (process.platform === 'win32' ? dir.slice(2).replace(/\\/g, '/') : `/${dir}`);
+    const { proxy, exited } = startProxy(daemon.port, HOST, alias);
+
+    await waitFor(() => daemon.upgrades.length >= 1);
+    expect(daemon.upgrades).toEqual(['/mcp']);
     proxy.stdin!.end();
     expect(await exited).toBe(0);
     expect(daemon.healthRequests).toEqual(['GET /health']);

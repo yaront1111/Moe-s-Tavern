@@ -158,7 +158,9 @@ export function readDaemonInfo(projectPath: string): DaemonInfo | null {
 }
 
 export function getProjectPath(): string {
-  return process.env.MOE_PROJECT_PATH || process.cwd();
+  // Our own path names a directory on this host, so resolve it natively, as the
+  // daemon does (canonicalProjectPath). Recorded and served paths stay compared as written.
+  return path.resolve(process.env.MOE_PROJECT_PATH || process.cwd());
 }
 
 export function formatError(message: string): string {

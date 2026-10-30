@@ -9,6 +9,7 @@ import http from 'http';
 import net from 'net';
 import path from 'path';
 import { DaemonJsonTooLargeError, readDaemonJsonText } from '../util/daemonJsonFile.js';
+import { canonicalProjectPath, isSameProjectPath } from '../util/projectPath.js';
 
 interface ProbeResult {
   symbol: 'pass' | 'warn' | 'fail';
@@ -172,8 +173,9 @@ async function probeDaemonReachability(
   const health = await probeHealth(port, HEALTH_PROBE_TIMEOUT_MS);
   if (health.ok && health.statusCode === 200 && health.body) {
     const body = health.body;
+    // As the daemon lifecycle does (index.ts): resolve only our own --project; the reported path is compared as written.
     const projectMatches = typeof body.projectPath === 'string'
-      && path.resolve(body.projectPath) === path.resolve(expectedProjectPath);
+      && isSameProjectPath(body.projectPath, canonicalProjectPath(expectedProjectPath));
     const pidMatches = typeof pid !== 'number' || body.pid === pid;
     if (body.status === 'healthy' && projectMatches && pidMatches) {
       return { symbol: 'pass', message: `/health OK on 127.0.0.1:${port} (status healthy, project matches)` };
