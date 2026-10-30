@@ -86,6 +86,10 @@ export type StrictDeliveryPolicy = Exclude<DeliveryPolicy, 'legacy'>;
 
 /** The missing-evidence vocabulary. Consumers assert these exact strings, so only this module builds them. */
 export const EVIDENCE_TOKENS = {
+  prerequisiteMissing: 'prerequisite-missing',
+  verifiedLocalSnapshot: 'verified-local-snapshot',
+  approvedReview: 'approved-review',
+  deliveryReceipt: 'delivery-receipt',
   completionCommit: 'completion-commit',
   pushedCompletionCommit: 'pushed-completion-commit',
   mergedPullRequest: 'merged-pull-request',
@@ -613,6 +617,10 @@ export function attestationLabel(policy: DeliveryPolicy, attested: DeliveryAttes
 }
 
 const TOKEN_REASONS = new Map<string, string>([
+  [EVIDENCE_TOKENS.prerequisiteMissing, 'the prerequisite is not on the board and cannot prove delivery; an architect/governor can remove it with moe.set_task_dependencies'],
+  [EVIDENCE_TOKENS.verifiedLocalSnapshot, 'the prerequisite\'s own execution-policy snapshot did not capture verified-local, so it was delivered under legacy rules'],
+  [EVIDENCE_TOKENS.approvedReview, 'no qa_approve stands on the current candidate: there is no candidate or its last review is not an approval'],
+  [EVIDENCE_TOKENS.deliveryReceipt, 'the prerequisite is ARCHIVED without a delivery receipt for its current candidate'],
   [EVIDENCE_TOKENS.completionCommit, 'no completion commit is recorded for this review round; the wrapper lands it seconds after REVIEW, so retry once task.commits shows it'],
   [EVIDENCE_TOKENS.pushedCompletionCommit, 'no completion commit recorded for this review round is marked pushed; a commit that never reached the remote does not count'],
   [EVIDENCE_TOKENS.mergedPullRequest, 'no merged pull request was attested; pass mergedPullRequest naming it'],

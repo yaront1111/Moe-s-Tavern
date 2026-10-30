@@ -20,7 +20,7 @@ import {
   isClaimGatedByDependsOn
 } from '../util/claimEligibility.js';
 import { resolveLaunch } from '../util/routing.js';
-import { dependencyShortfall, unmetDependsOn } from '../state/dependencyUnblock.js';
+import { dependencyShortfall, describeUnmetDependency, unmetDependsOn } from '../state/dependencyUnblock.js';
 import { describeMissingEvidence } from '../delivery/policy.js';
 import {
   assertNoLiveLease,
@@ -250,9 +250,10 @@ function assertNotHeldByReconciliation(state: StateManager, task: Task, workerId
  * the result before any write, like every other claim refusal.
  */
 function dependsOnClaimRefusal(state: StateManager, task: Task): MoeError {
-  const unmet = unmetDependsOn(state, task).map((id) => ({ id, ...dependencyShortfall(state, id) }));
-  const onEvidence = unmet.find((dep) => dep.missingEvidence.length > 0);
-  const onStatus = unmet.filter((dep) => dep.missingEvidence.length === 0).map((dep) => dep.id);
+  const unmet = unmetDependsOn(state, task).map((id) => ({ id, ...dependencyShortfall(state, id, task) }));
+  const onEvidence = unmet.find((dep) => state.getTask(dep.id)?.status === 'DONE' && dep.missingEvidence.length > 0);
+  const onStatus = unmet.filter((dep) => state.getTask(dep.id)?.status !== 'DONE' || dep.missingEvidence.length === 0)
+    .map((dep) => dep.missingEvidence.length > 0 ? describeUnmetDependency(state, dep.id, task) : dep.id);
   if (onStatus.length > 0 || !onEvidence) {
     return notAllowed(
       'claim',

@@ -231,7 +231,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       let satisfiedBlockedOnIds: string[] = [];
       let recordedBlockedOnIds = mergedBlockedOnIds;
       if (flipped) {
-        satisfiedBlockedOnIds = mergedBlockedOnIds.filter((id) => !!state.getTask(id) && isDependencySatisfied(state, id));
+        satisfiedBlockedOnIds = mergedBlockedOnIds.filter((id) => !!state.getTask(id) && isDependencySatisfied(state, id, task));
         if (satisfiedBlockedOnIds.length > 0) {
           const satisfied = new Set(satisfiedBlockedOnIds);
           recordedBlockedOnIds = mergedBlockedOnIds.filter((id) => !satisfied.has(id));
@@ -491,14 +491,14 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // rule, not unfinished, so "once it is DONE" alone would read as already
       // satisfied: name what it lacks. Always empty under the default policy.
       const heldOnEvidence = recordedBlockedOnIds.filter(
-        (id) => state.getTask(id)?.status === 'DONE' && !isDependencySatisfied(state, id)
+        (id) => state.getTask(id)?.status === 'DONE' && !isDependencySatisfied(state, id, task)
       );
       const blockResolution = freeSeat
         ? recordedBlockedOnIds.length > 0
           ? `It auto-unblocks (returning unassigned, claimable by anyone) once ${recordedBlockedOnIds.join(', ')} are DONE/ARCHIVED.` +
             (heldOnEvidence.length > 0
               ? ' Already DONE but still withheld until the delivery evidence settings.deliveryPolicy requires is recorded: ' +
-                `${heldOnEvidence.map((id) => describeUnmetDependency(state, id)).join(', ')}.`
+                `${heldOnEvidence.map((id) => describeUnmetDependency(state, id, task)).join(', ')}.`
               : '')
           : 'No unmet blockedOnTaskIds were recorded. A human/governor must clear the real blocker via moe.set_task_status; unblock_worker cannot reach an unassigned task. Re-file actual task dependencies if applicable.'
         : undefined;

@@ -2,7 +2,8 @@
 // Dependency auto-unblock — the task-dependency analogue of the resource grant
 // path (resourceStore.grantNextLeases). A task BLOCKED with blockedOnTaskIds is
 // waiting on other tasks; when every listed prerequisite is satisfied (DONE with
-// the delivery evidence its policy requires, ARCHIVED, or gone — see
+// the delivery evidence its policy requires, ARCHIVED, or gone for legacy
+// consumers; retained verified delivery for verified-local consumers — see
 // isDependencySatisfied) the daemon restores it to blockedFromStatus. That
 // single status write is what wakes the fleet: TASK_UPDATED wakes
 // wait_for_task waiters, and (for a legacy
@@ -28,37 +29,34 @@
 
 import type { StateManager } from './StateManager.js';
 import type { Task, TaskStatus } from '../types/schema.js';
-import { evaluateDeliveryEvidence } from '../delivery/policy.js';
+import { EVIDENCE_TOKENS, evaluateDeliveryEvidence } from '../delivery/policy.js';
+import { readExecutionPolicySnapshot, resolveTaskExecutionProfile } from '../delivery/executionProfile.js';
+import { listCandidatesForTask } from './candidateStore.js';
+import { listReviewsForTask } from './reviewStore.js';
+import { getDeliveryReceiptForCandidate } from './receiptStore.js';
 import { logger } from '../util/logger.js';
+
+export type DependencyConsumer = Pick<Task, 'executionPolicySnapshot'>;
 
 /** Whether one prerequisite releases its dependents, and what it still lacks when it does not. */
 export interface DependencyShortfall {
   satisfied: boolean;
   /**
    * Evidence tokens exactly as delivery/policy.ts builds them. Non-empty only
-   * for a DONE prerequisite whose evidence falls short; a prerequisite unmet on
-   * status alone reports [].
+   * for missing proof (including a missing prerequisite for a strict consumer);
+   * a prerequisite unmet on unfinished status alone reports [].
    */
   missingEvidence: string[];
 }
 
 /**
- * A dependency is satisfied when its task is gone (deleted ids must not wedge a
- * row forever), ARCHIVED, or DONE with the delivery evidence the project's
- * policy requires of it. Checked in that order, so only a DONE prerequisite is
- * ever asked for evidence: any other status is unmet exactly as before, and
- * under the default policy DONE alone still satisfies. ARCHIVED is not judged,
- * because archiving is allowed from unfinished statuses and never claimed a
- * delivery.
- *
- * The evidence is judged by evaluateDeliveryEvidence, the rule qa_approve
- * applies, never by a copy of it. For a DONE task that rule asks only for the
- * required check (a runner-observed exit-0 run of the gate on the current
- * candidate's own tree), and a record lookup that fails reports it missing.
- * Throws when the evidence cannot be judged at all: an unrecognised
- * deliveryPolicy, which that rule refuses as invalid input.
+ * Legacy/observe (and consumer-less) calls keep the original rule: gone or
+ * ARCHIVED satisfies, DONE is judged by evaluateDeliveryEvidence. A verified-local
+ * consumer instead needs retained verified delivery, even from an archived row.
+ * Throws on unjudgeable policy, snapshot or evidence; callers must fail closed.
  */
-export function dependencyShortfall(state: StateManager, taskId: string): DependencyShortfall {
+export function dependencyShortfall(state: StateManager, taskId: string, consumer?: DependencyConsumer): DependencyShortfall {
+  if (isStrictConsumer(state, consumer)) return strictShortfall(state, taskId);
   const dep = state.getTask(taskId);
   if (!dep || dep.status === 'ARCHIVED') return { satisfied: true, missingEvidence: [] };
   if (dep.status !== 'DONE') return { satisfied: false, missingEvidence: [] };
@@ -66,16 +64,38 @@ export function dependencyShortfall(state: StateManager, taskId: string): Depend
   return { satisfied, missingEvidence };
 }
 
+function isStrictConsumer(state: StateManager, consumer?: DependencyConsumer): boolean {
+  return consumer !== undefined && resolveTaskExecutionProfile(state.project?.settings, consumer.executionPolicySnapshot) === 'verified-local';
+}
+
+function strictShortfall(state: StateManager, taskId: string): DependencyShortfall {
+  const dep = state.getTask(taskId);
+  if (!dep) return { satisfied: false, missingEvidence: [EVIDENCE_TOKENS.prerequisiteMissing] };
+  if (dep.status !== 'DONE' && dep.status !== 'ARCHIVED') return { satisfied: false, missingEvidence: [] };
+  const missingEvidence: string[] = [];
+  if (readExecutionPolicySnapshot(dep.executionPolicySnapshot)?.profile !== 'verified-local') {
+    missingEvidence.push(EVIDENCE_TOKENS.verifiedLocalSnapshot);
+  }
+  const current = listCandidatesForTask(state, taskId).at(-1);
+  const lastReview = current && listReviewsForTask(state, taskId).filter((review) => review.candidateId === current.id).at(-1);
+  if (lastReview?.decision !== 'approve') missingEvidence.push(EVIDENCE_TOKENS.approvedReview);
+  if (dep.status === 'ARCHIVED' && (!current || !getDeliveryReceiptForCandidate(state, current.id))) {
+    missingEvidence.push(EVIDENCE_TOKENS.deliveryReceipt);
+  }
+  missingEvidence.push(...evaluateDeliveryEvidence(state, dep).missingEvidence);
+  return { satisfied: missingEvidence.length === 0, missingEvidence };
+}
+
 /**
  * The yes/no every dependency gate reads: claim_next_task, wait_for_task, the
  * auto-unblock below, the stale-block alert and the unmet counts. Fails closed:
- * a DONE prerequisite whose evidence cannot be judged keeps its dependents
+ * a prerequisite whose evidence or consumer profile cannot be judged keeps its dependents
  * withheld, because releasing them would build on exactly the promise the
  * evidence exists to check.
  */
-export function isDependencySatisfied(state: StateManager, taskId: string): boolean {
+export function isDependencySatisfied(state: StateManager, taskId: string, consumer?: DependencyConsumer): boolean {
   try {
-    return dependencyShortfall(state, taskId).satisfied;
+    return dependencyShortfall(state, taskId, consumer).satisfied;
   } catch (error) {
     logger.warn({ taskId, error }, 'dependencyUnblock: delivery evidence of a DONE prerequisite could not be judged; withholding its dependents');
     return false;
@@ -83,15 +103,15 @@ export function isDependencySatisfied(state: StateManager, taskId: string): bool
 }
 
 /** The subset of `task.dependsOn` not yet satisfied. Empty for tasks with no declared deps. */
-export function unmetDependsOn(state: StateManager, task: Pick<Task, 'dependsOn'>): string[] {
+export function unmetDependsOn(state: StateManager, task: Pick<Task, 'dependsOn' | 'executionPolicySnapshot'>): string[] {
   const ids = Array.isArray(task.dependsOn) ? task.dependsOn : [];
-  return ids.filter((id) => !isDependencySatisfied(state, id));
+  return ids.filter((id) => !isDependencySatisfied(state, id, task));
 }
 
 /** The subset of `task.blockedOnTaskIds` not yet satisfied. */
-export function unmetBlockedOnTaskIds(state: StateManager, task: Pick<Task, 'blockedOnTaskIds'>): string[] {
+export function unmetBlockedOnTaskIds(state: StateManager, task: Pick<Task, 'blockedOnTaskIds' | 'executionPolicySnapshot'>): string[] {
   const ids = Array.isArray(task.blockedOnTaskIds) ? task.blockedOnTaskIds : [];
-  return ids.filter((id) => !isDependencySatisfied(state, id));
+  return ids.filter((id) => !isDependencySatisfied(state, id, task));
 }
 
 /**
@@ -114,7 +134,7 @@ export function unmetBlockedOnTaskIds(state: StateManager, task: Pick<Task, 'blo
  */
 export function carriedBlockQuestion(
   state: StateManager,
-  task: Pick<Task, 'blockedReason' | 'blockedResourceId' | 'blockedOnTaskIds'>
+  task: Pick<Task, 'blockedReason' | 'blockedResourceId' | 'blockedOnTaskIds' | 'executionPolicySnapshot'>
 ): string | null {
   if (!task.blockedReason) return null;
   // Self-clearing: a grant or the dependency sweep will restore this row, so
@@ -268,14 +288,15 @@ export const DEPENDENCY_WAIT_ALERT_MULTIPLIER = 2;
  * evidence that cannot be judged at all (an unrecognised deliveryPolicy) is
  * named as such.
  */
-export function describeUnmetDependency(state: StateManager, taskId: string): string {
+export function describeUnmetDependency(state: StateManager, taskId: string, consumer?: DependencyConsumer): string {
   const dep = state.getTask(taskId);
-  if (!dep || dep.status !== 'DONE') return `${taskId} [${dep?.status ?? 'missing'}]`;
+  const status = dep?.status ?? 'missing';
   try {
-    const { missingEvidence } = dependencyShortfall(state, taskId);
-    return missingEvidence.length > 0 ? `${taskId} [DONE, missing ${missingEvidence.join(', ')}]` : `${taskId} [DONE]`;
+    if (!isStrictConsumer(state, consumer) && (!dep || dep.status !== 'DONE')) return `${taskId} [${status}]`;
+    const { missingEvidence } = dependencyShortfall(state, taskId, consumer);
+    return missingEvidence.length > 0 ? `${taskId} [${status}, missing ${missingEvidence.join(', ')}]` : `${taskId} [${status}]`;
   } catch {
-    return `${taskId} [DONE, delivery evidence could not be judged: check settings.deliveryPolicy]`;
+    return `${taskId} [${status}, delivery evidence could not be judged: check settings.deliveryPolicy]`;
   }
 }
 
@@ -327,7 +348,7 @@ export async function alertStaleBlocks(state: StateManager, nowMs: number = Date
     } else {
       const unmet = unmetBlockedOnTaskIds(state, task);
       if (unmet.length === 0) continue;
-      const described = unmet.map((id) => describeUnmetDependency(state, id));
+      const described = unmet.map((id) => describeUnmetDependency(state, id, task));
       const stuck = unmet.filter((id) => {
         const dep = state.getTask(id);
         return !!dep && NON_PROGRESSING_STATUSES.has(dep.status);

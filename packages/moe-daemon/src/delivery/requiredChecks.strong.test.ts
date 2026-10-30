@@ -246,7 +246,12 @@ function legacyPolicy(value: 'legacy' | null | 'absent'): void {
   h.state.project!.settings = next as never;
   h.state.tasks.set('task-1', { ...task(), commits: [], executionPolicySnapshot: { ...task().executionPolicySnapshot!, deliveryPolicy: 'legacy' } as never });
 }
-const setDone = () => h.state.tasks.set('task-1', { ...task(), status: 'DONE' });
+const setDone = () => {
+  h.state.tasks.set('task-1', { ...task(), status: 'DONE' });
+  // CQ-V09: model qa_approve's record, not a DONE status flip without review.
+  h.state.reviews.set(`review-${cand}`, { id: `review-${cand}`, taskId: 'task-1', candidateId: cand,
+    reviewerId: 'qa-1', decision: 'approve', summary: 'verified', createdAt: '2026-10-30T00:00:00.000Z' });
+};
 const BOTH = [token(UNIT), token(LINT)];
 
 describe('V verified-local under the legacy deliveryPolicy (bug task-43088e9b)', () => {

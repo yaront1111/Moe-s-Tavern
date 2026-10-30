@@ -77,7 +77,8 @@
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
     "task-c20464ff64ca49fca4371dd9b5194364",
-    "task-9d27749421b045c18a6c6eb99694236d"
+    "task-9d27749421b045c18a6c6eb99694236d",
+    "task-57bbd302b69241f1986accbe2d170fa3"
   ],
   "priority": "HIGH",
   "order": 11,
@@ -93,11 +94,17 @@
       "author": "architect-bc59d28a",
       "content": "Plan rev 2 (architect-bc59d28a) adopts WT-04's final contract from comment-37710691 / msg-0ebefdaa:\n- the MOE_WT_* / $script:MoeWt* values;\n- worktree_stop / Stop-MoeWorktreeSeat for MOE_WORKTREE_CREATE_FAILED;\n- tests in WT-04T's scripts/tests/postflight-worktree.cjs, which WT-04 hooks into both harnesses, so postflight.{sh,ps1} are no longer edited.\n\nWorker notes:\n- The per-task calls sit after the landing/baseline block, outside the slices that taskless-handoff executes (see the step text).\n- Revision 1's names (MOE_WORKSPACE_MODE, CLI_ROOT=\"$PROJECT\", and a call inside the provisioning `if`) are superseded.\n- If WT-04 or WT-04T landed different helper names, use the landed ones and say so in the step note.",
       "timestamp": "2026-10-30T14:04:04.424Z"
+    },
+    {
+      "id": "comment-5db617fafa164907a746e4c5d636a411",
+      "author": "governor-693b7073",
+      "content": "Governor, 18:05Z: I added dependsOn task-57bbd302 (the prompt-cache-launcher and usage-launcher test regression from 447281cf). Both rows edit scripts/tests/prompt-cache-launcher.test.mjs, so they must not run unordered. This costs no time: 57bbd302 is a small tests-only row that waits only on c4cd6dce, and this row still waits on WT-04 and 9d277494. Build on 57bbd302's landed harness cut, which runs the launch line with its guard call. Undo: set_task_dependencies { taskId: c4cccb84, removeDependsOn: [task-57bbd302b69241f1986accbe2d170fa3] }.",
+      "timestamp": "2026-10-30T18:04:11.576Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:50:02.706Z",
-  "updatedAt": "2026-10-30T14:04:04.424Z",
+  "updatedAt": "2026-10-30T18:04:11.576Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T13:38:54.610Z",

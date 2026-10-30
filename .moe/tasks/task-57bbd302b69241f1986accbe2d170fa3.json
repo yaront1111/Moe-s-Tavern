@@ -1,0 +1,104 @@
+{
+  "id": "task-57bbd302b69241f1986accbe2d170fa3",
+  "epicId": "epic-be924fb8",
+  "title": "bug: prompt-cache-launcher and usage-launcher tests cut launch blocks that 447281cf wrapped in agent_git_exec / Invoke-MoeGuardedCommand, so 7 Linux and 21 Windows cases fail",
+  "description": "Regression from c4cd6dce's completion commit 447281cf (the agent Git-write guard), the same commit as task-5b0e90fe's descriptor regression. 447281cf prefixed every bash CLI launch with `agent_git_exec` (`            \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" \\` became `            agent_git_exec \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" \\`). It replaced the ps1 `& $Command` with `Invoke-MoeGuardedCommand`, and it added guard cleanup right after the launches.\n\nscripts/tests/prompt-cache-launcher.test.mjs and scripts/tests/usage-launcher.test.mjs cut the REAL launch blocks out of each wrapper by text anchors and run them standalone with a fake CLI (mem:gotcha-launcher-test-extracts-codex-exec-blocks). Since 447281cf they fail four ways:\n- prompt-cache-launcher.test.mjs:349: the ps1 anchor `& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json ...` is gone (\"missing real Codex stream invocation\"). The sh anchor `            \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" \\` (12-space indent) no longer matches (\"missing boundaries\").\n- usage-launcher.test.mjs, Claude arms: an end anchor after the launch no longer matches. ps1: `\\n        }\\n    }\\n\\n    # Launch-failure classification`. sh: `\\n    fi\\n\\n    stop_heartbeat_sidecar`. The assert reports this as \"missing implementation boundary: <start marker>\".\n- usage-launcher.test.mjs, Codex arms: the cut block calls a guard function the harness never defines. sh gives CHILD_EXIT=127 (agent_git_exec not found). ps1 gives \"The term 'Invoke-MoeGuardedCommand' is not recognized\".\n\nEvidence (2026-10-30, architect-bd1eb82d):\n- Linux node v24.21.0, `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs`:\n  - HEAD fb47f668: 31 pass / 7 fail, all /bin/bash arms.\n  - A `git archive 447281cf^ scripts docs/roles` snapshot: 38 pass / 0 fail.\n- Native Windows node.exe at HEAD: 105 pass / 21 fail. That is the same 7 cases on each of powershell.exe, pwsh.exe and Git Bash.\n- `git log 447281cf^..HEAD` touches moe-agent.{sh,ps1} and these two test files only in 447281cf.\n\nImpact: .github/workflows/ci.yml:242 (\"Test agent runtime discovery\") runs both files on ubuntu, windows and macos, so every PR to main is red.\n\nFix direction: the tests follow the launcher, never the reverse.\n- Re-anchor each cut on text that exists at HEAD.\n- Run the guarded launch line as the launcher has it. Prefer giving each harness the launcher's own guard definitions, cut by anchor (agent_git_exec, and Invoke-MoeGuardedCommand plus the $script:AgentGitGuard state it reads). With no guard env they should pass straight through. Then the \"preserves child exit\" assertions also prove the guard keeps the child's exit code.\n- Leave scripts/moe-agent.sh and scripts/moe-agent.ps1 alone.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs` exits 0 with 0 failed under Linux node (the /bin/bash engine), run fresh from a snapshot of HEAD with only this task's test files overlaid. Command, exit code and output tail go to complete_task.",
+    "The same two files exit 0 under native Windows node, with the powershell.exe, pwsh.exe and Git Bash engines all running: 0 failed, 0 skipped. Windows node.exe launched from WSL on a /mnt/d snapshot is acceptable evidence.",
+    "No harness strips the guard call from the block it cuts. Each one runs the launch line exactly as the launcher has it at HEAD, guard call included, and defines the guard function from the launcher's own source, not a test re-implementation.",
+    "scripts/moe-agent.sh and scripts/moe-agent.ps1 are unchanged by this task; no assertion is weakened or deleted to get green."
+  ],
+  "taskRails": [
+    "Scripts-tests-only: edit scripts/tests/prompt-cache-launcher.test.mjs and scripts/tests/usage-launcher.test.mjs (plus a shared scripts/tests helper only if both need the same cut). Do not touch the launchers, so this row stays out of the wrapper lane and can run in parallel with 724e31fa."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Re-anchor scripts/tests/prompt-cache-launcher.test.mjs ('real Codex launch pipeline preserves Unicode, argv and child exit', about line 333).\n\nThe tests follow the launcher. Re-derive every anchor against HEAD at WORKING time: the architect validated these at a8ef4404, after c4cd6dce's 447281cf.\n\n(1) Add, next to `between`, a helper that cuts the launcher's OWN guard from its source. It is not a re-implementation:\n```\nconst guard = ext => ext === 'ps1'\n  ? `$script:AgentGitGuard=$null\\n${between(read('ps1'), 'function Invoke-MoeGuardedCommand {', 'function Remove-MoeAgentGitGuard')}`\n  : `AGENT_GIT_GUARD_ENV=()\\n${between(read('sh'), 'agent_git_exec() (', '\\n)\\n')}\\n)\\n`;\n```\nThe empty guard state is the non-Git-project path the launcher itself takes, so the guard passes straight through. The 'CHILD_EXIT=23' assertion then also proves the guard keeps the child's exit code.\n\n(2) ps1 branch:\n- `at` = indexOf `Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C \"$projectPath\" @codexSandboxArgs \"$shortPrompt\"`. It was `& $Command ...`. Keep the `                & {` lastIndexOf, the `            } else {` end and the 'missing real Codex stream invocation' assert.\n- Insert `${guard('ps1')}` right before `${block}` in the script.\n\n(3) sh branch:\n- The start anchor becomes `'            agent_git_exec \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" \\\\\\n'` (12 spaces, the exec branch's FIRST match; the TUI's identical line comes later). The end stays `'            set -e'`.\n- Insert `${guard('sh')}` before `${block}`.\n\nThe cut keeps the guard call: never strip or replace it, and never edit scripts/moe-agent.{sh,ps1}. Every existing assertion stays byte-identical.\n\nCheck with `env -u MOE_WORKER_ID node --test --test-name-pattern='real Codex launch pipeline' scripts/tests/prompt-cache-launcher.test.mjs`: it was 1 fail at HEAD, now 1 pass on /bin/bash.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Re-anchor scripts/tests/usage-launcher.test.mjs (the Claude and Codex arms, 6 cases per engine).\n\n(1) Add the same guard helper next to `run`, cut from the text run() already reads (`const text = source(ext)`):\n```\nconst guard = (ext, text) => ext === 'ps1'\n  ? `$script:AgentGitGuard=$null\\n${between(text, 'function Invoke-MoeGuardedCommand {', 'function Remove-MoeAgentGitGuard')}\\n`\n  : `AGENT_GIT_GUARD_ENV=()\\n${between(text, 'agent_git_exec() (', '\\n)\\n')}\\n)\\n`;\n```\nIn run(), write `setup + guard(ext, text) + block + '\\n' + body`, so every cut launch line finds the launcher's own guard. Today the sh Codex arms exit 127 (agent_git_exec not found) and ps1 says 'Invoke-MoeGuardedCommand is not recognized'.\n\n(2) Claude arms' end anchors moved, because 447281cf inserted guard cleanup after the launch:\n- ps1 `'\\n        }\\n    }\\n\\n    # Launch-failure classification'` becomes `'\\n        }\\n    }\\n\\n    Remove-MoeAgentGitGuard'`;\n- sh `'\\n    fi\\n\\n    stop_heartbeat_sidecar'` becomes `'\\n    fi\\n\\n    if [ -n \"${AGENT_GIT_GUARD_ROOT:-}\" ]'`.\nStart anchors, the Codex cuts (`Start-MoeUsageReceipt 'codex' 'headless'` to `} else {`; `start_moe_usage_receipt codex headless` to `set -e`), the hint blocks, every fake source and every assertion stay unchanged.\n\nNo harness may strip the guard call or define its own guard. Leave scripts/moe-agent.{sh,ps1} untouched. A shared scripts/tests helper is allowed by the rail but not needed: keep each file self-contained like today.\n\nCheck with `env -u MOE_WORKER_ID node --test scripts/tests/usage-launcher.test.mjs`: it was 6 fail on /bin/bash at HEAD, now 0 fail.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/usage-launcher.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh. error handling: a missing anchor must fail loudly through the existing between/assert messages, never be skipped.\n\n(a) DoD1, Linux:\n- Snapshot HEAD: `git archive HEAD scripts docs/roles | tar -x -C $SNAP`. docs/roles is required: the file reads the role docs (mem:gotcha-launcher-test-extracts-codex-exec-blocks).\n- Overlay ONLY the two test files, then cmp them against the worktree.\n- From $SNAP run `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs`.\n- Expect exit 0: 40 tests, 38 pass, 0 fail, 2 skipped (the two PowerShell-only rows, 'no PowerShell engine on linux').\n- The command, exit code and output tail are the complete_task evidence.\n\n(b) DoD2, native Windows:\n- Copy the same snapshot to a literal path under /mnt/d (e.g. /mnt/d/tmp/moe-57bb-gate).\n- From there run `\"/mnt/c/Program Files/nodejs/node.exe\" --test --test-reporter=tap scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs`.\n- Expect exit 0: 126 tests, 126 pass, 0 fail, 0 skipped. That covers powershell.exe, pwsh.exe (WindowsApps) and Git Bash; HEAD gives 105/21.\n- Report it as Windows evidence in the summary, then delete that literal directory.\n\nThe architect prototype matched both numbers exactly (Linux 38/0/2, Windows 126/0/0).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs",
+        "scripts/tests/usage-launcher.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (final step). Load adversarial-self-review.\n\n(1) Scratch-only mutants on the snapshot copies. Each one must FAIL by assertion on /bin/bash, then be restored and cmp'd:\n- restore the old sh exec anchor (no `agent_git_exec`): 'missing boundaries';\n- drop `${guard('sh')}` from the prompt-cache script: CHILD_EXIT is not 23 (exit 127);\n- drop guard(ext, text) from usage run(): the Codex arms fail;\n- restore the old sh Claude end anchor: 'missing implementation boundary'.\nA mutant that only fails at load (a syntax error) is not a kill.\n\n(2) Check DoD3 and DoD4 by reading the diff:\n- every cut still contains the guard call exactly as the launcher has it;\n- the guard text comes only from between() over the launcher source;\n- `git diff --stat -- scripts/moe-agent.sh scripts/moe-agent.ps1` shows nothing from this task;\n- no assertion was removed or loosened (diff the assert lines);\n- no MOE_*-dependent behavior: the gate runs under env -i.\n\n(3) Note in complete_task that CI's ci.yml 'Test agent runtime discovery' step runs these two files on all three OSes. If a finding changes a file, rerun step 3 fresh.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs",
+        "scripts/tests/usage-launcher.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c4cd6dce82bf49648dafdd9c538ff328"
+  ],
+  "priority": "HIGH",
+  "order": 313.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T18:03:40.123Z",
+  "updatedAt": "2026-10-30T18:10:58.600Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T18:04:27.031Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-6fc3dd5c"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T18:10:58.581Z",
+  "planningNotes": {
+    "approachesConsidered": "- Stripping `agent_git_exec` / `Invoke-MoeGuardedCommand` from the cut blocks, or defining a test-side stub: rejected by DoD3, and it would stop proving the guard keeps the child's exit code.\n- A shared scripts/tests helper: allowed by the rail, but each file already carries its own between/read, and the cut is 3 lines, so stay inline.\n- Setting a non-empty guard env so the fake asserts it: the description chooses no-env pass-through, so this is out of scope.",
+    "codebaseInsights": "Measured at a8ef4404, after 447281cf:\n- the sh guard is `agent_git_exec() ( if [ ${#AGENT_GIT_GUARD_ENV[@]} -gt 0 ]; then export ...; fi; exec \"$@\" )` (moe-agent.sh:6510);\n- the ps1 guard is `function Invoke-MoeGuardedCommand` (moe-agent.ps1:5992). It iterates `$script:AgentGitGuard.PSObject.Properties` (null means no iterations), runs `& $Command @args`, and restores the env in finally plus `$global:LASTEXITCODE`;\n- the Codex exec launch is moe-agent.sh:8019 and ps1:7227; the sh TUI repeat is at 8035, after the exec match;\n- the Claude tails are sh `fi` then `if [ -n \"${AGENT_GIT_GUARD_ROOT:-}\" ]...` (8677), and ps1 `}` `}` then `Remove-MoeAgentGitGuard` (7817).\n\nArchitect prototype, exactly the edits in steps 1-2:\n- Linux /bin/bash: 38 pass / 0 fail / 2 skip, vs 31/7 at HEAD;\n- native Windows node v24.16.0 from WSL on /mnt/d: 126/126, 0 fail, 0 skip, over powershell.exe, pwsh.exe (C:\\Users\\Yaron\\AppData\\Local\\Microsoft\\WindowsApps) and Git Bash.",
+    "risks": "- c4cd6dce is still in REVIEW. If its QA reopens it (for example over the providerDescriptor drift, filed as task-5b0e90fe), the launch lines may move again. dependsOn holds WORKING until it is DONE; re-derive the anchors at HEAD then.\n- The two scripts are wrapper-lane-sensitive: leave them untouched (task rail).\n- The Windows run needs pwsh.exe on PATH (WindowsApps) and Git at C:/Program Files/Git.\n- Never leave the /mnt/d scratch copy behind.",
+    "keyFiles": [
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/tests/usage-launcher.test.mjs",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T18:10:58.600Z",
+  "approvedPlanRevision": 1
+}
