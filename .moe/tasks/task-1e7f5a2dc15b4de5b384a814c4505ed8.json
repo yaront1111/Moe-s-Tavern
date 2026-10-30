@@ -75,12 +75,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 2,
-  "reopenReason": "Governor hold (11:55Z), awaiting two decisions. No defect is open.\n(1) HUMAN: size-only waiver prop-966350051b0c441f92420b7e7b86fb96. Net 404 vs the 400 cap; the 4 extra lines are TC6 coverage QA required. The exception follows the CQ-R11e1 rail.\n(2) ARCHITECT architect-e4b7eee0: does DoD2's \"every failure is a fixed TRANSFER_* code\" admit the shared helper's T3-pinned fixed provider/lifecycle passthrough? The governor read says yes (msg-4167f2ce).\nqa-ba3f4f35's evidence is green: exact b2138fba gate 264/265 with only the macOS skip; bridge+check 106/108; TC/TT 14/14; mutants killed. It is in /tmp/cq-r11e2-final-qa.7Iy3uM.\nThe row is at reopen 2. A size-only reject would hit the reopen cap and flip it to PLANNING over 4 lines.\nResume: once both decisions are in, the governor sets REVIEW. The next QA re-checks the rail plus the ruling, then decides.",
+  "reopenReason": "Governor hold lifted (13:03Z). The human approved size waiver prop-96635005 (CQ-R11e2 size exception rail, now on epic CQ-R; the human said \"i approve\"). The DoD2 ruling is also resolved: architect-e4b7eee0 ruled the helper passthrough intended (msg-a83b0ea4, comment-c2f7f32b). QA: re-check the rail text against the measured +407/-3, using qa-ba3f4f35's green evidence (/tmp/cq-r11e2-final-qa.7Iy3uM), then decide. This is not a reopen; reopenCount stays at 2.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
   "dependsOn": [
@@ -219,20 +219,23 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:52:33.539Z",
-  "updatedAt": "2026-10-30T11:56:54.899Z",
+  "updatedAt": "2026-10-30T13:12:16.433Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:57:25.378Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
     "executedStepCount": 15,
     "rejectCount": 2,
-    "reopenCount": 2
+    "reopenCount": 2,
+    "doneAt": "2026-10-30T13:12:16.433Z",
+    "wallClockMs": 51291055
   },
   "contextFetchedBy": [
     "worker-6e57c4f8",
     "qa-ba3f4f35",
     "worker-c2da129d",
-    "governor-693b7073"
+    "governor-693b7073",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -410,7 +413,7 @@
     "sessionId": "qa-ba3f4f35@2026-10-30T11:39:50Z",
     "at": "2026-10-30T11:51:40.615Z"
   },
-  "reviewCompletedAt": "2026-10-30T09:50:29.388Z",
+  "reviewCompletedAt": "2026-10-30T13:12:16.433Z",
   "rejectionDetails": {
     "failedDodItems": [
       "The verification command exits 0 with its output supplied to complete_task."
@@ -486,11 +489,11 @@
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-supervisor.py"
   ],
-  "blockedReason": "Governor hold (11:55Z), awaiting two decisions. No defect is open.\n(1) HUMAN: size-only waiver prop-966350051b0c441f92420b7e7b86fb96. Net 404 vs the 400 cap; the 4 extra lines are TC6 coverage QA required. The exception follows the CQ-R11e1 rail.\n(2) ARCHITECT architect-e4b7eee0: does DoD2's \"every failure is a fixed TRANSFER_* code\" admit the shared helper's T3-pinned fixed provider/lifecycle passthrough? The governor read says yes (msg-4167f2ce).\nqa-ba3f4f35's evidence is green: exact b2138fba gate 264/265 with only the macOS skip; bridge+check 106/108; TC/TT 14/14; mutants killed. It is in /tmp/cq-r11e2-final-qa.7Iy3uM.\nThe row is at reopen 2. A size-only reject would hit the reopen cap and flip it to PLANNING over 4 lines.\nResume: once both decisions are in, the governor sets REVIEW. The next QA re-checks the rail plus the ruling, then decides.",
+  "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-30T11:50:12.906Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "priorHandoffs": [
     {
       "whatIsDone": "QA review substantively complete on b2138fba. Unfiltered gate 264 pass with 1 existing macOS skip; bridge+check 106/108; TC/TT 14/14; ten timestamp probes 10/10; two prior-defect mutants killed; three toolchain probes return fixed codes with zero spawns. DoD2 ruled by architect-e4b7eee0 (msg-a83b0ea4): the shared helper's fixed PROVIDER_*/LIFECYCLE_* passthrough is intended. Evidence: /tmp/cq-r11e2-final-qa.7Iy3uM and comment-c2f7f32b.",
@@ -500,5 +503,9 @@
       "releasedBy": "governor-693b7073",
       "reason": "Explicit handoff: qa-ba3f4f35's R11e2 session exited at 11:51:41Z (checkpoint c686bdf8, board paths only), and QA said it was ending and handing back. The row is under a governor hold (BLOCKED) waiting on human waiver prop-96635005. QA's seat stays wedged on this hold (claim_next_task refuses a seat holding a BLOCKED row, and unblock_worker needs worker status BLOCKED). Release frees the seat; the task stays BLOCKED."
     }
-  ]
+  ],
+  "priorBlockedReason": "Governor hold (11:55Z), awaiting two decisions. No defect is open.\n(1) HUMAN: size-only waiver prop-966350051b0c441f92420b7e7b86fb96. Net 404 vs the 400 cap; the 4 extra lines are TC6 coverage QA required. The exception follows the CQ-R11e1 rail.\n(2) ARCHITECT architect-e4b7eee0: does DoD2's \"every failure is a fixed TRANSFER_* code\" admit the shared helper's T3-pinned fixed provider/lifecycle passthrough? The governor read says yes (msg-4167f2ce).\nqa-ba3f4f35's evidence is green: exact b2138fba gate 264/265 with only the macOS skip; bridge+check 106/108; TC/TT 14/14; mutants killed. It is in /tmp/cq-r11e2-final-qa.7Iy3uM.\nThe row is at reopen 2. A size-only reject would hit the reopen cap and flip it to PLANNING over 4 lines.\nResume: once both decisions are in, the governor sets REVIEW. The next QA re-checks the rail plus the ruling, then decides.",
+  "completedAt": "2026-10-30T13:12:16.433Z",
+  "reviewSummary": "Approved under the CQ-R11e2 size rail (human-approved prop-96635005); DoD2 per architect ruling comment-01090227 (helper PROVIDER_*/LIFECYCLE_* passthrough intended).\nDelivery: 3c5af5e1, 063d7ffd (completion) and 1209c752, b2138fba (checkpoints; this round landed checkpoint-first, so no newer completion commit) are on moe/work-2026-10-24 (git branch --contains). c686bdf8 is board JSON only. The 3 files at HEAD ebb402e2 equal b2138fba and are clean in the shared tree.\nSize: replayed only this task's 4 patches onto 3c5af5e1^ (git apply in scratch): supervisor +101/-2, transfer +61/-1, tests +245/-0 = 410 changed, net 404, exactly the rail. HEAD's test file differs from it only by peer task-2cf1c6be's AJ fixture hunks.\nFresh gate on a git archive of HEAD (scripts + packages/moe-daemon/src): env -i HOME PATH=nvm v24.21.0 node --test scripts/tests/local-runner.test.mjs -> exit 0, 265 tests/264 pass/0 fail/1 skip (existing opt-in macOS smoke), 33.7s. TC1-TC6 (4 subtests), TT1-TT4, AJ1-AJ6 all ran green and are unedited; hashes match qa-ba3f4f35's.\nMutants 9/9 killed: OverflowError handler, link_escapes, umask, mode check, member-name filter, guest digest (TC2-TC6); host cache hash, second frame, installed digest (TT2). Restored focused gate 14/14.\nDoD1 OK: TC2 installs only header-matched bytes as an own-uid tree with no 07022 bits under umask 0; TC3 stream/header refusals, TC4 absolute/../ members, links out (incl. the rename alias), hardlinks, chr device and bad top levels, TC5 existing install 73 untouched, no data_filter 71, I/O 74, TC6 overflow 65. None leaves install/staging.\nDoD2 OK: TT2/TT4 reverify before any provider call; TT1 frames only the verified buffer after a post-check cache rewrite, with mounts checked before and after; TT2 pins the frame, digest, mount and exit codes.\nDoD3 OK: reproduced above. diff --check clean, no __pycache__.\nResidual: no VM/native certification; executionReady false. The R11e2 rail is duplicated on the epic.",
+  "requiredCheckAtDone": null
 }

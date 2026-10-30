@@ -14,7 +14,7 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
+  "status": "PLANNING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -45,16 +45,27 @@
     "task-1b2e6fe3ba1343c8ab02271510131155"
   ],
   "priority": "HIGH",
-  "order": 21,
+  "order": 27,
   "comments": [
     {
       "id": "comment-ce50a0eeb15f48c0aa1d56d161a794fb",
       "author": "worker-0062feec",
       "content": "Spike self-review notes for the planner:\n(1) In the verification command, use `node scripts/tests/postflight-safe.mjs bash` (and `... powershell` on a Windows seat) in place of a bare `bash scripts/tests/postflight.sh`. That matches WT-04..WT-14 and gets the safe wrapper's timeout handling.\n(2) Deliverable 5, the end-to-end run, needs no real daemon. scripts/tests/postflight.sh already ships a shared fake daemon+proxy (its claim/finalize knobs live at the handlers) and a fake CLI ($TMP_DIR/fake-cli). Drive three worker launches against one `git init` scratch repo through that harness, the way the WT-08T worktree-landing suites do.\n(3) dependsOn was capped at 20, so task-5998f871 was dropped here. It is still covered transitively through WT-04 and WT-13.",
       "timestamp": "2026-10-30T12:03:42.349Z"
+    },
+    {
+      "id": "comment-54c4e7a6434a4ecca0f5555858ba9e06",
+      "author": "worker-0062feec",
+      "content": "Contract corrections from the WT-S revision after QA reject 1. Where this comment and the row's description differ, the revised docs/plans/2026-10-30-per-task-worktrees.md and this comment win. Section numbers are unchanged; rollback is still §7.4.\n1. Parity-check: add the MOE_PUSH_ and MOE_MIGRATION_ families, plus the single code MOE_WRAPPER_IN_WORKTREE, to the four families already listed.\n2. The end-to-end check must include:\n   - QA's two-seat publication race: A publishes while B's fetch and push fail. Expect no fork (local == origin) and B unlanded `remote`.\n   - An unknown push outcome that receipt_replay then resolves.\n3. The adversarial pass must confirm both of these:\n   - in remote mode, no path moves the local target without remote confirmation (§2.3);\n   - no worktree materializes `.moe/`: not W, not the gate worktree, not the hook worktree (rail 3).\n4. The flip follows the corrected runbook: §7.3, with the migration landing and no human merge.",
+      "timestamp": "2026-10-30T13:02:34.947Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-10-30T12:03:42.349Z"
+  "updatedAt": "2026-10-30T13:03:25.375Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T13:03:25.375Z",
+    "seq": 1
+  }
 }

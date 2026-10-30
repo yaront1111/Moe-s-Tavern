@@ -1,0 +1,28 @@
+{
+  "id": "task-6f3f7fe97a91434c9143e52e57c6f302",
+  "epicId": "epic-be924fb8",
+  "title": "bug: approving an already-approved rail proposal appends its rail again, and rejecting an approved one leaves its rail live",
+  "description": "Observed on 2026-10-30.\n- 12:56:23Z: the human approved four proposals in the IDE (prop-96635005, prop-da2a6c91, prop-4fe44aac, prop-10384054).\n- 13:00:41Z: a governor script sent APPROVE_PROPOSAL over /ws for three of them and REJECT_PROPOSAL for prop-4fe44aac.\n- Result: each re-approved ADD_RAIL was appended a second time, so epic CQ-R carried the CQ-R11e2 rail twice, CQ-RF the RF04 rail three times and the WT epic the WT-S rail twice.\n- prop-4fe44aac flipped to REJECTED while its rail stayed in epicRails.\n- Cleanup took four REMOVE_RAIL proposals (prop-0d2ff5ad, d4edfe4d, 252a4d2d, fab7280e).\n\nCause: packages/moe-daemon/src/state/StateManager.ts.\n- approveProposal (~L1369) calls applyRailChange and then sets APPROVED, whatever the current status is.\n- rejectProposal (~L1466) sets REJECTED on an APPROVED proposal without reverting it.\n- Any two clients can trigger this: two IDE windows, a double-click, or a script.\n\nFix:\n- approveProposal and rejectProposal act only on a PENDING proposal.\n- A repeat of the same decision on an already-resolved proposal is an idempotent no-op that returns the stored proposal.\n- The opposite decision on a resolved proposal is refused with a fixed error, sent back over /ws as an ERROR message.\n- Rails, the proposal file and the activity log stay unchanged in both cases.\n\nOut of scope: the IDE UI and the cleanup already done.",
+  "definitionOfDone": [
+    "A second approveProposal on an APPROVED ADD_RAIL proposal leaves epicRails, global rails and task rails unchanged (no duplicate), returns the stored proposal and appends no PROPOSAL_APPROVED event. Shown by a daemon test.",
+    "rejectProposal on an APPROVED proposal, and approveProposal on a REJECTED one, are refused with a fixed error. The record, the rails and the activity log are unchanged, and the /ws handler replies with ERROR. Shown by tests.",
+    "A PENDING proposal is still approved and rejected exactly as before, shown by the existing proposal tests, and `cd packages/moe-daemon && npm test` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 296.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:04:16.333Z",
+  "updatedAt": "2026-10-30T13:04:16.333Z"
+}

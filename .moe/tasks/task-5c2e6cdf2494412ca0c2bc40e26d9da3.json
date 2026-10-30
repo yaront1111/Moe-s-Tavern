@@ -13,7 +13,7 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
+  "status": "PLANNING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,9 +26,27 @@
     "task-0921d6d76a6b40a685077245b19ac639"
   ],
   "priority": "HIGH",
-  "order": 12,
-  "comments": [],
+  "order": 17,
+  "comments": [
+    {
+      "id": "comment-1970f7d8521f495dafdff5b7ca1e8144",
+      "author": "worker-0062feec",
+      "content": "Contract correction from the WT-S revision after QA reject 1. Where this comment and the row's description differ, the revised docs/plans/2026-10-30-per-task-worktrees.md and this comment win. Plan against revised §2.2 (L3/L6/L14), §2.3 and §7.3.\n\n1. Take the lease on EVERY completion landing, not \"only when a gate will run\".\n   - Acquire, wait, release and the bounds are unchanged.\n   - Rounds are L4-L9: at most 3 without a gate, 2 with one.\n\n2. Gate worktree arm (rail 3):\n   - Add the gate worktree with `--no-checkout`. Never pass `core.sparseCheckout=false`.\n   - Then run `sparse-checkout set --no-cone '/*' '!/.moe/'` and `read-tree -mu HEAD`.\n   - The integrity helper is gate_integrity_wt / Test-MoeGateIntegrityWorktree:\n     - keep the HEAD and write-tree checks;\n     - clear assume-unchanged and skip-worktree bits only outside `.moe/`;\n     - require a clean diff-files;\n     - fail with MOE_WORKTREE_GATE_INTEGRITY when `<gate>/.moe` exists, before or after the command. That makes the landing unlanded `gate`.\n   - Shared mode keeps today's run_frozen_gate / gate_integrity unchanged (rail 4).\n   - Cases:\n     - a gate command that creates `.moe/x` → integrity failure, nothing published;\n     - `.moe` is absent while the command runs;\n     - the shared-mode gate behaves as before.\n\n3. Migration landing `--land-branch <branch>` / `-LandBranch <branch>` (§7.3):\n   - Sequence: L3, then rounds of:\n     - L4;\n     - L5 `merge-tree --write-tree B <branch>`;\n     - L6 on exactly M;\n     - L7 C = `commit-tree M -p B -p <branch tip>`;\n     - L9 and L10.\n     Then L14.\n   - L6 always runs settings.qualityGate, whatever qualityGateScope says. With no gate set, refuse with MOE_MIGRATION_NO_GATE before any fetch.\n   - Skip L0-L2, L5b, L8 and L11-L13. Record no Candidate, CheckRun or ledger row.\n   - These publish nothing: a conflict, a failed gate, a lease timeout, 2 exhausted rounds.\n   - An unknown outcome stops. Once main contains the branch, a re-run exits 0 with MOE_COMMIT_NOTHING_TO_COMMIT.\n   - Cases: clean landing, conflict, no-gate refusal, re-run idempotence.\n\nIf this exceeds taskSizing at plan time, split item 3 into its own row (SPIDR, Interface) and make WT-16 depend on it.",
+      "timestamp": "2026-10-30T13:02:15.983Z"
+    },
+    {
+      "id": "comment-f814768d909d4514a99f1b6eedd8cca0",
+      "author": "worker-0062feec",
+      "content": "Follow-up to the WT-S revision comment above. It narrows that comment's item 1 so it matches this row's DoD2 (definitionOfDone is human-owned). Revised §2.2 L3 and §2.3 now say the same:\n- While `settings.qualityGate` is set, take the land lease on every completion landing, whether or not this landing's `qualityGateScope` runs the gate. This stops an ungated peer from publishing while a gated landing is gating.\n- With no `qualityGate` set, make no lease call, exactly as DoD2 says.\n- Safety never depends on the lease. The local CAS or the non-forced push decides, and WT-08T's race case runs with no gate.\nAdd a case: when the qualityGate is scoped so this landing does not run it, the landing still takes the lease and releases it.\nAlso extend your parity grep to cover `MOE_MIGRATION_`.",
+      "timestamp": "2026-10-30T13:12:00.126Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:53:57.865Z",
-  "updatedAt": "2026-10-30T11:53:57.865Z"
+  "updatedAt": "2026-10-30T13:12:00.126Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T13:03:03.609Z",
+    "seq": 1
+  }
 }

@@ -13,7 +13,7 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
+  "status": "PLANNING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,9 +26,27 @@
     "task-c20464ff64ca49fca4371dd9b5194364"
   ],
   "priority": "HIGH",
-  "order": 9,
-  "comments": [],
+  "order": 14,
+  "comments": [
+    {
+      "id": "comment-c942527cdf474d52a0c803ec4f33e760",
+      "author": "worker-0062feec",
+      "content": "Contract correction from the WT-S revision after QA reject 1. Where this comment and the row's description differ, the revised docs/plans/2026-10-30-per-task-worktrees.md and this comment win. Plan against revised §2.2, §2.3, §2.5, §2.6, §2.7 and §2.9.\n\nWITHDRAWN: the case \"an unreachable remote prints MOE_PUSH_FAILED and local main still advances\". In remote mode a non-forced push is the only publication, and the local target moves only to commits the remote is known to hold.\n\nDrive the remote cases with a deterministic git shim placed first on PATH. It fails or fakes chosen subcommands (for example MOE_TEST_GIT_FAIL=fetch|push|push-after-apply) and execs the real git for everything else.\n\nRequired `remote` cases:\n1. QA's two-seat race. Seat A publishes C1, then all 3 of seat B's fetches fail. Expect:\n   - B publishes nothing and ends unlanded `remote` (MOE_LAND_FETCH_FAILED);\n   - local target == origin target == C1;\n   - no MOE_LAND_TARGET_DIVERGED;\n   - A finalizes `landed`.\n2. Push transport error, then the reconcile fetch succeeds without C. Expect MOE_PUSH_FAILED, the round ends, the local target is unmoved, and nothing sends `pushed: true`.\n3. Push applied but the client fails: the shim runs the real push, then exits 128 with no porcelain line. The reconcile finds C. Expect landed, local mirrored to C, `pushed: true`.\n4. Unknown outcome: the push and the reconcile fetch both fail. Expect:\n   - MOE_PUSH_OUTCOME_UNKNOWN, and no local ref moved;\n   - the receipt journal kept, with push result `push unknown: …`;\n   - a `push-unknown` rescue ref on C;\n   - no completion ledger row and no finalize, so the attempt stays `finalizing`.\n   Then, with the shim off, receipt_replay fetches, finds C and closes `landed`.\n5. Rejected push: a peer landed first, so the line carries `!`. Expect a new round on the fresh tip, which lands.\n6. The local target is not an ancestor of the fetched tip. Expect unlanded `diverged`, and nothing moves.\n\nKeep the other listed cases. With no remote, L9's local CAS is the publication and `pushed` is false. The files must still be red against current code and stay out of CI.",
+      "timestamp": "2026-10-30T13:01:55.579Z"
+    },
+    {
+      "id": "comment-e07af02f346d42519f42dc90efde9dc0",
+      "author": "worker-0062feec",
+      "content": "Follow-up to the WT-S revision comment above. WT-08 and WT-09 must pass these files before WT-11 adds the unlanded route, and WT-11 must still pass them unchanged afterwards. That fixes what each case may assert:\n- Cases 1 (QA's race) and 6 (diverged), for the seat that loses:\n  - assert git state and the log code (MOE_LAND_FETCH_FAILED or MOE_LAND_TARGET_DIVERGED);\n  - assert no `record_commit` with `pushed: true` and no `landed` finalize;\n  - do NOT assert the `finalize_attempt unlanded` call. WT-11's own cases cover it.\n- Case 4 (unknown outcome): assert no finalize at all. That holds both before and after WT-11.\n- Run every case with no qualityGate, so no lease call is involved (revised §2.2 L3).",
+      "timestamp": "2026-10-30T13:12:07.077Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:52:07.306Z",
-  "updatedAt": "2026-10-30T11:52:07.306Z"
+  "updatedAt": "2026-10-30T13:12:07.077Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T12:56:04.205Z",
+    "seq": 1
+  }
 }

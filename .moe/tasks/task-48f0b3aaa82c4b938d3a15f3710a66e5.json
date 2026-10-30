@@ -13,7 +13,7 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
+  "status": "PLANNING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,16 +26,33 @@
     "task-6cf120a38b344e72b7bab8b9faf806f1"
   ],
   "priority": "MEDIUM",
-  "order": 18,
+  "order": 24,
   "comments": [
     {
       "id": "comment-0aff7ccd508b442486d51cb7fd78249f",
       "author": "worker-0062feec",
       "content": "Spike self-review correction (epic rail 2: parity-check must pass on every task). Append this to this task's verification command, run from the repo root: `&& S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)`. Running it on a HEAD snapshot keeps a peer's mid-edit wrapper bytes from failing a task that never touches the wrappers. Also: the design doc's §7.3 runbook and §7.3.6 doctor probes are this task's (an earlier draft of the doc numbered them WT-15).",
       "timestamp": "2026-10-30T12:03:34.217Z"
+    },
+    {
+      "id": "comment-dc2a92ff40a545f6b87c24640d778242",
+      "author": "worker-0062feec",
+      "content": "Contract correction from the WT-S revision after QA reject 1. Where this comment and the row's description differ, the revised docs/plans/2026-10-30-per-task-worktrees.md and this comment win.\n\nWITHDRAWN: \"the human merge of moe/work-2026-10-24 into main\". Rail 1 has no human exception, so that main move is ungated and is not allowed.\n\nWrite the runbook from revised §7.3 (flip-on, which now includes the migration landing) and §7.4 (rollback):\n1. Drain.\n2. Run the rescue-ref check.\n3. Settings: ALWAYS declare resources[\"git-land-main\"] (capacity 1, maxLeaseMs 7200000, releaseOnDeregister true), and set a qualityGate if none is set.\n4. A human runs the migration landing: `scripts/moe-agent.sh --land-branch moe/work-2026-10-24` (ps1 `-LandBranch`, built by WT-10). Any stop leaves main untouched, and the flip waits.\n5. `git switch -c moe/control main`.\n6. Set worktreeMode 'on' and consolidationBranch 'main', then run doctor, then restart the seats.\n\nRollback never moves main.",
+      "timestamp": "2026-10-30T13:02:25.482Z"
+    },
+    {
+      "id": "comment-05d5eda8e9a04732b521ec3698fe87da",
+      "author": "worker-0062feec",
+      "content": "Follow-up to the WT-S revision comment above.\n- DoD item 4's \"human-only merge step\" is satisfied by the human-run migration landing (`--land-branch`), whose gated two-parent commit C is the merge. The runbook must contain no manual `git merge` or `git push` to main.\n- The runbook names WT-10's `--land-branch` (task-5c2e6cdf2494412ca0c2bc40e26d9da3). Add WT-10 to this row's dependsOn with moe.set_task_dependencies before planning; this worker seat has no dependency tool.\n- Step 3 still declares `git-land-main` and sets a qualityGate. The migration landing always gates, so it always takes the lease, and once a qualityGate is set every landing does (revised §2.3, §7.3 step 3).",
+      "timestamp": "2026-10-30T13:12:12.262Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-10-30T12:03:34.217Z"
+  "updatedAt": "2026-10-30T13:12:12.262Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T13:03:22.067Z",
+    "seq": 1
+  }
 }
