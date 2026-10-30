@@ -1,0 +1,33 @@
+{
+  "id": "task-e7f4026abc0c4a8bb7632c8178ea7d70",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a seat whose own daemon died adopts whatever daemon now holds that port — px4swarm worker-9a70fc93 registered with the moes daemon, coded moes task V11, and left its bytes unlanded",
+  "description": "Observed 2026-10-30. The human reports it has happened before.\n\nWhat happened\n- px4swarm's daemon (Windows PID 26004) is dead. D:/projexts/px4swarm/.moe/daemon.json still names port 9876 (bindHost 0.0.0.0, startedAt 2026-10-28T19:16Z). The moes daemon (PID 17468) now holds 0.0.0.0:9876.\n- PyCharm launched `moe-agent.sh --role worker --project /mnt/d/projexts/px4swarm --worker-id worker-9a70fc93 --command claude --team px4swarm` (WSL agent mode). The seat registered with the MOES daemon (proj-3830fac7) and created a team named \"px4swarm\" there. It then claimed moes task task-e493ed19 (CQ-V11) and completed it at 07:33:25Z.\n- V11's two new files are untracked in the moes checkout (packages/moe-daemon/src/__acceptance__/mcpCall.ts and producerConsumer.acceptance.test.ts), and task.commits is empty, because the wrapper lands in its own --project (px4swarm, whose tree is clean). Attempt attempt-70f49183 sat in `finalizing`, so QA skipped V11, and the wrapper's next claims were refused with ATTEMPT_FINALIZING every 30 s.\n- The seat's Serena ran on /mnt/d/projexts/px4swarm, with a 4 m 35 s startup, and wrote the moes handoff memory task-task-e493ed19…-handoff into px4swarm's .serena/memories.\n\nRoot cause: no client checks that the daemon it reaches serves its project.\n1. scripts/moe-agent.sh `probe_daemon_health` (~line 1447, used at ~1524 for a Windows-owned daemon.json) passes on `status == 'healthy'` and ignores the reply's `projectPath`. Here the reply said \"D:/projexts/moes\".\n2. moe-proxy `readDaemonInfoResult` (packages/moe-proxy/src/utils.ts:116) compares the projectPath written in the file with its own project. That always matches for a stale file. It never asks the daemon it connects to.\n3. The daemon's /mcp accepts any client and carries no project identity. Optional hardening: a project parameter on the upgrade, refused on mismatch. That is the architect's call.\nCheck the IDE plugins' daemon adoption for the same gap: the px4swarm PyCharm window may have attached to the moes board the same way.\n\nRequired behavior: a client that reaches a daemon serving a different project treats its daemon.json as stale. It never registers, claims or bridges. It states which project that daemon serves and what to do: restart this project's daemon, which takes the next free port. Compare paths with the existing comparable-path rule (D:\\x == D:/x == /mnt/d/x; see comparableProjectPath).\n\nContainment done by the governor: V11's two files are declared onto V11 (moe.declare_files), so the next session holding V11 lands them.",
+  "definitionOfDone": [
+    "moe-agent.sh and moe-agent.ps1 never adopt a daemon whose live identity (/health projectPath) is another project. Pre-flight stops before registering, with a message naming both projects. The launcher tests cover a healthy-but-foreign daemon, and scripts/tests/parity-check.sh passes.",
+    "moe-proxy refuses to bridge to a daemon serving another project. It checks the live daemon's identity, not only daemon.json, and exits with the same class of error as today's daemon.json project mismatch. A unit test covers the foreign-daemon case.",
+    "The JetBrains plugin's daemon adoption is checked for the same gap, and either fixed with a ./gradlew test case or shown in the task comments not to need it."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human-reported recurring bug (a seat adopts another project's daemon through a stale daemon.json). Root cause verified in code; queue it for planning.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 286.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:43:02.972Z",
+  "updatedAt": "2026-10-30T07:43:11.337Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T07:43:11.337Z",
+    "seq": 1
+  }
+}

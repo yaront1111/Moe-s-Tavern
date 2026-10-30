@@ -8,9 +8,65 @@
     "Tests pin each shape in attributionTiers.test.ts and one get_commit_scope case with a junk peer"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nCreate packages/moe-daemon/src/util/attributionTiers.test.ts. It is pure and needs no harness: build Task objects cast through unknown. Use exact toEqual, and add expect(() => ...).not.toThrow() wherever it applies.\n\n1. Step lists.\n   - For each field (affectedFiles, newFiles, modifiedFiles) and each junk value (7, {a:1}, 'src/str.ts'), use it.each over a PENDING step whose other two lists are valid, e.g. affectedFiles ['ok/a.ts'].\n   - collectTaskPathTiers returns exactly the valid entries in `planned`.\n   - It contains no single-character path: 's', 'r', 'c' or '.' never appear.\n2. Completed steps (completedStepFiles, through collectAssertedPaths). It keeps completeTask.ts's selection, `modifiedFiles || affectedFiles`, and guards what that selects:\n   - modifiedFiles junk with affectedFiles ['ok/b.ts'] contributes NOTHING, because the truthy junk is selected and is not an array;\n   - modifiedFiles undefined with affectedFiles junk contributes nothing;\n   - valid modifiedFiles contributes exactly its entries.\n3. Task-level lists. filesModified, declaredFiles, touchedFiles and inferredPaths set to 7, {a:1} or 'abc' contribute nothing, and nothing throws. collectDeclaredPaths returns [].\n4. Commits.\n   - `commits` of 7, {a:1} or 'x' contributes nothing.\n   - [7, null, {paths: 'p.ts'}, {paths: ['ok/c.ts'], inferredPaths: 'ok/c.ts'}] asserts exactly ['ok/c.ts']. The junk inferredPaths string is ignored, so it removes nothing.\n5. Plan shape. implementationPlan [null, 7, 'step', {status: 'COMPLETED', affectedFiles: ['ok/d.ts']}] skips the non-objects and asserts ['ok/d.ts'].\n6. Control: one well-formed task gives the exact asserted and planned tiers it gives today.\n\nIn packages/moe-daemon/src/tools/getCommitScope.test.ts, add ONE case next to 'does not throw on junk step data and adds no entry for it', reusing that block's setupLanding and scope helpers.\n- The peer has a step with newFiles 7, modifiedFiles {a:1} and affectedFiles 'src/str.ts', plus declaredFiles ['ok/peer.ts'].\n- The caller's scope succeeds.\n- The peer contributes exactly ['ok/peer.ts'] to peerDeclared, and no character paths.\n\nRed proof: in the Linux snapshot (step 3's recipe), run `npx vitest run src/util/attributionTiers.test.ts src/tools/getCommitScope.test.ts`.\n- The 7 and {a:1} rows throw 'is not iterable'.\n- The string rows show character paths.\n- The control and the existing cases pass.\nRecord it.\n\nError handling in tests: each row asserts no throw, as well as the exact result.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/util/attributionTiers.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/attributionTiers.test.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "note": "Red proof in Linux snapshot (/tmp/moe-7e39.*): 38 failures, incl. 'is not iterable' TypeErrors for 7/{a:1} and string rows; getCommitScope junk-peer case throws. Existing cases pass. Many dirty peer paths in shared tree left untouched.",
+      "startedAt": "2026-10-30T07:42:03.414Z",
+      "completedAt": "2026-10-30T07:42:46.869Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix packages/moe-daemon/src/util/attributionTiers.ts with ONE guard used for every list it reads.\n\n- Add `function asList(value: unknown): readonly unknown[]`, returning `Array.isArray(value) ? value : []`.\n- PathSet.addAll takes `raws: unknown` and iterates only an array. Every caller (getCommitScope.ts:61/140-142/235, recordCommit.ts:339 and this module) already passes arrays, so getCommitScope.ts and recordCommit.ts need no edit. Their task-level reads become junk-safe for free.\n- planSteps: `asList(task.implementationPlan)` keeping only non-null, non-array objects.\n- completedStepFiles: `.flatMap((s) => asList(s.modifiedFiles || s.affectedFiles))`.\n  - This is exactly completeTask.ts's selection, with only a non-array result contributing nothing.\n  - Update its JSDoc to say so: the mirror agrees on every well-formed record, and completeTask.ts itself is unchanged.\n- nonInferredCommitPaths: `asList(commit.paths)`.\n- collectAssertedPaths: `for (const commit of asList(task.commits))`, skipping a commit that is not a non-null object.\n- collectTaskPathTiers: `[...asList(step.affectedFiles), ...asList(step.newFiles), ...asList(step.modifiedFiles)]` and `asList(task.inferredPaths)`.\n- Header comment: extend the 'DROPPED rather than thrown' sentence. A list field that is not an array contributes nothing: it is never spread, and never iterated as characters.\n\nError handling: every read in this module is total over arbitrary JSON, so no input shape throws. Valid entries keep today's normalization, dedupe and order.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/attributionTiers.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/attributionTiers.ts"
+      ],
+      "note": "asList/isRecord guards; addAll takes unknown; green in snapshot: 2 files, 103 tests pass, tsc clean.",
+      "startedAt": "2026-10-30T07:42:48.706Z",
+      "completedAt": "2026-10-30T07:43:09.148Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then cmp. A kill counts only when the Tests line shows real failures.\n   - asList returns the value as is: the 7/{a:1} rows throw, and the string rows split.\n   - addAll iterates any iterable: the task-level string rows add characters.\n   - planSteps without the object filter: the null-step row throws.\n   - completedStepFiles falls back to affectedFiles when modifiedFiles is junk: the mirror row fails.\n   - The commit object check is dropped: the commits row throws.\n2. GATE, in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate).\n   - Take `git archive HEAD` of the WHOLE repo and overlay ONLY this task's 3 files.\n   - Install with native `npm ci --no-audit --no-fund` under env -i, with nvm node v24.21.0.\n   - Run `cd packages/moe-daemon && npx tsc --noEmit && npm test`. The full suite is required, because attributionTiers feeds get_commit_scope and get_context. It must EXIT 0. Use NO_COLOR=1 and grep -a.\n   - cmp the 3 files against the snapshot before citing.\n3. complete_task:\n   - verification: that command, exit 0 and the output tail;\n   - summary: DoD 1 maps to the attributionTiers.test.ts rows plus the mutants, and DoD 2 to those rows plus the getCommitScope case.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "5 mutants killed (102/16/1/3/1 failures), file restored+cmp. Full gate in snapshot /tmp/moe-7e39.*: tsc + npm test exit 0, 202 files, 5694 passed 16 skipped; 3 owned files cmp-identical to snapshot.",
+      "startedAt": "2026-10-30T07:43:09.866Z",
+      "completedAt": "2026-10-30T07:44:09.638Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review.\n\nRead the diff as a peer whose task record is arbitrary JSON:\n- Can any field this module reads still throw? Try null and non-object steps, commits and commit fields, and every list field.\n- Can any field still be iterated as characters?\n- Do well-formed records produce byte-identical tiers, in the same order, so get_commit_scope's and get_context's existing tests pass unchanged?\n- Is completeTask.ts untouched, with the mirror's JSDoc honest about the one junk-only difference?\n\nRails: no .moe edits, no Git writes, none of the global rails' forbidden patterns.\n\nThen write the Serena memory 'task-task-7e39a63f6b024acf9f5f06c92bfafd59-handoff' with the landed asList/addAll semantics.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/attributionTiers.ts",
+        "packages/moe-daemon/src/util/attributionTiers.test.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "note": "Self-review: no remaining throw/char-iteration path (null/non-object steps and commits, every list field covered by tests); well-formed order unchanged (control row + existing getCommitScope/get_context tests pass); completeTask.ts has no diff; JSDoc states the junk-only difference. Only external callers of the two exported helpers: none outside the module. Handoff memory written.",
+      "startedAt": "2026-10-30T07:44:10.635Z",
+      "completedAt": "2026-10-30T07:44:21.973Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,10 +79,66 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:16:11.740Z",
-  "updatedAt": "2026-10-30T07:17:40.423Z",
+  "updatedAt": "2026-10-30T07:44:27.317Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:17:40.423Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:39:19.107Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0",
+    "worker-73c29a03"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:41:31.059Z",
+  "planningNotes": {
+    "approachesConsidered": "- Guard only the three step-list spreads named in the report. Rejected: the same module also throws on, or splits, non-array task-level lists (filesModified, declaredFiles, touchedFiles, inferredPaths, commits, commit.paths/inferredPaths) and on non-object plan steps. Its header promises that a peer's junk never fails another task's scope. One asList guard plus a guarded PathSet.addAll closes all of them in the same file.\n- Make completedStepFiles fall back to affectedFiles when modifiedFiles is junk. Rejected: that would make it disagree with completeTask.ts's `modifiedFiles || affectedFiles` selection. Keeping the selection and guarding the selected value keeps the mirror honest.\n- Also changing completeTask.ts. Rejected as out of scope: it only reads the caller's own record.",
+    "codebaseInsights": "- collectTaskPathTiers and collectPeerPaths feed get_commit_scope's PEER map for EVERY other open task. collectAssertedPaths feeds get_context's declaredPaths.\n- PathSet.addAll's callers all pass arrays; recordCommit's readPathList returns an array.\n- util/attributionTiers.test.ts does not exist yet.\n- getCommitScope.test.ts already pins null and false step lists ('does not throw on junk step data').",
+    "risks": "- Widening addAll's parameter to unknown must not silently drop a legitimate non-array iterable. None exists today; the grep is in the plan notes.\n- Peers do not edit this file today. task-01f37ac6 (PLANNING) may later touch getCommitScope.ts; it would serialize itself.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/attributionTiers.ts",
+      "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:41:31.080Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:42:03.414Z",
+  "reviewStartedAt": "2026-10-30T07:44:27.315Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx tsc --noEmit && npm test   # in a Linux-native git-archive HEAD snapshot with only this task's 3 files overlaid, env -i, nvm node v24.21.0",
+    "exitCode": 0,
+    "outputTail": "Test Files  202 passed (202)\n      Tests  5694 passed | 16 skipped (5710)\n   Duration  33.62s (tests 93%, import 4%, transform 3%)",
+    "reportedAt": "2026-10-30T07:44:27.315Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/attributionTiers.test.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+    "packages/moe-daemon/src/util/attributionTiers.ts"
+  ],
+  "completionSummary": "Fix in util/attributionTiers.ts only: private asList (Array.isArray guard) and isRecord; PathSet.addAll takes unknown and iterates arrays only; planSteps drops non-object steps; commits that are not objects are skipped; step lists, task.inferredPaths, commit.paths all guarded. completedStepFiles keeps completeTask.ts's `modifiedFiles || affectedFiles` selection and guards the selected value (junk contributes nothing, no fallback); completeTask.ts is unchanged. DoD 1: new attributionTiers.test.ts rows (field x number/object/string, mirror, task-level lists, commits, plan shape, control) plus 5 mutants killed with real failures (102/16/1/3/1). DoD 2: those rows plus the new getCommitScope.test.ts junk-peer case. Red proof before the fix: 38 failures including 'is not iterable'. Full gate: tsc + npm test exit 0 in a Linux snapshot, 202 files, 5694 passed, 16 skipped; the 3 owned files are cmp-identical to the snapshot."
 }

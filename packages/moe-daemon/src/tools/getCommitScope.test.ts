@@ -680,6 +680,21 @@ describe('moe.get_commit_scope', () => {
         ['ok/np.ts', ['task-noplan'], []],
       ]);
     });
+
+    it('survives a peer whose step file lists are a number, an object and a string', async () => {
+      setupLanding();
+      h.createTask({ id: 'task-junk-lists', status: 'WORKING', assignedWorkerId: 'worker-live', declaredFiles: ['ok/peer.ts'],
+        implementationPlan: [{
+          stepId: 's1', description: 'j', status: 'PENDING',
+          newFiles: 7, modifiedFiles: { a: 1 }, affectedFiles: 'src/str.ts',
+        }] } as unknown as Parameters<typeof h.createTask>[0]);
+      await h.state.load();
+
+      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      expect(result.peerDeclared.map((e) => [e.path, e.taskIds])).toEqual([
+        ['ok/peer.ts', ['task-junk-lists']],
+      ]);
+    });
   });
 
   describe('assigneeProtected', () => {
