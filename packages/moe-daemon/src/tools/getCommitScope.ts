@@ -92,7 +92,7 @@ function sortedById<T extends { id: string }>(items: Iterable<T>): T[] {
 export function getCommitScopeTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.get_commit_scope',
-    description: 'Attribution scope the agent wrapper stages a task\'s commit from: the task\'s ASSERTED paths (completed steps\' modifiedFiles/affectedFiles, filesModified, declare_files, tool-written, previously committed), the DECLARED part of them (moe.declare_files: committed regardless of the pre-task baseline; the rest of ASSERTED only when this task produced the dirty bytes), its PLANNED paths (plan-declared only, committed when changed since the pre-task baseline), every other open task\'s declared paths (PEER map; a peer that waits on this task contributes only its asserted paths, since it cannot have run yet; each entry\'s peerActive is false only when, since `since`, no contributing task had an active assignee, an open attempt or an attempt phase change — always true without `since`; taskIds lists every contributing task in id order, taskId being the first; editingTaskIds lists the contributors with an IN_PROGRESS plan step naming the path that are active by the peerActive rule — every such contributor without `since`), which workers are active (peersActive drives the attribution.undeclared policy), the board-state paths it may commit, and the project\'s commit policy. Read-only apart from a liveness touch; no ownership guard — an orphan-mode caller (workerId not the assignee) is counted in activePeerIds — but assigneeProtected tells a caller that is not the assignee whether it must leave the task\'s source paths alone. finalizingAttempt names the task\'s finalizing attempt exactly as claim_next_task\'s finalizing hold selects it ({attemptId, workerId, generation}, whoever holds it, the caller included) or is null; a daemon older than the field omits it.',
+    description: 'Attribution scope the agent wrapper stages a task\'s commit from: the task\'s ASSERTED paths (completed steps\' modifiedFiles/affectedFiles, filesModified, declare_files, tool-written, previously committed), the DECLARED part of them (moe.declare_files: committed regardless of the pre-task baseline; the rest of ASSERTED only when this task produced the dirty bytes), its PLANNED paths (plan-declared only, committed when changed since the pre-task baseline), every other open task\'s declared paths (PEER map; a peer that waits on this task contributes only its asserted paths, since it cannot have run yet; each entry\'s peerActive is false only when, since `since`, no contributing task had an active assignee, an open attempt or an attempt phase change — always true without `since`; taskIds lists every contributing task in id order, taskId being the first; activeTaskIds lists the contributors that are active by the peerActive rule, in id order — every contributor without `since` — so peerActive is true exactly when it is non-empty; editingTaskIds lists the contributors with an IN_PROGRESS plan step naming the path that are active by the same rule, a subset of activeTaskIds — every such contributor without `since`), which workers are active (peersActive drives the attribution.undeclared policy), the board-state paths it may commit, and the project\'s commit policy. Read-only apart from a liveness touch; no ownership guard — an orphan-mode caller (workerId not the assignee) is counted in activePeerIds — but assigneeProtected tells a caller that is not the assignee whether it must leave the task\'s source paths alone. finalizingAttempt names the task\'s finalizing attempt exactly as claim_next_task\'s finalizing hold selects it ({attemptId, workerId, generation}, whoever holds it, the caller included) or is null; a daemon older than the field omits it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -144,11 +144,14 @@ export function getCommitScopeTool(_state: StateManager): ToolDefinition {
       // ---- peers -----------------------------------------------------------
       // Deterministic: tasks visited in id order, first claimant of a path wins
       // taskId; peerActive is an OR over every task contributing the path. taskIds
-      // names every contributor (taskId === taskIds[0]); editingTaskIds the ones
-      // with an IN_PROGRESS step naming the path that are active, so a wrapper can
-      // hold a path a live peer is mid-edit on instead of sweeping its hunks.
+      // names every contributor (taskId === taskIds[0]); activeTaskIds the ones
+      // active by the peerActive rule, so peerActive === (activeTaskIds.length > 0)
+      // and a wrapper can name the live cause of a hold, not an idle first claimant;
+      // editingTaskIds the ones with an IN_PROGRESS step naming the path that are
+      // active (a subset of activeTaskIds), so a wrapper can hold a path a live
+      // peer is mid-edit on instead of sweeping its hunks.
       const peerByKey = new Map<string, {
-        path: string; taskId: string; peerActive: boolean; taskIds: string[]; editingTaskIds: string[];
+        path: string; taskId: string; peerActive: boolean; taskIds: string[]; activeTaskIds: string[]; editingTaskIds: string[];
       }>();
       const peerSet = new PathSet();
       for (const other of sortedById<Task>(state.tasks.values())) {
@@ -173,12 +176,13 @@ export function getCommitScopeTool(_state: StateManager): ToolDefinition {
           if (entry) {
             entry.peerActive ||= active;
             entry.taskIds.push(other.id);
+            if (active) entry.activeTaskIds.push(other.id);
             if (isEditing) entry.editingTaskIds.push(other.id);
             continue;
           }
           peerByKey.set(stored, {
             path: stored, taskId: other.id, peerActive: active,
-            taskIds: [other.id], editingTaskIds: isEditing ? [other.id] : [],
+            taskIds: [other.id], activeTaskIds: active ? [other.id] : [], editingTaskIds: isEditing ? [other.id] : [],
           });
         }
       }

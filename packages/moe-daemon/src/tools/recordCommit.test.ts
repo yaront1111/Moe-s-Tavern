@@ -399,6 +399,13 @@ describe('moe.record_commit', () => {
 
   describe('held contested paths (MOE_CONTESTED_HELD)', () => {
     const UNTOUCHED = (peer: string) => `MOE_ATTR_CONTESTED_UNTOUCHED(${peer})`;
+    // Literal copies on purpose: never import these from recordCommit.ts, or the exact-string rows prove nothing.
+    const UNTOUCHED_REMEDY = "MOE_ATTR_CONTESTED_UNTOUCHED: verify these bytes are this task's and coordinate any live peer. Before the next landing, either a one-shot Claude session of this task edits the path with a wrapper-observed successful editing tool (not a shell write), or a later session of this task that found the path clean at its pre-flight edits it while every contesting peer stays idle, or the stale peer task is legitimately completed or archived.";
+    const EDITING_REMEDY = "MOE_ATTR_CONTESTED_EDITING: a contesting peer task was mid-step on the path with an active session at this landing, so this session's editing tool did not release it (the file can carry that peer's unfinished hunks). Coordinate that peer; after its step completes, either a one-shot Claude session of this task edits the path with a wrapper-observed successful editing tool before the next landing, or the peer's own landing carries these bytes (name its commit in the summary).";
+    const WITNESS = "Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none.";
+    const STRICT_REMEDY = "MOE_ATTR_CONTESTED (attribution.contested=skip) holds the path whatever the session's tools did: only resolving or legitimately completing or archiving the peer task releases it.";
+    const NEVER_REMEDY = 'declare_files, unblocking or a shell touch alone does not release a hold; never change the policy as the fix.';
+    const OLD_PHRASES = ['Claude Edit/Write family or a supported Serena editor', "this task's own assignee session edits"];
     let sys: ReturnType<typeof vi.spyOn>;
     let gov: ReturnType<typeof vi.spyOn>;
 
@@ -413,12 +420,8 @@ describe('moe.record_commit', () => {
       await seedSpied();
       await record({ paths: ['src/a.ts'], skipped: [{ path: 'src/held.ts', code: UNTOUCHED('task-peer') }] });
       const line = taskText().split('\n').find((l: string) => l.startsWith('MOE_CONTESTED_HELD'));
-      expect(line).toContain('MOE_CONTESTED_HELD task=task-1: src/held.ts(task-peer) — ');
-      expect(line).toContain('wrapper-observed successful editing tool');
-      expect(line).toContain('own assignee session');
-      expect(line).toContain('not a shell write');
-      expect(line).toContain('legitimately completed or archived');
-      expect(line).toContain('declare_files, unblocking or a shell touch alone does not release');
+      expect(line).toBe(`MOE_CONTESTED_HELD task=task-1: src/held.ts(task-peer) — ${UNTOUCHED_REMEDY} ${WITNESS} ${NEVER_REMEDY}`);
+      for (const phrase of OLD_PHRASES) expect(line).not.toContain(phrase);
       expect(line).not.toContain('attribution.contested=skip');
       expect(gov).toHaveBeenCalledTimes(1);
       expect(gov).toHaveBeenCalledWith('governors', expect.stringContaining(line!));
@@ -432,19 +435,15 @@ describe('moe.record_commit', () => {
         contested: [{ path: 'src/other.ts', taskId: 'task-x' }, { path: 'src\\strict.ts', taskId: 'task-peer2' }],
       });
       const line = taskText().split('\n').find((l: string) => l.startsWith('MOE_CONTESTED_HELD'))!;
-      expect(line).toContain('MOE_CONTESTED_HELD task=task-1: src/strict.ts(task-peer2), src/orphan.ts(?) — ');
-      expect(line).toContain('attribution.contested=skip');
-      expect(line).toContain('only resolving or legitimately completing or archiving the peer task releases it');
-      expect(line).not.toContain('editing tool');
-      expect(line).toContain('never change the policy');
+      // Byte-identical to the pre-witness line: a literal, deliberately not built from the constants.
+      expect(line).toBe("MOE_CONTESTED_HELD task=task-1: src/strict.ts(task-peer2), src/orphan.ts(?) — MOE_ATTR_CONTESTED (attribution.contested=skip) holds the path whatever the session's tools did: only resolving or legitimately completing or archiving the peer task releases it. declare_files, unblocking or a shell touch alone does not release a hold; never change the policy as the fix.");
+      expect(line).not.toContain(WITNESS);
       expect(gov).toHaveBeenCalledWith('governors', expect.stringContaining('MOE_CONTESTED_HELD task=task-1'));
       expect(h.state.getTask('task-1')!.lastCommitOutcome).toMatchObject({ outcome: 'nothing', code: 'MOE_COMMIT_NOTHING_TO_COMMIT' });
     });
 
     describe('MOE_ATTR_CONTESTED_EDITING(task-<peer>)', () => {
       const EDITING = (peer: string) => `MOE_ATTR_CONTESTED_EDITING(${peer})`;
-      const EDITING_REMEDY = "MOE_ATTR_CONTESTED_EDITING: a contesting peer task was mid-step on the path with an active session at this landing, so this session's editing tool did not release it (the file can carry that peer's unfinished hunks). Coordinate that peer; after its step completes, either this task's own assignee session edits the path with a wrapper-observed successful editing tool before the next landing, or the peer's own landing carries these bytes (name its commit in the summary).";
-      const NEVER_REMEDY = 'declare_files, unblocking or a shell touch alone does not release a hold; never change the policy as the fix.';
       const heldLine = () => taskText().split('\n').find((l: string) => l.startsWith('MOE_CONTESTED_HELD'));
 
       it('holds a path a live peer was mid-step on: names the peer, gives only the editing remedy, alerts #governors once', async () => {
@@ -454,7 +453,8 @@ describe('moe.record_commit', () => {
           skipped: [{ path: 'docs/x.md', code: EDITING('task-peer') }],
           contested: [{ path: 'docs/x.md', taskId: 'task-peer' }],
         });
-        expect(heldLine()).toBe(`MOE_CONTESTED_HELD task=task-1: docs/x.md(task-peer) — ${EDITING_REMEDY} ${NEVER_REMEDY}`);
+        expect(heldLine()).toBe(`MOE_CONTESTED_HELD task=task-1: docs/x.md(task-peer) — ${EDITING_REMEDY} ${WITNESS} ${NEVER_REMEDY}`);
+        for (const phrase of OLD_PHRASES) expect(heldLine()).not.toContain(phrase);
         expect(heldLine()).not.toContain('MOE_ATTR_CONTESTED_UNTOUCHED');
         expect(heldLine()).not.toContain('attribution.contested=skip');
         expect(gov).toHaveBeenCalledTimes(1);
@@ -478,7 +478,8 @@ describe('moe.record_commit', () => {
           paths: ['src/a.ts'],
           skipped: [{ path: 'docs/x.md', code: EDITING('task-a') }, { path: 'docs/x.md', code: UNTOUCHED('task-b') }],
         });
-        expect(heldLine()).toBe(`MOE_CONTESTED_HELD task=task-1: docs/x.md(task-a) — ${EDITING_REMEDY} ${NEVER_REMEDY}`);
+        expect(heldLine()).toBe(`MOE_CONTESTED_HELD task=task-1: docs/x.md(task-a) — ${EDITING_REMEDY} ${WITNESS} ${NEVER_REMEDY}`);
+        for (const phrase of OLD_PHRASES) expect(heldLine()).not.toContain(phrase);
       });
 
       it.each([
@@ -509,35 +510,36 @@ describe('moe.record_commit', () => {
         expect(h.state.getTask('task-1')!.commits).toHaveLength(1);
       });
 
-      it('names an untouched and an editing hold on one line, remedies in the order untouched, editing, never', async () => {
+      it('names an untouched and an editing hold on one line, remedies in the order untouched, editing, witness once, never', async () => {
         await seedSpied();
         await record({
           paths: ['src/a.ts'],
           skipped: [{ path: 'src/u.ts', code: UNTOUCHED('task-a') }, { path: 'docs/e.md', code: EDITING('task-b') }],
         });
-        const line = heldLine()!;
-        expect(line.startsWith('MOE_CONTESTED_HELD task=task-1: src/u.ts(task-a), docs/e.md(task-b) — ')).toBe(true);
-        const at = (needle: string) => line.indexOf(needle);
-        expect(at('MOE_ATTR_CONTESTED_UNTOUCHED:')).toBeGreaterThan(0);
-        expect(at(EDITING_REMEDY)).toBeGreaterThan(at('MOE_ATTR_CONTESTED_UNTOUCHED:'));
-        expect(at(NEVER_REMEDY)).toBeGreaterThan(at(EDITING_REMEDY));
-        expect(line.endsWith(NEVER_REMEDY)).toBe(true);
-        expect(line).not.toContain('attribution.contested=skip');
+        expect(heldLine()).toBe(`MOE_CONTESTED_HELD task=task-1: src/u.ts(task-a), docs/e.md(task-b) — ${UNTOUCHED_REMEDY} ${EDITING_REMEDY} ${WITNESS} ${NEVER_REMEDY}`);
+        expect(heldLine()!.split(WITNESS)).toHaveLength(2);
+        expect(heldLine()).not.toContain('attribution.contested=skip');
         expect(taskText().match(/MOE_CONTESTED_HELD task=task-1/g)).toHaveLength(1);
       });
 
-      it('puts the strict remedy after the editing remedy and before the never clause', async () => {
+      it('puts the witness after the editing remedy and before the strict remedy and the never clause', async () => {
         await seedSpied();
         await record({
           paths: ['src/a.ts'],
           skipped: [{ path: 'src/s.ts', code: 'MOE_ATTR_CONTESTED' }, { path: 'docs/e.md', code: EDITING('task-b') }],
           contested: [{ path: 'src/s.ts', taskId: 'task-c' }],
         });
-        const line = heldLine()!;
-        expect(line).toContain('src/s.ts(task-c), docs/e.md(task-b) — ');
-        expect(line).not.toContain('MOE_ATTR_CONTESTED_UNTOUCHED');
-        expect(line.indexOf('attribution.contested=skip')).toBeGreaterThan(line.indexOf(EDITING_REMEDY));
-        expect(line.indexOf(NEVER_REMEDY)).toBeGreaterThan(line.indexOf('attribution.contested=skip'));
+        expect(heldLine()).toBe(`MOE_CONTESTED_HELD task=task-1: src/s.ts(task-c), docs/e.md(task-b) — ${EDITING_REMEDY} ${WITNESS} ${STRICT_REMEDY} ${NEVER_REMEDY}`);
+      });
+
+      it('puts the witness after the untouched remedy and before the strict remedy', async () => {
+        await seedSpied();
+        await record({
+          paths: ['src/a.ts'],
+          skipped: [{ path: 'src/s.ts', code: 'MOE_ATTR_CONTESTED' }, { path: 'src/u.ts', code: UNTOUCHED('task-a') }],
+          contested: [{ path: 'src/s.ts', taskId: 'task-c' }],
+        });
+        expect(heldLine()).toBe(`MOE_CONTESTED_HELD task=task-1: src/s.ts(task-c), src/u.ts(task-a) — ${UNTOUCHED_REMEDY} ${WITNESS} ${STRICT_REMEDY} ${NEVER_REMEDY}`);
       });
     });
 

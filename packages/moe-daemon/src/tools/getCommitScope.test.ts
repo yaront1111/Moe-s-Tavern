@@ -21,7 +21,9 @@ interface ScopeResult {
   touchedFiles: string[];
   inferredPaths: string[];
   unattributedPaths: string[];
-  peerDeclared: { path: string; taskId: string; peerActive: boolean; taskIds: string[]; editingTaskIds: string[] }[];
+  peerDeclared: {
+    path: string; taskId: string; peerActive: boolean; taskIds: string[]; activeTaskIds: string[]; editingTaskIds: string[];
+  }[];
   livePeerIds: string[];
   activePeerIds: string[];
   peersActive: boolean;
@@ -40,6 +42,15 @@ interface ScopeResult {
 
 const sortedKeys = (paths: string[]) => paths.map(pathKey).sort();
 
+/** T5: activeTaskIds is an ordered subset of taskIds, editingTaskIds a subset of it, and peerActive is its non-emptiness. */
+function expectActiveInvariants(result: ScopeResult): void {
+  for (const e of result.peerDeclared) {
+    expect(e.taskIds.filter((id) => e.activeTaskIds.includes(id)), `${e.path}: activeTaskIds order/subset`).toEqual(e.activeTaskIds);
+    expect(e.editingTaskIds.every((id) => e.activeTaskIds.includes(id)), `${e.path}: editing within active`).toBe(true);
+    expect(e.peerActive, `${e.path}: peerActive`).toBe(e.activeTaskIds.length > 0);
+  }
+}
+
 describe('moe.get_commit_scope', () => {
   const h = new ToolTestHarness();
   beforeEach(() => h.init());
@@ -47,6 +58,12 @@ describe('moe.get_commit_scope', () => {
 
   async function scope(args: Record<string, unknown> = {}): Promise<ScopeResult> {
     return await getCommitScopeTool(h.state).handler({ taskId: 'task-1', ...args }, h.state) as ScopeResult;
+  }
+
+  async function checked(args: Record<string, unknown> = {}): Promise<ScopeResult> {
+    const result = await scope(args);
+    expectActiveInvariants(result);
+    return result;
   }
 
   it('is registered in getTools()', () => {
@@ -418,7 +435,7 @@ describe('moe.get_commit_scope', () => {
       await h.state.load();
 
       const since = new Date(Date.now() - 5 * 60_000).toISOString();
-      const byPath = flags(await scope({ workerId: 'worker-1', since }));
+      const byPath = flags(await checked({ workerId: 'worker-1', since }));
       expect(byPath.get(pathKey('src/idle.ts'))).toEqual({ taskId: 'task-idle', peerActive: false });
     });
 
@@ -438,7 +455,7 @@ describe('moe.get_commit_scope', () => {
       h.createWorker({ id: 'worker-dead', status: 'DEAD', lastActivityAt: new Date(now).toISOString(), startedAt: hourAgo });
       await h.state.load();
 
-      const byPath = flags(await scope({ workerId: 'worker-1', since: new Date(sinceMs).toISOString() }));
+      const byPath = flags(await checked({ workerId: 'worker-1', since: new Date(sinceMs).toISOString() }));
       expect(byPath.get(pathKey('src/a.ts'))?.peerActive).toBe(true);
       expect(byPath.get(pathKey('src/b.ts'))?.peerActive).toBe(false);
       expect(byPath.get(pathKey('src/c.ts'))?.peerActive).toBe(false);
@@ -484,7 +501,7 @@ describe('moe.get_commit_scope', () => {
       await setAttemptPhase(h.state, (await attempt('task-recent')).id, 'closed');
       vi.useRealTimers();
 
-      const byPath = flags(await scope({ workerId: 'worker-1', since: new Date(sinceMs).toISOString() }));
+      const byPath = flags(await checked({ workerId: 'worker-1', since: new Date(sinceMs).toISOString() }));
       expect(byPath.get(pathKey('src/open.ts'))?.peerActive).toBe(true);
       expect(byPath.get(pathKey('src/quiet.ts'))?.peerActive).toBe(true);
       expect(byPath.get(pathKey('src/recent.ts'))?.peerActive).toBe(true);
@@ -502,7 +519,7 @@ describe('moe.get_commit_scope', () => {
       peerTask('task-gone', 'src/gone.ts', 'worker-missing');
       await h.state.load();
 
-      const result = await scope({ workerId: 'worker-1' });
+      const result = await checked({ workerId: 'worker-1' });
       expect(result.peerDeclared.map((e) => [e.path, e.peerActive])).toEqual([
         ['src/gone.ts', true],
         ['src/idle.ts', true],
@@ -521,11 +538,84 @@ describe('moe.get_commit_scope', () => {
         h.createWorker({ id: 'worker-live', status: 'CODING', lastActivityAt: new Date().toISOString() });
         await h.state.load();
 
-        const result = await scope({ workerId: 'worker-1', since: new Date(Date.now() - 5 * 60_000).toISOString() });
+        const result = await checked({ workerId: 'worker-1', since: new Date(Date.now() - 5 * 60_000).toISOString() });
         expect(result.peerDeclared).toEqual([
-          { path: 'src/shared.ts', taskId: 'task-p1', peerActive: true, taskIds: ['task-p1', 'task-p2'], editingTaskIds: [] },
+          {
+            path: 'src/shared.ts', taskId: 'task-p1', peerActive: true, taskIds: ['task-p1', 'task-p2'],
+            activeTaskIds: [activeId], editingTaskIds: [],
+          },
         ]);
       }
+    });
+  });
+
+  describe('peerDeclared[].activeTaskIds', () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    const sinceIso = () => new Date(Date.now() - 5 * 60_000).toISOString();
+
+    function setup(): void {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
+      h.createWorker({ id: 'worker-live', status: 'CODING', lastActivityAt: new Date().toISOString() });
+    }
+
+    it('T1 with since: an idle first contributor and an active second give taskIds [first, second], activeTaskIds [second]', async () => {
+      setup();
+      h.createTask({ id: 'task-a-idle', status: 'PLANNING', assignedWorkerId: null, declaredFiles: ['src/shared.ts'] });
+      h.createTask({ id: 'task-b-live', status: 'PLANNING', assignedWorkerId: 'worker-live', declaredFiles: ['src/shared.ts'] });
+      await h.state.load();
+
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
+      expect(result.peerDeclared).toEqual([{
+        path: 'src/shared.ts', taskId: 'task-a-idle', peerActive: true,
+        taskIds: ['task-a-idle', 'task-b-live'], activeTaskIds: ['task-b-live'], editingTaskIds: [],
+      }]);
+    });
+
+    it('T2 with since: every contributor idle gives activeTaskIds [] and peerActive false', async () => {
+      setup();
+      h.createTask({ id: 'task-a-idle', status: 'PLANNING', assignedWorkerId: null, declaredFiles: ['src/shared.ts'] });
+      h.createTask({ id: 'task-b-idle', status: 'PLANNING', assignedWorkerId: 'worker-missing', declaredFiles: ['src/shared.ts'] });
+      await h.state.load();
+
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
+      expect(result.peerDeclared).toEqual([{
+        path: 'src/shared.ts', taskId: 'task-a-idle', peerActive: false,
+        taskIds: ['task-a-idle', 'task-b-idle'], activeTaskIds: [], editingTaskIds: [],
+      }]);
+    });
+
+    it('T3 without since: every contributor is listed, an unassigned one and a missing-worker one included', async () => {
+      setup();
+      h.createTask({ id: 'task-a-idle', status: 'PLANNING', assignedWorkerId: null, declaredFiles: ['src/shared.ts'] });
+      h.createTask({ id: 'task-b-gone', status: 'PLANNING', assignedWorkerId: 'worker-missing', declaredFiles: ['src/shared.ts'] });
+      await h.state.load();
+
+      const result = await checked({ workerId: 'worker-1' });
+      expect(result.peerDeclared).toEqual([{
+        path: 'src/shared.ts', taskId: 'task-a-idle', peerActive: true,
+        taskIds: ['task-a-idle', 'task-b-gone'], activeTaskIds: ['task-a-idle', 'task-b-gone'], editingTaskIds: [],
+      }]);
+    });
+
+    it('T4 with since: an idle IN_PROGRESS contributor sorting first and an active one give active [active] and editing [active]', async () => {
+      setup();
+      const step = [{ stepId: 's1', description: 's', status: 'IN_PROGRESS', affectedFiles: ['src/shared.ts'] }];
+      h.createTask({ id: 'task-a-idle', status: 'WORKING', assignedWorkerId: null, implementationPlan: step } as Parameters<typeof h.createTask>[0]);
+      h.createTask({ id: 'task-b-live', status: 'WORKING', assignedWorkerId: 'worker-live', implementationPlan: step } as Parameters<typeof h.createTask>[0]);
+      await h.state.load();
+
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
+      expect(result.peerDeclared).toEqual([{
+        path: 'src/shared.ts', taskId: 'task-a-idle', peerActive: true,
+        taskIds: ['task-a-idle', 'task-b-live'], activeTaskIds: ['task-b-live'], editingTaskIds: ['task-b-live'],
+      }]);
+    });
+
+    it('T6 the tool description names activeTaskIds', () => {
+      expect(getCommitScopeTool(h.state).description).toContain('activeTaskIds');
     });
   });
 
@@ -569,14 +659,14 @@ describe('moe.get_commit_scope', () => {
       stepPeer('task-9cc1', 'IN_PROGRESS', ['docs/MCP_SERVER.md', 'docs/SCHEMA.md'], { assignedWorkerId: 'worker-live' });
       await h.state.load();
 
-      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
       expect(result.peerDeclared.find((e) => e.path === 'docs/MCP_SERVER.md')).toEqual({
         path: 'docs/MCP_SERVER.md', taskId: 'task-66e8', peerActive: true,
-        taskIds: ['task-66e8', 'task-9cc1'], editingTaskIds: ['task-9cc1'],
+        taskIds: ['task-66e8', 'task-9cc1'], activeTaskIds: ['task-9cc1'], editingTaskIds: ['task-9cc1'],
       });
       expect(result.peerDeclared.find((e) => e.path === 'docs/SCHEMA.md')).toEqual({
         path: 'docs/SCHEMA.md', taskId: 'task-9cc1', peerActive: true,
-        taskIds: ['task-9cc1'], editingTaskIds: ['task-9cc1'],
+        taskIds: ['task-9cc1'], activeTaskIds: ['task-9cc1'], editingTaskIds: ['task-9cc1'],
       });
     });
 
@@ -588,7 +678,7 @@ describe('moe.get_commit_scope', () => {
       await h.state.load();
       await openAttempt(h.state, { taskId: 'task-open', workerId: 'worker-gone', runnerId: 'worker-gone', workspace: h.testDir });
 
-      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
       expect(editing(result, 'src/a.ts')).toEqual(['task-live']);
       expect(editing(result, 'src/b.ts')).toEqual([]);
       expect(result.peerDeclared.find((e) => e.path === 'src/b.ts')?.taskIds).toEqual(['task-idle']);
@@ -601,7 +691,7 @@ describe('moe.get_commit_scope', () => {
       stepPeer('task-done-step', 'COMPLETED', ['src/c.ts'], { assignedWorkerId: 'worker-live' });
       await h.state.load();
 
-      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
       expect(editing(result, 'src/p.ts')).toEqual([]);
       expect(editing(result, 'src/c.ts')).toEqual([]);
       expect(result.peerDeclared.find((e) => e.path === 'src/c.ts')?.taskIds).toEqual(['task-done-step']);
@@ -612,7 +702,7 @@ describe('moe.get_commit_scope', () => {
       stepPeer('task-raw', 'IN_PROGRESS', ['./src\\x.ts'], { assignedWorkerId: 'worker-live' });
       await h.state.load();
 
-      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
       expect(result.peerDeclared.map((e) => [e.path, e.editingTaskIds])).toEqual([['src/x.ts', ['task-raw']]]);
     });
 
@@ -621,7 +711,7 @@ describe('moe.get_commit_scope', () => {
       stepPeer('task-two', 'IN_PROGRESS', ['src/a.ts'], { assignedWorkerId: 'worker-live', declaredFiles: ['src/b.ts'] });
       await h.state.load();
 
-      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
       expect(editing(result, 'src/a.ts')).toEqual(['task-two']);
       expect(editing(result, 'src/b.ts')).toEqual([]);
     });
@@ -634,9 +724,10 @@ describe('moe.get_commit_scope', () => {
       stepPeer('task-b', 'IN_PROGRESS', ['src\\a.ts'], { assignedWorkerId: 'worker-live', filesModified: ['./src/a.ts'] });
       await h.state.load();
 
-      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
       expect(result.peerDeclared).toEqual([{
-        path: 'src/a.ts', taskId: 'task-a', peerActive: true, taskIds: ['task-a', 'task-b'], editingTaskIds: ['task-a', 'task-b'],
+        path: 'src/a.ts', taskId: 'task-a', peerActive: true, taskIds: ['task-a', 'task-b'],
+        activeTaskIds: ['task-a', 'task-b'], editingTaskIds: ['task-a', 'task-b'],
       }]);
     });
 
@@ -646,7 +737,7 @@ describe('moe.get_commit_scope', () => {
       stepPeer('task-b', 'IN_PROGRESS', ['src/a.ts'], { assignedWorkerId: 'worker-missing' });
       await h.state.load();
 
-      const result = await scope({ workerId: 'worker-1' });
+      const result = await checked({ workerId: 'worker-1' });
       expect(editing(result, 'src/a.ts')).toEqual(['task-b', 'task-unassigned']);
       expect(result.peerDeclared[0]?.taskIds).toEqual(['task-b', 'task-unassigned']);
     });
@@ -656,7 +747,7 @@ describe('moe.get_commit_scope', () => {
       stepPeer('task-dep', 'IN_PROGRESS', ['src/only-plan.ts'], { assignedWorkerId: 'worker-live', dependsOn: ['task-1'] });
       await h.state.load();
 
-      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
       expect(result.peerDeclared).toEqual([]);
     });
 
@@ -673,7 +764,7 @@ describe('moe.get_commit_scope', () => {
         implementationPlan: 'garbage' } as unknown as Parameters<typeof h.createTask>[0]);
       await h.state.load();
 
-      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
       expect(result.peerDeclared.map((e) => [e.path, e.taskIds, e.editingTaskIds])).toEqual([
         ['ok/declared.ts', ['task-junk'], []],
         ['ok/fine.ts', ['task-junk'], ['task-junk']],
@@ -690,7 +781,7 @@ describe('moe.get_commit_scope', () => {
         }] } as unknown as Parameters<typeof h.createTask>[0]);
       await h.state.load();
 
-      const result = await scope({ workerId: 'worker-1', since: sinceIso() });
+      const result = await checked({ workerId: 'worker-1', since: sinceIso() });
       expect(result.peerDeclared.map((e) => [e.path, e.taskIds])).toEqual([
         ['ok/peer.ts', ['task-junk-lists']],
       ]);
