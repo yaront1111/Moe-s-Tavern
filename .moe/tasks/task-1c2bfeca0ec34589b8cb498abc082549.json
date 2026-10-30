@@ -133,7 +133,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:23:28.136Z",
-  "updatedAt": "2026-10-30T19:29:53.177Z",
+  "updatedAt": "2026-10-30T19:31:42.150Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T17:28:09.996Z",
@@ -249,7 +249,8 @@
     "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
     "moe-jetbrains/build.gradle.kts",
     ".moe/tasks/task-1c2bfeca0ec34589b8cb498abc082549.json",
-    ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json"
+    ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+    ".moe/project.json"
   ],
   "completionSummary": "Reopen-2 fixes for QA's two items on d69f0f9f, in RuntimeSelectionPolicy.kt and its test.\n1) DoD 3, no downgrade. storedProfile reads the pin when usableFor(basePath) is true, or when windowsHost and the store root or basePath has an unprovable drive mapping. Unprovable is not absent. A read only restricts: PROTECTED or UNTRUSTED gives PROTECTED plus the ask; LEGACY or ABSENT is unchanged. persist() and provenance still need a provably-outside store (usableStore), so nothing is written to an unplaceable store. D2's inside-project store still reads ABSENT.\n2) Bounded parser. The recursive DOS_TARGET regex is now a split-based dosTarget/plainSegment with the same rules, linear, no recursion.\nTests:\n- New D9 (Windows), for null and UnsatisfiedLinkError providers: restart gives PROTECTED and the ask; answer(true) leaves the record exactly protected; a fresh legacy project stays LEGACY, never asked. Subst cases cover the store drive alone and the project drive alone.\n- N10: a 4000-segment mapping expands exactly. Deep malformed variants give null: '.', ' ', an empty segment, Char(31), each of / : * ? \" < > |, and a \\\\?\\ prefix. 32767 chars is exact; 32768 is null.\n- RED first (D9 got LEGACY; N10 threw StackOverflowError). 11 of 11 production mutants are killed.\nEvidence (lease released; subst empty): the gate exits 0, 28 fresh suites, 487 tests, 0 skipped/failures/errors. QA's unchanged probes, with the SDK jna.boot.library.path:\n- qa-1c2bfeca-7bbwzu81: SUBST_DESCENDANT_FAILURES=0, outside control Accepted;\n- qa-1c2bfeca-rev3-ba3f4f35: EDGE_FAILURES=0, PIN_NATIVE_FAILURE_PROFILE=PROTECTED, confirmation requested, recordUnchanged=true, 4000 segments returning 8009 chars.\nSize: net 460 cumulative (+471/-11), under the 600 cap in TASK rail prop-452e4340.\nUnchanged observation: profile() queries the native provider before the profile is known (FRESH_LEGACY nativeQueries=5).",
   "commits": [
@@ -322,6 +323,22 @@
       "treeId": "c017d13f121d4f8bf5ad1d518f2737853c932287",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "3a8f58946733023c645f2fb5849bc76e2b0e9dec",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T19:23:06Z",
+      "paths": [
+        ".moe/project.json",
+        ".moe/tasks/task-1c2bfeca0ec34589b8cb498abc082549.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T19:31:42.150Z",
+      "treeId": "93b54830f3f131c26ab1eda4b0652f7db2e286dc",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -332,9 +349,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-73c29a03@2026-10-30T18:46:11Z",
-    "at": "2026-10-30T19:22:54.036Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T19:23:06Z",
+    "at": "2026-10-30T19:31:42.150Z"
   },
   "reviewCompletedAt": "2026-10-30T19:29:53.177Z",
   "rejectionDetails": {
