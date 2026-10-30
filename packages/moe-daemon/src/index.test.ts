@@ -19,6 +19,7 @@ import {
   readDaemonInfo,
   readLockInfo,
   releaseLock,
+  staleLockReason,
   statusDaemon,
   stopDaemon,
   validateDaemonInfoForProject,
@@ -519,6 +520,32 @@ setInterval(() => {}, 60000);`;
         expect(acquireLock(spelling(contenderKind))).toBe(false);
         expect([fs.readFileSync(lockPath(), 'utf-8'), process.kill(owner.pid!, 0), owner.exitCode]).toEqual([lock, true, null]);
       }, 60_000);
+
+      it('X15 lock reasons agree across native, relative and dotted project spellings', () => {
+        const base = path.basename(testDir);
+        const spellings = [testDir, alias, base, `./${base}/`];
+        for (const writer of spellings) {
+          expect(acquireLock(writer)).toBe(true);
+          expect.soft(spellings.map(reader => [writer, reader, staleLockReason(reader)]))
+            .toEqual(spellings.map(reader => [writer, reader, null]));
+
+          const lock = JSON.parse(fs.readFileSync(lockPath(), 'utf-8')) as {
+            pid: number; projectPath: string; createdAt: string;
+          };
+          fs.writeFileSync(lockPath(), JSON.stringify({ ...lock, pid: DEAD_PID }));
+          expect.soft(spellings.map(reader => [writer, reader, staleLockReason(reader)]))
+            .toEqual(spellings.map(reader => [writer, reader, 'lock owner not alive']));
+          fs.rmSync(lockPath());
+        }
+
+        const moved = path.join(testDir, 'moved');
+        fs.writeFileSync(lockPath(), JSON.stringify({
+          pid: process.pid, projectPath: moved, createdAt: new Date().toISOString(),
+        }));
+        expect(spellings.map(reader => [moved, reader, staleLockReason(reader)]))
+          .toEqual(spellings.map(reader => [moved, reader, 'projectPath mismatch']));
+        fs.rmSync(lockPath());
+      });
     });
   });
 });
