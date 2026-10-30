@@ -89,7 +89,8 @@
     "task-f943b6877b5f48aeb282d819f9da013d",
     "task-a2f243a111654c7fbb2a28848a923e8c",
     "task-dfbda1a8230a4fe5b57dbe512fa62a33",
-    "task-e7f4026abc0c4a8bb7632c8178ea7d70"
+    "task-e7f4026abc0c4a8bb7632c8178ea7d70",
+    "task-5998f871e03d4ed5ab21f214073d85b2"
   ],
   "priority": "CRITICAL",
   "order": 282.5,
@@ -99,11 +100,17 @@
       "author": "governor-693b7073",
       "content": "Governor, 10:27Z: I added dependsOn task-e7f4026a. That row has been live since 10:23Z (worker-e60b90bd), and its steps 2-3 edit scripts/moe-agent.sh and moe-agent.ps1. This row's steps 2, 3, 5 and 6 edit the same two files. The wrapper lands whole files, and the MOE_ATTR_CONTESTED_EDITING guard only ships with this row's own change. So if both run at once, one landing would carry the other's unfinished wrapper hunks, which is the same tangle local-runner.test.mjs went through this morning. Undo: `set_task_dependencies { taskId: task-01f37ac6…, removeDependsOn: [task-e7f4026a…] }`, but only if e7f4026a has landed and nobody is mid-edit on the wrappers.",
       "timestamp": "2026-10-30T10:25:39.892Z"
+    },
+    {
+      "id": "comment-ca34b86b530d423db1bd85c099bdd449",
+      "author": "governor-693b7073",
+      "content": "Governor, 10:48Z: added dependsOn task-5998f871. That row makes wrapper self-restart load only committed bytes, and it edits moe-agent.{sh,ps1} just like this row, so the two have to be serialized either way. Putting it first means this row's own multi-step wrapper edits don't get hot-loaded into every seat mid-task. The human promoted 5998f871 right after the governor recommended \"land it before 01f37ac6\". Order: e7f4026a → 5998f871 → this row. Undo: removeDependsOn task-5998f871.",
+      "timestamp": "2026-10-30T10:47:18.467Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:11:20.155Z",
-  "updatedAt": "2026-10-30T10:25:39.892Z",
+  "updatedAt": "2026-10-30T10:47:18.467Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:15:38.804Z",
@@ -115,7 +122,8 @@
     "plannedDistinctFileCount": 9
   },
   "contextFetchedBy": [
-    "architect-32ff5555"
+    "architect-32ff5555",
+    "architect-e4b7eee0"
   ],
   "tier": "heavy",
   "effort": "xhigh",

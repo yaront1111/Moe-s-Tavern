@@ -13,50 +13,82 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST. Load test-driven-development.\n\nPrerequisites. dependsOn gates the claim, not the bytes, so first confirm these are DONE:\n- task-86093c3e, the moe-proxy identity probe;\n- task-90664db1, the JetBrains identity check.\n\nRead their landed code, their handoff memories, and this row's first comment. Mirror the proxy's verdict rules and refusal wording:\n- the verdicts are same, foreign and unknown;\n- a relative served projectPath is unknown;\n- a 503 reply with an absolute, different projectPath is foreign.\n\nExtend scripts/tests/daemon-json-cap.test.mjs. It already runs the REAL pre-flight check blocks of both launchers, and CI runs it on Linux and Windows. Add rows named 'identity: ...'.\n\nHarness changes:\n- Rows with a fake /health server must spawn the child asynchronously (child_process.spawn, or execFile wrapped in a promise), never with spawnSync. spawnSync blocks the event loop, so the in-process server could not answer and every probe would time out as unknown.\n- The fake server is http.createServer on 127.0.0.1:0. It answers GET /health with the row's JSON and status, and records each request path.\n- sh: add a segment that runs from the line `probe_daemon_health() {` up to the line `# daemon.json is repository content`. It holds the probe and wsl_gateway_host. Stub `is_wsl() { return 1; }` and set PROJECT in the generated script.\n- ps1: set $projectPath in the generated script. Keep every new helper inside the existing helper segment, after Read-MoeDaemonJsonText.\n- The existing ps1 fixtures use the test runner's live pid and port 9876. On this machine the live moes daemon answers 9876, so those fixtures would now be judged foreign. Move every existing fixture to a port the test reserves and then closes. The verdict there is unknown, so the rows keep today's expectations except the printed port.\n\nRows. Add each one for every engine where its branch exists.\n\n1. sh foreign branch, Linux only. On Git Bash OSTYPE is msys, so the branch never runs there. The fixture has daemon.json projectPath D:\\projexts\\px4swarm and PROJECT /mnt/d/projexts/px4swarm.\n   - /health serves D:\\projexts\\moes: exit 1, and one exact line holds MOE_DAEMON_FOREIGN_PROJECT and both project paths. MOE_DAEMON_HOST is not exported, and daemon.json is byte-identical afterwards.\n   - /health serves d:/projexts/px4swarm/ (the same project in another spelling): RUNNING=true, as today.\n   - /health serves the relative path '.': RUNNING=true.\n\n2. sh PID branch. kill -0 needs a live pid. On Git Bash the generated script writes its own $$ into daemon.json before the check block.\n   - A foreign absolute served path: exit 1 with the refusal line.\n   - The same project: RUNNING=true.\n   - An unreachable /health (closed port): RUNNING=true, as today.\n\n3. ps1, on PowerShell 5.1 and 7, with the existing engine skips. pid is the test runner's own pid.\n   - Foreign: exit 1 with the identical line text.\n   - The same project, with $projectPath D:\\x\\y and served D:\\x\\.\\y, D:/x/y/ and /mnt/d/x/y: running=True.\n   - Unreachable: running=True.\n   - A 503 'unhealthy' reply with a foreign absolute path: exit 1.\n\n4. Static parity row: MOE_DAEMON_FOREIGN_PROJECT appears in both launchers, and the three refusal sentences are byte-identical in both.\n\nAssert exact lines where the wording is fixed. The verify step's mutants prove these rows fail on today's code.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/daemon-json-cap.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "note": "Prereqs task-86093c3e (6c55aefa) and task-90664db1 (ff5933d9) are DONE and landed. Extended daemon-json-cap.test.mjs: runCheck is now async (spawn, not spawnSync) so an in-process fake /health (withHealth: http.createServer on 127.0.0.1:0, records 'GET /health') can answer; the sh script adds the probe segment ('\\nprobe_daemon_health() {' to '\\n# daemon.json is repository content'), PROJECT, an is_wsl stub, an EXIT trap printing MOE_DAEMON_HOST, and a $$ substitution for a __PID__ token; the ps1 script sets $projectPath. Existing ps1 fixtures moved from port 9876 to a reserved-then-closed port (closedPort). New rows: a static refusal-parity row; sh Windows-owned branch (Linux only; foreign refused/untouched/no host export, same spelling d:/projexts/px4swarm/ adopted, relative '.' adopted); sh PID branch on bash and Git Bash (foreign 200, foreign 503, same C:\\moe-id\\proj vs /mnt/c or cygpath form, unreachable); ps1 on 5.1 and 7 (foreign untouched, foreign 503, same as D:\\x\\.\\y, D:/x/y/, /mnt/d/x/y, d:\\X\\y, relative, unreachable). Same-project rows assert exactly one GET /health, so they are not vacuous. RED on HEAD launchers: Linux 5 failures (static + 4 sh); Windows 16 failures (static, 3 Git Bash, 6 on each PowerShell), log /tmp/e7f4-red-windows.log. Linux has no pwsh, so ps1 rows run on Windows only. Shared-tree dirt from other sessions was left untouched.",
+      "startedAt": "2026-10-30T10:25:53.684Z",
+      "completedAt": "2026-10-30T10:32:20.617Z"
     },
     {
       "stepId": "step-2",
       "description": "IMPLEMENT scripts/moe-agent.sh. Change only the daemon pre-flight.\n\n1. probe_daemon_health takes an optional third argument, the expected project.\n- Exit 0: healthy, and the served path is either the same project or cannot be judged. Callers that pass no project get exactly today's verdict.\n- Exit 1: unreachable, timeout, unhealthy without a judgeable path, non-JSON, or a body over 64 KiB.\n- Exit 3: foreign. Print the served projectPath on stdout.\n- Foreign applies to any parseable reply, a 503 included. urllib raises HTTPError for a 503, so read the body with e.read().\n- In the python, read at most 65537 bytes, with a 3 s timeout.\n\n2. The comparable-path rule mirrors comparableProjectPath in packages/moe-proxy/src/utils.ts and in the daemon. Use ntpath and posixpath explicitly, never os.path, so Windows python under Git Bash behaves the same.\n- A drive path: ntpath.normpath, then '\\' becomes '/', the trailing '/' is stripped, and the result is lowercased.\n- A UNC path: normalize it with ntpath.\n- Any other absolute path: posixpath.normpath, then /mnt/<d>/rest maps to <d>:/rest, lowercased.\n- A served path that is not absolute cannot be judged.\n- On msys/cygwin PROJECT is /d/..., so pass the expected project as `cygpath -m \"$PROJECT\"`. Never refuse because of a spelling difference.\n\n3. Foreign (Windows-owned daemon.json) loop.\n- rc 3: refuse at once. Print the MOE_DAEMON_FOREIGN_PROJECT block and exit 1.\n- rc 0: adopt as today.\n- Anything else: try the next candidate.\n- Capture rc without tripping set -e: `rc=0; SERVED=$(probe_daemon_health ...) || rc=$?`.\n\n4. PID branch. After kill -0 succeeds, and only when DAEMON_PORT is numeric, probe ${MOE_DAEMON_HOST:-127.0.0.1}:$DAEMON_PORT with the project.\n- rc 3: refuse the same way.\n- Anything else: RUNNING=true, as today.\n\n5. The refusal block. Its three sentences are byte-identical in moe-agent.ps1:\n- `[ERROR] MOE_DAEMON_FOREIGN_PROJECT: the daemon at <host>:<port> serves <served>, not this project (<PROJECT>).`\n- `<DAEMON_INFO> is stale: this project's daemon is not running. Start it (the IDE's Restart Daemon, or moe-daemon start --project <PROJECT>); it takes the next free port.`\n- `Refusing to register, claim or bridge to another project's daemon.`\nThe block deletes nothing, starts nothing and exports nothing.\n\nError handling:\n- Every probe failure is unknown and keeps today's behavior. Only a positive, judgeable mismatch refuses.\n- --no-start-daemon still skips the whole block. The proxy's own probe (task-86093c3e) covers that path and every later RPC.\n\nOther peers edit other regions of this file, so preserve their bytes. Leave the fix-options wording to task-724e31fa.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "moe-agent.sh pre-flight only (+79/-8).\n- probe_daemon_health takes an optional 3rd arg, the expected project. Exit 0 = healthy and same/unjudgeable. Exit 1 = unknown. Exit 3 = a 200 or 503 reply naming another absolute path; it prints that path on one line, control chars replaced by '?', cut at 300 chars (mirrors the proxy's displayServedPath).\n- comparable() mirrors comparableProjectPath with ntpath/posixpath: drive or UNC via ntpath.normpath, '\\' to '/', trailing '/' stripped, lowercased; POSIX via posixpath.normpath, then /mnt/<d> folded.\n- Bounds: read(65537), 3 s urlopen timeout, and a daemon threading.Timer watchdog that calls os._exit(1) at 3 s total. Ad-hoc check: a trickled reply ends at 3.03 s, rc 1. ProxyHandler({}) keeps an http_proxy env var off the loopback probe.\n- New daemon_identity_project: cygpath -m on msys/cygwin. If cygpath fails it passes nothing, so the verdict is unknown and a spelling difference never refuses.\n- New refuse_foreign_daemon prints the three plan sentences with printf, so a backslash in a served path is never interpreted, then exits 1. It deletes, starts and exports nothing.\n- Foreign-branch loop: rc 3 refuses at once, rc 0 adopts, anything else tries the next candidate.\n- PID branch: after kill -0, when DAEMON_PORT is numeric, it probes ${MOE_DAEMON_HOST:-127.0.0.1}:port. rc 3 refuses; anything else sets RUNNING=true as today.\n- rc is captured as `SERVED=$(...) || PROBE_RC=$?`, which is set -e safe.\nGREEN on Linux bash: all 9 identity sh rows pass. The static parity row stays red until step 3 (ps1). bash -n and git diff --check are clean. The fix-options wording is left for task-724e31fa.",
+      "startedAt": "2026-10-30T10:32:22.734Z",
+      "completedAt": "2026-10-30T10:35:09.665Z"
     },
     {
       "stepId": "step-3",
       "description": "IMPLEMENT scripts/moe-agent.ps1. Change only the daemon pre-flight.\n\n1. Add two helpers inside the extracted helper range (after Read-MoeDaemonJsonText), so the launcher test can load them.\n- A comparable-path function with step 2's rule. For drive paths, use string operations rather than [IO.Path]::GetFullPath, so pwsh on Linux and PowerShell 5.1 agree.\n- A /health probe built on HttpWebRequest:\n  - Timeout and ReadWriteTimeout are both 3000;\n  - read at most 65537 bytes from the response stream;\n  - on a 503, read the body from the WebException's Response;\n  - return 'same', 'foreign <served>' or 'unknown'; any exception means unknown.\n\n2. In the check block, when $proc is found, probe 127.0.0.1:$($info.port) with $projectPath.\n- Foreign: Write-Host the same three lines as sh, with the ERROR line in red, then exit 1. The exit sits inside the if, not in a throw, so the existing catch cannot swallow it and fall through to starting a daemon.\n- Otherwise: $running = $true, as today.\n\n3. Error handling: any probe failure means unknown. A refusal deletes nothing and starts nothing.\n\n4. Keep the file UTF-8 with a BOM (scripts/CLAUDE.md), and keep the refusal text ASCII.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "note": "moe-agent.ps1 pre-flight only (+91/-1). The BOM is kept and the added text is pure ASCII.\n- Get-MoeComparableProjectPath: string-only segment collapse with the sh rule. Drive/UNC paths: '\\' to '/', '..' never climbs past the drive or server/share, lowercased. POSIX: /mnt/<d> folding.\n- Get-MoeDaemonIdentity returns same / foreign <served> / unknown. It strips the provider prefix (Microsoft.PowerShell.Core\\FileSystem::) from a UNC $projectPath that Resolve-Path qualified, and requires both paths absolute.\n- Check block: once Get-Process finds the pid, it probes 127.0.0.1:$info.port. Foreign prints the three byte-identical lines (ERROR in red) and exits 1 inside the if, never a throw. Otherwise $running = $true as today.\nDEVIATION from the plan: the probe uses a raw HTTP/1.0 TcpClient socket, not HttpWebRequest, the same design as the QA-approved JetBrains probe (mem:gotcha-jetbrains-http-header-deadline):\n- one 3 s deadline covers connect, headers and body, because ReceiveTimeout is set to the time left before every read; HttpWebRequest's ReadWriteTimeout restarts per trickled byte, and on pwsh 7 its timeouts map onto HttpClient differently;\n- no proxy and no redirect;\n- the reply is capped at 64 KiB body + 8 KiB head;\n- the connect waits with Task.WaitAny, so a refused port is unknown without logging an exception into $Error.\nAlso in this step:\n- sh: probe_daemon_health now also requires the expected project to be absolute, as Kotlin does.\n- Test: two ps1 UNC rows (a provider-qualified project is refused on a foreign daemon, and adopted when the daemon reports //srv/share/proj/).\nGREEN on Windows (snapshot of HEAD scripts/ and .github/ + the 3 files, cmp-verified): 43 tests, 40 pass, 0 fail, 3 skips (Git Bash Windows-owned branch, OSTYPE msys). Log /tmp/e7f4-green-windows.log.\nAd-hoc bounds on 5.1 and 7: header trickle 3.02-3.03 s unknown, body trickle 3.02 s unknown, 70 KB body unknown, control chars become '?' with the 300-char cap, same-project reply is same.\nOn Windows a refused loopback connect takes about 2.4 s (SYN retries), so a stale live-pid daemon.json costs that once per pre-flight.",
+      "startedAt": "2026-10-30T10:35:10.431Z",
+      "completedAt": "2026-10-30T10:43:22.572Z"
     },
     {
       "stepId": "step-4",
       "description": "DOCS. Change two clauses in the root CLAUDE.md and preserve every other byte. Other rows edit this file too: task-724e31fa, and later the CQ integration rows.\n\n1. The moe-proxy daemon-discovery text. After 'exits immediately on a project-path mismatch', add: 'in daemon.json or in the live daemon's /health reply (a daemon now serving another project)'.\n\n2. The WSL agent mode sentence about the sh pre-flight. Add: 'and stops pre-flight with MOE_DAEMON_FOREIGN_PROJECT, naming both projects, when the reachable daemon's /health projectPath is another project (moe-agent.ps1 does the same for a live PID)'.\n\nLeave that sentence's --host 0.0.0.0 wording to task-724e31fa.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "CLAUDE.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "CLAUDE.md"
+      ],
+      "note": "Root CLAUDE.md: two insertions on one line (+1/-1), every other byte kept (word-diff shows only the two added clauses).\n1. The proxy discovery clause now reads 'exits immediately on a project-path mismatch in daemon.json or in the live daemon's /health reply (a daemon now serving another project)'.\n2. The WSL agent mode sentence: after 'when the probe fails' it adds ', and stops pre-flight with `MOE_DAEMON_FOREIGN_PROJECT`, naming both projects, when the reachable daemon's /health projectPath is another project (both launchers do the same for a live PID)'.\nWording deviation: the plan said '(moe-agent.ps1 does the same for a live PID)'. moe-agent.sh's PID branch also probes, so it says 'both launchers'.\nThe --host 0.0.0.0 wording is untouched and left to task-724e31fa. git diff --check is clean.",
+      "startedAt": "2026-10-30T10:43:23.504Z",
+      "completedAt": "2026-10-30T10:43:44.576Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\nNever run the launcher tests in the shared tree: its moe-agent.{sh,ps1} carry peers' dirty edits. First build a snapshot with git archive HEAD of scripts/ and .github/ (the CI row reads ci.yml). Overlay this task's four files only, and cmp-verify each one.\n\n1. Linux. In the snapshot, run `node --test scripts/tests/daemon-json-cap.test.mjs`. That covers bash, plus pwsh if installed.\n\n2. Windows. Copy the snapshot's scripts/ and .github/ to a Windows temp dir and run the same file with Windows node (mem:gotcha-qa-windows-launcher-tests-from-wsl). That covers Git Bash, PowerShell 5.1 and pwsh 7.\n- Report tests, pass, fail and skipped per engine.\n- No identity row may be skipped except by the documented engine or OS skips.\n\n3. Parity. Run `bash scripts/tests/parity-check.sh` in the snapshot, and parity-check.ps1 on Windows.\n\n4. Mutants, on snapshot copies only. A kill counts only when assertions fail.\n- M1: sh treats rc 3 as 0. The sh foreign rows fail.\n- M2: ps1 ignores the foreign verdict. The ps1 foreign rows fail.\n- M3: the comparable rule drops /mnt/<d> folding, in both sh and ps1. The same-project spelling rows fail.\n- M4: a relative served path is judged. The relative row fails.\n\n5. DoD 2 evidence. In a Linux-native snapshot of packages/moe-proxy (mem:gotcha-daemon-linux-snapshot-gate), run `npm ci`, then `npm test`. It must exit 0, and task-86093c3e's identity tests must run.\n\n6. DoD 3 evidence, under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). If the lease is queued, call moe.report_blocked with that resourceId. Release it in every exit path. Run:\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun --tests <task-90664db1's identity test classes>\"\nCite task-90664db1's commit.\n\n7. GATE for complete_task (DoD 1). In the snapshot, run fresh, exit 0:\nnode --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh\nSupply its output and the Windows run's counts, and cite task-86093c3e's and task-90664db1's commits for DoD 2 and DoD 3.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "VERIFY: no source edits were needed. Evidence is in D:/moe-scratch/task-e7f4026a/.\nSnapshot: git archive HEAD of scripts/ and .github/, plus the 3 owned script files, cmp-verified. CLAUDE.md is docs-only and no gate reads it.\n1. Linux (bash; no pwsh installed): 43 tests, 13 pass, 0 fail, 30 skipped. All 30 skips are PowerShell rows: 5.1 is Windows-only and pwsh is absent. Every bash identity row ran.\n2. Windows node.exe: 43 tests, 40 pass, 0 fail, 3 skipped.\n   - Git Bash: 7 pass, 3 skips. The skips are the documented Windows-owned-branch rows: OSTYPE is msys, so that branch never runs there.\n   - PowerShell 5.1: 15/15. pwsh 7: 15/15. The 3 static rows pass.\n3. Parity: parity-check.sh PASS (Linux) and parity-check.ps1 PASS (Windows PowerShell 5.1).\n4. Mutants, on copies only. Every kill is an AssertionError and none is a syntax error.\n   - M1 (sh: sys.exit(3) becomes 0) is killed by 3 rows: Windows-owned foreign, PID foreign, PID 503 foreign.\n   - M2 (ps1 ignores foreign) is killed by 6 rows: foreign, 503 and UNC-foreign, on both PowerShells.\n   - M3 (no /mnt folding): in sh it kills 2 rows (the d:/projexts/px4swarm/ spelling row and the PID same row, C:\\moe-id\\proj vs /mnt/c); in ps1 it kills the /mnt/d/x/y row on both PowerShells.\n   - M4 (relative path judged): in sh it kills the relative row; in ps1 the relative row on both PowerShells.\n5. DoD 2: Linux-native whole-repo snapshot at HEAD 980c9a39, npm ci in daemon and proxy under env -i with node 24.21.0, then proxy npm test. Exit 0: 6 files, 263 tests; daemonIdentity.test.ts ran 75. task-86093c3e's completion is 6c55aefa.\n6. DoD 3, under the jetbrains-gradle lease (acquired, then released): gradlew.bat test --rerun --tests com.moe.services.DaemonIdentityTest --tests com.moe.services.MoeProjectForeignDaemonTest. Exit 0, BUILD SUCCESSFUL; XML is fresh after 10:44:52Z. DaemonIdentityTest 19/19 and MoeProjectForeignDaemonTest 10/10, 0 fail/err/skip, at HEAD c8a2a173. task-90664db1's completion is ff5933d9.\n7. Gate run fresh at HEAD 980c9a39: node --test daemon-json-cap and parity-check.sh both exit 0 (43/13/0/30). It will be re-run for complete_task.",
+      "startedAt": "2026-10-30T10:43:45.504Z",
+      "completedAt": "2026-10-30T10:49:43.070Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read this row's diff together with task-86093c3e's and task-90664db1's, once as the px4swarm seat and once as a hostile process holding the port.\n\n- Can a seat still register, claim or bridge to a foreign daemon by any path? Check:\n  - --no-start-daemon;\n  - a resumed seat;\n  - a later loop iteration after the daemon changed (the proxy's per-RPC probe);\n  - MOE_DAEMON_HOST set;\n  - the foreign branch's gateway candidate.\n\n- Can a spelling difference refuse a seat's own daemon? Check:\n  - the D:\\, D:/, /mnt/d and msys /d forms;\n  - case;\n  - a trailing slash;\n  - '.' and '..';\n  - UNC;\n  - a relative served path.\n  Do the sh, ps1, proxy, Kotlin and daemon rules agree on every row?\n\n- Is every read bounded in time and bytes? Can a slow or endless /health stall pre-flight for longer than about 3 s per candidate?\n\n- Can set -e abort on the probe's exit code? Can the ps1 catch swallow the refusal and start a daemon?\n\n- Does the message print anything beyond the two paths and host:port? Is it byte-identical in sh and ps1?\n\n- Rails:\n  - regression tests exist for each slice;\n  - error handling: every failure is unknown and keeps today's behavior;\n  - no MCP contract change;\n  - existing daemon.json files still parse;\n  - no forbidden pattern.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review of this row's diff alongside task-86093c3e/90664db1. No defect found, so nothing changed.\n\nLive end-to-end, read-only, against the real moes daemon (9876, D:/projexts/moes):\n- sh probe via the WSL gateway: /mnt/d/projexts/moes gives rc 0; /mnt/d/projexts/px4swarm gives rc 3 with served D:/projexts/moe. This is the incident scenario, now refused. 127.0.0.1 is unreachable from WSL NAT and gives rc 1 (unknown).\n- ps1 probe on 5.1 and 7: D:\\projexts\\moes gives same; D:\\projexts\\px4swarm gives foreign D:/projexts/moes. The real daemon accepts the HTTP/1.0 request with Host 127.0.0.1:port.\n\nPaths to a foreign daemon:\n- --no-start-daemon skips pre-flight, but every wrapper RPC spawns moe-proxy, which probes /health on each connect (task-86093c3e). The same holds for resumed seats and later loop iterations.\n- MOE_DAEMON_HOST is the first foreign-branch candidate and the PID-branch probe host.\n- The gateway candidate is probed the same way, and rc 3 on any candidate refuses at once.\n\nSpelling: D:\\, D:/, /mnt/d, msys /d (via cygpath -m; a cygpath failure gives unknown), case, trailing slash, '.', '..' and UNC all agree across sh, ps1, Kotlin and the daemon/proxy on Windows. A relative served path, or a relative expected project, is unknown everywhere. Known divergences, none of which can make a wrapper refuse its own correctly-configured daemon:\n- (a) A UNC \\\\wsl.localhost\\... project against a WSL daemon reporting /home/x is foreign for sh and ps1. The proxy and the daemon.json project check already refuse that combination; only Kotlin maps WSL shares.\n- (b) The Windows proxy lowercases non-/mnt POSIX paths, while sh, ps1 and Kotlin keep their case.\n- (c) The proxy on Linux treats '//srv' as POSIX; the wrappers and Kotlin treat it as UNC.\n\nBounds:\n- sh: a watchdog calls os._exit(1) at 3 s total, and the body is read with read(65537). A trickled reply took 3.03 s.\n- ps1: one deadline governs every read. Header and body trickles took about 3.02 s on 5.1 and 7, and the reply is capped at 64 KiB + 8 KiB.\n- Neither probe uses a proxy or follows redirects (ps1 uses a raw socket; sh uses ProxyHandler({})).\n\nControl flow:\n- sh: rc is captured with `|| PROBE_RC=$?`, so set -e is safe, and refuse_foreign_daemon exits in the main shell.\n- ps1: the refusal exits inside the try, and the foreign rows prove exit 1 with no '@@ running=' output, so the catch cannot swallow it. Get-MoeDaemonIdentity always returns exactly one string.\n\nThe message shows only host:port, the served path (control chars become '?', 300-char cap), this project and the daemon.json path. Its text is byte-identical in sh and ps1: the static row plus exact-line assertions on every engine.\n\nRails: regression rows cover each slice; every failure is unknown and keeps today's behavior; no MCP or wire change; daemon.json parsing is unchanged; no forbidden pattern. Size +414/-42, net 372: runtime sh 72, ps1 90, docs 0, tests 210.\n\nAccepted and pre-existing:\n- The /health to /mcp TOCTOU, and a hostile port holder that lies about projectPath; no client-side check can stop either.\n- A refused loopback connect costs about 2.4 s on Windows (SYN retries).",
+      "startedAt": "2026-10-30T10:49:43.965Z",
+      "completedAt": "2026-10-30T10:50:58.590Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -76,7 +108,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:43:02.972Z",
-  "updatedAt": "2026-10-30T10:04:23.976Z",
+  "updatedAt": "2026-10-30T10:51:47.796Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:43:11.337Z",
@@ -85,11 +117,13 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T07:45:40.066Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-e60b90bd"
   ],
   "dependsOn": [
     "task-86093c3efd8645748f460db870073392",
@@ -99,7 +133,14 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T07:59:43.680Z",
   "planningNotes": {
@@ -122,5 +163,21 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T07:59:43.710Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T10:25:53.684Z",
+  "reviewStartedAt": "2026-10-30T10:51:47.794Z",
+  "verification": {
+    "command": "set -euo pipefail\ncd /mnt/d/projexts/moes\nREV=$(git rev-parse HEAD)\nSNAP=$(mktemp -d /tmp/e7f4-gate.XXXXXX)\ngit archive \"$REV\" scripts .github | tar -x -C \"$SNAP\"\nfor f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/daemon-json-cap.test.mjs; do cp \"$f\" \"$SNAP/$f\"; cmp \"$f\" \"$SNAP/$f\"; done\ncd \"$SNAP\"\numask 022\nnode --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh\necho \"gate ok rev=$REV snap=$SNAP\"",
+    "exitCode": 0,
+    "outputTail": "✔ bash: identity: a Windows-owned daemon.json whose daemon serves another project is refused, untouched\n✔ bash: identity: a Windows-owned daemon.json whose daemon serves this project in another spelling is adopted\n✔ bash: identity: a Windows-owned daemon.json whose daemon names a relative project is adopted (unknown)\n✔ bash: identity: a live pid whose daemon serves another project is refused\n✔ bash: identity: a live pid whose 503 unhealthy daemon serves another project is refused\n✔ bash: identity: a live pid whose daemon serves this project is adopted\n✔ bash: identity: a live pid with an unreachable /health is adopted as today\n(30 PowerShell rows skipped: 5.1 is Windows-only, pwsh not installed on Linux)\n✔ CI runs this suite on Linux and Windows\nℹ tests 43\nℹ pass 13\nℹ fail 0\nℹ skipped 30\nPASS parity-check.sh\ngate ok rev=980c9a39854ac4e78225b7dc9f2045e2f490181e snap=/tmp/e7f4-gate.PzTO0l\n\nWindows run of the same file (Windows node.exe, same snapshot files): 43 tests / 40 pass / 0 fail / 3 skipped. Git Bash 7 pass + 3 documented skips (Windows-owned branch never runs under OSTYPE msys); PowerShell 5.1 15/15; pwsh 7 15/15. parity-check.ps1 PASS.",
+    "reportedAt": "2026-10-30T10:51:47.794Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/daemon-json-cap.test.mjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "CLAUDE.md"
+  ],
+  "completionSummary": "DoD 1: both launchers refuse a live daemon whose /health projectPath is another project.\n- moe-agent.sh: probe_daemon_health takes the expected project. Exit 3 means foreign; the comparable rule (ntpath/posixpath) mirrors comparableProjectPath. The probe has a 3 s total watchdog, a 64 KiB cap and no env proxy. The Windows-owned branch refuses on rc 3, and so does the PID branch, which now probes after kill -0. Git Bash compares `cygpath -m` output; a cygpath failure counts as unknown.\n- moe-agent.ps1: Get-MoeComparableProjectPath and Get-MoeDaemonIdentity, probed after Get-Process. On foreign it exits 1 inside the try.\n- Both print the same three MOE_DAEMON_FOREIGN_PROJECT lines naming both projects. They delete, start and export nothing. Every probe failure is unknown and keeps today's behavior.\n- DEVIATION: the ps1 probe is a raw HTTP/1.0 TcpClient with one deadline, not HttpWebRequest. HttpWebRequest's per-read timeout restarts on every trickled byte, the defect QA rejected in the JetBrains probe. Ad-hoc trickle tests end at about 3.0 s on 5.1 and 7.\n- CLAUDE.md: two clauses. Size +414/-42, net 372.\nTests: daemon-json-cap.test.mjs gains 'identity:' rows. Runs are async with a fake /health that counts requests, and the ps1 fixtures moved off 9876.\n- RED on HEAD launchers: Linux 5 failures, Windows 16.\n- GREEN on Linux: 13 pass, 30 PowerShell skips.\n- GREEN on Windows: 40 pass, 0 fail, 3 documented Git Bash skips (Git Bash 7/3, PowerShell 5.1 15/15, pwsh 7 15/15).\n- parity-check.sh and parity-check.ps1 PASS.\n- Mutants M1-M4 for sh and ps1 are all killed by assertions.\n- Live check against the real moes daemon: px4swarm is refused (sh via the WSL gateway, ps1 on 5.1 and 7) and moes is judged same.\nDoD 2 (task-86093c3e, 6c55aefa): proxy npm test in a Linux-native snapshot at 980c9a39 passes, 6 files / 263 tests, daemonIdentity 75.\nDoD 3 (task-90664db1, ff5933d9): run under the jetbrains-gradle lease (released afterwards). DaemonIdentityTest 19/19 and MoeProjectForeig"
 }

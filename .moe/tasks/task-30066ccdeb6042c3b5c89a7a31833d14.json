@@ -1,0 +1,28 @@
+{
+  "id": "task-30066ccdeb6042c3b5c89a7a31833d14",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-S] Spike: per-task worktree execution and landing to main; design doc, then slice the epic",
+  "description": "Seed row for epic-dce3a64f (per-task git worktrees, landing to main). A human decided this on 2026-10-30 (\"everything going to main\").\n\nArchitect: load moe-epic-breakdown and slice this epic into tasks with moe.create_task, in this epic. Each task is 1-3 files, so the wrapper twins move as sh/ps1 pairs. Order them with dependsOn, and end with the integration-and-hardening task that flips the default and sweeps the file-only dependency edges.\n\nThis row's own deliverable is the design doc the slices build on: docs/plans/2026-10-30-per-task-worktrees.md. It must decide:\n(1) Where worktrees live, and their lifecycle: created at claim, reused across a task's sessions, removed at DONE or ARCHIVED, with a crash/orphan sweep.\n(2) Landing: rebase onto main, then gate the rebased tree, then CAS main, then push. Also the retry loop under contention, and the conflict route (a rescue ref plus the task routed back).\n(3) What happens to the attribution tiers inside a private worktree, keeping DENY and BOARD.\n(4) Where .moe board records are committed from.\n(5) Seat tooling per worktree: the Serena root, node_modules and dist, and Gradle.\n(6) How seats keep running the wrapper from committed main bytes.\n(7) Migration: the settings flag, how existing in-flight tasks and the moe/work-2026-10-24 branch are handled, and the rollback path.\n\nThe current wrappers' landing code (scripts/moe-agent.sh post-flight, and get_commit_scope in packages/moe-daemon/src/tools/getCommitScope.ts) is the reference. Name every assumed interface in planningNotes.",
+  "definitionOfDone": [
+    "docs/plans/2026-10-30-per-task-worktrees.md exists and decides items (1)-(7) from the description, citing the current code paths it replaces.",
+    "The epic is sliced into tasks via moe.create_task, each within taskSizing (≤8 steps, ≤5 files), ordered by dependsOn, with sh/ps1 twins moving together, ending in an integration-and-hardening task that flips the default and sweeps file-only dependency edges.",
+    "No production code changes in this row; npm run lint (role-doc linter) passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T10:46:56.403Z",
+  "updatedAt": "2026-10-30T10:46:56.403Z"
+}

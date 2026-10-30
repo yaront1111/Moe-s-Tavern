@@ -582,6 +582,85 @@ function Read-MoeDaemonJsonText([string]$Path) {
     } finally { $stream.Dispose() }
 }
 
+# moe-proxy's comparableProjectPath rule: D:\x == D:/x == /mnt/d/x, drive and
+# UNC paths case-insensitive, '.', '..' and trailing separators normalized.
+# String operations only, so Windows PowerShell 5.1 and pwsh on Linux agree.
+# Twin: comparable() in moe-agent.sh's probe_daemon_health.
+function Get-MoeComparableProjectPath([string]$Path) {
+    $p = $Path.Trim()
+    $windows = $p -match '^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])'
+    if ($windows) { $p = $p.Replace('\', '/') }
+    # '..' never climbs past a drive or a UNC server/share.
+    $root = if (-not $windows) { 0 } elseif ($p.StartsWith('//')) { 2 } else { 1 }
+    $kept = New-Object System.Collections.Generic.List[string]
+    foreach ($segment in $p.Split('/')) {
+        if ($segment -eq '' -or $segment -eq '.') { continue }
+        if ($segment -ne '..') { $kept.Add($segment) }
+        elseif ($kept.Count -gt $root) { $kept.RemoveAt($kept.Count - 1) }
+    }
+    $joined = $kept -join '/'
+    if ($windows) { return $(if ($root -eq 2) { "//$joined" } else { $joined }).ToLowerInvariant() }
+    if ("/$joined" -match '^/mnt/([A-Za-z])(?:/(.*))?$') {
+        return $(if ($Matches[2]) { "$($Matches[1]):/$($Matches[2])" } else { "$($Matches[1]):" }).ToLowerInvariant()
+    }
+    return "/$joined"
+}
+
+# Which project the daemon on 127.0.0.1:$Port serves, by its /health
+# projectPath: 'same', 'foreign <served>' or 'unknown'. Once this project's
+# daemon dies, another project's daemon can take its port (task-e7f4026a).
+# Only a 200 or 503 reply naming another ABSOLUTE project is foreign; every
+# failure is unknown, which keeps the old verdict. A raw HTTP/1.0 socket, like
+# the JetBrains probe: one 3 s deadline covers connect, headers and body (a
+# per-read timeout restarts on every trickled byte), no proxy, no redirect, and
+# at most 64 KiB of body. Twin: probe_daemon_health in moe-agent.sh.
+function Get-MoeDaemonIdentity($Port, [string]$ProjectPath) {
+    $client = $null
+    try {
+        $deadline = [DateTime]::UtcNow.AddMilliseconds(3000)
+        $client = New-Object Net.Sockets.TcpClient
+        $client.SendTimeout = 3000
+        $connect = $client.ConnectAsync('127.0.0.1', [int]$Port)
+        # WaitAny, not Wait: a refused connect (the usual stale port) is an
+        # answer, not an exception to log.
+        $connected = [Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($connect), 3000) -ge 0
+        if (-not $connected -or $connect.Status -ne 'RanToCompletion') { return 'unknown' }
+        $stream = $client.GetStream()
+        $request = [Text.Encoding]::ASCII.GetBytes("GET /health HTTP/1.0`r`nHost: 127.0.0.1:$([int]$Port)`r`nConnection: close`r`n`r`n")
+        $stream.Write($request, 0, $request.Length)
+        # 64 KiB of body plus 8 KiB of status line and headers; one byte more is oversize.
+        $buffer = New-Object byte[] 73729
+        $total = 0
+        while ($total -lt $buffer.Length) {
+            $left = [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds
+            if ($left -le 0) { return 'unknown' }
+            $client.ReceiveTimeout = $left
+            $read = $stream.Read($buffer, $total, $buffer.Length - $total)
+            if ($read -le 0) { break }
+            $total += $read
+        }
+        # ISO-8859-1 maps byte n to char n, so a header offset is a byte offset.
+        $head = [Text.Encoding]::GetEncoding(28591).GetString($buffer, 0, $total)
+        $split = $head.IndexOf("`r`n`r`n")
+        if ($total -ge $buffer.Length -or $split -lt 0 -or $total - $split - 4 -gt 65536) { return 'unknown' }
+        if ($head -notmatch '^HTTP/1\.[01] (200|503)[ \r]') { return 'unknown' }
+        $health = [Text.Encoding]::UTF8.GetString($buffer, $split + 4, $total - $split - 4) | ConvertFrom-Json
+        $served = $health.projectPath
+        # Resolve-Path makes a UNC project provider-qualified.
+        $ProjectPath = $ProjectPath -replace '^Microsoft\.PowerShell\.Core\\FileSystem::', ''
+        $absolute = '^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]|/)'
+        if ($served -isnot [string] -or $served -notmatch $absolute -or $ProjectPath -notmatch $absolute) { return 'unknown' }
+        if ((Get-MoeComparableProjectPath $served) -eq (Get-MoeComparableProjectPath $ProjectPath)) { return 'same' }
+        $shown = $served -replace '[\x00-\x1f\x7f]', '?'
+        if ($shown.Length -gt 300) { $shown = $shown.Substring(0, 300) + '...' }
+        return "foreign $shown"
+    } catch {
+        return 'unknown'
+    } finally {
+        if ($client) { $client.Close() }
+    }
+}
+
 if (-not $NoStartDaemon) {
     $daemonInfoPath = Join-Path $moeDir "daemon.json"
     $running = $false
@@ -589,7 +668,18 @@ if (-not $NoStartDaemon) {
         try {
             $info = Read-MoeDaemonJsonText $daemonInfoPath | ConvertFrom-Json
             $proc = Get-Process -Id $info.pid -ErrorAction SilentlyContinue
-            if ($proc) { $running = $true }
+            if ($proc) {
+                # A live PID proves a process, not which project it serves.
+                # exit, not throw: the catch below would start a daemon instead.
+                $identity = Get-MoeDaemonIdentity $info.port $projectPath
+                if ($identity.StartsWith('foreign ')) {
+                    Write-Host "[ERROR] MOE_DAEMON_FOREIGN_PROJECT: the daemon at 127.0.0.1:$($info.port) serves $($identity.Substring(8)), not this project ($projectPath)." -ForegroundColor Red
+                    Write-Host "$daemonInfoPath is stale: this project's daemon is not running. Start it (the IDE's Restart Daemon, or moe-daemon start --project $projectPath); it takes the next free port."
+                    Write-Host "Refusing to register, claim or bridge to another project's daemon."
+                    exit 1
+                }
+                $running = $true
+            }
         } catch {
             $running = $false
         }

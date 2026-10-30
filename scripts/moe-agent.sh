@@ -1443,19 +1443,77 @@ PYEOF
 fi
 
 # HTTP /health probe against a daemon endpoint. Used when a PID check cannot
-# answer liveness (a Windows daemon's PID is invisible inside WSL).
+# answer liveness (a Windows daemon's PID is invisible inside WSL), and to ask a
+# live daemon which project it serves: once this project's daemon dies, another
+# project's daemon can take its port (task-e7f4026a). Exit 0 = healthy, exit 1 =
+# unreachable/unhealthy/unparseable. With $3 (the expected project), a 200 or
+# 503 reply naming another ABSOLUTE project exits 3 and prints that path (one
+# line, at most 300 chars). A relative or missing projectPath cannot be judged.
+# Paths compare by moe-proxy's comparableProjectPath (D:\x == D:/x == /mnt/d/x),
+# with ntpath/posixpath, never os.path, so Windows python agrees. Bounded: 3 s in
+# total (the watchdog also covers a trickled reply) and 64 KiB of body.
 probe_daemon_health() {
     local host="$1"
     local port="$2"
-    $PYTHON_CMD -c "
-import json, sys, urllib.request
+    local project="${3:-}"
+    $PYTHON_CMD -c '
+import json, ntpath, os, posixpath, re, sys, threading, urllib.error, urllib.request
+watchdog = threading.Timer(3, os._exit, (1,))
+watchdog.daemon = True
+watchdog.start()
+WINDOWS = re.compile(r"[A-Za-z]:[\\/]|[\\/]{2}[^\\/]")
+def absolute(p):
+    return isinstance(p, str) and (bool(WINDOWS.match(p)) or p.startswith("/"))
+def comparable(p):
+    p = p.strip()
+    if WINDOWS.match(p):
+        return ntpath.normpath(p).replace("\\", "/").rstrip("/").lower()
+    p = posixpath.normpath(p)
+    m = re.match(r"/mnt/([A-Za-z])(?:/(.*))?$", p)
+    return (m.group(1) + ":" + ("/" + m.group(2) if m.group(2) else "")).lower() if m else p
 try:
-    with urllib.request.urlopen('http://%s:%s/health' % (sys.argv[1], sys.argv[2]), timeout=3) as r:
-        d = json.load(r)
-    sys.exit(0 if d.get('status') == 'healthy' else 1)
+    try:
+        r = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
+            "http://%s:%s/health" % (sys.argv[1], sys.argv[2]), timeout=3)
+    except urllib.error.HTTPError as e:
+        if e.code != 503:
+            sys.exit(1)
+        r = e
+    code = r.getcode()
+    body = r.read(65537)
+    if len(body) > 65536:
+        sys.exit(1)
+    d = json.loads(body)
+    served = d.get("projectPath")
+    if (code in (200, 503) and absolute(served) and absolute(sys.argv[3])
+            and comparable(served) != comparable(sys.argv[3])):
+        shown = re.sub(r"[\x00-\x1f\x7f]", "?", served)
+        sys.stdout.write(shown if len(shown) <= 300 else shown[:300] + "...")
+        sys.exit(3)
+    sys.exit(0 if code != 503 and d.get("status") == "healthy" else 1)
 except Exception:
     sys.exit(1)
-" "$host" "$port" 2>/dev/null
+' "$host" "$port" "$project" 2>/dev/null
+}
+
+# The project as probe_daemon_health compares it. Git Bash/Cygwin spell PROJECT
+# /d/..., which no daemon reports; when cygpath fails, pass nothing (unknown)
+# rather than refuse this project's own daemon over a spelling.
+daemon_identity_project() {
+    case "$OSTYPE" in
+        msys*|cygwin*) cygpath -m "$PROJECT" 2>/dev/null || true ;;
+        *) printf '%s' "$PROJECT" ;;
+    esac
+}
+
+# A reachable daemon serves another project, so daemon.json is stale. Deletes,
+# starts and exports nothing. The three sentences are byte-identical in
+# moe-agent.ps1.
+refuse_foreign_daemon() { # $1 = host, $2 = port, $3 = served projectPath
+    printf '%b[ERROR]%b %s\n' "$RED" "$NC" "MOE_DAEMON_FOREIGN_PROJECT: the daemon at $1:$2 serves $3, not this project ($PROJECT)."
+    printf '%s\n' "$DAEMON_INFO is stale: this project's daemon is not running. Start it (the IDE's Restart Daemon, or moe-daemon start --project $PROJECT); it takes the next free port."
+    printf '%s\n' "Refusing to register, claim or bridge to another project's daemon."
+    exit 1
 }
 
 # Default gateway of a NAT-mode WSL distro = the Windows host.
@@ -1521,7 +1579,12 @@ if [ "$NO_START_DAEMON" = false ]; then
                 [ -n "$GW" ] && DAEMON_HOST_CANDIDATES="$DAEMON_HOST_CANDIDATES $GW"
             fi
             for CANDIDATE in $DAEMON_HOST_CANDIDATES; do
-                if probe_daemon_health "$CANDIDATE" "$DAEMON_PORT"; then
+                PROBE_RC=0
+                SERVED=$(probe_daemon_health "$CANDIDATE" "$DAEMON_PORT" "$(daemon_identity_project)") || PROBE_RC=$?
+                if [ "$PROBE_RC" -eq 3 ]; then
+                    refuse_foreign_daemon "$CANDIDATE" "$DAEMON_PORT" "$SERVED"
+                fi
+                if [ "$PROBE_RC" -eq 0 ]; then
                     export MOE_DAEMON_HOST="$CANDIDATE"
                     echo -e "${GREEN}[OK]${NC} Windows-side daemon reachable at $CANDIDATE:$DAEMON_PORT (cross-boundary)"
                     RUNNING=true
@@ -1549,6 +1612,15 @@ if [ "$NO_START_DAEMON" = false ]; then
                 rm -f "$DAEMON_INFO"
                 PID=""
             else
+                # A live PID proves a process, not which project it serves.
+                if [[ "$DAEMON_PORT" =~ ^[0-9]+$ ]]; then
+                    PROBE_HOST="${MOE_DAEMON_HOST:-127.0.0.1}"
+                    PROBE_RC=0
+                    SERVED=$(probe_daemon_health "$PROBE_HOST" "$DAEMON_PORT" "$(daemon_identity_project)") || PROBE_RC=$?
+                    if [ "$PROBE_RC" -eq 3 ]; then
+                        refuse_foreign_daemon "$PROBE_HOST" "$DAEMON_PORT" "$SERVED"
+                    fi
+                fi
                 RUNNING=true
             fi
         fi

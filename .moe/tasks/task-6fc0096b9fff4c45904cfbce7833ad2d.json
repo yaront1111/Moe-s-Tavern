@@ -81,7 +81,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,7 +94,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:04:29.281Z",
-  "updatedAt": "2026-10-30T10:41:58.761Z",
+  "updatedAt": "2026-10-30T10:51:23.387Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:41.573Z",
@@ -104,11 +104,14 @@
     "firstClaimAt": "2026-10-30T09:54:55.047Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T10:51:23.386Z",
+    "wallClockMs": 3388339
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-c2da129d"
+    "worker-c2da129d",
+    "qa-ba3f4f35"
   ],
   "dependsOn": [
     "task-ec64165c85f246088a7224cf70b04670",
@@ -209,20 +212,42 @@
       "treeId": "40c931f7a62dbb023e23ddedaab4b79b1992697b",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "c8a2a1730d7354a600d616b1f1987c0cd0ee3b7b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T10:23:29Z",
+      "paths": [
+        ".moe/tasks/task-6fc0096b9fff4c45904cfbce7833ad2d.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T10:42:17.475Z",
+      "treeId": "3ef0340b3c4e878455f0eb589cd4990b79f59678",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
-    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt",
+    ".moe/tasks/task-6fc0096b9fff4c45904cfbce7833ad2d.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-4ae016fb@2026-10-30T09:54:55Z",
-    "at": "2026-10-30T10:20:28.049Z"
+    "kind": "completion",
+    "sessionId": "worker-c2da129d@2026-10-30T10:23:29Z",
+    "at": "2026-10-30T10:42:17.475Z"
   },
   "workStartedAt": "2026-10-30T10:24:51.699Z",
   "reviewStartedAt": "2026-10-30T10:41:58.760Z",
@@ -233,5 +258,9 @@
     "reportedAt": "2026-10-30T10:41:58.760Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Implemented bounded, read-only daemon metadata parsing, existing cross-OS normalization before canonical fallback, and four-field compare-delete shared by supervisor and service cleanup. DoD1: spelling/namespace/reachability/ensure/connect-retry rows preserve reachable Windows/WSL metadata; both restart profiles refuse other-side PIDs before lookup/signal. Pending RF03 retries also reject foreign PID metadata without probing. DoD2: repeated reader keeps and one-field pid/port/startedAt/projectPath replacement rows preserve exact contents; unchanged stale metadata is removed. DoD3: RF03 and 90664db1 prerequisites landed; RF04 ordered after this task and handoff comment posted. Fresh Windows gate 411/411 across 26 classes (supervisor 41, foreign-service 10), zero failures/errors/skips. Ten scratch mutants assertion-killed; originals restored; scoped diff check and hashes clean. +302/-72, net 230 across four approved files. Gradle lease released; Serena handoff/gotchas saved. Known approved limits: compare-delete is best-effort, not atomic; dispatcher STATE_SNAPSHOT and restart post-stop deletions remain owned by task-007c0ea8 and RF04. No Git writes; wrapper owns landing."
+  "completionSummary": "Implemented bounded, read-only daemon metadata parsing, existing cross-OS normalization before canonical fallback, and four-field compare-delete shared by supervisor and service cleanup. DoD1: spelling/namespace/reachability/ensure/connect-retry rows preserve reachable Windows/WSL metadata; both restart profiles refuse other-side PIDs before lookup/signal. Pending RF03 retries also reject foreign PID metadata without probing. DoD2: repeated reader keeps and one-field pid/port/startedAt/projectPath replacement rows preserve exact contents; unchanged stale metadata is removed. DoD3: RF03 and 90664db1 prerequisites landed; RF04 ordered after this task and handoff comment posted. Fresh Windows gate 411/411 across 26 classes (supervisor 41, foreign-service 10), zero failures/errors/skips. Ten scratch mutants assertion-killed; originals restored; scoped diff check and hashes clean. +302/-72, net 230 across four approved files. Gradle lease released; Serena handoff/gotchas saved. Known approved limits: compare-delete is best-effort, not atomic; dispatcher STATE_SNAPSHOT and restart post-stop deletions remain owned by task-007c0ea8 and RF04. No Git writes; wrapper owns landing.",
+  "completedAt": "2026-10-30T10:51:23.386Z",
+  "reviewCompletedAt": "2026-10-30T10:51:23.386Z",
+  "reviewSummary": "Reviewed completion c8a2a1730d7354a600d616b1f1987c0cd0ee3b7b with git show and branch --contains on moe/work-2026-10-24; ef8bb3bb is board-only. Source/test diff +302/-72 (net 230); diff --check clean. Re-ran exact Windows command under jetbrains-gradle: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\". Exit 0, 26 classes/411 tests, 0 failures/errors/skips. Every XML timestamp and mtime follows Windows start 2026-10-30T10:46:16.261114Z; supervisor 41, foreign service 10, runtime policy 49. All tracked JetBrains hashes stayed stable and matched the completion tree.\nDoD1: bounded read-only reader, shared normalizer/canonical fallback, namespace-safe reachability, protected replacement bypass and both restart-profile refusals verified. DoD2: repeated reads preserve metadata; all four single-field replacements survive compare-delete, unchanged stale info is removed. DoD3: RF03/90664db1 landed; RF04 depends on this row and its handoff preserves the first guard. Activation and existing restart body remain unchanged. No API/migration/config changes required.\nIn an isolated commit archive, four QA mutants (canonical-only paths, three-field equality, foreign PID probing, removed restart guard) each failed the intended assertions; baseline/restored focused suites passed 51/51 and originals cmp-verified. Evidence D:/moe-scratch/qa-6fc0096b-20261030/. Lease released; peer files untouched. Compare-delete remains best-effort, not atomic; approved dispatcher/restart follow-ups remain out of scope. Windows evidence only, not native Linux/UI certification. Complexity pass: lean already; net 0 lines to cut.",
+  "requiredCheckAtDone": null
 }
