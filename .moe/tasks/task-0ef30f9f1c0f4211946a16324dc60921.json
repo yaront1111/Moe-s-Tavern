@@ -84,7 +84,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T15:22:33.524Z",
-  "updatedAt": "2026-10-30T15:51:41.975Z",
+  "updatedAt": "2026-10-30T15:52:04.066Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T15:40:19.659Z",
@@ -193,7 +193,40 @@
   },
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+    ".moe/tasks/task-0ef30f9f1c0f4211946a16324dc60921.json"
+  ],
+  "completionSummary": "JetBrains protected PATH filter now keeps only validated spellings. MoeDaemonSupervisor.protectedPathEntries maps each entry through unquoted (trim + one surrounding pair of \") first, drops any entry that still starts or ends with ' or \", then requires RuntimeSelectionPolicy.isOutsideProject on that same string. nodeOnProtectedPath no longer unquotes a second time. protectedDaemonEnvironment, the spawn/stop builders and ManagedVmPanel inherit the fix; LEGACY is untouched and isOutsideProject is unchanged. S4 in RuntimeSelectionPolicyTest keeps its whole-map assertEquals: kept = outsideA, padded (unpadded), spaced (unquoted), outsideB; dropped = `<project>'`, `'<project>`, `<outsideA>'`, `<outsideA>\"` plus the existing S4 drops. RED first (S4 failed: padded kept padded, `proj'` and `path-a'` kept, quoted kept with quotes), then GREEN. Full suite: 28 result files, 469 tests, 0 skipped, 0 failures, 0 errors. Run via the Windows cmd.exe gradlew.bat equivalent of ./gradlew test (WSL has no JDK). Diff is exactly the two planned files (+13/-5).",
+  "commits": [
+    {
+      "sha": "2b0d3deec87f31e1597a111a68b6d0a158705b11",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T15:49:26Z",
+      "paths": [
+        ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
+        ".moe/tasks/task-0ef30f9f1c0f4211946a16324dc60921.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T15:52:04.066Z",
+      "treeId": "074ccd20c2b3099ef0840f098cac0476705ba8de",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
   ],
-  "completionSummary": "JetBrains protected PATH filter now keeps only validated spellings. MoeDaemonSupervisor.protectedPathEntries maps each entry through unquoted (trim + one surrounding pair of \") first, drops any entry that still starts or ends with ' or \", then requires RuntimeSelectionPolicy.isOutsideProject on that same string. nodeOnProtectedPath no longer unquotes a second time. protectedDaemonEnvironment, the spawn/stop builders and ManagedVmPanel inherit the fix; LEGACY is untouched and isOutsideProject is unchanged. S4 in RuntimeSelectionPolicyTest keeps its whole-map assertEquals: kept = outsideA, padded (unpadded), spaced (unquoted), outsideB; dropped = `<project>'`, `'<project>`, `<outsideA>'`, `<outsideA>\"` plus the existing S4 drops. RED first (S4 failed: padded kept padded, `proj'` and `path-a'` kept, quoted kept with quotes), then GREEN. Full suite: 28 result files, 469 tests, 0 skipped, 0 failures, 0 errors. Run via the Windows cmd.exe gradlew.bat equivalent of ./gradlew test (WSL has no JDK). Diff is exactly the two planned files (+13/-5)."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-73c29a03@2026-10-30T15:49:26Z",
+    "at": "2026-10-30T15:52:04.066Z"
+  }
 }
