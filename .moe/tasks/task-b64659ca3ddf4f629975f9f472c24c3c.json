@@ -46,7 +46,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -59,7 +59,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:38:35.601Z",
-  "updatedAt": "2026-10-30T00:44:43.354Z",
+  "updatedAt": "2026-10-30T01:37:10.698Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T22:55:15.385Z",
@@ -69,11 +69,14 @@
     "firstClaimAt": "2026-10-30T00:41:09.478Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-30T01:37:10.697Z",
+    "wallClockMs": 3361219
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "light",
   "effort": "medium",
@@ -138,7 +141,42 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts",
+    ".moe/tasks/task-18b365e5f7ac43d49c1f34c3aebd4461.json",
+    ".moe/tasks/task-b64659ca3ddf4f629975f9f472c24c3c.json"
+  ],
+  "completionSummary": "cachedPlanPaths.git.test.ts first test now compares fs.realpathSync.native(top) with fs.realpathSync.native(root), so Git for Windows' C:/ output matches the fixture's C:\\ root. Only that test changed; cachedPlanPaths.ts is untouched. Linux 6/6 and native Windows 6/6.",
+  "commits": [
+    {
+      "sha": "6477f8f79ed5cbbe0c9262dd27166331e901d02b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T00:43:51Z",
+      "paths": [
+        ".moe/tasks/task-18b365e5f7ac43d49c1f34c3aebd4461.json",
+        ".moe/tasks/task-b64659ca3ddf4f629975f9f472c24c3c.json",
+        "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T00:45:06.287Z",
+      "treeId": "ed95835a862056d05cce4f40601e63575ff64fb1",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts"
   ],
-  "completionSummary": "cachedPlanPaths.git.test.ts first test now compares fs.realpathSync.native(top) with fs.realpathSync.native(root), so Git for Windows' C:/ output matches the fixture's C:\\ root. Only that test changed; cachedPlanPaths.ts is untouched. Linux 6/6 and native Windows 6/6."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-30T00:43:51Z",
+    "at": "2026-10-30T00:45:06.287Z"
+  },
+  "completedAt": "2026-10-30T01:37:10.697Z",
+  "reviewCompletedAt": "2026-10-30T01:37:10.697Z",
+  "reviewSummary": "Approved. Reviewed completion 6477f8f (on moe/work-2026-10-24, pushed). Own bytes: packages/moe-daemon/src/util/cachedPlanPaths.git.test.ts +3/-1 in the first `it` only; the rest is board JSON. cachedPlanPaths.ts is not in the commit (git diff --stat empty), and the other five tests and the fixture are byte-identical. I re-ran the plan's exact snapshot command (Linux leg, then native Windows leg via robocopy'd node_modules, Windows node 24.16): Linux 6/6, Windows 6/6, VERIFY_EXIT=0. Red proof that the plan only recorded: I ran the pre-fix test (6477f8f^) on native Windows and it fails 1 of 6 with Expected \"C:\\Users\\...\\moe-cfg-X\" / Received \"C:/Users/.../moe-cfg-X\", so the fix is what turns the Windows leg green. DoD 1 (passes on Windows and Linux) met. DoD 2 (openProjectGit unchanged) met. The assertion compares fs.realpathSync.native(top) with fs.realpathSync.native(root). Git running outside the root would name a different directory and fail it. An empty or missing top throws ENOENT, so it cannot pass vacuously. Native on both sides also covers 8.3 short names and case. Leftover temp dirs under /tmp and the Windows Temp: none. Tiny diff, no size issue. Complexity pass: nothing to cut. Unverified: nothing outside the one file; I did not run the full daemon suite because the change is test-only in one file.",
+  "requiredCheckAtDone": null
 }
