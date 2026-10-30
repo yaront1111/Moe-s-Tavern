@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -79,7 +79,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:16:11.740Z",
-  "updatedAt": "2026-10-30T07:44:52.235Z",
+  "updatedAt": "2026-10-30T08:14:57.641Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:17:40.423Z",
@@ -89,11 +89,14 @@
     "firstClaimAt": "2026-10-30T07:39:19.107Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T08:14:57.640Z",
+    "wallClockMs": 2138533
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-73c29a03"
+    "worker-73c29a03",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -181,5 +184,9 @@
     "kind": "completion",
     "sessionId": "worker-73c29a03@2026-10-30T07:41:36Z",
     "at": "2026-10-30T07:44:52.235Z"
-  }
+  },
+  "completedAt": "2026-10-30T08:14:57.640Z",
+  "reviewCompletedAt": "2026-10-30T08:14:57.640Z",
+  "reviewSummary": "Approved. Reviewed completion commit 9f965c3a (tree 660af39b, on moe/work-2026-10-24). 179 net non-board LOC (attributionTiers.ts +24/-11, attributionTiers.test.ts +151, getCommitScope.test.ts +15), under 400; completeTask.ts has no diff. Re-ran the gate in a fresh Linux-native snapshot (git archive HEAD fa040495; the 3 owned files blob-identical to the commit; native npm ci under env -i, node v24.21.0): tsc --noEmit exit 0, npm test exit 0, 205 files, 5767 passed / 16 skipped. DoD 1: asList (Array.isArray guard) now feeds PathSet.addAll, planSteps, completedStepFiles, nonInferredCommitPaths, collectAssertedPaths and collectTaskPathTiers, so a number, object or string never throws or splits into characters; valid entries keep order and normalization (control row passes, existing getCommitScope/get_context tests unchanged). External addAll callers already pass arrays and the signature only widened. DoD 2: attributionTiers.test.ts pins every shape (field x number/object/string, completed-step mirror, task-level lists, commits, plan shape, control) with exact toEqual plus not.toThrow; getCommitScope.test.ts adds the junk-peer case (peerDeclared exactly ['ok/peer.ts']). My own mutants on the snapshot, restored and cmp-clean: asList identity killed with 102 real failures; completedStepFiles falling back to affectedFiles on junk modifiedFiles killed with 3; dropping the commit isRecord check killed with 1. Baseline 103/103. Non-blocking note: nonInferredCommitPaths is exported but still assumes a non-null commit; its only caller guards with isRecord.",
+  "requiredCheckAtDone": null
 }
