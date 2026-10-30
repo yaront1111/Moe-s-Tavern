@@ -82,7 +82,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -98,17 +98,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T14:08:45.032Z",
-  "updatedAt": "2026-10-30T03:32:11.552Z",
+  "updatedAt": "2026-10-30T03:46:14.007Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T00:02:28.990Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T03:46:14.007Z",
+    "wallClockMs": 13425017
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
     "worker-b5749787",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -271,5 +274,9 @@
     "docs/MCP_SERVER.md",
     "docs/SCHEMA.md",
     "docs/TROUBLESHOOTING.md"
-  ]
+  ],
+  "completedAt": "2026-10-30T03:46:14.007Z",
+  "reviewCompletedAt": "2026-10-30T03:46:14.007Z",
+  "reviewSummary": "APPROVED. Reviewed completion b06e425 (recorded, pushed, on moe/work-2026-10-24); non-board diff small (recordCommit.ts +28/-14, test +98/-5, docs +12/-9).\n\nDoD: (1) No #governors page for ACTIVE_ASSIGNEE/OWNER_UNKNOWN; task-channel REFUSED line kept; alertGovernors = !ownerGuardRefusal && (...) leaves the per-task window free, so a later ordinary failure pages once (tested per code). (2) Owner-guard row skips updateTask, logs only appendActivity TASK_COMMIT_RECORDED; tests assert stored task deep-equal before/after, get_context keeps the committed outcome, an earlier failure stays, lastCommitOutcome stays absent (null) if the owner never landed. (3) 'owner-guard refusals' describe (13 cases) + control (NO_OWNED_PATHS still stamps and pages) + exactness test (failed row / lower-cased code stay ordinary); 5 type errors fixed annotation-only; no test weakened.\nAdversarial read: exact match on outcome refused + trimmed code; stray path fields ignored; inputs/response unchanged; chat errors stay in try/catch; docs consistent.\n\nRe-ran in Linux snapshot of pure `git archive HEAD` (no working-tree overlay), npm ci, env -i. HEAD: 189/190 files, 5317 passed, 3 failed, all in src/util/executionContractDocs.test.ts; tsc and tsconfig.test-check.json exit 0. Not this task: task-bc8410af's completion 2fb72648 (in REVIEW) changed that test + schema.ts after b06e425, and its docs/MCP_SERVER.md hunks are still uncommitted. With only those two files restored to their b06e425 versions: 190 files passed, 5315 passed | 16 skipped, tsc 0 = worker's GATE_EXIT=0. HEAD's suite stays red until bc8410af's docs land. Windows/JetBrains not run (untouched).",
+  "requiredCheckAtDone": null
 }

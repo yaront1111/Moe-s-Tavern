@@ -108,7 +108,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T10:43:25.554Z",
-  "updatedAt": "2026-10-30T03:43:47.762Z",
+  "updatedAt": "2026-10-30T03:44:15.483Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T16:07:37.010Z",
     "plannedStepCount": 5,
@@ -160,7 +160,44 @@
     "packages/moe-daemon/src/types/schema.ts",
     "docs/MCP_SERVER.md",
     "scripts/moe-agent.sh",
-    "scripts/moe-agent.ps1"
+    "scripts/moe-agent.ps1",
+    ".moe/tasks/task-bc8410afe7144ddda804b60af000864d.json",
+    ".moe/tasks/task-edda38a1b19d41fa8bc09d424edee81d.json"
   ],
-  "completionSummary": "Fixed the three stale statements, with drift tests. 5 files: schema.ts comment, MCP_SERVER.md, both launchers (comment-only), executionContractDocs.test.ts.\n1) schema.ts approvedPlanRevision comment: absence is a historical unstamped or relaxed set_task_status approval; a current human approval needs expectedPlanRevision and omission is INVALID_INPUT.\n2) moe-agent.sh/.ps1, 3 comment sites each: sessionId is stamped on get_context/start_step/complete_step/complete_task, the attempt pair only on the last three (CQ-F09/F12a).\n3) MCP_SERVER.md submit_plan: added the ninth field requiredChecks (ProtectedCheckDefinition objects, at most 20, separate from the 50-item string lists); \"eight-field\" is now \"nine-field\".\nTests (RED first, 6 failing, then GREEN): the submit_plan param block's properties equal EXECUTION_CONTRACT_FIELDS; requiredChecks and nine-field wording; bounded comment windows for schema.ts and both launchers; a missing anchor throws.\nOPERATOR NOTE: landing wrapper comment edits can trigger the normal fleet hot reload; nothing was restarted.\nGate (Linux snapshot, HEAD + 5 cmp-equal files, env -i): tsc 0, daemon 190 files 5320 passed/16 skipped, proxy 176 passed, parity PASS, prompt-cache-launcher 28 pass/1 skipped, lint OK, native powershell.exe ParseFile exit 0."
+  "completionSummary": "Fixed the three stale statements, with drift tests. 5 files: schema.ts comment, MCP_SERVER.md, both launchers (comment-only), executionContractDocs.test.ts.\n1) schema.ts approvedPlanRevision comment: absence is a historical unstamped or relaxed set_task_status approval; a current human approval needs expectedPlanRevision and omission is INVALID_INPUT.\n2) moe-agent.sh/.ps1, 3 comment sites each: sessionId is stamped on get_context/start_step/complete_step/complete_task, the attempt pair only on the last three (CQ-F09/F12a).\n3) MCP_SERVER.md submit_plan: added the ninth field requiredChecks (ProtectedCheckDefinition objects, at most 20, separate from the 50-item string lists); \"eight-field\" is now \"nine-field\".\nTests (RED first, 6 failing, then GREEN): the submit_plan param block's properties equal EXECUTION_CONTRACT_FIELDS; requiredChecks and nine-field wording; bounded comment windows for schema.ts and both launchers; a missing anchor throws.\nOPERATOR NOTE: landing wrapper comment edits can trigger the normal fleet hot reload; nothing was restarted.\nGate (Linux snapshot, HEAD + 5 cmp-equal files, env -i): tsc 0, daemon 190 files 5320 passed/16 skipped, proxy 176 passed, parity PASS, prompt-cache-launcher 28 pass/1 skipped, lint OK, native powershell.exe ParseFile exit 0.",
+  "commits": [
+    {
+      "sha": "2fb72648e6983aa31dffc854332c0c573c60d3ed",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b5749787@2026-10-30T03:40:49Z",
+      "paths": [
+        ".moe/tasks/task-bc8410afe7144ddda804b60af000864d.json",
+        ".moe/tasks/task-edda38a1b19d41fa8bc09d424edee81d.json",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/util/executionContractDocs.test.ts",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "recordedBy": "worker-b5749787",
+      "recordedAt": "2026-10-30T03:44:15.483Z",
+      "treeId": "2e473f71565da43349f5bd844448769341517821",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-915d7e84821448139086c97f77743f29"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-b5749787@2026-10-30T03:40:49Z",
+    "at": "2026-10-30T03:44:15.483Z"
+  }
 }
