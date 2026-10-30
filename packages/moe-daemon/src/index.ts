@@ -222,7 +222,9 @@ function staleLockReason(projectPath: string): string | null {
   if (!info || !info.pid || !Number.isFinite(info.createdAtMs)) return 'malformed lock';
   // Its owner's pid is in another pid namespace: never judge it stale from here.
   if (info.projectPath && isForeignDaemonInfo({ projectPath: info.projectPath })) return null;
-  if (info.projectPath && !isSameProjectPath(info.projectPath, projectPath)) return 'projectPath mismatch';
+  // acquireLock records path.resolve(--project). Resolve ours the same way, or a native alias of
+  // this directory (//x on POSIX, /x on the current Windows drive) reads a live owner's lock as stale.
+  if (info.projectPath && !isSameProjectPath(info.projectPath, canonicalProjectPath(projectPath))) return 'projectPath mismatch';
   if (!isProcessAlive(info.pid)) return 'lock owner not alive';
   if (Date.now() - info.createdAtMs > LOCK_STALE_TIMEOUT_MS) return 'lock owner unverifiable after timeout';
   return null;
@@ -316,7 +318,9 @@ function probeDaemonHealth(
   timeoutMs: number = SOCKET_TIMEOUT_MS,
   host?: string,
 ): Promise<boolean> {
-  if (!isDaemonInfoShape(info) || !isSameProjectPath(info.projectPath, expectedProjectPath)) {
+  // Exported, so it resolves the caller's own path itself (see validateDaemonInfoForProject).
+  const own = canonicalProjectPath(expectedProjectPath);
+  if (!isDaemonInfoShape(info) || !isSameProjectPath(info.projectPath, own)) {
     return Promise.resolve(false);
   }
 
@@ -344,7 +348,7 @@ function probeDaemonHealth(
             res.statusCode === 200
             && parsed.status === 'healthy'
             && typeof parsed.projectPath === 'string'
-            && isSameProjectPath(parsed.projectPath, expectedProjectPath)
+            && isSameProjectPath(parsed.projectPath, own)
             && isValidPid(parsed.pid)
             && parsed.pid === info.pid
           );
@@ -370,7 +374,12 @@ async function validateDaemonInfoForProject(
   if (!info) return { valid: false, reason: 'missing' };
   if (!isDaemonInfoShape(info)) return { valid: false, reason: 'malformed' };
   const foreign = isForeignDaemonInfo(info);
-  if (!isSameProjectPath(info.projectPath, projectPath)) {
+  // Our --project names a directory on this host, so resolve it here: a native alias
+  // (//x on POSIX, /x on the current Windows drive) must not orphan a live daemon's files.
+  // Recorded and reported paths are compared as written. Resolving them here would
+  // read the other side's /home/u/p as C:\home\u\p.
+  const own = canonicalProjectPath(projectPath);
+  if (!isSameProjectPath(info.projectPath, own)) {
     return { valid: false, reason: 'projectPath mismatch', ...(foreign ? { foreign } : {}) };
   }
   if (foreign) {
@@ -379,14 +388,14 @@ async function validateDaemonInfoForProject(
     const gateway = process.platform === 'linux' ? wslGatewayHost() : null;
     if (gateway && !hosts.includes(gateway)) hosts.push(gateway);
     for (const host of hosts) {
-      if (await probeDaemonHealth(info, projectPath, SOCKET_TIMEOUT_MS, host)) {
+      if (await probeDaemonHealth(info, own, SOCKET_TIMEOUT_MS, host)) {
         return { valid: true, info, foreign: true };
       }
     }
     return { valid: false, reason: 'foreign daemon unreachable', foreign: true };
   }
   if (!isProcessAlive(info.pid)) return { valid: false, reason: 'pid not alive' };
-  if (!await probeDaemonHealth(info, projectPath)) return { valid: false, reason: 'health check failed' };
+  if (!await probeDaemonHealth(info, own)) return { valid: false, reason: 'health check failed' };
   return { valid: true, info };
 }
 

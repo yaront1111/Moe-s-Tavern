@@ -4,14 +4,18 @@ import path from 'path';
 import os from 'os';
 import http from 'http';
 import net from 'net';
-import { spawn } from 'child_process';
+import { createRequire } from 'module';
+import { pathToFileURL } from 'url';
+import { spawn, type ChildProcess } from 'child_process';
 import type { DaemonInfo } from './types/schema.js';
+import { logger } from './util/logger.js';
 import {
   acquireLock,
   existingDaemonBlocksStart,
   isForeignDaemonInfo,
   isPortAvailable,
   isSameProjectPath,
+  probeDaemonHealth,
   readDaemonInfo,
   readLockInfo,
   releaseLock,
@@ -421,6 +425,100 @@ describe('daemon lifecycle validation', () => {
       vi.spyOn(process, 'cwd').mockReturnValue(recorded);
 
       expect(await validateDaemonInfoForProject('.', info)).toEqual({ valid: true, info });
+    });
+
+    // A native alias spells testDir's own directory differently: //tmp/x is /tmp/x on
+    // POSIX, and /Users/x is C:\Users\x on Windows from a cwd on C:. Only the caller's own
+    // --project is resolved that way; recorded and reported paths are compared as written.
+    describe('native aliases of --project', () => {
+      const tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
+      const source = new URL('./index.ts', import.meta.url).href;
+      const owners: ChildProcess[] = [];
+      let cwd: string;
+      let alias: string;
+      const spelling = (kind: string) => (kind === 'alias' ? alias : testDir);
+      const files = () => [jsonPath(), lockPath()].map((file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : null));
+
+      beforeEach(() => {
+        cwd = process.cwd();
+        process.chdir(path.dirname(testDir));
+        alias = process.platform === 'win32' ? testDir.slice(2).replace(/\\/g, '/') : `/${testDir}`;
+        expect([path.relative(testDir, path.resolve(alias)), isSameProjectPath(alias, testDir)]).toEqual(['', false]);
+      });
+
+      afterEach(async () => {
+        await Promise.all(owners.splice(0).map(stopChild));
+        process.chdir(cwd);
+      });
+
+      async function stopChild(child: ChildProcess): Promise<void> {
+        if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+        const exited = new Promise((resolve) => child.once('exit', resolve));
+        child.kill();
+        const force = setTimeout(() => child.kill('SIGKILL'), 5000);
+        await exited;
+        clearTimeout(force);
+      }
+
+      // A second process takes the lock, running this source through tsx from testDir's drive.
+      async function lockOwner(projectPath: string): Promise<ChildProcess> {
+        const code = `const { acquireLock } = await import(${JSON.stringify(source)});
+process.stdout.write(acquireLock(${JSON.stringify(projectPath)}) ? 'locked\\n' : 'refused\\n');
+setInterval(() => {}, 60000);`;
+        const child = spawn(process.execPath, ['--import', tsx, '--input-type=module', '--eval', code], {
+          cwd: path.dirname(testDir), env: { ...process.env, LOG_LEVEL: 'silent' }, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true,
+        });
+        owners.push(child);
+        const line = await new Promise<string>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('lock owner not ready within 30s')), 30_000);
+          const settle = (fn: () => void) => { clearTimeout(timer); fn(); };
+          let out = '';
+          child.stdout!.on('data', (chunk) => { out += chunk; if (out.includes('\n')) settle(() => resolve(out.split('\n')[0])); });
+          child.once('error', (error) => settle(() => reject(error)));
+          child.once('exit', (exitCode) => settle(() => reject(new Error(`lock owner exited early (${exitCode})`))));
+        });
+        expect(line).toBe('locked');
+        return child;
+      }
+
+      it.each(['canonical', 'alias'])('X12 a healthy native daemon named by its %s spelling blocks start, reports running and is stopped by pid', async (kind) => {
+        let probes = 0;
+        const port = await healthServer(testDir);
+        servers.at(-1)!.on('request', () => { probes += 1; });
+        writeDaemonFiles(port, process.pid);
+        const kept = files();
+        const info = vi.spyOn(logger, 'info');
+
+        expect([await existingDaemonBlocksStart(spelling(kind)), probes, ...files()]).toEqual([true, 1, ...kept]);
+        await statusDaemon(spelling(kind));
+        expect(info.mock.calls.filter(([, msg]) => msg === 'Daemon status').map(([fields]) => fields))
+          .toMatchObject([{ status: 'running', owner: 'local', pid: process.pid }]);
+        const killSpy = killSpyWithoutSignals();
+        await stopDaemon(spelling(kind));
+        expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined)).toEqual([[process.pid, 'SIGTERM']]);
+        expect([probes, ...files(), fs.existsSync(stopPath())]).toEqual([3, ...kept, true]);
+      });
+
+      it('X13 probeDaemonHealth resolves the caller\'s own path, never a recorded or reported one', async () => {
+        const info = daemonInfo({ port: await healthServer(testDir) });
+        const reportsAlias = daemonInfo({ port: await healthServer(alias) });
+        expect([
+          await probeDaemonHealth(info, testDir),
+          await probeDaemonHealth(info, alias),
+          await probeDaemonHealth({ ...info, projectPath: alias }, testDir),
+          await probeDaemonHealth(reportsAlias, alias),
+        ]).toEqual([true, true, false, false]);
+      });
+
+      it.each([['canonical', 'alias'], ['alias', 'alias']])('X14 a live lock taken with the %s spelling refuses a contender using the %s one', async (ownerKind, contenderKind) => {
+        const owner = await lockOwner(spelling(ownerKind));
+        const lock = fs.readFileSync(lockPath(), 'utf-8');
+        const recorded = JSON.parse(lock) as { pid: number; projectPath: string };
+        expect([recorded.pid, isSameProjectPath(recorded.projectPath, testDir)]).toEqual([owner.pid, true]);
+
+        expect(acquireLock(spelling(contenderKind))).toBe(false);
+        expect([fs.readFileSync(lockPath(), 'utf-8'), process.kill(owner.pid!, 0), owner.exitCode]).toEqual([lock, true, null]);
+      }, 60_000);
     });
   });
 });
