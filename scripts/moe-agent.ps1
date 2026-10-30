@@ -3454,6 +3454,15 @@ function Get-MoeCommitScope([string]$TaskId, [string]$Phase, [string]$Sid) {
                 foreach ($t in @(if ($ep -and $ep.Value -is [array]) { Get-MoeStringList $ep.Value })) {
                     if ($d.Editing -cnotcontains $t) { $d.Editing += $t }
                 }
+                # Active: those with a session (activeTaskIds), set only when an
+                # entry for the key carries that list (sh twin: PEER_ACTIVE_IDS).
+                $ap = $e.PSObject.Properties['activeTaskIds']
+                if ($ap -and $ap.Value -is [array]) {
+                    if ($null -eq $d.Active) { $d.Active = @() }
+                    foreach ($t in @(Get-MoeStringList $ap.Value)) {
+                        if ($d.Active -cnotcontains $t) { $d.Active += $t }
+                    }
+                }
             }
         }
         return $scope
@@ -3909,8 +3918,15 @@ function Resolve-MoeAttribution {
     # those mid-step on the path with a live session. An entry without the
     # keys (a hand-built scope) acts as @(TaskId) and @(): test $null before
     # @(...), since @($null) is one element (sh twin: PEER_IDS, PEER_EDITING).
+    # $peerOrder: $peerIds in cause order -- editing, then active, then the
+    # rest, each in $peerIds order -- so contested rows, trailers and held=
+    # name the cause first (at 8f62fa0f held= named idle task-001d8ab3 while
+    # live task-1e7f5a2d held the path). Built from $peerIds only; without
+    # Active (an older daemon, the disk fallback) $peerIds order (sh twin:
+    # peer_order). Explicit passes: Sort-Object is not stable in PS 5.1.
     $peerIds = @{}
     $peerEditing = @{}
+    $peerOrder = @{}
     foreach ($k in $Scope.PeerDeclared.Keys) {
         $d = $Scope.PeerDeclared[$k]
         $tk = Get-MoePathKey "$rel$($d.Path)"
@@ -3920,6 +3936,14 @@ function Resolve-MoeAttribution {
         if ($null -ne $d.TaskIds) { $peerIds[$tk] = @($d.TaskIds) }
         $peerEditing[$tk] = @()
         if ($null -ne $d.Editing) { $peerEditing[$tk] = @($d.Editing) }
+        $ids = $peerIds[$tk]; $ed = $peerEditing[$tk]
+        $peerOrder[$tk] = $ids
+        if ($null -ne $d.Active) {
+            $ac = @($d.Active)
+            $peerOrder[$tk] = @(@($ids | Where-Object { $ed -ccontains $_ }) +
+                @($ids | Where-Object { $ed -cnotcontains $_ -and $ac -ccontains $_ }) +
+                @($ids | Where-Object { $ed -cnotcontains $_ -and $ac -cnotcontains $_ }))
+        }
     }
     $mine = @{}
     foreach ($k in $asserted.Keys) { $mine[$k] = $asserted[$k] }
@@ -3985,7 +4009,8 @@ function Resolve-MoeAttribution {
         $isOwnMemory = ($k.StartsWith($memoryPrefix) -and $entry.XY -ne '??' -and $k.IndexOf($taskIdKey) -ge 0)
         if ($mine.ContainsKey($k) -or $isOwnMemory) {
             if ($peer.ContainsKey($k)) {
-                foreach ($t in $peerIds[$k]) { $contested += @{ Path = $p; TaskId = $t } }
+                $order = $peerOrder[$k]
+                foreach ($t in $order) { $contested += @{ Path = $p; TaskId = $t } }
                 if ($contestedPolicy -eq 'skip') {
                     $skipped += @{ Path = $p; Code = 'MOE_ATTR_CONTESTED' }
                     continue
@@ -4012,7 +4037,7 @@ function Resolve-MoeAttribution {
                 # session rewrote it: it can carry the peer's earlier hunks.
                 $idleClean = ($null -ne $PreflightDirty) -and -not $PreflightDirty.ContainsKey($k) -and ($peerIdle[$k] -eq $true)
                 if ($contestedPolicy -eq 'skip-untouched' -and -not $Tool.ContainsKey($k) -and -not $idleClean) {
-                    $skipped += @{ Path = $p; Code = "MOE_ATTR_CONTESTED_UNTOUCHED($($peer[$k]))" }
+                    $skipped += @{ Path = $p; Code = "MOE_ATTR_CONTESTED_UNTOUCHED($($order[0]))" }
                     continue
                 }
             }
@@ -4093,9 +4118,10 @@ function Resolve-MoeAttribution {
 
 # The own contested paths a landing held back, as `<path>(<peer>)` joined by
 # ',', at most 5 then `,+<N> more`, then one MOE_CONTESTED_HELD remedy: the
-# strict sentence, else one clause per held kind (untouched, then editing)
-# before the closing sentence (sh twin: attr_held_list). Feeds the
-# session-ended line's held= suffix; a missing Skipped/Contested gives ''.
+# strict sentence, else one clause per held kind (untouched, then editing),
+# then which sessions leave a TOOL witness, before the closing sentence (sh
+# twin: attr_held_list). Feeds the session-ended line's held= suffix; a
+# missing Skipped/Contested gives ''.
 function Get-MoeHeldList($Attr) {
     $held = @()
     $strict = $false
@@ -4124,8 +4150,10 @@ function Get-MoeHeldList($Attr) {
         $out += " MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
     } elseif ($held.Count -gt 0) {
         $out += " MOE_CONTESTED_HELD remedy:"
-        if ($untouched) { $out += " verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task." }
-        if ($editing) { $out += " the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have this task's assignee session re-edit the path with a wrapper-observed editing tool, or let the peer's own landing carry the bytes." }
+        if ($untouched) { $out += " verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived." }
+        if ($editing) { $out += " the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude session of this task re-edit the path, or let the peer's own landing carry the bytes." }
+        # Same sentence as recordCommit.ts HELD_REMEDY_WITNESS.
+        $out += " Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
         $out += " declare_files, unblocking or a shell touch alone does not release a hold."
     }
     return $out

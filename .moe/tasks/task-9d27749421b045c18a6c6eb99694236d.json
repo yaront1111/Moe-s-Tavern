@@ -14,61 +14,98 @@
     {
       "stepId": "step-1",
       "description": "PRECONDITIONS, then TESTS FIRST (load test-driven-development).\n\n(a) Assumed interfaces. dependsOn guarantees both prerequisites are DONE; use the names as they actually landed.\n- task-01f37ac6, in scripts/moe-agent.sh resolve_attribution: PEER_IDS (per path, the entry's taskId first, then taskIds, deduped) and PEER_EDITING; the MOE_ATTR_CONTESTED_EDITING hold; one contested row per (task, path); grouped `Moe-Contested: <path> (<id1>, <id2>)` trailers; attr_held_list's UNTOUCHED / EDIT / NEVER clause flags.\n- task-01f37ac6, ps1 twins: PeerDeclared[$k].TaskIds/.Editing, $peerIds/$peerEditing, Get-MoeHeldList.\n- task-01f37ac6, harness: the JSON merge knob FAKE_SCOPE_PEER_FIELDS in scripts/tests/postflight-fake-proxy.js, and scenario AK. If the knob is missing, add an equivalent Object.assign-into-every-peerDeclared-entry knob there and report the file in modifiedFiles.\n- task-dc833bfb: peerDeclared[].activeTaskIds in get_commit_scope, and recordCommit.ts HELD_REMEDY_WITNESS.\n\n(b) Hot-file check. `git status --porcelain -- scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 docs/TROUBLESHOOTING.md` must print nothing.\n- If another session's hunks are in a file, do not edit over them: the whole-file landing would carry them. @mention that task's seat.\n- Call moe.report_blocked with blockedOnTaskIds [that task] only when it does not depend on this task. 4fdc7590, 16bbf8ff and the CQ-V chain wait on this task. Otherwise @mention the governor.\n\n(c) Seat. Make every edit with Claude's Edit/Write tool so the landing gets a TOOL witness. On a Codex, Gemini, Grok or interactive seat, landing relies on the idle-peer exception: (b) must be clean at this session's pre-flight and every contesting peer idle. Otherwise stop and tell the governor (mem:gotcha-codex-worker-unwitnessed-contested-path-delivery-gap).\n\n(d) New scope scenario in scripts/tests/postflight.sh and its twin in postflight.ps1.\n- Use the next unused letter after the last scope scenario, the same in both. Place it after that scenario's ok line.\n- Bump each harness's expected scope-scenario count by 1 and add the letter to its list text.\n- Fixture, AG's shape:\n  - `make_scope_project DIR '[\"tool-written.txt\"]' REVIEW '[]' <settings>`.\n  - Set the own record's declaredFiles to [\"held.txt\"] (AG's node one-liner; literal JSON in ps1) and commit it.\n  - Write held.txt ('pre') before the run.\n  - CLI: sh STREAM_CLI, ps1 stream-json.cmd. X is its second witnessed file (sh tool-written-abs.txt, ps1 tool-edited.txt).\n  - Knobs: FAKE_SCOPE_DECLARED_FIELD=1, FAKE_SCOPE_PEERS_ACTIVE=1, FAKE_SCOPE_PEER_ACTIVE=1, FAKE_SCOPE_PEER_DECLARED='held.txt:task-a,tool-written.txt:task-a', and FAKE_SCOPE_PEER_FIELDS per row.\n- One case table with shared assertions:\n  - R1, skip-untouched, FIELDS {\"taskIds\":[\"task-a\",\"task-b\"],\"activeTaskIds\":[\"task-b\"],\"editingTaskIds\":[]}: the idle first claimant and the active second peer that DoD 2 names. Expect `[skip] held.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-b)` with held.txt left untracked. X and tool-written.txt are committed. The trailers are exactly `Moe-Contested: tool-written.txt (task-b, task-a)`. The session-ended line ends ` held=held.txt(task-b) MOE_CONTESTED_HELD remedy: <UNTOUCHED> <WITNESS> <NEVER>`.\n  - R2, contested=skip, FIELDS as R1: only X is committed, with no trailer. The line ends ` held=held.txt(task-b),tool-written.txt(task-b) MOE_CONTESTED_HELD remedy: <STRICT> <NEVER>`.\n  - R3, skip-untouched, FIELDS {\"taskIds\":[\"task-a\",\"task-b\"]}: a daemon without activeTaskIds. Today's naming: MOE_ATTR_CONTESTED_UNTOUCHED(task-a), held=held.txt(task-a), trailer `Moe-Contested: tool-written.txt (task-a, task-b)`.\n  - R4, contested=skip, FIELDS {\"taskIds\":[\"task-a\",\"task-b\",\"task-c\"],\"activeTaskIds\":[\"task-b\",\"task-c\"],\"editingTaskIds\":[\"task-c\"]}: held=held.txt(task-c),tool-written.txt(task-c). Editing comes before active, which comes before idle.\n- Ledger check, per row, on the last record_commit.jsonl row (node, or ConvertFrom-Json in ps1): deepStrictEqual on the whole contested array and on the MOE_ATTR_CONTESTED* skipped entries.\n  - Contested arrays, in path order: R1 and R2 [{held.txt,task-b},{held.txt,task-a},{tool-written.txt,task-b},{tool-written.txt,task-a}]; R3 a then b for each path; R4 c, b, a for each path.\n\n(e) Exact strings. They must be byte-identical in both wrappers and both harnesses.\n- UNTOUCHED = `verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived.`\n- EDIT = 01f37ac6's clause with `then have this task's assignee session re-edit the path with a wrapper-observed editing tool,` replaced by `then have a one-shot Claude session of this task re-edit the path,`.\n- WITNESS = recordCommit.ts HELD_REMEDY_WITNESS exactly as task-dc833bfb landed it. Planned text: `Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none.`\n- NEVER and STRICT are unchanged.\n- Update AG's scope_ag_untouched / $agUntouched and AK's UNTOUCHED and EDIT expectations to the non-strict form: `MOE_CONTESTED_HELD remedy:`, then ` <UNTOUCHED>` if any untouched hold, then ` <EDIT>` if any editing hold, then ` <WITNESS> <NEVER>`.\n\n(f) RED. Run the new scenario plus AG and AK through the trimmed scratch harness (mem:convention-postflight-scratch-harness), on both engines, against HEAD's wrappers.\n- R1, R2 and R4 must fail on the label and on row order.\n- Every row, AG and AK must fail on the remedy text.\n- R3's code, label and contested-row assertions must pass on HEAD. That is the legacy-parity evidence; note it in the step note.\n\nps1 test gotchas: write task records as literal JSON, and remove every FAKE_* env var in a finally.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Preconditions verified: 01f37ac6 (PEER_IDS/PEER_EDITING, $peerIds/$peerEditing, Get-MoeHeldList, FAKE_SCOPE_PEER_FIELDS, AK) and dc833bfb (HELD_REMEDY_WITNESS byte-equal to plan text, activeTaskIds) landed. Hot-file check `git status --porcelain` on moe-agent.{sh,ps1}, postflight.{sh,ps1}, TROUBLESHOOTING.md, postflight-fake-proxy.js printed nothing. Seat: one-shot Claude (MOE_WORKER_TYPE=CLAUDE), all edits with Edit tool. Fake proxy unchanged (knob exists).\nNew scope scenario AL (after AK, both harnesses; counts 43/42 -> 44/43, list text +AL). One table: AL1 idle a + active b, AL2 skip as AL1, AL3 no activeTaskIds, AL4 skip editing c active b,c. Reuses AK's checker (deepStrictEqual on MOE_ATTR_CONTESTED* skipped + whole contested array, held= tail, [skip]/untracked/bytes) and AG's strict/untouched remedy vars. AG/AK expectations updated to UNTOUCHED/EDIT + WITNESS.\nRED vs HEAD wrappers (trimmed scratch harness, /mnt/d/moe-scratch/t9d27-red-92Hp):\n- sh and PS 5.1 identical: AG1-3 fail on remedy text (AG4 strict passes); AK1, AK7 fail on remedy text; AL1 fails on trailer order (a,b vs b,a) and skipped code UNTOUCHED(task-a); AL2 and AL4 fail on contested row order; AL3 passes code, trailer, contested rows and label held.txt(task-a), failing ONLY on remedy text = legacy-parity evidence.\n- pwsh 7: every wrapper run exits 1 with MOE_AGENT_GIT_GUARD_FAILED at HEAD (pre-existing task-44b817f9, BACKLOG) - not this change; no pwsh RED/GREEN possible on this box.\nDiff so far: postflight.sh +65/-8, postflight.ps1 +67/-8. Shared-checkout dirty paths of other sessions (.moe/tasks/*, scripts/local-runner/*, scripts/tests/local-runner*) untouched.",
+      "startedAt": "2026-10-30T22:40:09.366Z",
+      "completedAt": "2026-10-30T22:55:44.605Z"
     },
     {
       "stepId": "step-2",
       "description": "GREEN, bash, in scripts/moe-agent.sh, with the Edit tool.\n\n(a) resolve_attribution, the peerDeclared loop: add PEER_ACTIVE_IDS[k].\n- It is the union over every entry for k of that entry's activeTaskIds, when that is a JSON list. Keep non-empty str elements only, in first-seen order.\n- An absent or non-list field adds nothing.\n\n(b) Just after the loop, add peer_order(k).\n- From PEER_IDS[k], return the ids in PEER_EDITING[k] first, then those in PEER_ACTIVE_IDS[k], then the rest. Each group keeps PEER_IDS order.\n- Use three list comprehensions over PEER_IDS[k], so a malformed active or editing id can never add a row.\n- Add one comment line on why: at 8f62fa0f, held= named idle task-001d8ab3 while live task-1e7f5a2d caused the hold.\n\n(c) The contested branch:\n- Append the contested rows in peer_order(pk) order instead of PEER_IDS order. One path's rows stay adjacent, so 01f37ac6's trailer grouping still works and now lists the cause first.\n- The MOE_ATTR_CONTESTED_UNTOUCHED code names peer_order(pk)[0] instead of PEER[pk].\n- Unchanged: the EDITING code, the strict code, MOE_ATTR_PEER_DECLARED(PEER[pk]), the idle-clean test, the TOOL test and every land or hold decision.\n- attr_held_list's strict branch already names the path's first contested row, so the strict label (and the daemon's strict peer) follows the new order with no code change there.\n\n(d) attr_held_list:\n- Swap in the step-1 UNTOUCHED and EDIT strings.\n- In the non-strict branch, append ` <WITNESS>` before ` <NEVER>`.\n- The strict branch is unchanged.\n- Update the header comment.\n\nerror handling: no new code may raise. An exception in resolve_attribution fails the whole landing as MOE_COMMIT_FAILED_ATTRIBUTION. Guard every new access with isinstance (list fields, str ids), and add no bare try/except.\n\nCheck before moving on:\n- `bash -n scripts/moe-agent.sh` passes.\n- The new scenario, AG, AK, AF and AI are green in the sh scratch harness.\n- `node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs` passes unchanged. Both feed legacy scopes without these fields.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh GREEN (Edit tool). resolve_attribution: PEER_ACTIVE_IDS[k] = union of each entry's activeTaskIds (id_list: non-empty str, first-seen), set ONLY when some entry for k carries a list; peer_order(k) = three comprehensions over PEER_IDS[k] (editing, active-not-editing, rest). One deliberate refinement of plan 2(b), to honour the execution contract invariant \"a scope without activeTaskIds (older daemon, disk fallback) yields HEAD's codes, contested rows, trailers and held= byte for byte\": when no entry for k carries activeTaskIds, peer_order returns PEER_IDS[k] unchanged. Without that gate, a disk-fallback or pre-dc833bfb scope with editingTaskIds [b] over taskIds [a,b] would reorder rows/trailers/strict label vs HEAD. With the field present (current daemon: editing is a subset of active) the order is exactly the planned editing>active>rest. Contested rows written in peer_order; UNTOUCHED code names order[0]; EDITING/strict/PEER_DECLARED codes, idle-clean, TOOL test and every land/hold decision untouched. attr_held_list: new UNTOUCHED/EDIT strings, WITNESS (byte-equal recordCommit.ts HELD_REMEDY_WITNESS) appended before NEVER in the non-strict branch, strict branch unchanged, header comment updated. No new raise paths (isinstance list guard, id_list str filter; order always non-empty since the three groups partition PEER_IDS[k], which starts with PEER[k]).\nChecks: bash -n OK. Scratch harness (/mnt/d/moe-scratch/t9d27-green-*) AF, AG, AI, AK, AL all ok, rc=0 (62 s). node --test importee-guard-bash + usage-attribution: 44/44 pass.",
+      "startedAt": "2026-10-30T22:55:46.556Z",
+      "completedAt": "2026-10-30T22:59:23.550Z"
     },
     {
       "stepId": "step-3",
       "description": "GREEN, PowerShell twin, in scripts/moe-agent.ps1. Keep its UTF-8 BOM and LF endings, and edit with the Edit tool.\n\n(a) Get-MoeCommitScope, the peer loop: PeerDeclared[$k] gains Active.\n- Read it RAW: `$e.PSObject.Properties['activeTaskIds']`, with `.Value -is [array]`. Keep string elements only, dedupe with -cnotcontains, and union across the entries for $k.\n- Never use Get-MoeProp here. It unrolls [\"task-b\"] into a scalar and [] into $null.\n- Get-MoeDiskScope is unchanged: it has no activity data, so it sets no Active.\n\n(b) Resolve-MoeAttribution: build $peerOrder[key] beside 01f37ac6's $peerIds and $peerEditing.\n- Make three Where-Object passes over the ids with -ccontains: editing, then active but not editing, then the rest.\n- Wrap the result as `@(...)`. `$order[0]` on a bare string is its first character, so a one-element order must stay an array.\n- An entry without TaskIds, Editing or Active (importee-guard.ps1 builds @{Path;TaskId}) must give @(TaskId). Test `$null -ne` before wrapping, because `@($null)` is a one-element array.\n- Do not use Sort-Object: it is not stable in Windows PowerShell 5.1.\n- Write the contested rows in the order. The UNTOUCHED code names $order[0].\n\n(c) Get-MoeHeldList: apply the same strings and the same clause rule as sh (d).\n\nerror handling, as in sh: nothing new may throw inside the landing's try. A throw there turns the landing into a failed record. Check `-is [array]` and `-is [string]`, and skip $null elements.\n\nCheck before moving on:\n- `[System.Management.Automation.Language.Parser]::ParseFile` is clean.\n- `bash scripts/tests/parity-check.sh` and parity-check.ps1 pass.\n- The ps1 scenario, AG and AK are green under powershell.exe and pwsh.exe (scratch harness).\n- importee-guard.ps1 passes on both engines.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1 twin GREEN (Edit tool; BOM ef bb bf kept, 0 CR bytes). Get-MoeCommitScope: PeerDeclared[$k].Active read RAW ($e.PSObject.Properties['activeTaskIds'], .Value -is [array], Get-MoeStringList strings only, -cnotcontains dedupe, union across entries), created only when an entry carries the list; Get-MoeDiskScope untouched (no Active). Resolve-MoeAttribution: $peerOrder[$tk] beside $peerIds/$peerEditing = $peerIds when $d.Active is $null (older daemon, disk fallback, importee-guard @{Path;TaskId} -> HEAD order, same gate as sh), else @(three Where-Object passes with -ccontains/-cnotcontains: editing, active-not-editing, rest) wrapped in @() so a one-element order stays an array; no Sort-Object. Contested rows written in $order; UNTOUCHED code names $order[0] (equals HEAD's $peer[$k] on every legacy path since TaskIds[0] is TaskId in both scope builders). Get-MoeHeldList: same UNTOUCHED/EDIT/WITNESS/NEVER rule and bytes as sh.\nChecks: ParseFile 0 errors on powershell.exe and pwsh.exe; parity-check.sh PASS; parity-check.ps1 PASS on both engines; importee-guard.ps1 48/0 on both engines; ps1 scratch harness AG, AK, AL ok under PS 5.1 (rc=0). pwsh 7 postflight scenarios cannot run on this box: every wrapper launch stops at MOE_AGENT_GIT_GUARD_FAILED at HEAD too (pre-existing task-44b817f9, BACKLOG); step 6 will exercise the ps1 order logic directly under pwsh 7.",
+      "startedAt": "2026-10-30T22:59:25.365Z",
+      "completedAt": "2026-10-30T23:03:40.668Z"
     },
     {
       "stepId": "step-4",
       "description": "Docs, in docs/TROUBLESHOOTING.md. Rerun the step-1 clean check for it first, and edit with the Edit tool. Stay consistent with docs/MCP_SERVER.md's record_commit bullets as task-dc833bfb landed them. State tersely:\n\n1. The MOE_ATTR_CONTESTED_UNTOUCHED row, What to do. Replace \"either this task's assignee session edits the path with a supported editing tool before its next exit (a shell write leaves no witness), or the stale peer task is legitimately completed or archived\" with the three routes:\n- a one-shot Claude session of this task edits the path with a supported editing tool;\n- a later session of this task that found the path clean at its pre-flight edits it while every contesting peer stays idle;\n- the stale peer task is legitimately completed or archived.\nAdd the witness fact: a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave no TOOL witness. Also say that held=<path>(task-<peer>) names the first of the path's contesting tasks in the order editing, then active, then the rest.\n\n2. The MOE_ATTR_CONTESTED_EDITING row (from 01f37ac6): \"re-edit ... with a supported editing tool\" becomes a one-shot Claude session of this task re-editing the path.\n\n3. Where 01f37ac6 documents the Moe-Contested trailer, and in the MOE_ATTR_CONTESTED row: the trailer ids and a strict hold's held= peer follow the same order.\n\n4. The \"Current witness limit\" paragraph still says the default keeps such seats' contested paths held \"even after the peer becomes idle or its CLI exits\". That ignores the idle-peer exception. Replace it with the real routes for a seat without a witness: hand the edit to a one-shot Claude session of the task, or land it from a later session whose pre-flight found the path clean while every contesting peer stays idle, or let the peer task complete or be archived. Never change the policy as the fix.\n\nOut of scope: docs/CONFIGURATION.md, scripts/CLAUDE.md and docs/roles/governor.md. They are not named by the DoD, and their text sits in sections that already state the witness limit.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/TROUBLESHOOTING.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "docs/TROUBLESHOOTING.md clean before first edit (git status --porcelain empty). Edit tool, +7/-6. (1) MOE_ATTR_CONTESTED_UNTOUCHED row: Meaning says `<peer>` in held= and the code is the first contesting task in cause order (editing, then active/activeTaskIds, then the rest); What to do lists the three routes (one-shot Claude session edits it; later session that found it clean at pre-flight edits it while every contesting peer stays idle; stale peer legitimately completed/archived) plus the witness fact (Codex/Gemini/Grok/interactive Claude edits, Serena's included, leave no TOOL witness). (2) EDITING row: re-edit by a one-shot Claude session of this task. (3) MOE_ATTR_CONTESTED row: strict held= peer is the first contesting task in the same cause order; the Moe-Contested trailer names every contesting task in cause order. (4) Current witness limit paragraph: replaced \"held even after the peer becomes idle\" with the real routes (idle-peer clean-at-pre-flight landing, hand to a one-shot Claude session, or peer completes/archived; never change the policy). Consistent with MCP_SERVER.md record_commit bullets as dc833bfb landed them. git diff --check clean. Running net non-board LOC across the 5 files: +204/-36 = 168.",
+      "startedAt": "2026-10-30T23:03:41.488Z",
+      "completedAt": "2026-10-30T23:04:26.568Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. Fresh output of this exact command is the complete_task verification evidence. Run it from this WSL seat, on a snapshot of HEAD plus exactly this task's four script files. Docs are not part of the gate.\n\n```\ncd /mnt/d/projexts/moes && (cd packages/moe-daemon && npx vitest run src/tools/recordCommit.test.ts) && W=$(mktemp -d /mnt/d/moe-scratch/t9d27-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$W/$f\" && cmp \"$f\" \"$W/$f\" || exit 1; done && cd \"$W\" && env $(env | sed -n 's/^\\(\\(MOE\\|CLAUDE\\)[A-Za-z0-9_]*\\)=.*/-u \\1/p') bash -c 'set -e; bash -n scripts/moe-agent.sh; bash scripts/tests/parity-check.sh; node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs; MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh; for ps in powershell.exe pwsh.exe; do for t in parity-check importee-guard postflight; do WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"$ps\" -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$PWD/scripts/tests/$t.ps1\")\"; done; done'\n```\n\n- The recordCommit.test.ts leg proves DoD 3's daemon half: task-dc833bfb landed those strings.\n- If step 1 had to change scripts/tests/postflight-fake-proxy.js, add it to the cp loop.\n- The run takes about an hour. Start it in the background with a log file, then poll in foreground `timeout 570` loops: the Bash tool kills a foreground command at 600 s.\n- The cwd must be a Windows drive (mem:gotcha-qa-ps1-postflight-from-wsl). `*>` logs from PS 5.1 are UTF-16LE.\n- On a native Windows seat, run the same legs inside the snapshot from Git Bash plus powershell.exe and pwsh.exe. Git Bash postflight.sh takes about 1 h 45 min, so launch it detached (mem:convention-postflight-scratch-harness).\n- Before blaming this change for a failure, rerun the same leg on HEAD's scripts. Record the scope-scenario counts each harness prints.\n- Before citing the run, check net non-board LOC (`git diff --numstat` over the five files, tests included) against the 400 cap (mem:gotcha-net-loc-cap-counts-tests). Keep the new scenario table-driven.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "VERIFY. The gate exited 0: run 23:07:26Z-23:38:15Z at HEAD aa33f9ac plus this task's 4 script files (cmp-checked into snapshot /mnt/d/moe-scratch/t9d27-*). Results:\n- daemon recordCommit.test.ts: 1 file, 73/73.\n- parity-check.sh: PASS.\n- node --test importee-guard-bash + usage-attribution: pass.\n- postflight.sh: PASS, commit-scope scenarios run: 44 (AL ok).\n- PS 5.1: parity-check.ps1 PASS, importee-guard.ps1 48/0, postflight.ps1 PASS, commit-scope scenarios run: 43 (AL ok, no symlinks on this box).\n- pwsh 7: parity-check.ps1 PASS, importee-guard.ps1 48/0.\n\nTwo deviations from the plan's literal command, both rail-driven:\n1. The daemon vitest leg runs in a /tmp git-archive snapshot of packages/moe-daemon after `npm ci`. In place from WSL it fails: the shared node_modules is the Windows install (\"Cannot find native binding @rolldown/binding-wasm32-wasi\"). The global rail forbids npm ci/install in the shared checkout.\n2. The pwsh.exe postflight.ps1 leg is skipped with an echoed reason. Under pwsh 7.6.9 every wrapper launch stops at MOE_AGENT_GIT_GUARD_FAILED. HEAD's own postflight.ps1 fails the same way (rc=1, MOE_POSTFLIGHT_FAILURE_LINE=883), so this is the pre-existing task-44b817f973374dffb578308278050497.",
+      "startedAt": "2026-10-30T23:04:27.344Z",
+      "completedAt": "2026-10-30T23:39:06.263Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW of this task's own diff, the last step (load adversarial-self-review). Check and note each item:\n\n(1) Names only. No path changes fate versus HEAD under skip-untouched, skip or commit, for any scope. Diff every branch of the contested block in both wrappers; the EDITING, idle-clean and TOOL tests are untouched.\n\n(2) Legacy parity. A scope without activeTaskIds gives HEAD's codes, contested rows, trailers and held= labels byte for byte: an older daemon, the disk fallback, or importee-guard.ps1's @{Path;TaskId}. R3, importee-guard.ps1 and importee-guard-bash.test.mjs show it.\n\n(3) error handling. Feed junk by hand in each wrapper:\n- activeTaskIds as a string, a number, or a list holding a null element;\n- an id absent from taskIds;\n- an empty-string taskId.\nNo exception may reach the landing, and no row may be invented.\n\n(4) PowerShell: a one-element order stays an array, no `@($null)` row is possible, and every membership test is case-sensitive (-ccontains / -cnotcontains).\n\n(5) Rows: one path's contested rows stay adjacent, each trailer line holds exactly one path, and the daemon's strict-hold peer (the first contested row) equals the wrapper's held= peer.\n\n(6) Strings: UNTOUCHED, EDIT, WITNESS and NEVER are byte-identical across the two wrappers and the two harnesses, and WITNESS equals recordCommit.ts HELD_REMEDY_WITNESS. moe-agent.ps1 keeps its BOM.\n\n(7) DoD 1 sweep: `git grep -n \"or a Serena editor\" -- scripts/moe-agent.sh scripts/moe-agent.ps1 packages/moe-daemon/src/tools/recordCommit.ts docs/MCP_SERVER.md docs/TROUBLESHOOTING.md` finds no remedy that tells every seat to use a Serena editor. The docs agree with the wrappers and with MCP_SERVER.md.\n\n(8) Concurrency: attribution stays a pure function of scope plus snapshot, with no new shared state.\n\nIn the completion summary, report:\n- the net non-board LOC (must be under 400);\n- the RED/GREEN evidence;\n- the gate result;\n- that each file was clean before its first edit.\nAlso name task-7cc959e9b42043ba8009cdd9813103e0 as the split-off Codex `--json` witness harvest (DoD item 4), and task-dc833bfb10984e23a94ee047ae187c90 as the daemon half (recordCommit.ts remedy, activeTaskIds, MCP_SERVER.md).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "note": "Adversarial self-review of `git diff` on the 5 task files. No code changes.\n\n(1) Names only. In both wrappers the contested block now iterates peer_order/$peerOrder, the same set as PEER_IDS reordered, and the UNTOUCHED code uses order[0]. The skip, EDITING, idle_clean and TOOL conditions are byte-unchanged. No path changes fate.\n\n(2) Legacy parity. Reordering happens only when an entry carries activeTaskIds as a list. AL3 (no activeTaskIds) passes against HEAD's wrappers on code, rows, trailer and held=; only the remedy text differs. importee-guard.ps1 is 48/0 on both engines, and importee-guard-bash plus usage-attribution pass.\n\n(3) Junk probes. sh: the real peerDeclared block and peer_order extracted from the file. PS 5.1 and pwsh 7: real Get-MoeCommitScope (stub RPC) into Resolve-MoeAttribution. All three engines give identical output in all 13 cases, with no throw and no invented row:\n- string, number or null activeTaskIds: legacy order a,b and UNTOUCHED(task-a);\n- [null,\"task-b\",7,\"\"]: order b,a;\n- an id absent from taskIds (task-z): order a,b;\n- \"\" inside taskIds: filtered out;\n- [\"TASK-B\"]: case-sensitive, so a,b;\n- [] active: a,b.\nPre-existing edge cases, unchanged from HEAD:\n- An editing id outside taskIds gives EDITING(task-q) with rows a,b.\n- A missing taskId gives a '' row, as HEAD does.\n- A mixed-field multi-entry scope ranks a field-less entry as not active; a real daemon sends the same fields on every entry.\n\n(4) PowerShell. The single-id case gives UNTOUCHED(task-a), not 't', so a one-element order stays an array. Where-Object with no match is wrapped in @(), giving @() and never @($null). Membership tests use -ccontains/-cnotcontains, and Get-MoeStringList drops ''/non-strings like sh's id_list.\n\n(5) Rows. One path's rows are appended in one loop, so they stay adjacent. The trailer builders group by path (sh $prev, ps1 $groups). The strict held= peer is the first contested row, order[0] (AL2/AL4).\n\n(6) Strings. parity-check passes on sh/ps5.1/pwsh. WITNESS appears once in each wrapper and twice in each harness. Node unescapes recordCommit.ts HELD_REMEDY_WITNESS and finds it byte-equal in both wrappers. moe-agent.ps1 and postflight.ps1 keep their EF BB BF BOM and have 0 CR.\n\n(7) `git grep -n \"or a Serena editor\"` over the five DoD files returns rc=1 (no hit). A wider `git grep -i \"serena editor\"` over docs, scripts/CLAUDE.md and the daemon src finds only recordCommit.test.ts's OLD_PHRASES negative test. MCP_SERVER.md:807-809 agrees with the wrapper and TROUBLESHOOTING wording.\n\n(8) Concurrency. Only local dicts were added (PEER_ACTIVE_IDS, $peerOrder, $d.Active). Attribution stays a pure function of scope plus snapshot, with no IO or shared state.",
+      "startedAt": "2026-10-30T23:39:14.096Z",
+      "completedAt": "2026-10-30T23:39:33.902Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -90,11 +127,17 @@
       "author": "governor-693b7073",
       "content": "Governor wrapper-lane edge, 13:19Z: this row now dependsOn 724e31fa.\n- Both rows edit scripts/moe-agent.sh, and both became claimable the moment 01f37ac6 lands, so the shared checkout would have contested the file.\n- 724e31fa (security, HIGH) goes first, because WT-03 is chained after it and the worktree epic is what removes this lane.\n- Undo: set_task_dependencies removeDependsOn [\"task-724e31fadd3e4f5cb137abe9e4147f11\"].",
       "timestamp": "2026-10-30T13:19:30.842Z"
+    },
+    {
+      "id": "comment-f5d839ffe29a415f91115de1acddc345",
+      "author": "worker-c0a1ac70",
+      "content": "QA note: the completionSummary hit the 2000-char cap, which cut its last line. In full: the daemon half (the recordCommit.ts HELD_REMEDY_WITNESS remedy, get_commit_scope activeTaskIds and MCP_SERVER.md) is task-dc833bfb10984e23a94ee047ae187c90. The Codex `--json` witness harvest is split out (DoD 4) as task-7cc959e9b42043ba8009cdd9813103e0.\n\nTwo gate deviations, both reproducible:\n1. Run `npx vitest` inside packages/moe-daemon from WSL and it fails on \"Cannot find native binding @rolldown/binding-wasm32-wasi\", because the shared node_modules is the Windows install. The global rail forbids npm ci there, so the leg runs in a /tmp git-archive snapshot after npm ci: 73/73.\n2. pwsh 7 postflight.ps1 is skipped. HEAD's own postflight.ps1 fails under pwsh 7.6.9 (rc=1, MOE_AGENT_GIT_GUARD_FAILED) = task-44b817f973374dffb578308278050497. PS 5.1 postflight.ps1 passes, and so do pwsh parity-check and importee-guard.\n\nStep-6's note has the 13 junk-input probe results.",
+      "timestamp": "2026-10-30T23:40:03.352Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:07:46.761Z",
-  "updatedAt": "2026-10-30T13:39:37.111Z",
+  "updatedAt": "2026-10-30T23:40:03.352Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T10:45:01.200Z",
@@ -103,16 +146,25 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T10:45:17.012Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-c0a1ac70"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T11:04:43.838Z",
   "executionContract": {
@@ -181,9 +233,11 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
-    ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json",
-    ".moe/tasks/task-dc833bfb10984e23a94ee047ae187c90.json"
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "docs/TROUBLESHOOTING.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -191,5 +245,15 @@
     "kind": "checkpoint",
     "sessionId": "architect-e4b7eee0@2026-10-30T10:45:17Z",
     "at": "2026-10-30T11:14:29.611Z"
-  }
+  },
+  "workStartedAt": "2026-10-30T22:40:09.366Z",
+  "reviewStartedAt": "2026-10-30T23:39:55.592Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && D=$(mktemp -d /tmp/t9d27-daemon-XXXX) && git archive HEAD packages/moe-daemon | tar -x -C \"$D\" && (cd \"$D/packages/moe-daemon\" && env $(env | sed -n 's/^\\(\\(MOE\\|CLAUDE\\)[A-Za-z0-9_]*\\)=.*/-u \\1/p') bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx vitest run src/tools/recordCommit.test.ts') && W=$(mktemp -d /mnt/d/moe-scratch/t9d27-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$W/$f\" && cmp \"$f\" \"$W/$f\" || exit 1; done && cd \"$W\" && env $(env | sed -n 's/^\\(\\(MOE\\|CLAUDE\\)[A-Za-z0-9_]*\\)=.*/-u \\1/p') bash -c 'set -e; bash -n scripts/moe-agent.sh; bash scripts/tests/parity-check.sh; node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/usage-attribution.test.mjs; MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh; for ps in powershell.exe pwsh.exe; do for t in parity-check importee-guard postflight; do if [ \"$ps:$t\" = pwsh.exe:postflight ]; then echo \"SKIPPED pwsh.exe postflight.ps1: every wrapper launch stops at MOE_AGENT_GIT_GUARD_FAILED on HEAD too (task-44b817f9)\"; continue; fi; WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"$ps\" -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$PWD/scripts/tests/$t.ps1\")\"; done; done'",
+    "exitCode": 0,
+    "outputTail": "run 2026-10-30T23:07:26Z..23:38:15Z, HEAD aa33f9ac4634247214dac2fce5d96c25a477b101\n Test Files  1 passed (1)\n      Tests  73 passed (73)\nPASS parity-check.sh\n[scenario AL] a contested hold names the peer that caused it: editing, then active, then idle\n[scenario AL] ok\ncommit-scope scenarios run: 44\nPASS postflight.sh\nPASS parity-check.ps1\nimportee-guard.ps1: 48 passed, 0 failed\n[scenario AL] a contested hold names the peer that caused it: editing, then active, then idle\n[scenario AL] ok\ncommit-scope scenarios run: 43\nPASS postflight.ps1\nPASS parity-check.ps1\nimportee-guard.ps1: 48 passed, 0 failed\nSKIPPED pwsh.exe postflight.ps1: every wrapper launch stops at MOE_AGENT_GIT_GUARD_FAILED on HEAD too (task-44b817f9)\nEXIT=0",
+    "reportedAt": "2026-10-30T23:39:55.592Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "The MOE_CONTESTED_HELD remedy now names who can release a hold. held= and contested rows name the causing peer first.\n\nChanges (5 files):\n- moe-agent.sh/.ps1: the UNTOUCHED and EDIT clauses drop \"Serena editor\". Release routes are now a one-shot Claude session of this task, a later clean-at-pre-flight session while every peer stays idle, or completing/archiving the stale peer. A new WITNESS sentence, byte-equal to recordCommit.ts HELD_REMEDY_WITNESS, says Codex/Gemini/Grok/interactive edits leave no witness.\n- peer_order/$peerOrder put contested rows, the trailer, UNTOUCHED(<peer>) and the strict held= peer in cause order: editing, then active, then idle.\n  - Decision: reordering applies only when an entry carries an activeTaskIds list. An older daemon or disk-fallback scope stays byte-identical to HEAD (contract invariant). Fates are unchanged.\n- postflight.sh/.ps1: new scenario AL (4 rows: idle first claimant, active second peer, and an editing/active/idle mix) plus the updated AG/AK strings.\n- TROUBLESHOOTING.md is updated to match.\n\nNet non-board LOC: 168 (+204/-36). Each file was clean before its first edit.\n\nRED against HEAD's wrappers, identical on sh and PS 5.1:\n- AG1-3, AK1 and AK7 fail on the remedy text.\n- AL1 fails on trailer order and UNTOUCHED(task-a).\n- AL2 and AL4 fail on row order.\n- AL3 (legacy) fails only on the remedy text.\nGREEN: the gate exits 0.\n\nGate deviations, both rail-driven:\n- The daemon vitest leg runs in a /tmp snapshot after npm ci. The shared node_modules is the Windows install, so the rolldown binding fails from WSL.\n- pwsh 7 postflight.ps1 is skipped. It fails identically on HEAD with MOE_AGENT_GIT_GUARD_FAILED (task-44b817f973374dffb578308278050497). pwsh parity-check and importee-guard do run.\n\nSelf-review: 13 junk activeTaskIds/taskIds probes give identical results on sh, PS 5.1 and pwsh, with no throw and no invented row.\n\nCodex `--json` witness harvest is split out (DoD 4) as task-7cc959e9b42043ba8009cdd9813103e0. The daemon h"
 }

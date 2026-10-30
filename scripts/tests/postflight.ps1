@@ -3750,7 +3750,7 @@ if (mode === 'link') fs.symlinkSync('crlf-copy.txt', f, 'file');
                 # only: a redirected child's console encoding is the OEM code
                 # page. The ledger and the chat line are UTF-8 JSON.
                 Write-Host '[scenario AG] a declared, pre-flight-dirty contested path stays held and the session-ended line names the working remedy'
-                $agUntouched = "MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task. declare_files, unblocking or a shell touch alone does not release a hold."
+                $agUntouched = "MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived. Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none. declare_files, unblocking or a shell touch alone does not release a hold."
                 $agStrict = "MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
                 $agDeclared = @("held $([char]0xE9).txt", 'z1.txt', 'z2.txt', 'z3.txt', 'z4.txt', 'z5.txt')
                 $agUtf8 = New-Object System.Text.UTF8Encoding($false)
@@ -4184,8 +4184,9 @@ try {
                 #        as EDITING, a PENDING-only path lands naming both
                 #        contributors, a declared pre-flight-dirty path is held UNTOUCHED
                 Write-Host '[scenario AK] a contesting peer mid-step holds a witnessed path, and every contesting task is named'
-                $akUntouched = "verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task."
-                $akEdit = "the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have this task's assignee session re-edit the path with a wrapper-observed editing tool, or let the peer's own landing carry the bytes."
+                $akUntouched = "verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived."
+                $akEdit = "the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude session of this task re-edit the path, or let the peer's own landing carry the bytes."
+                $akWitness = "Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
                 $akNever = 'declare_files, unblocking or a shell touch alone does not release a hold.'
                 $akUtf8 = New-Object System.Text.UTF8Encoding($false)
                 # postflight.sh's scope_ak_check, reading its expectations from
@@ -4217,7 +4218,7 @@ try {
                     $akRows = '{"path":"tool-written.txt","taskId":"task-peer"}'
                     $akFiles = 'tool-edited.txt'; $akTrailer = ''
                     $akSkips = '[{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED_EDITING(task-peer)"}]'
-                    $akHeld = " held=tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $akEdit $akNever"
+                    $akHeld = " held=tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $akEdit $akWitness $akNever"
                     if ($akRun -in 2, 3, 4, 6) {
                         $akFiles = 'tool-edited.txt tool-written.txt'; $akTrailer = 'Moe-Contested: tool-written.txt (task-peer)'
                         $akSkips = '[]'; $akHeld = ''
@@ -4241,7 +4242,7 @@ try {
                             $akTrailer = 'Moe-Contested: tool-edited.txt (task-peer, task-peer2)'
                             $akSkips = '[{"path":"held.txt","code":"MOE_ATTR_CONTESTED_UNTOUCHED(task-peer2)"},{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED_EDITING(task-peer)"}]'
                             $akRows = '{"path":"held.txt","taskId":"task-peer2"},{"path":"tool-edited.txt","taskId":"task-peer"},{"path":"tool-edited.txt","taskId":"task-peer2"},' + $akRows
-                            $akHeld = " held=held.txt(task-peer2),tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $akUntouched $akEdit $akNever"
+                            $akHeld = " held=held.txt(task-peer2),tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $akUntouched $akEdit $akWitness $akNever"
                         }
                     }
                     New-ScopeProject $akDir @('tool-written.txt') -Settings $akSettings
@@ -4277,13 +4278,71 @@ try {
                 $scopeScenariosRun++
                 Write-Host '[scenario AK] ok'
 
+                # Scenario AL -- a hold names the peer that caused it
+                # (task-9d277494; twin: postflight.sh, same runs and strings).
+                # Contesting tasks are named in cause order: editingTaskIds,
+                # then activeTaskIds, then the rest, each in taskIds order.
+                # That order drives the UNTOUCHED code, held=, every contested
+                # row and the trailer; which paths land is unchanged. held.txt
+                # is declared and dirty at pre-flight; the witnessed
+                # tool-written.txt lands under skip-untouched.
+                #   AL1  idle task-a first, active task-b      -> held.txt(task-b), trailer (task-b, task-a)
+                #   AL2  contested=skip, as AL1                -> both held, strict label task-b
+                #   AL3  no activeTaskIds (older daemon)       -> task-a, as before
+                #   AL4  contested=skip, editing c, active b+c -> c, b, a
+                Write-Host '[scenario AL] a contested hold names the peer that caused it: editing, then active, then idle'
+                foreach ($alRun in 1..4) {
+                    $alName = "AL$alRun"
+                    $alDir = Join-Path $tempRoot "scope-al$alRun"
+                    $alOut = Join-Path $tempRoot "scope-al$alRun.out"
+                    $alFields = '{"taskIds":["task-a","task-b"],"activeTaskIds":["task-b"],"editingTaskIds":[]}'
+                    $alOrder = @('task-b', 'task-a')
+                    if ($alRun -eq 3) { $alFields = '{"taskIds":["task-a","task-b"]}'; $alOrder = @('task-a', 'task-b') }
+                    if ($alRun -eq 4) { $alFields = '{"taskIds":["task-a","task-b","task-c"],"activeTaskIds":["task-b","task-c"],"editingTaskIds":["task-c"]}'; $alOrder = @('task-c', 'task-b', 'task-a') }
+                    $alHead = $alOrder[0]
+                    $alRows = (@('held.txt', 'tool-written.txt') | ForEach-Object { $alP = $_; $alOrder | ForEach-Object { '{"path":"' + $alP + '","taskId":"' + $_ + '"}' } }) -join ','
+                    if ($alRun -in 2, 4) {
+                        $alSettings = @{ attribution = @{ contested = 'skip' } }; $alFiles = 'tool-edited.txt'; $alTrailer = ''
+                        $alSkips = '[{"path":"held.txt","code":"MOE_ATTR_CONTESTED"},{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED"}]'
+                        $alHeld = " held=held.txt($alHead),tool-written.txt($alHead) $agStrict"
+                    } else {
+                        $alSettings = $null; $alFiles = 'tool-edited.txt tool-written.txt'
+                        $alTrailer = "Moe-Contested: tool-written.txt ($($alOrder -join ', '))"
+                        $alSkips = '[{"path":"held.txt","code":"MOE_ATTR_CONTESTED_UNTOUCHED(' + $alHead + ')"}]'
+                        $alHeld = " held=held.txt($alHead) $agUntouched"
+                    }
+                    New-ScopeProject $alDir @('tool-written.txt') -Settings $alSettings
+                    # Literal JSON: PS 5.1's ConvertTo-Json unwraps one-element arrays.
+                    [System.IO.File]::WriteAllText((Join-Path $alDir '.moe\tasks\task-postflight.json'), '{"id":"task-postflight","title":"Postflight smoke","status":"REVIEW","filesModified":["tool-written.txt"],"declaredFiles":["held.txt"]}', $akUtf8)
+                    & git -C $alDir commit -qm al-declared .moe/tasks/task-postflight.json 2>$null | Out-Null
+                    [System.IO.File]::WriteAllText((Join-Path $alDir 'held.txt'), "pre`n", $akUtf8)
+                    $alEnv = @{ FAKE_SCOPE_DECLARED_FIELD = '1'; FAKE_SCOPE_PEERS_ACTIVE = '1'; FAKE_SCOPE_PEER_ACTIVE = '1'
+                        FAKE_SCOPE_PEER_DECLARED = 'held.txt:task-a,tool-written.txt:task-a'; FAKE_SCOPE_PEER_FIELDS = $alFields }
+                    foreach ($v in $alEnv.Keys) { Set-Item -Path "Env:$v" -Value $alEnv[$v] }
+                    try {
+                        Assert-ScopeRun $alName (Invoke-GateWrapper $alDir $alOut -Command $streamJsonCmd) $alOut
+                    } finally {
+                        foreach ($v in $alEnv.Keys) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $alText = Get-Content -Raw -Path $alOut
+                    if ((Get-CommittedPaths $alDir) -ne $alFiles) { Write-Host $alText; throw "SCENARIO $alName FAILED: expected [$alFiles] committed; got [$(Get-CommittedPaths $alDir)]" }
+                    $alGot = (@(& git -C $alDir log -1 --format=%B 2>$null) | Where-Object { $_ -like 'Moe-Contested:*' }) -join '|'
+                    if ($alGot -ne $alTrailer) { Write-Host $alText; throw "SCENARIO $alName FAILED: expected the trailers [$alTrailer]; got [$alGot]" }
+                    $alWant = Join-Path $tempRoot "scope-al$alRun.want.json"
+                    [System.IO.File]::WriteAllText($alWant, ('{"skipped":' + $alSkips + ',"contested":[' + $alRows + '],"held":' + (ConvertTo-Json $alHeld) + '}'), $akUtf8)
+                    & node $akCheck $alDir $alOut $alWant
+                    if ($LASTEXITCODE -ne 0) { Write-Host $alText; throw "SCENARIO $alName FAILED: ledger, held= line or held paths differ" }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AL] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                $scopeExpectedRuns = 42
-                if ($symlinksOk) { $scopeExpectedRuns = 43 }
+                $scopeExpectedRuns = 43
+                if ($symlinksOk) { $scopeExpectedRuns = 44 }
                 if ($scopeScenariosRun -ne $scopeExpectedRuns) {
-                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK); ran $scopeScenariosRun"
+                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

@@ -4526,7 +4526,7 @@ EOF
   #   AG4  idle peer, contested=skip   -> the witnessed path is held too, strict remedy only
   # Twin: postflight.ps1.
   echo "[scenario AG] a declared, pre-flight-dirty contested path stays held and the session-ended line names the working remedy"
-  scope_ag_untouched="MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task. declare_files, unblocking or a shell touch alone does not release a hold."
+  scope_ag_untouched="MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived. Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none. declare_files, unblocking or a shell touch alone does not release a hold."
   scope_ag_strict="MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
   scope_ag_declared=('held é.txt' z1.txt z2.txt z3.txt z4.txt z5.txt)
   scope_ag_peers='held é.txt:task-peer,z1.txt:task-peer,z2.txt:task-peer,z3.txt:task-peer,z4.txt:task-peer,z5.txt:task-peer,tool-written.txt:task-peer'
@@ -4916,8 +4916,9 @@ try {
   #        PENDING-only path lands naming both contributors, a declared
   #        pre-flight-dirty path is held UNTOUCHED
   echo "[scenario AK] a contesting peer mid-step holds a witnessed path, and every contesting task is named"
-  scope_ak_untouched="verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task."
-  scope_ak_edit="the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have this task's assignee session re-edit the path with a wrapper-observed editing tool, or let the peer's own landing carry the bytes."
+  scope_ak_untouched="verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived."
+  scope_ak_edit="the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude session of this task re-edit the path, or let the peer's own landing carry the bytes."
+  scope_ak_witness="Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
   scope_ak_never="declare_files, unblocking or a shell touch alone does not release a hold."
   # Same checker as postflight.ps1's scope-ak-check.cjs: the last ledger row's
   # contested skips and whole contested list, the held= tail of the
@@ -4947,7 +4948,7 @@ try {
     scope_ak_rows='{"path":"tool-written.txt","taskId":"task-peer"}'
     scope_ak_files='tool-written-abs.txt '; scope_ak_trailer=''
     scope_ak_skips='[{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED_EDITING(task-peer)"}]'
-    scope_ak_held=" held=tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $scope_ak_edit $scope_ak_never"
+    scope_ak_held=" held=tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $scope_ak_edit $scope_ak_witness $scope_ak_never"
     case "$scope_ak_run" in
       2|3|4|6) scope_ak_files='tool-written-abs.txt tool-written.txt '; scope_ak_trailer='Moe-Contested: tool-written.txt (task-peer)'
                scope_ak_skips='[]'; scope_ak_held='' ;;
@@ -4966,7 +4967,7 @@ try {
          scope_ak_trailer='Moe-Contested: tool-written-abs.txt (task-peer, task-peer2)'
          scope_ak_skips='[{"path":"held.txt","code":"MOE_ATTR_CONTESTED_UNTOUCHED(task-peer2)"},{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED_EDITING(task-peer)"}]'
          scope_ak_rows='{"path":"held.txt","taskId":"task-peer2"},{"path":"tool-written-abs.txt","taskId":"task-peer"},{"path":"tool-written-abs.txt","taskId":"task-peer2"},'"$scope_ak_rows"
-         scope_ak_held=" held=held.txt(task-peer2),tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $scope_ak_untouched $scope_ak_edit $scope_ak_never" ;;
+         scope_ak_held=" held=held.txt(task-peer2),tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $scope_ak_untouched $scope_ak_edit $scope_ak_witness $scope_ak_never" ;;
     esac
     make_scope_project "$SCOPE_AK_DIR" '["tool-written.txt"]' REVIEW '[]' "$scope_ak_settings"
     if [ "$scope_ak_run" = 7 ]; then
@@ -4995,14 +4996,70 @@ try {
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AK] ok"
 
+  # Scenario AL -- a hold names the peer that caused it (task-9d277494; twin:
+  # scenario AL in postflight.ps1). Contesting tasks are named in cause order:
+  # editingTaskIds, then activeTaskIds, then the rest, each in taskIds order.
+  # That order drives the UNTOUCHED code, held=, every contested row and the
+  # trailer; which paths land is unchanged. held.txt is declared and dirty at
+  # pre-flight; the witnessed tool-written.txt lands under skip-untouched.
+  #   AL1  idle task-a first, active task-b      -> held.txt(task-b), trailer (task-b, task-a)
+  #   AL2  contested=skip, as AL1                -> both held, strict label task-b
+  #   AL3  no activeTaskIds (older daemon)       -> task-a, as before
+  #   AL4  contested=skip, editing c, active b+c -> c, b, a
+  echo "[scenario AL] a contested hold names the peer that caused it: editing, then active, then idle"
+  for scope_al_run in 1 2 3 4; do
+    SCOPE_AL_DIR="$TMP_DIR/scope-al$scope_al_run"
+    scope_al_out="$TMP_DIR/scope-al$scope_al_run.out"
+    scope_al_fields='{"taskIds":["task-a","task-b"],"activeTaskIds":["task-b"],"editingTaskIds":[]}'
+    scope_al_order='task-b task-a'
+    case "$scope_al_run" in
+      3) scope_al_fields='{"taskIds":["task-a","task-b"]}'; scope_al_order='task-a task-b' ;;
+      4) scope_al_fields='{"taskIds":["task-a","task-b","task-c"],"activeTaskIds":["task-b","task-c"],"editingTaskIds":["task-c"]}'; scope_al_order='task-c task-b task-a' ;;
+    esac
+    scope_al_head="${scope_al_order%% *}"; scope_al_rows=''
+    for scope_al_p in held.txt tool-written.txt; do
+      for scope_al_t in $scope_al_order; do scope_al_rows="$scope_al_rows${scope_al_rows:+,}{\"path\":\"$scope_al_p\",\"taskId\":\"$scope_al_t\"}"; done
+    done
+    if [ "$scope_al_run" = 2 ] || [ "$scope_al_run" = 4 ]; then
+      scope_al_settings='{"attribution":{"contested":"skip"}}'; scope_al_files='tool-written-abs.txt '; scope_al_trailer=''
+      scope_al_skips='[{"path":"held.txt","code":"MOE_ATTR_CONTESTED"},{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED"}]'
+      scope_al_held=" held=held.txt($scope_al_head),tool-written.txt($scope_al_head) $scope_ag_strict"
+    else
+      scope_al_settings='{}'; scope_al_files='tool-written-abs.txt tool-written.txt '
+      scope_al_trailer="Moe-Contested: tool-written.txt (${scope_al_order// /, })"
+      scope_al_skips="[{\"path\":\"held.txt\",\"code\":\"MOE_ATTR_CONTESTED_UNTOUCHED($scope_al_head)\"}]"
+      scope_al_held=" held=held.txt($scope_al_head) $scope_ag_untouched"
+    fi
+    make_scope_project "$SCOPE_AL_DIR" '["tool-written.txt"]' REVIEW '[]' "$scope_al_settings"
+    "$NODE_FOR_TEST" -e 'const [f]=process.argv.slice(1),fs=require("fs");const t=JSON.parse(fs.readFileSync(f,"utf8"));t.declaredFiles=["held.txt"];fs.writeFileSync(f,JSON.stringify(t)+"\n");' \
+      "$SCOPE_AL_DIR/.moe/tasks/task-postflight.json"
+    git -C "$SCOPE_AL_DIR" commit -qm al-declared .moe/tasks/task-postflight.json >/dev/null
+    echo pre > "$SCOPE_AL_DIR/held.txt"
+    set +e
+    FAKE_SCOPE_DECLARED_FIELD=1 FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED='held.txt:task-a,tool-written.txt:task-a' \
+      FAKE_SCOPE_PEER_FIELDS="$scope_al_fields" run_scope_wrapper "$SCOPE_AL_DIR" "$scope_al_out" "$STREAM_CLI"
+    scope_al_rc=$?
+    set -e
+    [ "$scope_al_rc" -eq 0 ] || scope_fail "AL$scope_al_run" "wrapper exited with $scope_al_rc" "$scope_al_out"
+    [ "$(committed_paths "$SCOPE_AL_DIR")" = "$scope_al_files" ] \
+      || scope_fail "AL$scope_al_run" "expected [$scope_al_files] committed; got [$(committed_paths "$SCOPE_AL_DIR")]" "$scope_al_out"
+    scope_al_got="$(git -C "$SCOPE_AL_DIR" log -1 --format=%B | grep '^Moe-Contested:' || true)"
+    [ "$scope_al_got" = "$scope_al_trailer" ] \
+      || scope_fail "AL$scope_al_run" "expected the trailers [$scope_al_trailer]; got [$scope_al_got]" "$scope_al_out"
+    "$NODE_FOR_TEST" -e "$scope_ak_check" "$SCOPE_AL_DIR" "$scope_al_out" "$scope_al_skips" "[$scope_al_rows]" "$scope_al_held" \
+      || scope_fail "AL$scope_al_run" "ledger, held= line or held paths differ" "$scope_al_out"
+  done
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AL] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  scope_expected_runs=43
-  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=42
+  scope_expected_runs=44
+  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=43
   if [ "$SCOPE_SCENARIOS_RUN" -ne "$scope_expected_runs" ]; then
-    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK); ran $SCOPE_SCENARIOS_RUN" >&2
+    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

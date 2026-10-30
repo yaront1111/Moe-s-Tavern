@@ -3887,8 +3887,11 @@ PEER_IDLE = {}
 # each entry's taskIds (first-seen order). PEER_EDITING[k]: those mid-step on k
 # with a live session (editingTaskIds). A missing or non-list field (an older
 # daemon) gives [taskId] and [], which lands byte-for-byte as before.
+# PEER_ACTIVE_IDS[k]: those with a session (activeTaskIds), set only when an
+# entry for k carries that list.
 PEER_IDS = {}
 PEER_EDITING = {}
+PEER_ACTIVE_IDS = {}
 def id_list(v):
     return [x for x in v if isinstance(x, str) and x] if isinstance(v, list) else []
 for ent in (scope.get('peerDeclared') or []):
@@ -3905,6 +3908,23 @@ for ent in (scope.get('peerDeclared') or []):
             for t in id_list(ent.get('editingTaskIds')):
                 if t not in editing:
                     editing.append(t)
+            if isinstance(ent.get('activeTaskIds'), list):
+                active = PEER_ACTIVE_IDS.setdefault(key(n), [])
+                for t in id_list(ent.get('activeTaskIds')):
+                    if t not in active:
+                        active.append(t)
+# peer_order(k): PEER_IDS[k] in cause order -- editing, then active, then the
+# rest, each in PEER_IDS order -- so contested rows, trailers and held= name
+# the cause first (at 8f62fa0f held= named idle task-001d8ab3 while live
+# task-1e7f5a2d held the path). Built from PEER_IDS only: never a new id.
+# Without activeTaskIds (an older daemon, the disk fallback): PEER_IDS order.
+def peer_order(k):
+    ids, editing, active = PEER_IDS[k], PEER_EDITING.get(k, []), PEER_ACTIVE_IDS.get(k)
+    if active is None:
+        return ids
+    return [t for t in ids if t in editing] \
+        + [t for t in ids if t not in editing and t in active] \
+        + [t for t in ids if t not in editing and t not in active]
 # This session's whole pre-flight dirty snapshot (blob, xy, path rows) as a
 # key set; None = none (a recovery landing, a failed copy): no exception.
 PREFLIGHT_DIRTY = None
@@ -4026,7 +4046,8 @@ for pk in sorted(S):
         continue
     if pk in MINE or own_memory(p, xy):
         if pk in PEER:
-            for t in PEER_IDS[pk]:
+            order = peer_order(pk)
+            for t in order:
                 contested.append((t, p))
             if contested_policy == 'skip':
                 skipped.append(('MOE_ATTR_CONTESTED', p))
@@ -4049,7 +4070,7 @@ for pk in sorted(S):
             idle_clean = PREFLIGHT_DIRTY is not None and pk not in PREFLIGHT_DIRTY \
                 and PEER_IDLE.get(pk) is True
             if contested_policy == 'skip-untouched' and pk not in TOOL and not idle_clean:
-                skipped.append(('MOE_ATTR_CONTESTED_UNTOUCHED(%s)' % PEER[pk], p))
+                skipped.append(('MOE_ATTR_CONTESTED_UNTOUCHED(%s)' % order[0], p))
                 continue
         # Asserted only by history (filesModified, completed steps, prior
         # commits, touchedFiles -- never declare_files): a claim on the PATH,
@@ -4497,9 +4518,9 @@ attr_print_skips() {
 # attr_held_list ATTR_DIR -- the own contested paths a landing held back, as
 # `<path>(<peer>)` joined by ',', at most 5 then `,+<N> more`, then one
 # MOE_CONTESTED_HELD remedy: the strict sentence, else one clause per held kind
-# (untouched, then editing) before the closing sentence (ps1 twin:
-# Get-MoeHeldList). Feeds the session-ended line's held= suffix; an unreadable
-# file gives ''.
+# (untouched, then editing), then which sessions leave a TOOL witness, before
+# the closing sentence (ps1 twin: Get-MoeHeldList). Feeds the session-ended
+# line's held= suffix; an unreadable file gives ''.
 attr_held_list() {
     local rec code p peer crec out="" n=0 strict="" untouched="" editing=""
     [ -r "$1/skipped" ] || return 0
@@ -4529,8 +4550,10 @@ attr_held_list() {
         out="$out MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
     elif [ "$n" -gt 0 ]; then
         out="$out MOE_CONTESTED_HELD remedy:"
-        [ -z "$untouched" ] || out="$out verify the bytes are this task's and coordinate any live peer, then have this task's assignee session edit each held path with a wrapper-observed editing tool (Claude Edit/Write or a Serena editor, not a shell write), or complete or archive the stale peer task."
-        [ -z "$editing" ] || out="$out the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have this task's assignee session re-edit the path with a wrapper-observed editing tool, or let the peer's own landing carry the bytes."
+        [ -z "$untouched" ] || out="$out verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived."
+        [ -z "$editing" ] || out="$out the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude session of this task re-edit the path, or let the peer's own landing carry the bytes."
+        # Same sentence as recordCommit.ts HELD_REMEDY_WITNESS.
+        out="$out Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
         out="$out declare_files, unblocking or a shell touch alone does not release a hold."
     fi
     printf '%s' "$out"
