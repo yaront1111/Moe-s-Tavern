@@ -14,6 +14,12 @@ import com.moe.util.TerminalAgentLauncher.ProtectedAgentRuntime
 import com.moe.util.TerminalAgentLauncher.ResolvedScript
 import com.moe.util.TerminalAgentLauncher.ScriptKind
 import com.moe.util.TerminalAgentLauncher.ScriptSource
+import com.sun.jna.Memory
+import com.sun.jna.platform.win32.Kernel32
+import com.sun.jna.platform.win32.WinBase
+import com.sun.jna.platform.win32.WinNT
+import com.sun.jna.platform.win32.WinioctlUtil
+import com.sun.jna.ptr.IntByReference
 import org.junit.After
 import org.junit.AssumptionViolatedException
 import org.java_websocket.WebSocket
@@ -703,8 +709,8 @@ class RuntimeSelectionPolicyTest {
             assertFalse("remote PATH entry", RuntimeSelectionPolicy.isOutsideProject("$remote\\bin", project.path, resolve = untouched))
             assertSpawnRefused("remote node", "$remote\\node", "node executable is not a plain local Windows path")
             assertFalse("remote project", RuntimeSelectionPolicy.isOutsideProject(node.path, "$remote\\proj", resolve = untouched))
-            assertEquals("the project directory cannot be resolved",
-                assertRejected("remote project", RuntimeSelectionPolicy.installedExecutable(node.path, "$remote\\proj")))
+            // task-52fb6178: a project base whose drive cannot be proved local is not a plain local base.
+            assertEquals(BASE_NOT_PLAIN, assertRejected("remote project", RuntimeSelectionPolicy.installedExecutable(node.path, "$remote\\proj")))
             assertEquals(RuntimeSelection.Accepted(realFile(node)), RuntimeSelectionPolicy.installedExecutable(node.path, project.path))
         }
         assertTrue(RuntimeSelectionPolicy.isOutsideProject(node.path, project.path))
@@ -727,6 +733,65 @@ class RuntimeSelectionPolicyTest {
             }
         }
         assertEquals(emptyList<String>(), asked)
+    }
+
+    @Test
+    fun `N13 on Windows no segment of a plainly local path ends in a dot or a space`() {
+        listOf(
+            "C:\\x\\project.", "C:\\x\\project.\\bin", "C:\\x\\project ", "C:\\x\\project \\bin", "C:\\x\\..\\proj", "C:\\x\\.\\proj",
+            "C:\\x\\...", "\\\\?\\C:\\x\\project.", "c:/x/project./bin"
+        ).forEach { assertFalse(it, RuntimeSelectionPolicy.isPlainLocalPath(it, windows = true)) }
+        listOf("C:\\x\\project.d\\bin", "C:\\x\\.hidden\\bin", "C:\\x\\a b\\c", "C:\\x\\v1.2.3")
+            .forEach { assertTrue(it, RuntimeSelectionPolicy.isPlainLocalPath(it, windows = true)) }
+        listOf("/w/project.", "/w/x/../y").forEach { assertTrue("POSIX $it", RuntimeSelectionPolicy.isPlainLocalPath(it, windows = false)) }
+    }
+
+    @Test
+    fun `N14 on Windows nothing is provably outside a project base that is not plainly local`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val project = temporaryFolder.newFolder("project")
+        val bin = File(project, "bin").apply { mkdirs() }
+        val outside = temporaryFolder.newFolder("outside")
+        val store = ProtectedStateStore(temporaryFolder.root.toPath().resolve("system/moe/protected-state"))
+        // An Error, so isOutsideProject's error handling cannot swallow it: any lookup fails the test.
+        val untouched: (String) -> Path? = { throw AssertionError("looked up $it") }
+        val volumeBase = volumeSpelling(project)
+        withDriveTargets({ throw AssertionError("drive mapping of $it") }) {
+            nonLocalBases(project).forEach { base ->
+                listOf(project.path, bin.path, File(project, "missing").path, outside.path).forEach { path ->
+                    assertFalse("$path, $base, no lookup", RuntimeSelectionPolicy.isOutsideProject(path, base, resolve = untouched))
+                    assertFalse("$path, $base", RuntimeSelectionPolicy.isOutsideProject(path, base))
+                }
+                // The accepted cost: such a base persists nothing new, so a verified-local pin, daemon provenance and a
+                // confirmed downgrade all stay session-only. A PROTECTED pin stored earlier is still read (unprovable is not absent).
+                assertFalse(base, store.usableFor(base))
+            }
+            // Legacy never asks for a drive mapping, and keeps a device base.
+            if (volumeBase != null) assertTrue(RuntimeSelectionPolicy.isOutsideProject(outside.path, volumeBase, RuntimeProfile.LEGACY))
+        }
+        // A real path with a dot segment: Win32 reads `nodejs.` as `nodejs`, so identity alone would keep it.
+        val dotted = outside.toPath().resolve("nodejs.").resolve("bin")
+        assertFalse(RuntimeSelectionPolicy.isOutsideProject(outside.path, project.path, resolve = { dotted }))
+        // A PROTECTED pin stored earlier holds after every restart: a legacy declaration asks for the downgrade again each
+        // time, and even an allowed one writes nothing. The dot aliases key as the project itself, so theirs is the project's own pin.
+        val asks = RecordingConfirmer().also { RuntimeSelectionPolicy.confirmer = it }
+        RuntimeSelectionPolicy.store = { store }
+        writeProfile(project, "legacy")
+        val real = realFile(project).path
+        assertEquals(RuntimeSelectionPolicy.profileRecordName(project.path), RuntimeSelectionPolicy.profileRecordName("$real."))
+        (listOf("$real\\..\\${project.name}", "$real\\.", "$real.") + listOfNotNull(volumeBase)).forEach { base ->
+            val name = RuntimeSelectionPolicy.profileRecordName(base)
+            val pin = profileJson(File(base), "protected").also { store.write(name, it) }
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            assertEquals(base, RuntimeProfile.PROTECTED, RuntimeSelectionPolicy.profile(base))
+            assertEquals(base, base, asks.paths.last())
+            asks.answers.last()(true)
+            assertEquals(base, pin, store.read(name))
+        }
+        // Controls: the plain base proves both answers, and its store is usable.
+        assertFalse(RuntimeSelectionPolicy.isOutsideProject(bin.path, project.path))
+        assertTrue(RuntimeSelectionPolicy.isOutsideProject(outside.path, project.path))
+        assertTrue(store.usableFor(project.path))
     }
 
     @Test
@@ -1226,6 +1291,118 @@ class RuntimeSelectionPolicyTest {
     }
 
     @Test
+    fun `S10 on Windows a project base that is not plainly local selects and spawns nothing`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val (project, root, node) = protectedFixture()
+        val planted = File(project, "node").apply { writeText("planted") }
+        val sandbox = installedLayout(File(project, "build/idea-sandbox/plugins/moe-jetbrains"))
+        val volumeBase = volumeSpelling(project)
+        assumeTrue("no volume GUID path on this host", volumeBase != null)
+        val message = "Protected execution profile: $BASE_NOT_PLAIN. Project and PATH copies of the Moe daemon are not used."
+        nonLocalBases(project).forEach { base ->
+            // The node and root outside the project are refused too: the base check refuses, not identity.
+            listOf(
+                RuntimeSelectionPolicy.installedExecutable(planted.path, base), RuntimeSelectionPolicy.installedExecutable(node.path, base),
+                RuntimeSelectionPolicy.installedArtifact(sandbox, "daemon/index.js", base),
+                RuntimeSelectionPolicy.installedArtifact(root, "daemon/index.js", base)
+            ).forEachIndexed { i, selection -> assertEquals("$base $i", BASE_NOT_PLAIN, assertRejected("$base $i", selection)) }
+            val env = mutableMapOf("PATH" to listOf(node.parentFile.path, project.path, File(project, "bin").path).joinToString(File.pathSeparator))
+            supervisorFor(project, { null }, { null }).protectedDaemonEnvironment(env, base)
+            assertEquals(base, mapOf("PATH" to ""), env)
+        }
+        // A project opened through its volume path: local, so no share is contacted.
+        assertNull(refusedSpawn("volume", volumeBase!!, root, node, message).stopCommandOrNull(volumeBase))
+        assertLegacyStop(volumeBase, root, node)
+        assertEquals(RuntimeSelection.Accepted(realFile(node)), RuntimeSelectionPolicy.installedExecutable(node.path, project.path))
+    }
+
+    @Test
+    fun `S11 on Windows a junction to a literal dot-ending folder is neither a plain node nor a plain project`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val (_, root, node) = protectedFixture()
+        val project = temporaryFolder.newFolder("project").apply { File(this, "node").writeText("planted") }
+        val store = ProtectedStateStore(temporaryFolder.root.toPath().resolve("system/moe/protected-state"))
+        withDottedJunction("project") { link, dotted ->
+            File(link, "node").writeText("node")
+            // The hazard: toRealPath returns the junction's target as written, and read back that path opens the project's file.
+            assertEquals("planted", File(dotted, "node").readText())
+            assertEquals("node executable is not a plain local Windows path",
+                assertRejected("node through the junction", RuntimeSelectionPolicy.installedExecutable(File(link, "node").path, project.path)))
+            assertFalse(RuntimeSelectionPolicy.isOutsideProject(link.path, project.path))
+            // The junction as the project base: plain as written, not as its real path.
+            assertEquals(BASE_NOT_PLAIN, assertRejected("node", RuntimeSelectionPolicy.installedExecutable(node.path, link.path)))
+            assertEquals(BASE_NOT_PLAIN, assertRejected("root", RuntimeSelectionPolicy.installedArtifact(root, "daemon/index.js", link.path)))
+            assertFalse(RuntimeSelectionPolicy.isOutsideProject(node.parentFile.path, link.path))
+            assertFalse(store.usableFor(link.path))
+            // Its pin still holds after a restart: a legacy declaration asks first, and even an allowed downgrade writes nothing.
+            val asks = RecordingConfirmer().also { RuntimeSelectionPolicy.confirmer = it }
+            RuntimeSelectionPolicy.store = { store }
+            val name = RuntimeSelectionPolicy.profileRecordName(link.path)
+            val pin = profileJson(link, "protected").also { store.write(name, it) }
+            writeProfile(link, "legacy")
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            assertEquals(RuntimeProfile.PROTECTED, RuntimeSelectionPolicy.profile(link.path))
+            assertEquals(listOf(link.path), asks.paths)
+            asks.answers.single()(true)
+            assertEquals(pin, store.read(name))
+        }
+        // Controls: the project itself is a plain base, with the node outside it.
+        assertEquals(RuntimeSelection.Accepted(realFile(node)), RuntimeSelectionPolicy.installedExecutable(node.path, project.path))
+        assertTrue(RuntimeSelectionPolicy.isOutsideProject(node.parentFile.path, project.path))
+    }
+
+    @Test
+    fun `S12 on Windows a project on a drive letter that cannot be proved local selects and spawns nothing`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val (project, root, node) = protectedFixture()
+        val native = RuntimeSelectionPolicy.windowsDriveTarget
+        // An Error, so isOutsideProject's error handling cannot swallow it: any lookup fails the test.
+        val untouched: (String) -> Path? = { throw AssertionError("looked up $it") }
+        val asked = mutableListOf<String>()
+        val store = useStore()
+        val asks = RecordingConfirmer().also { RuntimeSelectionPolicy.confirmer = it }
+        val message = "Protected execution profile: $BASE_NOT_PLAIN. Project and PATH copies of the Moe daemon are not used."
+        writeProfile(project, "legacy")
+        withSubst(project) { d ->
+            val base = "$d\\"
+            val name = RuntimeSelectionPolicy.profileRecordName(base)
+            val pin = profileJson(File(base), "protected").also { store.write(name, it) }
+            listOf<(String) -> String?>({ "\\Device\\LanmanRedirector\\;${it}0000000000012345\\srv\\sh" }, { "\\Device\\Mup\\srv\\sh" },
+                { "\\Device\\ImDisk0" }, { null }, { throw IllegalStateException("native") }, { throw UnsatisfiedLinkError("jnidispatch") }
+            ).forEachIndexed { i, fake ->
+                withDriveTargets({ asked += it; if (it.equals(d, ignoreCase = true)) fake(it) else native(it) }) {
+                    assertFalse("$i", RuntimeSelectionPolicy.isOutsideProject(node.parentFile.path, base, resolve = untouched))
+                    assertFalse("$i", store.usableFor(base))
+                    // The node and root sit on a native drive, so their own preflights pass.
+                    assertEquals("$i", BASE_NOT_PLAIN, assertRejected("$i node", RuntimeSelectionPolicy.installedExecutable(node.path, base)))
+                    assertEquals("$i", BASE_NOT_PLAIN, assertRejected("$i root",
+                        RuntimeSelectionPolicy.installedArtifact(root, "daemon/index.js", base)))
+                    val env = mutableMapOf("PATH" to node.parentFile.path)
+                    supervisorFor(project, { null }, { null }).protectedDaemonEnvironment(env, base)
+                    assertEquals("$i", mapOf("PATH" to ""), env)
+                    refusedSpawn("$i", base, root, node, message)
+                    // Unprovable is not absent: the pin holds after a restart, and even an allowed downgrade writes nothing.
+                    RuntimeSelectionPolicy.forgetSessionForTest()
+                    assertEquals("$i", RuntimeProfile.PROTECTED, RuntimeSelectionPolicy.profile(base))
+                    assertEquals("$i", base, asks.paths.last())
+                    asks.answers.last()(true)
+                    assertEquals("$i", pin, store.read(name))
+                }
+            }
+            assertLegacyStop(base, root, node)
+            withDriveTargets({ throw AssertionError("drive mapping of $it") }) {
+                assertTrue(RuntimeSelectionPolicy.isOutsideProject(node.parentFile.path, base, RuntimeProfile.LEGACY))
+            }
+            // Controls: with the native lookup, 1c2bfeca's subst expansion proves the same base local.
+            assertEquals(RuntimeSelection.Accepted(realFile(node)), RuntimeSelectionPolicy.installedExecutable(node.path, base))
+            assertTrue(RuntimeSelectionPolicy.isOutsideProject(node.parentFile.path, base))
+        }
+        // The lookup only ever gets a drive designator, never a UNC or a full path.
+        assertTrue(asked.isNotEmpty())
+        asked.forEach { assertTrue(it, Regex("^[A-Za-z]:$").matches(it)) }
+    }
+
+    @Test
     fun `S5 activation requires provenance only under the protected profile`() {
         val (project, root, node) = protectedFixture()
         var profile = RuntimeProfile.LEGACY
@@ -1652,6 +1829,24 @@ class RuntimeSelectionPolicyTest {
         windowsRestart = { false }
     )
 
+    /** A protected supervisor for the project opened as [base] starts nothing and keeps [message] visible; returned for more checks. */
+    private fun refusedSpawn(label: String, base: String, root: File, node: File, message: String): MoeDaemonSupervisor {
+        val started = mutableListOf<List<String>>()
+        val statuses = mutableListOf<Pair<Boolean, String>>()
+        val supervisor = supervisorFor(File(base), { root }, { node.path }, started = started, statuses = statuses)
+        assertFalse(label, supervisor.ensureDaemonRunning())
+        assertEquals(label, emptyList<List<String>>(), started)
+        assertEquals(label, listOf(false to message), statuses)
+        assertEquals(label, message, supervisor.selectionRefusal())
+        return supervisor
+    }
+
+    /** Restart Daemon's legacy stop for the project opened as [base]: the installed node and daemon, with no drive mapping asked. */
+    private fun assertLegacyStop(base: String, root: File, node: File) = withDriveTargets({ throw AssertionError("drive mapping of $it") }) {
+        val stop = listOf(realFile(node).path, realFile(File(root, "daemon/index.js")).path, "stop", "--project", base)
+        assertEquals(base, stop, supervisorFor(File(base), { root }, { node.path }, profile = { RuntimeProfile.LEGACY }).stopCommandOrNull(base))
+    }
+
     /** A started process that never runs; without [handle] it has none, so it is never recorded. */
     private class IdleProcess(private val handle: ProcessHandle? = null) : Process() {
         override fun toHandle(): ProcessHandle = handle ?: super.toHandle()
@@ -1788,6 +1983,75 @@ class RuntimeSelectionPolicyTest {
         share("localhost", project), share("127.0.0.1", project), share("localhost", project) + "\\bin"
     )
 
+    /**
+     * Every project base for [project] that is not a plain local base: [nonLocalSpellings], IntelliJ's `//localhost/X$/rest`,
+     * WSL and missing shares, the rooted and drive-relative forms, the dot and space segments Win32 resolves away (JDK 17's
+     * Paths.get throws on the last), and the volume GUID path. The base rule must refuse every one before any lookup.
+     */
+    private fun nonLocalBases(project: File): List<String> {
+        val real = realFile(project).path
+        return nonLocalSpellings(project) + listOf(
+            share("localhost", project).replace('\\', '/'), "\\\\wsl\$\\moe-no-such-distro\\proj",
+            "\\\\wsl.localhost\\moe-no-such-distro\\proj", "\\\\localhost\\moe-no-such-share\$\\proj",
+            real.substring(2), real.substring(0, 2) + real.substring(3), "$real\\..\\${project.name}", "$real\\.", "$real.", "$real "
+        ) + listOfNotNull(volumeSpelling(project))
+    }
+
+    /**
+     * A mount point on the new empty folder [link] whose substitute name is exactly `\??\` + [target]; false on any failure.
+     * mklink /J and New-Item -ItemType Junction drop a trailing '.' from the target, so the reparse point is written
+     * directly. A mount point on an empty folder you own needs no privilege.
+     */
+    private fun rawJunction(link: File, target: String): Boolean = try {
+        link.mkdir() && Kernel32.INSTANCE.let { kernel ->
+            val handle = kernel.CreateFile(link.path, WinNT.GENERIC_WRITE, 0, null, WinNT.OPEN_EXISTING,
+                WinNT.FILE_FLAG_BACKUP_SEMANTICS or WinNT.FILE_FLAG_OPEN_REPARSE_POINT, null)
+            if (WinBase.INVALID_HANDLE_VALUE == handle) return@let false
+            try {
+                val substitute = "\\??\\$target".toByteArray(Charsets.UTF_16LE)
+                val print = target.toByteArray(Charsets.UTF_16LE)
+                // REPARSE_DATA_BUFFER: tag, data length, reserved, both names' offsets and lengths, then each name NUL-terminated.
+                val dataLength = 8 + substitute.size + 2 + print.size + 2
+                val buffer = Memory(8L + dataLength).apply {
+                    clear()
+                    setInt(0, WinNT.IO_REPARSE_TAG_MOUNT_POINT)
+                    setShort(4, dataLength.toShort())
+                    setShort(10, substitute.size.toShort())
+                    setShort(12, (substitute.size + 2).toShort())
+                    setShort(14, print.size.toShort())
+                    write(16, substitute, 0, substitute.size)
+                    write(16L + substitute.size + 2, print, 0, print.size)
+                }
+                kernel.DeviceIoControl(handle, WinioctlUtil.FSCTL_SET_REPARSE_POINT, buffer, 8 + dataLength, null, 0, IntByReference(), null)
+            } finally {
+                kernel.CloseHandle(handle)
+            }
+        }
+    } catch (_: Exception) {
+        false
+    } catch (_: LinkageError) {
+        false
+    }
+
+    /**
+     * Runs [body] with `<tmp>\<name>-link`, a junction to the literal folder `<tmp>\<name>.` (dotted), which Win32 reads as
+     * `<tmp>\<name>`, then removes both in a finally block. cmd creates and removes the dotted folder: Java's Paths.get
+     * rejects the `\\?\` form, Win32 would drop the dot, and TemporaryFolder cannot delete it.
+     */
+    private fun <T> withDottedJunction(name: String, body: (link: File, dotted: String) -> T): T {
+        val dotted = realFile(temporaryFolder.root).path + "\\" + name + "."
+        assertEquals("mkdir $dotted", 0, exitOf("cmd", "/c", "mkdir", "\\\\?\\$dotted"))
+        val link = File(temporaryFolder.root, "$name-link")
+        try {
+            assertTrue("a junction to $dotted", rawJunction(link, dotted))
+            return body(link, dotted)
+        } finally {
+            // File.delete removes only the reparse point; exitOf never throws, so a failed body keeps its own failure.
+            link.delete()
+            exitOf("cmd", "/c", "rd", "/s", "/q", "\\\\?\\$dotted")
+        }
+    }
+
     /** [file] through its volume GUID device path, `\\.\Volume{…}\<rest>`: local, drive-less, no network; null when mountvol cannot say. */
     private fun volumeSpelling(file: File): String? = try {
         val real = realFile(file).path
@@ -1878,6 +2142,7 @@ class RuntimeSelectionPolicyTest {
         private val LIVE = mapOf(100L to ProcessFacts(100, T0, 1), 200L to ProcessFacts(200, T1, 100))
         private const val NOT_STARTED_HERE = "this IDE did not start it from the installed Moe runtime"
         private const val STOP_FAILED = "the stop request failed"
+        private const val BASE_NOT_PLAIN = "the project directory is not a plain local Windows path"
         private val DRIVE_PATH = Regex("""^[A-Za-z]:\\""")
         // mountvol <X:> /L prints exactly one `\\?\Volume{GUID}\` line.
         private val VOLUME_LINE = Regex("""\\\\\?\\(Volume\{[0-9A-Fa-f-]{36}\})\\""")

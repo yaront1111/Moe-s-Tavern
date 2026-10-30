@@ -64,6 +64,8 @@ object RuntimeSelectionPolicy {
     private val DRIVE_LETTER = Regex("[A-Za-z]:")
     private const val MAX_WINDOWS_PATH = 32767
     private const val PLUGIN_ID = "com.moe.jetbrains"
+    // VS Code (CQ-RF06b) refuses with the same words.
+    private const val BASE_NOT_PLAIN = "the project directory is not a plain local Windows path"
 
     // Projects read as verified-local or awaiting a downgrade decision this JVM session. A later
     // repository edit cannot downgrade them; even an explicitly confirmed downgrade waits for restart.
@@ -81,10 +83,11 @@ object RuntimeSelectionPolicy {
 
     private fun storedProfile(basePath: String, key: String): StoredProfile {
         return try {
-            // A pin only restricts, so it is read even from a store no drive mapping can place: unprovable is not absent,
-            // and must not turn a pinned project legacy. Writes still need a store provably outside the project.
+            // A pin only restricts, so it is read even from a store no drive mapping can place, or for a base that is not a
+            // plain local base: unprovable is not absent, and must not turn a pinned project legacy. Writes still need a
+            // store provably outside the project.
             val readable = store()?.takeIf {
-                it.usableFor(basePath) || windowsHost && listOf(it.root.toString(), basePath).any(::unprovableDrive)
+                it.usableFor(basePath) || windowsHost && (unprovableDrive(it.root.toString()) || unplainBase(basePath))
             }
             val text = readable?.read(recordsFile("profile:$key")) ?: return StoredProfile.ABSENT
             val root = parseStrict(text, "the profile record").fields(PROFILE_FIELDS, "the profile record")
@@ -208,11 +211,15 @@ object RuntimeSelectionPolicy {
      * loopback admin share (`\\localhost\C$\<project>`) names the project itself. A device form
      * (`\\.\Volume{…}\…`, `\\.\GLOBALROOT\…`) names a folder without its drive. toRealPath keeps
      * both forms and nothing maps them back to the project, so neither is provably outside it.
-     * comparablePath turns `\\?\C:\` and `\\.\C:\` into `C:/`, so those stay plain. POSIX has
-     * neither form: there the answer is always true.
+     * comparablePath turns `\\?\C:\` and `\\.\C:\` into `C:/`, so those stay plain. No segment may
+     * end in '.' or ' ', '.' and '..' included: Win32 resolves those segments and drops a trailing
+     * '.' or ' ' when it reads a path, so `<tmp>\project.` names `<tmp>\project`, while toRealPath
+     * returns a junction's target as written. POSIX has none of these forms: there the answer is always true.
      */
     internal fun isPlainLocalPath(path: String, windows: Boolean = windowsHost): Boolean =
-        !windows || LOCAL_DRIVE.containsMatchIn(comparablePath(path, false))
+        !windows || comparablePath(path, false).let { plain ->
+            LOCAL_DRIVE.containsMatchIn(plain) && plain.split('/').none { it.endsWith('.') || it.endsWith(' ') }
+        }
 
     /**
      * Separators become `/`, the `\\?\` and `\\.\` device prefixes go (`\\?\UNC\server` becomes
@@ -284,6 +291,18 @@ object RuntimeSelectionPolicy {
     // Asked before NIO opens [path]: QueryDosDevice opens nothing, so a letter that maps to a share is never contacted.
     private fun unprovableDrive(path: String): Boolean =
         DRIVE_QUALIFIED.containsMatchIn(path.replace('/', '\\')) && resolveWindowsDrivePath(path) == null
+
+    /**
+     * For a Windows host only: [path] is plainly local ([isPlainLocalPath]) on a drive whose mapping is proved a
+     * local volume ([resolveWindowsDrivePath], once comparablePath drops a `\\?\` or `\\.\` prefix). The spelling is
+     * judged first, so only an `X:` designator is ever looked up, and nothing is opened.
+     */
+    private fun isPlainLocalBase(path: String): Boolean =
+        isPlainLocalPath(path) && resolveWindowsDrivePath(comparablePath(path, false)) != null
+
+    // What isOutsideProject refuses a base for under protected on a Windows host: as written, or as its real path.
+    private fun unplainBase(basePath: String): Boolean =
+        !isPlainLocalBase(basePath) || realPathOrNull(basePath)?.let { !isPlainLocalBase(it.toString()) } == true
 
     /**
      * [real] once no drive letter on it stands for another folder: each expansion is resolved by the OS again, since
@@ -365,8 +384,10 @@ object RuntimeSelectionPolicy {
      * it resolves to; on a Windows host both must also be plainly local ([isPlainLocalPath]), and
      * a spelling that is not is never looked up, so no share is contacted. On a Windows host
      * protected also needs file identity ([outsideByIdentity]) and opens nothing on a drive letter
-     * it cannot prove local ([unprovableDrive]). A relative or unparseable path, or any failure,
-     * answers false. [resolve] is the real-path lookup, which tests substitute.
+     * it cannot prove local ([unprovableDrive]). There the base must also be a plain local base
+     * ([isPlainLocalBase]), as written (judged before anything parses or opens it) and as its real
+     * path; nothing is provably outside any other base. A relative or unparseable path, or any
+     * failure, answers false. [resolve] is the real-path lookup, which tests substitute.
      */
     fun isOutsideProject(
         path: String,
@@ -383,13 +404,16 @@ object RuntimeSelectionPolicy {
         resolve: (String) -> Path? = ::realPathOrNull
     ): Boolean = try {
         val candidate = Paths.get(path)
-        val provable = !strict(profile) || !unprovableDrive(candidate.normalize().toString()) && !unprovableDrive(basePath)
+        val provable = !strict(profile) || isPlainLocalBase(basePath) && !unprovableDrive(candidate.normalize().toString())
         val project = if (provable) realPathOrNull(basePath) else null
-        val projects = listOfNotNull(Paths.get(basePath).toAbsolutePath().normalize(), project)
-            .map { comparablePath(it.toString(), foldCase) }
+        // Lazy: Paths.get must not see a base the spelling check refused (JDK 17 throws on a trailing space).
+        val projects by lazy {
+            listOfNotNull(Paths.get(basePath).toAbsolutePath().normalize(), project).map { comparablePath(it.toString(), foldCase) }
+        }
         // Looked up once, and only after the spelling passed.
         val real by lazy { resolve(path) }
-        provable && candidate.isAbsolute && (profile == RuntimeProfile.LEGACY || isPlainLocalPath(candidate.normalize().toString())) &&
+        provable && (!strict(profile) || project != null && isPlainLocalBase(project.toString())) &&
+            candidate.isAbsolute && (profile == RuntimeProfile.LEGACY || isPlainLocalPath(candidate.normalize().toString())) &&
             listOfNotNull(candidate.normalize(), real).map { it.toString() }.all { form ->
                 (profile == RuntimeProfile.LEGACY || isPlainLocalPath(form)) &&
                     comparablePath(form, foldCase).let { c -> projects.none { isWithin(c, it) } }
@@ -406,7 +430,12 @@ object RuntimeSelectionPolicy {
         label: String, basePath: String, foldCase: Boolean, realRoot: Path?, profile: RuntimeProfile, resolve: () -> Path
     ): RuntimeSelection {
         val unresolved = RuntimeSelection.Rejected("the project directory cannot be resolved")
-        val project = (if (strict(profile) && unprovableDrive(basePath)) null else realPathOrNull(basePath)) ?: return unresolved
+        // Refused, never canonicalized: toRealPath keeps a share or device base, and nothing maps a share back to a local
+        // folder (localhost, 127/8, ::1, the host name, DFS, \\wsl$). Identity could match a loopback share only by
+        // opening it, and a foreign redirector need not report NTFS file ids.
+        if (strict(profile) && !isPlainLocalBase(basePath)) return rejected(BASE_NOT_PLAIN, basePath)
+        val project = realPathOrNull(basePath) ?: return unresolved
+        if (strict(profile) && !isPlainLocalBase(project.toString())) return rejected(BASE_NOT_PLAIN, project)
         val physical = if (strict(profile)) (physicalProject(project) ?: return unresolved) else null
         val real = try {
             resolve()
