@@ -111,7 +111,7 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -143,7 +143,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:02.918Z",
-  "updatedAt": "2026-10-30T18:29:43.828Z",
+  "updatedAt": "2026-10-30T18:32:44.185Z",
   "dependsOn": [
     "task-a4ca766a67184630842d4a6d12338cf8",
     "task-5b0e90fe108f430b8aa02451e7f8915a"
@@ -152,14 +152,17 @@
     "firstClaimAt": "2026-10-29T16:58:05.289Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T18:32:44.185Z",
+    "wallClockMs": 92078896
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
     "worker-6e57c4f8",
     "architect-6fc3dd5c",
     "worker-c2da129d",
-    "worker-681f4f22"
+    "worker-681f4f22",
+    "qa-ba3f4f35"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -245,6 +248,23 @@
       "treeId": "7638878a11c9d8825248fe3ccb96cd16a52b2b02",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "d93418e6a05603ac1db6349513b89d974c16fee9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-681f4f22@2026-10-30T18:24:30Z",
+      "paths": [
+        ".moe/tasks/task-57bbd302b69241f1986accbe2d170fa3.json",
+        ".moe/tasks/task-af83018e892149a1a18cd6a946edeba5.json",
+        ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json"
+      ],
+      "recordedBy": "worker-681f4f22",
+      "recordedAt": "2026-10-30T18:29:57.101Z",
+      "treeId": "f513448dee9124f076883d7b3916b3b11ce87df9",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -254,14 +274,17 @@
     "packages/moe-daemon/src/state/dependencyUnblock.ts",
     "packages/moe-daemon/src/tools/claimNextTask.ts",
     "packages/moe-daemon/src/tools/reportBlocked.ts",
-    "packages/moe-daemon/src/tools/setTaskDependencies.ts"
+    "packages/moe-daemon/src/tools/setTaskDependencies.ts",
+    ".moe/tasks/task-57bbd302b69241f1986accbe2d170fa3.json",
+    ".moe/tasks/task-af83018e892149a1a18cd6a946edeba5.json",
+    ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-c2da129d@2026-10-30T18:03:47Z",
-    "at": "2026-10-30T18:11:20.241Z"
+    "kind": "completion",
+    "sessionId": "worker-681f4f22@2026-10-30T18:24:30Z",
+    "at": "2026-10-30T18:29:57.101Z"
   },
   "priorBlockedReason": "Approved plan conflicts with existing contract. Step 1 requires a strict local-branch v2 snapshot consumer plus a legacy v2 snapshot prerequisite; step 2 resolves both via resolveTaskDeliveryPolicy. Actual delivery/policy.ts:171 ignores captured deliveryPolicy for legacy/observe, returning the SAME live project policy for both; verified-local throws NOT_READY. Thus the required mixed-policy fixture and strict legacy-delivery branch are unreachable. Changing selector semantics violates the epic's live-policy preservation and expands beyond approved scope. Reproduced at cd522777 in /tmp/moe-v09-policy.eGaN6X: consumer/prerequisite resolve legacy/legacy under live legacy and local-branch/local-branch under live local-branch. Fresh existing Q5 policy tests: 22 passed, 92 filtered skips, exit 0. Need approved definition of historical legacy delivery evidence versus current consumer strictness. V08 is NOT a dependency blocker (governor removed it). Step 1 started; no source/test edits or Git writes; full gate not run. Handoff and gotcha memories recorded.",
   "blockedOnTaskIds": null,
@@ -329,5 +352,9 @@
     "reportedAt": "2026-10-30T18:29:43.826Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-V09 complete. Consumer-aware shared readiness requires captured verified-local prerequisite identity, current-candidate last approval and existing delivery evidence; ARCHIVED additionally requires its candidate receipt. Missing/deleted or legacy-only proof cannot release strict consumers. Legacy/observe behavior preserved; report/claim/unblock/alerts share the predicate and dependency removal records its actor without evidence writes. Source is checkpoint ddc1f35c (7 files, +278 net LOC); this resumed session changed no project source. Fresh whole-HEAD Linux snapshot c6c5d6c7 + seven identical overlays, native npm ci, sanitized env: daemon suite 211 files, 6116 passed/20 skipped, exit0; production and isolated new-test typechecks exit0. All nine mutants compiled and failed real assertions; restored targeted six suites 320/320 passed and all overlays cmp equal. Adversarial review found no changes needed. verified-local remains disabled. Logs /tmp/moe-v09-resume.UWGWkE; Serena task handoff and live-policy gotcha updated. Wrapper owns completion landing; QA should include source checkpoint ddc1f35c when reviewing the verification-only completion."
+  "completionSummary": "CQ-V09 complete. Consumer-aware shared readiness requires captured verified-local prerequisite identity, current-candidate last approval and existing delivery evidence; ARCHIVED additionally requires its candidate receipt. Missing/deleted or legacy-only proof cannot release strict consumers. Legacy/observe behavior preserved; report/claim/unblock/alerts share the predicate and dependency removal records its actor without evidence writes. Source is checkpoint ddc1f35c (7 files, +278 net LOC); this resumed session changed no project source. Fresh whole-HEAD Linux snapshot c6c5d6c7 + seven identical overlays, native npm ci, sanitized env: daemon suite 211 files, 6116 passed/20 skipped, exit0; production and isolated new-test typechecks exit0. All nine mutants compiled and failed real assertions; restored targeted six suites 320/320 passed and all overlays cmp equal. Adversarial review found no changes needed. verified-local remains disabled. Logs /tmp/moe-v09-resume.UWGWkE; Serena task handoff and live-policy gotcha updated. Wrapper owns completion landing; QA should include source checkpoint ddc1f35c when reviewing the verification-only completion.",
+  "completedAt": "2026-10-30T18:32:44.185Z",
+  "reviewCompletedAt": "2026-10-30T18:32:44.185Z",
+  "reviewSummary": "Approved CQ-V09 after independent recorded-tree review. Reviewed completion d93418e6a05603ac1db6349513b89d974c16fee9 (tree f513448dee9124f076883d7b3916b3b11ce87df9) plus source checkpoint ddc1f35cead8a84a009b8c342c5445ddc44dab78; both contained on moe/work-2026-10-24, checkpoint is an ancestor, all seven source files unchanged between them. Source diff +320/-42 = 278 net LOC; diff --check clean. Fresh whole-repo archive of the exact completion, no dirty overlays, native npm ci and env -i HOME/Linux Node 24.21.0 PATH (MOE_* absent), /tmp/moe-v09-qa.CIHtRF/repo: `cd packages/moe-daemon && npm test` exit 0, 211 files, 6116 passed/20 skipped, 36.20s; new strict suite 45/45. `npx tsc --noEmit` and `npx tsc -p tsconfig.v09-qa.json` (new test explicitly included, types:[node], exclude:[]) both exit 0. Logs and exit files in snapshot parent; source cmp identical to completion afterward. DoD1/2: strict consumers require prerequisite captured verified-local identity, last approving review on current candidate, shared delivery evidence, and current-candidate receipt for ARCHIVED; missing/deleted/status-only/legacy proof withheld, malformed inputs and ambiguous receipts fail closed. DoD3: removal role refusal and actor audit verified, no evidence manufactured; deletion leaves strict shortfall. Audited every predicate caller, claim refusal before writes, unblock/report/alerts, legacy/observe and consumer-less preservation. Only existing-test change is the approved realistic approving-Review fixture; selectors, schemas, delete_task and activity vocabulary unchanged. Production verified-local activation remains disabled. Worker mutant evidence audited, independent full regression reproduced. No required docs/migrations/config changes in this slice (V12 owns docs). Shared dirty bytes untouched; no agent Git writes. Complexity pass: lean already, net 0 lines proposed.",
+  "requiredCheckAtDone": null
 }
