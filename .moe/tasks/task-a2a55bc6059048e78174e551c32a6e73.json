@@ -63,7 +63,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -76,16 +76,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T00:20:53.436Z",
-  "updatedAt": "2026-10-30T00:43:17.867Z",
+  "updatedAt": "2026-10-30T01:35:10.199Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T00:34:25.107Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T01:35:10.199Z",
+    "wallClockMs": 3645092
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -191,5 +194,9 @@
     "kind": "completion",
     "sessionId": "worker-5ebbf433@2026-10-30T00:41:00Z",
     "at": "2026-10-30T00:43:17.867Z"
-  }
+  },
+  "completedAt": "2026-10-30T01:35:10.199Z",
+  "reviewCompletedAt": "2026-10-30T01:35:10.199Z",
+  "reviewSummary": "Reviewed completion commit e92eeac (on moe/work-2026-10-24, pushed). Code diff: getCommitScope.ts +10/-1 and getCommitScope.test.ts +70/-2, about 74 net LOC, under the 400 cap. The commit also carries two .moe/tasks board records. I read the diff and util/claimEligibility.ts. The field comes straight from finalizingAttemptsByTask(state).get(task.id): no caller filter, no foreignFinalizingAttempt, and no copied predicate. It returns exactly {attemptId, workerId, generation} or null, and the attempt's runnerId, workspace and timestamps stay off the wire. Every other reply key is unchanged, and the key-list test pins that. The description sentence is accurate and says an older daemon omits the field. No docs/MCP_SERVER.md edit, which task-d3cd966c owns. claimEligibility.ts is untouched. The worktree matches HEAD for both files.\n\nRe-ran the plan's step-3 gate myself: whole-repo `git archive HEAD` Linux snapshot, only the two task files overlaid, run under `env -i PATH=...`. Result: vitest 189 files passed, 5276 passed / 16 skipped, `npx tsc --noEmit` clean, test-file type check (tsconfig.test-check.json) clean, VERIFY_EXIT=0. Matches the worker's reported evidence.\n\nRed proof: I overlaid the pre-change getCommitScope.ts (e92eeac~1) on the new tests. All 5 fail, which are the 4 new finalizingAttempt tests plus the key-list test. So the tests are not vacuous.\n\nDoD: (1) field behavior, including the caller's own attempt named, is covered by the 'whoever asks' test. (2) The test list covers every case the DoD names: no attempts, running/reconciling/closed, blank workerId, generation 0 and 1.5, an empty id, higher generation inserted first, another task's attempt, and the caller's own. All use toStrictEqual or toBeNull on exact values. (3) The description documents the field and the older-daemon omission. (4) Gate green as above. Mutation-resistant tests, no deleted or weakened tests, no scope creep.",
+  "requiredCheckAtDone": null
 }
