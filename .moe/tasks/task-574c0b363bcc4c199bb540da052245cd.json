@@ -9,9 +9,75 @@
     "`cd packages/moe-daemon && npm test` exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED TESTS FIRST (DoD 1). Create packages/moe-daemon/src/tools/noTeamMembershipAudience.test.ts and run it red against the current code before touching runtime.\n\nFixture (copy the ToolTestHarness pattern from claimNextTask.test.ts 'moe.claim_next_task — execution attempts'): `const h = new ToolTestHarness(); beforeEach(() => { h.init(); h.setupMoeFolder(); h.createEpic(); }); afterEach(() => h.cleanup());`. Imports: claimNextTaskTool (./claimNextTask.js), waitForTaskTool (./waitForTask.js), getTools + toolsForRole (./index.js), ToolTestHarness (./toolTestHarness.js), noTeamMembershipRefusal (../util/teamMembershipHeal.js), type TeamRole (../types/schema.js).\n\nSEATS = [{ role: 'architect', status: 'PLANNING' }, { role: 'worker', status: 'WORKING' }, { role: 'qa', status: 'REVIEW' }] — each seat claims from its own column. Solo-blocked board per role (the exact shape that arms the solo epic+status rule): `h.createTask({ id: 'task-free', status, order: 1 })`, `h.createTask({ id: 'task-peer', status, order: 2, assignedWorkerId: `${role}-peer` })`, `h.createWorker({ id: `${role}-peer`, currentTaskId: 'task-peer', status: 'CODING' })`, `h.createWorker({ id: `${role}-solo` })` (harness default teamId null), then `await h.state.load()`.\n\nHelpers: `namedTools(reply)` = the distinct `moe.<name>` tokens in JSON.stringify(reply) (regex /moe\\.[a-z_]+/g), which covers nextAction.tool, its args and every line of prose; `visible(role)` = toolsForRole(getTools(h.state), role).map((t) => t.name).\n\nEnumerated test cases (each assertion is required; a truthiness check is not enough):\n- T1-T3 (one per SEATS row, it.each or a loop): claim_next_task, called as `claimNextTaskTool(h.state).handler({ workerId: `${role}-solo`, statuses: [status] }, h.state)`. Assert (a) the premise, so the case cannot pass vacuously: visible(role) contains neither 'moe.join_team' nor 'moe.list_teams'; (b) reply.hasNext === false and reply.code === 'NO_TEAM_MEMBERSHIP'; (c) reply.nextAction is undefined; (d) reply.sessionHandoff toEqual { action: 'END_SESSION', workerId: `${role}-solo`, reason: expect.stringContaining(`${role}-solo`) }, so a taskId key or another addressee fails; (e) THE DoD-1 ASSERTION: namedTools(reply).filter((t) => !visible(role).includes(t)) toEqual [], so the failure lists any hidden tool; (f) JSON.stringify(reply) does not contain 'taken by concurrent workers'; (g) the solo rule still refused and nothing healed: h.state.getTask('task-free')!.assignedWorkerId is null and h.state.getTeamForWorker(`${role}-solo`) is null.\n- T4-T6 (same board per role): the wait_for_task immediate path, `waitForTaskTool(h.state).handler({ workerId: `${role}-solo`, statuses: [status], timeoutMs: 1000 }, h.state)`, with the same (b)-(f) plus reply.timedOut undefined (it answers at once and never parks).\n- T7 control, for callers whose tools/list shows moe.join_team: for [['governor-solo', 'governor'], ['w-solo', null]], refusal = noTeamMembershipRefusal(id). Assert nextAction.tool === 'moe.join_team', nextAction.args toEqual { workerId: id }, sessionHandoff undefined, and namedTools(refusal) is a subset of toolsForRole(getTools(h.state), role). Governor goes through the pure function because claim_next_task redirects a governor-prefixed caller to moe.enter_governance before the solo rule (claimNextTask.ts, the resolveWorkerRole === 'governor' branch near line 341).\n- T8 pure function, per seat role: noTeamMembershipRefusal(`${role}-x`) has no nextAction, and its sessionHandoff is { action: 'END_SESSION', workerId: `${role}-x` } with a string reason. This pins the one function all three producers share (claimNextTask.ts:712, waitForTask.ts:310 and the subscription wake at waitForTask.ts:441), so the wake producer, which these tests do not drive, cannot drift.\n\nRun `cd packages/moe-daemon && npx vitest run src/tools/noTeamMembershipAudience.test.ts`. T1-T6 and T8 must FAIL on the current code (moe.join_team is named; there is no sessionHandoff), and T7 must PASS. Paste the red summary into the complete_step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/noTeamMembershipAudience.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/noTeamMembershipAudience.test.ts"
+      ],
+      "note": "Created noTeamMembershipAudience.test.ts. Ran RED in a Linux-native snapshot (/tmp/moe-574c.1AzunK, HEAD + this file, npm ci, env -i, node v24.21.0): Tests 9 failed | 5 passed (14). All 9 failures are 'expected { tool: moe.join_team, … } to be undefined' on nextAction: architect/worker/qa × (claim_next_task, wait_for_task immediate path, pure noTeamMembershipRefusal). Passing: 3 premise cases (tools/list hides moe.join_team and moe.list_teams for each seat role) and the 2 control cases (governor-solo, w-solo keep the join_team nextAction, no handoff, only visible tools). The claim and wait cases reached code NO_TEAM_MEMBERSHIP before failing on nextAction, so the solo-rule board arms correctly. Layout: describe.each over SEATS for the per-role cases, describe.each for the governor and role-less controls. Shared tree has ~779 dirty paths owned by other sessions; untouched.",
+      "startedAt": "2026-10-30T06:16:57.763Z",
+      "completedAt": "2026-10-30T06:17:36.511Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT the role-aware refusal (runtime + the one superseded test assertion pair + stale comments). Turn step 1 green.\n\n1) packages/moe-daemon/src/util/teamMembershipHeal.ts\n- Import roleFromWorkerId from './workerRole.js'. That module is util-to-util and has type-only imports, so no import cycle. Do NOT import tools/index.ts: tools/index.ts -> claimNextTask.ts -> this module would form a cycle.\n- Add `export interface NoTeamMembershipHandoff { hasNext: false; code: typeof NO_TEAM_MEMBERSHIP; sessionHandoff: { action: 'END_SESSION'; workerId: string; reason: string } }`. It has no taskId, because no task is involved.\n- noTeamMembershipRefusal(workerId: string) now returns NoTeamMembershipRefusal | NoTeamMembershipHandoff. Keep the signature single-argument and pure, so none of the three call sites changes.\n  - When roleFromWorkerId(workerId) is 'architect', 'worker' or 'qa' (non-null and not 'governor'), return the handoff variant with NO nextAction.\n  - Suggested reason, refine freely: `Worker ${workerId} belongs to no team, and every claimable candidate sits in an epic+status a live worker already holds. A team may work one epic+status in parallel; a solo worker may not, so the queue is not empty and nothing raced you: your team membership is missing. This session cannot fix that, because joining a team is the launcher's job. Save any handoff, then end this session; before its next claim the wrapper retries the team join and reports why it fails (for example a full team).`\n  - Hard constraints on that reason: it names NO moe.* tool at all, and it keeps none of the concurrent-claim wording.\n  - Every other caller keeps today's join_team object byte-for-byte. That means a governor, a role-less id such as 'w-solo', the IDE and scripts/moe-call.sh. util/teamMembershipHeal.test.ts pins that shape and must pass unchanged.\n- Rewrite the function's docstring to say why the id prefix is the whole story. This refusal is served only to a caller with no team, live or tombstoned (resolveEffectiveTeam returned null). For such a caller, McpAdapter's tools/list role (resolveWorkerRole) falls back to roleFromWorkerId. TOOL_AUDIENCE lists moe.join_team and moe.list_teams to no architect, worker or qa seat, while toolsForRole shows the governor every non-wrapper tool.\n- One more docstring line on who acts on the handoff:\n  - the moe-account-switch mod ends an interactive TUI on any top-level END_SESSION addressed to its MOE_WORKER_ID (scripts/mods/moe-account-switch/hooks/register.ts endSessionInstruction);\n  - both wrappers key only on code === 'NO_TEAM_MEMBERSHIP' (moe-agent.sh claim_refused_no_team; moe-agent.ps1 near line 1498) and re-run the team join before their next claim.\n- Error handling: the function stays total and never throws. An empty or unprefixed id (roleFromWorkerId needs the trailing dash, so 'architectX' is unprefixed) takes the join_team branch. A claim or wait can never fail because its refusal was built.\n\n2) packages/moe-daemon/src/tools/waitForTask.ts: COMMENTS ONLY, no code. Three comments still promise a join_team nextAction:\n- the MatchResult.skippedForNoTeam docstring ('...with NO_TEAM_MEMBERSHIP and a join_team nextAction...');\n- the findMatchingTask tail ('...report it so the caller reaches join_team');\n- the immediate-path comment above `return noTeamMembershipRefusal(workerId)` ('...with the code and the join_team nextAction...').\nReword each to say the caller gets claim_next_task's NO_TEAM_MEMBERSHIP remedy for its role.\n\n3) packages/moe-daemon/src/tools/waitForTask.test.ts. This is the DoD 1 vs DoD 2 reconciliation; touch nothing else.\n- The test 'does NOT offer a task withheld by the solo-worker epic+status rule — and says WHY, exactly as claim_next_task does' waits as 'worker-b', a worker seat by prefix. Its two remedy lines assert exactly what DoD 1 forbids for a worker caller: nextAction.tool === 'moe.join_team' and nextAction.args.workerId === 'worker-b'.\n- Replace exactly those two lines with `expect(result.nextAction).toBeUndefined();` and `expect(result.sessionHandoff).toMatchObject({ action: 'END_SESSION', workerId: 'worker-b' });`.\n- Reword the comment's 'with a join_team nextAction'.\n- Keep every solo-rule assertion byte-identical: hasNext false, task undefined, code NO_TEAM_MEMBERSHIP, timedOut undefined.\n- Edit no other test in any file.\n\nRun `cd packages/moe-daemon && npx vitest run src/tools/noTeamMembershipAudience.test.ts src/tools/waitForTask.test.ts src/tools/claimNextTask.test.ts src/util/teamMembershipHeal.test.ts src/tools/toolAudience.test.ts`. It must be all green. Report all three files in complete_step modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/teamMembershipHeal.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/teamMembershipHeal.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.test.ts"
+      ],
+      "note": "teamMembershipHeal.ts: imports roleFromWorkerId from ./workerRole.js (util-to-util, type-only imports there, no cycle); new exported NoTeamMembershipHandoff (no taskId); noTeamMembershipRefusal(workerId) now returns NoTeamMembershipRefusal | NoTeamMembershipHandoff. architect-/worker-/qa- ids get { hasNext:false, code, sessionHandoff:{action:'END_SESSION', workerId, reason} } with no nextAction; the reason names no moe.* tool and none of the concurrent-claim wording. Governor, role-less and unprefixed ids keep the join_team object byte-for-byte. Docstring rewritten (why the id prefix is the whole story; who acts on the handoff). waitForTask.ts: three comments reworded, no code. waitForTask.test.ts: only the two remedy assertions (now nextAction undefined, sessionHandoff toMatchObject END_SESSION/worker-b) plus the comment wording. Verified in Linux snapshot /tmp/moe-574c.1AzunK (env -i, node v24.21.0): vitest run of noTeamMembershipAudience, waitForTask, claimNextTask, teamMembershipHeal, toolAudience tests → Test Files 5 passed (5), Tests 107 passed (107). tsc --noEmit clean. git diff --stat of the three owned files shows only my edits (+66/-10). claimNextTask.ts, tools/index.ts and teamMembershipHeal.test.ts untouched. Shared tree ~779 dirty paths from other sessions untouched.",
+      "startedAt": "2026-10-30T06:17:38.291Z",
+      "completedAt": "2026-10-30T06:18:20.449Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DOCUMENT the contract in docs/MCP_SERVER.md. NO_TEAM_MEMBERSHIP is undocumented today, and the claim reply's sessionHandoff line says 'resource-BLOCKED hold only'.\n\n1) ### moe.claim_next_task, the **Returns** block:\n- add `code?: \"NO_TEAM_MEMBERSHIP\"`;\n- change the sessionHandoff line to `{ action: \"END_SESSION\", taskId?, workerId, reason }`, with the comment: resource-BLOCKED hold (taskId set), or NO_TEAM_MEMBERSHIP for an architect, worker or qa seat (no taskId): end this session;\n- nextAction comment: absent on a resource-BLOCKED hold and on a seat's NO_TEAM_MEMBERSHIP;\n- add 'moe.join_team' to the tool union, noted as NO_TEAM_MEMBERSHIP for a governor or role-less caller.\n\n2) Add a **No team membership:** paragraph directly after the **Worker Constraint:** list.\n- A claimer in no team (live, or remembered by a team's formerMemberIds tombstone) skips every candidate in an epic+status that a live other worker holds; a team may parallelize one. When that empties the pool, the answer is { hasNext: false, code: \"NO_TEAM_MEMBERSHIP\" }, never the concurrent-claim answer.\n- The remedy follows what the caller's tools/list shows:\n  - A worker id prefixed architect-, worker- or qa- has a tools/list that hides moe.join_team and moe.list_teams. It gets the END_SESSION handoff and no nextAction: save any handoff and end the session.\n  - Both wrappers key on code and re-run the team join before their next claim, reporting a refused join (for example a full team). The moe-account-switch mod ends an interactive seat on the handoff.\n  - A governor or a role-less caller (IDE, scripts/moe-call.sh, an unprefixed id) gets nextAction moe.join_team { workerId }.\n- moe.wait_for_task answers the same refusal, either at once or when a matching task appears while it waits.\n\n3) ### moe.wait_for_task **Returns**: add that NO_TEAM_MEMBERSHIP shape with its two variants.\n\n4) The Claude Account Rotation paragraph (about line 2928) lists what carries END_SESSION: '(`moe.report_blocked` freeing it, or a claim refused over a resource-held task)'. Add: or a claim or wait refused for missing team membership.\n\nPhrasing: write no sentence claiming the daemon never runs, touches or executes git; util/daemonGitDocs.test.ts greps docs for that.\n\nLanding: five idle, unassigned WORKING CQ rows also declare this file (task-66e8d7d1, task-9cc13170, task-a9d1a74d, task-b621ddc9, task-ced85748), and it was clean at plan time.\n- Make the edit through a wrapper-observed file-editing tool call. A shell redirect leaves no witness, so the default contested policy cannot credit it.\n- A seat whose CLI has no such tool still lands the path while it was clean at that session's pre-flight and every contesting row is idle.\n- If the session-ended line still reports it held (MOE_ATTR_CONTESTED_UNTOUCHED), say so in the complete_task summary. Never hand-land it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md, 4 hunks, +18/-4, all mine (file was clean at HEAD). All four edits went through the Edit tool, so the wrapper has a witnessed file-editing call. (1) claim_next_task Returns: added code?: NO_TEAM_MEMBERSHIP; sessionHandoff line now { action, taskId?, workerId, reason } with the resource-BLOCKED / seat NO_TEAM_MEMBERSHIP comment; nextAction comment absent on both; moe.join_team added to the tool union (governor or role-less caller). (2) New **No team membership:** paragraph after the Worker Constraint list: tombstone-aware solo rule, the two remedy variants by tools/list, wrappers key on code and retry the join, mod ends an interactive seat, wait_for_task answers the same refusal at once or on a wake. (3) wait_for_task Returns: both NO_TEAM_MEMBERSHIP variants. (4) Account Rotation END_SESSION list now includes 'a claim or wait refused for missing team membership'. No sentence claims the daemon never runs/touches/executes git; util/daemonGitDocs.test.ts re-run in the snapshot with the doc overlaid: 4/4 pass.",
+      "startedAt": "2026-10-30T06:18:21.477Z",
+      "completedAt": "2026-10-30T06:18:46.053Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY once, fresh. Its output is the complete_task evidence. It covers DoD 2 and DoD 3, plus a mutation proof for DoD 1.\n\n1) The DoD 3 command, exactly as written: `cd packages/moe-daemon && npm test`. It must exit 0.\n- Run it with MOE_* scrubbed from the environment. An agent seat's ambient MOE_WORKER_ID role-trims four getContext.test.ts cases (mem:gotcha-daemon-tests-ambient-moe-worker-id). Use `env -i HOME=$HOME PATH=<node bin>:/usr/bin:/bin`, or `env -u` for each MOE_* var.\n- On WSL the in-tree node_modules is Windows-native. Run in a Linux snapshot instead: a `git archive HEAD` of the whole repo, with exactly this task's five files overlaid (never `git diff --name-only`), using a native npm ci (mem:gotcha-daemon-linux-snapshot-gate). cmp each owned file against the snapshot before citing the run.\n- Strip ANSI codes (or set NO_COLOR=1) before grepping the summary line.\n\n2) DoD 2 from the diff:\n- `git diff -- packages/moe-daemon/src/util/teamMembershipHeal.test.ts packages/moe-daemon/src/tools/claimNextTask.test.ts packages/moe-daemon/src/tools/toolAudience.test.ts` is empty;\n- the waitForTask.test.ts diff is only the two remedy assertions plus their comment wording;\n- `git diff -- packages/moe-daemon/src/util/teamMembershipHeal.ts` leaves healTeamMembership, resolveEffectiveTeam, findTombstonedTeam and withEvictionTombstones untouched;\n- claimNextTask.ts and src/tools/index.ts (TOOL_AUDIENCE) are unchanged.\n\n3) Mutation proof. Use a scratch copy (never the shared tree) and the focused vitest list from step 2. Each mutant must turn the named tests red; record the red names per mutant in the step note:\n- M1: always return the join_team object. T1-T6 and T8 go red.\n- M2: drop the role check so every caller gets the handoff. T7 goes red, plus teamMembershipHeal.test.ts 'carries the stable code, the join_team exit…' and claimNextTask.test.ts 'refuses a teamless claimer with NO_TEAM_MEMBERSHIP…'.\n- M3: treat governor like a seat (role !== null). T7 goes red.\n- M4: address the handoff to '' or add a taskId key. T1-T6 go red.\n- M5: put 'moe.join_team' back into the handoff reason. T1-T6 go red.\n\nAny mutant that stays green is a test gap: fix the test, then re-run 1).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification only, no files changed. Snapshot /tmp/moe-574c.1AzunK (git archive HEAD ced4869 + exactly the 5 owned files; cmp identical to the shared tree for all five; native npm ci; env -i, node v24.21.0, NO_COLOR=1). DoD 3: `npm test` exit 0, Test Files 197 passed (197), Tests 5494 passed | 16 skipped (5510). DoD 2: git diff of teamMembershipHeal.test.ts, claimNextTask.test.ts, toolAudience.test.ts, claimNextTask.ts and tools/index.ts is empty; waitForTask.test.ts diff is only the two remedy assertions + comment wording; teamMembershipHeal.ts hunks touch only the import and the noTeamMembershipRefusal block (healTeamMembership, resolveEffectiveTeam, findTombstonedTeam, withEvictionTombstones untouched). Mutants, run on the snapshot copy of teamMembershipHeal.ts against the 5-file focused list (107 tests), each restored and cmp'd after: M1 (always join_team) -> 10 red = T1-T6 + T8 for all 3 roles (9) + waitForTask 'does NOT offer a task withheld by the solo-worker…'. M2 (everyone gets handoff) -> 4 red = T7 governor-solo, T7 w-solo, teamMembershipHeal 'carries the stable code, the join_team exit and no race wording', claimNextTask 'refuses a teamless claimer with NO_TEAM_MEMBERSHIP and a join_team exit…'. M3 (role !== null) -> 1 red = T7 governor-solo. M4a (handoff addressed to '') -> 10 red = T1-T6 + T8 + waitForTask worker-b. M4b (taskId key added) -> 9 red = T1-T6 + T8 (toEqual rejects the extra key). M5 (reason names moe.join_team) -> 6 red = T1-T6 claim and wait cases for all 3 roles (the pure-function case does not scan for tool names, by plan). No mutant survived, so no test gap.",
+      "startedAt": "2026-10-30T06:18:47.081Z",
+      "completedAt": "2026-10-30T06:20:32.497Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's own diff, the last step. Check and note each item:\n- Producers: grep shows all three NO_TEAM_MEMBERSHIP producers still route through noTeamMembershipRefusal (claimNextTask.ts ~712; waitForTask.ts immediate path ~310 and subscription wake ~441). No producer hand-builds a refusal.\n- Governor: a governor-prefixed caller reaching wait_for_task still gets join_team, which its tools/list shows.\n- Hostile ids: '', 'architectX' (no dash), 'ARCHITECT-1' (case) and a 10k-char id all take the join_team branch or the handoff branch without throwing. roleFromWorkerId is case-sensitive startsWith, the same rule McpAdapter's tools/list uses.\n- Concurrency: the function is pure. Two concurrent refusals share nothing, and nothing writes state, so a refused claim still assigns nobody, joins no team and opens no attempt.\n- Mod contract: sessionHandoff is top-level with exactly action 'END_SESSION' and the caller's workerId, and the reply is not an MCP error. scripts/mods/moe-account-switch/hooks/register.ts endSessionInstruction therefore fires for an interactive seat; a -p run is ignored there by design.\n- Wrapper contract: both launchers still read only `code` (grep NO_TEAM_MEMBERSHIP in scripts/moe-agent.sh and scripts/moe-agent.ps1). No consumer dereferences nextAction on this reply. Grep moe-proxy, moe-claude-plugin, moe-jetbrains and moe-vscode for NO_TEAM_MEMBERSHIP and sessionHandoff.\n- Docs: every field and variant documented in docs/MCP_SERVER.md exists in code, and nothing claims the daemon auto-joins a team.\n- Rails: no global forbiddenPatterns token appears in the diff, and the diff stays well under the 400 net-LOC review cap.\n- Would I be embarrassed if this shipped? A seat refused for no team now ends cleanly instead of hunting a tool it cannot see.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review, read-only; no file changed in this step (steps 1-3 reported all 5 owned paths). PRODUCERS: grep shows exactly three call sites (claimNextTask.ts:712, waitForTask.ts:312 immediate, waitForTask.ts:443 subscription wake), all via noTeamMembershipRefusal; the only 'NO_TEAM_MEMBERSHIP' literal outside tests is the constant in util/teamMembershipHeal.ts. GOVERNOR: governor- and role-less ids keep the byte-identical join_team object (T7 + M2/M3 mutants prove it). HOSTILE IDS via tsx on the snapshot: '' , 'architectX', 'ARCHITECT-1', a 10k-char unprefixed id and 'governor-1' take the join_team branch; 'architect-', 'architect-'+10k chars, 'worker-\\u0000' and 'qa-${x}' take the handoff branch; none throws, all keep hasNext:false + code, and the handoff branch names no moe.* tool. CONCURRENCY: the function is pure and writes no state, so a refused claim assigns nobody, joins no team and opens no attempt (T1-T6 assert task-free unassigned and getTeamForWorker null). MOD CONTRACT: register.ts endSessionInstruction needs only top-level sessionHandoff.action==='END_SESSION' and addressee===workerId, and reads reason; taskId is not read. The reply is a normal object, not an MCP error. WRAPPER CONTRACT: moe-agent.sh:2075 and moe-agent.ps1:1498 key only on code === NO_TEAM_MEMBERSHIP; moe-proxy, moe-claude-plugin, moe-jetbrains and moe-vscode sources contain no NO_TEAM_MEMBERSHIP consumer. DOCS: every documented field/variant exists in code; no sentence claims the daemon auto-joins a team or never runs git (daemonGitDocs 4/4 green). RAILS: no forbidden pattern (eval(, innerHTML, dangerouslySetInnerHTML, __proto__) in the diff; net LOC well under the 400 cap: runtime +55/-2 (teamMembershipHeal.ts), comments +6/-4, waitForTask.test.ts +5/-4, docs +18/-4 mine, new test file 137 lines. teamMembershipHeal.ts is 176 lines (<300). KNOWN, NOT MINE: during this step a peer session added one hunk to the shared docs/MCP_SERVER.md (line 929, the 'Diagnostic, never authenticated evidence' bullet, +1). git diff --numstat now reads +19/-4 for the file; my four hunks are +18/-4. I did not touch or revert it. Landing of docs/MCP_SERVER.md may therefore be reported held/contested by the wrapper. Embarrassment test: a seat refused for no team now ends cleanly and the wrapper retries the join, instead of the seat hunting a tool it cannot see. No open risk to fix.",
+      "startedAt": "2026-10-30T06:20:35.276Z",
+      "completedAt": "2026-10-30T06:21:05.391Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -21,13 +87,141 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 255.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-fba7c36bbfdc4b6aba4cf1789781489d",
+      "author": "architect-32ff5555",
+      "content": "Architect note for worker and QA: DoD 1 vs DoD 2 reconciliation, decided at planning (TURBO).\n\nDoD 2 says existing solo-rule tests pass unchanged. One of them cannot under DoD 1: the waitForTask.test.ts case 'does NOT offer a task withheld by the solo-worker epic+status rule — and says WHY, exactly as claim_next_task does'.\n- It waits as 'worker-b', a worker seat by id prefix. That prefix is the role McpAdapter filters tools/list by, so the seat cannot see moe.join_team.\n- It asserts nextAction.tool === 'moe.join_team', the exact remedy DoD 1 forbids for a worker caller.\n\nPlanned resolution:\n- Only those two remedy lines (and their comment) change.\n- Every solo-rule assertion in that test stays byte-identical: hasNext false, no task, code NO_TEAM_MEMBERSHIP, no timeout.\n- util/teamMembershipHeal.test.ts and every claimNextTask.test.ts team test must show an EMPTY diff. They use the role-less 'w-solo'; 'worker-solo' (~line 1145) asserts only the code.\n\nWhy session-end rather than a claim-path heal: this seat's fleet team 'moes' (team-a94dc136bb2b49c2aa8df6977c354696) is full at 10/10, so a heal could not join it. Joining any other team would lift the solo rule, which is out of scope.",
+      "timestamp": "2026-10-30T06:16:17.347Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T23:30:26.694Z",
-  "updatedAt": "2026-10-30T05:55:40.120Z",
+  "updatedAt": "2026-10-30T06:21:53.426Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T05:55:40.120Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T05:56:22.283Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-32ff5555",
+    "worker-093a65d0"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:16:05.747Z",
+  "executionContract": {
+    "intendedBehavior": "A NO_TEAM_MEMBERSHIP refusal served to a teamless architect-, worker- or qa- seat carries `sessionHandoff { action: 'END_SESSION', workerId, reason }` and no nextAction, and its JSON names no moe.* tool outside toolsForRole(role). This covers moe.claim_next_task, and moe.wait_for_task both at once and on a wake. The seat can execute that remedy: it ends the session, and the wrapper retries the team join before its next claim. A governor or role-less caller keeps nextAction moe.join_team, byte-identical to today. The solo epic+status rule, the tombstone heal, TOOL_AUDIENCE and both wrappers are unchanged.",
+    "acceptanceCriteria": [
+      "noTeamMembershipAudience.test.ts T1-T6: for each of architect (PLANNING), worker (WORKING) and qa (REVIEW), the claim_next_task and wait_for_task replies from a solo-blocked board have code NO_TEAM_MEMBERSHIP, no nextAction, an END_SESSION handoff addressed to the caller, and no named moe.* tool missing from toolsForRole(role)",
+      "T7: a governor- and a role-less caller keep nextAction moe.join_team { workerId }, and every tool they name is visible to them",
+      "T8: the pure noTeamMembershipRefusal gives the handoff variant for all three seat roles",
+      "Existing teamMembershipHeal.test.ts and claimNextTask.test.ts pass with an empty diff; waitForTask.test.ts changes only its two superseded remedy assertions",
+      "`cd packages/moe-daemon && npm test` exits 0, run fresh with MOE_* scrubbed",
+      "Mutants M1-M5 from step 4 each turn the named tests red"
+    ],
+    "invariants": [
+      "The solo epic+status rule refuses and permits exactly the same claims",
+      "A refused claim assigns nobody, joins no team and opens no attempt",
+      "healTeamMembership, resolveEffectiveTeam, findTombstonedTeam and withEvictionTombstones are untouched",
+      "noTeamMembershipRefusal stays pure and never throws",
+      "Every NO_TEAM_MEMBERSHIP producer goes through noTeamMembershipRefusal"
+    ],
+    "compatibility": [
+      "hasNext:false and code 'NO_TEAM_MEMBERSHIP' are unchanged for every caller. Both wrappers key only on code",
+      "The join_team refusal object is byte-identical for governor and role-less callers (IDE, scripts/moe-call.sh, unprefixed ids)",
+      "The END_SESSION sessionHandoff reuses the existing convention. Its only consumer, the moe-account-switch mod, does not read taskId",
+      "No TOOL_AUDIENCE, schema or .moe state-file change. No new tool or parameter"
+    ],
+    "approvedScope": [
+      "util/teamMembershipHeal.ts: noTeamMembershipRefusal becomes role-aware; new exported NoTeamMembershipHandoff type; docstring",
+      "tools/waitForTask.ts: three comment rewordings, no code",
+      "tools/waitForTask.test.ts: the two remedy assertions of the worker-b solo-rule test, plus its comment",
+      "tools/noTeamMembershipAudience.test.ts: new",
+      "docs/MCP_SERVER.md: claim_next_task Returns and a No team membership paragraph, wait_for_task Returns, and the account-rotation END_SESSION list"
+    ],
+    "reuse": [
+      "The existing END_SESSION sessionHandoff convention (util/claimEligibility.ts, report_blocked) and its mod consumer, instead of a new signal",
+      "roleFromWorkerId, the same fallback McpAdapter's tools/list uses, instead of a new role lookup",
+      "ToolTestHarness, getTools and toolsForRole for the new tests"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/util/teamMembershipHeal.ts: noTeamMembershipRefusal(workerId) returns { hasNext:false, code, nextAction: moe.join_team } (lines ~103-123)",
+      "packages/moe-daemon/src/util/workerRole.ts: export roleFromWorkerId(id) maps the 'architect-'/'governor-'/'worker-'/'qa-' prefixes, else null",
+      "packages/moe-daemon/src/tools/index.ts: TOOL_AUDIENCE 'moe.join_team': [] and 'moe.list_teams': []; toolsForRole(tools, role) shows a governor all non-wrapper tools and a null role every tool",
+      "packages/moe-daemon/src/server/McpAdapter.ts ~270: tools/list role = resolveWorkerRole(state, params.workerId)",
+      "packages/moe-daemon/src/tools/claimNextTask.ts:712 and waitForTask.ts:310/441 return noTeamMembershipRefusal(workerId)",
+      "claimNextTask.ts ~341 redirects a resolveWorkerRole === 'governor' caller to moe.enter_governance before the solo rule",
+      "scripts/mods/moe-account-switch/hooks/register.ts endSessionInstruction: needs only top-level sessionHandoff.action === 'END_SESSION' and workerId === MOE_WORKER_ID",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts: ToolTestHarness init/setupMoeFolder/createEpic/createTask/createWorker/cleanup"
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test",
+      "cd packages/moe-daemon && npx vitest run src/tools/noTeamMembershipAudience.test.ts src/tools/waitForTask.test.ts src/tools/claimNextTask.test.ts src/util/teamMembershipHeal.test.ts src/tools/toolAudience.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "CHOSEN, option 1 from the task: a role-aware refusal. noTeamMembershipRefusal answers a teamless architect, worker or qa seat with an END_SESSION sessionHandoff and no nextAction. It names no tool the seat cannot see. The governor and role-less callers keep the join_team remedy unchanged.\n\nREJECTED, option 2 (the claim path heals a teamless seat into its role team):\n- The observed seat (architect-32ff5555, teamId null) is teamless because its fleet team 'moes' (team-a94dc136bb2b49c2aa8df6977c354696) is FULL at 10/10, and healing must never evict a member.\n- The daemon does not know which team the wrapper's TEAM names. Joining any other team lifts the solo epic+status rule for that seat, which changes which claims the rule refuses (out of scope, and DoD 2).\n\nREJECTED, exposing moe.join_team/moe.list_teams to architect/worker/qa in TOOL_AUDIENCE:\n- Not one of the task's two options.\n- It undoes part of the role-scoped tools/list token diet (037f6b74).\n- The agent would have to guess the right team, and still cannot fix a full team.\n\nOption 1 hands the problem to the wrapper, which knows TEAM, retries the join before every claim, and prints the refusal (for example 'Team moes is full').",
+    "codebaseInsights": "- Three producers share one function: claimNextTask.ts:712, waitForTask.ts:310 (immediate) and waitForTask.ts:441 (subscription wake) all return noTeamMembershipRefusal(workerId). Changing the function fixes all of them with zero call-site edits.\n- The refusal fires only when resolveEffectiveTeam(state, id) is null (no live team, no tombstone). McpAdapter's tools/list role is resolveWorkerRole(state, id), so for such a caller it is exactly roleFromWorkerId(id). The pure prefix check therefore matches what tools/list hid.\n- TOOL_AUDIENCE: 'moe.join_team': [] and 'moe.list_teams': []. toolsForRole shows a governor every non-wrapper tool, and a null role every tool.\n- The END_SESSION sessionHandoff already exists (util/claimEligibility.ts blockedHoldGuidance, report_blocked). The moe-account-switch mod's endSessionInstruction needs only top-level action === 'END_SESSION' and workerId === MOE_WORKER_ID, and does not need taskId. A TUI seat whose loop relaunches it therefore ends itself 10 s after the turn.\n- Wrappers: moe-agent.sh claim_refused_no_team and moe-agent.ps1 (~1498) read only `code`, then set TEAM_JOINED=false so retry_team_join runs before the next claim. No wrapper change is needed.\n- Daemon tests are not type-checked: tsconfig excludes src/**/*.test.ts, so the union return type cannot break existing tests at compile time.",
+    "risks": "DoD 1 vs DoD 2 conflict, decided rather than parked (TURBO):\n- DoD 2 asks that existing solo-rule tests pass unchanged.\n- But waitForTask.test.ts 'does NOT offer a task withheld by the solo-worker epic+status rule…' waits as 'worker-b', a worker seat whose tools/list hides moe.join_team, and asserts nextAction.tool === 'moe.join_team'. That is the exact remedy DoD 1 forbids for a worker caller, so the two cannot both hold literally.\n- Resolution: only those two remedy lines (and their comment) change. Every solo-rule assertion in that test stays byte-identical. teamMembershipHeal.test.ts and every claimNextTask.test.ts team test pass untouched: they use the role-less 'w-solo', and 'worker-solo' at ~1145 asserts only the code.\n\nContested landing: docs/MCP_SERVER.md is also declared by five idle CQ rows. See step 3 for how to edit it so it lands.\n\nEnvironment:\n- Ambient MOE_* env in an agent seat breaks four getContext tests, so scrub it.\n- On WSL, use a Linux snapshot for the daemon suite.\n\nDo NOT touch scripts/CLAUDE.md or the mod's header comment. Both list END_SESSION producers only as examples, and the mod's behaviour does not change.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/teamMembershipHeal.ts",
+      "packages/moe-daemon/src/util/workerRole.ts",
+      "packages/moe-daemon/src/tools/index.ts",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/waitForTask.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "scripts/mods/moe-account-switch/hooks/register.ts",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:16:05.765Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:16:57.763Z",
+  "declaredFiles": [
+    "packages/moe-daemon/src/util/teamMembershipHeal.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts",
+    "packages/moe-daemon/src/tools/waitForTask.test.ts",
+    "packages/moe-daemon/src/tools/noTeamMembershipAudience.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "reviewStartedAt": "2026-10-30T06:21:53.425Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Test Files  197 passed (197)\n      Tests  5494 passed | 16 skipped (5510)\n   Start at  08:21:18\n   Duration  23.77s (tests 95%, import 4%, transform 1%)\n(run in a Linux-native snapshot of HEAD ced4869 + the 5 owned files, cmp-identical to the shared tree, under env -i with node v24.21.0 and NO_COLOR=1; exit=0)",
+    "reportedAt": "2026-10-30T06:21:53.425Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/noTeamMembershipAudience.test.ts",
+    "packages/moe-daemon/src/util/teamMembershipHeal.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts",
+    "packages/moe-daemon/src/tools/waitForTask.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "A NO_TEAM_MEMBERSHIP refusal served to a teamless architect-/worker-/qa- seat now carries sessionHandoff { action:'END_SESSION', workerId, reason } and NO nextAction; its JSON names no moe.* tool (the reason says: end the session, the wrapper retries the team join before its next claim). Governor and role-less callers keep the join_team nextAction byte-for-byte. Option chosen: role-aware refusal (not healing, not a TOOL_AUDIENCE change).\n\nFiles (5): util/teamMembershipHeal.ts (noTeamMembershipRefusal is role-aware via roleFromWorkerId; new exported NoTeamMembershipHandoff; docstring; still pure, one-arg, never throws; heal/resolve/tombstone functions untouched). tools/waitForTask.ts (3 comments only). tools/waitForTask.test.ts (only the 2 superseded remedy assertions for 'worker-b' + comment wording, per the architect's DoD1/DoD2 reconciliation comment). tools/noTeamMembershipAudience.test.ts (new, 14 cases: T1-T6 claim + wait for architect/worker/qa, T7 governor + role-less control, T8 pure function, premise cases). docs/MCP_SERVER.md (claim Returns, No team membership paragraph, wait Returns, account-rotation END_SESSION list). All three producers (claimNextTask.ts:712, waitForTask.ts:312/443) route through the one function; claimNextTask.ts, tools/index.ts, teamMembershipHeal.test.ts, claimNextTask.test.ts, toolAudience.test.ts have an empty diff.\n\nEvidence (Linux-native snapshot of HEAD ced4869 + exactly the 5 owned files, cmp-identical, env -i, node v24.21.0): RED first: 9 failed | 5 passed. Focused list green: 5 files, 107 tests. Full `npm test` run twice: exit 0, Test Files 197 passed (197), Tests 5494 passed | 16 skipped (5510). tsc --noEmit clean. Mutants M1-M5 each turned the named tests red (M1 10, M2 4, M3 1, M4a 10, M4b 9, M5 6); none survived.\n\nLanding note: docs/MCP_SERVER.md is shared with five idle CQ rows and a peer session added one unrelated hunk (line ~929, +1) during my session; my 4 hunks (+18/-4) were made via the Edit tool and are declared. "
 }

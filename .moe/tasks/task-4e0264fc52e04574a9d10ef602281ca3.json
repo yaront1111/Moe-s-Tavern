@@ -102,7 +102,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -122,7 +122,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:51.453Z",
-  "updatedAt": "2026-10-30T06:02:11.949Z",
+  "updatedAt": "2026-10-30T06:21:53.657Z",
   "dependsOn": [
     "task-34632f08a9a549a28bcf2b9f6946244b",
     "task-fef5ca575850416ea1052ee1a7b8e22e",
@@ -148,7 +148,9 @@
     "firstClaimAt": "2026-10-29T16:50:59.555Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T06:21:53.657Z",
+    "wallClockMs": 48654102
   },
   "tier": "heavy",
   "effort": "xhigh",
@@ -237,5 +239,9 @@
     "kind": "completion",
     "sessionId": "worker-0062feec@2026-10-30T05:40:35Z",
     "at": "2026-10-30T06:02:11.949Z"
-  }
+  },
+  "completedAt": "2026-10-30T06:21:53.657Z",
+  "reviewCompletedAt": "2026-10-30T06:21:53.657Z",
+  "reviewSummary": "CQ-C11 (epic-final) approved. Commit 4f75feb is on moe/work-2026-10-24. It adds 375 net LOC, all tests (2 e2e files), with no production code; the 5 .moe files are wrapper board staging.\n\nQA gate re-run in a fresh Linux snapshot of 4f75feb (native npm ci, env -i, node v24.21.0):\n- daemon npm test: EXIT 0, 196 files, 5480 passed, 16 skipped. This matches the worker's numbers.\n- tsc --noEmit: 0.\n- Both e2e files: 24/24 pass, none skipped.\n\nDoD:\n1. Invalidation cases pass: positive P1, negatives N1/N2, semantic S1, delta D1-D7 (every full reason) and recipes R1-R3.\n2. Zero planner calls only for C07 reuse/refresh (Z1) and the eligible TURBO recipe (Z2). Exactly 1 call for reassess, replan from WORKING/REVIEW, DoD and contract changes (P1), and the 5 recipe fallbacks (P2).\n3. No bypass:\n   - CONTROL holds, and SPEED is checked mid-delay (B1).\n   - RECIPE_ACTOR gets NOT_ALLOWED and a forged instance is stripped (B2).\n   - A late assessment does not take back a row claimed explicitly in the meantime (B3).\n   - No approval is re-stamped (Z1).\n4. Verification evidence reproduces.\n\nQA mutants, 4/4 killed, sources restored and sha-checked:\n- lookupNegative miss returning absent (N1/N2/S1);\n- refresh treated as reuse (Z1);\n- RECIPE_ACTOR guard off (B2);\n- getContext owner check weakened (D1-D7).\n\nThe refresh deviation is legitimate: per decision-cq-c07-plan-reuse-split, landed C07 resumes refresh to WORKING.\n\nEpic sweep (63 commits): no forbidden tokens, no proxy paths, and runtime git reads only.\n\nNon-blocking, for M05/M06:\n(a) C07 reuse does not anchor .moe/recipes.json. This fails closed: the instance stays bound to the old digest.\n(b) C08 QA notes are still open.\n(c) C05 stale negatives are evicted only by LRU.\n\nStill open: the assessPostpatch call site, contextEpoch stamping, and C02/C03 in packets. Verified-local stays off.",
+  "requiredCheckAtDone": null
 }
