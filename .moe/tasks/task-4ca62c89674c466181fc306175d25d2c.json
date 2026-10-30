@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -83,7 +83,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T14:29:48.062Z",
-  "updatedAt": "2026-10-30T15:26:27.764Z",
+  "updatedAt": "2026-10-30T16:02:51.193Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T14:30:43.240Z",
@@ -93,11 +93,14 @@
     "firstClaimAt": "2026-10-30T14:31:40.493Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T16:02:51.193Z",
+    "wallClockMs": 5470700
   },
   "contextFetchedBy": [
     "architect-6fc3dd5c",
-    "worker-55e6716a"
+    "worker-55e6716a",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -225,5 +228,9 @@
     "reportedAt": "2026-10-30T15:26:10.650Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Fixed the daemon.lock O_EXCL create-to-write window using optional LockInfo.empty and original stat.mtimeMs: young empty locks stay live through LOCK_STALE_TIMEOUT_MS, old empty locks remain reclaimable. Failed writes close their fd before best-effort unlink and return false; no successful-write unlink. Non-empty malformed/pid-only/JSON lock policy, later reason/check order and APIs unchanged. Only index.ts/index.test.ts, +52/-6 (46 net). Three regression tests; RED confirmed T1/T3 assertion failures, T2 baseline pass. GREEN lifecycle suite:46 passed/1 existing Windows-only skip. Fresh exact gate in whole-repo Linux archive /tmp/moe-4ca62c-worker.HDT3TK with cmp-verified owned overlays/native npm ci/env -i/Node24.21.0: tsc clean;209 files,6067 passed/20 skipped; exit0. Supplemental index.test.ts typecheck and scratch timeout/future-mtime/cleanup-error/fd-order/success-no-unlink checks pass. Scoped adversarial review and diff --check clean. Logs /tmp/moe-4ca62c-{red,green,gate,review,test-types}.log. Handoff+gotcha memory saved. No implementation changes after gate; latest HEAD daemon tree unchanged from snapshot baseline. Known stale-unlink TOCTOU and slow-start timeout out of scope; no new bug reproduced. Shared peer dirty paths untouched. Wrapper owns commit/push."
+  "completionSummary": "Fixed the daemon.lock O_EXCL create-to-write window using optional LockInfo.empty and original stat.mtimeMs: young empty locks stay live through LOCK_STALE_TIMEOUT_MS, old empty locks remain reclaimable. Failed writes close their fd before best-effort unlink and return false; no successful-write unlink. Non-empty malformed/pid-only/JSON lock policy, later reason/check order and APIs unchanged. Only index.ts/index.test.ts, +52/-6 (46 net). Three regression tests; RED confirmed T1/T3 assertion failures, T2 baseline pass. GREEN lifecycle suite:46 passed/1 existing Windows-only skip. Fresh exact gate in whole-repo Linux archive /tmp/moe-4ca62c-worker.HDT3TK with cmp-verified owned overlays/native npm ci/env -i/Node24.21.0: tsc clean;209 files,6067 passed/20 skipped; exit0. Supplemental index.test.ts typecheck and scratch timeout/future-mtime/cleanup-error/fd-order/success-no-unlink checks pass. Scoped adversarial review and diff --check clean. Logs /tmp/moe-4ca62c-{red,green,gate,review,test-types}.log. Handoff+gotcha memory saved. No implementation changes after gate; latest HEAD daemon tree unchanged from snapshot baseline. Known stale-unlink TOCTOU and slow-start timeout out of scope; no new bug reproduced. Shared peer dirty paths untouched. Wrapper owns commit/push.",
+  "completedAt": "2026-10-30T16:02:51.193Z",
+  "reviewCompletedAt": "2026-10-30T16:02:51.193Z",
+  "reviewSummary": "Reviewed completion ffbf20ba (on moe/work-2026-10-24, pushed): index.ts +16/-6, index.test.ts +36/-0 = 46 net (under the 400 cap). Diff matches approved scope: optional LockInfo.empty; readLockInfo empty branch keeps the original stat.mtimeMs; staleLockReason gives an empty-only grace (null while age <= LOCK_STALE_TIMEOUT_MS, else 'malformed lock'); acquireLock wraps writeSync, on failure closeSync then unlinkSync (each best-effort), warn, return false. Success and EEXIST-retry paths untouched, no unlink after a successful write. readLockInfo's only prod consumer is staleLockReason (empty handled first); non-empty 'not-json', pid-only and JSON paths keep order and reasons. No new env/setting/doc.\n\nRE-RAN the exact gate in a fresh Linux snapshot of HEAD d444ea1d (whole-repo archive, native node_modules with a lock md5-matching HEAD, index.ts/index.test.ts cmp-identical to ffbf20ba, env -i NO_COLOR=1, Node 24.21.0): `cd packages/moe-daemon && npx tsc --noEmit && npm test` -> exit 0, 210 files, 6071 passed | 20 skipped (worker's 209/6067 predates a later vitestEnv test from another row).\n\nMutants on index.ts, each killed by exactly the intended test: dropping the empty grace fails the young-empty test; a grace that never expires fails the 60s-old-empty test; removing close/unlink fails the failed-write test. Baseline 46 passed | 1 skipped.\n\nAll four acceptance criteria are covered by exact-value tests, and the existing stopDaemon 'not-json' test passes unchanged. Not run: native Windows (close-before-unlink ordering is by construction only). Out of scope and untouched: removeStaleLock TOCTOU, >15s slow-start trust. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
