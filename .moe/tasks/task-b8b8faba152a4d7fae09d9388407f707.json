@@ -8,9 +8,63 @@
     "Both suites pass on the CI runner(s) they are added to"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED GUARD TESTS FIRST, following an existing precedent: scripts/tests/local-runner-check.test.mjs ~274 reads ../../.github/workflows/ci.yml and asserts its own file sits on a `run: node --test` line. Add one such test to EACH suite, so removing either file from CI fails that suite wherever it runs.\n- scripts/tests/daemon-json-cap.test.mjs: `test('CI runs this suite on Linux and Windows', ...)`.\n- scripts/tests/seat-registration.test.mjs: the same.\n\nEach test:\n(a) reads ci.yml through `new URL('../../.github/workflows/ci.yml', import.meta.url)` and normalizes CRLF;\n(b) finds the step whose `run: node --test ...` line includes ` scripts/tests/<this file>` as a whole token (regex like the precedent's), and asserts it exists;\n(c) asserts that the same step's `if:` line, the nearest `if:` between that step's `- name:` and its `run:`, is absent or is exactly `runner.os != 'macOS'`, so Linux always runs it;\n(d) asserts the step belongs to the `build-all-platforms:` job: its line index lies after the `  build-all-platforms:` header and before the next top-level job header.\nKeep it line-based with no YAML dependency, as the precedent is. Error handling: a missing ci.yml or step fails with an assert message naming the file. Never wrap it in try/skip.\n\nRun `node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs` with MOE_*/CLAUDE* unset. Exactly the two new tests must fail (the file is not in ci.yml yet), and every existing case must stay green. Record the red output. Report both files in complete_step modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/daemon-json-cap.test.mjs",
+        "scripts/tests/seat-registration.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/daemon-json-cap.test.mjs",
+        "scripts/tests/seat-registration.test.mjs"
+      ],
+      "note": "Appended 'CI runs this suite on Linux and Windows' to both suites (line-based ci.yml read, whole-token match, if: guard, job check). RED with all MOE_*/CLAUDE* scrubbed: fail 2 (exactly the two new tests), pass 23, skipped 48 (PS engines, no pwsh in WSL). Shared checkout has ~791 other dirty paths, untouched.",
+      "startedAt": "2026-10-30T06:30:51.509Z",
+      "completedAt": "2026-10-30T06:31:44.922Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "WIRE CI (DoD 1). In .github/workflows/ci.yml, job build-all-platforms (matrix ubuntu-latest, windows-latest, macos-latest), add ONE step directly after 'Test agent runtime discovery':\n\n```yaml\n      - name: Test launcher daemon.json cap and seat re-registration\n        # Real launcher blocks: Linux runs bash and pwsh 7; Windows runs Git Bash,\n        # PowerShell 5.1 and pwsh 7. Not macOS: its /bin/bash is 3.2 and these\n        # suites have not been run there.\n        if: runner.os != 'macOS'\n        run: node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs\n```\n\nWhy a new step instead of appending to an existing node --test step: every existing one also runs on macOS.\n- GitHub's ubuntu-latest and macos-latest images ship pwsh, so these suites' PowerShell 7 legs, which have only ever run on Windows, would run on Unix too.\n- macOS adds /bin/bash 3.2.\n- Neither can be verified before merge.\n\nKeep the file LF, with 6-space step indentation exactly like its neighbours. Then:\n- parse it: `python3 -c \"import yaml,sys; d=yaml.safe_load(open('.github/workflows/ci.yml')); s=[x for x in d['jobs']['build-all-platforms']['steps'] if 'daemon-json-cap' in str(x.get('run',''))]; assert len(s)==1 and s[0]['if']==\\\"runner.os != 'macOS'\\\", s\"`;\n- re-run the two suites: the step-1 guards must now pass.\n\nContested landing: two idle, unassigned WORKING CQ rows (task-340a07b3, task-4e412148) also declare ci.yml, which was clean at plan time. Make the edit through a wrapper-observed file-editing tool call, never a shell redirect.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "modifiedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Added one step after 'Test agent runtime discovery' via Edit (7 insertions, 0 deletions, LF). PyYAML parse OK: exactly one step with if == runner.os != 'macOS'. Guards now green: fail 0, pass 25, skipped 48 (no pwsh in WSL).",
+      "startedAt": "2026-10-30T06:31:45.170Z",
+      "completedAt": "2026-10-30T06:32:04.845Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ON EVERY ENGINE THE NEW STEP WILL RUN (DoD 2). CI cannot be triggered from here: ci.yml runs on push and PR to main only. Local runs that match each runner's engines are the evidence, so report counts per engine.\n\n1) Linux, matching ubuntu-latest, which has bash and pwsh 7.\n- WSL has no pwsh, so fetch a portable one into the scratch dir: the linux-x64 tarball from github.com/PowerShell/PowerShell/releases (any 7.x), extracted with `chmod +x`.\n- Then run, from the repo root: `env -u MOE_WORKER_ID -u MOE_PROJECT_PATH -u MOE_SESSION_ID ... PATH=<pwsh dir>:$PATH node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs`. Scrub every MOE_*/CLAUDE* variable.\n- Required: 0 failed, and the only skips are 'PowerShell 5.1 is Windows-only'. A pwsh skip means pwsh was not found, so fix PATH.\n- This pwsh-on-Linux leg has never run (both suites' authors verified Windows only), so treat its first result carefully.\n\n2) Windows, matching windows-latest, which has Git Bash, PS 5.1 and pwsh 7.\n- From WSL, run `node.exe --test` on Windows paths of a /mnt/d/moe-scratch snapshot (git archive HEAD plus this task's three files), with MOE_*/CLAUDE* unset.\n- Required: 0 failed, 0 skipped.\n\nDecision rule if a Linux pwsh case fails:\n- The case asserts Windows-only behaviour: make that suite's PowerShell 7 engine skip off Windows with an explicit reason string, the pattern prompt-cache-launcher, usage-launcher and moe-account-lease use, which run only bash off Windows. Never weaken a bash or Windows assertion.\n- It exposes a real ps1 defect on Unix pwsh: do not fix it here. moe.create_task a LOW bug in this epic, make the engine skip off Windows with a reason naming that task id, and say so in complete_task.\n\nThis task's complete_task verification command is leg 1's exact command, and its output tail must show the per-engine counts. Put the leg-2 counts and the YAML parse result in the summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Linux leg (bash + portable pwsh 7.6.9 on PATH, all MOE_*/CLAUDE* scrubbed): tests 73, pass 49, fail 0, skipped 24 (all 'PowerShell 5.1 is Windows-only'). pwsh-on-Linux leg passed first time, so no engine skip needed. Windows leg (node.exe on D:\\moe-scratch-b8b8faba snapshot: git archive HEAD scripts+.github plus this task's 3 files): tests 73, pass 73, fail 0, skipped 0. (D:\\moe-scratch already existed, so I used a new dir.)",
+      "startedAt": "2026-10-30T06:32:05.387Z",
+      "completedAt": "2026-10-30T06:35:11.787Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, last step. Check and note each item:\n- Could the guard tests pass vacuously? Confirm (b) matches the file name as a whole token, so 'seat-registration.test.mjs' is not satisfied by a longer name; that (c) fails on `if: runner.os == 'Windows'`; and that (d) fails if the step moves to another job. Prove it with three quick mutants of ci.yml on a scratch copy, each going red.\n- The ci.yml diff is exactly one step; no neighbouring step, indentation or LF ending changed.\n- Do the suites leave temp dirs or processes behind when run twice in parallel (node --test runs files concurrently)?\n- Other scripts/tests suites are still absent from CI: account-trust-docs.test.mjs, local-runner-vm-control.test.mjs and postflight-owner-scope.test.mjs, plus the wave1-pilot.mjs script. They are out of scope; list them in the complete_task summary for the governor instead of adding them.\n- The diff is far under the 400 net-LOC review cap.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        ".github/workflows/ci.yml",
+        "scripts/tests/daemon-json-cap.test.mjs",
+        "scripts/tests/seat-registration.test.mjs"
+      ],
+      "note": "Self-review. 4 mutants of ci.yml on scratch copy (D:\\moe-scratch-b8b8faba), guard tests only: file dropped -> fail 1; longer name 'seat-registration.test.mjs.bak' -> fail 1; if == Windows -> fail 2; step moved under another job -> fail 2; restored -> pass. ci.yml diff: 7 insertions, 0 deletions, LF, no neighbour touched. Two parallel runs: 25 pass 0 fail, no leaked processes (only unrelated architect seat running); /tmp entry count moved by 1 with other sessions active, not attributable. Diff 36 net test LOC + 7 CI lines, far under 400. Not in CI, out of scope: account-trust-docs.test.mjs, local-runner-vm-control.test.mjs, postflight-owner-scope.test.mjs, wave1-pilot.mjs.",
+      "startedAt": "2026-10-30T06:35:12.284Z",
+      "completedAt": "2026-10-30T06:35:40.291Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,10 +80,101 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T04:25:41.871Z",
-  "updatedAt": "2026-10-30T05:55:44.769Z",
+  "updatedAt": "2026-10-30T06:36:25.683Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T05:55:44.769Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:25:59.845Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-32ff5555",
+    "worker-73c29a03"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:30:23.988Z",
+  "executionContract": {
+    "intendedBehavior": "Every CI run of the build-all-platforms matrix on ubuntu-latest and windows-latest runs `node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs`. Both suites also fail on their own if ci.yml stops listing them.",
+    "acceptanceCriteria": [
+      "ci.yml build-all-platforms has exactly one new step running node --test on both suites, `if: runner.os != 'macOS'`, and it parses with PyYAML",
+      "Each suite's new 'CI runs this suite on Linux and Windows' test is red before the ci.yml edit and green after; three ci.yml mutants (file dropped, if narrowed to Windows, step moved to another job) each go red",
+      "Linux with portable pwsh 7: both suites 0 failed, only PS 5.1 skipped; Windows (Git Bash, PS 5.1, pwsh 7): 0 failed, 0 skipped"
+    ],
+    "invariants": [
+      "Existing assertions in both suites are unchanged",
+      "ci.yml stays LF with valid YAML"
+    ],
+    "compatibility": [
+      "No existing CI step changes; macOS runs exactly what it ran before",
+      "No launcher or daemon code changes"
+    ],
+    "approvedScope": [
+      "One new step in .github/workflows/ci.yml build-all-platforms",
+      "One self-check test appended to each of scripts/tests/daemon-json-cap.test.mjs and scripts/tests/seat-registration.test.mjs",
+      "Only if step 3's decision rule demands it: an explicit off-Windows skip reason for a suite's PowerShell 7 engine"
+    ],
+    "reuse": [
+      "The local-runner-check ci.yml self-check pattern",
+      "The existing ENGINES/skip pattern if a skip reason becomes necessary"
+    ],
+    "sourceAssumptions": [
+      ".github/workflows/ci.yml: build-all-platforms matrix [ubuntu-latest, windows-latest, macos-latest]; step 'Test agent runtime discovery' ~241; triggers are push and pull_request on main only",
+      "scripts/tests/daemon-json-cap.test.mjs ~52-57 and scripts/tests/seat-registration.test.mjs ~116-120: ENGINES bash/PS 5.1/pwsh 7 with probe()-based pwsh skip",
+      "scripts/tests/local-runner-check.test.mjs ~274: line-based ci.yml self-check precedent"
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs",
+      "python3 -c \"import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "CHOSEN: a new build-all-platforms step limited to Linux and Windows (`if: runner.os != 'macOS'`), plus a precedent-matching self-check in each suite. The epic rail requires a regression test, and the self-check is red until the step exists.\n\nREJECTED:\n- Appending the files to 'Test agent runtime discovery', as the description suggests. That step also runs on macOS, where /bin/bash 3.2 and pwsh would run these suites unverified. A red macOS leg on main would block the fleet's PRs.\n- A Linux-only step: it drops the Windows PS 5.1/pwsh/Git Bash legs, which are the suites' most valuable coverage, since ps1 is the Windows launcher.\n- Making every scripts/tests/*.test.mjs required in CI: three other suites are also absent, which is out of scope.",
+    "codebaseInsights": "- ci.yml runs only on push and PR to main, so a moe/work push never runs it. The matrix job build-all-platforms covers ubuntu, windows and macos, and its node --test steps carry no `if`.\n- Both suites pick engines the same way:\n  - bash: '/bin/bash' off Windows, Git Bash 'C:/Program Files/Git/bin/bash.exe' on Windows;\n  - PS 5.1: skipped off Windows;\n  - pwsh 7: probed with `pwsh -Command $PSVersionTable...` and skipped only when absent.\n  GitHub's Linux and macOS images include pwsh, so CI would run the PowerShell 7 legs there. Their authors never could: WSL has no pwsh. Evidence from task-8333866a and task-ad0dc2e7 shows Windows 57/57 and 14/14, WSL bash only.\n- The self-check precedent is scripts/tests/local-runner-check.test.mjs:274 (a line-based read of ci.yml).",
+    "risks": "- The Linux pwsh leg has never run, and step 3 has the decision rule for it.\n- An agent seat's ambient MOE_* env must be scrubbed for the local runs.\n- ci.yml is declared by two idle CQ rows, so use a wrapper-observed editing tool.\n- No CI run is possible pre-merge, so the per-engine local counts are the DoD-2 evidence and must be reported explicitly.",
+    "keyFiles": [
+      ".github/workflows/ci.yml",
+      "scripts/tests/daemon-json-cap.test.mjs",
+      "scripts/tests/seat-registration.test.mjs",
+      "scripts/tests/local-runner-check.test.mjs",
+      "scripts/tests/prompt-cache-launcher.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:30:24.008Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:30:51.509Z",
+  "reviewStartedAt": "2026-10-30T06:36:25.681Z",
+  "verification": {
+    "command": "env PATH=/tmp/pwsh-dl/ex:$PATH node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs  # run with all MOE_*/CLAUDE* env vars unset; portable pwsh 7.6.9 in /tmp/pwsh-dl/ex",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 73\nℹ pass 49\nℹ fail 0\nℹ skipped 24\nPer engine: bash 21 pass, PowerShell 7 24 pass, 4 static pass; the 24 skips are all 'PowerShell 5.1 is Windows-only; not available on linux'. Windows leg: tests 73 pass 73 fail 0 skipped 0.",
+    "reportedAt": "2026-10-30T06:36:25.681Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/daemon-json-cap.test.mjs",
+    "scripts/tests/seat-registration.test.mjs",
+    ".github/workflows/ci.yml"
+  ],
+  "completionSummary": "ci.yml build-all-platforms gains one step ('Test launcher daemon.json cap and seat re-registration', if: runner.os != 'macOS', run: node --test on daemon-json-cap and seat-registration); 7 insertions, 0 deletions, LF, PyYAML parses with exactly one such step. Each suite gets an appended 'CI runs this suite on Linux and Windows' self-check (line-based, whole-token match, if: guard, job check); both were red before the ci.yml edit (exactly 2 failures) and green after. Four ci.yml mutants (file dropped, longer name, if==Windows, step in another job) each go red.\nEvidence (CI cannot be triggered here: push/PR to main only):\n- Linux (bash + portable pwsh 7.6.9 on PATH, MOE_*/CLAUDE* scrubbed): 73 tests, 49 pass (bash 21, PS7 24, 4 static), 0 fail, 24 skipped = PS 5.1 'Windows-only' only. The pwsh-on-Linux leg passed first time, so no engine skip was added.\n- Windows (node.exe, D:\\ snapshot of HEAD + the 3 files): 73 pass, 0 fail, 0 skipped.\nNot in CI, out of scope, for the governor: account-trust-docs.test.mjs, local-runner-vm-control.test.mjs, postflight-owner-scope.test.mjs, wave1-pilot.mjs."
 }

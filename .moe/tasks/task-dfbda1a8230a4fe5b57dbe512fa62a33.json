@@ -1,0 +1,31 @@
+{
+  "id": "task-dfbda1a8230a4fe5b57dbe512fa62a33",
+  "epicId": "epic-be924fb8",
+  "title": "bug: ps1 failed, rescue and post-CAS recovery record_commit sends omit skipped/contested, unlike sh's record_commit_rpc",
+  "description": "scripts/moe-agent.ps1 still sends record_commit without `skipped`/`contested` on several paths that run after attribution:\n- the failed sends (peel, build, gate, commit, ref contention, teardown);\n- the Invoke-MoeRescueRef kind=rescue send;\n- the catch/finally post-CAS committed re-sends.\nsh's record_commit_rpc always reads ATTR_DIR/skipped and ATTR_DIR/contested, so on sh a held contested path still raises MOE_CONTESTED_HELD and its #governors alert on those outcomes, while on ps1 it raises nothing. Fix: merge Get-MoeRecordHeldFields (added by task-a2f243a1) into those sends where $attr is in scope. Add a postflight.{sh,ps1} assertion for at least one failed outcome.",
+  "definitionOfDone": [
+    "Every ps1 record_commit send after attribution carries skipped and contested via Get-MoeRecordHeldFields, as sh's record_commit_rpc does",
+    "postflight.sh and postflight.ps1 assert the lists on a failed-outcome row that holds a contested path",
+    "postflight.{sh,ps1} and parity-check pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-a2f243a111654c7fbb2a28848a923e8c"
+  ],
+  "priority": "LOW",
+  "order": 269.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:35:22.260Z",
+  "updatedAt": "2026-10-30T06:35:22.260Z"
+}

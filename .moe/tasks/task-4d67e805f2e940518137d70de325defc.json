@@ -1,0 +1,28 @@
+{
+  "id": "task-4d67e805f2e940518137d70de325defc",
+  "epicId": "epic-be924fb8",
+  "title": "bug: claim_next_task's file-collision notice doesn't mark which colliding peers are live and mentions nobody, so two live seats editing one file learn of it only at landing",
+  "description": "Observed twice on 2026-10-30, both times on docs/MCP_SERVER.md.\n\n1. 03:43:45Z: the collision notice for task-915d7e84 listed bc8410af among 8 peers. bc8410af's completion landing (03:44Z) held docs/MCP_SERVER.md as MOE_ATTR_CONTESTED_UNTOUCHED(task-915d7e84). QA then rejected bc8410af at 03:50Z because its docs never reached HEAD.\n2. 06:16:18Z: the collision notice for task-574c0b36 listed the live CQ-V03 (task-9cc13170, worker-e60b90bd, started 06:14Z) among 5 peers. 574c0b36's landing e67ca0e (06:22:35Z) committed V03's in-progress MCP_SERVER.md hunks under 574c0b36's id. Nothing was lost, but both workers and both QA reviews had to untangle the attribution by hand.\n\nRoot cause: claimNextTask.ts (about line 741) builds the notice from util/affectedFiles.ts computeFileCollisions. That function treats every nonterminal row that declares the file alike: a peer that is assigned and actively being edited looks the same as an unassigned row that is still waiting on its dependencies. It then posts to #workers with no @mentions. chat_wait only wakes a seat on a mention or a human message, so nobody is paged. The claim response's fileCollision array carries the same undifferentiated list.\n\nWanted: flag the colliding peers that are live (assigned to a registered, non-DEAD worker), and page those seats plus the claimer, so they can coordinate before either one lands. Keep it advisory: the claim is never blocked.",
+  "definitionOfDone": [
+    "Each claim_next_task response fileCollision entry whose peer task is assigned to a registered, non-DEAD worker carries that worker's id (for example liveAssignee). Entries for unassigned peers, or peers held by a DEAD seat, carry none. Unit tests cover all three cases.",
+    "When at least one colliding peer is live, the #workers notice @mentions each live peer's assignee and the claiming worker, so their chat_wait wakes, and lists the live peers before the dormant ones. A claim whose only collisions are dormant posts no mention. Tests assert the message's mentions in both cases.",
+    "The claim is never blocked or delayed by collision computation (a failure is still swallowed), and the docs/MCP_SERVER.md claim_next_task section describes the new field."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 268.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:35:01.788Z",
+  "updatedAt": "2026-10-30T06:35:01.788Z"
+}

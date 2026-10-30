@@ -106,7 +106,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -126,7 +126,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:54.656Z",
-  "updatedAt": "2026-10-30T06:29:57.200Z",
+  "updatedAt": "2026-10-30T06:35:59.476Z",
   "dependsOn": [
     "task-23a5563cea384d56abb8da1551435455",
     "task-0795112597cb453f93aaa5106e92d023",
@@ -139,13 +139,16 @@
     "firstClaimAt": "2026-10-26T08:22:53.949Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T06:35:59.476Z",
+    "wallClockMs": 339185527
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
     "architect-e4b7eee0",
     "architect-4ae016fb",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-952969be"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -296,5 +299,9 @@
     "kind": "completion",
     "sessionId": "worker-e60b90bd@2026-10-30T06:14:37Z",
     "at": "2026-10-30T06:26:45.777Z"
-  }
+  },
+  "completedAt": "2026-10-30T06:35:59.476Z",
+  "reviewCompletedAt": "2026-10-30T06:35:59.476Z",
+  "reviewSummary": "Reviewed completion cd2160e (tree 8ff543f3), which is on moe/work-2026-10-24 and has no drift since in tools/ or the docs. The MCP_SERVER.md sections landed in peer commit e67ca0e. I checked them hunk by hunk, and the file at cd2160e is byte-equal to e67ca0e.\nGATE: a fresh Linux snapshot at cd2160e (whole-repo git archive, native npm ci, env -i, node v24.21.0).\n- cd packages/moe-daemon && npm test: EXIT 0. 198/198 files; 5518 passed, 16 skipped. This matches task.verification.\n- npx tsc --noEmit: EXIT 0. The test file passes a scratch tsconfig with EXIT 0.\nDoD:\n1. Forged args: T1/T2/T3/T6. /mcp is refused with RUNNER_CHANNEL_REQUIRED before arguments are read, even with the key header, and writes nothing. runnerId, source, candidateId, treeSha, command and planRevision are each refused by name. A record_check_run run fails isAuthenticatedCheckRun.\n2. Duplicates: T4 covers the duplicate:true replay with no write, CHECK_RUN_IMMUTABLE, CHECK_DISPATCH_ALREADY_OBSERVED and CHECK_DISPATCH_IMMUTABLE.\n3. Superseded: T5. The result binds cand-k1, its tree and revision 1 after K2 and revision 2. NOT_CURRENT and NOT_FOUND are refused.\n4. Gate reproduced (above).\nQA mutants: 4 of 5 killed (channel gate off, forged keys allowed, unknown-key check off, observation tool unregistered). The fifth, runnerId taken from args, is equivalent: the allowlist refuses the key first.\nRails: checkRunStore, recordCheckRun, policy, the V03b store, server/* and guest-bridge are unchanged. TOOL_AUDIENCE 'wrapper' hides both tools from agent roles. All 14 refusal codes in the docs exist in code. No forbidden patterns.\nSIZE: packages/ is +389/-0 net (runtime 147, tests 242), under 400 by the QA precedent measure (-- packages/). Counting docs, it is 446 non-board in cd2160e (SCHEMA +57), plus about 101 MCP_SERVER lines in e67ca0e, about 547 total. No rail names this row. I approved on the code count because the docs are approved-scope contract prose, which I reviewed in full.",
+  "requiredCheckAtDone": null
 }

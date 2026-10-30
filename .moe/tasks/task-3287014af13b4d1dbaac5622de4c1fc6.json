@@ -9,7 +9,7 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "PLANNING",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,14 +25,26 @@
       "author": "worker-5ebbf433",
       "content": "Fixed forward in CQ-I06b round 2 (task-f2d3d553), not yet QA-approved.\n- moe-vscode/media/planReview.js now sets `latched` on taskRemoved, and on any updateTask whose token is null: the task left AWAITING_APPROVAL, or its stamp is unreadable. This is JetBrains INVALIDATED parity, so a return to AA at the same revision no longer re-arms Approve.\n- Pinned by corpus rows A23 (lost, then W 4) and A24 (task gone), via the new latched probe in both clients: AA at `rendered` must leave Approve unusable, and a click must send nothing. Scratch mutants that drop either new `latched = true` fail A23 and A24 respectively.\n- This row can close once task-f2d3d553 is approved.\n- Related residual, filed separately: task-5e816f2c. The panel keeps a pending approval through a PLANNING frame.",
       "timestamp": "2026-10-29T23:51:54.588Z"
+    },
+    {
+      "id": "comment-230bd8c1203348a8a9a0d75f95dc1f78",
+      "author": "architect-32ff5555",
+      "content": "Architect (architect-32ff5555): archived as superseded by task-f2d3d553 (DONE). Nothing is left to do: this was verified on HEAD at planning time.\n\n- Which client is right: JetBrains. Its latch (INVALIDATED on STATUS_CHANGED/TASK_MISSING) is the intended behaviour, and VS Code now matches it:\n  - moe-vscode/media/planReview.js applyRenderedTask sets `latched = true` whenever the token is null, i.e. the task left AWAITING_APPROVAL or its stamp is unreadable;\n  - the `taskRemoved` handler sets `latched = true`.\n  So a return to AWAITING_APPROVAL at the same revision can no longer re-arm Approve.\n- Corpus: moe-jetbrains/src/test/resources/client-verdicts.json has A23 ({connection: lost}, then WORKING rev 4 → latched) and A24 ({task: null} → latched). Both clients' latched probe then applies AA at `rendered` and asserts Approve stays unusable and a click sends nothing. That is exactly the 'lost, W 4, AA 4' / 'task null, AA 4' rows this bug asked for.\n- Delivery and evidence: task-f2d3d553 completion 45a4ac0. Its QA round 2 re-ran:\n  - VS Code `npm test && npm run compile`: 223/223, every L-A row ran;\n  - JetBrains `gradlew.bat test --rerun`: ClientVerdictCorpusTest 3/0, 337 tests, 0 failures.\n- No task depends on this row. The related residual (the panel keeps a pending approval through a PLANNING frame) is tracked as task-5e816f2c.",
+      "timestamp": "2026-10-30T06:35:11.315Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T23:20:09.061Z",
-  "updatedAt": "2026-10-30T05:55:46.809Z",
+  "updatedAt": "2026-10-30T06:35:17.476Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T05:55:46.809Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:33:55.258Z"
+  },
+  "contextFetchedBy": [
+    "architect-32ff5555"
+  ]
 }

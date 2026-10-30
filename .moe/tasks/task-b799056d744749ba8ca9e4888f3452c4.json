@@ -108,12 +108,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Size waiver prop-d975cf4e82a64baba646abba431068c3 was APPROVED by the human in the governor REPL at 2026-10-30T06:33:32Z, and the CQ-R11e1 465-line rail is now in epic-fe5e32c3's epicRails (16 to 17 rails). Resuming QA's park route, APPROVED -> REVIEW. Next QA: confirm the rail in allRails.epic against completion a4744468's numstat (+428/-37) and approve with no new bytes.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
   "dependsOn": [
@@ -138,7 +138,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:37:06.800Z",
-  "updatedAt": "2026-10-30T06:29:59.168Z",
+  "updatedAt": "2026-10-30T06:33:43.493Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:55:00.461Z",
     "plannedStepCount": 6,
@@ -250,7 +250,14 @@
     ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json",
     ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
     ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
-    ".moe/tasks/task-b799056d744749ba8ca9e4888f3452c4.json"
+    ".moe/tasks/task-b799056d744749ba8ca9e4888f3452c4.json",
+    ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
+    ".moe/tasks/task-6f5cf10f78184c38a46e6973cadda817.json",
+    ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+    ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json",
+    ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
+    ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
   ],
   "completionSummary": "CQ-R11e1 delivered: a host cache for the pinned Node toolchain.\n- Pins in scripts/local-runner/toolchain.json: Node 24.22.2 (CI's line, per the human decision), linux-x64 and linux-arm64 .tar.xz from nodejs.org.\n  - x64: sha256 48cc0e21…aaf75, size 32039312. arm64: sha256 eb187837…d9ba8, size 30968168.\n  - Both were hashed from downloaded bytes and match nodejs.org SHASUMS256.txt.\n- toolchain-cache.mjs exports fetchNodeToolchain, which returns a frozen {file, sha256, size, version} at <cacheDir>/<sha256>.tar.xz.\n  - Fixed TOOLCHAIN_* codes; no URL, path or body ever appears in a message.\n  - The module-relative manifest is validated strictly: exact keys, one version, the fixed URL template, size bound 128 MiB.\n  - Input is validated before any fetch or mkdir.\n- agent-cache.mjs now exports fetchPinnedFile, with neutral PINNED_* codes and a sha256 or sha512 digest. An exact size, or size null with a maxBytes bound, is for CQ-R11e3.\n  - fetchAgentBinary routes through it and maps PINNED_* to AGENT_BINARY_* one to one.\n  - AB1-AB11 are unedited and green.\n- Tests: TC1-TC7 were added to local-runner-check.test.mjs. The bundle test ships toolchain.json and toolchain-cache.mjs; the VS Code bundle deep-equals the manifest.\n  - Deviation: they are added to `shipped`, not `required`, because nothing wires them yet.\n- Live check: 1 fetch, then a cache hit with 0 fetches.\n- Mutation: 20 mutants probed.\n  - iv-b (holdsPin ignoring maxBytes on a hit) survived and is now killed by a new TC6 row.\n  - xv is equivalent on POSIX because O_NOFOLLOW also refuses.\n- Fresh run: 73 tests, 72 pass, 1 skip (the pre-existing K9 root-only skip), exit 0.\n- Size: 465 changed lines (+428/-37), runtime and manifest 195, tests 270. This is over the 400 cap. Waiver pre-filed as prop-d975cf4e82a64baba646abba431068c3 (EPIC ADD_RAIL, PENDING); #governors notified.\n- Disclosure: during step 5 I ran `git add -N` on my two new files to read numstat, then `git reset -q` on those same paths. No other index ",
   "commits": [
@@ -276,6 +283,28 @@
       "treeId": "01439e6a255edd14a039651685b6739783279e3b",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "b4f614b82be0425ec92835b3596b052e6fa0e178",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T06:25:02Z",
+      "paths": [
+        ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
+        ".moe/tasks/task-6f5cf10f78184c38a46e6973cadda817.json",
+        ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+        ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json",
+        ".moe/tasks/task-b799056d744749ba8ca9e4888f3452c4.json",
+        ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
+        ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T06:31:07.316Z",
+      "treeId": "263f157d2af0be00876d782b56e32b23585a4b56",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -286,12 +315,14 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5ebbf433@2026-10-30T06:04:34Z",
-    "at": "2026-10-30T06:23:10.673Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T06:25:02Z",
+    "at": "2026-10-30T06:31:07.316Z"
   },
-  "blockedReason": "QA (qa-952969be): substance GREEN, parked on size only. Completion a4744468 (on moe/work-2026-10-24) measures 465 changed lines (+428/-37 by git diff --numstat) against the 400 cap. The worker's waiver prop-d975cf4e82a64baba646abba431068c3 (EPIC ADD_RAIL, cap 465 across the 5 owned files) is still PENDING and not in the epic rails, so QA cannot approve yet and a size-only reject would just burn a reopen.\nEvidence: fresh DoD gate on a pure git archive of a4744468, env -i Node 24.21.0: 73 tests, 72 pass, 1 skip (K9 root-only, pre-existing), exit 0. local-runner-agents.test.mjs is byte-identical to baa52df and AB1-AB11 pass (DoD 3). TC1-TC7 pass (DoD 1, 2). agent-cache.mjs adds exactly one export, fetchPinnedFile.\n15 independent mutants on a scratch copy: 12 killed; 2 equivalent (dropping the size-null stat precheck; fetchPinnedFile's catch passing raw errors, unreachable because every internal throws a PINNED code); 1 advisory survivor: dropping `entry.version === version` in toolchain-cache.mjs validEntry is not caught, because the TC2 'different versions' row also rewrites the url. The code refuses that shape today; it is not a defect.\nRoute: APPROVED -> set_task_status REVIEW; QA approves with no new bytes. REJECTED -> set_task_status PLANNING for a review-scope split (runtime+manifest 195 / tests 270). unblock_worker cannot reach this unassigned parked row.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-30T06:29:59.168Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "QA (qa-952969be): substance GREEN, parked on size only. Completion a4744468 (on moe/work-2026-10-24) measures 465 changed lines (+428/-37 by git diff --numstat) against the 400 cap. The worker's waiver prop-d975cf4e82a64baba646abba431068c3 (EPIC ADD_RAIL, cap 465 across the 5 owned files) is still PENDING and not in the epic rails, so QA cannot approve yet and a size-only reject would just burn a reopen.\nEvidence: fresh DoD gate on a pure git archive of a4744468, env -i Node 24.21.0: 73 tests, 72 pass, 1 skip (K9 root-only, pre-existing), exit 0. local-runner-agents.test.mjs is byte-identical to baa52df and AB1-AB11 pass (DoD 3). TC1-TC7 pass (DoD 1, 2). agent-cache.mjs adds exactly one export, fetchPinnedFile.\n15 independent mutants on a scratch copy: 12 killed; 2 equivalent (dropping the size-null stat precheck; fetchPinnedFile's catch passing raw errors, unreachable because every internal throws a PINNED code); 1 advisory survivor: dropping `entry.version === version` in toolchain-cache.mjs validEntry is not caught, because the TC2 'different versions' row also rewrites the url. The code refuses that shape today; it is not a defect.\nRoute: APPROVED -> set_task_status REVIEW; QA approves with no new bytes. REJECTED -> set_task_status PLANNING for a review-scope split (runtime+manifest 195 / tests 270). unblock_worker cannot reach this unassigned parked row.",
+  "blockedOnTaskIds": null
 }
