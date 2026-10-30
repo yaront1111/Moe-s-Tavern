@@ -1,0 +1,29 @@
+{
+  "id": "task-a2a55bc6059048e78174e551c32a6e73",
+  "epicId": "epic-be924fb8",
+  "title": "get_commit_scope: add finalizingAttempt, the task's finalizing attempt as claim_next_task's hold selects it",
+  "description": "Split from task-d3cd966c5ef74468b03ac4ca23893d5d (its DoD 1). The daemon half lands now. The wrapper half waits for the in-flight wrapper edits and the pending main merge.\n\nAdd a field to moe.get_commit_scope's response: `finalizingAttempt: { attemptId, workerId, generation } | null`. It is additive.\n- It names the task's well-formed finalizing attempt exactly as `finalizingAttemptsByTask(state).get(task.id)` (packages/moe-daemon/src/util/claimEligibility.ts) selects it:\n  - phase 'finalizing';\n  - non-blank id, taskId and workerId;\n  - a safe-integer generation >= 1;\n  - the highest generation when two exist.\n- It names the attempt whoever holds it, the caller included. Each wrapper compares workerId to itself; the owner guard ignores its own attempt.\n- No other response field changes.\n- The tool's inline description says what the field means and that an older daemon omits it.\n\nWhy: the owner guard in both wrappers (sh landing_owner_guard, ps1 Get-MoeOwnerGuard) reads and parses every .moe/attempts/*.json record. It does this on every landing where the task is unassigned or held by an unprotected owner, which includes every worker completion. On 2026-10-29, 584 records took 1.46 s, and the count grows by one per claim. task-d3cd966c switches both wrappers to this field and documents it in docs/MCP_SERVER.md. That doc is in the pending main merge's change set, so its edit waits with the wrappers.",
+  "definitionOfDone": [
+    "moe.get_commit_scope returns finalizingAttempt: { attemptId, workerId, generation } for the attempt that finalizingAttemptsByTask (util/claimEligibility.ts) selects for the task, else null. The caller's own attempt is named too. Every other response field is unchanged.",
+    "getCommitScope.test.ts covers: no attempts gives null; one well-formed finalizing attempt gives exactly { attemptId, workerId, generation }; running and closed attempts give null; malformed finalizing records (blank workerId; generation 0) give null; two finalizing attempts give the higher generation; another task's finalizing attempt gives null; the caller's own finalizing attempt is still named.",
+    "The tool's inline description documents the field and says an older daemon omits it. docs/MCP_SERVER.md is updated by task-d3cd966c5ef74468b03ac4ca23893d5d.",
+    "In a Linux-native snapshot of packages/moe-daemon, npx vitest run, npx tsc --noEmit and a type check of getCommitScope.test.ts all exit 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 262.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T00:20:53.436Z",
+  "updatedAt": "2026-10-30T00:20:53.436Z"
+}
