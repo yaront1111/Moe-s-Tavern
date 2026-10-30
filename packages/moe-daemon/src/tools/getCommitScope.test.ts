@@ -14,6 +14,7 @@ interface ScopeResult {
   assignedWorkerId: string | null;
   assigneeAlive: boolean;
   assigneeProtected: boolean;
+  finalizingAttempt: { attemptId: string; workerId: string; generation: number } | null;
   asserted: string[];
   declared: string[];
   planned: string[];
@@ -706,7 +707,7 @@ describe('moe.get_commit_scope', () => {
       }
     });
 
-    it('only adds the assigneeProtected key to the reply', async () => {
+    it('adds only the assigneeProtected and finalizingAttempt keys to the reply', async () => {
       await ready();
       ownedTask('task-1', 'worker-owner');
       h.createWorker({ id: 'worker-owner', status: 'CODING' });
@@ -715,9 +716,74 @@ describe('moe.get_commit_scope', () => {
       const result = await scope();
       expect(Object.keys(result).sort()).toEqual([
         'activePeerIds', 'alwaysInclude', 'asserted', 'assignedWorkerId', 'assigneeAlive', 'assigneeProtected',
-        'declared', 'epicId', 'excludePrefixes', 'inferredPaths', 'livePeerIds', 'peerDeclared', 'peersActive',
+        'declared', 'epicId', 'excludePrefixes', 'finalizingAttempt', 'inferredPaths', 'livePeerIds', 'peerDeclared', 'peersActive',
         'planned', 'policy', 'reopenCount', 'status', 'taskId', 'title', 'touchedFiles', 'unattributedPaths',
       ].sort());
+    });
+  });
+
+  describe('finalizingAttempt', () => {
+    // The finalizing hold claim_next_task enforces, named whoever holds it, the
+    // caller included: the wrapper's owner guard compares workerId to itself.
+    const open = (taskId: string, workerId: string) =>
+      openAttempt(h.state, { taskId, workerId, runnerId: workerId, workspace: h.testDir });
+
+    beforeEach(async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'REVIEW', assignedWorkerId: null });
+      h.createTask({ id: 'task-2', status: 'REVIEW', assignedWorkerId: null });
+      await h.state.load();
+    });
+
+    async function finalizing(taskId = 'task-1', workerId = 'worker-done') {
+      const attempt = await open(taskId, workerId);
+      return await setAttemptPhase(h.state, attempt.id, 'finalizing');
+    }
+
+    it('is null with no attempts, and for running, reconciling and closed attempts', async () => {
+      expect((await scope()).finalizingAttempt).toBeNull();
+      const attempt = await open('task-1', 'worker-done');
+      expect((await scope()).finalizingAttempt).toBeNull();
+      await setAttemptPhase(h.state, attempt.id, 'reconciling');
+      expect((await scope()).finalizingAttempt).toBeNull();
+      await setAttemptPhase(h.state, attempt.id, 'closed');
+      expect((await scope()).finalizingAttempt).toBeNull();
+    });
+
+    it('names exactly the finalizing attempt, whoever asks', async () => {
+      const a = await finalizing();
+      const expected = { attemptId: a.id, workerId: 'worker-done', generation: a.generation };
+
+      expect((await scope({ workerId: 'worker-other' })).finalizingAttempt).toStrictEqual(expected);
+      expect((await scope()).finalizingAttempt).toStrictEqual(expected);
+      expect((await scope({ workerId: 'worker-done' })).finalizingAttempt).toStrictEqual(expected);
+      expect((await scope({ taskId: 'task-2' })).finalizingAttempt).toBeNull();
+    });
+
+    it('skips malformed finalizing records', async () => {
+      const a = await finalizing();
+      const named = { attemptId: a.id, workerId: 'worker-done', generation: a.generation };
+      expect((await scope()).finalizingAttempt).toStrictEqual(named);
+
+      h.state.attempts.set(a.id, { ...a, workerId: '  ' });
+      expect((await scope()).finalizingAttempt).toBeNull();
+      h.state.attempts.set(a.id, { ...a, generation: 0 });
+      expect((await scope()).finalizingAttempt).toBeNull();
+      h.state.attempts.set(a.id, { ...a, generation: 1.5 });
+      expect((await scope()).finalizingAttempt).toBeNull();
+      h.state.attempts.set(a.id, { ...a, id: '' });
+      expect((await scope()).finalizingAttempt).toBeNull();
+    });
+
+    it('keeps the highest generation when two are finalizing', async () => {
+      const a = await finalizing();
+      h.state.attempts.set('attempt-high', { ...a, id: 'attempt-high', workerId: 'worker-high', generation: 9 });
+      h.state.attempts.set('attempt-low', { ...a, id: 'attempt-low', workerId: 'worker-low', generation: 2 });
+
+      expect((await scope()).finalizingAttempt).toStrictEqual({
+        attemptId: 'attempt-high', workerId: 'worker-high', generation: 9,
+      });
     });
   });
 });
