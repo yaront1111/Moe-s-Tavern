@@ -113,7 +113,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -133,7 +133,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:04:34.787Z",
-  "updatedAt": "2026-10-30T22:47:01.131Z",
+  "updatedAt": "2026-10-30T22:52:44.249Z",
   "dependsOn": [
     "task-4132ab1c40064e898f8a306cf4145f67",
     "task-001d8ab383ef41088e045b2e41ed0e1e",
@@ -144,12 +144,15 @@
     "firstClaimAt": "2026-10-30T06:38:37.770Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T22:52:44.249Z",
+    "wallClockMs": 58446479
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
     "architect-915213a1",
-    "worker-632cd3f0"
+    "worker-632cd3f0",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -202,7 +205,48 @@
     "scripts/tests/local-runner.test.mjs",
     "scripts/tests/local-runner-bundle.test.mjs",
     "scripts/local-runner/certify-canary.mjs",
+    "scripts/local-runner/certify.mjs",
+    ".moe/tasks/task-1f7409c5bcc1499ab886f656bd78c894.json",
+    ".moe/tasks/task-ea8b44c9964442e3a5ca80b2a1cc2ad7.json"
+  ],
+  "completionSummary": "CQ-R13g adds certify's 'canary-check' (new scripts/local-runner/certify-canary.mjs, 111 lines), spliced into certify.mjs after LIFECYCLE_CHECKS; teardown stays last.\n- Project: generated in memory, no fixtures/. It holds package.json, a v3 lockfile pinning is-number@7.0.0 by literal URL and sha512, and canary.test.js. Variants: 'fail' asserts false; 'altered' flips the first digest byte, so the integrity stays well-formed and admitted.\n- Runs: three sequential runCheckJob calls with fresh owners and credentials, stopping at the first failure. Pass-through wrappers observe provision, dependencies and session; natively they fall back to runCheckJob's defaults.\n- Verdicts:\n  - every run: vm 'deleted';\n  - pass: 'passed', 'intact', and environment === checkEnvironment(observed image, sha256(supervisor), GUEST_RESOURCES, pinned toolchain for the guest arch, cache digest). The expected value is null, never matching, when the arch or a string digest is missing;\n  - fail: 'code-failure';\n  - altered: infra-failure with exactly DEPENDENCY_CHECKSUM_MISMATCH and 0 sessions.\n  All codes are fixed CERTIFY_CANARY_*, and a rejection keeps its own code.\n- Tests (local-runner.test.mjs +141/-5):\n  - CY1: the pins spelled out, the lockfile admitted, the variants byte-diffed, and pass/fail tests run under node;\n  - CY2: exact inputs, plus real-runCheckJob parse acceptance and rejection pass-through;\n  - CY3: 18 table rows plus a reject row;\n  - CY4: wiring.\n  The rig sits above CF1 so isolated rows hit no TDZ. Id-list rows are updated, and the bundle `shipped` list gains the file.\n- RED: the test file fails at load (ERR_MODULE_NOT_FOUND) and the bundle row fails.\n- GREEN: exit 0, 356 tests, 355 pass, 1 skipped. CF1/CY1-4/LC7/CB7 alone 1/1.\n- Host prototype (real buildDependencyCache + offline npm ci): pass ci 0 / test 0; fail test 1; altered DEPENDENCY_CHECKSUM_MISMATCH. Pins re-verified live.\n- Mutations: 14 killed by assertions. The IMAGE_ARCHES guard is an equivalent mutant (the man",
+  "commits": [
+    {
+      "sha": "f69a494c8a61ef07245e8cd68f28c159add221ce",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-632cd3f0@2026-10-30T22:26:06Z",
+      "paths": [
+        ".moe/tasks/task-1f7409c5bcc1499ab886f656bd78c894.json",
+        ".moe/tasks/task-ea8b44c9964442e3a5ca80b2a1cc2ad7.json",
+        "scripts/local-runner/certify-canary.mjs",
+        "scripts/local-runner/certify.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-632cd3f0",
+      "recordedAt": "2026-10-30T22:47:24.262Z",
+      "treeId": "c07b439179942082405278f95bca104cc7c444dc",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    "scripts/local-runner/certify-canary.mjs",
     "scripts/local-runner/certify.mjs"
   ],
-  "completionSummary": "CQ-R13g adds certify's 'canary-check' (new scripts/local-runner/certify-canary.mjs, 111 lines), spliced into certify.mjs after LIFECYCLE_CHECKS; teardown stays last.\n- Project: generated in memory, no fixtures/. It holds package.json, a v3 lockfile pinning is-number@7.0.0 by literal URL and sha512, and canary.test.js. Variants: 'fail' asserts false; 'altered' flips the first digest byte, so the integrity stays well-formed and admitted.\n- Runs: three sequential runCheckJob calls with fresh owners and credentials, stopping at the first failure. Pass-through wrappers observe provision, dependencies and session; natively they fall back to runCheckJob's defaults.\n- Verdicts:\n  - every run: vm 'deleted';\n  - pass: 'passed', 'intact', and environment === checkEnvironment(observed image, sha256(supervisor), GUEST_RESOURCES, pinned toolchain for the guest arch, cache digest). The expected value is null, never matching, when the arch or a string digest is missing;\n  - fail: 'code-failure';\n  - altered: infra-failure with exactly DEPENDENCY_CHECKSUM_MISMATCH and 0 sessions.\n  All codes are fixed CERTIFY_CANARY_*, and a rejection keeps its own code.\n- Tests (local-runner.test.mjs +141/-5):\n  - CY1: the pins spelled out, the lockfile admitted, the variants byte-diffed, and pass/fail tests run under node;\n  - CY2: exact inputs, plus real-runCheckJob parse acceptance and rejection pass-through;\n  - CY3: 18 table rows plus a reject row;\n  - CY4: wiring.\n  The rig sits above CF1 so isolated rows hit no TDZ. Id-list rows are updated, and the bundle `shipped` list gains the file.\n- RED: the test file fails at load (ERR_MODULE_NOT_FOUND) and the bundle row fails.\n- GREEN: exit 0, 356 tests, 355 pass, 1 skipped. CF1/CY1-4/LC7/CB7 alone 1/1.\n- Host prototype (real buildDependencyCache + offline npm ci): pass ci 0 / test 0; fail test 1; altered DEPENDENCY_CHECKSUM_MISMATCH. Pins re-verified live.\n- Mutations: 14 killed by assertions. The IMAGE_ARCHES guard is an equivalent mutant (the man"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-632cd3f0@2026-10-30T22:26:06Z",
+    "at": "2026-10-30T22:47:24.262Z"
+  },
+  "completedAt": "2026-10-30T22:52:44.249Z",
+  "reviewCompletedAt": "2026-10-30T22:52:44.249Z",
+  "reviewSummary": "Reviewed completion commit f69a494c (on moe/work-2026-10-24, pushed). Code +259/-10 in 4 files, under 400; diff --check clean; no fixtures/ path.\nGate: I re-ran task.verification in a git-archive snapshot of f69a494c (env -i, Node 24.21.0). Exit 0: 356 tests, 355 pass, 0 fail, 1 skip.\nDoD1: met by CY2 (pass run, 3-run inputs), CY3 (18 rows plus a reject row) and CY4 (wiring; teardown still deletes certify's VM). Natively the canary matches the real runCheckJob:\n- supervisorSha256 = sha256(supervisor), as bootstrap sets it;\n- toolchainSha256 = the manifest pin;\n- digest = tree.digest;\n- the tarball cache is keyed by sha512, so 'altered' maps to DEPENDENCY_CHECKSUM_MISMATCH;\n- native deps is {}, so no seam can be injected.\nDoD2: met by CY1 (literal pins, lockfile admitted, variants byte-diffed, pass/fail run under node).\nDoD3: met; output reproduced.\nMutation probes: 10 killed by AssertionError. One survivor: dropping `outcome === 'infra-failure'` in the altered verdict. It is equivalent natively, because the real runCheckJob's DEPENDENCY_CHECKSUM_MISMATCH implies infra-failure. Optional follow-up row: {outcome:'inconclusive', failure:'DEPENDENCY_CHECKSUM_MISMATCH'}.\nRails: verified-local is off, executionReady stays false, and no assertion was weakened. The native operator run is not certified here.",
+  "requiredCheckAtDone": null
 }
