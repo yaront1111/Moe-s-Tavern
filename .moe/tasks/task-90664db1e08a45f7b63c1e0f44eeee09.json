@@ -74,16 +74,24 @@
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE, fresh, then ADVERSARIAL SELF-REVIEW.\n\nTake the shared resource 'jetbrains-gradle' with moe.acquire_resource first. If it is busy, call moe.report_blocked with resourceId 'jetbrains-gradle'. Release it after the run. Then run, from WSL:\n\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n\nIt must exit 0. Its command, exit code and output tail are complete_task's evidence. Before citing it, confirm that DaemonIdentityTest, MoeProjectForeignDaemonTest and the unedited MoeProjectConnectionTest ran.\n\nMutants, on scratch copies, each turning the named rows red:\n(i) compare raw strings: the Same spelling rows;\n(ii) delete daemon.json unconditionally: F2;\n(iii) treat Unknown as Foreign: U1 and the Unknown rows;\n(iv) drop the connecting = false before scheduleReconnect: F1's reconnectFuture assertion.\n\nThen load adversarial-self-review and check:\n- a false Foreign: Windows vs WSL vs \\\\\\\\wsl$ spellings, case, trailing slash, a relative path;\n- the probe on the EDT;\n- a second client from a concurrent connect;\n- a disposal during the probe;\n- the IDE proxy (NO_PROXY);\n- a slow or trickling /health (both timeouts plus the byte cap);\n- the compare-then-delete window. It is best-effort: a new daemon writes a new startedAt.\n\nA read-only `git status --short` must show only the four owned paths, and MoeDaemonSupervisor.kt untouched. Never revert, stash, `git add -A` or commit peer or pre-existing paths. Write the Serena handoff 'task-task-90664db1e08a45f7b63c1e0f44eeee09-handoff' for task-e7f4026a (the final verification row) and CQ-RF04 (task-de91373a, which edits MoeProjectService.kt next).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt"
       ],
-      "startedAt": "2026-10-30T08:16:54.225Z"
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "note": "Resumed existing IN_PROGRESS step-5; start_step correctly refused re-entry. No source/test edits needed: all four owned files match checkpoint 52d45cb6 byte-for-byte. Under jetbrains-gradle lease the exact plan command `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exited 0, BUILD SUCCESSFUL in 9s. Fresh XML verified against Windows start 2026-10-30T09:02:11.1897184Z: 26 suites, 382 tests, 0 failures/errors/skips; DaemonIdentityTest 16, MoeProjectForeignDaemonTest 5, unchanged MoeProjectConnectionTest 5. Re-ran six scratch-only mutants, all killed by expected assertions without compilation failures: raw compare; unconditional delete (F2); Unknown-as-Foreign (U1/U2); relative guard removed; any-status classification; connecting reset removed (F1). Restored scratch source hashes equal shared/checkpoint hashes. Evidence: D:/moe-scratch/task-90664db1/resume-262588d0/{gate.log,suite-summary.json,mutants.json}. Lease released. Adversarial checklist covered path aliases/relative/malformed/oversize input, EDT dispatch, existing connecting/client swap, disposal/manual disconnect after probe, NO_PROXY, timeout/trickle cap, cleanup and best-effort compare-delete TOCTOU. Found pre-existing out-of-scope readDaemonInfo deletion side effects; filed task-6fc0096b9fff4c45904cfbce7833ad2d, did not edit MoeDaemonSupervisor.kt. Unedited connection tests and supervisor absent from task diff. Shared peer/debris dirty paths untouched; git status scoped to moe-jetbrains is clean because own bytes are checkpointed. Existing +651 size exception applies; no scope growth.",
+      "startedAt": "2026-10-30T08:16:54.225Z",
+      "completedAt": "2026-10-30T09:05:57.886Z"
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -115,17 +123,18 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:54:54.318Z",
-  "updatedAt": "2026-10-30T08:51:37.141Z",
+  "updatedAt": "2026-10-30T09:07:14.489Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:58:59.861Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
     "worker-73c29a03",
-    "qa-ba3f4f35"
+    "qa-ba3f4f35",
+    "worker-262588d0"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -135,7 +144,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T08:03:34.416Z",
@@ -193,14 +203,11 @@
   "planApprovedAt": "2026-10-30T08:03:34.439Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T08:04:46.282Z",
-  "blockedReason": "Steps 1-4 are done and green. Step 5's plan gate cannot exit 0 on moe/work-2026-10-24 right now, for reasons outside this task.\n\nThe branch carries the CQ-RF02 checkpoint 91eb0d14, and that row is BLOCKED. HEAD alone fails 2 JetBrains tests:\n- MoeDaemonSupervisorTest 'a legacy spawn and activation neither write nor read the protected state store'\n- RuntimeSelectionPolicyTest 'D4 store failures and malformed project reads never escape'\nReproduced on a git archive of HEAD 79e5de60 with none of my files: 359 tests, 2 failed. The rows that fix them are task-bf4debb34a0241d2be0f764a2a68158b and task-f23c4464c8f24efeb8d62973111839ce (both PLANNING).\n\nEvidence for this row's bytes:\n- Shared-tree plan gate at 08:35Z: 380 tests; the only 2 failures are the two above. DaemonIdentityTest 16/16, MoeProjectForeignDaemonTest 5/5, the unedited MoeProjectConnectionTest 5/5.\n- Isolated full suite on HEAD a6f16a64 (before that checkpoint) plus my 4 files: 373/373, exit 0.\n- 6/6 mutants killed.\n\nResume: when both bug rows are DONE, take jetbrains-gradle, rerun the exact plan gate, confirm those three classes ran, then complete step-5 and complete_task.\n\nSize waiver prop-38260a62f0b44ba99d12d6b851c96891 is pending. MoeDaemonSupervisor.kt is untouched.",
-  "blockedOnTaskIds": [
-    "task-bf4debb34a0241d2be0f764a2a68158b",
-    "task-f23c4464c8f24efeb8d62973111839ce"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T08:37:55.003Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "52d45cb6d815ec814dfbd308fe1ba271c6998baa",
@@ -222,10 +229,10 @@
     }
   ],
   "filesModified": [
-    "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
-    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/services/DaemonIdentity.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
   ],
   "touchedFiles": [
     "moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt",
@@ -238,5 +245,14 @@
     "kind": "checkpoint",
     "sessionId": "worker-73c29a03@2026-10-30T08:03:35Z",
     "at": "2026-10-30T08:38:19.228Z"
-  }
+  },
+  "reviewStartedAt": "2026-10-30T09:07:14.487Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :compileKotlin UP-TO-DATE\n> Task :compileTestKotlin UP-TO-DATE\n> Task :testClasses UP-TO-DATE\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 9s\n11 actionable tasks: 2 executed, 9 up-to-date\nFresh XML checked against Windows-clock start: 26 suites, 382 tests, 0 failures, 0 errors, 0 skipped. DaemonIdentityTest=16; MoeProjectForeignDaemonTest=5; MoeProjectConnectionTest=5. Evidence: D:/moe-scratch/task-90664db1/resume-262588d0/gate.log and suite-summary.json.",
+    "reportedAt": "2026-10-30T09:07:14.487Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Delivered the checkpointed JetBrains /health identity probe and connection refusal branch, with portable Windows/WSL comparison and backward-compatible Unknown behavior. Four owned files remain byte-identical to 52d45cb6; no resumed source edits. Fresh exact Gradle gate: 382 tests, 0 failures/errors/skips; helper 16, foreign-daemon integration 5, unedited connection suite 5. Six scratch mutants killed by expected assertions; source restored/hash-verified. Adversarial review complete; shared resource released and Serena handoff written. MoeDaemonSupervisor.kt unchanged. Pre-existing supervisor readDaemonInfo deletion side effects are tracked separately in task-6fc0096b9fff4c45904cfbce7833ad2d, not fixed inline. Existing +651 size waiver retained."
 }
