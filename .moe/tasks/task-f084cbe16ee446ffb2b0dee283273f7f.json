@@ -1,0 +1,29 @@
+{
+  "id": "task-f084cbe16ee446ffb2b0dee283273f7f",
+  "epicId": "epic-be924fb8",
+  "title": "fix: generated project runtime ignores include pins/ with header-guarded migration",
+  "description": "Production generator/migration surface split from task-7ee53957b90e459fb636948e5cecfa2a to keep each plan within 5 files. Objective: new and existing Moe-generated .moe/.gitignore files ignore daemon chat pins. Deliverable: add pins/ to RUNTIME_RECORD_DIRS in packages/moe-daemon/scripts/generate-init-files.ts, run generate-init-files to update tracked src/generated/initFiles.ts (never hand edit generated), and add cases in src/util/initFiles.test.ts. Existing header-guarded writeGitignore appends missing runtime dirs atomically and propagates IO failures; preserve its behavior. Fresh writeInitFiles emits pins/ exactly once; already current generated ignores minus pins gain ONLY pins (LF, CRLF/no-trailing-newline, custom lines preserved), repeat no-op, preexisting pins not duplicated, no-header custom ignore byte-identical. Test disk-write failure propagates/no destructive rewrite. Tests use temp roots, never live .moe. NOT in scope: root .gitignore, CLAUDE.md/ARCHITECTURE (parent owns those); messages/ generation, history rewriting, chat APIs. Verification from root: `(cd packages/moe-daemon && npm run generate-init-files && npm test)`. Parent depends on this and owns repo policy/docs + final combined regression. Avoid generator changes caused by unrelated live doc edits; work from authoritative task snapshot and only report own generated delta.",
+  "definitionOfDone": [
+    "Generated GITIGNORE_CONTENT and fresh writeInitFiles output contain exactly one pins/ line, proven by daemon test.",
+    "A header-bearing previously current ignore missing only pins gains only pins; LF/CRLF, repeat idempotence, existing pins and no-header custom preservation covered by tests.",
+    "Generation source is authoritative, generated tracked artifact reflects it; IO errors preserve propagation and no custom override logic changes.",
+    "The named generation plus full daemon test command exits 0 with fresh evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-7ee53957b90e459fb636948e5cecfa2a",
+  "priority": "LOW",
+  "order": 3.9,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T14:08:01.145Z",
+  "updatedAt": "2026-10-30T14:08:01.145Z"
+}

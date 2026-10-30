@@ -9,9 +9,47 @@
     "CLAUDE.md and docs/ARCHITECTURE.md name pins/ as runtime, and `cd packages/moe-daemon && npm test` exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Complete repository runtime-ignore policy (DoD1; prerequisite tests retained). Read child producer's landed generator/tests and ensure it delivers pins/ fresh/init migration; do not reimplement it here. Add only `.moe/pins/` adjacent to `.moe/messages/` in root .gitignore. Keep all other ignore entries exactly as found; no broad .moe/** pattern, no force-add/untracking/history change and no writes to live .moe. Existing generator's atomic-write/error handling remains unchanged and is tested by the prerequisite. Reuse its test cases unchanged at final gate; confirm git check-ignore resolves a synthetic pins path to this exact new root rule, not a user/global exclude.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".gitignore"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Document the runtime relationship (DoD3). Add pins/ to CLAUDE.md's 'Only the runtime subset' list and to docs/ARCHITECTURE.md's .moe tree as local runtime/gitignored chat pins. Explain succinctly that pins reference message IDs in local message history, so versioning pins would leave dangling links elsewhere. Preserve distinctions between versioned board state and runtime, and between this repo's messages ignore and generated-project messages behavior (explicitly outside scope). No promise that ignoring provides security or deletes old history, and no unrelated doc sweep.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "CLAUDE.md",
+        "docs/ARCHITECTURE.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Single final integration verification for both pins slices (DoD1–3). From root run exactly `git check-ignore -v -- .moe/pins/chan-x.json && (cd packages/moe-daemon && npm test)`. Require check-ignore output identifies root .gitignore's `.moe/pins/` rule and the synthetic path, full daemon suite exits0 and child's generated-content/fresh-write/migration/custom-preservation/idempotence/error tests execute. Do not regenerate here merely to absorb other sessions' pending doc changes; child must have landed a source-consistent artifact. Inspect generated runtime array against source read-only. The prerequisite tests exercise actual writeInitFiles used by init_project on owned temp dirs. Load regression-check/verification-before-completion, retain exact fresh command/exitCode/outputTail. No real pin file or fixture needs creating in live .moe.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".gitignore",
+        "CLAUDE.md",
+        "docs/ARCHITECTURE.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Final adversarial self-review once, covering the combined pins feature. Load adversarial-self-review. Confirm only pins runtime policy changed, all three original DoD items now proven across dependency+parent, header-preserved migration appends only missing pins to an otherwise current file, CRLF/custom/no-header behavior preserved, generated source+artifact agree, and repeat startup cannot duplicate lines. Inspect own three-file diff plus dependency's relevant hunks read-only; never include peers' docs/runtime bytes. Ensure no committed history rewrite or claims that ignore is a security boundary. Fix within owned scope and refresh same gate, then complete via Moe with true modifiedFiles/evidence; wrapper owns Git writes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".gitignore",
+        "CLAUDE.md",
+        "docs/ARCHITECTURE.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -21,13 +59,56 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 4,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-7e1bf7e7e3c24111bfda8333b97e6832",
+      "author": "architect-76a2c8bb",
+      "content": "Size split by production interface: six files including tracked generated artifact. Child task-f084cbe16ee446ffb2b0dee283273f7f owns generated project ignore/migration + tests (3files). Parent owns repo .gitignore + CLAUDE.md + ARCHITECTURE.md (3files), consuming child unchanged and running final combined full daemon regression. Original DoD retained: fresh/migrated-project evidence is produced by dependency and rerun here. No messages/ scope expansion or direct live .moe edits. Child BACKLOG needs operator promotion.",
+      "timestamp": "2026-10-30T14:09:05.420Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:55:57.486Z",
-  "updatedAt": "2026-10-30T12:55:49.595Z",
+  "updatedAt": "2026-10-30T14:09:05.480Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:49.595Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:06:31.405Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-76a2c8bb"
+  ],
+  "dependsOn": [
+    "task-f084cbe16ee446ffb2b0dee283273f7f"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:09:05.455Z",
+  "planningNotes": {
+    "approachesConsidered": "Split six-file change on the generated-project vs repository-policy surfaces, not test phase. Producer task-f084cbe16ee446ffb2b0dee283273f7f owns generate-init-files.ts/generated initFiles.ts/util initFiles.test.ts. This dependent parent completes repo ignore + two docs and combined regression. 3files, <30min, no new code/IO mechanism.",
+    "codebaseInsights": "Verified chatStore.writePins writes .moe/pins/<channel>.json; initProject creates pins and calls writeInitFiles. Generator RUNTIME_RECORD_DIRS feeds both fresh GITIGNORE_CONTENT and header-guarded append migration; tracked generated file must count. Existing test util/initFiles.test.ts already covers header/custom/idempotence and child adds pins. Root .gitignore currently messages but no pins; git ls-files .moe/pins/* empty at planning. No repo source edited by architect.",
+    "risks": "Ignore only runtime pins; no messages/ change in generated projects, no removal/untracking of already committed history. No direct .moe edit. Do not conflate gitignore with security boundary (ignored files may be overwritten by tracked upstream paths). Preserve peers' edits in CLAUDE/ARCHITECTURE. Child BACKLOG not implemented yet; wait normal dependency gate.",
+    "keyFiles": [
+      ".gitignore",
+      "CLAUDE.md",
+      "docs/ARCHITECTURE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:09:05.480Z",
+  "approvedPlanRevision": 1
 }

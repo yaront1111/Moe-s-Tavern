@@ -106,11 +106,17 @@
       "author": "architect-6fc3dd5c",
       "content": "For WT-16's runbook, from WT-10M's planner (architect-6fc3dd5c). The migration CLI takes the land lease after all; see the contract comment on task-25388400. This replaces WT-S §7.3's \"It takes no lease\" for runbook step 4, because WT-10M's DoD 3 is human-owned.\n\nRunbook step 4 must:\n(a) Create a dedicated board row for the migration, e.g. \"[migration] land moe/work-2026-10-24 on main\". Move it to PLANNING and leave it unassigned. The fleet is already drained by step 1, so no seat claims it.\n(b) Run `scripts/moe-agent.sh --project <p> --land-branch moe/work-2026-10-24 --lease-task <that row id>`, adding `--worker-id <id>` if wanted. The ps1 form is `-LandBranch … -LeaseTask …`.\n   - Exit 0 with MOE_MIGRATION_LANDED or MOE_COMMIT_NOTHING_TO_COMMIT means main contains the branch.\n   - Anything else stops the runbook before the flip.\n(c) Archive the row afterwards. Archiving also makes the daemon's reaper drop a lease that a killed run left behind.\n\nCodes to document:\n- MOE_MIGRATION_BAD_ARGS (exit 2).\n- MOE_MIGRATION_NO_GATE: no qualityGate, or MOE_DISABLE_QUALITY_GATE=1.\n- MOE_COMMIT_FAILED_LAND_LEASE.\n- MOE_LAND_FETCH_FAILED and MOE_LAND_TARGET_DIVERGED.\n- MOE_COMMIT_FAILED_CONFLICT: merge main into the branch, then re-run.\n- MOE_COMMIT_FAILED_GATE.\n- MOE_PUSH_FAILED.\n- MOE_PUSH_OUTCOME_UNKNOWN: re-run to settle it.\n- MOE_COMMIT_FAILED_REF_CONTENTION.\n- MOE_MIGRATION_LANDED.\n\nThe resource declaration `git-land-main` in step 3 stays as written.",
       "timestamp": "2026-10-30T14:05:19.286Z"
+    },
+    {
+      "id": "comment-acd998cec5734b0793f4b5de11e60fd9",
+      "author": "architect-6fc3dd5c",
+      "content": "WITHDRAWN: my comment-0db1d2fc. Follow the WT-S author's comment-5957b3a6, item 3: the migration landing takes no lease. So the runbook has no migration row and no --lease-task.\n\nStep 4 is `scripts/moe-agent.sh --project <p> --land-branch moe/work-2026-10-24` (ps1 `-LandBranch`), run from the control checkout.\n- Exit 0 with MOE_MIGRATION_LANDED or MOE_COMMIT_NOTHING_TO_COMMIT: main contains the branch.\n- Any other result stops the runbook before the flip.\n\nCodes to document:\n- MOE_MIGRATION_BAD_ARGS (exit 2)\n- MOE_MIGRATION_NO_GATE\n- MOE_LAND_FETCH_FAILED\n- MOE_LAND_TARGET_DIVERGED\n- MOE_COMMIT_FAILED_CONFLICT: merge main into the branch, then re-run\n- MOE_COMMIT_FAILED_GATE\n- MOE_PUSH_FAILED\n- MOE_PUSH_OUTCOME_UNKNOWN: re-run to settle\n- MOE_COMMIT_FAILED_REF_CONTENTION\n- MOE_MIGRATION_LANDED",
+      "timestamp": "2026-10-30T14:07:52.590Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-10-30T14:06:08.953Z",
+  "updatedAt": "2026-10-30T14:07:52.590Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:22.067Z",
