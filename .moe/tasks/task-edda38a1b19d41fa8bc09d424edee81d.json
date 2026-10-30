@@ -54,7 +54,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -67,17 +67,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:40:15.453Z",
-  "updatedAt": "2026-10-30T03:26:27.951Z",
+  "updatedAt": "2026-10-30T03:42:45.126Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T23:33:24.539Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-30T03:42:45.126Z",
+    "wallClockMs": 14960587
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
     "worker-0062feec",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-952969be"
   ],
   "tier": "light",
   "effort": "high",
@@ -207,5 +210,9 @@
   "completionSummary": "Added two delegating fixture stubs to scripts/tests/taskless-binding-notice.test.mjs: bash moe_rpc_unserved() { moe_rpc \"$@\"; } and ps1 Invoke-MoeRpcUnserved forwarding to Invoke-MoeRpc. Diff vs f1c04b15 is exactly these two lines; wrappers untouched (hashes unchanged). Linux: exit 0, tests 7 pass 4 fail 0 skipped 3. Windows (node.exe from WSL, Git Bash+powershell.exe+pwsh): exit 0, tests 10 pass 10 fail 0 skipped 0. Mutants: removing the stub fails all 3 bash cases; removing the wrapper's retained guard (scratch copy) fails only held=task-fixture with 'retained holds must not repeatedly page governors'.",
   "touchedFiles": [
     "scripts/tests/taskless-binding-notice.test.mjs"
-  ]
+  ],
+  "completedAt": "2026-10-30T03:42:45.126Z",
+  "reviewCompletedAt": "2026-10-30T03:42:45.126Z",
+  "reviewSummary": "Reviewed completion bbb0c43c (on moe/work-2026-10-24; checkpoint cb5c2c6c earlier). `git show` diff = exactly two added lines in scripts/tests/taskless-binding-notice.test.mjs (+ the task's own board JSON): bash `moe_rpc_unserved() { moe_rpc \"$@\"; }` and ps1 `function Invoke-MoeRpcUnserved { param($Tool, [Alias('Args')]$RpcArgs) Invoke-MoeRpc -Tool $Tool -Args $RpcArgs }`. Both delegate to the existing stubs, so every RPC (governor page included) still lands in the one NOTICE_FILE sink; main's assertions are untouched; commit touches no scripts/moe-agent.{sh,ps1}; test file is ASCII-only and clean vs HEAD. Re-ran myself: (1) Linux `node --test scripts/tests/taskless-binding-notice.test.mjs` -> exit 0, tests 7 / pass 4 / fail 0 / skipped 3 (WSL has no pwsh). (2) Windows `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/taskless-binding-notice.test.mjs` -> exit 0, tests 10 / pass 10 / fail 0 / skipped 0 (bash, powershell.exe, pwsh all green, including held=task-fixture). (3) Clean `git archive HEAD scripts` snapshot (the shared tree's moe-agent.{sh,ps1} carry peers' dirty edits) -> exit 0, 7/4/0/3, so the green is not an artifact of dirty wrappers. Mutants in scratch copies outside the repo: (a) stub line deleted -> all 3 bash cases fail (original symptom: pass 1 / fail 3); (b) wrapper's ` && [ \"$ADOPTED_BINDING\" != retained ]` guard removed -> only held=task-fixture fails with \"retained holds must not repeatedly page governors\", proving the delegate keeps the page observable (DoD 3). DoD 1/2/3 all met; size is 2 LOC, no rail issue. Complexity pass: nothing to cut. Not self-landed; the wrapper's completion commit was already recorded and reachable on the branch.",
+  "requiredCheckAtDone": null
 }
