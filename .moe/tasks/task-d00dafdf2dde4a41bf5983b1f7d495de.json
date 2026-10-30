@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -106,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:04:05.532Z",
-  "updatedAt": "2026-10-30T17:53:55.007Z",
+  "updatedAt": "2026-10-30T18:00:34.189Z",
   "dependsOn": [
     "task-a8a3a502b8264cc5adcb660f59656a00",
     "task-b29d022e7d9e4698b40517340f48e31c"
@@ -117,7 +117,9 @@
     "plannedDistinctFileCount": 2,
     "executedStepCount": 8,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T18:00:34.189Z",
+    "wallClockMs": 42100633
   },
   "contextFetchedBy": [
     "worker-c2da129d",
@@ -196,18 +198,40 @@
       "treeId": "c9e44a572582bc8f1359bebbcbe4434b45d43c1e",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "fb47f668ace0dc7ae23e1c4bd342757735af226f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T17:44:23Z",
+      "paths": [
+        ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+        ".moe/tasks/task-d00dafdf2dde4a41bf5983b1f7d495de.json",
+        ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json",
+        "scripts/local-runner/certify-bridge.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T17:54:16.040Z",
+      "treeId": "fe298d915fe2e231ba109f86851c17dc3503dac6",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
-    "scripts/local-runner/certify-bridge.mjs"
+    "scripts/local-runner/certify-bridge.mjs",
+    ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+    ".moe/tasks/task-d00dafdf2dde4a41bf5983b1f7d495de.json",
+    ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "completion",
-    "sessionId": "worker-5ebbf433@2026-10-30T17:28:42Z",
-    "at": "2026-10-30T17:38:36.401Z"
+    "sessionId": "worker-c2da129d@2026-10-30T17:44:23Z",
+    "at": "2026-10-30T17:54:16.040Z"
   },
   "reviewStartedAt": "2026-10-30T17:53:55.005Z",
   "verification": {
@@ -218,7 +242,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "Fixed QA DoD 3 pending-accept false pass. guestNetwork now keeps its listener open across a fresh I/O poll using nested setImmediate before sampling accepts; existing REACHABLE precedence, fixed-code failures, bounds and finally cleanup are unchanged. GN6 reproduces a real completed TCP handshake while the host accept callback is pending, for closed/0, unknown/2 and provider-killed replies; requires REACHABLE, accepts=1, VM deletion and listener closure. All three were red before repair; every existing row remained green.\n\nFresh required suite: exit 0, 320 tests, 319 pass, 1 skip. Focused network suite: 9/9. QA race/no-connect/drained repro modes all pass against current source. Four scratch mutations killed with AssertionErrors: no barrier, single immediate, close-before-drain and skip-provider-error. Restored copy 4/4 green and cmp-identical. Adversarial review found no further issue; scoped diff --check clean. Repair +26 lines in the approved two files; whole task 277 changed lines. Logs /tmp/moe-d00d-worker-c2da129d/. Serena handoff and accept-race gotcha updated.\n\nNo Git writes, direct .moe edits or peer-byte changes. Original multi-commit delivery remains intact. Native Multipass certification is operator-only and unrun; executionReady false and verified-local unavailable.",
-  "reviewCompletedAt": "2026-10-30T17:44:12.524Z",
+  "reviewCompletedAt": "2026-10-30T18:00:34.189Z",
   "rejectionDetails": {
     "failedDodItems": [
       "'guest-network' passes only when neither the check identity nor the agent identity can connect to the host's daemon port at the gateway address. A successful connect fails the check. Shown by tests."
@@ -249,5 +273,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-30T18:00:34.189Z",
+  "reviewSummary": "Reviewed completion fb47f668ace0dc7ae23e1c4bd342757735af226f (tree fe298d915fe2e231ba109f86851c17dc3503dac6), plus f7b5e172/cd522777/2dea91c8; git show/branch --contains confirm moe/work-2026-10-24. Owned two-file cumulative diff +254/-23=277 changed lines; repair +26. Unrelated tsconfigs/daemon board records excluded from source scope; no shared-tree or Git writes.\n\nExact-SHA archive /tmp/moe-qa-d00d-rereview-THsftV. Re-ran task.verification: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs => exit 0, 320 tests/319 pass/1 skip. Same env: node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-bundle.test.mjs => exit 0, 64/63 pass/1 skip. Logs: verification-complete-archive.log, related-complete-archive.log. Initial archive ENOENTs (resourceStore.ts/daemon lockfile/tsconfig) corrected from same SHA before complete green reruns.\n\nAll DoD checked: CB digest/framing and EOF-74/local-kill rejection; GN1-GN6 fixed validated argv, exact tokens, fail-closed provider outcomes, both identities, loopback listener, REACHABLE precedence and VM/listener cleanup. Independent qa-race.mjs race/no-connect/drained exit 0; pending case now counts 1 and returns REACHABLE. Four scratch mutants killed by assertions: omitted/single barrier, close-before-drain, skip-provider-error; restored GN6 4/4 green, byte-identical. Scoped diff --check clean. Cross-platform argv/scheduling reviewed; no docs/config owed. Approved listener+9876 deviation retained.\n\nNative Multipass/macOS and root mount behavior remain operator-only/unverified for CQ-R13; executionReady false, verified-local unavailable. Rails unchanged. Complexity: net -0 lines possible. Handoff archive destination clear.",
+  "requiredCheckAtDone": null
 }

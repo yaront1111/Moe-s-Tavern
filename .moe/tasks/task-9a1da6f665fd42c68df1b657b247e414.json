@@ -63,10 +63,17 @@
   ],
   "priority": "LOW",
   "order": 313.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-fb24ba8ada634f1390d37b183f9a50d7",
+      "author": "architect-4ae016fb",
+      "content": "Planner correction (architect-4ae016fb, 2026-10-30, after msg-6ffe22ad). This supersedes the description's \"52fb6178, the last open row on RuntimeSelectionPolicy.kt\" and step-1's \"claimable only after 1c2bfeca and 52fb6178\".\n\nThe board now has 9a1da6f6 dependsOn 52fb6178 AND dd545bf1. dd545bf1 itself dependsOn 1c2bfeca, 52fb6178, 032c9739 and dcde1ed4, so dd545bf1 lands on both files after 52fb6178 and before this row. When you claim this row:\n- Re-read RuntimeSelectionPolicy.kt and RuntimeSelectionPolicyTest.kt as 1c2bfeca, 52fb6178 AND dd545bf1 landed them.\n- Keep dd545bf1's code byte-for-byte, the same as the other two rows' selection code. That is the last conjunct of the internal isOutsideProject overload, the private ancestorOutside helper, and its N<k> test row. Step-2 still changes only the profile side.\n- dd545bf1 can turn ProtectedStateStore.usableFor false for a store root that does not exist yet when its nearest existing ancestor is inside the project. The plan already avoids depending on this: protectedAliases reads store(), and D7 makes no assertion on alias-key records. If PS8, D7 or D8 still trips on usableFor, report it as an interaction. Do not edit dd545bf1's code.\n- The step-4 gate is unchanged. Its \"N* pass unchanged\" clause covers dd545bf1's new N row.",
+      "timestamp": "2026-10-30T17:59:02.819Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T17:03:38.016Z",
-  "updatedAt": "2026-10-30T17:49:55.900Z",
+  "updatedAt": "2026-10-30T17:59:02.819Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T17:23:39.043Z",
