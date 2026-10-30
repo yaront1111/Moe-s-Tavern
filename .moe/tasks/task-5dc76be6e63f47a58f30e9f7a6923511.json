@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -86,16 +86,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T14:31:59.369Z",
-  "updatedAt": "2026-10-30T04:34:06.876Z",
+  "updatedAt": "2026-10-30T04:42:31.178Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T23:24:45.041Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T04:42:31.178Z",
+    "wallClockMs": 19066137
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -199,5 +202,9 @@
     "kind": "completion",
     "sessionId": "worker-fe18a9a9@2026-10-30T04:31:41Z",
     "at": "2026-10-30T04:34:06.876Z"
-  }
+  },
+  "completedAt": "2026-10-30T04:42:31.178Z",
+  "reviewCompletedAt": "2026-10-30T04:42:31.178Z",
+  "reviewSummary": "Approved. Reviewed completion f09cfa5 (on moe/work-2026-10-24, pushed) via git show, not the dirty tree. Size +30/-1 non-board LOC, under the 400 cap.\n\nDoD1: Get-RoleDoc in scripts/moe-agent.ps1 now uses `Get-Content -Raw -Encoding UTF8 -Path $p` plus one comment line. Missing doc still returns \"\". The ps1 keeps its EF BB BF BOM and has 0 CR lines. This is the only Get-Content change and the bash twin is untouched. The Moe-Contested note (task-16bbf8ff) is moot: the commit carries only this task's 2-line ps1 hunk.\n\nDoD2: the new block in scripts/tests/prompt-cache-launcher.test.mjs extracts the real Get-RoleDoc and the real $systemAppend assembly. It writes the result to a file as UTF-8 (no stdout transcoding confound), runs on each PowerShell engine for BOM-less and BOM role docs, and asserts exact equality with no U+FEFF or U+00E2. Test source is ASCII. With no engine it registers a skipped test with a reason.\n\nI ran both gates on Windows Node from WSL, on fresh `git archive f09cfa5 scripts` copies in Windows temp (removed afterwards):\n- GREEN with the fix: 96 tests, 96 pass, 0 fail, 0 skipped, exit 0. Both ParseFile tests and all 4 new Get-RoleDoc tests pass (powershell.exe and pwsh.exe, BOM-less and BOM).\n- RED reproduced independently: same snapshot with the parent commit's ps1. Only `powershell.exe ... (BOM-less)` failed, at \"no BOM and no ANSI-decoded mojibake\"; the other 3 passed. This matches the worker's recorded red.\n\nDoD3: `bash scripts/tests/parity-check.sh` exit 0. `git diff-tree --check` is clean. Linux run of the committed snapshot: 30 tests, 28 pass, 0 fail, 2 skipped, the new test skipped as 'no PowerShell engine on linux'. Git Bash rows passed in the Windows run.\n\nDoD4: worker's task.verification matches the plan's named gate and reproduced green. Dirty peer paths untouched.",
+  "requiredCheckAtDone": null
 }
