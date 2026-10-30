@@ -130,6 +130,18 @@ tasks {
                 it.contains("java.system.class.loader")
             }
             setJvmArgs(filteredJvmArgs)
+            // Plain JUnit has no IDE launcher to point JNA at the SDK's native library, which protected runtime
+            // selection reads drive mappings through on Windows. Without it every protected Windows test would refuse.
+            if (System.getProperty("os.name").startsWith("Windows")) {
+                val arch = when (System.getProperty("os.arch").lowercase()) {
+                    "amd64", "x86_64" -> "amd64"
+                    "aarch64", "arm64" -> "aarch64"
+                    else -> error("The IntelliJ SDK ships no JNA library for Windows on ${System.getProperty("os.arch")}.")
+                }
+                val jna = classpath.files.firstOrNull { it.name == "util-8.jar" }?.resolveSibling("jna/$arch")
+                check(jna != null && jna.resolve("jnidispatch.dll").isFile) { "The IntelliJ SDK's JNA native library is not at $jna." }
+                systemProperty("jna.boot.library.path", jna.absolutePath)
+            }
         }
     }
 }

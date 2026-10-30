@@ -13,9 +13,95 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 2,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Address reopen 1 and add the missing failing tests first. Goal: a subst root inside the project must not become an escape just because Path.parent stops there. Read rejectionDetails and the landed 1f19140c policy, N8/S9, protectedFixture, supervisorFor, installedLayout and withSubst. Preserve every existing test assertion and all peer bytes. This is a replacement of plan 1's invalid no-native mechanism, not another lexical-ancestor tweak. No .moe or Git writes.\n\nAdd a new Windows-only regression using withSubst(File(project, \"bin\")) (not merely subst-to-project or its parent). Populate bin/node and bin/plugin/daemon/index.js through the existing fixtures, then assert all five observables:\n  assertFalse(RuntimeSelectionPolicy.isOutsideProject(\"$d\\\\\", project.path))\n  assertFalse(RuntimeSelectionPolicy.isOutsideProject(\"$d\\\\missing\\\\leaf\", project.path))\n  installedExecutable(\"$d\\\\node\", project.path) is Rejected with exactly \"node executable resolves inside the project\"\n  installedArtifact(File(\"$d\\\\plugin\"), \"daemon/index.js\", project.path) is Rejected with exactly \"installed daemon/index.js resolves inside the project\"\n  protectedDaemonEnvironment drops the alias PATH entry, and supervisor.ensureDaemonRunning() is false with started == emptyList<List<String>>() and the existing exact path-free status/selectionRefusal message.\nInclude an outside-path entry in that PATH assertion, so emptying all PATH is not a passing fix. Add a native junction-target variant: make a local junction to project/bin using the existing junction helper, subst that junction, and assert the same containment refusal. This catches expansion without subsequent real-path resolution. Require the junction setup to succeed on the Windows gate; do not silently omit the row.\n\nKeep N8's project/parent-root, same-subst-drive unrelated-folder and reverse (subst-opened project) controls and S9's accepted outside-subst node unchanged. Add an existing ordinary local file and a missing outside store-root descendant positive control. Use the existing fake process, never a real daemon.\n\nUse test-driven-development for the new regression's local RED/GREEN cycle. Record the pre-fix descendant-root failures; do not run the entire suite at this stage. withSubst must remove only its own drive in a finally block even on assertion failure. Check the subst executable exists and fail setup errors; skip on Windows only if all letters really are occupied, not because an arbitrary subst command failed. No mapped network drives are created. Keep the new descendant and junction cases table-driven through one shared assertion block, rather than duplicating five-observable fixtures; target at most 270 additional net lines across the three files so cumulative prior+repair scope remains under 400.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Added RuntimeSelectionPolicyTest N9 (Windows-only, table-driven over \"descendant root\" = subst to project\\bin and \"junction root\" = subst to an outside junction -> project\\bin). Each row asserts all five observables: isOutsideProject false for Z:\\ and Z:\\missing\\leaf; installedExecutable(Z:\\node) Rejected \"node executable resolves inside the project\"; installedArtifact(Z:\\plugin) Rejected \"installed daemon/index.js resolves inside the project\"; protectedDaemonEnvironment keeps exactly the outside entry (PATH=outsideA, alias dropped); ensureDaemonRunning false, started == [], exact path-free status + selectionRefusal. Junction setup is asserted, not skipped. Positive controls: outside node Accepted + isOutsideProject true; newStore().usableFor(project) true for a not-yet-created outside store root. N8/S9 untouched.\nwithSubst: asserts System32\\subst.exe exists; removal now in a real finally (cleanup assertion only when the body passed, so a body failure is never masked); a subst failing on every free letter fails the test (AssertionError listing letters/exits); skip only when every letter Z..D exists.\nRED (jetbrains-gradle lease, then released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest.N9* --rerun\" -> exit 1, 1 test/1 failure \"AssertionError: descendant root Z:\\\" (isOutsideProject true on old code). Scratch reorder run (file restored byte-identical afterwards) -> \"junction root Z:\\\" also fails. QA probe already showed the remaining four descendant observables leak on this code. subst lists nothing afterwards. Full suite not run at this step (per plan). Peer dirty paths (.moe/tasks/*, moe-vscode/*, .moe/decisions/) untouched.",
+      "startedAt": "2026-10-30T17:51:07.502Z",
+      "completedAt": "2026-10-30T17:53:44.752Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add a bounded Windows DOS-drive expansion helper using the JNA already in IntelliJ, plus its injected tests. No new dependency or process-based production lookup. Verified SDK util-8.jar contains com.sun.jna.platform.win32.Kernel32 and com.intellij.jna.JnaLoader; Kernel32.QueryDosDevice(String, char[], int) is present. Do not add GetFinalPathNameByHandle or GetDriveType: neither is needed to recover a subst target, and a drive-type/filesystem probe is not a safe substitute for the no-share boundary.\n\nIn RuntimeSelectionPolicy add these internal seams (new symbols):\n  @Volatile internal var windowsDriveTarget: (String) -> String? = ::queryWindowsDriveTarget\n  internal fun resolveWindowsDrivePath(path: String, query: (String) -> String? = windowsDriveTarget): String?\nError handling is fail-closed throughout. The native provider is lazy in use, checks JnaLoader.isLoaded(), then calls Kernel32.INSTANCE.QueryDosDevice(\"X:\", CharArray(32768), 32768). Read ONLY the first NUL-terminated mapping within the returned count; Microsoft documents later strings as historical mappings. Zero, missing terminator, empty/current malformed value, count outside the buffer, unavailable JNA, Exception, IOError or LinkageError return null. Never retry indefinitely, enumerate all drives, shell out, or cache mappings across calls. resetForTest restores the native provider without initializing JNA.\n\nresolveWindowsDrivePath is string-only and testable on POSIX. Accept a drive-qualified input spelling, preserve the path suffix, and repeatedly expand a current mapping of the exact form \"\\??\\X:\\absolute\\target\" by prepending that target to the suffix. Normalize separator spelling only; do not interpret a remote/device target as a DOS path. Reject cycles by case-insensitive drive letter, more than 26 queries, or expanded paths over 32767 UTF-16 units. A terminal mapping must be an entire recognized local device root (case-insensitive), never a prefix: \\Device\\HarddiskVolume<digits>, \\Device\\CdRom<digits>, \\Device\\Floppy<digits>, or \\Device\\Ramdisk with an optional numeric suffix. Return the expanded DOS spelling, NOT the NT device spelling. Reject UNC, \\??\\UNC, Mup, LanmanRedirector/WebDAV, unknown device families, root-plus-directory NT targets, malformed values and lookup failures. Unknown device mappings are unprovable and fail closed; do not infer \"local\" from any arbitrary \\Device prefix. Existing normal disk/removable-volume paths stay unchanged; exotic third-party mappings are unsupported unless positively recognized (record this limitation for RF07).\n\nTable-test the helper with fake query maps, no network: direct physical drive; subst to project/bin; parent subst plus unrelated sibling; two chained drives; lower-case letters; a current remote mapping followed by an old local mapping; cycles/self-cycle; missing/throwing/LinkageError provider; overlong expansion; UNC/remote/unknown and HarddiskVolume1\\directory targets. Assert exact expanded spelling or null and query-count bounds; no native lookup on the fake path. Native provider smoke is exercised by the Windows subst regressions, not replaced by a fake.\n\nThe plain JUnit task removes IntelliJPlatformArgumentProvider, so test-native dispatch needs explicit SDK setup. In build.gradle.kts's existing test.doFirst, on Windows only, derive the SDK lib directory from the test classpath's util-8.jar and set jna.boot.library.path to its existing jna/amd64 (x86_64/amd64) or jna/aarch64 (aarch64/arm64) directory. Require jnidispatch.dll to exist; fail with a clear Gradle setup error rather than letting every protected test silently refuse. Preserve the existing JVM-argument filtering. Do not hard-code this workstation's C:\\Users path, change production search paths, or add native settings on Linux/macOS.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "note": "RuntimeSelectionPolicy: new internal seams `@Volatile windowsDriveTarget: (String) -> String? = ::queryWindowsDriveTarget`, `resolveWindowsDrivePath(path, query = windowsDriveTarget)` and `currentDosMapping(buffer, count)`. resolveWindowsDrivePath is string-only: separators -> '\\', requires ^[A-Za-z]:\\, expands `\\??\\X:\\folder` targets (DOS_TARGET: segments non-empty, not ending '.'/' ', no reserved chars) by prefixing the target to the suffix, stops at a whole recognized local device (\\Device\\HarddiskVolume<n>|CdRom<n>|Floppy<n>|Ramdisk[n], case-insensitive, entire string) and returns the expanded DOS spelling. Null for non-drive spellings, remote/UNC/Mup/Lanman/WebDAV/unknown/root+dir/malformed mappings, a repeated letter (cycle; so <= 26 queries), > 32767 chars, or a throwing provider (Exception/IOError/LinkageError). Native provider: JnaLoader.isLoaded() then Kernel32.INSTANCE.QueryDosDevice(drive, CharArray(32768), 32768); currentDosMapping reads only the first NUL-terminated string within count (0/negative/over-buffer/no terminator/empty -> null). No caching, no process, no enumeration. resetForTest restores the provider (function reference only, no JNA init).\nbuild.gradle.kts test.doFirst (Windows only, after the existing JVM-arg filtering): arch amd64/x86_64 -> amd64, aarch64/arm64 -> aarch64, util-8.jar located on the test classpath, jna.boot.library.path = <sdk lib>/jna/<arch>; missing jar/dll/arch -> clear Gradle error. No hard-coded user paths; nothing on Linux/macOS.\nTest N10 (runs on POSIX too): expansions (physical, CdRom/Floppy/Ramdisk, subst to project/bin, parent subst + sibling, two-drive chain asking [Y:,W:,C:], lower-case letters, root target), zero queries for non-drive/overlong inputs, 16 refused mappings, missing mapping, 2-cycle [A:,B:], self-cycle [S:], 26-drive cycle = exactly 26 queries, throwing/UnsatisfiedLinkError/IOError providers, currentDosMapping rows incl. remote-current + local-history -> null, and a Windows native smoke (SystemRoot expands to itself through the SDK JNA).\nGREEN: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest.N10* --rerun\" -> exit 0, 1 test 0 failures. Scratch mutants (files restored, cmp-verified): any-\\Device-prefix-local, last-string history, no cycle guard, no jna.boot.library.path -> each exit 1 with the expected N10 assertion. Integration (step 3) not yet wired; N9 still RED by design. Lease released.",
+      "startedAt": "2026-10-30T17:53:47.034Z",
+      "completedAt": "2026-10-30T17:59:33.452Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Integrate the drive proof without changing public signatures, accepted File/PATH spellings, or LEGACY behavior. All new native work is gated by profile == RuntimeProfile.PROTECTED && windowsHost. The strict-default public overloads and explicit internal RuntimeProfile overloads remain.\n\nPreflight a drive-qualified candidate/root before the existing toRealPath or Files reads in isOutsideProject, installedExecutable and installedArtifact. For a native mapping that is remote/unknown/unavailable, isOutsideProject returns false; selection refuses with the existing \"$label is not a plain local Windows path\" reason. Null installed roots and blank/relative/malformed executable paths keep their existing reasons. Also preflight a drive-qualified project before realPathOrNull(basePath), so the identity proof does not open a mapped share. Unprovable project resolution keeps \"the project directory cannot be resolved\"; the sibling 52fb6178 owns BASE_NOT_PLAIN and its full raw/non-plain-base policy. This task must not add that sibling's trailing-dot/base UI rules. Keep existing UNC/device spelling refusal; do not resolve a remote drive target to inspect it. For real paths discovered after NIO, recheck the drive mapping before any further identity/file checks. Do not make the injected resolve callback run on a preflight refusal.\n\nReplace outsideByIdentity's truncated ancestor input with expanded physical ancestors. Expand both project and candidate, not just candidate (N8's reverse case matters). Resolve existing expanded paths with toRealPath before walking their parents; a subst target can itself contain a junction. A small private helper for existing paths may repeat drive expansion -> toRealPath until expansion no longer changes the resolved path, with a visited set and a 26-round cap; any cycle/overflow/error fails closed. The project must resolve. During the candidate walk, NoSuchFileException advances to the parent of the expanded missing spelling, preserving usableStore roots whose leaf/parents do not exist yet; other errors refuse. Once an existing path resolves, compare Files.isSameFile against the expanded real project and continue from that resolved path's parent, NOT from the old alias parent's spelling. True requires at least one successful identity check and no project match. Never convert an unresolved/missing project into an outside answer. Keep identity in addition to all current lexical/root-containment checks.\n\nUse expanded spellings only for proof: successful installedExecutable/installedArtifact still return the same real File as before, and protected PATH keeps the validated original outside spelling. Do not reinterpret \"..\" relative to the expanded target: retain the original OS real-path resolution before proving an existing candidate, and normalize missing candidate paths in their original drive coordinate system as today.\n\nAdd integration error-handling tests with windowsDriveTarget replaced/restored in try/finally: remote mapping and native failure refuse before a throwing candidate resolve callback, and node/artifact refuse without a fake spawn. Unknown lookup never falls back to the old ancestor walk. LEGACY with a throwing native provider still preserves installed stop selection/PATH; on POSIX the provider must not be called. Retain the old N5-N8/S7-S9 and supervisor W31-W35 controls unchanged. Add concise KDoc explaining hidden drive-root ancestors, why device mappings are queried before NIO, the bounded algorithm and unsupported unknown device families. No docs sweep here; include the runtime/JNA and unusual-device limitations in the RF07 handoff. No changes to profile persistence/projectKey, supervisor, state-store implementation, VM/launcher or VS Code; verified-local stays unavailable.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "note": "Drive proof integrated (PROTECTED && windowsHost only, via strict(profile)); public signatures, accepted File/PATH spellings and LEGACY unchanged.\n- unprovableDrive(path): a drive-qualified spelling whose QueryDosDevice chain is not a local volume. Asked BEFORE NIO for the isOutsideProject candidate + project, the installedExecutable candidate (\"node executable is not a plain local Windows path\"), the installedArtifact root (\"installed <rel> is not a plain local Windows path\", after the null-root reason) and the select project (\"the project directory cannot be resolved\"). Rechecked on select's real path before Files.isRegularFile. isOutsideProject's injected resolve never runs on a preflight refusal.\n- physicalPath(real): expand -> realPathOrNull until expanding changes nothing; visited set + 26-round cap; any failure null.\n- physicalProject: drive project -> physicalPath; non-drive (UNC) real project kept as it resolved (52fb6178 owns BASE_NOT_PLAIN; no base rules added).\n- outsideByIdentity(path, physicalProject?): expands path (original real path, or normalized missing spelling in its own drive coordinates), walks NoSuchFile parents of the EXPANDED spelling to the nearest existing folder, toRealPath + physicalPath it, then isSameFile against the physical project from that resolved path up (never alias parents). True needs >=1 comparison and no match; null project/unprovable/other error = false.\n- queryWindowsDriveTarget's own catch dropped: resolveWindowsDrivePath (its only caller) already catches Exception/IOError/LinkageError from any provider. build.gradle.kts JNA lookup compacted 5->2 lines (still fails loudly), only for the size budget.\nTests: N11 (Windows; remote/ImDisk0/UnsatisfiedLinkError providers + one remote letter: false before a throwing resolve, node/artifact/project reasons, supervisor starts nothing; native controls accept), N12 (all hosts; throwing provider never asked by LEGACY stop/PATH, nor PROTECTED off Windows). withDriveTargets swaps/restores in try/finally. Old N5-N8/S7-S9/W31-W35 untouched.\nMutants killed: identity without re-resolution -> N9 \"junction root Z:\\\"; candidate preflight dropped -> N11 \"looked up Z:\\bin\"; strict ignoring profile -> N12 LEGACY stop (+N7).\nFocused Windows run (lease held/released): gradlew.bat test --tests com.moe.util.RuntimeSelectionPolicyTest --tests com.moe.services.MoeDaemonSupervisorTest --rerun -> exit 0; XML 60/0 skipped/0 failed and 79/0/0; `subst` empty after. Size: round net 264, cumulative ~391 (<400).",
+      "startedAt": "2026-10-30T17:59:36.262Z",
+      "completedAt": "2026-10-30T18:22:52.175Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate, once at the end, under the jetbrains-gradle resource lease (release in finally). WSL has no Linux JDK. Run exactly:\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\nThis is the task's required full Kotlin package gate; it is not the epic-wide integration pass. Require exit 0 and fresh :test execution, not UP-TO-DATE. Inspect fresh build/test-results/test XML: no failures/errors; the native descendant-root and junction/subst regressions actually executed without a skip; old N8/S9 and the unchanged supervisor legacy-restart rows pass. Confirm no owned subst mappings remain. Capture command, exitCode and outputTail for moe.complete_task; historical 482-test success is not evidence for this fix.\n\nIn this same verification step, rerun QA's unchanged behavioral probe D:\\qa-1c2bfeca-7bbwzu81\\run.cmd against freshly built production and test classes. Supply the same SDK jna.boot.library.path JVM property via the probe launcher environment (JAVA_TOOL_OPTIONS), because the original standalone Java launcher predates JNA. Do not alter SubstProbe.java or its assertions. Require SUBST_DESCENDANT_FAILURES=0 plus the unrelated-outside positive controls; an all-refused result is failure, not a fix. Include its exact invocation/output in the step note. If its old sandbox jar is stale, refresh the normal Gradle artifacts rather than modifying the probe. Do not claim a passing probe just from a passing suite.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "note": "Step 4 verification ran with the jetbrains-gradle lease held from 18:23:24Z and released after the probe. No source changes were made in this step.\n\nGATE (run exactly as planned, from WSL bash):\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n- 18:27:21Z to 18:27:44Z, exit 0, \"BUILD SUCCESSFUL in 22s\".\n- :compileKotlin, :jar, :composedJar and :prepareTestSandbox were UP-TO-DATE (the jar was built at 18:22:25Z from the source last edited at 18:21:30Z). :test was executed.\n- Fresh build/test-results/test XML: 28 suites, tests=486, skipped=0, failures=0, errors=0. Every suite timestamp falls between 18:27:20Z and 18:27:39Z.\n- RuntimeSelectionPolicyTest: 60/0/0/0. MoeDaemonSupervisorTest: 79/0/0/0.\n- Each of these named cases passed and none was skipped: N8, N9, N10, N11, N12, S9, W31, W32, W33, W34, W35.\n- One benign JDK warning appeared on stderr: \"restricted method System::load called by com.sun.jna.Native\". It comes from JEP 472 on the JBR test runtime and does not affect results.\n- `cmd.exe /d /c subst` before and after the gate printed nothing: no mappings were left behind.\n\nQA PROBE (unchanged; D:\\qa-1c2bfeca-7bbwzu81 not modified):\ncmd.exe /d /c \"set JAVA_TOOL_OPTIONS=-Djna.boot.library.path=C:\\Users\\Yaron\\.gradle\\caches\\9.8.2\\transforms\\252d726876db45402d601288a6657911\\transformed\\idea-2026.2.3-win\\lib\\jna\\amd64&& D:\\qa-1c2bfeca-7bbwzu81\\run.cmd\"\n- Exit 0.\n- Classpath freshness: build/instrumented does not exist, so the probe's first classpath entry contributes nothing. The probe printed PRODUCTION=file:/D:/projexts/moes/moe-jetbrains/.intellijPlatform/sandbox/moe-jetbrains/IU-2026.2.3/plugins-test/moe-jetbrains/lib/moe-jetbrains-0.8.0.jar, which is the fresh jar and contains RuntimeSelectionPolicy$windowsDriveTarget$1.class.\n- project-root-control: isOutside=false; node and artifact Rejected (\"resolves inside the project\"); PATH={PATH=}; running=false; fakeSpawns=[]; protected status message.\n- descendant-root (the reopen shape: subst Z: to <project>\\bin, entry Z:\\): isOutside=false; node and artifact Rejected (\"resolves inside the project\"); PATH={PATH=}; running=false; fakeSpawns=[].\n- outside-control (subst to the unrelated runtime folder): isOutside=true; nodeSelection=Accepted(file=Z:\\node); PATH={PATH=Z:\\}; running=true; exactly 1 fake spawn [Z:\\node, <installed>\\daemon\\index.js, start, --project, <proj>].\n- SUBST_DESCENDANT_FAILURES=0.\n- `subst` printed nothing afterwards.\n\nLogs: /tmp/w1c-gate.log and /tmp/w1c-probe.log (outside the repo).",
+      "startedAt": "2026-10-30T18:22:55.365Z",
+      "completedAt": "2026-10-30T18:28:46.484Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review of this task's diff, then QA handoff. Load adversarial-self-review, regression-check and verification-before-completion. Review once: can a descendant subst root or a junction under its target hide the project's parents; can a project opened through subst bypass the reverse check; does an unknown/remote mapping or failed native load lead to any NIO lookup or fallback acceptance; are historical MULTI_SZ entries ignored; are cycles/length/native errors bounded; are missing store leaves still supported; can native initialization run under LEGACY/POSIX; are provider state and only owned mappings cleaned on every failure; does JUnit use the SDK-native binary for the current Windows architecture? Check local/outside positive assertions so broad refusal cannot masquerade as security.\n\nDo not claim atomic protection against a concurrent administrator remapping drives between validation and spawn; no new durable trust/caching is introduced. Preserve peer/pre-existing files and keep the change within these three files and the normal task-size budget (prior completion net 127 is part of the cumulative diff). No Git writes. If source changes follow the gate, rerun that same gate before completion. Record new test names, native proof output, compatibility/unsupported-device limits and why the original ancestor-only mechanism failed. Pass the reusable internal seam and JNA test configuration to task-52fb6178; it already depends on this task and must not race the same files. RF07 remains the sole whole-epic hardening/docs owner. Complete only with fresh verification evidence; any QA reopen must be addressed against these explicit observations, not by weakening the native tests.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/build.gradle.kts"
+      ],
+      "note": "Adversarial self-review of this task's diff (the three paths only; peers' dirty files untouched). Answers to the step-5 questions:\n\n1. Can a descendant subst root or a junction under its target hide the project's parents? No. outsideByIdentity expands the letter (resolveWindowsDrivePath), resolves the nearest existing folder with toRealPath (junctions), re-expands it (physicalPath), then walks the physical parents by isSameFile.\n   - Evidence: N9 (descendant root and junction root; `$d\\` and `$d\\missing\\leaf` inside) and QA's probe descendant-root shape.\n\n2. Can a project opened through subst bypass the reverse check? No. physicalProject expands the project.\n   - FOUND A GAP and fixed it with a test only: nothing exercised select() with a subst-opened project. N8:525 covers isOutsideProject, but false there cannot tell \"proved inside\" from \"refused as unprovable\".\n   - Added a 5-line reverse block to N9 (new this round; existing cases unchanged): subst of the project's parent; the node in <project>\\bin with basePath \"$d\\proj\" → \"node executable resolves inside the project\"; the outside node with the same basePath → Accepted(realFile(node)).\n   - MUTANT (physicalPath returns null instead of following an expansion) → RuntimeSelectionPolicyTest 60 run, 1 failed: only N9, ComparisonFailure \"expected:<node executable resolves inside the project> but was:<the project directory cannot be resolved>\". Every other test passed under the mutant.\n   - Source restored byte-identical (cmp against the backup).\n\n3. Does an unknown or remote mapping, or a failed native load, lead to any NIO lookup or fallback acceptance? No. unprovableDrive preflights the candidate, root and project before NIO, and `real` is rechecked after NIO.\n   - Evidence: N11 covers 3 providers (LanmanRedirector, ImDisk, UnsatisfiedLinkError). Its `untouched` resolver throws AssertionError on any lookup, and the refusal messages are specific.\n\n4. Are historical MULTI_SZ entries ignored? Yes. currentDosMapping takes only the first string, which must be NUL-terminated within the count. N10 covers a remote-first history.\n\n5. Are cycles, length and native errors bounded?\n   - Each letter is queried at most once (26 maximum). Paths are capped at 32767 chars and the buffer at 32768.\n   - Exception, IOError and LinkageError lead to refusal.\n   - physicalPath runs at most 26 rounds over a seen-set.\n   - Evidence: N10.\n\n6. Are missing store leaves still supported? Yes. Missing folders defer to their parent. Evidence: the N9 control `newStore().usableFor` with a missing root.\n\n7. Can native initialization run under LEGACY or POSIX? No. Every native path is behind strict(profile) = PROTECTED && windowsHost. Evidence: N12 makes no queries (LEGACY on Windows; every profile elsewhere) and its stop/PATH positives still pass.\n   - I re-read the supervisor to confirm N12's PROTECTED branch holds on POSIX CI: isPlainLocalPath is true off Windows, and the stop command uses real paths.\n\n8. Are provider state and owned mappings cleaned up on every failure? Yes. withDriveTargets restores in finally, and resetForTest resets the provider. withSubst removes only the letter it created, in finally, and a body failure keeps its own error. `subst` printed nothing after every run.\n\n9. Does JUnit use the SDK's native binary for the current arch? Yes. build.gradle.kts maps os.arch to amd64 or aarch64, takes util-8.jar's sibling jna/<arch>, requires jnidispatch.dll, and fails the build otherwise. The gate log shows Native loading from the SDK's util-8.jar, and N10's native smoke check passes (SystemRoot resolves to itself).\n\n10. Positive controls exist so broad refusal cannot pass as security: N9 (Accepted, outside=true, store usable), N11 (Accepted under the native provider), the new N9 reverse Accepted, N12 (stop and PATH), and the probe's outside-control (Accepted, PATH kept, 1 spawn).\n\nFRESH GATE after the test-only change (lease held 18:32:32Z, then released):\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n- 18:33:06Z to 18:33:30Z, exit 0, BUILD SUCCESSFUL in 24s. compileKotlin, jar, composedJar and prepareTestSandbox were rebuilt from the restored source.\n- 28 suites, 486 tests, skipped=0, failures=0, errors=0. RuntimeSelectionPolicyTest 60/0/0/0; MoeDaemonSupervisorTest 79/0/0/0.\n\nQA PROBE rerun on the final build: exit 0, PRODUCTION = the fresh sandbox moe-jetbrains-0.8.0.jar, every shape PASS, SUBST_DESCENDANT_FAILURES=0. outside-control: isOutside=true, Accepted(Z:\\node), PATH kept Z:\\, 1 fake spawn.\n\nSize: this round +313/−44 = net 269. With the prior completion's net 127, the cumulative net is 396, under 400.\n\nTheoretical risks, not fixed:\n- An administrator remapping a drive between validation and spawn is not atomic.\n- One 64KB buffer is allocated per query (transient).\n- A JNA load failure is reported as \"not a plain local Windows path\".\n- The JEP 472 System::load warning appears on stderr under JUnit.",
+      "startedAt": "2026-10-30T18:28:48.517Z",
+      "completedAt": "2026-10-30T18:35:22.804Z"
+    }
+  ],
+  "planRevision": 3,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,10 +114,17 @@
   ],
   "priority": "MEDIUM",
   "order": 297.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-3be1fe6fec45440bbfd298efd75884b7",
+      "author": "architect-de6d9983",
+      "content": "Replan investigation: confirmed mechanism with native JBR + bundled JNA, outside repository. D:\\arch-1c2bfeca-de6d9983\\run.cmd exits 0, DESCENDANT_ROOT_EXPANDED=PASS: QueryDosDevice(Z:) returns \\??\\C:\\...\\project\\bin; terminal C: returns \\Device\\HarddiskVolume3. The expanded root's parent is physically project; raw toRealPath remains Z:\\. No repo source edits; probe deletes only its mapping/temp dirs. API evidence: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-querydosdevicew specifies first MULTI_SZ entry is current mapping, zero/buffer failure must refuse. IntelliJ util-8.jar supplies JNA 5.17.0 Kernel32.QueryDosDevice; plain JUnit needs test-only jna.boot.library.path setup. Plan revision will replace the invalid no-native restriction, preserve the prior identity conjunct, and add native descendant-root plus bounded injected mapping cases.",
+      "timestamp": "2026-10-30T17:37:03.700Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:23:28.136Z",
-  "updatedAt": "2026-10-30T17:28:09.996Z",
+  "updatedAt": "2026-10-30T18:37:24.492Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T17:28:09.996Z",
@@ -39,109 +132,110 @@
   },
   "metrics": {
     "firstClaimAt": "2026-10-30T16:27:21.946Z",
-    "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2,
-    "executedStepCount": 4,
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 9,
     "rejectCount": 1,
     "reopenCount": 1
   },
   "contextFetchedBy": [
     "worker-c2da129d",
-    "qa-ba3f4f35"
+    "qa-ba3f4f35",
+    "architect-de6d9983",
+    "architect-bd1eb82d",
+    "worker-093a65d0",
+    "architect-bc59d28a"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
-  "failedDodItems": [
-    {
-      "item": "On a Windows host, RuntimeSelectionPolicy.isOutsideProject returns false for a subst drive spelling of the project and of a folder inside it. It also returns false when the drive is substed to the project's parent and the entry reaches the project (Q:\\<project name>\\bin). The protected daemon PATH drops such entries but keeps an unrelated folder on the same subst drive. Shown by new JetBrains unit tests. They create a temporary subst drive on a free letter, always remove it in a finally block, and skip only when no letter is free.",
-      "rejectedAt": "2026-10-30T17:24:43.130Z",
-      "rejectedBy": "qa-ba3f4f35"
-    },
-    {
-      "item": "On a Windows host, a node candidate under such a drive is refused with a named reason and no daemon is spawned. Shown by tests.",
-      "rejectedAt": "2026-10-30T17:24:43.130Z",
-      "rejectedBy": "qa-ba3f4f35"
-    }
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
   ],
-  "planSubmittedAt": "2026-10-30T16:33:36.810Z",
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T17:42:40.708Z",
   "executionContract": {
-    "intendedBehavior": "Under the protected profile on a Windows host, a drive-qualified PATH entry, or an accepted node/installed real path, counts as outside the project only when file identity also proves it: some folder from it up to its root exists, and none is the project (Files.isSameFile).\nSo a subst or mapped drive letter that reaches the project is refused: the PATH entry is dropped, and the node is refused with 'node executable resolves inside the project' and never spawned. An unrelated folder on the same subst drive is kept.\nPOSIX hosts, non-alias local paths and the legacy profile keep their answers.",
+    "intendedBehavior": "On Windows under PROTECTED, expose local subst drive targets before proving candidate/project containment by real path and file identity. A subst root equal to or below the project is refused for PATH, node and installed artifacts with no daemon spawn. An unrelated path on the same local subst drive remains usable. Query drive mappings without opening their targets; remote, malformed, unknown or unavailable mappings fail closed. Preserve LEGACY/POSIX behavior and strict-default signatures.",
     "acceptanceCriteria": [
-      "On Windows, a subst spelling of the project, of a folder inside it, and of the project's parent reaching the project (`Q:\\proj\\bin`) are not outside, and the protected PATH drops them while keeping `Q:\\other`.",
-      "On Windows, a node under such a drive is refused with 'node executable resolves inside the project', and nothing is spawned.",
-      "The existing RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest rows pass unchanged."
+      "Native subst-to-project, project-parent and project-descendant cases are inside; protected PATH drops them but preserves an outside entry and an unrelated folder on the same subst drive.",
+      "Native descendant-root node/artifact selections have the existing exact inside-project refusal, and the fake supervisor starts nothing; subst-to-junction-to-project/bin is refused too.",
+      "Injected chained mappings expand correctly; cycles, malformed/remote/unknown targets, historical local mappings behind a current remote one, native/load failures and overlong expansion refuse with bounded calls.",
+      "Existing policy/supervisor assertions pass unchanged; ordinary local and safe outside-subst paths remain usable, missing outside state-store leaves work, and new native work is absent on LEGACY/POSIX.",
+      "The exact fresh Gradle gate exits 0 with the native regressions executed, and the unchanged QA behavioral probe reports zero descendant failures with outside positive controls passing."
     ],
     "invariants": [
-      "Any identity lookup failure, a missing project, or a drive that does not exist answers not-outside.",
-      "isOutsideProject never throws.",
-      "No identity walk on POSIX.",
-      "Identity runs only after task-526a2080's plain-local spelling check, so no UNC or device form is ever opened.",
-      "Tests remove only subst drives they created, in finally blocks."
+      "Drive expansion uses QueryDosDevice's first/current mapping only; never execute a repository/PATH helper or open a remote mapping to determine its target.",
+      "Do not treat a missing project, failed native load, unrecognized device family or truncated lexical ancestor chain as proof of outside.",
+      "Bound drive expansion to 26 queries, 32768-char native buffer and 32767-char expanded path; canonicalization cycles/redirect rounds also fail closed.",
+      "No new native initialization for LEGACY or POSIX; no persistent drive-map cache or caller-minted trust.",
+      "Preserve all lexical, installed-root and regular-file checks and all existing test assertions; tests remove only subst mappings they created.",
+      "No .moe edits, agent Git writes, verified-local enabling or whole-epic certification claim."
     ],
     "compatibility": [
-      "The isOutsideProject, installedArtifact and installedExecutable signatures are unchanged.",
-      "No new refusal strings.",
-      "ProtectedStateStore.usableFor keeps accepting local store roots whose parents do not exist yet."
+      "Public selector signatures and internal profile overloads remain; accepted File objects and retained PATH spellings do not change.",
+      "Retain exact node/artifact inside-project messages, existing local missing-path behavior and missing-parent state-store support.",
+      "Ordinary recognized local volume roots remain supported; unknown/third-party device mappings fail closed as unprovable. Remote mapped drives are not probed.",
+      "IntelliJ's bundled JNA is reused; only Windows JUnit native-dispatch configuration changes, derived from SDK classpath rather than workstation paths."
     ],
     "approvedScope": [
-      "RuntimeSelectionPolicy.outsideByIdentity(path, project) (new private helper)",
-      "isOutsideProject gains a Windows-only identity conjunct",
-      "select gains a Windows-only identity branch, with the existing 'resolves inside the project' reason",
-      "RuntimeSelectionPolicyTest: withSubst helper plus one N row and one S row"
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+      "moe-jetbrains/build.gradle.kts",
+      "RuntimeSelectionPolicy.windowsDriveTarget and resolveWindowsDrivePath (new internal seams), native provider, existing-path canonicalization, outsideByIdentity, protected-only selector preflights and resetForTest."
     ],
     "reuse": [
-      "Files.isSameFile (JDK identity: volume serial + file index)",
-      "rejected()",
-      "The existing test helpers, plus junction()'s ProcessBuilder pattern"
+      "Bundled com.intellij.jna.JnaLoader and com.sun.jna.platform.win32.Kernel32.QueryDosDevice; no new dependency.",
+      "Existing isPlainLocalPath, comparablePath, realPathOrNull, rejected, Files.isSameFile, withSubst, junction, protectedFixture, supervisorFor and installedLayout."
     ],
     "sourceAssumptions": [
-      "RuntimeSelectionPolicy.kt: isOutsideProject (~243-258 before task-526a2080), select (~260-278), realPathOrNull (179-185).",
-      "MoeDaemonSupervisor.kt:583-586: protectedPathEntries calls isOutsideProject.",
-      "ProtectedStateStore.kt:37: usableFor calls isOutsideProject.",
-      "Probed on JDK 17: toRealPath keeps subst letters, and Files.isSameFile sees through them."
+      "Current 1f19140c outsideByIdentity walks lexical Path.parent and misses subst roots below project; native QA reproduced all five observable leaks despite 482 passing tests.",
+      "Native architect probe D:\\arch-1c2bfeca-de6d9983\\run.cmd passed: QueryDosDevice exposes \\??\\C:\\...\\project\\bin; terminal C: is \\Device\\HarddiskVolume3; expanded parent is the project, raw toRealPath remains Z:\\.",
+      "SDK util-8.jar contains JNA 5.17.0 Kernel32.QueryDosDevice; lib/jna/amd64/jnidispatch.dll exists. Standalone probe without jna.boot.library.path fails native loading.",
+      "moe-jetbrains/build.gradle.kts test.doFirst removes IntelliJPlatformArgumentProvider; existing selector wrappers/profiles protect LEGACY restart compatibility.",
+      "Dependency 526a2080 is DONE/landed at 9663fc10; overlapping 52fb6178 already depends on this task. RF07 is the epic-final task."
     ],
     "checkRefs": [
       "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\""
     ]
   },
   "planningNotes": {
-    "approachesConsidered": "(1) Drive-type refusal: refuse every subst or remote drive letter, using QueryDosDevice/GetDriveType through JNA. It is cheap and never reads a share. Rejected because:\n- DoD 1 requires an unrelated folder on the same subst drive to stay on PATH;\n- it adds native calls (the plugin uses no JNA today);\n- a benign mapped home drive would be dropped.\n(2) Resolve the drive letter the way Node does, through GetFinalPathNameByHandle via JNA. That is VS Code parity, but it is native code with handle management. Rejected for the same reasons.\n(3) Identity through Files.isSameFile over the real path's ancestors (chosen):\n- pure NIO;\n- the probe showed it true for subst, volume-GUID and loopback-UNC spellings of the same folder;\n- it catches the reverse case, a project opened through a subst letter;\n- it fails closed on unknown drives.\n(4) Skip identity on the project's own drive letter, as an optimization. Rejected: walking every candidate is simpler and strictly safer, and the cost is small (O(depth) per entry, once per spawn or selection).",
-    "codebaseInsights": "- Probed on JDK 17 (D:\\arch-526a-probe\\Subst.java): toRealPath(`Q:\\bin`) stays `Q:\\bin` for subst, while Files.isSameFile(`Q:\\bin`, `<project>\\bin`) is true. WindowsFileSystemProvider.isSameFile opens both paths following links (FILE_FLAG_BACKUP_SEMANTICS, so it works for directories) and compares volume serial + file index.\n- On Windows BasicFileAttributes.fileKey() is null, so identity cannot be cached through the public API.\n- subst is per logon session and needs no admin. Its target follows the test JVM's token.\n- Test helpers that already exist: protectedFixture, supervisorFor, installedLayout, assertRejected and realFile, plus junction()'s ProcessBuilder pattern for System32 tools.\n- task-526a2080 (the dependency) plans windowsHost, isPlainLocalPath, isOutsideProject's resolve seam, select's first plain-local branch, and the rows N5-N6 and S7-S8.",
-    "risks": "- Leaking a subst drive when a test fails. Always /D in a finally block, only for drives this test created. Afterwards `subst` must list nothing.\n- Tests racing for a drive letter: the loop falls through to the next one.\n- ReFS (Dev Drive) has 128-bit file ids, and its 64-bit index may collide. That only causes false 'inside' answers, i.e. over-refusal, which is the fail-closed direction.\n- A disconnected mapped drive in PATH can stall the walk, as toRealPath already does. It is then dropped.\n- An entry on a drive that does not exist (an unplugged USB drive) is now dropped: harmless.\n- Out of scope: POSIX bind mounts (need root), and the projectKey divergence for a project opened through a subst letter (user-initiated).\n- RF07 (task-f3f364a6) dependsOn this row.",
+    "approachesConsidered": "Replace revision 1's disproved pure-NIO-only plan. QueryDosDevice exposes subst targets using the DOS object namespace and no file handle; reuse bundled JNA. Retain NIO identity after expansion. Reject blanket subst refusal because DoD requires unrelated folders on the same drive. Reject GetFinalPathNameByHandle and speculative GetDriveType fallback for this no-share proof; unknown device namespaces fail closed instead.",
+    "codebaseInsights": "The five leaked observables share RuntimeSelectionPolicy, so supervisor/state-store changes are unnecessary. Existing N8/S9 cover root/parent but miss descendant roots. Path expansion must be followed by real-path resolution for junction-bearing subst targets, and both candidate and project need expansion. Tests already expose fake supervisor/process fixtures. Native JNA is in SDK util-8.jar but plain JUnit lacks its native search path. Docs: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-querydosdevicew ; JnaLoader present since supported platform 231: https://raw.githubusercontent.com/JetBrains/intellij-community/idea/231.8109.175/platform/util/src/com/intellij/jna/JnaLoader.java .",
+    "risks": "No drive-type call on unknown targets: exotic device mappings are intentionally unprovable. Native test configuration must not use repo-supplied libraries in production. Missing path ancestors, project alias inversion, junction-bearing targets and failed JNA init need explicit tests. Preserve accepted alias spellings/LEGACY restart behavior. Concurrent post-validation remapping and profile projectKey alias persistence remain outside this slice. Three files, estimated under 60 minutes with these seams; keep cumulative net change under normal 400-line threshold rather than requesting an exception.",
     "keyFiles": [
       "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
       "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
-      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
-      "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt"
+      "moe-jetbrains/build.gradle.kts"
     ]
   },
   "executionPolicySnapshot": {
     "version": 2,
     "profile": "legacy",
-    "planRevision": 1,
+    "planRevision": 3,
     "deliveryPolicy": "legacy"
   },
-  "planApprovedAt": "2026-10-30T16:33:36.840Z",
-  "approvedPlanRevision": 1,
+  "planApprovedAt": "2026-10-30T17:42:40.742Z",
+  "approvedPlanRevision": 3,
   "workStartedAt": "2026-10-30T17:10:25.392Z",
-  "reviewStartedAt": "2026-10-30T17:19:33.048Z",
+  "reviewStartedAt": "2026-10-30T18:37:24.489Z",
   "verification": {
     "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
     "exitCode": 0,
-    "outputTail": "Windows equivalent of `cd moe-jetbrains && ./gradlew test` (WSL has no JDK), run 17:17:32Z under jetbrains-gradle lease:\n> Task :compileTestKotlin UP-TO-DATE\n> Task :compileTestJava NO-SOURCE\n> Task :processTestResources UP-TO-DATE\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :composedJar UP-TO-DATE\n> Task :prepareTestSandbox UP-TO-DATE\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 22s\n11 actionable tasks: 2 executed, 9 up-to-date\nexit=0\nXML (build/test-results/test, 28 files): 482 tests, 0 failures, 0 errors, 0 skipped. RuntimeSelectionPolicyTest 56 @2026-10-30T17:17:45.218Z (N8, S9 present, not skipped); MoeDaemonSupervisorTest 79 @2026-10-30T17:17:34.906Z. `cmd.exe /d /c subst` lists no drive afterwards.",
-    "reportedAt": "2026-10-30T17:19:33.048Z",
+    "outputTail": "> Task :compileKotlin\n> Task :compileJava NO-SOURCE\n> Task :classes UP-TO-DATE\n> Task :jar\n> Task :compileTestKotlin UP-TO-DATE\n> Task :compileTestJava NO-SOURCE\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :composedJar\n> Task :prepareTestSandbox\n> Task :prepareTest\nWARNING: A restricted method in java.lang.System has been called\nWARNING: java.lang.System::load has been called by com.sun.jna.Native in an unnamed module (file:/C:/Users/Yaron/.gradle/caches/9.8.2/transforms/252d726876db45402d601288a6657911/transformed/idea-2026.2.3-win/lib/util-8.jar)\nWARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module\nWARNING: Restricted methods will be blocked in a future release unless native access is enabled\n> Task :test\nBUILD SUCCESSFUL in 24s\n11 actionable tasks: 6 executed, 5 up-to-date\nConsider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html",
+    "reportedAt": "2026-10-30T18:37:24.489Z",
     "source": "agent-reported"
   },
   "filesModified": [
-    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
-    ".moe/tasks/task-1c2bfeca0ec34589b8cb498abc082549.json",
-    ".moe/tasks/task-b29d022e7d9e4698b40517340f48e31c.json"
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/build.gradle.kts"
   ],
-  "completionSummary": "Under PROTECTED on a Windows host, RuntimeSelectionPolicy now proves a drive-qualified candidate outside the project by file identity too. New private outsideByIdentity(path, project) walks path→root with Files.isSameFile: a match means inside; a missing folder is skipped (the parent decides); any other failure, a missing project or a nonexistent drive answers not-outside. isOutsideProject adds it as the last conjunct, so it runs only after 526a2080's plain-local spelling/real-path checks. The real path is looked up once via a local lazy. select adds a branch before Accepted with the existing \"$label resolves inside the project\" (installedExecutable + installedArtifact). Both checks are gated on PROTECTED as well as windowsHost: the plan's 'LEGACY never calls these' is false (Windows Restart Daemon stop via stopCommandOrNull), so LEGACY is unchanged. Signatures unchanged; no new strings.\n\nTests:\n- N8: subst to the project (L:\\, L:\\bin, L:\\missing) and to its parent (L:\\proj, L:\\proj\\bin) are inside, while L:\\other is kept. Also the reverse alias, the PATH whole-map (keeps outsideA + L:\\other) and the removed drive (false).\n- S9: L:\\node and the sandbox root through subst are refused, and nothing is spawned (exact refusal). Control: an outside node via subst is Accepted.\n- withSubst removes only its own drive.\n\nRED (identity stubbed true): N8/S9 fail. GREEN 56/56. Full native gate exits 0: 482 tests, 0 failures/errors/skips, 28 XML; :test ran. subst lists nothing afterwards.\n\n2 files, +132/-5. jetbrains-gradle released. Residuals (handoff memory): POSIX bind mounts, projectKey for a subst-opened project, project-side UNC opens (task-52fb6178). Wrapper owns landing; peer dirty paths untouched.",
+  "completionSummary": "Reopen 1 (plan rev 3). Why the first fix failed: outsideByIdentity walked lexical Path.parent. With `subst Z: <project>\\bin`, Z:\\ has no parent, so the walk never reached the project: isOutsideProject(Z:\\)=true, node and artifact Accepted, PATH kept Z:\\, spawn.\nFix (RuntimeSelectionPolicy.kt, PROTECTED on Windows only): QueryDosDevice through IntelliJ's JNA (current MULTI_SZ entry only) expands subst chains to a whole local volume (resolveWindowsDrivePath). Remote/unknown/malformed mappings, cycles, >26 letters or >32767 chars and native errors return null. unprovableDrive checks the candidate, root and project before NIO. Both sides are expanded, re-resolved via toRealPath (junctions), and their physical parents compared by Files.isSameFile. LEGACY/POSIX never query; accepted spellings unchanged. build.gradle.kts points Windows JUnit at the SDK's jna/<arch>.\nTests: N9 (descendant and junction subst roots: PATH entry dropped, node/artifact \"resolves inside the project\", no spawn; reverse: a project opened via subst is proved and an outside node Accepted), N10 (expansion table, MULTI_SZ history, bounds, cycles, native errors, native smoke), N11 (remote, unknown or failed JNA refuse before any lookup), N12 (LEGACY/POSIX never query). Mutants killed: no re-resolution (N9), no preflight (N11), strict ignoring profile (N12), subst project unprovable (N9 reverse).\nGate (jetbrains-gradle lease): 28 suites, 486 tests, 0 skipped/failed (RuntimeSelectionPolicyTest 60, supervisor 79). QA's unchanged probe (jna.boot.library.path via JAVA_TOOL_OPTIONS): SUBST_DESCENDANT_FAILURES=0; outside-control Accepted, PATH kept, 1 spawn. No subst left.\nLimits: unknown device families (ImDisk, VeraCrypt) are refused. A remote-mapped project or JNA failure leaves the store unusable: the stored profile reads ABSENT (LEGACY unless the repo declares verified-local). Not atomic against an admin remap. UNC base unchanged (52fb6178). Cumulative net 396/400. Seam handed to 52fb6178.",
   "commits": [
     {
       "sha": "1f19140cd93c9fd5ddad7604d1723bbd25b3d49c",
@@ -160,6 +254,21 @@
       "treeId": "6bac7b3c85c86f40741d9c6b49a500a0f906d2df",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "6aa3965b552232502f548fca82975a78583c9a09",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T17:24:43Z",
+      "paths": [
+        ".moe/tasks/task-1c2bfeca0ec34589b8cb498abc082549.json"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T17:28:28.547Z",
+      "treeId": "c1ca28a9cb1fa8724c8f364664618cb6da0e48a2",
+      "status": "PLANNING",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -169,9 +278,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fe18a9a9@2026-10-30T17:09:41Z",
-    "at": "2026-10-30T17:19:51.637Z"
+    "kind": "checkpoint",
+    "sessionId": "worker-c2da129d@2026-10-30T17:24:43Z",
+    "at": "2026-10-30T17:28:28.547Z"
   },
   "reviewCompletedAt": "2026-10-30T17:24:43.130Z",
   "rejectionDetails": {

@@ -8,8 +8,10 @@ import com.google.gson.Strictness
 import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
 import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.jna.JnaLoader
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.extensions.PluginId
+import com.sun.jna.platform.win32.Kernel32
 import java.io.File
 import java.io.IOError
 import java.io.StringReader
@@ -56,6 +58,12 @@ object RuntimeSelectionPolicy {
     private val DRIVE_ROOT = Regex("^[A-Za-z]:/$")
     private val LOCAL_DRIVE = Regex("^[A-Za-z]:/")
     private val DEVICE_PREFIX = Regex("^//[?.]/(unc/)?", RegexOption.IGNORE_CASE)
+    private val DRIVE_QUALIFIED = Regex("""^[A-Za-z]:\\""")
+    // A whole local volume, never a folder in one, a shadow copy or any other device family.
+    private val LOCAL_DEVICE = Regex("""^\\Device\\(?:HarddiskVolume\d+|CdRom\d+|Floppy\d+|Ramdisk\d*)$""", RegexOption.IGNORE_CASE)
+    // A subst target: a drive-qualified folder whose segments are not empty and do not end in '.' or ' ' (Win32 renames those).
+    private val DOS_TARGET = Regex("""^\\\?\?\\([A-Za-z]:(?:\\[^\\/:*?"<>|\x00-\x1F]*[^\\/:*?"<>|\x00-\x1F. ])*)\\?$""")
+    private const val MAX_WINDOWS_PATH = 32767
     private const val PLUGIN_ID = "com.moe.jetbrains"
 
     // Projects read as verified-local or awaiting a downgrade decision this JVM session. A later
@@ -217,6 +225,71 @@ object RuntimeSelectionPolicy {
     internal fun isWithin(child: String, parent: String): Boolean =
         child == parent || child.startsWith(if (parent.endsWith("/")) parent else "$parent/")
 
+    /** Each drive letter's current DOS-device mapping, read by [queryWindowsDriveTarget]; tests replace it. */
+    @Volatile
+    internal var windowsDriveTarget: (String) -> String? = ::queryWindowsDriveTarget
+
+    /**
+     * Drive-qualified [path] with each subst letter replaced by its target (`\??\<folder>`), until its letter maps to a
+     * whole local volume: the folder the OS opens, found without opening anything. Null for any other spelling, for a
+     * remote (`\Device\LanmanRedirector\…`, `\??\UNC\…`), unknown, malformed or unreadable mapping, a cycle, or a path
+     * longer than Windows allows. Each letter is queried at most once, so at most 26 queries.
+     */
+    internal fun resolveWindowsDrivePath(path: String, query: (String) -> String? = windowsDriveTarget): String? {
+        var current = path.replace('/', '\\')
+        val seen = HashSet<Char>()
+        while (DRIVE_QUALIFIED.containsMatchIn(current) && current.length <= MAX_WINDOWS_PATH && seen.add(current[0].uppercaseChar())) {
+            val mapping = try {
+                query("${current[0].uppercaseChar()}:")
+            } catch (_: Exception) {
+                null
+            } catch (_: IOError) {
+                null
+            } catch (_: LinkageError) {
+                null
+            } ?: return null
+            if (LOCAL_DEVICE.matches(mapping)) return current
+            current = (DOS_TARGET.matchEntire(mapping) ?: return null).groupValues[1] + current.substring(2)
+        }
+        return null
+    }
+
+    // The IDE's own JNA, never a helper process; plain JUnit points it at the SDK's native library (build.gradle.kts).
+    // Any failure, a JNA that cannot load included, is resolveWindowsDrivePath's to refuse.
+    private fun queryWindowsDriveTarget(drive: String): String? {
+        if (!JnaLoader.isLoaded()) return null
+        val buffer = CharArray(MAX_WINDOWS_PATH + 1)
+        return currentDosMapping(buffer, Kernel32.INSTANCE.QueryDosDevice(drive, buffer, buffer.size))
+    }
+
+    /** QueryDosDevice's current mapping: its first string, NUL-terminated within [count]. The strings after it are history. */
+    internal fun currentDosMapping(buffer: CharArray, count: Int): String? =
+        if (count !in 1..buffer.size) null else buffer.indexOf('\u0000').takeIf { it in 1 until count }?.let { String(buffer, 0, it) }
+
+    // Asked before NIO opens [path]: QueryDosDevice opens nothing, so a letter that maps to a share is never contacted.
+    private fun unprovableDrive(path: String): Boolean =
+        DRIVE_QUALIFIED.containsMatchIn(path.replace('/', '\\')) && resolveWindowsDrivePath(path) == null
+
+    /**
+     * [real] once no drive letter on it stands for another folder: each expansion is resolved by the OS again, since
+     * a subst target can hold a junction, until expanding changes nothing. Null when a mapping cannot be proved local,
+     * a resolution fails, or the rounds repeat or pass 26.
+     */
+    private fun physicalPath(real: Path): Path? {
+        var current = real
+        val seen = HashSet<String>()
+        while (seen.add(current.toString()) && seen.size <= 26) {
+            val expanded = resolveWindowsDrivePath(current.toString()) ?: return null
+            if (expanded == current.toString()) return current
+            current = realPathOrNull(expanded) ?: return null
+        }
+        return null
+    }
+
+    // The real project as identity compares it: on a drive its physical folder; any other form as it resolved.
+    private fun physicalProject(project: Path): Path? =
+        if (DRIVE_QUALIFIED.containsMatchIn(project.toString())) physicalPath(project) else project
+
     /**
      * The directory the IDE loaded this plugin from, else the root inferred from this jar (the
      * sources TerminalAgentLauncher.resolveBundledRoot uses). It is the only place protected
@@ -245,6 +318,9 @@ object RuntimeSelectionPolicy {
     internal fun installedArtifact(
         root: File?, relative: String, basePath: String, profile: RuntimeProfile, foldCase: Boolean = defaultFoldCase
     ): RuntimeSelection {
+        if (root != null && strict(profile) && unprovableDrive(root.path)) {
+            return rejected("installed $relative is not a plain local Windows path", root)
+        }
         val realRoot = root?.let { realPathOrNull(it.path) } ?: return RuntimeSelection.Rejected("installed Moe runtime not found")
         return select("installed $relative", basePath, foldCase, realRoot, profile) { File(root, relative).toPath().toRealPath() }
     }
@@ -263,6 +339,9 @@ object RuntimeSelectionPolicy {
             return rejected("node executable is not a valid path", ex)
         }
         if (!candidate.isAbsolute) return RuntimeSelection.Rejected("node executable is not an absolute path")
+        if (strict(profile) && unprovableDrive(candidate.toString())) {
+            return rejected("node executable is not a plain local Windows path", candidate)
+        }
         return select("node executable", basePath, foldCase, null, profile) { candidate.toRealPath() }
     }
 
@@ -270,9 +349,9 @@ object RuntimeSelectionPolicy {
      * True only for an absolute [path] outside the project, both as written and as the real path
      * it resolves to; on a Windows host both must also be plainly local ([isPlainLocalPath]), and
      * a spelling that is not is never looked up, so no share is contacted. On a Windows host
-     * protected also needs file identity: no existing folder from it up to its root is the project
-     * ([outsideByIdentity]). A relative or unparseable path, or any failure, answers false.
-     * [resolve] is the real-path lookup, which tests substitute.
+     * protected also needs file identity ([outsideByIdentity]) and opens nothing on a drive letter
+     * it cannot prove local ([unprovableDrive]). A relative or unparseable path, or any failure,
+     * answers false. [resolve] is the real-path lookup, which tests substitute.
      */
     fun isOutsideProject(
         path: String,
@@ -289,18 +368,18 @@ object RuntimeSelectionPolicy {
         resolve: (String) -> Path? = ::realPathOrNull
     ): Boolean = try {
         val candidate = Paths.get(path)
-        val project = realPathOrNull(basePath)
+        val provable = !strict(profile) || !unprovableDrive(candidate.normalize().toString()) && !unprovableDrive(basePath)
+        val project = if (provable) realPathOrNull(basePath) else null
         val projects = listOfNotNull(Paths.get(basePath).toAbsolutePath().normalize(), project)
             .map { comparablePath(it.toString(), foldCase) }
         // Looked up once, and only after the spelling passed.
         val real by lazy { resolve(path) }
-        candidate.isAbsolute && (profile == RuntimeProfile.LEGACY || isPlainLocalPath(candidate.normalize().toString())) &&
+        provable && candidate.isAbsolute && (profile == RuntimeProfile.LEGACY || isPlainLocalPath(candidate.normalize().toString())) &&
             listOfNotNull(candidate.normalize(), real).map { it.toString() }.all { form ->
                 (profile == RuntimeProfile.LEGACY || isPlainLocalPath(form)) &&
                     comparablePath(form, foldCase).let { c -> projects.none { isWithin(c, it) } }
             } &&
-            (profile == RuntimeProfile.LEGACY || !windowsHost ||
-                project != null && outsideByIdentity(real ?: candidate.normalize(), project))
+            (!strict(profile) || outsideByIdentity(real ?: candidate.normalize(), project?.let(::physicalProject)))
     } catch (_: Exception) {
         false
     } catch (_: IOError) {
@@ -311,7 +390,9 @@ object RuntimeSelectionPolicy {
     private fun select(
         label: String, basePath: String, foldCase: Boolean, realRoot: Path?, profile: RuntimeProfile, resolve: () -> Path
     ): RuntimeSelection {
-        val project = realPathOrNull(basePath) ?: return RuntimeSelection.Rejected("the project directory cannot be resolved")
+        val unresolved = RuntimeSelection.Rejected("the project directory cannot be resolved")
+        val project = (if (strict(profile) && unprovableDrive(basePath)) null else realPathOrNull(basePath)) ?: return unresolved
+        val physical = if (strict(profile)) (physicalProject(project) ?: return unresolved) else null
         val real = try {
             resolve()
         } catch (ex: NoSuchFileException) {
@@ -321,7 +402,8 @@ object RuntimeSelectionPolicy {
         }
         return when {
             // Before any further read, so a share is not contacted again.
-            profile == RuntimeProfile.PROTECTED && !isPlainLocalPath(real.toString()) ->
+            profile == RuntimeProfile.PROTECTED &&
+                (!isPlainLocalPath(real.toString()) || strict(profile) && unprovableDrive(real.toString())) ->
                 rejected("$label is not a plain local Windows path", real)
             !Files.isRegularFile(real) -> rejected("$label is not a regular file", real)
             realRoot != null && !isWithin(comparablePath(real.toString(), false), comparablePath(realRoot.toString(), false)) ->
@@ -329,37 +411,47 @@ object RuntimeSelectionPolicy {
             isWithin(comparablePath(real.toString(), foldCase), comparablePath(project.toString(), foldCase)) ->
                 rejected("$label resolves inside the project", real)
             // A lookup failure on a path toRealPath just resolved is practically unreachable; it refuses too.
-            profile == RuntimeProfile.PROTECTED && windowsHost && !outsideByIdentity(real, project) ->
-                rejected("$label resolves inside the project", real)
+            physical != null && !outsideByIdentity(real, physical) -> rejected("$label resolves inside the project", real)
             else -> RuntimeSelection.Accepted(real.toFile())
         }
     }
 
+    private fun strict(profile: RuntimeProfile): Boolean = profile == RuntimeProfile.PROTECTED && windowsHost
+
     /**
-     * On Windows toRealPath calls GetFinalPathNameByHandle only at a reparse point, so a subst or
-     * mapped drive letter is never resolved: `Q:\bin` can be `<project>\bin` with no shared prefix,
-     * and only file identity (volume serial + file index) sees it. True only when some folder from
-     * [path] up to its root exists and none is [project]. A missing folder holds nothing, so its
-     * parent decides; any other failure, a missing project or a drive that does not exist answers
-     * false. Node's realpath.native resolves these letters, so VS Code needs no twin.
+     * On Windows toRealPath calls GetFinalPathNameByHandle only at a reparse point, so a subst letter is never
+     * resolved: `Q:\bin` can be `<project>\bin` with no shared prefix, and as a drive root `Z:\` for `<project>\bin`
+     * has no parent, hiding every folder above it. So [path] is expanded ([resolveWindowsDrivePath]), its nearest existing
+     * folder resolved to its [physicalPath], and from there each folder up to the root compared with the physical
+     * [project] by file identity (volume serial + file index). True only when one comparison ran and none matched; a
+     * missing folder defers to its parent, and any other failure, unprovable mapping or missing project answers false.
+     * Node's realpath.native resolves these letters, so VS Code needs no twin.
      */
-    private fun outsideByIdentity(path: Path, project: Path): Boolean {
-        var proved = false
-        var current: Path? = path
-        while (current != null) {
-            try {
-                if (Files.isSameFile(current, project)) return false
-                proved = true
-            } catch (_: NoSuchFileException) {
-                // Its parent decides.
-            } catch (_: Exception) {
-                return false
-            } catch (_: IOError) {
-                return false
+    private fun outsideByIdentity(path: Path, project: Path?): Boolean {
+        if (project == null) return false
+        try {
+            var current: Path? = Paths.get(resolveWindowsDrivePath(path.toString()) ?: return false)
+            var real: Path? = null
+            while (real == null && current != null) {
+                try {
+                    real = current.toRealPath()
+                } catch (_: NoSuchFileException) {
+                    current = current.parent
+                }
             }
-            current = current.parent
+            var folder = real?.let(::physicalPath)
+            var proved = false
+            while (folder != null) {
+                if (Files.isSameFile(folder, project)) return false
+                proved = true
+                folder = folder.parent
+            }
+            return proved
+        } catch (_: Exception) {
+            return false
+        } catch (_: IOError) {
+            return false
         }
-        return proved
     }
 
     // The reason reaches the UI; the absolute path only the log.
@@ -611,6 +703,7 @@ object RuntimeSelectionPolicy {
         forgetSessionForTest()
         store = { ideStore }
         confirmer = DowngradeConfirmer { _, _ -> }
+        windowsDriveTarget = ::queryWindowsDriveTarget
     }
 
     /** A failure whose message names the broken rule and never the file's contents. */

@@ -533,6 +533,154 @@ class RuntimeSelectionPolicyTest {
     }
 
     @Test
+    fun `N9 on Windows a subst drive rooted below the project, directly or through a junction, is inside it`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val (project, root, node) = protectedFixture()
+        val bin = File(project, "bin").apply { mkdirs() }
+        File(bin, "node").writeText("planted")
+        installedLayout(File(bin, "plugin"))
+        val link = File(temporaryFolder.newFolder("links"), "bin-link")
+        assertTrue("a junction outside the project to its bin", junction(link.toPath(), bin.toPath()))
+        val outsideA = temporaryFolder.newFolder("path-a").path
+        val reason = "node executable resolves inside the project"
+        val message = "Protected execution profile: $reason. Project and PATH copies of the Moe daemon are not used."
+        listOf("descendant root" to bin, "junction root" to link).forEach { (shape, target) ->
+            withSubst(target) { d ->
+                listOf("$d\\", "$d\\missing\\leaf").forEach { assertFalse("$shape $it", RuntimeSelectionPolicy.isOutsideProject(it, project.path)) }
+                assertEquals(shape, reason, assertRejected("$shape node", RuntimeSelectionPolicy.installedExecutable("$d\\node", project.path)))
+                assertEquals(shape, "installed daemon/index.js resolves inside the project", assertRejected("$shape root",
+                    RuntimeSelectionPolicy.installedArtifact(File("$d\\plugin"), "daemon/index.js", project.path)))
+                val started = mutableListOf<List<String>>()
+                val statuses = mutableListOf<Pair<Boolean, String>>()
+                val supervisor = supervisorFor(project, { root }, { "$d\\node" }, started = started, statuses = statuses)
+                val env = mutableMapOf("PATH" to listOf(outsideA, "$d\\").joinToString(File.pathSeparator))
+                supervisor.protectedDaemonEnvironment(env, project.path)
+                assertEquals(shape, mapOf("PATH" to outsideA), env)
+                assertFalse(shape, supervisor.ensureDaemonRunning())
+                assertEquals(shape, emptyList<List<String>>(), started)
+                assertEquals(shape, listOf(false to message), statuses)
+            }
+        }
+        // The reverse: a project opened through a drive is proved, not merely refused: it owns its files, not an outside node.
+        withSubst(project.parentFile) { d ->
+            assertEquals(reason, assertRejected("project via $d", RuntimeSelectionPolicy.installedExecutable(File(bin, "node").path, "$d\\${project.name}")))
+            assertEquals(RuntimeSelection.Accepted(realFile(node)), RuntimeSelectionPolicy.installedExecutable(node.path, "$d\\${project.name}"))
+        }
+        // Controls: an ordinary local file and a store root not created yet, both outside, stay usable.
+        assertEquals(RuntimeSelection.Accepted(realFile(node)), RuntimeSelectionPolicy.installedExecutable(node.path, project.path))
+        assertTrue(RuntimeSelectionPolicy.isOutsideProject(node.path, project.path))
+        assertTrue("a missing store root outside the project", newStore().usableFor(project.path))
+    }
+
+    @Test
+    fun `N10 drive expansion follows only current local mappings, within bounds`() {
+        val maps = mutableMapOf("C:" to "\\Device\\HarddiskVolume3", "D:" to "\\Device\\CdRom0", "E:" to "\\Device\\Floppy1",
+            "F:" to "\\Device\\Ramdisk", "P:" to "\\??\\C:\\work\\proj\\bin", "W:" to "\\??\\C:\\work", "Y:" to "\\??\\W:\\proj", "R:" to "\\??\\c:\\")
+        val asked = mutableListOf<String>()
+        fun expand(path: String): String? = run { asked.clear(); RuntimeSelectionPolicy.resolveWindowsDrivePath(path) { asked += it; maps[it] } }
+        mapOf("C:\\x\\y" to "C:\\x\\y", "c:/x/y" to "c:\\x\\y", "D:\\a" to "D:\\a", "E:\\a" to "E:\\a", "F:\\a" to "F:\\a",
+            "P:\\" to "C:\\work\\proj\\bin\\", "p:\\node" to "C:\\work\\proj\\bin\\node", "W:\\proj\\bin" to "C:\\work\\proj\\bin",
+            "W:\\other" to "C:\\work\\other", "R:\\x" to "c:\\x", "y:\\bin" to "C:\\work\\proj\\bin"
+        ).forEach { (path, expanded) -> assertEquals(path, expanded, expand(path)) }
+        assertEquals("a chain asks each drive once", listOf("Y:", "W:", "C:"), asked)
+        listOf("\\\\srv\\sh\\x", "//srv/sh/x", "Z:", "Z:x", "\\x", "x", "C:\\" + "a".repeat(32765)).forEach {
+            assertNull(it.take(20), expand(it))
+            assertEquals("${it.take(20)} is never looked up", emptyList<String>(), asked)
+        }
+        // Remote, unknown, malformed and missing mappings are unprovable: nothing is inferred from a \Device prefix.
+        listOf("\\Device\\LanmanRedirector\\;Z:0000000000012345\\srv\\sh", "\\Device\\Mup\\srv\\sh", "\\??\\UNC\\srv\\sh",
+            "\\Device\\WebDavRedirector\\srv\\DavWWWRoot", "\\Device\\HarddiskVolume1\\dir", "\\Device\\HarddiskVolumeShadowCopy1",
+            "\\Device\\HarddiskVolume", "\\Device\\ImDisk0", "\\??\\Volume{00000000-0000-0000-0000-000000000000}\\", "\\??\\C:\\a\\..\\b",
+            "\\??\\C:\\dot.\\b", "\\??\\C:\\a\\\\b", "\\??\\C:x", "C:\\work", "", "\\??\\C:\\" + "a".repeat(32763)
+        ).forEach { mapping ->
+            maps["Z:"] = mapping
+            assertNull(mapping.take(60), expand("Z:\\x"))
+        }
+        maps.remove("Z:")
+        assertNull("no mapping", expand("Z:\\x"))
+        maps += mapOf("A:" to "\\??\\B:\\x", "B:" to "\\??\\a:\\y", "S:" to "\\??\\S:\\x")
+        assertNull(expand("A:\\z"))
+        assertEquals("a cycle stops at its first repeated drive", listOf("A:", "B:"), asked)
+        assertNull(expand("S:\\z"))
+        assertEquals(listOf("S:"), asked)
+        maps.clear()
+        ('A'..'Z').forEach { maps["$it:"] = "\\??\\${if (it == 'Z') 'A' else it + 1}:\\$it" }
+        assertNull(expand("A:\\z"))
+        assertEquals("26 queries at most", 26, asked.size)
+        listOf(IllegalStateException("native"), UnsatisfiedLinkError("jnidispatch"), java.io.IOError(IOException("device"))).forEach { failure ->
+            assertNull("$failure", RuntimeSelectionPolicy.resolveWindowsDrivePath("C:\\x") { throw failure })
+        }
+        // QueryDosDevice's buffer: the first NUL-terminated string within the count is the current mapping, later ones are history.
+        fun current(text: String, count: Int = text.length) = RuntimeSelectionPolicy.currentDosMapping(text.toCharArray(), count)
+        val history = "\\Device\\LanmanRedirector\\;Z:0\\srv\\sh\u0000\\??\\C:\\proj\u0000\u0000"
+        assertEquals("\\??\\C:\\x", current("\\??\\C:\\x\u0000\u0000"))
+        assertEquals("\\Device\\LanmanRedirector\\;Z:0\\srv\\sh", current(history))
+        assertNull(RuntimeSelectionPolicy.resolveWindowsDrivePath("Z:\\x") { if (it == "Z:") current(history) else "\\Device\\HarddiskVolume3" })
+        listOf(current("\\??\\C:\\x\u0000", 8), current("x\u0000", 3), current("x\u0000", 0), current("x\u0000", -1), current("\u0000\u0000"))
+            .forEach { assertNull(it) }
+        // On Windows the SDK's JNA answers in plain JUnit: the system drive is a local volume.
+        System.getenv("SystemRoot")?.takeIf { RuntimeSelectionPolicy.windowsHost }?.let { assertEquals(it, RuntimeSelectionPolicy.resolveWindowsDrivePath(it)) }
+    }
+
+    @Test
+    fun `N11 on Windows a drive mapping that cannot be proved local refuses before any lookup and never falls back`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val (project, root, node) = protectedFixture()
+        val native = RuntimeSelectionPolicy.windowsDriveTarget
+        // An Error, so isOutsideProject's error handling cannot swallow it: any lookup fails the test.
+        val untouched: (String) -> Path? = { throw AssertionError("looked up $it") }
+        fun assertSpawnRefused(label: String, nodePath: String, reason: String) {
+            val started = mutableListOf<List<String>>()
+            val statuses = mutableListOf<Pair<Boolean, String>>()
+            assertFalse(label, supervisorFor(project, { root }, { nodePath }, started = started, statuses = statuses).ensureDaemonRunning())
+            assertEquals(label, emptyList<List<String>>(), started)
+            val message = "Protected execution profile: $reason. Project and PATH copies of the Moe daemon are not used."
+            assertEquals(label, listOf(false to message), statuses)
+        }
+        // A share, a device family nothing proves local, a native library that does not load: nothing on the drive is
+        // opened, and nothing falls back to the ancestor walk, which the controls show accepting these paths.
+        listOf<(String) -> String?>({ "\\Device\\LanmanRedirector\\;${it}0\\srv\\sh" }, { "\\Device\\ImDisk0" },
+            { throw UnsatisfiedLinkError("jnidispatch") }).forEachIndexed { i, provider ->
+            withDriveTargets(provider) {
+                assertFalse("$i node", RuntimeSelectionPolicy.isOutsideProject(node.path, project.path, resolve = untouched))
+                assertEquals("$i", "node executable is not a plain local Windows path",
+                    assertRejected("$i node", RuntimeSelectionPolicy.installedExecutable(node.path, project.path)))
+                assertSpawnRefused("$i", node.path, "installed daemon/index.js is not a plain local Windows path")
+            }
+        }
+        // One remote letter: a node or a project on it is refused unopened, while the native drive still selects.
+        val remote = ('Z' downTo 'D').map { "$it:" }.first { !realFile(node).path.startsWith(it, ignoreCase = true) }
+        withDriveTargets({ if (it == remote) "\\Device\\LanmanRedirector\\;${it}0\\srv\\sh" else native(it) }) {
+            assertFalse("remote PATH entry", RuntimeSelectionPolicy.isOutsideProject("$remote\\bin", project.path, resolve = untouched))
+            assertSpawnRefused("remote node", "$remote\\node", "node executable is not a plain local Windows path")
+            assertFalse("remote project", RuntimeSelectionPolicy.isOutsideProject(node.path, "$remote\\proj", resolve = untouched))
+            assertEquals("the project directory cannot be resolved",
+                assertRejected("remote project", RuntimeSelectionPolicy.installedExecutable(node.path, "$remote\\proj")))
+            assertEquals(RuntimeSelection.Accepted(realFile(node)), RuntimeSelectionPolicy.installedExecutable(node.path, project.path))
+        }
+        assertTrue(RuntimeSelectionPolicy.isOutsideProject(node.path, project.path))
+    }
+
+    @Test
+    fun `N12 legacy selection, and protected selection off Windows, never asks for a drive mapping`() {
+        val (project, root, node) = protectedFixture()
+        val outside = node.parentFile.path
+        val asked = mutableListOf<String>()
+        val profiles = if (RuntimeSelectionPolicy.windowsHost) listOf(RuntimeProfile.LEGACY) else RuntimeProfile.entries
+        withDriveTargets({ asked += it; throw UnsatisfiedLinkError("jnidispatch") }) {
+            profiles.forEach { profile ->
+                val supervisor = supervisorFor(project, { root }, { node.path }, profile = { profile })
+                val stop = listOf(realFile(node).path, realFile(File(root, "daemon/index.js")).path, "stop", "--project", project.path)
+                assertEquals("$profile stop", stop, supervisor.stopCommandOrNull(project.path))
+                val env = mutableMapOf("PATH" to listOf(outside, project.path).joinToString(File.pathSeparator))
+                supervisor.protectedDaemonEnvironment(env, project.path, profile)
+                assertEquals("$profile PATH", mapOf("PATH" to outside), env)
+            }
+        }
+        assertEquals(emptyList<String>(), asked)
+    }
+
+    @Test
     fun `V1 a recorded supervisor verifies its daemon, which stays verified after the supervisor exits`() {
         val dir = temporaryFolder.newFolder("a").path
         val live = mutableMapOf(100L to ProcessFacts(100, T0, 1), 200L to ProcessFacts(200, T1, 100))
@@ -1530,26 +1678,42 @@ class RuntimeSelectionPolicyTest {
     }
 
     /**
-     * Runs [body] with a fresh subst drive (`L:`) for [target], then removes that drive; a drive this
-     * helper did not create is never touched. Skips when no letter from Z to D is free.
+     * Runs [body] with a fresh subst drive (`L:`) for [target], then removes that drive in a finally block; a drive
+     * this helper did not create is never touched. Skips only when every letter from Z to D is taken: a subst that
+     * fails on every free letter fails the test.
      */
     private fun <T> withSubst(target: File, body: (String) -> T): T {
-        val subst = File(System.getenv("SystemRoot"), "System32\\subst.exe").path
+        val subst = File(System.getenv("SystemRoot"), "System32\\subst.exe")
+        assertTrue("$subst exists", subst.isFile)
+        val failures = mutableListOf<String>()
         for (letter in 'Z' downTo 'D') {
             val drive = "$letter:"
-            // Taken, or held by a remembered network mapping: try the next letter.
-            if (File("$drive\\").exists() || exitOf(subst, drive, target.path) != 0) continue
-            // exitOf never throws, so cleanup cannot hide the body's own failure.
-            val result = try {
-                body(drive)
-            } catch (failure: Throwable) {
-                exitOf(subst, drive, "/D")
-                throw failure
+            if (File("$drive\\").exists()) continue
+            // A free-looking letter may still be held, by a remembered network mapping: try the next one.
+            val exit = exitOf(subst.path, drive, target.path)
+            if (exit != 0 && failures.add("$drive exit $exit")) continue
+            var passed = false
+            try {
+                return body(drive).also { passed = true }
+            } finally {
+                // exitOf never throws, and a failed body keeps its own failure.
+                val removed = exitOf(subst.path, drive, "/D")
+                if (passed) assertEquals("subst $drive /D", 0, removed)
             }
-            assertEquals("subst $drive /D", 0, exitOf(subst, drive, "/D"))
-            return result
         }
+        if (failures.isNotEmpty()) throw AssertionError("subst $target failed on every free letter: $failures")
         throw AssumptionViolatedException("no free drive letter for subst")
+    }
+
+    /** Runs [body] with [provider] answering every drive mapping, then restores the lookup it replaced. */
+    private fun <T> withDriveTargets(provider: (String) -> String?, body: () -> T): T {
+        val previous = RuntimeSelectionPolicy.windowsDriveTarget
+        RuntimeSelectionPolicy.windowsDriveTarget = provider
+        try {
+            return body()
+        } finally {
+            RuntimeSelectionPolicy.windowsDriveTarget = previous
+        }
     }
 
     private fun exitOf(vararg command: String): Int = try {
