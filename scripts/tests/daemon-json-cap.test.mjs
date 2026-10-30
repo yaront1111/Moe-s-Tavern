@@ -411,6 +411,86 @@ for (const engine of ENGINES) {
     }));
 }
 
+// The project-path comparison contract; its home is moe-proxy comparableProjectPath.
+const CONTRACT = [
+  ['D:\\proj', 'd:/proj'], ['d:/Proj/', 'd:/proj'], ['D:\\', 'd:'], ['D:/../proj', 'd:/proj'],
+  ['/mnt/d/proj', 'd:/proj'], ['/mnt/D/Proj/', 'd:/proj'], ['/mnt/d', 'd:'], ['/mnt/dd/x', '/mnt/dd/x'], ['/MNT/d/x', '/MNT/d/x'],
+  ['/home/qa/OtherProject', '/home/qa/OtherProject'], ['/home/qa/otherproject', '/home/qa/otherproject'],
+  ['/home//u/./x/../p/', '/home/u/p'],
+  ['\\\\srv\\share\\proj', '//srv/share/proj'], ['//SRV/SHARE/PROJ/', '//srv/share/proj'], ['//srv/share/../../b', '//srv/share/b'],
+];
+const WSL_SHARES = [
+  ['\\\\wsl.localhost\\Ubuntu\\home\\u\\proj', '/home/u/proj'], ['//wsl$/Ubuntu/home/u/proj', '/home/u/proj'],
+  ['//WSL$/Ubuntu/mnt/d/proj', 'd:/proj'], ['//wsl$/Ubuntu', '/'],
+];
+// Maps the rows' inputs to keys in ONE child process, which reads them as JSON on stdin. A
+// failed spawn, a non-zero exit, unparseable output or a wrong row count fails the test.
+function childKeys(exe, args, rows, parse = JSON.parse) {
+  const r = spawnSync(exe, args, { input: JSON.stringify(rows.map(([p]) => p)), encoding: 'utf8', env: ENV, timeout: 60_000, windowsHide: true });
+  const detail = `${exe} exited ${r.status} (${r.error?.message ?? r.signal ?? 'no spawn error'}), stderr: ${r.stderr}`;
+  assert.equal(r.status, 0, detail);
+  let keys;
+  try { keys = parse(r.stdout); } catch { assert.fail(`${detail}\nunparseable output: ${r.stdout}`); }
+  assert.equal(keys?.length, rows.length, `${detail}\nwrong row count: ${r.stdout}`);
+  return rows.map(([p], i) => [p, keys[i]]);
+}
+// A child process, so the daemon's module graph never holds this test process open.
+function distKeys(rel, rows) {
+  const url = new URL(`../../${rel}`, import.meta.url);
+  assert.ok(existsSync(url), `${rel} is missing: build packages/moe-proxy and packages/moe-daemon first`);
+  const code = `import { readFileSync, writeSync } from 'node:fs';
+const { comparableProjectPath } = await import(${JSON.stringify(url.href)});
+writeSync(1, JSON.stringify(JSON.parse(readFileSync(0, 'utf8')).map((p) => comparableProjectPath(p))));
+process.exit(0);`;
+  return childKeys(process.execPath, ['--input-type=module', '-e', code], rows);
+}
+const ALL_ROWS = [...CONTRACT, ...WSL_SHARES];
+test('path contract: moe-proxy and moe-daemon give every row its contract key', () => {
+  assert.deepEqual(distKeys('packages/moe-proxy/dist/utils.js', ALL_ROWS), ALL_ROWS);
+  assert.deepEqual(distKeys('packages/moe-daemon/dist/index.js', ALL_ROWS), ALL_ROWS);
+});
+test('path contract: moe-proxy matches every absolute row of the JetBrains table', () => {
+  const kt = readFileSync(new URL('../../moe-jetbrains/src/test/kotlin/com/moe/services/DaemonIdentityTest.kt', import.meta.url), 'utf8');
+  const table = between(kt, 'fun `comparableProjectPath folds Windows, WSL and UNC spellings`()', 'for ((input, expected) in rows)');
+  const unescape = (s) => s.replace(/\\(.)/g, '$1');
+  const rows = [...table.matchAll(/"((?:[^"\\]|\\.)*)" to "((?:[^"\\]|\\.)*)"/g)]
+    .map(([, input, key]) => [unescape(input), unescape(key)])
+    .filter(([input]) => /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]|\/)/.test(input.trim()));
+  assert.ok(rows.length >= 20, `only ${rows.length} absolute rows parsed from the Kotlin table`);
+  assert.deepEqual(distKeys('packages/moe-proxy/dist/utils.js', rows), rows);
+});
+// The launchers' own rules, cut from the real scripts.
+const pythonKeys = (rows) => childKeys(PYTHON, ['-c', `import json, ntpath, posixpath, re, sys
+${between(SEGMENTS.sh.probe(), 'WINDOWS = re.compile(', '\ntry:')}
+print(json.dumps([comparable(p) for p in json.load(sys.stdin)]))`], rows);
+function powershellKeys(engine, rows) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'moe-path-'));
+  try {
+    const script = path.join(dir, 'keys.ps1');
+    writeFileSync(script, `\ufeff$ErrorActionPreference = 'Stop'
+${between(ps, '\nfunction Get-MoeComparableProjectPath(', '\n# Which project the daemon on 127.0.0.1')}
+foreach ($p in @(${rows.map(([p]) => psq(p)).join(', ')})) { Get-MoeComparableProjectPath $p }
+`);
+    return childKeys(engine.exe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], rows,
+      (out) => out.replaceAll('\r', '').replace(/\n$/, '').split('\n'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const LAUNCHER_RULES = [
+  { name: `moe-agent.sh (${PYTHON})`, skip: false, keys: pythonKeys },
+  ...ENGINES.filter((e) => e.ext === 'ps1').map((e) => ({ name: `moe-agent.ps1 (${e.name})`, skip: e.skip, keys: (rows) => powershellKeys(e, rows) })),
+];
+for (const rule of LAUNCHER_RULES) {
+  test(`path contract: ${rule.name} gives every non-WSL-share row its key`, { skip: rule.skip }, () => {
+    assert.deepEqual(rule.keys(CONTRACT), CONTRACT);
+  });
+  test(`path contract: ${rule.name} maps a WSL share to its POSIX path`,
+    { skip: rule.skip, todo: 'launchers still read a WSL share as plain UNC: task-3def080415d3495a8557b514d6a0ab2a' }, () => {
+      assert.deepEqual(rule.keys(WSL_SHARES), WSL_SHARES);
+    });
+}
+
 test('CI runs this suite on Linux and Windows', () => {
   const file = 'scripts/tests/daemon-json-cap.test.mjs';
   const lines = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n').split('\n');

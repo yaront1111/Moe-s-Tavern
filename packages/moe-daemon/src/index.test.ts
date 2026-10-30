@@ -240,12 +240,18 @@ describe('daemon lifecycle validation', () => {
         ['/mnt/D/projexts/app', 'D:/projexts/app'],
         ['/mnt/d/', 'D:\\'],
         ['/tmp/a', '/tmp/a/'],
+        ['\\\\srv\\share\\proj', '//SRV/SHARE/PROJ/'],
+        ['\\\\wsl.localhost\\Ubuntu\\home\\u\\proj', '/home/u/proj'],
+        ['//wsl$/Ubuntu/mnt/d/proj', 'D:\\proj'],
       ];
       const unequal: Array<[string, string]> = [
         ['/mnt/d/x', 'E:/x'],
         ['/mnt/d/x', 'D:/y'],
         ['/mnt/dd/x', 'D:/x'],
         ['/mnt/d/x/y', 'D:/x'],
+        ['/home/qa/OtherProject', '/home/qa/otherproject'],
+        ['/home/u/p', 'C:\\home\\u\\p'],
+        ['//srv/share/p', '/srv/share/p'],
       ];
       for (const [a, b] of equal) {
         expect([a, b, isSameProjectPath(a, b), isSameProjectPath(b, a)]).toEqual([a, b, true, true]);
@@ -253,7 +259,7 @@ describe('daemon lifecycle validation', () => {
       for (const [a, b] of unequal) {
         expect([a, b, isSameProjectPath(a, b), isSameProjectPath(b, a)]).toEqual([a, b, false, false]);
       }
-      if (process.platform !== 'win32') expect(isSameProjectPath('/tmp/A', '/tmp/a')).toBe(false);
+      expect(isSameProjectPath('/tmp/A', '/tmp/a')).toBe(false);
     });
 
     it('X2 isForeignDaemonInfo judges the writer by its projectPath form', () => {
@@ -404,6 +410,9 @@ describe('daemon lifecycle validation', () => {
       expect(await same('/mnt/d/projexts/app/sub/..', 'D:/projexts/app')).toEqual([true, true]);
       expect(await same('/mnt/d/projexts/app/./', 'd:\\projexts\\app')).toEqual([true, true]);
       expect(await same('/mnt/d/projexts/app/sub/../..', 'D:/projexts/app')).toEqual([false, false]);
+      expect(await same('/home/qa/OtherProject', '/home/qa/otherproject')).toEqual([false, false]);
+      expect(await same('\\\\srv\\share\\proj', '//SRV/SHARE/PROJ/')).toEqual([true, true]);
+      expect(await same('\\\\wsl.localhost\\Ubuntu\\home\\u\\proj', '/home/u/proj')).toEqual([true, true]);
     });
 
     it.skipIf(process.platform === 'win32')('X11 validateDaemonInfoForProject accepts a relative --project naming a live native daemon recorded under /mnt/<d>', async () => {

@@ -91,31 +91,40 @@ function canonicalProjectPath(projectPath: string): string {
   return path.resolve(projectPath);
 }
 
+const WINDOWS_FORM = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/;
+const WSL_SHARE = /^\/\/(?:wsl\$|wsl\.localhost)\/[^/]+(\/.*)?$/i;
+const MNT_DRIVE = /^\/mnt\/([A-Za-z])(?:\/(.*))?$/;
+
 /**
- * Comparison-only form of a project path; never written anywhere. Follows
- * moe-proxy's rule (packages/moe-proxy/src/utils.ts comparableProjectPath), so
- * `/mnt/d/x` (WSL) and `D:\x` (Windows) name the same project on both sides.
- * A drive path is detected on the raw string, since path.resolve would treat it
- * as relative on Linux. /mnt/<d> is mapped only after normalizing, so `.`,
- * `sub/..` and `/mnt/d/x/./` still match `/mnt/d/x`. On Windows that is a posix
- * normalize: path.resolve would prefix the /mnt path with the cwd drive.
+ * Comparison-only form of a project path; never written anywhere. The contract
+ * is documented on moe-proxy's comparableProjectPath (packages/moe-proxy/src/utils.ts).
+ * Keep the two equivalent: scripts/tests/daemon-json-cap.test.mjs checks both dists against one table.
  */
 function comparableProjectPath(projectPath: string): string {
   const raw = projectPath.trim();
-  if (/^[a-zA-Z]:[\\/]/.test(raw)) return normalizeWindowsDrivePath(raw);
-  const isWin32 = process.platform === 'win32';
-  const resolved = path.resolve(raw);
-  const wslMatch = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(isWin32 ? path.posix.normalize(raw) : resolved);
-  if (wslMatch) {
-    const rest = (wslMatch[2] ?? '').replace(/\/+$/, '');
-    return `${wslMatch[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();
-  }
-  if (/^[a-zA-Z]:[\\/]/.test(resolved)) return normalizeWindowsDrivePath(resolved);
-  return isWin32 ? resolved.toLowerCase() : resolved;
+  const abs = WINDOWS_FORM.test(raw) || raw.startsWith('/') ? raw : path.resolve(raw);
+  if (!WINDOWS_FORM.test(abs)) return posixKey(abs);
+  const s = abs.replace(/\\/g, '/');
+  const share = WSL_SHARE.exec(s);
+  if (share) return posixKey(share[1] ?? '/');
+  const unc = s.startsWith('//');
+  return ((unc ? '//' : '') + collapse(s, unc ? 2 : 1)).toLowerCase();
 }
 
-function normalizeWindowsDrivePath(drivePath: string): string {
-  return path.win32.normalize(drivePath).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+function posixKey(p: string): string {
+  const key = '/' + collapse(p, 0);
+  const mnt = MNT_DRIVE.exec(key);
+  return mnt ? `${mnt[1]}:${mnt[2] ? `/${mnt[2]}` : ''}`.toLowerCase() : key;
+}
+
+/** Drops empty and '.' segments; '..' never pops the first `keep` (drive, or UNC server and share). */
+function collapse(p: string, keep: number): string {
+  const kept: string[] = [];
+  for (const segment of p.split('/').filter((s) => s !== '' && s !== '.')) {
+    if (segment !== '..') kept.push(segment);
+    else if (kept.length > keep) kept.pop();
+  }
+  return kept.join('/');
 }
 
 function isSameProjectPath(a: string, b: string): boolean {
@@ -1238,6 +1247,7 @@ async function main() {
 
 export {
   canonicalProjectPath,
+  comparableProjectPath,
   isSameProjectPath,
   isForeignDaemonInfo,
   isDaemonInfoShape,

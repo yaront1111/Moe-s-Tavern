@@ -116,6 +116,20 @@ describe('probeDaemonIdentity', () => {
     },
   );
 
+  // The cross-platform path contract (comparableProjectPath), with no platform guard.
+  it.each([
+    ['/home/qa/OtherProject', '/home/qa/otherproject', 'foreign'],
+    ['//SRV/SHARE/PROJ/', '\\\\srv\\share\\proj', 'same'],
+    ['/home/u/proj', '\\\\wsl.localhost\\Ubuntu\\home\\u\\proj', 'same'],
+    ['\\\\wsl$\\Ubuntu\\home\\u\\proj', '/home/u/proj', 'same'],
+    ['/home/u/proj', 'C:\\home\\u\\proj', 'foreign'],
+  ])('classifies served %s for own %s as %s', async (served, own, kind) => {
+    const { port } = await listen(healthy(served));
+    await expect(probeDaemonIdentity(HOST, port, own)).resolves.toEqual(
+      kind === 'foreign' ? { kind, projectPath: served } : { kind },
+    );
+  });
+
   it('classifies another absolute project as foreign and returns the served path verbatim', async () => {
     const { port } = await listen(healthy(OTHER_PROJECT));
     await expect(probeDaemonIdentity(HOST, port, '/mnt/d/proj'))

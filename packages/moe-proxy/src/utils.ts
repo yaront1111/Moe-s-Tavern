@@ -14,45 +14,52 @@ export interface DaemonInfoReadResult {
   retryable: boolean;
 }
 
+const WINDOWS_FORM = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/;
+const WSL_SHARE = /^\/\/(?:wsl\$|wsl\.localhost)\/[^/]+(\/.*)?$/i;
+const MNT_DRIVE = /^\/mnt\/([A-Za-z])(?:\/(.*))?$/;
+
 /**
- * Reduce a project path to a form comparable across the Windows/WSL boundary.
- * A Windows daemon records `D:\projexts\app` in daemon.json while a WSL-side
- * proxy resolves the same directory as `/mnt/d/projexts/app`; both reduce to
- * `d:/projexts/app`. Paths without a drive-letter equivalent keep the old
- * behavior (resolve; case-insensitive only on win32).
- *
- * A drive-letter path is detected on the raw string (path.resolve would treat
- * it as relative on Linux). `/mnt/<d>` is mapped only after normalizing, so
- * '.', 'sub/..' and '/mnt/d/x/./' match '/mnt/d/x': on POSIX after
- * path.resolve, on win32 after a posix normalize of the raw string
- * (path.resolve would prefix it with the cwd drive). The daemon's
- * comparableProjectPath follows the same rule.
+ * The cross-platform project-path comparison contract. The key is the same
+ * whatever OS computes it, and is comparison-only: never written anywhere.
+ * The daemon's comparableProjectPath twin, JetBrains DaemonIdentityProbe and
+ * the launchers follow it (scripts/tests/daemon-json-cap.test.mjs checks them).
+ * - Drive (`D:\x`, `d:/x/`) and UNC (`\\srv\share\x`, `//srv/share/x`): `\` and
+ *   `/` both separate, '..' never climbs past the drive or the UNC server and
+ *   share, and case folds with toLowerCase (locale-independent, full Unicode:
+ *   it over-folds U+212A and U+212B, which NTFS keeps apart, a fail-open same).
+ * - `\\wsl$\<distro>\x` and `\\wsl.localhost\<distro>\x` name that distro's
+ *   POSIX `/x`; the distro is not compared. The launchers still read a WSL
+ *   share as plain UNC until task-3def0804.
+ * - Any other path starting with `/` is POSIX: only `/` separates, '..' stops
+ *   at the root, case is kept, and `/mnt/<d>[/x]` maps to `<d>:[/x]`.
+ * The drive letter and the mount letter are ASCII-only. Only a relative input
+ * is first resolved natively against the cwd.
  */
 export function comparableProjectPath(projectPath: string): string {
   const raw = projectPath.trim();
-
-  if (/^[a-zA-Z]:[\\/]/.test(raw)) {
-    return normalizeWindowsDrivePath(raw);
-  }
-  const resolved = path.resolve(raw);
-  const wslSource = process.platform === 'win32' ? path.posix.normalize(raw) : resolved;
-  const wslMatch = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(wslSource);
-  if (wslMatch) {
-    const rest = (wslMatch[2] ?? '').replace(/\/+$/, '');
-    return `${wslMatch[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();
-  }
-
-  if (/^[a-zA-Z]:[\\/]/.test(resolved)) {
-    return normalizeWindowsDrivePath(resolved);
-  }
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  const abs = WINDOWS_FORM.test(raw) || raw.startsWith('/') ? raw : path.resolve(raw);
+  if (!WINDOWS_FORM.test(abs)) return posixKey(abs);
+  const s = abs.replace(/\\/g, '/');
+  const share = WSL_SHARE.exec(s);
+  if (share) return posixKey(share[1] ?? '/');
+  const unc = s.startsWith('//');
+  return ((unc ? '//' : '') + collapse(s, unc ? 2 : 1)).toLowerCase();
 }
 
-function normalizeWindowsDrivePath(drivePath: string): string {
-  return path.win32.normalize(drivePath)
-    .replace(/\\/g, '/')
-    .replace(/\/+$/, '')
-    .toLowerCase();
+function posixKey(p: string): string {
+  const key = '/' + collapse(p, 0);
+  const mnt = MNT_DRIVE.exec(key);
+  return mnt ? `${mnt[1]}:${mnt[2] ? `/${mnt[2]}` : ''}`.toLowerCase() : key;
+}
+
+/** Drops empty and '.' segments; '..' never pops the first `keep` (drive, or UNC server and share). */
+function collapse(p: string, keep: number): string {
+  const kept: string[] = [];
+  for (const segment of p.split('/').filter((s) => s !== '' && s !== '.')) {
+    if (segment !== '..') kept.push(segment);
+    else if (kept.length > keep) kept.pop();
+  }
+  return kept.join('/');
 }
 
 function isSameProjectPath(a: string, b: string): boolean {

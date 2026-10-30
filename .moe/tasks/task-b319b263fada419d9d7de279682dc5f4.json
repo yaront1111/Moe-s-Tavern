@@ -12,10 +12,76 @@
     "The verification command exits 0; postflight.ps1 passes via node scripts/tests/postflight-safe.mjs powershell."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-899a90d6",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "sh core helpers (scripts/moe-agent.sh), design §2.2 L0-L2, §2.4, §3.\n\nFIRST read the landed WT-04/05/06 bytes (`git log --oneline --grep 'Moe-Task: task-c20464ff64ca49fca4371dd9b5194364'`, likewise c4cccb84 and 042dc0dd) for three things:\n- the per-task workspace variables, proposed in #general msg-ad88dbbd as unexported MOE_WORKSPACE_MODE (shared|worktree), MOE_WORKTREE_PATH (W in the wrapper's own path syntax), MOE_TASK_BRANCH and MOE_LAND_TARGET. Use the names WT-04 actually landed;\n- the provisioning success point;\n- the postflight worktree fixture.\n\nEditing rule (live seats run this file): write the whole new file elsewhere on the same filesystem, `bash -n` it, then make one `mv -f` over scripts/moe-agent.sh (scripts/CLAUDE.md Hot reload). Define new helpers beside the existing landing helpers, above the main-loop group, never after it.\n\nAdd:\n(a) A DENY variant as a new MODE `worktree` of resolve_attribution's python. Every snapshot path is a candidate (reason WORKTREE) unless `denied_wt(p, xy)`, which is the existing `denied(p, xy)` OR the path is `.claude/skills` or under `.claude/skills/`. Held paths get MOE_ATTR_EXCLUDED exactly as today. In this mode skip the BOARD sets, scope tiers, baseline/evidence/tool inputs and policy, so .moe/** is always held with no BOARD exception, and write empty unattributed/contested outputs. One denied() list per wrapper stays the single source.\n(b) `control_worktree_mode`: rc 0 iff `git -C \"$MOE_TOP\" symbolic-ref -q HEAD` prints exactly refs/heads/moe/control (the §6.5 invariant WT-04 enforces); any git failure is rc 1.\n(c) `land_worktree_checkpoint W BRANCH`. It shadows `local MOE_TOP=\"$W\" MOE_REL=\"\" MOE_GITDIR=$(git -C \"$W\" rev-parse --absolute-git-dir)`, so git_dirty_snapshot, moe_temp_index_build, write_commit_message, index_refresh, rescue_ref_from_commit and record_commit_rpc run on W unchanged.\n- L0: commit_scope postflight, then landing_owner_guard. A refusal goes through landing_refuse_owner: outcome refused, nothing moves.\n- L1: git_dirty_snapshot of W, then resolve_attribution worktree, attr_print_skips and today's MOE_ATTR_EXCLUDED count line. No candidates gives outcome nothing with MOE_COMMIT_NOTHING_TO_COMMIT.\n- L2: T = `git -C W rev-parse -q --verify refs/heads/$BRANCH`; moe_temp_index_build T (an unchanged tree gives nothing); write_commit_message checkpoint (today's subject and trailers, with ' recovered' when LAND_RECOVERED); `commit-tree -p T`; then ONE `update-ref refs/heads/$BRANCH <new> T`. There is no retry loop: only another session of this task could move it. On success: index_refresh of the landed paths, LAND_OUTCOME=committed, MOE_LANDING_DONE=true.\n(d) `push_task_branch BRANCH`, only when CS_CHECKPOINT_PUSH=true. no_git_remote gives today's info line and no push. Otherwise `git -C W push --porcelain origin refs/heads/$BRANCH:refs/heads/$BRANCH`: no force flag, no -u, no MOE_PUSH_REBASE retry. A rejection or failure calls announce_checkpoint_unpushed with the branch, sets pushed=false and changes nothing else.\n(e) record_commit_rpc on every outcome: kind checkpoint, ref `refs/heads/$BRANCH` (the full ref, §3.4), paths = the landed set, inferredPaths [] and unattributedPaths [] (present, empty), no contested; pushed is true only for a confirmed push.\n\nError handling:\n- a failed W status gives MOE_COMMIT_FAILED_ATTRIBUTION, recorded failed, W untouched;\n- an unresolvable T or a lost CAS gives MOE_COMMIT_FAILED_REF_CONTENTION plus rescue_ref_from_commit 'ref-contention' at the built commit, outcome failed, W untouched;\n- an index-build or commit-tree failure follows land_plumbing's existing failure path;\n- index_refresh's MOE_COMMIT_INDEX_REFRESH_FAILED warns and never fails the landing.\nNo path above touches the control checkout, the target or any other ref.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "sh wiring (scripts/moe-agent.sh), using the step-1 helpers.\n(a) preflight_landing returns before any baseline, live-marker or baseline-recovery work for a worktree-mode worker (WT-04's mode variable = worktree) and for a non-worker seat while control_worktree_mode. No <gitdir>/moe/baseline/<taskId>.tsv is ever written for them; that file is what the shared recovery, idle recovery and teardown rescue key on, and those would otherwise run ensure_safe_branch (a `git checkout`) in the control checkout. Make sure the mode is known before baseline_write.\n(b) Right after WT-04's provisioning succeeds (W/.moe guard passed) and before the CLI launch:\n- When CS_AUTO_COMMIT and checkpoints are on (CS_CHECKPOINT_COMMITS=true, MOE_DISABLE_CHECKPOINT!=1), run land_worktree_checkpoint with LAND_RECOVERED=true. On committed, print `MOE_CHECKPOINT_RECOVERED task=<id> sha=<sha>`. Then reset the per-landing globals (LAND_OUTCOME, LAND_SHA, LAND_CODE, MOE_LANDING_DONE, LAND_RECOVERED) so the session's own exit lands normally.\n- A failed recovery leaves the dirt in W and the session proceeds.\n- A W/.moe guard failure stops the seat before this point, so it makes no recovery commit.\n- Then write `$MOE_GITDIR/moe/worktree/<taskId>.control-dirt` (the control's common gitdir): the control checkout's git_dirty_snapshot paths minus denied_wt, so .moe/** is excluded. Write them NUL-separated to a temp file, then mv. A write failure prints one [WARN] and disables the stray check for this session.\n(c) Post-flight kind selection, before today's branches. For a worktree-mode worker:\n- autoCommit=false: nothing, as today.\n- A non-completion exit with checkpoints on: land_worktree_checkpoint, then push_task_branch.\n- A non-completion exit with checkpoints off: no landing; W keeps its bytes (one info line).\n- A completion exit (REVIEW|DONE): land_worktree_checkpoint for byte safety, then LAND_OUTCOME=failed with `[WARN] worktree completion landing to the target is not available in this wrapper; the bytes are on <branch> and nothing reached <target>`. finalize_postflight then reports failed, never landed; WT-08 replaces this tail.\nA worktree-mode exit never calls run_landing, ensure_safe_branch, push_branch or baseline_*.\nFor ROLE architect|qa while control_worktree_mode: land nothing. Print today's nothing-landed info line with MOE_COMMIT_NOTHING_TO_COMMIT and record_commit_rpc nothing/checkpoint with that code. No run_landing, no ensure_safe_branch, no baseline call. The governor path is unchanged.\n(d) teardown_rescue returns early for those same two cases, printing one `[rescue] worktree mode: bytes stay in W for the next pre-flight` line. No rescue_ref.\n(e) Stray check after the landing of every worktree-mode worker exit:\n- Recompute the control dirt the same way. Paths absent from the pre-flight list print `MOE_WORKTREE_STRAY_EDIT count=<n>` plus up to 5 paths.\n- Then send ONE `moe_rpc add_comment {taskId, workerId, content}` naming up to 20 paths (+N more) and saying the bytes were neither landed nor reverted.\n- Never stage, land or revert them.\nError handling: a missing or unreadable list, a failed status, or a failed add_comment prints one [WARN] and never changes the landing outcome.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "postflight.sh scenarios (scripts/tests/postflight.sh).\n\nBuild on the landed WT-04/05/06 worktree fixture: a scratch project whose fake claim carries workspace mode worktree, with W = .worktrees/<taskId> on moe/task/<taskId> and the control on moe/control. If a helper is missing, add one small `make_wt_project` beside make_scope_project.\n\nAdd scenarios WT7A-WT7F. Bump the counter guard (scope_expected_runs and the name list in its message) by the number added. Leave every existing scenario untouched (DoD 5). Use scope_fail, run_scope_wrapper, committed_paths and node checks over record_commit.jsonl / evidence-rpcs.jsonl.\n\n- WT7A (DoD 1): the fake CLI edits a tracked file and adds a new one in W; exit WORKING. Assert:\n  - moe/task/<id> gains exactly one commit, whose first parent is the previous tip and whose tree has both files;\n  - the target sha, the control HEAD and sha, its index (`diff --cached --quiet`) and its `status --porcelain` output are unchanged;\n  - the last record_commit row matches {outcome:'committed', kind:'checkpoint', ref:'refs/heads/moe/task/<id>', paths:[both, sorted], inferredPaths:[], unattributedPaths:[]} via deepStrictEqual on those keys;\n  - nothing was pushed (no remote).\n- WT7B (DoD 2): the CLI also writes W/.mcp.json, W/.codex/x, W/.claude/skills/s.md (the link path WT-06 makes, as a plain dir here) and an untracked W/.serena/f. Assert MOE_ATTR_EXCLUDED is in the output, none of those paths is in the commit tree, and no baseline file exists under the control gitdir or W's gitdir.\n- WT7C (DoD 3, recovery): leave W dirty from a first run (MOE_DISABLE_CHECKPOINT=1), then make a normal run. Assert:\n  - MOE_CHECKPOINT_RECOVERED task=<id> sha=<sha>;\n  - that wip subject ends ' recovered' and its tree holds the leftover file;\n  - it is the parent of the session's own checkpoint.\n  Negative (spike comment-40613e9a): leftover dirt plus W/.moe/x gives no new commit on moe/task/<id>, and the dirt and W/.moe/x stay intact.\n- WT7D (DoD 3, control seats): with the control on moe/control, an architect run and a QA run whose CLI writes a file in the control. Each:\n  - prints MOE_COMMIT_NOTHING_TO_COMMIT and records outcome nothing with that code;\n  - leaves `git for-each-ref` output equal before and after (no commit on any ref);\n  - keeps HEAD on refs/heads/moe/control and writes no baseline.\n- WT7E (DoD 4): <control>/pre.txt is dirty before the run, and the worker CLI writes <control>/stray.txt by absolute path. Assert:\n  - MOE_WORKTREE_STRAY_EDIT is printed;\n  - exactly one add_comment row in .moe/evidence-rpcs.jsonl names stray.txt and not pre.txt;\n  - stray.txt keeps its bytes, and `git log --all --format=%H -- stray.txt` is empty.\n- WT7F (push): with checkpointPush on and a local bare remote, the task branch is pushed and the remote sha equals the local tip. Then pre-seed the remote's moe/task/<id> with a divergent commit: the output carries CHECKPOINT-UNPUSHED, and the local and remote refs are unchanged (no force).\n\nKeep fixtures small; each scenario proves one behavior.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "ps1 core helpers (scripts/moe-agent.ps1), the twin of step 1, with the same codes and the same behavior. Keep the file UTF-8 with BOM.\n(a) `Test-MoeDenyPathWorktree($TopPath,$XY,$Rel,$Settings)` = Test-MoeDenyPath OR a path key equal to `.claude/skills` or starting with `.claude/skills/`. Test-MoeDenyPath already holds .moe/**; the BOARD exception lives only in Resolve-MoeAttribution, which this path never calls.\n(b) `Test-MoeControlWorktreeMode`: true iff `git -C <control> symbolic-ref -q HEAD` is exactly refs/heads/moe/control; any failure is false.\n(c) `Invoke-MoeWorktreeCheckpoint -TaskId -WorktreePath -Branch -Recovered (+ title, status, cli exit, sid)`, using `$wtGit = @{ Top = W; GitDir = <git -C W rev-parse --absolute-git-dir>; Rel = '' }`:\n- Get-MoeOwnerGuard; a refusal goes to Send-MoeOwnerRefusal.\n- Get-MoeDirtySnapshot W; null gives MOE_COMMIT_FAILED_ATTRIBUTION.\n- Filter with Test-MoeDenyPathWorktree, printing today's MOE_ATTR_EXCLUDED count line.\n- Build-MoeTempIndexTree W idx T candidates. Its index file goes under $wtGit.GitDir/moe and is removed in finally.\n- New-MoeCommitMessage plus Write-MoeMessageFile, then commit-tree -p T.\n- ONE `update-ref refs/heads/<branch> <new> T`. Never Ensure-MoeSafeBranch, never the 3-attempt loop. A lost CAS or unresolvable T gives MOE_COMMIT_FAILED_REF_CONTENTION plus Invoke-MoeRescueRef 'ref-contention' -Sha.\n- Then Update-MoeSharedIndex W <landed paths> and $script:moeLandingDone.\nIt returns Invoke-MoeLanding's result shape (Outcome, Sha, Code, Ref, Pushed, Paths), so Complete-MoePostflight keeps mapping it.\n(d) `Push-MoeTaskBranch`: Test-MoeNoRemote first, then an explicit `push --porcelain origin refs/heads/<b>:refs/heads/<b>` with no force and no MOE_PUSH_REBASE. It must never be Push-MoeBranch's bare `git push`, which pushes the current branch of its Top. A failure prints today's CHECKPOINT-UNPUSHED WARN and the #general line.\n(e) Send-MoeRecordCommit rows exactly as in step 1(e): full ref refs/heads/<branch>, inferredPaths @(), unattributedPaths @(), no contested.\nError handling mirrors step 1 path for path, with the same codes. Nothing touches the control checkout, the target or any other ref.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "ps1 wiring (scripts/moe-agent.ps1), the twin of step 2.\n(a) Invoke-MoePreflightBaseline returns before Invoke-MoeRecoveryCheck, Write-MoeBaseline and Write-MoeLiveMarker for a worktree-mode worker (WT-04's $script: mode variable) and for an architect/QA seat while Test-MoeControlWorktreeMode. No baseline file is ever written for them.\n(b) Right after WT-04's provisioning success point and before the CLI launch:\n- Run the recovery checkpoint (-Recovered) when autoCommit and checkpoints are on; print `MOE_CHECKPOINT_RECOVERED task=<id> sha=<sha>` on committed.\n- Reset $script:moeLandingDone and the landing result so the session's own exit lands.\n- Then write the control-dirt list ($moeGit.GitDir/moe/worktree/<taskId>.control-dirt: control dirt minus Test-MoeDenyPathWorktree, NUL-separated, temp file then Move-Item -Force).\n(c) In the post-flight $moeMode block, before today's branches. For a worktree-mode worker:\n- autoCommit off: nothing.\n- Non-completion with checkpoints on: Invoke-MoeWorktreeCheckpoint, then Push-MoeTaskBranch when $moeSettings.checkpointPush.\n- Checkpoints off: no landing, with one info line.\n- Completion (REVIEW/DONE): the checkpoint, then a failed result plus the same [WARN] text as sh, so Complete-MoePostflight finalizes failed, never landed.\nAn architect/QA seat while Test-MoeControlWorktreeMode lands nothing: the nothing-landed line with MOE_COMMIT_NOTHING_TO_COMMIT, and Send-MoeRecordCommit outcome nothing with that code. Neither path ever calls Invoke-MoeLanding, Ensure-MoeSafeBranch, Push-MoeBranch or a *-MoeBaseline helper.\n(d) Invoke-MoeTeardownRescue returns early for the same two cases, with the same [rescue] line as sh. No Invoke-MoeRescueRef.\n(e) The stray check after every worktree-mode worker exit: MOE_WORKTREE_STRAY_EDIT count=<n> plus up to 5 paths, then ONE Invoke-MoeRpc add_comment naming up to 20 paths (+N more). It never stages, lands or reverts them.\nError handling: as in sh step 2(e), one [WARN] and the landing outcome unchanged. Path comparisons use the existing Get-MoePathKey normalization (case-insensitive on Windows).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "postflight.ps1 scenarios (scripts/tests/postflight.ps1): the twins of step 3's WT7A-WT7F, with the same names, the same assertions and the same fixtures.\n- Build on the landed WT-04/05/06 worktree fixture in this harness; add a small New-WtProject beside New-ScopeProject only if it is missing.\n- Bump $scopeExpectedRuns (41/42, keeping the symlink rule) and the scenario-name list in its error text by the number added.\n- Add `$scopeScenariosRun++` and `[scenario WT7x] ok` per block.\n- Assert record_commit rows through Get-RecordCommitLines plus ConvertFrom-Json, add_comment through .moe/evidence-rpcs.jsonl, and output codes with -like.\n- WT7B's `.claude/skills` is a plain directory here (junction creation is WT-06's concern).\n- WT7F uses a local bare remote created with `git init --bare` under $tempRoot.\n- Leave every existing scenario untouched.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Verification, once, from the repo root. This is the exact command, and its fresh output is complete_task's evidence:\nnode scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u)\nIt must exit 0, with postflight-safe failureClass NONE and parity PASS (DoD 5, 6).\n\nWindows evidence (DoD 6): run `node scripts/tests/postflight-safe.mjs powershell` on a Windows seat. From WSL, use the Serena gotcha-qa-ps1-postflight-from-wsl recipe: a Windows-drive cwd, env -u for every MOE_*/CLAUDE* var, and MOE_POSTFLIGHT_TIMEOUT_SEC=180. Record which engine ran. Do not count pwsh alone as Windows PowerShell 5.1 evidence.\n\nThen measure the task-wide non-board diff over the 4 files: this task's checkpoint commits plus the working tree, `git diff --numstat <parent of this task's first commit> -- <files>`. If it exceeds 400 net changed lines, file a size exception BEFORE complete_task: moe.propose_rail {proposalType:'ADD_RAIL', targetScope:'EPIC', taskId, ...}.\n- Word it like prop-d975cf4e: per-file +/-, runtime vs tests, 'grow it only by defect fixes QA requires; it waives size only; every DoD item and fresh verification still apply'.\n- Its reason: the DoD binds L0-L2, DENY, recovery, the control-seat rule and stray edits to this one row in both twins and both harnesses. Agents cannot edit a DoD, so a split would loop back to PLANNING.\n- Name the proposal id in the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-8",
+      "description": "Adversarial self-review, the final step. Load adversarial-self-review and attack this task's diff only:\n1. Can any worktree-mode exit (checkpoint, completion, recovery, teardown, a control seat) still reach run_landing/Invoke-MoeLanding, ensure_safe_branch/Ensure-MoeSafeBranch (a `git checkout` of the control), push_branch/Push-MoeBranch, or a baseline helper?\n2. Can a lost CAS, failed status, failed push or failed recovery lose or overwrite W's bytes, or move the target?\n3. Does a worktree completion exit ever finalize 'landed'?\n4. Does a W/.moe guard failure ever reach the recovery commit?\n5. Are paths with spaces, unicode or a leading dash passed as `:(literal)` / `--` arguments, never interpolated, in the push refspec, the control-dirt list and the comment?\n6. Are sh and ps1 identical in codes, record fields and messages?\n7. Do all pre-existing shared-mode scenarios pass with zero edits?\n8. Does the size exception (if needed) match the measured numbers?\nFix within these 4 files. If any byte changes, re-run step 7's exact command and submit that output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,7 +90,8 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
-    "task-042dc0ddb9b64c60a98a567b71723351"
+    "task-042dc0ddb9b64c60a98a567b71723351",
+    "task-16bbf8ff071d485aa27ab5b92049c600"
   ],
   "priority": "HIGH",
   "order": 13,
@@ -34,21 +101,86 @@
       "author": "worker-0062feec",
       "content": "Contract correction from the WT-S revision after QA reject 1. Plan against revised §3.3 in docs/plans/2026-10-30-per-task-worktrees.md.\nThe pre-flight recovery checkpoint now runs only after WT-04's fail-closed `.moe/` guard (§1.6) passes. If `W/.moe` exists, nothing is committed and the seat blocks.\nAdd a case: a dirty W with `W/.moe/x` present must produce no recovery commit on the task branch.\nEverything else in the row is unchanged.",
       "timestamp": "2026-10-30T13:01:48.682Z"
+    },
+    {
+      "id": "comment-6dc364e0a3d54b5586e6a9dbabeed0cc",
+      "author": "architect-4ae016fb",
+      "content": "@architect-899a90d6 Message from WT-04's planner. WT-04 (task-c20464ff, rev 1) gives you these:\n- W, its branch and its target: sh MOE_WT_PATH, MOE_WT_BRANCH and MOE_WT_TARGET; ps1 $script:MoeWt*. MOE_WT_MODE is 'worktree' only after a successful provision.\n- task_branch_landed REF TASKID / Test-MoeTaskBranchLanded: merge-tree --write-tree prints REF's own tree. Use refs/heads/<target> as REF.\n- The refusal helper: worktree_stop / Stop-MoeWorktreeSeat (report_blocked, then exit 1).\n- Recovery: W's dirt survives a reuse (WT-04 never runs read-tree on a non-empty index), so your §3.3 recovery checkpoint sees exactly the crashed session's bytes.\n- Shared suite: scripts/tests/postflight-worktree.cjs (WT-04T, task-dd5daa4b).\n- Parity: WT-04 renames the sh-only MOE_LAND_* env-bridge names to MOE_PY_*. Keep your new code tokens in both twins, comments included.",
+      "timestamp": "2026-10-30T13:35:27.814Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:51:18.624Z",
-  "updatedAt": "2026-10-30T13:24:46.660Z",
+  "updatedAt": "2026-10-30T13:42:30.340Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:03.133Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-10-30T13:20:18.467Z"
+    "firstClaimAt": "2026-10-30T13:20:18.467Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
     "architect-899a90d6",
     "architect-eb7de546"
-  ]
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:42:30.313Z",
+  "executionContract": {
+    "intendedBehavior": "In worktree mode, every non-completion exit of a worker session commits every non-DENY dirty path of its task worktree W onto refs/heads/moe/task/<taskId> (temp index, commit-tree -p T, one update-ref CAS, W index refresh). It writes no baseline, computes no attribution tiers, records a checkpoint with the full task-branch ref and empty inferred/unattributed paths, and pushes the task branch without force when checkpointPush is on. A dirty W at pre-flight becomes a recovery checkpoint (MOE_CHECKPOINT_RECOVERED), but only after WT-04's W/.moe guard passes. Teardown makes no shared rescue. Architect/QA seats whose control checkout is on refs/heads/moe/control land nothing (MOE_COMMIT_NOTHING_TO_COMMIT). New control-checkout dirt made during a worker session is reported once (MOE_WORKTREE_STRAY_EDIT plus one add_comment) and never landed or reverted. Shared mode is byte-for-byte unchanged.",
+    "acceptanceCriteria": [
+      "WT7A: a worktree WORKING exit adds one commit on moe/task/<id> (parent = previous tip) holding the dirty paths; target and control checkout unchanged; record {committed, checkpoint, refs/heads/moe/task/<id>, paths, inferredPaths [], unattributedPaths []}.",
+      "WT7B: DENY paths in W (.mcp.json, .codex/x, .claude/skills, untracked .serena) print MOE_ATTR_EXCLUDED and stay out of the commit; no baseline file exists.",
+      "WT7C: leftover W dirt becomes a ' recovered' checkpoint with MOE_CHECKPOINT_RECOVERED before the session's own checkpoint; with W/.moe present no recovery commit is made.",
+      "WT7D: architect and QA exits with the control on moe/control record MOE_COMMIT_NOTHING_TO_COMMIT and move no ref.",
+      "WT7E: a control-checkout write prints MOE_WORKTREE_STRAY_EDIT and produces one add_comment, never committed or reverted; pre-existing control dirt is not reported.",
+      "WT7F: the task branch pushes without force; a divergent remote prints CHECKPOINT-UNPUSHED and changes no ref.",
+      "Existing shared-mode scenarios pass unchanged; MOE_WORKTREE_/LAND_/CONTROL_/BOARD_ code sets are equal across sh and ps1; the verification command exits 0; postflight.ps1 passes on Windows."
+    ],
+    "invariants": [
+      "A worktree-mode exit never calls run_landing/Invoke-MoeLanding, ensure_safe_branch/Ensure-MoeSafeBranch, push_branch/Push-MoeBranch or a baseline helper.",
+      "No worktree-mode path moves the target, the control checkout's HEAD or index, or any ref except refs/heads/moe/task/<id> and refs/moe/rescue/<id>/*.",
+      "A worktree completion exit never finalizes 'landed' before WT-08.",
+      ".moe/** in W is always held (no BOARD exception); stray control bytes are never staged or reverted."
+    ],
+    "compatibility": [
+      "Shared mode, its record_commit rows (short branch ref) and every existing harness scenario stay byte-identical.",
+      "Uses WT-04's per-task workspace variables and provisioning success point as landed (proposed names in msg-ad88dbbd).",
+      "Exposes land_worktree_checkpoint / Invoke-MoeWorktreeCheckpoint, push_task_branch / Push-MoeTaskBranch and control_worktree_mode / Test-MoeControlWorktreeMode for WT-08..WT-13."
+    ],
+    "checkRefs": [
+      "node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u)",
+      "node scripts/tests/postflight-safe.mjs powershell (Windows seat)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- (1) Reuse run_landing / Invoke-MoeLanding with a worktree flag. Rejected. Both hard-wire the control checkout: ensure_safe_branch / Ensure-MoeSafeBranch run `git checkout` there, the CAS ref is refs/heads/$LAND_BRANCH, and baseline and tiers are threaded through every branch. A compact arm that reuses the low-level helpers (snapshot, temp-index build, message, record, rescue-from-commit, index refresh) stays smaller and cannot regress shared mode (rail 4).\n- (2) A third copy of the DENY list for denied_wt. Rejected. sh gains a resolve_attribution MODE worktree that calls the existing denied() plus the .claude/skills rule; ps1 wraps Test-MoeDenyPath. Each wrapper keeps one list.\n- (3) Reading settings.worktreeMode for control seats. Rejected: the daemon default lives only in resolveWorktreeMode (WT-19 flips it), and a non-WORKING claim's workspace always says shared. HEAD == refs/heads/moe/control is the §6.5 invariant WT-04 enforces; it is local and needs no daemon change.\n- (4) Leaving worktree completion exits to WT-08. Rejected: they would fall into the shared landing and git checkout the control off moe/control. WT-07 commits their bytes to the task branch and fails the completion explicitly, never 'landed'.\n- (5) A teardown test. Skipped: teardown is inert without a baseline file (existing teardown-no-baseline mode), and WT7B proves no baseline exists in worktree mode; the explicit early return is reviewed in step 8.\n- (6) Splitting the row. Not possible without a DoD edit (agents cannot edit DoD), so it is planned whole with a measured size exception.",
+    "codebaseInsights": "Explorer maps; line numbers drift (task-f31d415d shifted sh by +5 after its main-loop `{`).\n\nsh:\n- run_landing ~5487: post-flight kind selection ~8805-8912; outputs LAND_OUTCOME and LAND_SHA; finalize_postflight 4912 maps committed to landed, nothing to nothing-to-commit, else rescued or failed.\n- preflight_landing 5765 (callers: idle hold, resume cap, launch); teardown_rescue 6035 runs from cleanup_temp, the EXIT trap.\n- Helpers: landing_owner_guard 3504, resolve_attribution 3599 (MODE arg; python denied() ~3752), git_dirty_snapshot 2850, moe_temp_index_build 4337 (index at $MOE_GITDIR/moe; git -C $MOE_TOP), index_refresh 4451, write_commit_message 4539, rescue_ref_from_commit 4972, no_git_remote 5004, announce_checkpoint_unpushed 5009, push_branch 5035 (bare `git push` when an upstream exists), record_commit_rpc 5117 (REF is explicit).\n- moe_rpc add_comment pattern at ~2685.\n- Bash dynamic scoping lets `local MOE_TOP=...` in the arm retarget every helper.\n\nps1:\n- Invoke-MoeLanding 4626; mode selection 7871-7911; Complete-MoePostflight 5322; Invoke-MoePreflightBaseline 5184 / Invoke-MoeRecoveryCheck 5113; Invoke-MoeTeardownRescue 5349 (outer finally, before Complete-MoePostflight).\n- Helpers: Test-MoeDenyPath 3302 (no BOARD branch), Build-MoeTempIndexTree 3943 (any Top and base), New-MoeCommitMessage 4109, Send-MoeRecordCommit 4159, Test-MoeNoRemote 4307, Push-MoeBranch 4317, Update-MoeSharedIndex 4398.\n\nHarnesses:\n- Scenario counter guards: sh 42/41, ps1 41/42 with symlinks.\n- The fake proxy logs record_commit to .moe/record_commit.jsonl and add_comment to .moe/evidence-rpcs.jsonl.\n- postflight-safe.mjs gives one JSON verdict.",
+    "risks": "- WT-04/05/06 are not planned/landed yet. Their variable and helper names are taken from msg-ad88dbbd and must be read from landed bytes (step 1).\n- The mode must be known before preflight_landing writes a baseline. Otherwise a later shared recovery could check out the control.\n- record_commit's `ref` becomes the full refs/heads/moe/task/<id> for worktree rows; shared rows keep the short branch.\n- The importee guard inside the temp-index builders still runs; it can only drop a file whose import is a DENY path.\n- Size: expect roughly 700-850 changed lines (two twins plus two harnesses). Step 7 measures it and files the exception.\n- The governor still has to order the WT wrapper rows against the V-chain (msg-089aae80); do not edit wrappers while another lane row is mid-edit.\n- The ps1 harness from WSL needs the Windows-drive recipe.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/postflight-safe.mjs",
+      "docs/plans/2026-10-30-per-task-worktrees.md",
+      "scripts/CLAUDE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:42:30.340Z",
+  "approvedPlanRevision": 1
 }

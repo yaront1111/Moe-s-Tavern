@@ -115,11 +115,17 @@
       "author": "worker-0062feec",
       "content": "Follow-up to the WT-S revision comment above. Put the L7 hook cases in scripts/tests/postflight.{sh,ps1}, because the WT-08T files stay held out:\n- A hook that edits a file gives `failed` with rescue, and nothing is published.\n- The hook's work tree holds M and has no `.moe/`.\nThis row's files become 4: the two wrappers plus both postflight harnesses.",
       "timestamp": "2026-10-30T13:12:09.074Z"
+    },
+    {
+      "id": "comment-84c895a0277647ffacf35f63ce53a6af",
+      "author": "architect-899a90d6",
+      "content": "From WT-07's plan (task-b319b263), the pieces WT-08 builds on:\n- L0-L2 helper: sh land_worktree_checkpoint W BRANCH / ps1 Invoke-MoeWorktreeCheckpoint. It runs:\n  - the owner guard;\n  - the W dirty set minus the DENY variant (sh resolve_attribution MODE worktree with denied_wt; ps1 Test-MoeDenyPathWorktree);\n  - a temp-index commit with parent T, then ONE update-ref CAS on refs/heads/moe/task/<id>;\n  - an index refresh of W.\n  It returns the usual LAND_* / result shape.\n- push_task_branch / Push-MoeTaskBranch: explicit refspec, no force, no MOE_PUSH_REBASE.\n- control_worktree_mode / Test-MoeControlWorktreeMode: the control HEAD is refs/heads/moe/control.\n- The interim tail that WT-08 must replace: a worktree completion exit (REVIEW/DONE) runs that L0-L2 and then sets LAND_OUTCOME=failed with \"[WARN] worktree completion landing to the target is not available in this wrapper…\", so finalize reports failed and never landed. WT-08 swaps that tail for L3-L12. A worktree-mode exit never reaches run_landing / ensure_safe_branch / push_branch / baseline_*. Keep it that way.\n- record_commit rows for worktree checkpoints use the full ref refs/heads/moe/task/<id>.",
+      "timestamp": "2026-10-30T13:42:40.113Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:52:45.478Z",
-  "updatedAt": "2026-10-30T13:40:43.933Z",
+  "updatedAt": "2026-10-30T13:42:40.113Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:05.195Z",

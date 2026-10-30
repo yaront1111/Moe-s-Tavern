@@ -279,6 +279,54 @@ describe('utils', () => {
         .toEqual(rows.map((p) => [p, 'd:/x']));
       expect(onWin32(() => comparableProjectPath('/mnt/d/x/sub/../..'))).toBe('d:');
     });
+
+    // The cross-platform contract: every absolute row gets the same key on every OS.
+    const CONTRACT: Array<[string, string]> = [
+      ['D:\\proj', 'd:/proj'], ['d:/Proj/', 'd:/proj'], ['D:\\', 'd:'], ['D:/../proj', 'd:/proj'],
+      ['/mnt/d/proj', 'd:/proj'], ['/mnt/D/Proj/', 'd:/proj'], ['/mnt/d', 'd:'],
+      ['/mnt/dd/x', '/mnt/dd/x'], ['/MNT/d/x', '/MNT/d/x'],
+      ['/home/qa/OtherProject', '/home/qa/OtherProject'], ['/home/qa/otherproject', '/home/qa/otherproject'],
+      ['/home//u/./x/../p/', '/home/u/p'], ['///x', '/x'],
+      ['\\\\srv\\share\\proj', '//srv/share/proj'], ['//SRV/SHARE/PROJ/', '//srv/share/proj'],
+      ['//srv/share/../../b', '//srv/share/b'],
+      ['\\\\wsl.localhost\\Ubuntu\\home\\u\\proj', '/home/u/proj'], ['//wsl$/Ubuntu/home/u/proj', '/home/u/proj'],
+      ['//WSL$/Ubuntu/mnt/d/proj', 'd:/proj'], ['//wsl$/Ubuntu', '/'],
+      // toLowerCase folds the Kelvin sign to k, like Kotlin lowercase() and python lower().
+      ['D:/qa/\u212a', 'd:/qa/k'],
+    ];
+
+    it('gives every contract row its key natively and under win32', () => {
+      expect(CONTRACT.map(([p]) => [p, comparableProjectPath(p)])).toEqual(CONTRACT);
+      expect(onWin32(() => CONTRACT.map(([p]) => [p, comparableProjectPath(p)]))).toEqual(CONTRACT);
+    });
+
+    it('on win32 adds no cwd drive to a POSIX path', () => {
+      expect(onWin32(() => [comparableProjectPath('/home/u/p'), comparableProjectPath('C:\\home\\u\\p')]))
+        .toEqual(['/home/u/p', 'c:/home/u/p']);
+    });
+
+    it('reads the drive letter and the /mnt mount as ASCII only', () => {
+      expect(comparableProjectPath('\u212a:/x')).not.toBe('k:/x');
+      expect(onWin32(() => comparableProjectPath('\u212a:/x'))).not.toBe('k:/x');
+      expect([comparableProjectPath('/mnt/\u212a/x'), onWin32(() => comparableProjectPath('/mnt/\u212a/x'))])
+        .toEqual(['/mnt/\u212a/x', '/mnt/\u212a/x']);
+    });
+
+    it('discovery keeps POSIX case and folds drive case', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-proxy-case-'));
+      try {
+        const info: DaemonInfo = { port: 3000, pid: 12345, startedAt: 'x', projectPath: dir.toUpperCase() };
+        fs.mkdirSync(path.join(dir, '.moe'));
+        fs.writeFileSync(path.join(dir, '.moe', 'daemon.json'), JSON.stringify(info));
+        const posix = dir.startsWith('/');
+        const expected = posix ? { info: null, retryable: false, error: 'daemon.json belongs to a different project' }
+          : { info, retryable: false };
+        expect(readDaemonInfoResult(dir)).toEqual(expected);
+        if (posix) expect(onWin32(() => readDaemonInfoResult(dir))).toEqual(expected);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('getDaemonHost', () => {
