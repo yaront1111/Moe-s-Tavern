@@ -79,7 +79,7 @@ export async function runGuestSession(input) {
 
 const windowsDrive = value => path.win32.normalize(value).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
-/** A port of comparableProjectPath (packages/moe-proxy/src/utils.ts, twin in packages/moe-daemon/src/index.ts):
+/** A port of comparableProjectPath (packages/moe-proxy/src/utils.ts, twin in packages/moe-daemon/src/util/projectPath.ts):
  * D:/x, D:\x and /mnt/d/x are one project, and so are their relative and non-normalized spellings. */
 export function canonicalProjectPath(projectPath) {
   const raw = projectPath.trim();
@@ -101,8 +101,9 @@ export function canonicalProjectPath(projectPath) {
  * than '127.0.0.1' or '::1', or an unusable port resolves null with no request. Otherwise one GET /health goes to that
  * port on loopback (no agent, proxy or redirect), under one total deadline and a MAX_HEALTH_BYTES body cap. Only a 200,
  * healthy report naming projectPath (canonicalProjectPath) with its own bindHost exactly '127.0.0.1' or '::1' admits.
+ * With `spelling`, the report must also name the project exactly so: runner-client reads the key filed under that string.
  */
-export function loopbackDaemonHost(info, projectPath, { timeoutMs = 5_000, signal } = {}) {
+export function loopbackDaemonHost(info, projectPath, { timeoutMs = 5_000, signal, spelling } = {}) {
   const port = info?.port;
   if (!isRecord(info) || (Object.hasOwn(info, 'bindHost') && !LOOPBACK.has(info.bindHost))
     || !Number.isInteger(port) || port < 1 || port > 65_535) return Promise.resolve(null);
@@ -122,7 +123,8 @@ export function loopbackDaemonHost(info, projectPath, { timeoutMs = 5_000, signa
           try {
             const report = JSON.parse(Buffer.concat(chunks).toString('utf8'));
             finish(isRecord(report) && report.status === 'healthy' && typeof report.projectPath === 'string'
-              && canonicalProjectPath(report.projectPath) === canonicalProjectPath(projectPath) && LOOPBACK.has(report.bindHost) ? host : null);
+              && canonicalProjectPath(report.projectPath) === canonicalProjectPath(projectPath) && (spelling === undefined || report.projectPath === spelling)
+              && LOOPBACK.has(report.bindHost) ? host : null);
           } catch { finish(null); }
         });
       });

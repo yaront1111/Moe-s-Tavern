@@ -7,14 +7,79 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (load test-driven-development). Put rows only in these two files. The governor's lane note (task comment, 22:17Z) keeps scripts/tests/local-runner.test.mjs and local-runner-bundle.test.mjs off limits.\n\nscripts/tests/local-runner-channel.test.mjs:\n- Add a helper next to keyName: `spelled(project)` = win32 ? project.replace(/\\\\/g, '/') : `${project}/`. These are spellings a daemon really records for its project:\n  - JetBrains' forward-slash basePath on Windows (the live .moe/daemon.json says 'D:/projexts/moes');\n  - a shell's trailing slash on POSIX.\n  The daemon writes --project as given into daemon.json and /health, and runnerKeyPath hashes that same string.\n- New rows in the C1 table:\n  - 'a spelling the daemon does not report' (R2): `setup` rewrites daemon.json to {port: HEALTH_PORT, projectPath: spelled(path.dirname(path.dirname(file)))}, while healthProject stays the fixture's canonical project. Expect RUNNER_DAEMON_NOT_LOOPBACK and no socket.\n  - 'a non-string projectPath' ({info: {projectPath: 7}}) and 'no projectPath' ({info: {projectPath: undefined}}): RUNNER_DAEMON_INFO_INVALID. These are guards: they pass on HEAD, and they kill a fix that calls canonicalProjectPath before the typeof check, which would surface a raw TypeError instead of a RUNNER_* code.\n  - Keep 'another project' as it is.\n- New C2 row (R1), next to \"hashes daemon.json's projectPath\": 'admits this project recorded in another spelling and reads the key filed under it'.\n  - Call fixture() with no key. Rewrite daemon.json to {port: HEALTH_PORT, projectPath: spelled(project)} and set healthProject = spelled(project).\n  - Write SENTINEL ONLY at keyName(spelled(project)).\n  - openRunnerChannel({projectPath: project, WebSocket}) must resolve, dial ws://127.0.0.1:${HEALTH_PORT}/runner and send SENTINEL in RUNNER_KEY_HEADER. Close the channel.\n- C4-C9 before(): start the real daemon with `init --project spelled(project)`. File every key under keyName(spelled(project)): the sentinel write, the 'daemon reused the sentinel key' read-back, and C6's wrong key. The client keeps passing `project`.\n  - This is the end-to-end proof that a real daemon reports the same spelling in daemon.json and /health and files its key under it.\n  - Do NOT use //x for the real daemon on POSIX: the daemon's own isForeignDaemonInfo treats //x as foreign, so `stop --project` would refuse it.\n  - These rows need a built packages/moe-daemon/dist (step 3's snapshot). The shared checkout's dist predates the /health bind report, so before() fails there even on HEAD.\n\nscripts/tests/local-runner-daemon-bind.test.mjs, new test DB6: 'each module admits its own daemon when the caller spells the project //x (POSIX) or /x (win32)'.\n- Setup: keyDir(t); `const { root, file, fake } = await daemon(t)`; writeFileSync(runnerKeyFile(root), KEY).\n- `alias(p)` = win32 ? p.slice(2).replace(/\\\\/g, '/') : `/${p}`.\n- On win32 only: process.chdir(path.dirname(root)), restored with t.after. '/x' takes the cwd's drive, and CI windows-latest has the checkout on D: but tmpdir on C:.\n- Assertions:\n  - guest-session: session(provider(), alias(file)) runs to {observation: EXIT, executionReady: false}. Drive it like DB2's last block (send HELLO, EXIT; exit(0)).\n  - runner-client: openRunnerChannel({projectPath: alias(root), WebSocket: scripted(), timeoutMs: 1_000}) resolves; close it.\n  - vm-control: readDaemonInfo(alias(root), {timeoutMs: 1_000}) deep-equals {port: fake.port, host: '127.0.0.1'}.\n- DB6 PASSES on HEAD. It is the evidence that the title's own-path aliases never refused (each module resolves the caller's path), and it pins that.\n\nRED: run the new rows in place under Linux node with env -i, an explicit Linux PATH and --test-name-pattern. scripts/tests harnesses may run in place per the GLOBAL rail.\n- R1 and R2 must fail by assertion with RUNNER_DAEMON_INFO_INVALID.\n- DB6 and the two guards must pass.\n- Record the counts in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-channel.test.mjs",
+        "scripts/tests/local-runner-daemon-bind.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-channel.test.mjs",
+        "scripts/tests/local-runner-daemon-bind.test.mjs"
+      ],
+      "note": "Tests first. Channel test: spelled() helper; C1 rows (R2 'a spelling the daemon does not report', non-string projectPath, no projectPath); C2 row R1 (admits recorded spelling, key under keyName(spelled)); C4-C9 start the real daemon with `init --project spelled(project)` and file every key under keyName(spelled(project)). Daemon-bind: DB6 (appended after DB5). RED run in place (Linux node v24.21 under env -i, --test-name-pattern): R1 and R2 FAIL by assertion with RUNNER_DAEMON_INFO_INVALID (2 fail); the 2 C1 guards pass; DB6 passes on HEAD (1 pass). C4-C9 not run here: the shared dist predates the /health bind report (snapshot in step 3). Dirty paths from other sessions left untouched: .moe/tasks/*, local-runner.test.mjs, local-runner-bundle.test.mjs, certify-canary.mjs, .moe/decisions/.",
+      "startedAt": "2026-10-30T22:37:40.245Z",
+      "completedAt": "2026-10-30T22:38:50.335Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT (load ponytail first). About 10 changed source lines. No new module, error code, export or dependency.\n\nscripts/local-runner/guest-session.mjs:\n(a) loopbackDaemonHost gets one more option: `{ timeoutMs = 5_000, signal, spelling } = {}`.\n- It admits only when `(spelling === undefined || report.projectPath === spelling)` also holds, next to the existing healthy, canonical-project and loopback-bind checks.\n- Add one sentence to its doc comment: with spelling, the report must also name the project exactly so, because runner-client reads the key filed under that string.\n- daemonRefusal and vm-control's readDaemonInfo pass no spelling, so their rule is unchanged. VC-M2 pins that vm-control still admits a daemon.json spelled unlike its report.\n(b) In the canonicalProjectPath doc comment (~line 82), the daemon twin is packages/moe-daemon/src/util/projectPath.ts (index.ts re-exports it). Change nothing else there.\nDo NOT change canonicalProjectPath's code or output. It is also ownedLedgerDir's hash input, and VC-L2 pins the ledger keys.\n\nscripts/local-runner/runner-client.mjs:\n- Import canonicalProjectPath from './guest-session.mjs', which runner-client already imports from.\n- discover() refuses RUNNER_DAEMON_INFO_INVALID when `!isRecord(info) || typeof info.projectPath !== 'string' || canonicalProjectPath(info.projectPath) !== canonicalProjectPath(projectPath)`, or on a bad port.\n- Then call loopbackDaemonHost(info, projectPath, { timeoutMs, signal, spelling: info.projectPath }).\n- runnerKeyFile(info.projectPath) stays unchanged; that spelling is now the one the daemon itself reported.\n- Update the header comment and the discover() comment, briefly:\n  - daemon.json may record this project in another spelling. JetBrains records D:/x on Windows while path.resolve gives D:\\x, so the old exact match refused every caller there.\n  - The key is the one runnerKeyPath filed under that recorded spelling.\n  - The daemon's own report must repeat that spelling byte for byte, so daemon.json still only refuses.\n\nError handling:\n- Keep the typeof check before canonicalProjectPath. canonicalProjectPath trims, so a non-string would throw a raw TypeError that escapes discover() uncoded.\n- Every refusal stays exactly one fixed RUNNER_* code in the fixed message: INFO_INVALID for daemon.json, NOT_LOOPBACK when the daemon's own report does not admit (including a spelling mismatch), ABORTED for the signal.\n- No path, key byte or upstream text goes into any error.\n- loopbackDaemonHost still never rejects; it resolves null on every failure.\n\nStep 1's RED rows go GREEN; every other row is unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/local-runner/runner-client.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/local-runner/runner-client.mjs"
+      ],
+      "note": "guest-session.mjs: loopbackDaemonHost takes optional `spelling` (admits only if report.projectPath === spelling when given) + one doc sentence; canonicalProjectPath doc now names packages/moe-daemon/src/util/projectPath.ts as the twin (code/output untouched). runner-client.mjs: imports canonicalProjectPath; discover() refuses INFO_INVALID unless typeof info.projectPath === 'string' (checked first) and canonicalProjectPath matches the caller's, then passes spelling: info.projectPath; runnerKeyFile(info.projectPath) unchanged; header and discover comments updated. In place, Linux node under env -i, C4-C9 skipped (stale shared dist): channel 26/26 pass, daemon-bind 8/8 (DB6 included), vm-control 12/12, bridge 63 pass/1 skip/0 fail. R1 and R2 now GREEN. daemonRefusal and readDaemonInfo untouched.",
+      "startedAt": "2026-10-30T22:38:51.009Z",
+      "completedAt": "2026-10-30T22:39:59.451Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFICATION, once. This is the completion evidence. Run the exact command:\n`(cd packages/moe-daemon && npm run build) && node --test scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-bridge.test.mjs`\n\nWhere to run it:\n- In a git archive of the completion candidate, OUTSIDE the repo.\n- Use Linux-native, lock-matched packages/moe-daemon/node_modules: npm ci in the snapshot, or cp -al from a matching install.\n- Under env -i with an explicit Linux PATH (the inherited WSL PATH holds spaced Windows dirs and makes the run exit 127), NO_COLOR=1 and umask 022.\n- Never build, clean or install in the shared checkout (GLOBAL rail). Its dist predates the /health bind report, so C4-C9 fail there even on HEAD.\n\nExpected: exit 0, 0 fail, and C4-C9 passing against the alias-started daemon.\n\nAlso required: native Windows evidence (mem:gotcha-windows-node-from-wsl-test-runs).\n- Run the two edited files with '/mnt/c/Program Files/nodejs/node.exe' from a drive cwd, with the file path converted by wslpath -w.\n- The daemon-free rows (C1, C2, the scripted-socket rows and DB1-DB6) can run in place; use --test-name-pattern to exclude C4-C9.\n- R1, R2 and DB6 must actually run on win32, not skip.\n- Run C4-C9 natively only in a Windows snapshot with a built daemon. Otherwise say that CI's windows-latest leg covers them.\n\nReport both runs' counts in complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-channel.test.mjs",
+        "scripts/tests/local-runner-daemon-bind.test.mjs"
+      ],
+      "note": "Verification only, no repo bytes changed. LINUX GATE, the exact command, in a git archive of HEAD with my 4 files overlaid (cmp'd) at /tmp/moe-1f74-snap.* (outside the repo), lock-matched Linux node_modules via npm ci, env -i with explicit PATH, NO_COLOR=1, umask 022, Node v24.21: `(cd packages/moe-daemon && npm run build) && node --test <channel> <daemon-bind> <vm-control> <bridge>` -> exit 0; 115 tests, 4 suites, 114 pass, 0 fail, 1 skipped (the bridge file's existing skip). C4-C9 all PASS against the daemon started with `init --project <trailing-slash spelling>`, keys under keyName(spelled(project)). R1, R2, both C1 guards and DB6 pass. NATIVE WINDOWS: '/mnt/c/Program Files/nodejs/node.exe' v24.16.0, /mnt/d cwd, wslpath -w file paths, --test-skip-pattern excluding C4-C9: channel 26 tests / 25 pass / 0 fail / 1 skip (the symlink row, win32-skipped by design); daemon-bind 8/8 pass. R1, R2 and DB6 actually ran on win32 (listed as passing, not skipped). C4-C9 were not run natively (needs a Windows snapshot with a built daemon): CI's windows-latest leg covers them. NOTE: scripts/local-runner/certify.mjs is dirty in the shared tree from another session (CQ-R13g lane); not mine, not touched.",
+      "startedAt": "2026-10-30T22:40:00.346Z",
+      "completedAt": "2026-10-30T22:40:59.217Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once (load adversarial-self-review).\n\nMutation probes. Apply each to a scratch copy, run the named rows, then restore and cmp. Each must FAIL its row:\n- M1, the exact `info.projectPath !== projectPath` restored: R1 fails, and so do C4-C9 in the snapshot.\n- M2, `spelling` dropped from runner-client's call, or the clause dropped in loopbackDaemonHost: R2 fails (it becomes RUNNER_KEY_MISSING).\n- M3, runnerKeyFile(projectPath) (hashes the caller's spelling): R1 fails with RUNNER_KEY_MISSING.\n- M4, canonicalProjectPath called before the typeof check: the non-string and no-projectPath rows fail with a TypeError.\n- M5, loopbackDaemonHost always requires report.projectPath === info.projectPath: VC-M2 fails (Linux).\n- M6, loopbackDaemonHost compares the raw caller path: DB6 fails.\n\nThen confirm:\n- No key byte or path appears in any error or output (C9).\n- Every failure is still one fixed RUNNER_* code.\n- vm-control.mjs and canonicalProjectPath are untouched.\n- git diff shows only the 4 planned files.\n- Concurrency: discover runs per call with no shared state.\n- Input edges: a blank or relative daemon.json projectPath canonicalizes against the cwd, but the daemon's own report must repeat it, so it can never select another key file.\n\nRecord the mutant results in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/local-runner/runner-client.mjs",
+        "scripts/tests/local-runner-channel.test.mjs",
+        "scripts/tests/local-runner-daemon-bind.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/local-runner/runner-client.mjs",
+        "scripts/tests/local-runner-channel.test.mjs",
+        "scripts/tests/local-runner-daemon-bind.test.mjs"
+      ],
+      "note": "MUTATION PROBES (mutated the snapshot copy only; each restored and cmp'd against the working tree; baseline re-run 46/46 green after). All 6 killed by their named rows: M1 exact `info.projectPath !== projectPath` restored -> R1 'admits this project recorded in another spelling' FAILS, R2 fails (INFO_INVALID instead of NOT_LOOPBACK) and C4-C9 all FAIL in the snapshot. M2a `spelling` dropped from runner-client's call and M2b clause dropped in loopbackDaemonHost -> only R2 'a spelling the daemon does not report' FAILS, as RUNNER_KEY_MISSING (confirmed). M3 runnerKeyFile(projectPath) -> R1 FAILS (RUNNER_KEY_MISSING), the 'hashes daemon.json's projectPath' row and C4-C9 fail. M4 canonicalProjectPath before the typeof check -> 'a non-string projectPath' and 'no projectPath' FAIL with a raw TypeError ('projectPath.trim is not a function'). M5 always require report.projectPath === info.projectPath -> VC-M2 (and VC-M1) FAIL. M6 raw caller path -> DB6 (and DB1) FAIL. CONFIRMED: C9 passes (no key byte or path in any error/output/console); every refusal is still one fixed RUNNER_* code (no new code, export or dependency); vm-control.mjs untouched; canonicalProjectPath code untouched (guest-session hunks = doc comment line 82, loopbackDaemonHost doc+signature+one admit clause); my diff is exactly the 4 planned files, +60/-12 (net 48); the other dirty paths (certify.mjs, local-runner.test.mjs, local-runner-bundle.test.mjs, postflight.sh, .moe/*) are other sessions'. Concurrency: discover() is per-call, no shared state. INPUT EDGE probed (scratch script, not committed): daemon.json projectPath '.' with the runner cwd == project, daemon reports the absolute path -> RUNNER_DAEMON_NOT_LOOPBACK, 0 sockets, key not read; only a daemon repeating '.' byte for byte selects the key filed under hash('.'). RESIDUAL (theoretical, noted for QA): a rogue loopback listener that echoes a relative spelling could make the client read the key filed under that string and send it to the listener. Needs a local listener answering /health for this project, which on HEAD could already take this project's own key by echoing the absolute path; the new reach is only a key filed under a relative `--project` spelling. Not widened by this change beyond that; left as is per the approved plan.",
+      "startedAt": "2026-10-30T22:40:59.967Z",
+      "completedAt": "2026-10-30T22:43:22.836Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote (standing delegation): deps DONE (f33bf7af); off the wrapper lane — no open row declares scripts/local-runner/* — so it runs in parallel without contesting a landing. 4 coders + 2 architects idle with 0 claimable rows; LOW priority keeps QA on lane rows first.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -22,8 +87,132 @@
   ],
   "priority": "LOW",
   "order": 318.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-26f09255af914b6487b1fb3fc045e71c",
+      "author": "governor-693b7073",
+      "content": "Governor lane note for the planner (22:20Z). I promoted this row so it can run in parallel with the serialized lanes. To keep it uncontested:\n- Do not touch scripts/tests/local-runner.test.mjs or scripts/tests/local-runner-bundle.test.mjs. The local-runner lane holds them: 9eaa4c4e (REVIEW) → 6bc91f38 → ea8b44c9 (CQ-R13g) → f4811a72 (CQ-R13).\n- No open row declares the source files this bug names (scripts/local-runner/guest-session.mjs, vm-control.mjs, runner-client.mjs). The same is true of scripts/tests/local-runner-vm-control.test.mjs and local-runner-daemon-bind.test.mjs (and of -bridge/-channel), so put the regression tests in one of those.\n- If the fix really needs local-runner.test.mjs, say so in the plan and I will slot the row into the lane after 9eaa4c4e instead.\n- Gates: run them in a git-archive snapshot. No npm build, clean or install in the shared checkout (GLOBAL rail).",
+      "timestamp": "2026-10-30T22:17:51.792Z"
+    },
+    {
+      "id": "comment-8e20c8033be940129eeec729dc66bb8a",
+      "author": "architect-4ff0711c",
+      "content": "Planner findings (architect-4ff0711c), written before the plan.\n\n1. The title's premise does not hold for guest-session.mjs or vm-control.mjs.\n- Their canonicalProjectPath already applies path.resolve to its argument, so '//x' on Linux and '/x' on native Windows (cwd drive) both reduce to the canonical spelling. I probed this with Linux node and with node.exe.\n- DB1 and VC-M2 already pin other spellings of the caller's own path.\n- No logic change there. The plan adds a guard row, DB6, using the title's exact aliases.\n\n2. The runner-client exact match: deliberate as written, wrong as an identity rule.\n- CQ-V04b1's plan chose `projectPath === path.resolve(input)`.\n- The daemon records --project exactly as given. daemon.json, the /health projectPath and runnerKeyPath all use that raw string.\n- JetBrains passes basePath with forward slashes. The live .moe/daemon.json says 'D:/projexts/moes', but path.resolve always yields 'D:\\projexts\\moes'.\n- So on native Windows, openRunnerChannel refuses with RUNNER_DAEMON_INFO_INVALID for every caller spelling. Probed with node.exe.\n- The exact match also stopped daemon.json from choosing the key file, since the key is filed under sha256 of the daemon's spelling. The plan keeps that. daemon.json may name the project in any canonical-equal spelling, and the key is the one filed under that spelling. But the daemon's own /health report must repeat that spelling byte for byte, so daemon.json can still only refuse.\n\n3. Line 82: the comment fix is in the plan.\n\nResidual, out of scope:\n- The local canonicalProjectPath also resolves the reported path and has no //wsl$ mapping. Across the WSL boundary it can therefore differ from the daemon contract. For example, on win32 a report of '/home/x' reads as '<drive>:\\home\\x'.\n- It is also ownedLedgerDir's hash input, so changing it would move VM ledgers. Left unchanged.",
+      "timestamp": "2026-10-30T22:35:23.992Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T21:01:54.988Z",
-  "updatedAt": "2026-10-30T21:01:54.988Z"
+  "updatedAt": "2026-10-30T22:43:55.123Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T22:15:01.320Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T22:15:31.662Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-4ff0711c",
+    "worker-c75a6f39"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T22:37:15.111Z",
+  "executionContract": {
+    "intendedBehavior": "openRunnerChannel opens against this project's daemon when daemon.json records the project in another spelling of the same path (canonicalProjectPath), as JetBrains does on native Windows ('D:/x'). It then reads the runner key filed under that recorded spelling, but only when the daemon's own /health report repeats the spelling byte for byte, so daemon.json still only refuses. Error handling is unchanged: every refusal is one fixed RUNNER_* code. guest-session (daemonRefusal) and vm-control (readDaemonInfo) keep their rule; a guard row shows all three modules already admit the caller's native alias (//x on POSIX, /x on win32). The guest-session canonicalProjectPath comment names packages/moe-daemon/src/util/projectPath.ts as the daemon twin.",
+    "acceptanceCriteria": [
+      "R1: daemon.json and /health name spelled(project) (forward slashes on win32, a trailing slash on POSIX), and the key exists only under keyName(spelled(project)). openRunnerChannel({projectPath: project}) opens with that key in the header. Fails on HEAD with RUNNER_DAEMON_INFO_INVALID.",
+      "R2: daemon.json names spelled(project) while /health names project. Result: RUNNER_DAEMON_NOT_LOOPBACK, no socket and no key read. Fails on HEAD with RUNNER_DAEMON_INFO_INVALID.",
+      "C1: 'another project', a non-string projectPath and a missing projectPath each stay RUNNER_DAEMON_INFO_INVALID, never a raw TypeError.",
+      "C4-C9 run against a real daemon started with --project spelled(project), with keys under keyName(spelled(project)). They pass where packages/moe-daemon/dist is built.",
+      "DB6: guest-session, runner-client and vm-control each admit their own daemon when the caller spells the project //x (POSIX) or /x (win32). Passes on HEAD and after the change.",
+      "VC-M2, DB1-DB5, the bridge tests and every other existing row pass unchanged.",
+      "Mutation probes M1-M6 from the self-review step each fail their named row."
+    ],
+    "invariants": [
+      "daemon.json can only refuse: the key spelling it names must be repeated by the daemon's own /health report.",
+      "The key is read only after the daemon's report admits. Every failure is one fixed RUNNER_* code, and no key byte or path reaches a message (C9).",
+      "canonicalProjectPath code and output are unchanged; ownedLedgerDir hashes it (VC-L2).",
+      "daemonRefusal and readDaemonInfo pass no spelling and behave exactly as before.",
+      "No change to the daemon, proxy, plugin, vm-control.mjs, local-runner.test.mjs or local-runner-bundle.test.mjs. No new error code, export or dependency."
+    ],
+    "compatibility": [
+      "Existing loopbackDaemonHost(info, projectPath, {timeoutMs, signal}) calls are unchanged.",
+      "The RUNNER_* code set and runnerKeyFile are unchanged.",
+      "A daemon that records the canonical spelling (POSIX launchers, PowerShell autostart) opens exactly as before."
+    ],
+    "approvedScope": [
+      "guest-session.mjs loopbackDaemonHost: an optional `spelling` option (exact report.projectPath match when given), plus its doc sentence.",
+      "guest-session.mjs canonicalProjectPath doc comment: the twin location only.",
+      "runner-client.mjs discover(): a canonical identity check behind a typeof guard, spelling: info.projectPath on the loopbackDaemonHost call, and the header and discover comments.",
+      "New or changed rows in scripts/tests/local-runner-channel.test.mjs (the spelled helper, R1, R2, two C1 guards, the C4-C9 alias start) and in scripts/tests/local-runner-daemon-bind.test.mjs (DB6)."
+    ],
+    "reuse": [
+      "canonicalProjectPath from guest-session.mjs, already vm-control's identity rule.",
+      "loopbackDaemonHost's existing report parse and deadline.",
+      "Test helpers: fixture, healthProject and keyName (channel); daemon, session, provider, scripted and keyDir (daemon-bind)."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/index.ts: parseArgs keeps --project raw and superviseDaemon forwards it to _run unchanged. startDaemon writes that string to daemon.json (writeDaemonInfo) and to /health projectPath, and passes it to ensureRunnerKey. Only the lock records canonicalProjectPath.",
+      "packages/moe-daemon/src/server/runnerChannel.ts: runnerKeyPath is <dir>/<first 32 hex of sha256(projectPath)>.key over that raw string.",
+      "moe-jetbrains MoeDaemonSupervisor passes basePath, which uses forward slashes on Windows. The live .moe/daemon.json records 'D:/projexts/moes'.",
+      "Probed with node.exe: a forward-slash daemon.json makes openRunnerChannel refuse with RUNNER_DAEMON_INFO_INVALID for both the backslash and the forward-slash caller spelling.",
+      "scripts/local-runner/guest-session.mjs canonicalProjectPath applies path.resolve to non-drive input, so '//x' (Linux) and '/x' (win32, cwd drive) already equal the canonical spelling. Probed with Linux node and node.exe.",
+      "In place, the shared packages/moe-daemon/dist predates the /health bind report. The channel test's before() asserts that, so C4-C9 fail there on HEAD."
+    ],
+    "checkRefs": [
+      "(cd packages/moe-daemon && npm run build) && node --test scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-bridge.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Keep the exact match and only fix comments. Rejected: the runner channel stays unusable on native Windows whenever JetBrains started the daemon (forward-slash basePath), whatever the caller's spelling.\n2. Relax to canonical equality and keep hashing daemon.json's spelling. Rejected: daemon.json would then choose which same-project key file is read, including a relative spelling that resolves differently from the daemon's own cwd. That breaks the 'daemon.json can only refuse' invariant this file and the daemon-bind tests state.\n3. CHOSEN: canonical equality, plus the daemon's own /health report must repeat daemon.json's spelling byte for byte, via an optional `spelling` on loopbackDaemonHost.\n4. Make the daemon canonicalize --project. Rejected: it moves every runner key (a new runnerId) and changes daemon.json for every consumer; too large for a LOW row.\n5. Port the daemon's comparableProjectPath into the local runner. Rejected: it changes canonicalProjectPath's output, which moves ownedLedgerDir and orphans recorded VMs, and the stated bug does not need it.",
+    "codebaseInsights": "- The title's premise is false for guest-session.mjs and vm-control.mjs: their canonicalProjectPath already resolves its argument (probed on Linux and native Windows). The real defect is runner-client's exact match against the daemon's RAW recorded spelling.\n- The daemon records --project as given in daemon.json, in /health and in runnerKeyPath; the lock records path.resolve.\n- runner-client already hashes info.projectPath (CQ-V04b1: 'the client must hash daemon.json's projectPath, not the caller's spelling'). The exact match made that moot.\n- Existing guards: DB1 'this project in another spelling', VC-M2 (in vm-control, a daemon.json spelled unlike the report is admitted) and VC-L2 (ledger keys).",
+    "risks": "- On win32 the '/x' alias is drive-relative and takes the cwd's drive. CI windows-latest has the checkout on D: and tmpdir on C:, so DB6 must chdir to path.dirname(root) on win32 and restore it.\n- Real daemon on POSIX: use a trailing slash, never //x. The daemon's isForeignDaemonInfo reads //x as foreign, so `stop --project <canonical>` would refuse it. A trailing slash and forward slashes compare equal via comparableProjectPath.\n- The shared dist is stale (no /health bind report), so C4-C9 are meaningful only in the snapshot.\n- Lane: do not touch local-runner.test.mjs or local-runner-bundle.test.mjs.\n- Residual, out of scope: the local canonicalProjectPath also resolves the REPORTED path and has no //wsl$ mapping, a divergence from the daemon contract across the WSL boundary.",
+    "keyFiles": [
+      "scripts/local-runner/runner-client.mjs",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/tests/local-runner-channel.test.mjs",
+      "scripts/tests/local-runner-daemon-bind.test.mjs",
+      "scripts/tests/local-runner-vm-control.test.mjs",
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/server/runnerChannel.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T22:37:15.133Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T22:37:40.245Z",
+  "reviewStartedAt": "2026-10-30T22:43:55.121Z",
+  "verification": {
+    "command": "(cd packages/moe-daemon && npm run build) && node --test scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-bridge.test.mjs",
+    "exitCode": 0,
+    "outputTail": "Run in a git archive snapshot of HEAD with the 4 changed files overlaid (cmp-identical to the working tree), outside the repo (GLOBAL rail), Linux npm ci, env -i, umask 022, Node 24.21: build OK; ℹ tests 115 / ℹ suites 4 / ℹ pass 114 / ℹ fail 0 / ℹ cancelled 0 / ℹ skipped 1 / ℹ todo 0. ✔ a spelling the daemon does not report is RUNNER_DAEMON_NOT_LOOPBACK; ✔ admits this project recorded in another spelling and reads the key filed under it; ✔ C4/C5 ✔ C6 ✔ C7 ✔ C8 ✔ C9 (against the alias-started daemon); ✔ DB6. Native Windows node.exe 24.16 (daemon-free rows): channel 25 pass/1 skip/0 fail, daemon-bind 8 pass/0 fail; R1, R2, DB6 ran.",
+    "reportedAt": "2026-10-30T22:43:55.121Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-channel.test.mjs",
+    "scripts/tests/local-runner-daemon-bind.test.mjs",
+    "scripts/local-runner/guest-session.mjs",
+    "scripts/local-runner/runner-client.mjs"
+  ],
+  "completionSummary": "openRunnerChannel now opens against this project's daemon when daemon.json records the project in another spelling of the same path (JetBrains records 'D:/x' on native Windows, where path.resolve gives 'D:\\x'). 4 files, +60/-12 (net 48): guest-session.mjs and runner-client.mjs plus rows in local-runner-channel.test.mjs and local-runner-daemon-bind.test.mjs. No daemon, proxy, plugin, vm-control.mjs, local-runner.test.mjs or local-runner-bundle.test.mjs change; no new error code, export or dependency.\n- runner-client.mjs discover(): the old exact `info.projectPath !== projectPath` match is now a typeof guard (first, so a non-string stays RUNNER_DAEMON_INFO_INVALID, never a raw TypeError) plus canonicalProjectPath equality. It passes `spelling: info.projectPath` to loopbackDaemonHost. runnerKeyFile(info.projectPath) is unchanged.\n- guest-session.mjs loopbackDaemonHost: new optional `spelling`; when given, the daemon's own /health report must repeat it byte for byte, so daemon.json still only refuses and never selects the key file. daemonRefusal and vm-control's readDaemonInfo pass none and behave as before. canonicalProjectPath's code and output are untouched (its doc comment now names packages/moe-daemon/src/util/projectPath.ts as the twin).\n- Confirmed first: the title's premise is false for guest-session and vm-control. Their canonicalProjectPath already resolves the caller's path, so //x (POSIX) and /x (win32) never refused there. DB6 pins that and passes on HEAD. The real defect was runner-client's exact match against the daemon's raw recorded spelling.\nTests:\n- R1 (recorded spelling admitted, key read under it) and R2 (daemon.json spelling not repeated by /health -> NOT_LOOPBACK, no socket) fail by assertion on HEAD with INFO_INVALID.\n- Two C1 guards (non-string and missing projectPath) and DB6 pass on HEAD.\n- C4-C9 now start the real daemon with `--project <trailing-slash spelling>`, keys filed under that spelling.\nEvidence:\n- Linux, exact command, git archive o"
 }

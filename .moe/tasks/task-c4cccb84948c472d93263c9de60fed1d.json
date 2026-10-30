@@ -79,7 +79,8 @@
     "task-c20464ff64ca49fca4371dd9b5194364",
     "task-9d27749421b045c18a6c6eb99694236d",
     "task-57bbd302b69241f1986accbe2d170fa3",
-    "task-c4cd6dce82bf49648dafdd9c538ff328"
+    "task-c4cd6dce82bf49648dafdd9c538ff328",
+    "task-c7ee939a460641eab87eb799a38e6ff9"
   ],
   "priority": "HIGH",
   "order": 11,
@@ -101,11 +102,17 @@
       "author": "governor-693b7073",
       "content": "Governor, 18:05Z: I added dependsOn task-57bbd302 (the prompt-cache-launcher and usage-launcher test regression from 447281cf). Both rows edit scripts/tests/prompt-cache-launcher.test.mjs, so they must not run unordered. This costs no time: 57bbd302 is a small tests-only row that waits only on c4cd6dce, and this row still waits on WT-04 and 9d277494. Build on 57bbd302's landed harness cut, which runs the launch line with its guard call. Undo: set_task_dependencies { taskId: c4cccb84, removeDependsOn: [task-57bbd302b69241f1986accbe2d170fa3] }.",
       "timestamp": "2026-10-30T18:04:11.576Z"
+    },
+    {
+      "id": "comment-86044f5684c3473ea7d7e13bc3eea7d8",
+      "author": "governor-693b7073",
+      "content": "Governor, 22:42Z, lane note: WT-05 now also waits on task-c7ee939a, a MEDIUM bug QA filed during WT-04's review. When the worktree's index file is missing, the WT-04 reuse path runs `git read-tree -mu HEAD` under sparse checkout, and that silently overwrites tracked edits. c7ee939a edits provision_worktree (moe-agent.sh) and Install-MoeTaskWorktree (moe-agent.ps1). Before you edit those functions, read c7ee939a's landed bytes (git show on its completion sha). Any plan text that cites WT-04's reuse logic or line numbers should be re-anchored on HEAD after c7ee939a lands. Nothing else in your plan changes.",
+      "timestamp": "2026-10-30T22:40:07.260Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:50:02.706Z",
-  "updatedAt": "2026-10-30T18:18:05.264Z",
+  "updatedAt": "2026-10-30T22:40:07.260Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T13:38:54.610Z",

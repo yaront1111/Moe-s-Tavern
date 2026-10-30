@@ -1,8 +1,9 @@
 // Client for the daemon's authenticated /runner channel (CQ-V04b1): the host's trusted check runner calls moe.* tools
 // through it, and it is the only local-runner code that reads the runner key. It dials only a daemon whose own /health
 // reported a loopback bind for this project (guest-session.mjs's loopbackDaemonHost), at the port from
-// <projectPath>/.moe/daemon.json (guest-session.mjs's open, size and record discipline). The key is read once per open,
-// handed straight to the WebSocket and never stored, returned or logged; this module never logs. Every failure is one
+// <projectPath>/.moe/daemon.json (guest-session.mjs's open, size and record discipline). The key is the one the daemon
+// filed under the spelling of the project it recorded and reported, which may differ from the caller's. It is read
+// once per open, handed straight to the WebSocket and never stored, returned or logged; this module never logs. Every failure is one
 // fixed RUNNER_* code in a fixed message: never a path, a key byte or upstream text. A refused socket is accepted and
 // then closed with 1008, so an open resolves only after a `ping` round trip proves the key was accepted.
 import { createHash } from 'node:crypto';
@@ -10,7 +11,7 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { loopbackDaemonHost, MAX_DAEMON_INFO_BYTES } from './guest-session.mjs';
+import { canonicalProjectPath, loopbackDaemonHost, MAX_DAEMON_INFO_BYTES } from './guest-session.mjs';
 
 export const RUNNER_KEY_HEADER = 'x-moe-runner-key'; // mirrors server/runnerChannel.ts
 const KEY_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -45,12 +46,17 @@ async function readSmall(file, limit, missing, invalid) {
 }
 
 // daemon.json supplies the port and can only refuse; the daemon's own loopback bind report admits, before any key read.
+// It may record this project in another spelling (JetBrains records D:/x on Windows, where path.resolve gives D:\x), and the
+// daemon files its key under that recorded string. So the spelling must be this project's (canonicalProjectPath) and the
+// daemon's own report must repeat it byte for byte: daemon.json never selects which key file is read. The typeof check
+// comes first because canonicalProjectPath throws on a non-string.
 async function discover(projectPath, { timeoutMs, signal }) {
   let info;
   try { info = JSON.parse(await readSmall(path.join(projectPath, '.moe', 'daemon.json'), MAX_DAEMON_INFO_BYTES, INFO, INFO)); } catch { throw runnerError(INFO); }
-  if (!isRecord(info) || info.projectPath !== projectPath || !Number.isInteger(info.port) || info.port < 1 || info.port > 65_535) throw runnerError(INFO);
+  if (!isRecord(info) || typeof info.projectPath !== 'string' || canonicalProjectPath(info.projectPath) !== canonicalProjectPath(projectPath)
+    || !Number.isInteger(info.port) || info.port < 1 || info.port > 65_535) throw runnerError(INFO);
   if (signal?.aborted) throw runnerError('RUNNER_ABORTED');
-  const host = await loopbackDaemonHost(info, projectPath, { timeoutMs, signal });
+  const host = await loopbackDaemonHost(info, projectPath, { timeoutMs, signal, spelling: info.projectPath });
   if (!host) throw runnerError(signal?.aborted ? 'RUNNER_ABORTED' : 'RUNNER_DAEMON_NOT_LOOPBACK');
   return { ...info, host };
 }

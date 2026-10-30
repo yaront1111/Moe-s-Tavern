@@ -285,3 +285,24 @@ test('DB5 a non-loopback daemon.json bindHost refuses in every module with no re
     ['SESSION_DAEMON_NOT_LOOPBACK', 'RUNNER_DAEMON_NOT_LOOPBACK', 'DAEMON_UNREACHABLE', [], 0, 0], bindHost);
   }
 });
+
+// The caller's own path, spelled the native way that path.resolve folds back: //x on POSIX, a drive-relative /x on win32.
+test('DB6 each module admits its own daemon when the caller spells the project //x (POSIX) or /x (win32)', async t => {
+  keyDir(t);
+  const { root, file, fake } = await daemon(t);
+  writeFileSync(runnerKeyFile(root), KEY);
+  const win = process.platform === 'win32';
+  const alias = value => (win ? value.slice(2).replace(/\\/g, '/') : `/${value}`);
+  if (win) { // '/x' takes the cwd's drive, and the checkout may sit on another drive than tmpdir
+    const cwd = process.cwd();
+    process.chdir(path.dirname(root));
+    t.after(() => process.chdir(cwd));
+  }
+  const proc = provider();
+  const run = session(proc, alias(file));
+  proc.send(HELLO, EXIT);
+  proc.exit(0);
+  assert.deepEqual(await run.promise, { observation: EXIT, executionReady: false });
+  (await openRunnerChannel({ projectPath: alias(root), WebSocket: scripted(), timeoutMs: 1_000 })).close();
+  assert.deepEqual(await readDaemonInfo(alias(root), { timeoutMs: 1_000 }), { port: fake.port, host: '127.0.0.1' });
+});

@@ -24,6 +24,8 @@ for (const name of ['log', 'info', 'warn', 'error', 'debug']) console[name] = (.
 const tick = () => new Promise(resolve => setTimeout(resolve, 20));
 const scratch = () => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-runner-client-')); roots.push(dir); return dir; };
 const keyName = projectPath => `${createHash('sha256').update(projectPath).digest('hex').slice(0, 32)}.key`;
+// Another spelling of the same project that a daemon really records: JetBrains' forward-slash basePath on Windows, a shell's trailing slash on POSIX.
+const spelled = project => (process.platform === 'win32' ? project.replace(/\\/g, '/') : `${project}/`);
 function dump(value) { return `${value?.stack ?? ''}${String(value)}${JSON.stringify(value, value instanceof Error ? Object.getOwnPropertyNames(value) : undefined)}`; }
 const keep = value => { seen.push(dump(value)); return value; };
 const freePort = async () => { const probe = net.createServer().listen(0, '127.0.0.1'); await once(probe, 'listening'); const { port } = probe.address(); await new Promise(resolve => probe.close(resolve)); return port; };
@@ -89,6 +91,9 @@ describe('C1 daemon.json discovery: each refusal is its own code and opens no so
     ['one byte over the size cap', { info: record => record({ pad: 'a'.repeat(MAX_DAEMON_INFO_BYTES + 1 - record({ pad: '' }).length) }) }, INFO],
     ['a directory', { info: null, setup: file => fs.mkdirSync(file) }, INFO], ['a symlink', { setup: file => { fs.renameSync(file, `${file}.real`); fs.symlinkSync(`${file}.real`, file); } }, INFO, process.platform === 'win32'],
     ['another project', { info: { projectPath: path.join(os.tmpdir(), 'elsewhere') } }, INFO],
+    ['a non-string projectPath', { info: { projectPath: 7 } }, INFO], ['no projectPath', { info: { projectPath: undefined } }, INFO],
+    // daemon.json spells this project another way, but the daemon's own /health report does not repeat that spelling.
+    ['a spelling the daemon does not report', { setup: file => fs.writeFileSync(file, JSON.stringify({ port: HEALTH_PORT, projectPath: spelled(path.dirname(path.dirname(file))) })) }, LOOP],
     ['a string port', { info: { port: '9' } }, INFO], ['port 65536', { info: { port: 65536 } }, INFO], ['no port', { info: { port: undefined } }, INFO],
     ['bindHost 0.0.0.0', { info: { bindHost: '0.0.0.0' } }, LOOP], ['bindHost localhost', { info: { bindHost: 'localhost' } }, LOOP],
   ];
@@ -130,6 +135,18 @@ describe('C2 key file and C3 inputs and transport', () => {
       assert.ok(WebSocket.calls[0].options.headers[RUNNER_KEY_HEADER] === SENTINEL, 'the key header is sent');
       channel.close();
     }
+  });
+
+  it('admits this project recorded in another spelling and reads the key filed under it', async () => {
+    const { project, keys, WebSocket } = fixture();
+    const recorded = spelled(project);
+    fs.writeFileSync(path.join(project, '.moe', 'daemon.json'), JSON.stringify({ port: HEALTH_PORT, projectPath: recorded }));
+    healthProject = recorded; // the daemon's own report repeats the spelling it recorded
+    fs.writeFileSync(path.join(keys, keyName(recorded)), SENTINEL); // and only that spelling has a key file
+    const channel = await openRunnerChannel({ projectPath: project, WebSocket });
+    assert.equal(WebSocket.calls[0].url, `ws://127.0.0.1:${HEALTH_PORT}/runner`);
+    assert.ok(WebSocket.calls[0].options.headers[RUNNER_KEY_HEADER] === SENTINEL, 'the key header is sent');
+    channel.close();
   });
 
   it('a missing WebSocket is RUNNER_WEBSOCKET_UNAVAILABLE before any key read, and bad inputs are RUNNER_INPUT_INVALID', async () => {
@@ -242,9 +259,11 @@ describe('the real daemon /runner endpoint (C4-C9)', () => {
     assert.ok(fs.existsSync(path.join(path.dirname(daemonEntry), 'server', 'runnerChannel.js')), 'build packages/moe-daemon first: dist predates the runner channel');
     assert.match(fs.readFileSync(daemonEntry, 'utf8'), /checks,\s*(?:\/\/.*\s+)?bindHost: host\b/, 'build packages/moe-daemon first: dist predates the /health bind report');
     [project, keys] = [scratch(), scratch()];
-    fs.writeFileSync(path.join(keys, keyName(project)), SENTINEL, { mode: 0o600 });
+    // The daemon records --project as given, in daemon.json, in /health and in its key file name, so a spelled start proves
+    // the client reads the key under the spelling the daemon itself reports while the caller keeps passing `project`.
+    fs.writeFileSync(path.join(keys, keyName(spelled(project))), SENTINEL, { mode: 0o600 });
     Object.assign(env, { HOME: profile, USERPROFILE: profile, NODE_ENV: 'production', LOG_LEVEL: 'warn', MOE_RUNNER_KEY_DIR: keys });
-    daemon = spawn(process.execPath, [daemonEntry, 'init', '--project', project, '--port', String(await freePort())], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    daemon = spawn(process.execPath, [daemonEntry, 'init', '--project', spelled(project), '--port', String(await freePort())], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     for (const stream of [daemon.stdout, daemon.stderr]) stream.on('data', chunk => { diagnostics = `${diagnostics}${chunk}`.slice(-16_000); });
     process.env.MOE_RUNNER_KEY_DIR = keys;
     await until(async () => { // the client is the readiness probe: it opens only once the daemon accepts the key
@@ -252,7 +271,7 @@ describe('the real daemon /runner endpoint (C4-C9)', () => {
       channel = await openRunnerChannel({ projectPath: project, timeoutMs: 2000 }).catch(() => null);
       return channel;
     }, 'a runner channel');
-    assert.ok(fs.readFileSync(path.join(keys, keyName(project)), 'utf8') === SENTINEL, 'the daemon reused the sentinel key');
+    assert.ok(fs.readFileSync(path.join(keys, keyName(spelled(project))), 'utf8') === SENTINEL, 'the daemon reused the sentinel key');
   });
   after(async () => { channel?.close(); await stopDaemon(); });
 
@@ -263,7 +282,7 @@ describe('the real daemon /runner endpoint (C4-C9)', () => {
   });
   it('C6 refuses a different key with RUNNER_AUTH_REFUSED', async () => {
     const wrong = scratch();
-    fs.writeFileSync(path.join(wrong, keyName(project)), OTHER);
+    fs.writeFileSync(path.join(wrong, keyName(spelled(project))), OTHER);
     process.env.MOE_RUNNER_KEY_DIR = wrong;
     await refused(openRunnerChannel({ projectPath: project }), 'RUNNER_AUTH_REFUSED');
     process.env.MOE_RUNNER_KEY_DIR = keys;
