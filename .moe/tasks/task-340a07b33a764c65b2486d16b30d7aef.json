@@ -137,7 +137,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:16:07.737Z",
-  "updatedAt": "2026-10-30T07:29:21.424Z",
+  "updatedAt": "2026-10-30T07:29:59.427Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:18:44.976Z",
     "plannedStepCount": 5,
@@ -244,7 +244,9 @@
     ".moe/tasks/task-43088e9b504b49a5ae59c562fcc0c784.json",
     ".moe/tasks/task-78ba155c350f4927ab5bdf53c21a4468.json",
     ".moe/tasks/task-7e39a63f6b024acf9f5f06c92bfafd59.json",
-    ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json"
+    ".moe/tasks/task-a2f243a111654c7fbb2a28848a923e8c.json",
+    ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+    ".moe/tasks/task-5e816f2cafe8490596af56d9a5108efe.json"
   ],
   "completionSummary": "CQ-V04b, the runner's focused check dispatch client. Net 400 non-board LOC, at the cap:\n- scripts/local-runner/check-dispatch.mjs: 187 lines.\n- scripts/tests/local-runner-dispatch.test.mjs: 212 lines.\n- ci.yml +1/-1: the new test is appended to the local-runner list.\nNo daemon change. cli.mjs and the R modules are untouched; verified-local is untouched.\n\nWhat it does:\n- owedChecks(context) mirrors the daemon's owedChecks and requiredCheckCommand from get_context: the bound approved definitions, with protected entries matched by requiredChecks.ts `covers`, then the gate. It returns [] off the approved revision.\n- dispatchFocusedChecks first refuses, before any VM: no candidate; a snapshot tree that is not the candidate's, or a snapshot with a non-empty overlay; an unapproved revision; nothing owed. It then runs checks one at a time through runCheck:\n  - onReady checks the environment allowlist, then calls record_check_dispatch with id 'dispatch-<32hex>';\n  - the observation uses id 'check-<32hex>'; passed with a workspace other than 'intact' is sent as 'inconclusive', and a null exitCode as -1;\n  - transport retries reuse the same id, 3 attempts in all;\n  - V05b's retry-infra re-runs the check with fresh ids, at most 10 times;\n  - it stops on the first refusal or failure with one fixed RUNNER_* code, plus a codeName when the daemon sent one.\n- CLI: `--project --task --commit`. It composes V04b1's openRunnerChannel, exportSourceSnapshot and an adapter onto R11's runCheckJob. The channel reopens after a disconnect. The adapter refuses RUNNER_SEAM_UNAVAILABLE when a seam is missing. Output is one JSON line of fixed codes. SIGINT/SIGTERM abort so the VM is still deleted.\n\nSelf-review fix: exportSourceSnapshot includes the checkout's dirty overlay, which in this checkout is peers' bytes, so a matching tree did not prove the bytes checked. The CLI now uses the commit alone, and the coordinator refuses any overlay.\n\nDoD:\n1. H, E, F (exact params; unlisted environment or ref",
   "commits": [
@@ -275,6 +277,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "f0e2833f940f1ea347085991a2d15825f63301c3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T07:20:38Z",
+      "paths": [
+        ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+        ".moe/tasks/task-5e816f2cafe8490596af56d9a5108efe.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T07:29:59.427Z",
+      "treeId": "7a7bd555a4ec38f81c8e6587b6ea1e60c2a772fc",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -284,9 +302,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-093a65d0@2026-10-30T06:59:10Z",
-    "at": "2026-10-30T07:18:38.308Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T07:20:38Z",
+    "at": "2026-10-30T07:29:59.427Z"
   },
   "completedAt": "2026-10-30T07:29:21.424Z",
   "reviewCompletedAt": "2026-10-30T07:29:21.424Z",

@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:57.787Z",
-  "updatedAt": "2026-10-30T07:11:36.214Z",
+  "updatedAt": "2026-10-30T07:32:35.152Z",
   "dependsOn": [
     "task-a9d1a74d845b4d3d83f359bf864f8651"
   ],
@@ -113,11 +113,14 @@
     "firstClaimAt": "2026-10-29T17:46:28.144Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T07:32:35.152Z",
+    "wallClockMs": 49567008
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-73c29a03"
+    "worker-73c29a03",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -244,5 +247,9 @@
     "kind": "completion",
     "sessionId": "worker-73c29a03@2026-10-30T06:59:15Z",
     "at": "2026-10-30T07:11:36.213Z"
-  }
+  },
+  "completedAt": "2026-10-30T07:32:35.152Z",
+  "reviewCompletedAt": "2026-10-30T07:32:35.152Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit ddff93ba (on moe/work-2026-10-24; sources byte-identical at HEAD f0e2833f and in worktree). Two NEW files: repairPolicy.ts +182, repairPolicy.test.ts +211 = 393 net non-board LOC (<=400). No existing file changed.\n\nRe-ran in a fresh Linux snapshot (git archive HEAD, lock equal modulo CR, npm ci, env -i, node v24.21.0): `cd packages/moe-daemon && npm test` EXIT 0 (201 files, 5646 passed | 16 skipped; repairPolicy.test.ts 43 tests); `npx tsc --noEmit` EXIT 0; test file also typechecks (scratch tsconfig, exit 0).\n\nDoD: (1) defaults 3 repairs / 2 infra retries, configurable via settings.repairPolicy, bounds 0-10, INVALID_INPUT naming the field. (2) Unchanged tree or unchanged failure escalates at once with diagnostics: run id, candidate, command, outcome, exit code, excerpt (<=20 lines, <=2000 chars), <=5 log refs. (3) Only current-candidate runs count; other-planRevision runs ignored (fresh budget); unapproved revision gives replan; infra budget separate. (4) Verification reproduced.\n\nAdversarial read: pure, deterministic, no input mutation, duplicate ids collapsed in linear time, fail-closed on outcome/exit mismatch, legacy exit-code rule kept, no forbidden tokens. My own mutants (budget >= to >, skip unchanged-candidate, ignore planRevision, infra across candidates, logRefs 5 to 6) were each killed by real test failures; source restored and cmp-identical.\n\nNotes for CQ-V12, not blockers: activation unwired (V04 left no seam); settings.repairPolicy not yet in ProjectSettings/CONFIGURATION.md; a non-string stored outputTail would throw in the excerpt, so guard malformed rows. Wrapper landed the commit; no self-landing.",
+  "requiredCheckAtDone": null
 }

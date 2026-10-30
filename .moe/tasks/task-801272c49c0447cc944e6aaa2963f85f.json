@@ -1,0 +1,30 @@
+{
+  "id": "task-801272c49c0447cc944e6aaa2963f85f",
+  "epicId": "epic-be924fb8",
+  "title": "security: daemon WebSocket server refuses upgrades whose Origin is not allowed",
+  "description": "Objective: the daemon's WebSocket server refuses any upgrade that carries an Origin header outside an explicit allowed set, before any message is processed. The rule applies on every path; /ws and /mcp are what matter, and /runner keeps its key authentication on top. Browsers attach Origin to WebSocket upgrades and apply no CORS to them, so the server must check it itself.\n\nThis task was split out of task-724e31fa, the HIGH security row filed on 2026-10-30, which stays the final verification row. Keep this row's text at the problem-class level, with no exploit steps.\n\nDeliverable:\n- packages/moe-daemon/src/server/WebSocketServer.ts: the WSS gets a verifyClient that refuses a present Origin outside a frozen allowed set with HTTP 403.\n  - The allowed set is empty, because no Moe client is a browser. Its comment says an origin is added there only for a first-party browser client.\n  - An absent Origin is accepted. The literal value 'null' counts as present.\n  - The refusal happens before any handler runs or any state snapshot is sent. It is logged at warn level with the remote address and a truncated origin.\n- Tests in a new packages/moe-daemon/src/server/webSocketOrigin.test.ts. Follow server/runnerChannel.test.ts: a real http server plus MoeWebSocketServer.\n- docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md describe the rule and what an HTTP 403 on upgrade means.\n\nReal clients and their handshakes. None of them sends Origin; check each:\n- moe-proxy and the VS Code extension: `new WebSocket(url)` from 'ws'. The wrapper RPC path runs through moe-proxy.\n- The claude-plugin hook: a raw handshake in packages/moe-claude-plugin/src/daemonClient.ts.\n- The local runner: vm-control's mcpCaller uses Node's global WebSocket, and runner-client uses 'ws' with its key header.\n- The JetBrains plugin: an org.java_websocket WebSocketClient. It sends Host, Upgrade, Connection, Sec-WebSocket-Key and Sec-WebSocket-Version; confirm this against the version moe-jetbrains pins.\n\nNot in scope:\n- the WSL bind (sibling tasks);\n- /health;\n- any setting or environment knob for allowed origins;\n- client changes.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "An upgrade to /ws or /mcp carrying an Origin header, including the value 'null', is refused with HTTP 403 before any message is processed: no state snapshot is sent and no MCP client is attached. Proven by webSocketOrigin.test.ts.",
+    "An upgrade without an Origin header is accepted on /ws and /mcp, and /runner still authenticates by its key. Proven by webSocketOrigin.test.ts.",
+    "Each real client's handshake is accepted, with one row per client in webSocketOrigin.test.ts: 'ws' with no options (moe-proxy, VS Code, wrapper RPC), the claude-plugin's raw handshake bytes, Node's global WebSocket (vm-control) and the Java-WebSocket header set (JetBrains).",
+    "docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md state the Origin rule and the 403 symptom, with no exploit walkthrough.",
+    "`cd packages/moe-daemon && npm test` exits 0, with its output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 285.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:32:46.880Z",
+  "updatedAt": "2026-10-30T07:32:46.880Z"
+}
