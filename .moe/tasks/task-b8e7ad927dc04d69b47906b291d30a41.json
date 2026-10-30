@@ -69,8 +69,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-ba3f4f35",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -105,12 +105,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:17.692Z",
-  "updatedAt": "2026-10-30T07:28:51.837Z",
+  "updatedAt": "2026-10-30T07:39:21.582Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:28:21.268Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T07:39:21.582Z",
+    "wallClockMs": 33060314
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
@@ -212,7 +214,12 @@
     ".moe/tasks/task-032c973941bc41d9b051eedacb7de0b6.json",
     ".moe/tasks/task-5e816f2cafe8490596af56d9a5108efe.json",
     ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
-    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json"
+    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+    ".moe/tasks/task-0c72d59aad37467fb49e5ad699692d78.json",
+    ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
+    ".moe/tasks/task-6be626cfe5744ee29deeb2bb1b59468e.json",
+    ".moe/tasks/task-e493ed19006d4be4a96e3ca2f80a5ab4.json",
+    ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json"
   ],
   "completionSummary": "CQ-R10d3 delivered. installAgents and checkAgents, three files, 247 changed lines against the 300 target and 400 cap (measured against scratch baselines: snapshot-transfer.mjs +66/-12, guest-readiness.mjs +31/-0, local-runner.test.mjs +136/-2). agent-cache.mjs, guest-supervisor.py and local-runner-agents.test.mjs are untouched. No verified-local or isolation claim; executionReady stays false.\n\nscripts/local-runner/snapshot-transfer.mjs:\n- installAgents({name, arch, cacheDir, provider, timeoutMs}, {fetch, manifest}) validates the stream options first, then takes both CLIs only from fetchAgentBinary (pins from the installed manifest, verified cache files). It streams them through the 'agents' mode between two no-mount checks and accepts exactly one {kind:'installed', count}. It resolves a frozen {instance, agents, bytes, executionReady:false}.\n- agentFrames is an async generator: positional reads through an O_NOFOLLOW|O_NONBLOCK descriptor, re-hashed as they stream. A short read or a digest that is not the pin throws TRANSFER_INPUT_INVALID BEFORE that binary's last data frame, so the guest never completes a binary the host did not just re-verify.\n- The shared transfer(name, provider, options, delivered) helper keeps the name CQ-R11e2 expects. materializeSnapshot and verifyWorkspace now use it with unchanged order, codes and results. MODES gains 'agents', feed uses for-await, and streamOptions accepts async iterables.\n\nscripts/local-runner/guest-readiness.mjs:\n- checkAgents({name, arch, provider}) runs one fixed `sudo -n sha256sum` probe and compares it with the installed manifest's pins (memberSha256 for the codex archive). It reports AGENT_MISSING, AGENT_HASH_MISMATCH or a provider code.\n- One refinement inside the existing code vocabulary: a non-zero exit with no per-cli failure reads PROBE_UNKNOWN.\n- GUEST_PROBES.agentHashes is appended after CHECKS and kept out of them, so bootstrap never runs it.\n\nTests, all added with the Edit tool. The task's rows are AH1-AH3, ",
   "commits": [
@@ -236,6 +243,26 @@
       "treeId": "9e247d678a232cf1f72427414ccaa7d25b84e5ac",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "5f4c687378d859a4219aa9ee9978e49f78f03b2e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T07:28:48Z",
+      "paths": [
+        ".moe/tasks/task-0c72d59aad37467fb49e5ad699692d78.json",
+        ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
+        ".moe/tasks/task-6be626cfe5744ee29deeb2bb1b59468e.json",
+        ".moe/tasks/task-b8e7ad927dc04d69b47906b291d30a41.json",
+        ".moe/tasks/task-e493ed19006d4be4a96e3ca2f80a5ab4.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T07:33:56.741Z",
+      "treeId": "bb823a98b9c35f0c5a7f053906170e1b77fe6636",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -243,11 +270,17 @@
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-readiness.mjs"
   ],
-  "unattributedPaths": [],
+  "unattributedPaths": [
+    "moe-jetbrains/.kotlin/sessions/kotlin-compiler-10694370982063904823.salive"
+  ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-73c29a03@2026-10-30T07:15:11Z",
-    "at": "2026-10-30T07:27:42.008Z"
-  }
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T07:28:48Z",
+    "at": "2026-10-30T07:33:56.741Z"
+  },
+  "completedAt": "2026-10-30T07:39:21.582Z",
+  "reviewCompletedAt": "2026-10-30T07:39:21.582Z",
+  "reviewSummary": "Reviewed completion 1592bf308d1cdb057ae8e4db3bd6685608274baf with git show and git branch --contains: on moe/work-2026-10-24; current HEAD has identical owned source/tests. QA checkpoint 5f4c687 is board-only. Owned diff: 247 changed lines (+233/-14) across the three approved files; wrapper-generated board changes separate.\nFresh exact-commit archive rerun: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs => exit 0, 270 pass/271 tests, 1 existing macOS smoke skip.\nAlso reran node --test over local-runner-{bundle,bridge,check,snapshot,vm-control,dispatch}.test.mjs with that environment: exit 0, 157 pass/158, 1 existing root-mount certification skip. Initial extra run lacked archived repository assets; restored exact-commit assets and reran. Optional channel C4-C9 remained unverified: snapshot has no built daemon dist; outside this slice's gate.\nDoD verified: real-supervisor AI1-AI5/AH3 cover owned 0555 installs, exact bytes, staging cleanup and fixed refusals; AH1/AH2 cover verified-cache-only frames, rehash-before-final-frame, backpressure, mounts before/after, input/download/stream failures; RA covers missing/changed/member/wrong-arch pins. Bootstrap order and synchronous stream callers remain green. Four independent scratch mutations (digest bypass, missing second mount check, wrong installed count, prefix-only readiness) all killed. Reviewed cleanup/concurrency and Windows flag fallbacks/guards; native Windows/macOS VM behavior not certified. Approved scope needs no migration/config/docs beyond landed API comments. No verified-local/isolation claim; executionReady stays false. No shared source edits or Git writes.",
+  "requiredCheckAtDone": null
 }

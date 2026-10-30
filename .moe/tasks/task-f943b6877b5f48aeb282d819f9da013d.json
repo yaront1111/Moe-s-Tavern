@@ -118,7 +118,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:24:43.213Z",
-  "updatedAt": "2026-10-30T07:35:45.068Z",
+  "updatedAt": "2026-10-30T07:36:24.551Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T06:51:57.615Z",
@@ -237,7 +237,10 @@
     ".moe/tasks/task-032c973941bc41d9b051eedacb7de0b6.json",
     ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
     ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
-    ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json"
+    ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json",
+    ".moe/tasks/task-142415f4cad3435a94bb879399eba160.json",
+    ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
+    ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json"
   ],
   "completionSummary": "Finding: the peer set already counted a mid-step peer (collectPeerPaths unions every step's affectedFiles/newFiles/modifiedFiles, IN_PROGRESS included); e67ca0e named only task-66e8d7d1 because each peerDeclared entry carried just the first claimant, and a TOOL witness released the path while task-9cc13170 was mid-step on it. Delivered (daemon side; wrapper consumer stays task-01f37ac6): (1) get_commit_scope peerDeclared[] gains additive taskIds (every contributor, id order, taskId===taskIds[0]) and editingTaskIds (contributors with an IN_PROGRESS step naming the path AND active by the peerActive rule; fail closed without since); taskId/peerActive unchanged; helper inProgressStepPaths guards non-array plan/lists. (2) record_commit classifies MOE_ATTR_CONTESTED_EDITING(task-<peer>) as a held path with its own remedy; HeldPath.kind untouched|editing|strict, remedy order untouched, editing, strict, never; the peer comes from the code. (3) docs/MCP_SERVER.md updated (remedy byte-identical to the constant, 472 chars); the file was CLEAN before my edit. Tests: e67ca0e repro with exact toEqual; one exact-array test per editing rule; the first-claimant test updated (not loosened); record_commit hold line/remedy/one alert, 8 malformed codes + bad paths not holds, mixed order pinned. RED first (8 + 5 failing), then GREEN; 7 mutants all killed. Gate (Linux-native snapshot of HEAD, npm ci, env -i): tsc --noEmit + npm test exit 0, 201 files, 5646 passed | 16 skipped; getCommitScope.test.ts 55, recordCommit.test.ts 72. Net non-board LOC 298 (+316/-18; tests 242), under the 400 cap. Self-review caught and fixed a dropped space on a pre-existing line in recordCommit.ts. Out of scope, filed as bug task-7e39a63f6b024acf9f5f06c92bfafd59: collectTaskPathTiers throws on a truthy non-iterable step file list (the junk test therefore uses newFiles: null). 831 other dirty paths in the shared checkout are peers' and untouched.",
   "commits": [
@@ -269,6 +272,24 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "9d1852c6e4bacc9ddb3d6bc3ab8d26d0f7150af5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T07:33:48Z",
+      "paths": [
+        ".moe/tasks/task-142415f4cad3435a94bb879399eba160.json",
+        ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
+        ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+        ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T07:36:24.551Z",
+      "treeId": "eec9721419436cf06690c41a6699d2fe2adda61d",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -281,9 +302,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5ebbf433@2026-10-30T07:14:11Z",
-    "at": "2026-10-30T07:22:56.843Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T07:33:48Z",
+    "at": "2026-10-30T07:36:24.551Z"
   },
   "completedAt": "2026-10-30T07:35:45.068Z",
   "reviewCompletedAt": "2026-10-30T07:35:45.068Z",

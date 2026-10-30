@@ -9,9 +9,91 @@
     "Duplicate gotcha-*/decision-* groups are merged into single files with no distinct fact dropped, each merge listed as 'kept <name> <- merged <names>'. No path under .serena is committed: `git log --oneline -- .serena` is still empty after the landing."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "BASELINE AND SELECTION. Read-only; nothing moves in this step.\n\n(1) Before-listing: run the installed Serena's own lister in a fresh process with the CURRENT config:\n`~/.local/share/uv/tools/serena-agent/bin/python -c \"import yaml; from serena.memories.memory_manager import MemoryManager as M; p=yaml.safe_load(open('.serena/project.yml')).get('ignored_memory_patterns') or []; n=M('.serena', ignored_memory_patterns=p).list_project_memories().get_full_list(); print(len(n), len(' '.join(n)))\"`\nRecord the count and chars. That is the 'before' for DoD 2; the audit measured about 36 KB.\n\n(2) Board status, through moe tools only, never by editing .moe:\n- DONE ids: moe.list_tasks {status:['DONE'], limit:500}, paging with offset until returned < limit;\n- ARCHIVED ids: moe.list_tasks {status:['ARCHIVED'], includeArchived:true}, paged the same way;\n- live ids: PLANNING, AWAITING_APPROVAL, WORKING, REVIEW, BLOCKED and BACKLOG.\n\n(3) Selection over TOP-LEVEL files of .serena/memories only. The daemon/ and jetbrains/ topic subdirs are never touched. Select names that fullmatch `task-(task-[0-9a-f]{32})-(qa-)?handoff\\.md` and whose id is DONE or ARCHIVED. 'task-*-handoff' includes the -qa-handoff files.\n- A live id is never selected.\n- An id that is not on the board at all (a deleted task) stays put and is only counted.\n- Write the move list and the counts (selected, live kept, unknown kept) to a scratch file outside the repo.\n\nError handling: a failed list_tasks page, or a name that matches neither set, stops the step. Never guess a status.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".serena/project.yml"
+      ],
+      "note": "Read-only baseline: fresh MemoryManager 784 names / 35423 chars. Board paged through Moe: 156 DONE, 348 ARCHIVED, 58 live; selection/counts at /tmp/moe-memory-prune-78ba155c/selection.json. Shared dirty paths untouched; only read-only git log/status used. No source fixes or tests needed (memory maintenance).",
+      "startedAt": "2026-10-30T07:32:16.343Z",
+      "completedAt": "2026-10-30T07:32:49.468Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "ARCHIVE AND HIDE. Use one small Python script (in scratch, outside the repo). Never use git, and never use Serena rename_memory 300 times.\n\n(1) Create .serena/memories/_archive/. For each selected file, os.rename it to _archive/<same basename>.\n- If the destination exists, skip that file and report it. Never overwrite.\n- After the loop, assert that every selected name is now in _archive/ and that no live-id handoff moved.\n\n(2) Edit .serena/project.yml by replacing exactly the line `ignored_memory_patterns: []` with:\n```\nignored_memory_patterns:\n- _archive/.*\n```\nEvery other byte stays unchanged. Re-load the file with yaml.safe_load and assert that the list equals ['_archive/.*'] and that the other keys are unchanged.\n\nSerena fullmatches the pattern against the memory name ('_archive/<name>'). A match is excluded from list, read and write, and the raw file remains readable with the Read tool. Running Serena servers keep their old config until restart, so measure with a fresh process.\n\nThe wrappers' pre-flight memory preload already scans only the top level (`find -maxdepth 1` in sh, non-recursive Get-ChildItem in ps1), so archived names drop out of <inbox> automatically.\n\nError handling: on any assert failure, print the offending names and stop. Fix the move by hand with os.rename back before retrying.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".serena/project.yml"
+      ],
+      "modifiedFiles": [
+        ".serena/project.yml"
+      ],
+      "note": "Archived 307 handoffs, retained 53 live / 0 unknown. Scratch archive.py asserted archive coverage, no live handoff moved, config parses and all other bytes/keys unchanged (CRLF preserved). No destinations existed. Per approved safety plan, memory move names in scratch selection.json, only project.yml listed; no declare_files calls.",
+      "startedAt": "2026-10-30T07:33:11.729Z",
+      "completedAt": "2026-10-30T07:33:13.609Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "MERGE DUPLICATE gotcha-* AND decision-* MEMORIES. Read only the candidate groups, never all 379 files.\n\nCandidates:\n(a) Name clusters: hyphen tokens after the gotcha-/decision- prefix, stopwords dropped, plural 's'/'es' stripped, Jaccard >= 0.5 with at least 2 shared tokens, union-find.\n(b) Seed topic groups:\n- contested landing: gotcha-contested-path-dropped-unless-tool-tier, gotcha-contested-path-never-lands, gotcha-contested-path-silently-skipped-from-landing, gotcha-contested-path-needs-edit-tool-to-land, gotcha-contested-path-skipped-overlay-gate-false-green;\n- shared-file sweeps: gotcha-shared-file-hunks-land-under-first-committer, gotcha-landing-peer-sweeps-shared-doc-hunks;\n- plan-text rails: gotcha-submit-plan-rails-scan-plan-text, gotcha-submit-plan-rail-scan-and-unlanded-files, gotcha-moe-rails-grep-plan-text, decision-plan-text-rails;\n- vscode harness: gotcha-vscode-tests, gotcha-vscode-vm-test-harness, gotcha-vscode-vm-test-harnesses, gotcha-vscode-vm-test-realm-artifacts;\n- the gotcha-local-runner-*tests* files;\n- gotcha-daemon-dead-mcp-connect-timeout + gotcha-moe-mcp-connect-timeout-dead-daemon;\n- gotcha-agent-session-env-leaks-into-tests + gotcha-seat-env-leaks-into-daemon-tests;\n- gotcha-codex-worker-tui-skips-wrapper-postflight + gotcha-interactive-tui-skips-wrapper-postflight;\n- gotcha-cq-plan-size-vs-qa-cap + gotcha-qa-size-cap-inconsistency-cq-v;\n- gotcha-get-context-shape-and-fallback + gotcha-get-context-unrecorded-shape-unpinned.\n\nFor each group:\n- Merge only true duplicates or near-duplicates (same subject, overlapping facts).\n- Complementary rows stay separate, with a one-line reason. Examples: the per-task decision-cq-*-split rows; decision-protected-runtime-selection vs -confirmations.\n\nMerging:\n- Keep the most general existing name, or a docs/MEMORY.md-style topic name.\n- The kept file must carry EVERY distinct fact, with dates and task ids kept as provenance. Write it with Serena write_memory or edit_memory.\n- Move the merged-away files to _archive/ the same way as in step 2.\n- Then grep the live (non-_archive) memories for `mem:<merged-away>` and bare `<merged-away>` references and re-point them to the kept name.\n- References inside .moe task plans are NOT edited: list them (read-only grep) for the summary.\n\nRecord each merge as 'kept <name> <- merged <names>'.\n\nError handling: if a fact's merge is ambiguous, keep both bullets verbatim. Never drop a fact to shorten.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".serena/project.yml"
+      ],
+      "modifiedFiles": [
+        ".serena/project.yml"
+      ],
+      "note": "Reviewed 16 name/seed candidate groups (50 files). Consolidated 12 overlapping topics, archived 20 merged-away names; all source content retained in dated provenance sections, checked exact substring preservation before repointing. Updated 20 live-memory files via Serena to eliminate stale merged-name references. Complementary topics kept separate with reasons at /tmp/moe-memory-prune-78ba155c/kept-separate.txt. Full merge map and untouched references in merges.json/task-plan-references.json (18 plans). No code or test changes (TDD recommendation loaded, not applicable to memory prose). Memory names/paths recorded in scratch, not declared, per safety plan.",
+      "startedAt": "2026-10-30T07:33:13.638Z",
+      "completedAt": "2026-10-30T07:36:33.997Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "HUMAN QUESTION (the task says ask, don't decide). Post one moe.chat_send to #general. Ask the human whether .serena/memories, or the whole of .serena, should be gitignored or added to settings.attribution.exclude. Include the facts:\n- .serena/ is untracked and has never been committed;\n- both wrappers already refuse untracked .serena/** at landing (MOE_ATTR_EXCLUDED: the sh denied() rule and ps1 line ~3227).\nChange neither .gitignore nor project settings.\n\nDeclare nothing under .serena with moe.declare_files. In complete_step.modifiedFiles name only .serena/project.yml. The moved and merged memory names belong in the completion summary, as the DoD requires.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".serena/project.yml"
+      ],
+      "modifiedFiles": [
+        ".serena/project.yml"
+      ],
+      "note": "Posted the required human choice to #general; no gitignore/settings edits, no declare_files. Both landing guards verified by read-only inspection; .serena remains untracked with empty history.",
+      "startedAt": "2026-10-30T07:36:34.017Z",
+      "completedAt": "2026-10-30T07:36:34.044Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY, once and fresh. QA re-runs the same command after the landing. It reads .moe/tasks read-only:\n```\ncd /mnt/d/projexts/moes && test -z \"$(git log --oneline -- .serena)\" && ~/.local/share/uv/tools/serena-agent/bin/python - <<'PY'\nimport glob, json, os, re, sys, yaml\nfrom serena.memories.memory_manager import MemoryManager\npats = yaml.safe_load(open('.serena/project.yml', encoding='utf-8')).get('ignored_memory_patterns') or []\nassert '_archive/.*' in pats, pats\nnames = MemoryManager('.serena', ignored_memory_patterns=pats).list_project_memories().get_full_list()\nassert not [n for n in names if n.startswith('_archive/')]\narch = glob.glob('.serena/memories/_archive/task-task-*handoff.md')\nbad = []\nfor f in arch:\n    m = re.fullmatch(r'task-(task-[0-9a-f]{32})-(?:qa-)?handoff\\.md', os.path.basename(f))\n    p = '.moe/tasks/%s.json' % m.group(1) if m else ''\n    st = json.load(open(p, encoding='utf-8')).get('status') if p and os.path.exists(p) else None\n    if st not in ('DONE', 'ARCHIVED'): bad.append((os.path.basename(f), st))\nprint('listed=%d chars=%d archived_handoffs=%d bad=%s' % (len(names), len(' '.join(names)), len(arch), bad))\nsys.exit(1 if bad else 0)\nPY\n```\nIt must exit 0, and its listed/chars give the 'after' for DoD 2 against step 1's 'before'. Its fresh output is the complete_task verification evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".serena/project.yml"
+      ],
+      "modifiedFiles": [
+        ".serena/project.yml"
+      ],
+      "note": "Exact plan heredoc ran fresh, exit 0: listed=461 chars=18993 archived_handoffs=307 bad=[]. Before: 784 / 35423. No archived name listed, config parsed and every archived handoff currently DONE/ARCHIVED. Only the approved memory-maintenance verification was run; no unrelated package suite.",
+      "startedAt": "2026-10-30T07:36:34.063Z",
+      "completedAt": "2026-10-30T07:36:58.563Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "SELF-REVIEW before complete_task (load adversarial-self-review). Check that:\n\n(a) No live task's handoff is in _archive/. Re-derive the live set with moe.list_tasks.\n(b) For every merge, a diff of the kept file against the archived originals shows no distinct fact dropped.\n(c) project.yml still parses and only ignored_memory_patterns changed.\n(d) The daemon/ and jetbrains/ topic subdirs are untouched.\n(e) No .moe, .gitignore or settings edits were made, and no git command beyond read-only log/status.\n\nThe completion summary carries:\n- the before and after counts and chars;\n- the moved handoff names (or the scratch list path plus the count) and the kept-in-place counts (live, unknown);\n- each 'kept X <- merged Y' line, the groups kept separate with their reason, and any task-plan references left untouched;\n- the #general question's message id.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".serena/project.yml"
+      ],
+      "modifiedFiles": [
+        ".serena/project.yml"
+      ],
+      "note": "Adversarial-self-review loaded and completed using scratch difflib/hash evidence (plan forbids git commands except read-only log/status). Refreshed full board via Moe: two previously live handoffs became DONE, so archived those too to satisfy DoD (additional-handoffs.json). 309 total handoffs; final retained 53 live, 0 unknown. Every merged source text retained modulo reference repoints, merged originals byte-identical, 307 baseline handoff archives byte-identical. Config exact replacement/YAML valid; daemon/jetbrains unchanged. After final handoff/gotcha writes reran exact plan verification because archive/count changed: exit 0, listed=461 chars=18979 archived_handoffs=309 bad=[]. No Git writes or .moe/.gitignore/settings edits. Detailed completion ledger: comment-70b6990d0d30442895a5f103df862ca0; human question msg-2c79a164edd94f04a9a786c8655ff104. QA must confirm empty .serena history after wrapper exit. Per approved safety plan only project.yml attributed, full local memory paths/move ledger retained in scratch and handoff.",
+      "startedAt": "2026-10-30T07:36:58.583Z",
+      "completedAt": "2026-10-30T07:39:25.613Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -21,8 +103,109 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 283.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-70b6990d0d30442895a5f103df862ca0",
+      "author": "worker-262588d0",
+      "content": "Memory pruning complete (local untracked Serena state; QA must verify history after wrapper exit).\nBefore: 784 names / 35423 chars. Final fresh exact plan command: exit 0, listed=461 chars=18979 archived_handoffs=309 bad=[] (41.2% fewer names, 46.4% fewer chars; concurrent peer additions included).\nMoved list: /tmp/moe-memory-prune-78ba155c/selection.json (307) + additional-handoffs.json (2 newly DONE while working). Initially/finally kept 53 live / 0 unknown. Archive originals retained; no live handoff archived.\nkept decision-finalizing-attempt-close-paths <- merged gotcha-attempt-close-paths-key-on-assignment\nkept decision-plan-text-rails <- merged gotcha-moe-rails-grep-plan-text, gotcha-submit-plan-rail-scan-and-unlanded-files, gotcha-submit-plan-rails-scan-plan-text\nkept gotcha-agent-session-env-leaks-into-tests <- merged gotcha-seat-env-leaks-into-daemon-tests\nkept gotcha-interactive-tui-skips-wrapper-postflight <- merged gotcha-codex-worker-tui-skips-wrapper-postflight\nkept gotcha-contested-path-needs-edit-tool-to-land <- merged gotcha-contested-path-dropped-unless-tool-tier, gotcha-contested-path-never-lands, gotcha-contested-path-silently-skipped-from-landing, gotcha-contested-path-skipped-overlay-gate-false-green\nkept gotcha-cq-plan-size-vs-qa-cap <- merged gotcha-qa-size-cap-inconsistency-cq-v\nkept gotcha-daemon-dead-mcp-connect-timeout <- merged gotcha-moe-mcp-connect-timeout-dead-daemon\nkept gotcha-shared-file-hunks-land-under-first-committer <- merged gotcha-landing-peer-sweeps-shared-doc-hunks\nkept gotcha-local-runner-tests <- merged gotcha-local-runner-cross-platform-tests, gotcha-local-runner-tests-archive-export\nkept gotcha-qa-approve-summary-limit <- merged gotcha-qa-approve-summary-length\nkept gotcha-statemanager-line-budget <- merged gotcha-statemanager-1500-line-budget\nkept gotcha-vscode-vm-test-harness <- merged gotcha-vscode-tests, gotcha-vscode-vm-test-harnesses, gotcha-vscode-vm-test-realm-artifacts\nKept separate: ten CQ split decision rows (different human contracts/dependencies); workload freeze/scope vs authoring contract; protected runtime selection vs human confirmations; get_context lookup/projection vs unrecorded receipt test gap; supervisor and Git-guard specialist test topics. Reasons: /tmp/moe-memory-prune-78ba155c/kept-separate.txt.\n20 live-memory files repointed; originals preserved verbatim modulo reference repoints. All archived originals byte-identical; project.yml exact CRLF-preserving ignored_memory_patterns change; daemon/ and jetbrains/ hashes unchanged. Provenance ledger in new handoff intentionally names archived original topics.\n18 task-plan references left untouched (task IDs and names in /tmp/moe-memory-prune-78ba155c/task-plan-references.json). 94 archived handoff references in 84 live files intentionally unchanged (archived-handoff-references.json). No .moe/.gitignore/settings hand edits; no Git writes; no declare_files.\n#general human question: msg-2c79a164edd94f04a9a786c8655ff104. No human exclusion choice assumed. Current git history .serena empty; post-exit landing history must be checked by QA.\nHandoff: mem:task-task-78ba155c350f4927ab5bdf53c21a4468-handoff. Scratch evidence root /tmp/moe-memory-prune-78ba155c/.",
+      "timestamp": "2026-10-30T07:38:59.847Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:17:33.972Z",
-  "updatedAt": "2026-10-30T07:17:33.972Z"
+  "updatedAt": "2026-10-30T07:39:25.636Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:27:13.643Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-262588d0"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:31:21.148Z",
+  "executionContract": {
+    "intendedBehavior": "Handoff memories (task-task-<id>-handoff and -qa-handoff) of tasks that are DONE or ARCHIVED on the board move into .serena/memories/_archive/ under their own names. .serena/project.yml ignored_memory_patterns gains '_archive/.*', so Serena hides those files from list/read/write, while they stay on disk for read_file. Duplicate and near-duplicate gotcha-*/decision-* memories are merged into single files with every distinct fact kept, and the merged-away files are archived the same way. Nothing under .serena is committed.",
+    "acceptanceCriteria": [
+      "No live task's handoff is archived. The completion summary lists the moved names and the before/after counts",
+      "ignored_memory_patterns contains '_archive/.*', and a fresh MemoryManager listing shows no _archive/ names and is measurably smaller",
+      "Every merge is listed as 'kept <name> <- merged <names>' with no distinct fact dropped",
+      "`git log --oneline -- .serena` stays empty after the landing (the verification command checks it)"
+    ],
+    "invariants": [
+      "Status is read through moe tools for selection; .moe is only ever read, never written",
+      "Files are moved, never deleted, and never overwritten",
+      "No .gitignore or settings change"
+    ],
+    "compatibility": [
+      "The topic subdirs (daemon/, jetbrains/) and every non-selected memory are unchanged",
+      "Handoffs of live tasks, and of task ids not on the board, stay at top level",
+      "The wrapper preload already scans only the top level, so no wrapper change is needed"
+    ],
+    "approvedScope": [
+      ".serena/memories top-level handoff files (move only)",
+      ".serena/memories gotcha-*/decision-* candidate groups (merge and archive)",
+      ".serena/project.yml ignored_memory_patterns line",
+      "One #general question to the human about gitignore/attribution.exclude"
+    ],
+    "reuse": [
+      "Serena's own MemoryManager for the before/after measurement (the same code the MCP server runs)",
+      "moe.list_tasks status filters with offset paging for the board status"
+    ],
+    "sourceAssumptions": [
+      "Serena 1.6.2.dev0 serena/memories/memory_manager.py: ignored_memory_patterns compiled and fullmatched against the name; _list_memories walks subdirs with '/' names; ignored names are refused by load, save, delete and move",
+      ".serena/project.yml currently has `ignored_memory_patterns: []`",
+      "scripts/moe-agent.sh pre-flight memory preload uses `find -maxdepth 1`, and moe-agent.ps1 uses non-recursive Get-ChildItem",
+      "scripts/moe-agent.sh denied() and moe-agent.ps1 (~line 3227) exclude untracked .serena/** paths from landing"
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && test -z \"$(git log --oneline -- .serena)\" && ~/.local/share/uv/tools/serena-agent/bin/python - <<'PY' … (the exact heredoc in step 5) … PY"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Serena delete_memory: rejected. Moving into _archive/ plus ignored_memory_patterns keeps history readable on disk.\n- Calling rename_memory per file: rejected. There are about 300 files, and renaming into an ignored name is refused once the pattern exists.\n- Reading every gotcha file to find duplicates: rejected for token cost. Name-similarity clusters (14 groups, 43 files when checked at planning) plus seeded topic groups bound the reads.\n- Splitting archive and merge into two tasks: rejected, because the human-owned DoD carries both.",
+    "codebaseInsights": "At planning there were 780 top-level memory files: 359 handoffs (51 of them qa-handoffs), 285 gotcha-* and 94 decision-*, in 3.6 MB. Both wrappers DENY untracked .serena/** at landing, so the commit risk the description names is already blocked; the verification still asserts it. The pre-flight <inbox> memory names come from a top-level disk scan, so archived handoffs disappear from it with no wrapper change.",
+    "risks": "- Running Serena servers keep the old (empty) ignore list until restart, so their list_memories shows the _archive/ names until then. Measure with a fresh process.\n- Live memories that cite archived handoffs as mem:<name> become unreadable through read_memory (read_file still works). Count them in the summary and do not rewrite them.\n- A task reopened from DONE later would find its handoff archived. That is rare and recoverable by moving the file back.",
+    "keyFiles": [
+      ".serena/project.yml",
+      "docs/MEMORY.md",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:31:21.168Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:32:16.343Z",
+  "reviewStartedAt": "2026-10-30T07:39:25.634Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && test -z \"$(git log --oneline -- .serena)\" && ~/.local/share/uv/tools/serena-agent/bin/python - <<'PY'\nimport glob, json, os, re, sys, yaml\nfrom serena.memories.memory_manager import MemoryManager\npats = yaml.safe_load(open('.serena/project.yml', encoding='utf-8')).get('ignored_memory_patterns') or []\nassert '_archive/.*' in pats, pats\nnames = MemoryManager('.serena', ignored_memory_patterns=pats).list_project_memories().get_full_list()\nassert not [n for n in names if n.startswith('_archive/')]\narch = glob.glob('.serena/memories/_archive/task-task-*handoff.md')\nbad = []\nfor f in arch:\n    m = re.fullmatch(r'task-(task-[0-9a-f]{32})-(?:qa-)?handoff\\.md', os.path.basename(f))\n    p = '.moe/tasks/%s.json' % m.group(1) if m else ''\n    st = json.load(open(p, encoding='utf-8')).get('status') if p and os.path.exists(p) else None\n    if st not in ('DONE', 'ARCHIVED'): bad.append((os.path.basename(f), st))\nprint('listed=%d chars=%d archived_handoffs=%d bad=%s' % (len(names), len(' '.join(names)), len(arch), bad))\nsys.exit(1 if bad else 0)\nPY",
+    "exitCode": 0,
+    "outputTail": "listed=461 chars=18979 archived_handoffs=309 bad=[]\n",
+    "reportedAt": "2026-10-30T07:39:25.634Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    ".serena/project.yml"
+  ],
+  "completionSummary": "Archived 309 finished-task handoffs; retained 53 live / 0 unknown. Fresh MemoryManager listing: 784 names/35423 chars -> 461/18979 (41.2%/46.4% smaller); exact plan heredoc exit 0, bad=[]. Consolidated 12 topics, archived 20 duplicates, repointed 20 live-memory files; every source fact/provenance retained. Full 'kept X <- merged Y' ledger, complementary-group reasons and untouched references: comment-70b6990d0d30442895a5f103df862ca0 and mem:task-task-78ba155c350f4927ab5bdf53c21a4468-handoff. Moved names: /tmp/moe-memory-prune-78ba155c/selection.json (307) + additional-handoffs.json (2). 18 task-plan references left untouched; 94 archived-handoff references in 84 files preserved. Config only ignored_memory_patterns changed; topic subdirs unchanged. Human question msg-2c79a164edd94f04a9a786c8655ff104; no gitignore/settings changes. No Git writes; .serena untracked and history empty before exit. QA must confirm again after wrapper landing."
 }

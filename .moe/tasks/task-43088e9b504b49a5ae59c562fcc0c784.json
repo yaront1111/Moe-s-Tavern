@@ -59,7 +59,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -75,7 +75,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:49:24.162Z",
-  "updatedAt": "2026-10-30T07:17:37.578Z",
+  "updatedAt": "2026-10-30T07:39:14.471Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T06:51:58.935Z",
@@ -85,11 +85,14 @@
     "firstClaimAt": "2026-10-30T06:53:57.100Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T07:39:14.471Z",
+    "wallClockMs": 2717371
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -225,5 +228,9 @@
     "kind": "completion",
     "sessionId": "worker-e60b90bd@2026-10-30T07:10:33Z",
     "at": "2026-10-30T07:17:37.578Z"
-  }
+  },
+  "completedAt": "2026-10-30T07:39:14.471Z",
+  "reviewCompletedAt": "2026-10-30T07:39:14.471Z",
+  "reviewSummary": "APPROVED. Reviewed recorded completion 55e4c4cc (tree 0a67824e), on moe/work-2026-10-24. Net ~82 non-board LOC (policy.ts +13/-6, deliveryProjection.ts +5/-4, strong test +74/-0, no test lines deleted).\n\nRe-ran in a fresh Linux-native snapshot (git archive HEAD, native npm ci, env -i, node v24.21.0; 3 owned files cmp-identical to 55e4c4cc): `cd packages/moe-daemon && npx tsc --noEmit && npm test` -> tsc exit 0, tests exit 0, 201 files passed, 5646 passed | 16 skipped (HEAD has later tests than the worker's 5602). Scratch tsconfig type-check of the test file: exit 0. Focused file 34/34.\n\nMy own mutants, each real test failures: M1 unconditional legacy return restored -> 6 failed; M3 `!trusted?.length` -> 1 failed (empty env list must stay strict); M9 projection keeps unconditional legacy return -> 4 failed; M6 landing demanded under legacy -> 5 failed. Restored, cmp-verified.\n\nDoD1: policy.ts computes `trusted` above the legacy return and excuses legacy only on `trusted === null`; legacy owes no landing token; policy still reports 'legacy'; projection agrees for verified-local. Rows V1 x3 (legacy|absent|null), V2, V3 (live rollback vs stored snapshot), V4 (undeclared), V5 (malformed env list throws, DONE withholds). DoD2: L2 x2 (legacy/observe satisfied with no run, projection undefined) plus all pre-existing cases unchanged.\n\nInvariants: qaApprove.ts:140 and dependencyUnblock.ts:65 both call evaluateDeliveryEvidence, no own legacy shortcut (one predicate); assertExecutionProfileReady untouched; no new predicate/token/field; daemonGitDocs regex test passes in the full suite. Nothing deferred. Non-blocking: stale 'satisfied at once under default policy' comments/docs belong to V12 sweep (task-b621ddc9).",
+  "requiredCheckAtDone": null
 }

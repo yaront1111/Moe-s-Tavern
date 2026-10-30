@@ -11,9 +11,57 @@
     "`cd packages/moe-daemon && npm test` exits 0, with its output supplied to complete_task."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nPrerequisite: task-801272c4 (the Origin rule: a WSS verifyClient in server/WebSocketServer.ts) is DONE. Read its landed bytes and handoff memory. Also read mem:decision-daemon-origin-and-wsl-bind and this row's planner comment.\n\nCreate packages/moe-daemon/src/server/bindHosts.test.ts. Use exact toEqual everywhere.\n\nR rows: resolveBindHosts(host, interfaces) as a table.\n- For 'wsl' with a map holding:\n  - 'vEthernet (WSL)': IPv4 172.20.48.1 non-internal, plus an IPv6 fe80:: entry;\n  - 'vEthernet (WSL (Hyper-V firewall))': IPv4 172.29.0.1, plus a duplicate of 172.20.48.1;\n  - 'Ethernet': 192.168.1.5;\n  - 'Loopback Pseudo-Interface 1': 127.0.0.1, internal.\n  The result is ['127.0.0.1', '172.20.48.1', '172.29.0.1']: loopback first, then interface order, deduplicated, IPv4 non-internal only.\n- A numeric family 4 (older Node) counts as IPv4.\n- 'wsl' with no adapter, or with an empty map, gives ['127.0.0.1'].\n- '127.0.0.1', '0.0.0.0', '::1' and 'WSL' each map to [themselves]: only the exact token 'wsl' is symbolic.\n\nL rows: listenOnHosts(primary, hosts, port, handler).\n- Probe first whether 127.0.0.2 can bind; it.skipIf it cannot, e.g. on macOS.\n- primary = http.createServer(handler), with a REAL MoeWebSocketServer attached the way server/runnerChannel.test.ts builds one: a StateManager on a temp project plus a McpAdapter.\n- listenOnHosts(primary, ['127.0.0.1','127.0.0.2'], 0, handler) resolves to servers whose addresses are exactly those two, on one shared port, and never 0.0.0.0 or '::'.\n- On EACH address:\n  - GET /health answers the shared handler's body;\n  - a 'ws' upgrade to /mcp opens;\n  - an upgrade with an Origin header gets 403, from the sibling's rule, through the forwarded upgrade.\n- Closing every returned server makes both addresses refuse connections.\n\nL-fail row: hosts ['127.0.0.1', '192.0.2.1'] (TEST-NET, never local).\n- The promise rejects.\n- The primary is closed again: 127.0.0.1 on that port refuses.\n- No server is left listening.\n\nD rows: the real daemon start path. Spawn `_run` through the tsx CLI with an isolated env and a free port, following delivery/acceptance.test.ts's startDaemonChild. Run two variants:\n  (a) `--host wsl`;\n  (b) no --host and MOE_BIND_HOST=wsl in the env.\nFor each:\n- daemon.json carries bindHost 'wsl';\n- /health on 127.0.0.1 answers with that pid;\n- the exported probeDaemonHealth and validateDaemonInfoForProject accept that info, so they probe loopback, never the literal 'wsl';\n- SIGTERM makes the process exit, removes daemon.json and frees 127.0.0.1:<port>.\nThe test host has no vEthernet adapter, so 'wsl' means loopback only. The extra-address coverage is the L rows.\n\nRed proof: in the Linux snapshot (step 5's recipe), run `npx vitest run src/server/bindHosts.test.ts`. Expect the file to fail on the missing module, and the D rows to fail on 'wsl'. Record it.\n\nError handling in tests: every server, socket and spawned child is torn down in afterEach, even on failure; never use a fixed fleet port.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/server/bindHosts.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create packages/moe-daemon/src/server/bindHosts.ts. It has no daemon-state imports.\n\nExports:\n- `WSL_BIND_HOST = 'wsl'`.\n- `resolveBindHosts(host: string, interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>): string[]`, which is pure.\n  - Any host other than exactly 'wsl' gives [host].\n  - 'wsl' gives ['127.0.0.1', ...] followed by each address whose interface name starts with 'vEthernet (WSL', compared case-insensitively. Take only entries with family 'IPv4' or 4 and internal false, deduplicated, in interface order.\n- `listenOnHosts(primary: http.Server, hosts: readonly string[], port: number, handler: http.RequestListener): Promise<http.Server[]>`.\n  1. Listen the primary on hosts[0]:port. Port 0 is allowed.\n  2. Every further host gets `http.createServer(handler)` on the primary's ACTUAL port. It forwards `'upgrade'` with `(req, socket, head) => primary.emit('upgrade', req, socket, head)`, so the single WebSocketServer and its verifyClient (the Origin rule) serve it. Never attach a second WebSocket server.\n  3. Return the servers in host order.\n\nError handling:\n- If any listen fails, close every server already listening, the primary included, then reject with that error naming the host. A partial set is never served.\n- The function never throws synchronously.\n- Add a header comment explaining why the extra servers forward upgrades rather than own a WSS.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/server/bindHosts.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wire it into packages/moe-daemon/src/index.ts. Non-'wsl' hosts must behave exactly as today.\n\n1. probeHostFor: 'wsl' maps to DEFAULT_BIND_HOST, like the wildcards. Update its comment.\n2. startDaemon:\n   - `const hosts = resolveBindHosts(host, interfaces())`. The interfaces read is try/catch'd: a throw logs a warning and uses loopback alone.\n   - findAvailablePort accepts `string | readonly string[]` and holds a port only when isPortAvailable is true on EVERY address. The single-string calls and their tests keep working.\n   - Hoist the inline /health request handler into a named const, and create httpServer from it. MoeWebSocketServer is still built on httpServer, unchanged.\n   - Replace the single listen promise with `const servers = await listenOnHosts(httpServer, hosts, port, handler)`. Log the bound addresses at info level.\n   - waitForPortListening, the daemon.json write (bindHost recorded exactly as today: any host other than 127.0.0.1, so 'wsl') and every probe stay as they are.\n3. shutdown: after wsServer.close(), close EVERY returned server through closeHttpServer, each in its own try/catch that logs at error level. This replaces the single httpServer close.\n4. A listen failure from listenOnHosts takes the same failure path a listen error takes today: lock released, start fails, and nothing is partially served.\n\nThe local runner refuses a non-loopback bindHost. 'wsl' stays refused there; do not touch scripts/local-runner.\n\nError handling is as above; nothing is persisted beyond today's daemon.json.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Docs. The Origin sibling edited these same files first, so preserve its text and any peer's bytes.\n\n1. docs/CONFIGURATION.md, the MOE_BIND_HOST row (and --host):\n   - `wsl` means loopback plus the IPv4 address of each `vEthernet (WSL...)` adapter.\n   - It is what JetBrains' 'Run Agents in WSL' mode uses once its argv sibling lands.\n   - It is recorded as bindHost 'wsl'.\n   - With no WSL adapter (mirrored networking, or a non-Windows host), only loopback is bound.\n   - An explicit 0.0.0.0 still listens on every interface. Say plainly that it is not recommended.\n2. docs/TROUBLESHOOTING.md: a short 'WSL agents cannot reach the Windows daemon' entry covering:\n   - start it with --host wsl;\n   - NAT mode reaches it through the WSL gateway, which is the adapter address, and mirrored mode through loopback;\n   - a firewall rule for the daemon's node;\n   - restart the daemon after WSL restarts, because the adapter address can change;\n   - the MOE_DAEMON_HOST override.\n\nKeep both at the problem-class level, with no exploit steps.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each one to a scratch copy, restore it, then cmp. A kill counts only when the Tests line shows real failures.\n   - 'wsl' resolves to ['0.0.0.0']: the R and L rows fail.\n   - Internal or IPv6 entries are kept: an R row fails.\n   - Loopback is not first: the R order check and the D rows fail.\n   - Extras do not forward 'upgrade': the L /mcp upgrade on 127.0.0.2 fails.\n   - Extras get their own WSS without verifyClient: the L Origin row fails, because 101 arrives instead of 403.\n   - No rollback on a partial failure: the L-fail row fails.\n   - probeHostFor('wsl') returns 'wsl': the D probe rows fail.\n   - findAvailablePort checks only the first address: run the L-fail row or a held-port variant, and name the row that kills it.\n2. GATE, in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate):\n   - `git archive HEAD` of the WHOLE repo; overlay ONLY this task's 5 files and cmp-verify them;\n   - native `npm ci --no-audit --no-fund` under env -i with nvm node v24.21.0;\n   - run `cd packages/moe-daemon && npx tsc --noEmit && npm test`. It must EXIT 0. Use NO_COLOR=1 and grep -a.\n   - Type-check the new test file with a scratch tsconfig: extends ./tsconfig.json, types ['node'], include only the test.\n3. complete_task:\n   - verification: that command, exit code 0, and the output tail;\n   - summary: DoD 1 is the R rows; DoD 2 is the L and L-fail rows; DoD 3 is the D rows; DoD 4 is the docs.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as an attacker on the LAN, and as an unlucky Windows user:\n- Can 'wsl' ever end up listening on 0.0.0.0 or '::'? Check:\n  - an interfaces read that throws;\n  - an adapter carrying 0.0.0.0;\n  - MOE_BIND_HOST overriding --host;\n  - a case variant.\n- Can an upgrade on an extra listener skip the Origin rule? Can it reach a second WSS?\n- If one address fails to listen, is anything left listening, and is the lock released?\n- Is the port held on every address, so two projects can't split one port?\n- Is shutdown complete, closing every server, and is every wait bounded?\n- Do older daemon.json files (bindHost 0.0.0.0 or absent) still probe as before? Does the local runner still refuse 'wsl'?\n- Are non-'wsl' hosts byte-for-byte unchanged?\n- Rails:\n  - regression tests are present;\n  - no MCP contract change;\n  - .moe state stays backward-compatible;\n  - no .moe edits and no Git writes;\n  - none of the global rails' forbidden patterns.\n- Would I be embarrassed if this shipped?\n\nFix any finding and re-run step 5's gate fresh. Then write the Serena memory 'task-task-2f2484b426ef42aaa0566323da2d550e-handoff' with the landed names (WSL_BIND_HOST, resolveBindHosts, listenOnHosts) for task-0c72d59a and task-724e31fa.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -36,5 +84,77 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:33:01.209Z",
-  "updatedAt": "2026-10-30T07:34:32.298Z"
+  "updatedAt": "2026-10-30T07:39:08.216Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:36:28.519Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:39:08.197Z",
+  "executionContract": {
+    "intendedBehavior": "--host wsl, or MOE_BIND_HOST=wsl, makes the daemon listen on 127.0.0.1 plus each non-internal IPv4 address of a `vEthernet (WSL...)` adapter, all on one port and never on 0.0.0.0.\n- Extra listeners share the HTTP handler and forward upgrades to the primary server, so the one WebSocket server and its Origin rule serve them.\n- daemon.json records bindHost 'wsl', and every local probe uses loopback.\n- A partial listen failure serves nothing.\n- Every other host value behaves exactly as today.",
+    "acceptanceCriteria": [
+      "resolveBindHosts gives exact arrays for 'wsl' with NAT adapters, with no adapter, and with duplicates, internal, IPv6 or numeric-family entries. Every other host maps to itself.",
+      "listenOnHosts on 127.0.0.1 plus 127.0.0.2 serves /health and an /mcp upgrade on both, refuses an Origin upgrade with 403 on both, and binds no wildcard address.",
+      "A failed second listen rejects, and leaves nothing listening.",
+      "The real `_run` started with --host wsl, or with MOE_BIND_HOST=wsl, writes bindHost 'wsl', answers /health on 127.0.0.1, passes the exported probes, and frees its port on SIGTERM."
+    ],
+    "invariants": [
+      "Only the exact token 'wsl' is symbolic, and loopback is always the first listener.",
+      "There is exactly one WebSocket server, with no second WSS on any extra listener.",
+      "Nothing is served from a partial address set, and the port is held on every address."
+    ],
+    "compatibility": [
+      "A host of 127.0.0.1, an explicit 0.0.0.0, '::' or a specific address listens exactly as today.",
+      "An older daemon.json with bindHost 0.0.0.0, or with no bindHost, probes as today. The local runner's non-loopback refusal covers 'wsl'."
+    ],
+    "approvedScope": [
+      "server/bindHosts.ts: WSL_BIND_HOST, resolveBindHosts and listenOnHosts.",
+      "index.ts: probeHostFor('wsl'), findAvailablePort over several addresses, the hoisted request handler, listenOnHosts wiring, and closing every server at shutdown.",
+      "The docs/CONFIGURATION.md MOE_BIND_HOST row, and a docs/TROUBLESHOOTING.md WSL reachability entry."
+    ],
+    "reuse": [
+      "Reuses closeHttpServer, isPortAvailable, waitForPortListening and the existing daemon.json write.",
+      "The test reuses runnerChannel.test.ts's server fixture and acceptance.test.ts's spawn pattern."
+    ],
+    "sourceAssumptions": [
+      "index.ts startDaemon calls httpServer.listen(port, host) once and records bindHost when the host is not 127.0.0.1. probeHostFor (line 76) maps only the wildcards to loopback.",
+      "validateDaemonInfoForProject's foreign path probes probeHostFor(bindHost) and then the WSL gateway, so 'wsl' must map to loopback.",
+      "MoeWebSocketServer is built as `new WSS({ server: httpServer })`. ws attaches its upgrade listener to that server, so re-emitting 'upgrade' on it routes through handleUpgrade, where verifyClient runs.",
+      "delivery/acceptance.test.ts startDaemonChild spawns `_run` through the tsx CLI with an isolated env."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npx tsc --noEmit && npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Listen on 0.0.0.0 and filter by remote address. Rejected: the DoD forbids listening on 0.0.0.0.\n- Resolve the adapter IP in JetBrains and pass it. Rejected: the daemon must listen on loopback too, and the symbolic token keeps every launcher trivial.\n- A second WSS on each extra listener. Rejected: it would duplicate state wiring and could skip the Origin rule. Forwarding 'upgrade' events to the primary server keeps one WSS.\n- A test-only env hook to inject interfaces into a spawned daemon. Rejected: the multi-address behavior is proven in-process with 127.0.0.2, and the spawned rows prove the real wiring on loopback.",
+    "codebaseInsights": "- parseArgs takes --host, else MOE_BIND_HOST.\n- superviseDaemon passes --host through to `_run`.\n- The daemon.json bindHost is recorded for any host other than 127.0.0.1.\n- isPortAvailable also dials loopback, because Windows lets a 0.0.0.0 listener and a 127.0.0.1 listener share a port.\n- The local runner (guest-session, runner-client and vm-control) refuses a non-loopback bindHost, by design.\n- The adapter is named 'vEthernet (WSL)', or 'vEthernet (WSL (Hyper-V firewall))' on newer builds.",
+    "risks": "- 127.0.0.2 does not bind on macOS; skip those rows there by probing first.\n- Spawned-daemon rows are slow. Bound every wait and tear down in afterEach.\n- The adapter address can change after a WSL restart, so the daemon keeps the old one until it is restarted. That is documented in TROUBLESHOOTING.\n- Both docs files are also edited by the Origin sibling and by epic-final docs sweeps. Edit only the named rows.",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/server/runnerChannel.test.ts",
+      "packages/moe-daemon/src/delivery/acceptance.test.ts",
+      "docs/CONFIGURATION.md",
+      "docs/TROUBLESHOOTING.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:39:08.216Z",
+  "approvedPlanRevision": 1
 }
