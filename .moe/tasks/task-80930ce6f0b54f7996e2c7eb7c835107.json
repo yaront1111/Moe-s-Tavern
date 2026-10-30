@@ -91,7 +91,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -117,7 +117,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:52:38.398Z",
-  "updatedAt": "2026-10-30T11:26:16.446Z",
+  "updatedAt": "2026-10-30T11:30:54.490Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:59:30.687Z",
@@ -127,11 +127,14 @@
     "firstClaimAt": "2026-10-30T08:07:14.847Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T11:30:54.490Z",
+    "wallClockMs": 12219643
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-952969be"
   ],
   "dependsOn": [
     "task-2f2484b426ef42aaa0566323da2d550e",
@@ -273,5 +276,9 @@
     "kind": "completion",
     "sessionId": "worker-e60b90bd@2026-10-30T11:16:55Z",
     "at": "2026-10-30T11:26:16.446Z"
-  }
+  },
+  "completedAt": "2026-10-30T11:30:54.490Z",
+  "reviewCompletedAt": "2026-10-30T11:30:54.490Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 898560a3 (on moe/work-2026-10-24, pushed): about 269 net LOC excluding board JSON (healthHost.ts +49, test +207, index.ts +7, ARCHITECTURE.md +6). The four owned files are byte-equal to the commit.\n\nRe-ran `cd packages/moe-daemon && npx tsc --noEmit && npm test` in a fresh Linux-native snapshot (git archive HEAD, native npm ci, env -i, node 24.21.0): tsc exit 0, gate exit 0, 208 files, 5915 passed / 16 skipped; healthHost.test.ts 54/54.\n\nRan 3 own mutants, each killed by real failing rows and then restored and cmp-checked: guard disabled in index.ts (3 fail), any IPv4 accepted (5 fail), absent Host refused (3 fail).\n\nDoD 1: the guard is the first statement of the /health branch, a fixed 403 text/plain 'Forbidden', and Host is never echoed or logged. Real spawned daemon: 127.0.0.1, localhost and absent Host get 200 with the full JSON; a foreign name, a foreign IP and localhost.evil.example get 403 with no JSON; probeDaemonHealth is still true; /other still gets 426. I grepped the /health consumers: the CLI probe, doctor, JetBrains DaemonIdentity, moe-agent.ps1 and the scripts use 127.0.0.1; the Docker HEALTHCHECK uses localhost; moe-agent.sh and the proxy use the host given (on WSL the gateway IP, which is the arrival address); the proxy maps 403 to 'unknown'.\nDoD 2: table A has 17 allowed and 27 refused rows, including absent Host and the WSL gateway on a ::ffff: dual-stack socket.\nDoD 3: one Security Notes bullet in docs/ARCHITECTURE.md.\n\nRails OK; scope equals approvedScope; ponytail pass found nothing to cut. Not verified by me: live Windows/WSL runs, since the real-daemon rows skip win32. That stays with task-724e31fa. Follow-up task-f0abb6d6 covers a daemon bound by DNS name, whose own CLI probe now gets 403.",
+  "requiredCheckAtDone": null
 }
