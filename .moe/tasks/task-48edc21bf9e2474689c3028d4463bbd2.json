@@ -88,7 +88,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -101,16 +101,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:45:17.943Z",
-  "updatedAt": "2026-10-30T07:57:55.818Z",
+  "updatedAt": "2026-10-30T08:19:29.956Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:49:15.275Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T08:19:29.956Z",
+    "wallClockMs": 5414681
   },
   "contextFetchedBy": [
     "architect-32ff5555",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-8e551ac8"
   ],
   "dependsOn": [
     "task-4d67e805f2e940518137d70de325defc",
@@ -213,5 +216,9 @@
     "kind": "completion",
     "sessionId": "worker-e60b90bd@2026-10-30T07:50:40Z",
     "at": "2026-10-30T07:57:55.818Z"
-  }
+  },
+  "completedAt": "2026-10-30T08:19:29.956Z",
+  "reviewCompletedAt": "2026-10-30T08:19:29.956Z",
+  "reviewSummary": "Verified completion 477d7f523a8a72222f417ffd1c244c16d75042f8 (tree b577c84746990a51089266d6d526ea2f4035043e) on moe/work-2026-10-24. Fresh fetch: origin/moe/work-2026-10-24 contains it. Reviewed git show of that commit. Non-board +197/-10, net 187 (runtime chatPayload.ts +28/-6, docs +4/-4, tests +165). Under the 400 cap. docs/MCP_SERVER.md is the four planned chat_read, chat_wait, and chat_resync hunks; the Moe-Contested trailer names the shared file and the diff has no foreign hunks.\n\nDoD 1: a system mention-less \"<id> left (<reason>)\" line and a quiet deregistration banner ending in \"(no tasks held)\" are system feed, so sendMessage forces routingTargets to []. The real deregisterWorker path test expects four presence events with empty targets, unread null, and a parked chat_wait that stays parked until a human #governors post.\n\nDoD 2: a banner that released a task still routes to the busy seat (unread 1 in #workers and #governors). The table pins the blocked, stale, QA-reject, file-collision, and commit banners, plus a dropped-claims banner that still contains \"(no tasks held)\" but does not end on it, so the anchored regex does not hide it. Agent sender, an @mention inside the reason, and unanchored near-misses stay visible to chat_read.\n\nDoD 3: chatWait.test.ts, busy waiter, channels [#governors], returns only the #governors line and the real @mention. The same predicate filters legacy lines on read. Producers untouched. typeof guard; both regexes are start-anchored with one bounded class. No MCP parameter change and no .moe schema change. Rails met: regression tests, backward compatible, no forbidden patterns.\n\nRe-ran on a Linux git archive of that commit (lock 415a8083, node v24.21.0, env -i, NO_COLOR=1): npx tsc --noEmit exit 0; npm test exit 0; Test Files 205 passed (205); Tests 5767 passed | 16 skipped (5783). Ponytail: lean already, net 0.",
+  "requiredCheckAtDone": null
 }
