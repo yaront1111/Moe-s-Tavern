@@ -1,0 +1,28 @@
+{
+  "id": "task-25ba449ab87d4039a283426f07302cbc",
+  "epicId": "epic-be924fb8",
+  "title": "bug: daemon/proxy path comparison folds POSIX case on Windows and disagrees with UNC identity rules",
+  "description": "Adversarial review of task-e7f4026a found pre-existing comparableProjectPath drift in packages/moe-proxy/src/utils.ts and the daemon twin: Windows node maps /home/qa/OtherProject and /home/qa/otherproject to the same c:/home/qa/otherproject, while launcher/JetBrains preserve POSIX case.\nLinux proxy also gives different keys for \\\\srv\\share\\proj vs //SRV/SHARE/PROJ/; WSL UNC \\\\wsl.localhost\\Ubuntu\\home\\u\\proj vs /home/u/proj differs on both OSes although Kotlin maps it. Pure helper repro against b2138fba built bytes: /tmp/e7f4-resume.mvnO0m/{path-parity.mjs,linux-path-parity.log,windows-path-parity.log}; Windows harness C:/Users/Yaron/AppData/Local/Temp/e7f4-resume.IXcXBP/path-parity.mjs.\nKeep this outside the current launcher QA fix; define one cross-platform comparison contract and add Linux/native-Windows regressions before changing shared utilities.",
+  "definitionOfDone": [
+    "Case-distinct absolute POSIX served paths do not compare equal solely because the client runs on Windows.",
+    "UNC and WSL-share equivalence rules are explicit and tested against the launcher and JetBrains rules.",
+    "Proxy/daemon identity and discovery suites cover the corrected comparison on Linux and native Windows without regressing drive-/mnt spellings."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 291.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:27:29.451Z",
+  "updatedAt": "2026-10-30T11:27:29.451Z"
+}

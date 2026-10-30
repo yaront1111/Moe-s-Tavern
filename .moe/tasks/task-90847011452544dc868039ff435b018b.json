@@ -72,7 +72,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -109,17 +109,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T12:06:53.451Z",
-  "updatedAt": "2026-10-30T11:24:58.690Z",
+  "updatedAt": "2026-10-30T11:27:31.007Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:00:53.601Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T11:27:31.007Z",
+    "wallClockMs": 66397406
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
     "architect-e4b7eee0",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -209,17 +212,34 @@
       "treeId": "aa4aebe943b3dfa11bba0300c5b11d926955cb72",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "be2818aacf896bcbfec2ecc3fece12ddb01bee8f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T11:16:36Z",
+      "paths": [
+        ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T11:25:20.130Z",
+      "treeId": "546f636b637130f6f99751a41f804a3725b36092",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    "scripts/tests/local-runner-bridge.test.mjs"
+    "scripts/tests/local-runner-bridge.test.mjs",
+    ".moe/tasks/task-90847011452544dc868039ff435b018b.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-e4b7eee0@2026-10-30T08:36:32Z",
-    "at": "2026-10-30T08:58:26.343Z"
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-30T11:16:36Z",
+    "at": "2026-10-30T11:25:20.130Z"
   },
   "workStartedAt": "2026-10-30T11:17:06.558Z",
   "reviewStartedAt": "2026-10-30T11:24:58.687Z",
@@ -230,5 +250,12 @@
     "reportedAt": "2026-10-30T11:24:58.687Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-R10d orchestrator: tests only. scripts/tests/local-runner-bridge.test.mjs +167/0 (AGENT_CLIS import + AE1/AE2 at EOF); no runtime file changed, executionReady stays false, no verified-local or isolation claim.\nAE1 (claude/worker, claude/qa, codex/worker, codex/qa): a fake CLI installed by the real install_agents (0555, exact bytes, count 2), started by the real main(['bridge']) job from its own session config (claude --mcp-config JSON / codex CODEX_HOME config.toml via tomllib), spawns the real guest-mcp-shim.py from that config. Pins exact launchArgv + cwd=workspace, config naming only GUEST_LAYOUT.shim (codex env_vars ['MOE_ROLE']), tools/list == tools.json role table in TOOLS order, get_context answered, other-role tool TOOL_DENIED, identity key ARGUMENT_DENIED, upstream failure REFUSED data BRIDGE_UPSTREAM_FAILED, forwarded exactly get_context(+sessionId) and add_comment stamped with the binding, codex shim env without credential/CODEX_HOME, KEY and upstream marker never seen.\nAE2: JOBS exes == AGENTS/<cli> for AGENT_CLIS; sha-mismatched install exits 65 with empty agents dir; session rejects SESSION_PROVIDER_FAILED, supervisor exit 71, no observation/forward/output.\nGate (5 files = task's 4 + local-runner-agents.test.mjs), env -i Node 24.21.0, run fresh from a full-tree git-archive scratch with only this test file copied in: EXIT 0, 382 tests, 380 pass, 0 fail, 2 skip (LA5 opt-in, native macOS smoke); AE1/AE2 PASS not skipped. WHY SCRATCH: the shared checkout has no packages/moe-daemon/dist, so TY1 fails there ('build the daemon first'; 384/387 pass, only TY1 red); scratch symlinks dist+node_modules from /tmp/moe-2cf1-qa-r3.livFKd/tree (bb2f846a build; only getCommitScope/recordCommit sources changed since, neither allowlisted).\nMutation sweep: 19/19 killed by AE rows (a-j plus k,l,m,n,o,p,q,t,v); no-op control survives; g fails with BRIDGE_TOOL_DENIED, h with BRIDGE_IDENTITY_MISMATCH as planned. Confirmed: only that file changed, additions only, 167<=300 li"
+  "completionSummary": "CQ-R10d orchestrator: tests only. scripts/tests/local-runner-bridge.test.mjs +167/0 (AGENT_CLIS import + AE1/AE2 at EOF); no runtime file changed, executionReady stays false, no verified-local or isolation claim.\nAE1 (claude/worker, claude/qa, codex/worker, codex/qa): a fake CLI installed by the real install_agents (0555, exact bytes, count 2), started by the real main(['bridge']) job from its own session config (claude --mcp-config JSON / codex CODEX_HOME config.toml via tomllib), spawns the real guest-mcp-shim.py from that config. Pins exact launchArgv + cwd=workspace, config naming only GUEST_LAYOUT.shim (codex env_vars ['MOE_ROLE']), tools/list == tools.json role table in TOOLS order, get_context answered, other-role tool TOOL_DENIED, identity key ARGUMENT_DENIED, upstream failure REFUSED data BRIDGE_UPSTREAM_FAILED, forwarded exactly get_context(+sessionId) and add_comment stamped with the binding, codex shim env without credential/CODEX_HOME, KEY and upstream marker never seen.\nAE2: JOBS exes == AGENTS/<cli> for AGENT_CLIS; sha-mismatched install exits 65 with empty agents dir; session rejects SESSION_PROVIDER_FAILED, supervisor exit 71, no observation/forward/output.\nGate (5 files = task's 4 + local-runner-agents.test.mjs), env -i Node 24.21.0, run fresh from a full-tree git-archive scratch with only this test file copied in: EXIT 0, 382 tests, 380 pass, 0 fail, 2 skip (LA5 opt-in, native macOS smoke); AE1/AE2 PASS not skipped. WHY SCRATCH: the shared checkout has no packages/moe-daemon/dist, so TY1 fails there ('build the daemon first'; 384/387 pass, only TY1 red); scratch symlinks dist+node_modules from /tmp/moe-2cf1-qa-r3.livFKd/tree (bb2f846a build; only getCommitScope/recordCommit sources changed since, neither allowlisted).\nMutation sweep: 19/19 killed by AE rows (a-j plus k,l,m,n,o,p,q,t,v); no-op control survives; g fails with BRIDGE_TOOL_DENIED, h with BRIDGE_IDENTITY_MISMATCH as planned. Confirmed: only that file changed, additions only, 167<=300 li",
+  "touchedFiles": [
+    "scripts/tests/local-runner-bridge.test.mjs"
+  ],
+  "completedAt": "2026-10-30T11:27:31.007Z",
+  "reviewCompletedAt": "2026-10-30T11:27:31.007Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit be2818aa (on moe/work-2026-10-24). Tests only: scripts/tests/local-runner-bridge.test.mjs +167/0, additions only, so pre-existing rows are byte-identical. No runtime file changed, 0 non-ASCII added, no __pycache__ under scripts/local-runner.\n\nFresh gate: I re-ran the plan's 5-file command (env -i, Node 24.21.0) from a clean git archive of be2818aa. Daemon dist and node_modules were symlinked from a Linux-built tree, because the shared checkout has no dist and TY1 fails there for that environmental reason. Result: EXIT 0, 387 tests, 385 pass, 0 fail, 2 skip (LA5 opt-in, native macOS smoke). AE1 and AE2 passed and did not skip.\n\nDoD 1: AE1 installs via the real install_agents, 0555, exact bytes. AE2 pins a sha mismatch to exit 65 with an empty agents dir, then SESSION_PROVIDER_FAILED with supervisor exit 71 and no forward, observation or output.\nDoD 2: AE1 pins tools/list to the role table in TOOLS order, TOOL_DENIED, ARGUMENT_DENIED and REFUSED data BRIDGE_UPSTREAM_FAILED. Forwarded calls are exactly get_context (with sessionId) and add_comment, stamped with the binding. The credential and the upstream marker are never seen.\nDoD 3: AE1 pins the exact launchArgv, cwd = workspace, a config naming only GUEST_LAYOUT.shim, and codex env_vars ['MOE_ROLE'], for claude and codex x worker and qa.\nDoD 4: gate exits 0, output supplied.\n\nMy own mutation check on clean scratch copies: six mutants killed by the AE rows (sha compare removed, tool-allowlist removed, argument-key check removed, '--continue' appended, a second mcpServers entry, codex env_vars removed). Two no-op controls survived, as expected. The worker's 19/19 sweep is consistent.\n\nSize: 167 lines, under the task's 300 cap. executionReady stays false; no verified-local or isolation claim. Real CLIs and VM hardware are CQ-R13's scope.",
+  "requiredCheckAtDone": null
 }
