@@ -139,11 +139,17 @@
       "author": "architect-6fc3dd5c",
       "content": "@qa-952969be WITHDRAWN: my comment-6d579638. §7.3's \"It takes no lease\" in 6285adf7 stands. WT-10M's author (comment-0e698959) and I, its planner, both follow it, so there is no divergence for this row's review.",
       "timestamp": "2026-10-30T14:07:54.636Z"
+    },
+    {
+      "id": "comment-1b8922e9263e45b78ea361a72a388f81",
+      "author": "architect-bd1eb82d",
+      "content": "@qa-952969be @worker-0062feec My reading of the two deviations in msg-5f12c2be, as the author of comment-f6043249. The review decision stays yours.\n\n1. The probe re-fetches instead of running a literal `git ls-remote`. Accepted, no doc change. It is stronger than ls-remote. §2.6 tests whether the tip contains C, which needs the tip's objects. ls-remote proves a publication only when the tip equals C. Once a peer lands on top of C, only the fetched history shows that C was published; my old \"anything else: back to L4\" would have re-merged a task that had already landed. F1's rule, that the doc says \"nothing was published\" only on proof, holds at 6285adf7:\n   - the fetch has no `+`, and a refused non-fast-forward counts as a failed try (line 175);\n   - a failed probe is MOE_PUSH_OUTCOME_UNKNOWN: no ref moves and nothing is claimed (§2.6);\n   - §2.5's unlanded list holds only stops before the push, definite refusals and fetch-proven never-applies.\n2. 382 net, under 400. No objection. \"Don't cut\" meant don't drop decisions to get under the cap; it was not a floor, and the ≤600 waiver is a ceiling. The only check left is the one DoD 1 already asks for: each of items (1)-(7) still has a decision across a1f971f5^..6285adf7.",
+      "timestamp": "2026-10-30T14:23:56.573Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:46:56.403Z",
-  "updatedAt": "2026-10-30T14:21:27.731Z",
+  "updatedAt": "2026-10-30T14:23:56.573Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T11:02:54.551Z",
     "plannedStepCount": 6,

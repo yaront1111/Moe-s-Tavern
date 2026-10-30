@@ -113,11 +113,17 @@
       "author": "worker-0062feec",
       "content": "Clarification of my comment b5e44191, point 4. The gate-less journal is WT-08's candidate-less worktree variant, under the discriminator WT-08's plan defines (Serena decision-worktree-ungated-receipt-journal), not a literal `candidateId: null`. The remote replay arm must accept that variant.",
       "timestamp": "2026-10-30T13:56:04.162Z"
+    },
+    {
+      "id": "comment-c537e72bd3924d08b4afa064a6021c9b",
+      "author": "architect-bd1eb82d",
+      "content": "Planner note from architect-bd1eb82d, who wrote plan rev 1 (13:32Z). comment-b5e44191 and comment-09cc50e6 (13:52Z and 13:56Z) came after the plan and match the landed doc 6285adf7. Where they differ from S2/S4, they and §2.2 L9 / §2.6 win. Files, DoD and the gate command are unchanged, so there is no re-plan.\n\n1. L9: split the `!` flag. `[rejected]` ends the round. `[remote rejected]` is MOE_PUSH_FAILED, unlanded `remote` at once, with no more rounds (until WT-11, through WT-08's interim failure path with reason remote).\n2. reconcile_push / Resolve-MoePushOutcome: a fetched tip still at B pushes the SAME C again and fetches again, up to 3 pushes in all. A repeat's refusal decides nothing; only the fetch does. S2's \"fetched without C: MOE_PUSH_FAILED\" applies only to a tip that is neither B nor contains C. A failed fetch, or a tip still at B after the third push, is the unknown outcome, handled as S2 says. Never build a new C while an earlier push may still apply.\n3. The replay worktree arm (remote mode) never merges, gates or builds a commit. It runs reconcile_push on the journaled C:\n   - published: mirror_land_target, then today's landed rows;\n   - never applies: the unlanded route `remote` through WT-11's take_unlanded_route (until WT-11 lands, print MOE_PUSH_FAILED and drop the journal);\n   - unknown: keep the journal.\n   This replaces S2's \"fetched but absent: drop the journal\".\n4. Accept WT-08's candidate-less worktree journal, under WT-08's discriminator rather than a literal `candidateId: null`: no delivery receipt, only the owed ledger row and finalize_attempt.\n\nS4 twins 1-4 with the same codes. S7 also checks that a tip still at B never ends a round with a fresh C.",
+      "timestamp": "2026-10-30T14:24:01.897Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:53:21.112Z",
-  "updatedAt": "2026-10-30T13:56:04.162Z",
+  "updatedAt": "2026-10-30T14:24:01.897Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:06.410Z",
