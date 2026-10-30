@@ -1,0 +1,32 @@
+{
+  "id": "task-5998f871e03d4ed5ab21f214073d85b2",
+  "epicId": "epic-be924fb8",
+  "title": "bug: wrapper self-restart hot-loads a peer task's uncommitted, unreviewed moe-agent.sh edits into every seat",
+  "description": "Filed by the governor on 2026-10-30.\n\nObserved: at 10:33:44Z, architect-4ae016fb, worker-6e57c4f8 and worker-262588d0 all deregistered with reason wrapper_restart. They re-exec'd scripts/moe-agent.sh because worker-e60b90bd, in the middle of task-e7f4026a step 2, had saved an in-progress edit to it: +79/-8, uncommitted, not yet gated or QA'd. Each seat re-execs the same way at its next loop top. So every sh seat launched from this shared checkout is now running another task's half-finished wrapper.\n\nCause: the \"Self-restart when this script's own bytes change on disk\" block (moe-agent.sh about :6459 and the loop-top check about :6507) compares only the working-tree file's sha256. Its parse guard (bash -n) refuses broken syntax, but it loads any edit that parses. In the Moe repo most of the V chain edits moe-agent.{sh,ps1}: e7f4026a now, then 01f37ac6, V07, V08, V08b, V04c, R13c2 and aa85ff13. An intermediate state that parses but is half-changed (a renamed function whose call site isn't updated yet, landing logic edited in one twin only) can break pre-flight or landing for the whole fleet. Today's reload re-registered fine, so this time it is luck, not design.\n\nFix, keeping sh and ps1 in parity: reload only bytes that are committed. Before re-exec, also require that the wrapper file matches HEAD. For example, `git diff --quiet HEAD -- <wrapper>` with a fail-closed fallback, so a failed git read means no reload. A dirty wrapper defers the reload, with a single \"[INFO] MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits\" line per hash. The seat reloads once the edit lands, as committed bytes. Keep the existing parse guard and the one-restart-per-hash rule. Mirror it in moe-agent.ps1's reload path.",
+  "definitionOfDone": [
+    "A seat whose wrapper file differs from HEAD (uncommitted edit) does not re-exec; it logs MOE_WRAPPER_RELOAD_DEFERRED once per hash and keeps serving its current bytes, proven by a postflight.{sh,ps1} row.",
+    "Once the edit is committed (the file matches HEAD again with a new hash), the seat re-execs exactly once, as today; the bash -n parse guard and the refused-hash rule are unchanged.",
+    "When the git check fails (no git, not a repo, or an unreadable index), the seat does not reload. That failure never ends the seat or deregisters it.",
+    "bash scripts/tests/parity-check.sh and scripts/tests/postflight.{sh,ps1} pass; scripts/CLAUDE.md documents the committed-bytes rule."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-e7f4026abc0c4a8bb7632c8178ea7d70"
+  ],
+  "priority": "HIGH",
+  "order": 292.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T10:35:09.303Z",
+  "updatedAt": "2026-10-30T10:35:09.303Z"
+}

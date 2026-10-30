@@ -3847,6 +3847,18 @@ import { isDeepStrictEqual } from 'node:util';
 import { runAgentJob } from '../local-runner/agent-lifecycle.mjs';
 import { bridgeArgv, jobFrame } from '../local-runner/guest-bridge.mjs';
 import { MAX_RESPONSE_BYTES } from '../local-runner/guest-session.mjs';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { after, before } from 'node:test';
+// Start without a late top-level await: earlier rows could finish and run root teardown during that await.
+// before() still waits for the bind, which an AJ row run on its own (a name filter or a rerun) would otherwise outrun.
+const AGENT_PROJECT = mkdtempSync(path.join(tmpdir(), 'moe-agent-session-'));
+const AGENT_DAEMON = path.join(AGENT_PROJECT, '.moe', 'daemon.json');
+mkdirSync(path.dirname(AGENT_DAEMON));
+const agentHealth = createServer((req, res) => res.end(JSON.stringify({ status: 'healthy', projectPath: AGENT_PROJECT, bindHost: '127.0.0.1' })))
+  .listen(0, '127.0.0.1');
+before(() => (agentHealth.listening ? undefined : once(agentHealth, 'listening')));
+after(() => { agentHealth.closeAllConnections(); agentHealth.close(); rmSync(AGENT_PROJECT, { recursive: true, force: true }); });
 
 const AGENT_KEY = 'sk-R10-agent!~'.padEnd(32, 'k');
 const JOB = { cli: 'claude', credential: { name: 'ANTHROPIC_API_KEY', value: AGENT_KEY } };
@@ -3905,8 +3917,8 @@ function agentHarness(t, { guest, pkill = [0], pgrep = [1], bridge, acquire = le
     onCall?.(tool);
     return tool === 'moe.acquire_resource' ? answer(acquire) : tool === 'moe.release_resource' ? answer(release) : mcp({ tool });
   };
-  const daemonInfoPath = path.join(scratch(t), 'daemon.json');
-  writeFileSync(daemonInfoPath, JSON.stringify({ port: 9876, pid: 1, projectPath: '/p' }));
+  const daemonInfoPath = AGENT_DAEMON;
+  writeFileSync(daemonInfoPath, JSON.stringify({ port: agentHealth.address().port, pid: 1, projectPath: '/p' }));
   h.input = { name: GUEST, binding: AGENT, job: JOB, daemonInfoPath, forward, timeoutMs: 1_000, sleep: async ms => { h.slept.push(ms); },
     onOutput: (stream, data) => h.outputs.push([stream, data]), onObservation: frame => h.observations.push(frame),
     provider: { run, spawn: (...args) => {
