@@ -563,12 +563,31 @@ $mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -Path $mcpConfigFile -Enco
 $script:GrokPromptFile = $null
 $script:GrokEnvPrev = $null
 
+# daemon.json is repository content: read at most 64 KiB + 1 byte so a huge or
+# never-ending file cannot stall pre-flight; the callers' catch treats the throw
+# like unparseable JSON. Same cap as moe-agent.sh's daemon_json_field.
+# Convert-Path: a UNC project resolves provider-qualified, which [IO.File] rejects.
+function Read-MoeDaemonJsonText([string]$Path) {
+    $stream = [IO.File]::OpenRead((Convert-Path -LiteralPath $Path))
+    try {
+        $buffer = New-Object byte[] 65537
+        $total = 0
+        while ($total -lt $buffer.Length) {
+            $read = $stream.Read($buffer, $total, $buffer.Length - $total)
+            if ($read -le 0) { break }
+            $total += $read
+        }
+        if ($total -gt 65536) { throw 'daemon.json is larger than 64 KiB' }
+        return [Text.Encoding]::UTF8.GetString($buffer, 0, $total).TrimStart([char]0xFEFF)
+    } finally { $stream.Dispose() }
+}
+
 if (-not $NoStartDaemon) {
     $daemonInfoPath = Join-Path $moeDir "daemon.json"
     $running = $false
     if (Test-Path $daemonInfoPath) {
         try {
-            $info = Get-Content -Raw -Path $daemonInfoPath | ConvertFrom-Json
+            $info = Read-MoeDaemonJsonText $daemonInfoPath | ConvertFrom-Json
             $proc = Get-Process -Id $info.pid -ErrorAction SilentlyContinue
             if ($proc) { $running = $true }
         } catch {
@@ -608,7 +627,7 @@ if (-not $NoStartDaemon) {
 
             if (Test-Path $daemonInfoPath) {
                 try {
-                    $newInfo = Get-Content -Raw -Path $daemonInfoPath | ConvertFrom-Json
+                    $newInfo = Read-MoeDaemonJsonText $daemonInfoPath | ConvertFrom-Json
                     $proc = Get-Process -Id $newInfo.pid -ErrorAction SilentlyContinue
                     if ($proc) {
                         Write-Host "Daemon started (waited ${waited}s)"

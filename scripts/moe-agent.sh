@@ -1463,6 +1463,16 @@ wsl_gateway_host() {
     ip route show default 2>/dev/null | awk '{print $3; exit}'
 }
 
+# daemon.json is repository content: read at most 64 KiB + 1 byte and treat a
+# larger file like unparseable JSON (python exits non-zero). Same cap as the
+# daemon, proxy, IDE plugins and moe-agent.ps1's Read-MoeDaemonJsonText.
+daemon_json_field() { # $1 = daemon.json path, $2 = key; prints the value
+    $PYTHON_CMD -c 'import json,sys
+d=open(sys.argv[1],"rb").read(65537)
+if len(d)>65536: sys.exit("daemon.json is larger than 64 KiB")
+sys.stdout.write(str(json.loads(d).get(sys.argv[2],"")))' "$1" "$2"
+}
+
 # Start daemon if needed
 if [ "$NO_START_DAEMON" = false ]; then
     DAEMON_INFO="$MOE_DIR/daemon.json"
@@ -1473,8 +1483,8 @@ if [ "$NO_START_DAEMON" = false ]; then
         # Try to read PID/port/projectPath from daemon.json
         # NOTE: Uses sys.argv[1] instead of string interpolation to safely handle
         # paths containing single quotes, double quotes, or spaces.
-        PID_OUTPUT=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid', ''))" "$DAEMON_INFO" 2>&1)
-        PID_EXIT_CODE=$?
+        PID_EXIT_CODE=0
+        PID_OUTPUT=$(daemon_json_field "$DAEMON_INFO" pid 2>&1) || PID_EXIT_CODE=$?
 
         if [ $PID_EXIT_CODE -ne 0 ]; then
             echo -e "${YELLOW}[WARN]${NC} Failed to parse daemon.json: $PID_OUTPUT"
@@ -1484,8 +1494,8 @@ if [ "$NO_START_DAEMON" = false ]; then
             PID="$PID_OUTPUT"
         fi
 
-        DAEMON_PORT=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('port', ''))" "$DAEMON_INFO" 2>/dev/null || echo "")
-        DAEMON_PROJECT=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('projectPath', ''))" "$DAEMON_INFO" 2>/dev/null || echo "")
+        DAEMON_PORT=$(daemon_json_field "$DAEMON_INFO" port 2>/dev/null || echo "")
+        DAEMON_PROJECT=$(daemon_json_field "$DAEMON_INFO" projectPath 2>/dev/null || echo "")
 
         # daemon.json written by a Windows-side daemon while we run under
         # WSL/Linux: its PID is invisible here, so kill -0 would misread a live
@@ -1585,7 +1595,7 @@ if [ "$NO_START_DAEMON" = false ]; then
 
             # Check if daemon.json exists and process is running
             if [ -f "$DAEMON_INFO" ]; then
-                NEW_PID=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid', ''))" "$DAEMON_INFO" 2>/dev/null || echo "")
+                NEW_PID=$(daemon_json_field "$DAEMON_INFO" pid 2>/dev/null || echo "")
                 if [ -n "$NEW_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then
                     echo -e "${GREEN}[OK]${NC} Daemon started (waited ${WAITED}s)"
                     break
