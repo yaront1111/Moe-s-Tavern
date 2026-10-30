@@ -1,0 +1,231 @@
+{
+  "id": "task-86093c3efd8645748f460db870073392",
+  "epicId": "epic-be924fb8",
+  "title": "moe-proxy refuses to bridge to a daemon whose /health reports another project",
+  "description": "Split from task-e7f4026a (HIGH, human-reported, recurring). That row keeps the moe-agent.sh/.ps1 pre-flight slice and the final verification of all three slices, and it dependsOn this task.\n\nObjective: moe-proxy checks which project the daemon it is about to bridge actually serves.\n- Today readDaemonInfoResult (packages/moe-proxy/src/utils.ts) compares only the projectPath written in .moe/daemon.json with its own project. A stale file always matches, so after a project's daemon dies, the proxy bridges to whatever daemon now holds that port.\n- On 2026-10-30 a px4swarm seat registered with the moes daemon this way, then claimed and coded a moes task.\n- Every wrapper RPC also goes through this proxy: moe_rpc and Invoke-MoeRpc spawn it one-shot. So this check alone stops a seat from registering or claiming on a foreign daemon.\n\nDeliverable:\n- A new packages/moe-proxy/src/daemonIdentity.ts.\n  - It GETs http://<getDaemonHost()>:<port>/health with a bounded timeout and a body capped at 64 KiB.\n  - It classifies the reply as same, foreign (with the served projectPath) or unknown.\n  - It compares paths with comparableProjectPath from utils.ts, the rule the daemon's own probeDaemonHealth uses (D:\\x == D:/x == /mnt/d/x).\n  - It imports utils.ts but does not edit it: task-a4ad3fdb and task-724e31fa edit that file.\n- packages/moe-proxy/src/index.ts connect() runs the probe before it opens /mcp, on every connect and reconnect.\n  - Foreign: write an error naming both projects and the fix, then exit 1. That is the same class as today's 'daemon.json belongs to a different project'. The fix is: this project's .moe/daemon.json is stale; restart this project's daemon, which takes the next free port. The proxy never opens /mcp.\n  - Unknown: proceed exactly as today, so the reconnect path and older daemons keep working. Unknown covers an unreachable /health, a timeout, a non-JSON or oversize body, and a reply with no projectPath from an older daemon.\n- Tests:\n  - packages/moe-proxy/src/daemonIdentity.test.ts, against a real local http server;\n  - one end-to-end case that spawns the proxy against a fake daemon whose /health names another project, and asserts exit 1, the message, and that no /mcp upgrade arrived.\n\nNot in scope:\n- daemon code: there is no wire change, and a project parameter on the upgrade is deferred hardening;\n- moe-agent.sh/.ps1 (task-e7f4026a);\n- the JetBrains plugin (a sibling task);\n- the proxy README and utils.ts.\n\nVerification command (fresh, exit 0): cd packages/moe-proxy && npm test. From WSL, run it in a Linux-native snapshot, because the checkout's node_modules are Windows builds (mem:gotcha-daemon-linux-snapshot-gate).",
+  "definitionOfDone": [
+    "connect() probes the daemon's /health before opening /mcp, on every connect and reconnect. When the reply's projectPath is another project by comparableProjectPath, the proxy exits 1 with an error naming both projects and telling the reader to restart this project's daemon, and it makes no /mcp upgrade. Proven by an end-to-end test against a fake daemon.",
+    "This project spelled D:\\x, D:/x or /mnt/d/x connects as before. An unreachable /health, a timeout, a non-JSON or oversize body, and a reply without projectPath all keep today's behavior. Proven by daemonIdentity.test.ts rows.",
+    "packages/moe-proxy/src/utils.ts is unchanged; the diff is daemonIdentity.ts, its tests and index.ts.",
+    "`cd packages/moe-proxy && npm test` exits 0, with its output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nCreate packages/moe-proxy/src/daemonIdentity.test.ts (vitest), following index.test.ts's style. It holds two groups.\n\nA. Unit rows for probeDaemonIdentity(host, port, projectPath, {timeoutMs}), against a real http.createServer on 127.0.0.1:0:\n- same: /health answers 200 {status:'healthy', projectPath: P} -> {kind:'same'}.\n  - Spelling rows: with P = '/mnt/d/proj', the replies 'D:\\\\proj', 'D:/proj' and '/mnt/d/proj' are all 'same'. comparableProjectPath maps each to 'd:/proj', on every OS.\n- foreign: reply projectPath path.join(os.tmpdir(), 'other-moe-project') -> {kind:'foreign', projectPath: <that exact string>}. 'D:\\\\other' against '/mnt/d/proj' is foreign too.\n- unknown, one row each:\n  - connection refused: a port from a server you closed;\n  - timeout: a server that accepts and never answers, with timeoutMs 150; assert it resolves within about 1s;\n  - non-JSON body;\n  - body over 64 KiB (64*1024+1 bytes of JSON-ish text);\n  - 200 JSON without projectPath (an older daemon);\n  - projectPath that is not a non-empty string (42, '', null);\n  - a JSON array body;\n  - non-200 statuses: 426, as a bare `new WebSocketServer({port:0})` answers, and 500.\n- The probe NEVER rejects: every row awaits a resolved value. Close all servers in afterEach.\n\nB. End-to-end against the built proxy, spawning `node ../dist/index.js` the way index.test.ts does (`npm test` runs pretest -> build). The fake daemon is http.createServer:\n- GET /health answers {status:'healthy', projectPath: <served>, pid: process.pid};\n- a WebSocketServer({server}) counts 'connection' events.\nA temp project's .moe/daemon.json names that port and the temp project itself, and MOE_PROJECT_PATH is the temp project.\n- E1, foreign (served = path.join(os.tmpdir(), 'other-moe-project')): the proxy exits 1 within 5s. Its first stdout JSON-RPC error message contains both project paths and the word 'restart'. The fake daemon saw ZERO /mcp connections.\n- E2, same (served = the temp project): the proxy opens /mcp, so connection count >= 1. Then kill it, or end stdin, and clean up.\n\nRun the file and confirm it fails: daemonIdentity.ts is missing, and E1 sees an upgrade.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "note": "Wrote daemonIdentity.test.ts (unit rows A + e2e E1-E4). Red confirmed in a Linux-native snapshot (/tmp/moe-proxy-gate.7ar0DY): suite fails on missing ./daemonIdentity.js. Added beyond plan: relative-served-path rows per planner comment, 503 classified, exact-cap/cap+1 rows, trickle row, E3 reconnect re-probe, E4 older-daemon connects. Shared checkout has ~868 other dirty paths; none touched.",
+      "startedAt": "2026-10-30T07:59:50.098Z",
+      "completedAt": "2026-10-30T08:01:06.520Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "TESTS FIRST (red). Load test-driven-development.\n\nCreate packages/moe-proxy/src/daemonIdentity.test.ts (vitest), following the style of index.test.ts. It has two groups.\n\nCLASSIFICATION RULE, shared with the JetBrains sibling task-90664db1:\n- Only HTTP 200 (healthy) or 503 (unhealthy) with a JSON object body counts. Those are the daemon's /health codes (packages/moe-daemon/src/index.ts ~:703).\n- Its projectPath must be a non-empty ABSOLUTE path: a drive letter (/^[a-zA-Z]:[\\\\/]/), UNC (starting with two backslashes) or POSIX (starting with '/'). The daemon reports its raw --project argument (~:61), which can be relative, and a relative path is 'unknown', never foreign.\n- Classify by comparableProjectPath: equal means 'same', otherwise 'foreign'.\n- Everything else is 'unknown'.\n\nA. Unit rows for probeDaemonIdentity(host, port, projectPath, {timeoutMs}), against a real http.createServer on 127.0.0.1:0:\n- same: /health answers 200 {status:'healthy', projectPath: P} -> {kind:'same'}.\n- Spelling rows: with P = '/mnt/d/proj', the replies 'D:\\\\proj', 'D:/proj' and '/mnt/d/proj' all classify as 'same'. comparableProjectPath maps each to 'd:/proj' on every OS.\n- foreign: reply projectPath path.join(os.tmpdir(), 'other-moe-project') -> {kind:'foreign', projectPath: <that exact string>}. 'D:\\\\other' against '/mnt/d/proj' is foreign too.\n- 503 rows:\n  - 503 {status:'unhealthy', projectPath: <absolute other>} -> foreign;\n  - 503 with this project -> same.\n- unknown, one row each:\n  - connection refused (a port from a server you closed);\n  - timeout: a server that accepts and never answers, with timeoutMs 150; assert it resolves within about 1s;\n  - a non-JSON body;\n  - a body over 64 KiB (64*1024+1 bytes of JSON-ish text);\n  - 200 JSON without projectPath (an older daemon);\n  - a projectPath that is not a non-empty string (42, '', null);\n  - a RELATIVE projectPath ('.', 'sub/proj');\n  - a JSON array body;\n  - other statuses: 426, as a bare `new WebSocketServer({port:0})` answers, and 500.\n- The probe NEVER rejects: every row awaits a resolved value. Close all servers in afterEach.\n\nB. End-to-end against the built proxy, spawning `node ../dist/index.js` as index.test.ts does (`npm test` runs pretest -> build). The fake daemon is an http.createServer that answers GET /health with {status:'healthy', projectPath: <served>, pid: process.pid}, plus a WebSocketServer({server}) that counts 'connection' events. A temp project's .moe/daemon.json names that port and the temp project itself, and MOE_PROJECT_PATH is the temp project.\n- E1, foreign (served = path.join(os.tmpdir(), 'other-moe-project')): the proxy exits 1 within 5s. Its first stdout JSON-RPC error message contains both project paths and the word 'restart'. The fake daemon saw ZERO /mcp connections.\n- E2, same (served = the temp project): the proxy opens /mcp (connection count >= 1). Then kill it, or end stdin, and clean up.\n\nRun the file and confirm it fails: daemonIdentity.ts is missing, and E1 sees an upgrade.",
+          "reason": "Aligns with the classification rule fixed for the JetBrains sibling (task-90664db1; planner note comment-927340a6). The daemon's /health returns 503 when unhealthy and reports the raw --project argument (packages/moe-daemon/src/index.ts ~:61 and ~:703), which can be relative. A 503 carrying an absolute, different projectPath is foreign; a relative projectPath is unknown.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-30T07:59:59.652Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create packages/moe-proxy/src/daemonIdentity.ts.\n\nExports:\n- `export type DaemonIdentity = { kind: 'same' } | { kind: 'foreign'; projectPath: string } | { kind: 'unknown' };`\n- `export async function probeDaemonIdentity(host: string, port: number, projectPath: string, options: { timeoutMs?: number } = {}): Promise<DaemonIdentity>`. The default timeoutMs is 1500, a named const; /health is local and answers in milliseconds.\n- `export const MAX_HEALTH_BODY_BYTES = 64 * 1024`.\n\nBehavior:\n- One node:http GET of http://<host>:<port>/health, with a hostname option; a bare IPv6 literal works without brackets.\n- One overall timer that destroys the request, plus the request's own timeout.\n- Byte-counted reads: destroy and answer unknown once the total exceeds MAX_HEALTH_BODY_BYTES.\n- Settle exactly once, through a `done` guard.\n- Answer:\n  - statusCode 200, a JSON object (not an array), and a non-empty string projectPath: 'same' when comparableProjectPath(reply) === comparableProjectPath(projectPath), else {kind:'foreign', projectPath: reply};\n  - everything else is 'unknown'.\n- Never reject. Every error, timeout or parse failure resolves {kind:'unknown'}.\n- Clear the timer and destroy the socket on every path. Import comparableProjectPath from './utils.js', and do NOT edit utils.ts: task-a4ad3fdb and task-724e31fa edit it.\n\nAdd a header comment on why the probe exists. A stale daemon.json always matches its own project, so a port reused by another project's daemon would be bridged (task-e7f4026a). Unknown keeps today's behavior for older daemons and the reconnect path.\n\nRun daemonIdentity.test.ts group A green.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-proxy/src/daemonIdentity.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "note": "Created daemonIdentity.ts per amend-1: probeDaemonIdentity, DaemonIdentity, MAX_HEALTH_BODY_BYTES, isAbsoluteAnyOs; accepts 200/503 only, relative projectPath -> unknown, one done-guarded settle, overall timer + request timeout + 64 KiB byte cap. Also amended step-1 tests (503-same row, sub/proj row, isAbsoluteAnyOs rows) and fixed a test bug (WebSocketServer address() read before 'listening'). Group A green in snapshot: 41 passed; E1/E3 still red until step 3 (index.ts unchanged), E2/E4 pass.",
+      "startedAt": "2026-10-30T08:01:28.514Z",
+      "completedAt": "2026-10-30T08:02:11.259Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Create packages/moe-proxy/src/daemonIdentity.ts.\n\nExports:\n- `export type DaemonIdentity = { kind: 'same' } | { kind: 'foreign'; projectPath: string } | { kind: 'unknown' };`\n- `export async function probeDaemonIdentity(host: string, port: number, projectPath: string, options: { timeoutMs?: number } = {}): Promise<DaemonIdentity>`. The default timeoutMs is 1500, a named const; /health is local and answers in milliseconds.\n- `export const MAX_HEALTH_BODY_BYTES = 64 * 1024`.\n\nBehavior:\n- One node:http GET of http://<host>:<port>/health, using the hostname option, so a bare IPv6 literal works without brackets.\n- One overall timer that destroys the request, plus the request's own timeout.\n- Count bytes as they are read. Once the total exceeds MAX_HEALTH_BODY_BYTES, destroy the request and answer unknown.\n- Settle exactly once, through a `done` guard.\n\nClassification, shared with JetBrains task-90664db1:\n- Accept only statusCode 200 or 503 (the daemon's healthy and unhealthy /health codes).\n- The body must parse as a JSON object, not an array.\n- projectPath must be a non-empty ABSOLUTE string: a drive letter (/^[a-zA-Z]:[\\\\/]/), UNC (starting with two backslashes) or POSIX (starting with '/'). Write it as a small exported isAbsoluteAnyOs(), not path.isAbsolute, which on Linux rejects 'D:\\\\x'.\n- Then: 'same' when comparableProjectPath(reply) === comparableProjectPath(projectPath), else {kind:'foreign', projectPath: reply}.\n- Everything else is 'unknown': a relative projectPath (the daemon reports its raw --project argument), any other status, and any error, timeout or parse failure.\n\nNever reject. Clear the timer and destroy the socket on every path. Import comparableProjectPath from './utils.js', and do NOT edit utils.ts (task-a4ad3fdb and task-724e31fa edit it).\n\nHeader comment: why the probe exists. A stale daemon.json always matches its own project, so a port reused by another project's daemon would be bridged (task-e7f4026a). 'unknown' keeps today's behavior for older daemons and for the reconnect path.\n\nRun daemonIdentity.test.ts group A until it is green.",
+          "reason": "This step adopts the shared classification rule: 200 or 503 with an absolute projectPath; a relative path or any other status is unknown. That keeps the proxy and the JetBrains sibling (task-90664db1) identical. Without it, an unhealthy foreign daemon (503) would be bridged, and a relative --project could be misread as foreign.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-30T07:59:59.697Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-3",
+      "description": "packages/moe-proxy/src/index.ts, connect() (~:366): probe before opening /mcp, on every connect and reconnect, since both go through connect().\n\n- Keep the daemon.json branch exactly as it is (missing, retryable, non-retryable).\n- Move the existing socket code, from `closeWebSocket();` through the ws handler wiring, unchanged into `function openDaemonSocket(projectPath: string, port: number): void`.\n- After `info` is known, call `probeDaemonIdentity(getDaemonHost(), info.port, projectPath).then(identity => { ... })`:\n  - If `shuttingDown` is set, return without opening a socket; gracefulShutdown owns the exit.\n  - foreign: writeError(...) with a message naming both projects and the fix, then process.exit(1). Suggested message: `Daemon on port <port> serves project <identity.projectPath>, not <projectPath>: this project's .moe/daemon.json is stale. Restart this project's Moe daemon (it takes the next free port).` Also writeLog the same line to stderr.\n  - otherwise ('same' or 'unknown'): openDaemonSocket(projectPath, info.port).\n- The probe never rejects, so add no .catch that could open a second socket.\n- Messages arriving during the probe queue in pendingMessages, as they do while disconnected today (isConnected is false). Do not change that queueing, the reconnect window or the timeout checker.\n\nImport probeDaemonIdentity from './daemonIdentity.js'. utils.ts stays unchanged.\n\nError handling: a foreign daemon is fatal and non-retryable, the same class as 'daemon.json belongs to a different project'. 'unknown' is never fatal.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "note": "connect() now probes /health after readDaemonInfoResult and before any /mcp socket; the old socket+stdin code is moved verbatim into openDaemonSocket(projectPath, port). Foreign: writeLog+writeError (both projects + 'Restart this project's Moe daemon') then exit 1; unknown/same: openDaemonSocket; shuttingDown during the probe: return. Deviation from plan wording, deliberate: the stdin reader stays inside openDaemonSocket (runs after the probe) rather than before it. Reason: wrapper RPCs write a request then close stdin; if stdin were live during the probe, gracefulShutdown would set shuttingDown with the message queued and the shuttingDown guard would then skip opening /mcp, stranding the request. Added a .catch that mirrors main().catch (writeError + exit 1) so a sync throw in openDaemonSocket is not an unhandled rejection; it cannot open a second socket. Test message assertion made case-insensitive (/restart/i). Full proxy suite in snapshot: 6 files, 223 tests passed.",
+      "startedAt": "2026-10-30T08:02:48.943Z",
+      "completedAt": "2026-10-30T08:03:30.314Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh. The checkout's node_modules are Windows builds, so on WSL run the gate in a Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate). workerType.integration.test.ts imports daemon source, so the snapshot needs the daemon's dependencies too.\n\nSNAP=$(mktemp -d /tmp/moe-proxy-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$SNAP\" && for f in packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts packages/moe-proxy/src/index.ts; do cp \"/mnt/d/projexts/moes/$f\" \"$SNAP/$f\"; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c \"cd '$SNAP/packages/moe-daemon' && npm ci --no-audit --no-fund && cd '$SNAP/packages/moe-proxy' && npm ci --no-audit --no-fund && npm test\"\n\nThe evidence command is `cd packages/moe-proxy && npm test`, run in that snapshot. It must exit 0. Supply the full command above, the exit code and the output tail, which must show the daemonIdentity.test.ts rows, to complete_task. Before citing the run, cmp each of the three owned files against its snapshot copy.\n\nMutants, on snapshot copies only, each turning the named rows red:\n(i) skip the probe and open the socket directly: E1;\n(ii) compare raw strings instead of comparableProjectPath: the spelling rows;\n(iii) treat 'unknown' as foreign: the unknown rows, plus index.test.ts's existing e2e cases whose ws-only mock answers 426.\n\nA read-only `git status --short` must show only the three owned paths changed by this task; utils.ts must be untouched. Never revert, stash, `git add -A` or commit peer or pre-existing paths. Error handling: a failure in a file this task did not touch is reported with its output, not edited.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/daemonIdentity.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "note": "Fresh Linux-native snapshot /tmp/moe-proxy-gate.amQ4AS (git archive HEAD + 3 owned files, npm ci in daemon and proxy, npm test): exit 0, 6 files / 223 tests passed (daemonIdentity.test.ts 45, index.test.ts 15, workerType.integration 8). cmp of the 3 owned files vs snapshot: identical. Mutants on the scratch snapshot only, each killed by real failures: (i) probe skipped -> E1 + E3 red (2 failed); (ii) raw string compare -> the 'D:\\proj' and 'D:/proj' spelling rows red (2 failed); (iii) unknown treated as foreign in index.ts -> E4 + 13 index.test.ts e2e + framing/workerType suites red (30 failed); (iii-b) same in daemonIdentity.ts -> all unknown unit rows + E4 red (49 failed). All restored and cmp'd. git status in packages/moe-proxy: only index.ts (M), daemonIdentity.ts and daemonIdentity.test.ts (new); utils.ts diff is 0 lines. ~868 other dirty paths in the shared checkout untouched.",
+      "startedAt": "2026-10-30T08:03:34.885Z",
+      "completedAt": "2026-10-30T08:12:12.650Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review.\n\nCheck:\n- Can the probe hang connect()? Look at the overall timer, a black-holed host via MOE_DAEMON_HOST, and a server that trickles bytes forever: the byte cap plus the overall timer must both bound it.\n- Can it double-settle or leak a socket or timer?\n- Can a shutdown during the probe still open /mcp?\n- Can a reconnect race open two sockets? Two connect() calls can only come from the reconnect timer, which the close handler clears.\n- Does any path classify a real same-project daemon as foreign? Check Windows vs WSL spellings, a trailing slash, and case.\n- Does an older daemon without projectPath still connect?\n- No exploit or secret goes in the message, which names only the two project paths and the port.\n- The diff is exactly daemonIdentity.ts, daemonIdentity.test.ts and index.ts.\n\nFix any finding, then re-run step 4 fresh. Report the three paths in complete_step.modifiedFiles. Write the Serena handoff 'task-task-86093c3efd8645748f460db870073392-handoff' for task-e7f4026a (the wrapper slice and the final verification) and task-90664db1 (the JetBrains sibling): the probe's API, its unknown-means-proceed rule, and the message shape.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/daemonIdentity.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/daemonIdentity.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "note": "Adversarial review of the 3-path diff. ONE real finding, fixed: the foreign-daemon message embedded the served projectPath verbatim; it comes from whatever answered the port (up to 64 KiB, may carry newlines), so it could forge stderr log lines or produce a huge error. Added displayServedPath (control chars -> '?', cap 300 chars + '...') used by index.ts; tests: 3 unit rows + E1b e2e; mutant dropping it is killed by E1b alone. Re-ran step 4 fresh after the fix: new snapshot /tmp/moe-proxy-gate.55jUhg, npm test exit 0, 6 files / 237 tests, cmp of the 3 owned files identical. Checked and found sound: (1) hang: overall timer + request timeout + 64 KiB byte cap bound a black-holed host and a trickling server (unit row 'trickles forever' resolves in ~300ms); (2) double-settle/leak: single done guard, timer cleared and req destroyed in finish() on every path, sync http.request throw is caught; (3) shutdown during the probe: guard returns without opening /mcp, equivalent to the cleared reconnect timer, and on first connect stdin is not yet live so only signals can set it; (4) reconnect race: connect() is re-armed only by the close handler or the daemon-missing branch, each single-shot, stale-socket close events are ignored, so one connect never opens two sockets; (5) false foreign: D:\\x/D:/x//mnt/d/x, trailing slash and case all go through comparableProjectPath; relative served paths are unknown; UNC-vs-WSL is already refused by the existing daemon.json check; (6) older daemon without projectPath and 426 mocks still connect (E4, index.test.ts); (7) message names only the two paths and the port. Theoretical, deferred by plan: TOCTOU between /health and the /mcp upgrade (needs a daemon wire change). Observed: HEAD moved mid-task (peer 93423c1b, task-a4ad3fdb, changed utils.ts/utils.test.ts: 87->97 tests); my diff on utils files is empty and my index.ts hunks are uncommitted. Handoff written to Serena (task-task-86093c3efd8645748f460db870073392-handoff) plus gotcha-proxy-stdin-before-async-connect.",
+      "startedAt": "2026-10-30T08:12:15.530Z",
+      "completedAt": "2026-10-30T08:15:01.086Z"
+    }
+  ],
+  "planRevision": 3,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 286.52,
+  "comments": [
+    {
+      "id": "comment-7c31c87854a14834b4e99bc0f7b100d6",
+      "author": "architect-bd1eb82d",
+      "content": "Planner note (architect-bd1eb82d): the daemon's /health reports `projectPath` as the raw --project argument (packages/moe-daemon/src/index.ts, around line 61), so it can be relative ('.', '../x'). comparableProjectPath would resolve that against the proxy's own cwd, which can give a false 'foreign'. Classify a relative served projectPath as 'unknown' (proceed as today). Only an absolute path (drive-letter, UNC or POSIX) that differs by comparableProjectPath counts as 'foreign'. Add a test row for it. A 503 'unhealthy' reply that still carries an absolute, different projectPath is foreign too.",
+      "timestamp": "2026-10-30T07:57:34.280Z"
+    },
+    {
+      "id": "comment-0f0032ac99e041d8bcb40646b3cbb45c",
+      "author": "architect-4ae016fb",
+      "content": "@worker-e60b90bd I amended steps 1-2 (amend-1) before any step started; please read the amended text.\n\nClassification rule, shared with the JetBrains sibling task-90664db1:\n- Only HTTP 200 (healthy) or 503 (unhealthy) with a JSON object body counts. Those are the daemon's /health codes.\n- projectPath must be a non-empty ABSOLUTE path (drive letter, UNC or POSIX).\n  - A relative projectPath is 'unknown', because the daemon reports its raw --project argument.\n  - A 503 carrying an absolute, different projectPath is 'foreign'.\n- Add an exported isAbsoluteAnyOs(), plus test rows for the 503 cases and the relative case.\n\nEverything else in the plan is unchanged.",
+      "timestamp": "2026-10-30T08:00:03.874Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:54:43.638Z",
+  "updatedAt": "2026-10-30T08:15:23.829Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:56:12.926Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-e60b90bd"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:58:50.047Z",
+  "executionContract": {
+    "intendedBehavior": "Before every /mcp connect and reconnect, moe-proxy GETs the daemon's /health. When the reply's projectPath is another project by comparableProjectPath, the proxy writes a JSON-RPC error naming both projects and telling the reader to restart this project's daemon, exits 1, and never opens /mcp. A same-project reply, and every unknown outcome (unreachable, timeout, non-JSON, oversize, non-200, or no projectPath), keep today's behavior.",
+    "acceptanceCriteria": [
+      "E1: against a fake daemon whose /health names another project, the proxy exits 1 with the message and makes no /mcp upgrade.",
+      "The spelling rows (D:\\x, D:/x and /mnt/d/x) classify as same, and every unknown row resolves 'unknown' without rejecting.",
+      "The existing index.test.ts e2e cases still pass, and utils.ts is unchanged."
+    ],
+    "invariants": [
+      "The probe never rejects, settles once, and is bounded by the timeout and the 64 KiB body cap.",
+      "No /mcp socket opens after shutdown starts or for a foreign daemon, and a single connect never opens two sockets.",
+      "No daemon or wire change, and no edits to utils.ts, the README or the wrappers."
+    ],
+    "compatibility": [
+      "Daemons whose /health lacks projectPath, or whose /health is unreachable, connect as today.",
+      "The 'daemon.json belongs to a different project' path and its message are unchanged."
+    ],
+    "approvedScope": [
+      "packages/moe-proxy/src/daemonIdentity.ts: DaemonIdentity, probeDaemonIdentity, MAX_HEALTH_BODY_BYTES.",
+      "packages/moe-proxy/src/index.ts: connect() probes, then calls openDaemonSocket (the existing socket code, moved unchanged)."
+    ],
+    "reuse": [
+      "comparableProjectPath and getDaemonHost from utils.ts; index.test.ts's spawn-the-built-proxy harness pattern."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-proxy/src/index.ts connect() (~:366) builds ws://<getDaemonHost()>:<port>/mcp after readDaemonInfoResult. Reconnect timers call connect() again.",
+      "packages/moe-proxy/src/utils.ts exports comparableProjectPath and getDaemonHost.",
+      "packages/moe-daemon/src/index.ts /health returns {status, version, pid, uptime, projectPath, stats, checks}."
+    ],
+    "checkRefs": [
+      "cd packages/moe-proxy && npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Probe /health in the proxy before opening /mcp (chosen; it is what the task describes). It needs no daemon wire change, because /health already reports projectPath (index.ts startDaemon /health handler).\n- Comparing daemon.json's pid with /health's pid: rejected. A stale file names a dead pid while another daemon serves the port; the projectPath answer is what identifies the project.\n- Treating unknown as fatal: rejected. Older daemons and transient /health failures must keep today's behavior, and the reconnect path relies on it.\n- Editing utils.ts: forbidden, because task-a4ad3fdb and task-724e31fa edit it. Import comparableProjectPath instead.\n- Putting the e2e case in index.test.ts: rejected. It goes in daemonIdentity.test.ts so the diff stays at the three files DoD 3 names.",
+    "codebaseInsights": "- index.ts connect() (~:366) is synchronous today: readDaemonInfoResult, then closeWebSocket() and new WebSocket(ws://<getDaemonHost()>:<port>/mcp) with handlers. Reconnects re-enter connect() through a timer that the close handler clears.\n- pendingMessages queues stdin messages while isConnected is false (~:602). shuttingDown (~:54) is set by gracefulShutdown.\n- writeError writes a JSON-RPC error to stdout; writeLog writes to stderr.\n- utils.ts comparableProjectPath maps D:\\x, D:/x and /mnt/d/x to 'd:/x' on every OS.\n- package.json has pretest = build, so e2e tests spawn a fresh dist/index.js.\n- A bare ws WebSocketServer({port}) answers a plain GET with 426, so the existing index.test.ts mocks resolve to 'unknown' and keep passing.\n- workerType.integration.test.ts imports daemon source, so the WSL snapshot needs npm ci in both packages.",
+    "risks": "- The async gap in connect(): handle shutdown during the probe, never open two sockets, and keep queued messages flowing after open.\n- Cross-OS paths: the tests use comparableProjectPath spellings that hold on win32, linux and darwin, because CI runs a 3-OS matrix.\n- Windows-native node_modules: the gate must run in a Linux snapshot with both packages installed.\n- Sibling rows task-90664db1 (JetBrains) and task-e7f4026a (wrappers plus final verification) depend on this one. Keep the message and the rules stable for them.",
+    "keyFiles": [
+      "packages/moe-proxy/src/index.ts",
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-proxy/src/index.test.ts",
+      "packages/moe-proxy/src/workerType.integration.test.ts",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:58:50.073Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:59:50.098Z",
+  "reviewStartedAt": "2026-10-30T08:15:23.825Z",
+  "verification": {
+    "command": "SNAP=$(mktemp -d /tmp/moe-proxy-gate.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$SNAP\" && for f in packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts packages/moe-proxy/src/index.ts; do cp \"/mnt/d/projexts/moes/$f\" \"$SNAP/$f\"; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c \"cd '$SNAP/packages/moe-daemon' && npm ci --no-audit --no-fund && cd '$SNAP/packages/moe-proxy' && npm ci --no-audit --no-fund && npm test\"",
+    "exitCode": 0,
+    "outputTail": "npm notice run moe-proxy@0.8.0 test\nnpm notice run vitest run\n\n RUN  v5.0.5 /tmp/moe-proxy-gate.55jUhg/packages/moe-proxy\n\n ✓ src/utils.test.ts (97 tests) 79ms\n ✓ src/input-framing.test.ts (3 tests) 489ms\n ✓ src/workerType.test.ts (65 tests) 656ms\n ✓ src/daemonIdentity.test.ts (49 tests) 2138ms\n   ✓ probeDaemonIdentity (27)\n     ✓ classifies a server that trickles bytes forever as unknown within the timeout 301ms\n   ✓ moe-proxy bridges only to a daemon serving its own project (5)\n     ✓ E3: probes again on reconnect and exits 1 when another daemon took the port 1329ms\n ✓ src/workerType.integration.test.ts (8 tests) 3125ms\n   ✓ launcher worker type through the proxy into the daemon (8)\n ✓ src/index.test.ts (15 tests) 16611ms\n   ✓ moe-proxy graceful shutdown (15)\n\n Test Files  6 passed (6)\n      Tests  237 passed (237)\n   Start at  10:13:28\n   Duration  16.80s (tests 97%, transform 2%, import 1%)\n\ncmp ok packages/moe-proxy/src/daemonIdentity.ts\ncmp ok packages/moe-proxy/src/daemonIdentity.test.ts\ncmp ok packages/moe-proxy/src/index.ts",
+    "reportedAt": "2026-10-30T08:15:23.825Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-proxy/src/daemonIdentity.test.ts",
+    "packages/moe-proxy/src/daemonIdentity.ts",
+    "packages/moe-proxy/src/index.ts"
+  ],
+  "completionSummary": "moe-proxy now probes the daemon's /health before opening /mcp, on every connect and reconnect, and refuses a daemon that serves another project.\n\nDelivered (3 paths, all in packages/moe-proxy/src): daemonIdentity.ts (new: probeDaemonIdentity, DaemonIdentity, MAX_HEALTH_BODY_BYTES, isAbsoluteAnyOs, displayServedPath), daemonIdentity.test.ts (new, 49 tests), index.ts (connect() probes, then openDaemonSocket = the old socket + stdin code moved verbatim). utils.ts, README, daemon and wrappers untouched (utils.ts diff = 0 lines).\n\nBehavior: foreign (absolute served projectPath that differs by comparableProjectPath) -> JSON-RPC error naming both projects + \"Restart this project's Moe daemon (it takes the next free port)\", exit 1, zero /mcp upgrades. Only HTTP 200/503 with a JSON object body counts; a relative projectPath, 426/500/404, non-JSON, oversize (>64 KiB), timeout, refused and an older daemon with no projectPath are 'unknown' and proceed exactly as before. D:\\x, D:/x and /mnt/d/x all classify 'same'.\n\nEvidence: fresh Linux-native snapshot (git archive HEAD + 3 owned files, npm ci in moe-daemon and moe-proxy), `cd packages/moe-proxy && npm test` exit 0, 6 files / 237 tests passed (daemonIdentity 49, index.test.ts 15, workerType.integration 8, workerType 65, utils 97, input-framing 3). Owned files cmp-identical to the snapshot. Mutants, each killed by real failures: probe skipped -> E1+E3; raw string compare -> spelling rows; unknown-as-foreign (index.ts) -> E4 + 13 index.test.ts e2e + others; unknown-as-foreign (daemonIdentity.ts) -> all unknown rows + E4; displayServedPath dropped -> E1b.\n\nDeviations/notes for QA: (1) The stdin reader stays inside openDaemonSocket (after the probe), not before it: wrapper RPCs write one request and close stdin, and with a live reader the probe's shuttingDown guard would strand the queued request (mem:gotcha-proxy-stdin-before-async-connect; pinned by index.test.ts 'waits for pending response before exiting on stdin close'). (2) Ad"
+}
