@@ -7,9 +7,34 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Decision (the task asked for one): this is a test portability gap, not a product ordering gap. No skip is needed and admission.mjs does not change.\n- The failing row is A1's `{ git: path.relative(process.cwd(), fileURLToPath(import.meta.url)) }`.\n- On Windows, path.relative from a cwd on another root (another drive, or a \\\\wsl.localhost UNC share when node.exe is launched from WSL /tmp) returns an ABSOLUTE 'D:\\...\\local-runner.test.mjs'.\n- readInput then accepts it, since it is absolute, exists and lies outside the scratch repo. openRepository's first Git call (rev-parse --show-toplevel) fails on a non-git file and maps to ADMISSION_REPOSITORY_UNSUPPORTED.\n- Admission never checks executability on any OS. An absolute non-git file reaches openRepository on Linux too, and Windows has no exec bit to check. So nothing in the product needs reordering.\n- Proven at c7493fb2 with Windows node v24.16.0 on a clean archive of HEAD. A1 passes with the cwd on the file's own root. It fails with 'Candidate admission repository was not a supported checkout root.' from C:\\Windows\\Temp or D:\\projexts.\nRED first, before editing, take a pristine snapshot and confirm `not ok N - A1` plus that message:\n`SNAP=$(mktemp -d /tmp/moe-b294-red.XXXXXX); git archive HEAD | tar -x -C \"$SNAP\"; (cd /mnt/c/Windows/Temp && \"/mnt/c/Program Files/nodejs/node.exe\" --test-reporter=tap \"$(wslpath -w \"$SNAP/scripts/tests/local-runner.test.mjs\")\") | grep -aE '^(not )?ok [0-9]+ - A1 |supported checkout root'`\nRun the file directly. `node.exe --test <UNC path>` fails with \"Could not find\" (glob).\nFix, in scripts/tests/local-runner.test.mjs A1 only. In the A1 body, before `const base` and therefore before `changes` computes path.relative, add a 3-line comment saying why: Windows path.relative across drive or UNC roots is absolute, so the relative-git row became an absolute non-git file that admission ran. Then add:\n```js\nconst cwd = process.cwd();\nt.after(() => process.chdir(cwd));\nprocess.chdir(path.dirname(fileURLToPath(import.meta.url)));\n```\nThis is the established pattern in scripts/tests/local-runner-vm-control.test.mjs:279-280 and local-runner-snapshot.test.mjs:418. The row then reads 'local-runner.test.mjs' on every OS and cwd, and it still resolves to an existing file outside the repo. That keeps its mutation power: in scratch, a readInput mutant dropping `path.isAbsolute(git)` fails A1 on that row.\nKeep the row expression, the 'relative git the cwd resolves' comment and every other row unchanged. Error handling: the chdir target is the test file's own existing directory, not a temp dir, so the scratch dirs' t.after rm is never blocked on Windows. t.after restores the cwd even when A1 fails.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification gate. Run this exact command once, fresh, and submit its command, exit code and output tail to moe.complete_task.\nExpect exit 0 with A1 `ok` in both logs. At c7493fb2, Windows ran 260 tests (215 pass, 41 POSIX-only skips) in about 11s and Linux ran 260 in about 34s. The only failures there were AJ3-AJ6, which task-2cf1c6be's pending agentHarness hunk fixes. This task dependsOn task-2cf1c6be, so those should be green by the time you run.\nIf any row other than A1 still fails, do not edit it. Rerun the same command without the `cp` overlay (pristine HEAD) and cite the identical failures as pre-existing. Before running, confirm that the first `git diff` prints only this task's A1 hunk.\n```bash\nset -euo pipefail\ncd /mnt/d/projexts/moes\nREV=$(git rev-parse HEAD)\ngit diff HEAD -- scripts/tests/local-runner.test.mjs\nSNAP=$(mktemp -d /tmp/moe-b294-gate.XXXXXX)\ngit archive \"$REV\" | tar -x -C \"$SNAP\"\ncp scripts/tests/local-runner.test.mjs \"$SNAP/scripts/tests/local-runner.test.mjs\"\numask 022\nWIN_T=$(wslpath -w \"$SNAP/scripts/tests/local-runner.test.mjs\")\n(cd /mnt/c/Windows/Temp && \"/mnt/c/Program Files/nodejs/node.exe\" --test-reporter=tap \"$WIN_T\") > \"$SNAP/win.log\" 2>&1 || { tail -60 \"$SNAP/win.log\"; exit 1; }\n(cd / && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test --test-reporter=tap \"$SNAP/scripts/tests/local-runner.test.mjs\") > \"$SNAP/linux.log\" 2>&1 || { tail -60 \"$SNAP/linux.log\"; exit 1; }\ngrep -aE '^ok [0-9]+ - A1 ' \"$SNAP/win.log\" \"$SNAP/linux.log\"\ngrep -aE '^# (tests|pass|fail|skipped)' \"$SNAP/win.log\" \"$SNAP/linux.log\"\ncmp scripts/tests/local-runner.test.mjs \"$SNAP/scripts/tests/local-runner.test.mjs\"\necho \"gate ok rev=$REV snap=$SNAP\"\n```\nThe Windows run uses a cwd on C:, a different root from the \\\\wsl.localhost snapshot. That is exactly the original failure condition.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this task's diff, using the adversarial-self-review skill. This is the last step.\n(1) A1 is the only test touched. The cwd is restored by t.after on pass and on failure. No later test depends on A1's cwd: compare the Linux and Windows pass/skip counts with the pristine-HEAD run.\n(2) A FILTERED run (`--test-name-pattern '^A1 '`) in a tree carrying task-2cf1c6be's module-level AGENT_PROJECT block can fail A1 with left() = ['moe-agent-session-…']. That block runs inside the first test's TMP isolation. It is that task's issue (reported in #general, msg-1caf91f0), not this fix, so use full-file runs as the gate does.\n(3) In scratch only, prove the row still bites: drop `path.isAbsolute(git) &&` from readInput in a snapshot copy of scripts/local-runner/admission.mjs. A1 must fail on the `\"git\":\"local-runner.test.mjs\"` row. Restore the copy afterwards; never edit the product file.\n(4) The diff touches only scripts/tests/local-runner.test.mjs. Leave other sessions' dirty paths, and any peers' hunks in this file, untouched; never stage or revert them.\nIf this step changes the file, rerun step 2 and submit that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -22,10 +47,79 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:22:42.895Z",
-  "updatedAt": "2026-10-30T09:54:42.451Z",
+  "updatedAt": "2026-10-30T10:22:25.598Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:42.451Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T10:10:46.024Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "dependsOn": [
+    "task-2cf1c6bee5814ed98eb3d069d97b32b3"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T10:22:25.573Z",
+  "executionContract": {
+    "intendedBehavior": "A1's relative-git row stays a relative path that the cwd resolves to an existing file, under any OS and any cwd. Admission therefore refuses it as ADMISSION_INPUT_INVALID under Windows node.exe even when the cwd is on another drive or a UNC share. This is a test-only portability fix; admission's behavior is correct and unchanged.",
+    "acceptanceCriteria": [
+      "RED, before the fix: Windows node.exe run from C:\\Windows\\Temp on a pristine HEAD snapshot reports `not ok N - A1` with 'Candidate admission repository was not a supported checkout root.' (reproduced at c7493fb2).",
+      "GREEN: the step-2 gate exits 0. The full scripts/tests/local-runner.test.mjs passes under Windows node.exe from a C: cwd (POSIX-only rows skip) and under Linux node 24.21.0, with A1 `ok` in both logs.",
+      "In scratch, a readInput mutant without `path.isAbsolute(git)` still fails A1 on the relative-git row.",
+      "Only scripts/tests/local-runner.test.mjs changes. scripts/local-runner/admission.mjs and every other A1 row stay unchanged."
+    ],
+    "invariants": [
+      "The process cwd is restored after A1 (t.after), on pass and on failure.",
+      "Product admission semantics are untouched: git must be absolute, existing and outside the repository."
+    ],
+    "compatibility": [
+      "No product, wire, daemon or .moe state change; CI's Linux, Windows and macOS runs of the file are unaffected apart from A1 becoming cwd-independent."
+    ],
+    "approvedScope": [
+      "The A1 test body in scripts/tests/local-runner.test.mjs: a saved cwd, a t.after restore, a chdir to the test file's own directory, and a 3-line comment"
+    ],
+    "reuse": [
+      "The chdir and t.after restore pattern from scripts/tests/local-runner-vm-control.test.mjs:279-280 and scripts/tests/local-runner-snapshot.test.mjs:418."
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/admission.mjs readInput requires text(git) && path.isAbsolute(git). admitCandidate refuses a missing git or one inside the repository as ADMISSION_INPUT_INVALID, then calls openRepository.",
+      "scripts/local-runner/source-export.mjs openRepository throws unsupported() when its first `rev-parse --show-toplevel` run fails, which admission maps to ADMISSION_REPOSITORY_UNSUPPORTED.",
+      "path.win32.relative from a C: or \\\\wsl.localhost cwd to a D: file returns the absolute D: path (verified).",
+      "At c7493fb2, AJ3-AJ6 fail on both OSes before task-2cf1c6be's agentHarness hunk lands. This task dependsOn task-2cf1c6be."
+    ],
+    "checkRefs": [
+      "The bash script in plan step 2 (Verification gate), run verbatim once: git archive HEAD plus this file, then full-file runs under Windows node.exe from /mnt/c/Windows/Temp and under Linux node v24.21.0, with A1 ok in both logs."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Product change: check executability or ordering in admitCandidate. Rejected: admission never checks the exec bit on any OS, Windows has none, and an absolute non-git file gives REPOSITORY_UNSUPPORTED on Linux too, so the product is consistent.\n(2) Skip the row on win32. Rejected: CI's Windows runner (same-drive cwd) passes it, and a skip would drop coverage that is easy to keep.\n(3) Fall back to a bare relative name when path.relative is absolute. Rejected: the value would no longer resolve from the cwd, which weakens the row's mutation power on Windows.\n(4) Chosen: chdir into the test file's directory for A1, then restore it. The row stays relative and resolvable on every OS.\nPrototype at c7493fb2:\n- Windows A1 passes from the snapshot, C: and D: cwds.\n- Linux A1 passes.\n- Mutant without path.isAbsolute(git): A1 fails.\n- Full file: Windows 215 pass, 41 skip, only AJ3-6 fail; Linux 255 pass, only AJ3-6 fail. AJ3-6 fail identically at pristine HEAD.",
+    "codebaseInsights": "A1 builds `changes` from path.relative(process.cwd(), the test file). In the shared tree, task-2cf1c6be's uncommitted module-level AGENT_PROJECT block makes a filtered A1 run fail on both OSes (reported to worker-5ebbf433), so gate on full-file runs. node.exe --test with an absolute UNC path fails with 'Could not find' (a glob issue); run the file directly. Windows node v24.16.0 lives at /mnt/c/Program Files/nodejs/node.exe.",
+    "risks": "- Shared file. task-2cf1c6be had uncommitted hunks in this file at planning time; dependsOn waits for them to land. Other WORKING CQ-R tasks list the file in their plans. Confirm the diff shows only the A1 hunk before the gate.\n- Run the local-runner tests under umask 022 (seededAgents fixture).\n- If HEAD is still red on unrelated rows, cite pristine-HEAD failures as pre-existing; never edit other rows.",
+    "keyFiles": [
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/local-runner/admission.mjs",
+      "scripts/local-runner/source-export.mjs",
+      "scripts/tests/local-runner-vm-control.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T10:22:25.598Z",
+  "approvedPlanRevision": 1
 }
