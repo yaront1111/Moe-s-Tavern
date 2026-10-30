@@ -824,7 +824,7 @@ describe('stampExecutionIdentity', () => {
       expect(stampExecutionIdentity(msg, FULL)).toBe(true);
       expect(msg.params.arguments).toEqual({ taskId: 't1', stepId: 's1', ...IDENTITY });
     }
-    for (const name of ['moe.claim_next_task', 'moe.heartbeat', 'moe.complete_steps', 'moe.complete', 'moe.qa_approve',
+    for (const name of ['moe.claim_next_task', 'moe.heartbeat', 'moe.complete_steps', 'moe.complete', 'moe.add_comment',
       'moe.submit_plan', 'moe.report_blocked', 'moe.get_activity_log', 'moe.reattach_attempt', 'constructor', 'toString',
       'hasOwnProperty']) {
       const msg = call(name);
@@ -923,6 +923,59 @@ describe('stampExecutionIdentity', () => {
         expect(messageOf(result)).not.toContain(bad.trim());
         expect(messageOf(result)).not.toContain(MARK);
       }
+    });
+  });
+
+  // CQ-V06a: QA's own decisions carry the same attempt + session groups as complete_task.
+  describe('QA decision stamping', () => {
+    const base = { taskId: 't1', candidateId: 'cand-1', summary: 's' };
+    const spellings = (tool: string) => [`moe.${tool}`, `moe_${tool}`, tool];
+
+    describe.each(['qa_approve', 'qa_reject'])('%s', (tool) => {
+      it('stamps the full identity under every spelling, with generation a number', () => {
+        for (const name of spellings(tool)) {
+          const msg = call(name, { ...base });
+          expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+          expect(msg.params.arguments).toEqual({ ...base, ...IDENTITY });
+          expect(typeof (msg.params.arguments as { generation: unknown }).generation).toBe('number');
+        }
+      });
+
+      it('accepts presented values equal to the env and completes the rest', () => {
+        for (const presented of [IDENTITY, { attemptId: 'attempt-0123' }, { generation: 7 }, { sessionId: SESSION }]) {
+          const msg = call(`moe.${tool}`, { ...base, ...presented });
+          expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+          expect(msg.params.arguments).toEqual({ ...base, ...IDENTITY });
+        }
+      });
+
+      it('refuses a substituted field under every spelling without mutating', () => {
+        const cases: Array<Record<string, unknown>> = [
+          { attemptId: 'attempt-other' }, { generation: '7' }, { generation: 8 }, { sessionId: 'worker-t@other' },
+        ];
+        for (const presented of cases) {
+          for (const name of spellings(tool)) {
+            const msg = call(name, { ...base, ...presented });
+            expect(stampExecutionIdentity(msg, FULL)).toEqual(refusal(-32003, 'EXECUTION_IDENTITY_SUBSTITUTED'));
+            expect(msg.params.arguments).toEqual({ ...base, ...presented });
+          }
+        }
+      });
+
+      it('refuses a partial attempt env without mutating', () => {
+        const msg = call(`moe.${tool}`, { ...base });
+        const env = { MOE_SESSION_ID: SESSION, MOE_ATTEMPT_ID: 'attempt-0123' };
+        expect(stampExecutionIdentity(msg, env)).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+        expect(msg.params.arguments).toEqual(base);
+      });
+
+      it('is the legacy passthrough with an empty env, even for presented fields', () => {
+        for (const extra of [{}, { attemptId: 'x' }, { generation: '7' }]) {
+          const msg = call(`moe.${tool}`, { ...base, ...extra });
+          expect(stampExecutionIdentity(msg, {})).toBe(false);
+          expect(msg.params.arguments).toEqual({ ...base, ...extra });
+        }
+      });
     });
   });
 });

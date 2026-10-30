@@ -325,6 +325,7 @@ const EXECUTION_IDENTITY_TOOLS = new Map<string, readonly IdentityGroup[]>();
 for (const [tool, groups] of [
   ['get_context', ['session']], ['start_step', ['attempt', 'session']],
   ['complete_step', ['attempt', 'session']], ['complete_task', ['attempt', 'session']],
+  ['qa_approve', ['attempt', 'session']], ['qa_reject', ['attempt', 'session']],
 ] as const) {
   for (const name of [`moe.${tool}`, `moe_${tool}`, tool]) EXECUTION_IDENTITY_TOOLS.set(name, groups);
 }
@@ -368,8 +369,9 @@ const GROUP_READERS: Record<IdentityGroup, (env: Record<string, string | undefin
 };
 
 /**
- * CQ-F09, CQ-F12a: stamp the session's execution identity onto moe.get_context
- * (sessionId) and onto moe.start_step, moe.complete_step and moe.complete_task
+ * CQ-F09, CQ-F12a, CQ-V06a: stamp the session's execution identity onto
+ * moe.get_context (sessionId) and onto moe.start_step, moe.complete_step,
+ * moe.complete_task, moe.qa_approve and moe.qa_reject
  * (attemptId, generation, sessionId). The
  * runner (the wrapper's env), never the CLI caller, owns that identity: the
  * same transport as injectRunnerIdentity, except the caller can never

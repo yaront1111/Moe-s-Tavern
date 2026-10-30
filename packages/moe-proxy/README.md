@@ -66,8 +66,9 @@ The runner, never the CLI caller, owns the session's execution identity. `script
 |------|----------------|
 | `moe.get_context` | `sessionId` |
 | `moe.start_step`, `moe.complete_step`, `moe.complete_task` | `attemptId`, `generation`, `sessionId` |
+| `moe.qa_approve`, `moe.qa_reject` | `attemptId`, `generation`, `sessionId` |
 
-This holds under every spelling (`moe.x`, `moe_x` and bare `x`) and covers no other tool. A field whose env group is absent is not stamped, and a value the caller presents for it reaches the daemon untouched.
+This holds under every spelling (`moe.x`, `moe_x` and bare `x`) and covers no other tool. A field whose env group is absent is not stamped, and a value the caller presents for it reaches the daemon untouched. Under verified-local the daemon requires QA's own identity on `moe.qa_approve` and `moe.qa_reject` (CQ-V06); under legacy and observe a presented attempt still gets the daemon's `ATTEMPT_SUPERSEDED` freshness check, as `moe.complete_task` does.
 
 A presented field must equal the stamped env value exactly (`===`: `"7"` does not match `7`). Anything else is refused before the call is forwarded, and nothing is mutated or echoed:
 

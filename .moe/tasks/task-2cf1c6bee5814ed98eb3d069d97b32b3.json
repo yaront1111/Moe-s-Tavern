@@ -1,0 +1,188 @@
+{
+  "id": "task-2cf1c6bee5814ed98eb3d069d97b32b3",
+  "epicId": "epic-be924fb8",
+  "title": "security: local-runner loopback checks take the daemon's bind from the daemon, not from .moe/daemon.json",
+  "description": "Filed by architect-4ae016fb on 2026-10-30. It comes from the CQ-RF05 re-decision (task-b439d7fb), whose decision record docs/design/protected-profile-threat-model.md names this row as a required follow-up. It sits beside the HIGH daemon-exposure row task-724e31fa and its slices; this row is a separate problem class.\n\nProblem class: a guard takes its trust input from a file that repository content can supply. Keep this row's text at that level, with no exploit steps, because .moe/tasks is committed and pushed.\n- Three local-runner modules refuse to work with a daemon that listens beyond loopback:\n  - scripts/local-runner/guest-session.mjs daemonRefusal, before a guest session starts and before every forward;\n  - runner-client.mjs, before the /runner channel opens (RUNNER_DAEMON_NOT_LOOPBACK);\n  - vm-control.mjs readDaemonInfo (DAEMON_UNREACHABLE).\n- Each of them takes the bind from the bindHost field of <project>/.moe/daemon.json, and an absent field counts as loopback.\n- daemon.json is gitignored, but git overwrites an ignored file when an upstream commit adds it, so its bytes are repository content (Serena memory gotcha-gitignored-moe-files-overwritten-by-pull). A file without bindHost passes these checks whatever the daemon actually listens on.\n\nWanted:\n- The admit decision comes from the daemon itself, never from a file under the project. A file may add a refusal, never an admission.\n- Recommended mechanism: the daemon's /health reports the bind it actually uses (the value daemon.json records, including 'wsl' once task-2f2484b4 lands). Each reader asks /health over loopback, at the port it already uses. It admits only an answer that is healthy, names this project (the canonical projectPath comparison vm-control already does), and reports 127.0.0.1 or ::1.\n- Alternative, if /health cannot serve this: an owner-only record outside the repository, written by the daemon next to its runner key (runnerKeyPath). The planning architect picks one and records why.\n- One shared helper, not three copies. guest-session keeps checking before every forward.\n- Any failure refuses with the module's existing code: no answer, a timeout, a malformed or oversized reply, another project's daemon, a missing bind field, or a non-loopback report. A non-loopback bindHost in daemon.json still refuses on its own.\n- Must land before verified-local is enabled. It does not gate CQ-R13 certification unless a human decides it should.\n\nNot in scope:\n- the daemon CLI's status/stop probe host. It is a legacy operator tool; the protected IDE stops daemons through its own provenance-gated path.\n- the Origin rule and the WSL bind (task-724e31fa and its slices);\n- the IDE's port↔pid binding, which the decision record accepts.\n\nOrdering: index.ts holds /health, which task-2f2484b4 edits; vm-control.mjs is edited by task-d8fc3955. Put new tests in a NEW file, scripts/tests/local-runner-daemon-bind.test.mjs, so this row does not collide with the CQ-R rows that edit local-runner.test.mjs and local-runner-bridge.test.mjs.",
+  "definitionOfDone": [
+    "guest-session (at session start and before each forward), runner-client and vm-control admit a daemon only on the daemon's own loopback bind report for this project. A daemon.json without bindHost no longer admits a daemon that reports a non-loopback bind. Proven by scripts/tests/local-runner-daemon-bind.test.mjs, with at least one row per module.",
+    "Every failure path refuses with that module's existing refusal code: no answer, a timeout, a malformed or oversized reply, another project's daemon, a missing bind field, and a non-loopback report. A non-loopback bindHost in daemon.json still refuses even when the daemon reports loopback. Proven by the same test file.",
+    "The daemon-side source of the bind (the /health field, or the owner-only record) is covered by a daemon test, and existing /health consumers keep passing. `cd packages/moe-daemon && npm test` and `node --test scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-bridge.test.mjs` exit 0, with their output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No exploit walkthrough in task fields, chat, comments or docs: describe the problem class only. .moe/tasks is committed and pushed.",
+    "Any state this row persists lives outside the repository with owner-only access. A missing, unreadable or mismatched answer refuses.",
+    "Preserve legacy behavior: each module keeps its refusal codes, a loopback daemon of this project is still admitted, and nothing the daemon serves today is removed."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DAEMON: /health reports the bind the daemon listens with.\n\nPrerequisites: task-2f2484b4 and task-d8fc3955 are DONE. Before editing, read:\n- their landed bytes;\n- mem:task-task-2f2484b426ef42aaa0566323da2d550e-handoff and mem:task-task-d8fc3955a12949858a9be4f584a1cc67-handoff;\n- mem:decision-local-runner-daemon-bind (this row's design);\n- mem:gotcha-gitignored-moe-files-overwritten-by-pull.\n\npackages/moe-daemon/src/index.ts:\n- The /health handler (hoisted into a named const by task-2f2484b4) adds `bindHost: host` to its JSON.\n- `host` is the exact token startDaemon listens with (`bindHost || DEFAULT_BIND_HOST`): '127.0.0.1' by default, or 'wsl', '0.0.0.0', '::1' and so on.\n- The field is ALWAYS present, unlike daemon.json, which omits the default.\n- Never derive it from server.address(): under 'wsl' the primary listener is loopback but the extra listeners are not.\n- Every existing field (status, version, pid, uptime, projectPath, stats, checks) keeps its value.\n- One short comment says the local runner admits a daemon on this field.\n- error handling: none is new. The handler's existing 200/503 paths are unchanged.\n\npackages/moe-daemon/src/server/bindHosts.test.ts is task-2f2484b4's file, listed under newFiles only because it did not exist at plan time. Extend its spawned `_run` rows:\n- --host wsl, and MOE_BIND_HOST=wsl: /health answers bindHost 'wsl'.\n- A new variant with no --host and no MOE_BIND_HOST: /health answers bindHost '127.0.0.1', and daemon.json still has no bindHost key.\n- In each variant, the /health key set is EXACTLY status, version, pid, uptime, projectPath, stats, checks, bindHost.\n- The exported probeDaemonHealth and validateDaemonInfoForProject still accept the daemon (existing consumers).\n- If the landed file has no spawned-daemon rows, add one describe there, spawning `_run` the way delivery/acceptance.test.ts startDaemonChild does: isolated env, free port, teardown in afterEach.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/server/bindHosts.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nCreate scripts/tests/local-runner-daemon-bind.test.mjs (node:test, node:assert/strict). It needs no built daemon, and it never touches port 9876, where a live fleet daemon may answer.\n\nFake /health, an inline factory:\n- It listens on 127.0.0.1:0, and also on ::1:0 best-effort. Rows that need ::1 skip with a reason where it cannot bind.\n- It records each request's method, url and remote address.\n- Default answer: 200 with {status:'healthy', projectPath:<row project>, bindHost:'127.0.0.1'}.\n- Per-row behaviors:\n  - a given status and body (object or raw string);\n  - silent: accept, never answer;\n  - trickle: headers, then one byte every 20 ms, never ending;\n  - oversized: MAX_HEALTH_BYTES+1 bytes;\n  - a 302.\n- A closed port is a freed 127.0.0.1:0 port.\n\nEach row's project is a scratch dir holding .moe/daemon.json {port:<fake port>, pid:1, projectPath:<project>}, plus the row's overrides.\n\nImports: at the top, only exports that exist today (runGuestSession, openRunnerChannel, readDaemonInfo, mcpCaller). Import loopbackDaemonHost and MAX_HEALTH_BYTES dynamically inside DB1, so the module rows fail one by one on pristine code.\n\nRows:\n- DB1: loopbackDaemonHost(info, projectPath, {timeoutMs}) as a table.\n  - It admits '127.0.0.1' for the default answer:\n    - with no file bindHost;\n    - with file bindHost '127.0.0.1';\n    - for this project in another spelling (trailing separator).\n  - It admits '::1' for file bindHost '::1' plus a ::1 fake reporting '::1'.\n  - It resolves null, never rejecting, for:\n    - a closed port;\n    - silent and trickle at timeoutMs 200, settling within ~1 s. This proves a TOTAL deadline, not an idle timeout.\n    - bodies '{', '[]' and 'null';\n    - an oversized body;\n    - a 503;\n    - 200 with status 'unhealthy';\n    - a 302;\n    - another project;\n    - no bindHost;\n    - bindHost '0.0.0.0', '::', 'wsl', 'localhost', '127.0.0.2', '::ffff:127.0.0.1', '', null, 1 or ['127.0.0.1'];\n    - file bindHost '0.0.0.0' or 'wsl' while the fake reports loopback. Here the fake must have seen NO request.\n  - Every request it does send is exactly 'GET /health', from a loopback address.\n- DB2: guest-session. Use runGuestSession with the bridge test's BINDING, a job, ownedInstanceName from lifecycle.mjs, a spawn spy, and timeoutMs 200.\n  - The core regression: daemon.json has no bindHost and the daemon reports '0.0.0.0' (and 'wsl'). It refuses SESSION_DAEMON_NOT_LOOPBACK, with spawn never called.\n  - Each failure kind refuses SESSION_DAEMON_NOT_LOOPBACK before spawn: no answer, a timeout, malformed, oversized, another project, a missing bind field, a non-loopback bind.\n  - A file without a usable port refuses SESSION_DAEMON_INFO_INVALID.\n  - The path names the project: daemonInfoPath is <projA>/.moe/daemon.json, the file's projectPath names projB, and the fake answers projB. This refuses.\n  - The default answer starts the session.\n  - Before each forward, using the bridge test's fakeProvider shape (hello, then requests):\n    - the first request is forwarded;\n    - the fake then reports '0.0.0.0';\n    - the second request ends the session SESSION_DAEMON_NOT_LOOPBACK, with exactly one forward.\n    - The same holds when the fake is closed between the two requests.\n- DB3: runner-client, with a scripted WebSocket class.\n  - The core regression and every failure kind refuse RUNNER_DAEMON_NOT_LOOPBACK. No WebSocket is constructed and the key is never read: the key file is absent, so reading it would surface RUNNER_KEY_MISSING.\n  - The default answer dials ws://127.0.0.1:<port>/runner. '::1' dials ws://[::1]:<port>/runner.\n  - An aborted signal stays RUNNER_ABORTED.\n- DB4: vm-control.\n  - readDaemonInfo(project, {timeoutMs:200}) refuses DAEMON_UNREACHABLE for the core regression and for every failure kind.\n  - It admits with {port, host}.\n  - mcpCaller with a scripted WebSocket dials ws://<admitted host>:<port>/mcp, and makes no socket after a refusal.\n- DB5: a non-loopback daemon.json bindHost refuses in all three modules, each with its own code, even when the fake reports loopback. The fake sees no request.\n\nAssertions are exact (deepEqual on codes, URLs and request logs).\n\nerror handling in tests: every server, socket and timer is closed in after or t.after, even when a row fails, and every refusal is asserted by its fixed code, never by message text.\n\nRed proof: on the pristine modules, run `node --test scripts/tests/local-runner-daemon-bind.test.mjs`. DB1 must fail (no such export), and the DB2-DB4 core-regression rows must fail because the session, channel or info is admitted. Record the failing row names.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/local-runner-daemon-bind.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "EXISTING SUITES onto a fake /health. These are fixture lines only, and behavior-neutral.\n\nHot files. Before the first edit of each file:\n- run `git status --porcelain -- <file>`;\n- if another live session's hunks are there, do not edit over them. Comment on that task or @mention its seat, then call moe.report_blocked naming it.\n- Edit only with the Edit tool, so the wrapper records a TOOL witness.\n\nEach file gets the same inline fake /health of about 8 lines: 127.0.0.1:0, plus ::1:0 best-effort. Its answer names the fixture's project, and it is closed in after(). No row may reach the probe with port 9876.\n\n- local-runner-bridge.test.mjs, H section:\n  - DAEMON_DIR becomes <mkdtemp>/.moe, so the project is its parent, and after() removes that mkdtemp root.\n  - daemonFile's default port is the fake's.\n  - 'edge.json' becomes a record carrying that port, padded with spaces to EXACTLY MAX_DAEMON_INFO_BYTES.\n  - 'v6.json' uses the ::1 fake's port, and skips with a reason where ::1 cannot bind.\n  - Everything else stays, including the H4 rebind row.\n- local-runner.test.mjs, agentHarness: daemonInfoPath becomes <scratch>/.moe/daemon.json with the fake's port, and the fake's answer names that scratch dir.\n- local-runner-channel.test.mjs:\n  - fixture()'s default port is the fake's, and the answer names each fixture's project.\n  - The C2 URL rows use the fake ports. The '::1' row skips where ::1 cannot bind.\n  - 'a refused connection is RUNNER_CONNECT_FAILED' points at the fake. Its /runner upgrade fails (a real WebSocket gets error and close 1006), so the row keeps its code.\n  - Extend before()'s dist-freshness assertion: a dist whose /health lacks the bind report fails fast with the same 'build packages/moe-daemon first' hint.\n- local-runner-vm-control.test.mjs:\n  - VC-M1's good record uses the fake's port, and the URL becomes ws://127.0.0.1:<port>/mcp.\n  - readDaemonInfo results become {port, host}. The '::1' row goes to the ::1 fake, skipped where ::1 is unavailable.\n  - VC-M2's fake answers '/mnt/d/x', and its rows expect {port, host:'127.0.0.1'}.\n\nRow names, refusal codes and every other assertion stay. On the pristine modules these edits keep every row green except the readDaemonInfo `host` assertions, which turn green in step 5.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-channel.test.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "SHARED ADMISSION + guest-session. Load ponytail.\n\nIn scripts/local-runner/guest-session.mjs add ONE section, 'daemon admission shared with runner-client.mjs and vm-control.mjs'.\n\n1. canonicalProjectPath moves here verbatim from vm-control.mjs, with windowsDrive and its doc comment.\n   - vm-control.mjs imports it and re-exports it (`export { canonicalProjectPath }`), so its tests and ownedLedgerDir keep working.\n   - guest-session cannot import vm-control, because vm-control already imports guest-session.\n2. `export const MAX_HEALTH_BYTES = 65_536`, the daemon's own probeDaemonHealth cap.\n3. `export function loopbackDaemonHost(info, projectPath, { timeoutMs = 5_000, signal } = {})` resolves '127.0.0.1', '::1' or null. It NEVER rejects or throws.\n   a. info is daemon.json's parsed record. It is repository content, so it may only refuse. A non-record, an own bindHost outside {'127.0.0.1','::1'}, or a port that is not an integer 1-65535 resolves null with no request.\n   b. host is '::1' when info.bindHost is '::1', else '127.0.0.1'.\n   c. Send one `http.get({host, port, path:'/health', agent:false, signal})`: no proxy, no redirect follow.\n      - ONE total deadline, set with setTimeout plus destroy. Never the socket idle timeout.\n      - A body cap of MAX_HEALTH_BYTES: stop reading and resolve null past it.\n   d. Admit only when all of these hold:\n      - statusCode is 200;\n      - the body is a JSON object whose status is 'healthy';\n      - its projectPath is a string, and canonicalProjectPath of it equals canonicalProjectPath(projectPath);\n      - its own bindHost is exactly '127.0.0.1' or '::1'.\n      Then resolve host.\n   e. error handling: every exit path clears the timer and destroys the request. A request or response error, an abort, a parse failure or a synchronous throw from http.get resolves null.\n4. daemonRefusal(file, {timeoutMs, signal}) keeps its bounded read.\n   - A non-record stays SESSION_DAEMON_INFO_INVALID, and so does a record without a usable port, since the port is needed to ask the daemon.\n   - Then it returns `(await loopbackDaemonHost(info, path.dirname(path.dirname(file)), {timeoutMs, signal})) ? null : 'SESSION_DAEMON_NOT_LOOPBACK'`.\n   - daemonInfoPath, the trusted input, is <project>/.moe/daemon.json. The file's own projectPath field is repository content and never names the project.\n5. Session start: the probe gets options.timeoutMs and NO caller signal. Keep `throw sessionError(refused ?? 'SESSION_ABORTED')`, so an aborted signal with an admitted daemon is still SESSION_ABORTED.\n6. Before every forward (reply): pass options.timeoutMs and session.controller.signal.\n   - After the await, check session.closing BEFORE acting on a refusal, so a probe cut short by teardown never sets the session's failure code.\n   - Otherwise call stop(session, refused).\n7. In the header comment, 'a fresh loopback check of daemon.json' becomes the daemon's own loopback bind report. MAX_DAEMON_INFO_BYTES stays exported.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/local-runner/vm-control.mjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "runner-client and vm-control onto the shared admission. No new error codes anywhere.\n\nscripts/local-runner/runner-client.mjs:\n- discover(projectPath, {timeoutMs, signal}) keeps every file check and its codes.\n- Drop its own bindHost line: the helper refuses a non-loopback file bindHost without sending a request.\n- After the file checks:\n  - an already-aborted signal is RUNNER_ABORTED;\n  - then `const host = await loopbackDaemonHost(info, projectPath, {timeoutMs, signal})`;\n  - on null, throw RUNNER_ABORTED if the signal aborted meanwhile, else RUNNER_DAEMON_NOT_LOOPBACK.\n- All of this happens BEFORE the key file is read.\n- openRunnerChannel passes its timeoutMs and signal, and dials `ws://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/runner`.\n- Update the header comment: it dials only a daemon that reported a loopback bind for this project.\n\nscripts/local-runner/vm-control.mjs:\n- readDaemonInfo(projectPath, {timeoutMs} = {}) keeps its bounded read and every file check, but drops its own bindHost check, which is now the helper's job.\n- It then requires loopbackDaemonHost(info, projectPath, {timeoutMs}) and resolves {port, host}. Any refusal is DAEMON_UNREACHABLE.\n- mcpCaller dials `ws://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/mcp`, the endpoint the daemon answered on. It does not pass its own call timeout to the probe; the helper's default applies.\n- Remove the now-unused LOOPBACK const, and update readDaemonInfo's doc comment.\n\nerror handling: every refusal is one of the module's existing fixed codes, thrown with its fixed message. No path, port, key byte or upstream text reaches an error, and the helper's null is the only signal used.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/runner-client.mjs",
+        "scripts/local-runner/vm-control.mjs"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each one to a scratch copy, restore it, then cmp. A kill counts only when real rows fail. Name the row that kills each.\n   a. The helper admits an absent report bindHost.\n   b. It skips the project compare.\n   c. It trusts the file's bindHost or projectPath instead of the report.\n   d. Its deadline is the socket idle timeout (the trickle row must kill this).\n   e. There is no body cap.\n   f. guest-session's per-forward probe is removed.\n   g. runner-client reads the key before the probe.\n   h. mcpCaller always dials 127.0.0.1.\n   i. /health omits bindHost (a step 1 row must kill this).\n\n2. GATE, in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate, mem:gotcha-local-runner-qa-snapshot-assets):\n   - `git archive HEAD` of the WHOLE repo;\n   - overlay ONLY this task's 10 files, and cmp them;\n   - in packages/moe-daemon, a native `npm ci --no-audit --no-fund` under env -i with nvm node v24.21.0;\n   - run exactly the command below. It must EXIT 0. Use NO_COLOR=1 and grep -a.\n   `cd packages/moe-daemon && npm run build && npm test && cd ../.. && node --test scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-dispatch.test.mjs`\n\n3. Windows: run node.exe --test on the new test file from a D: copy of the snapshot, as task-d8fc3955's QA did, and record its counts. A ::1 or WSL-only skip is fine; a failure is not.\n\n4. LOC: report `git diff --numstat` for the 10 files. Keep it under 400 net non-board LOC; if it is over, cut before completing.\n\n5. complete_task:\n   - verification: that command, exit code 0, and the output tail;\n   - summary, mapped to the DoD:\n     - DoD 1: the DB2-DB4 core-regression rows;\n     - DoD 2: DB1, the DB2-DB4 failure-kind rows, and DB5;\n     - DoD 3: the step 1 rows plus the gate.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review.\n\nRead the diff two ways: as repository content trying to get a non-loopback daemon admitted, and as an unlucky Windows or WSL user.\n- Can any daemon.json byte produce an admission? Check:\n  - an absent, null or array bindHost;\n  - a duplicate key, or a key named after the object prototype. Never write that literal: the global rails forbid it.\n  - a port that points at another project's daemon or at a non-Moe loopback service;\n  - a projectPath field naming another project;\n  - a daemonInfoPath outside .moe.\n- Can any reply admit without being healthy, this project's and loopback? Check:\n  - 'wsl', after task-2f2484b4;\n  - case and whitespace variants;\n  - an IPv4-mapped address;\n  - arrays;\n  - a redirect;\n  - chunked, slow or oversized bodies;\n  - a 503.\n- Is every wait bounded by a total deadline? On every path, is every request destroyed and every timer cleared? Does teardown abort the per-forward probe without changing the failure code?\n- Is the key never read before admission? Does mcpCaller dial the admitted host?\n- Are the refusal codes unchanged, with no new codes? Does no error echo a path, a port or upstream text?\n- Is a loopback daemon of this project still admitted: by default, as '127.0.0.1', as '::1', and in another spelling? Does /health keep every field?\n- Rails:\n  - regression tests are present;\n  - no MCP contract change;\n  - .moe state stays backward-compatible;\n  - no .moe edits and no Git writes;\n  - nothing persisted;\n  - none of the forbidden patterns;\n  - no exploit walkthrough in comments, test names or summaries.\n- Would I be embarrassed if this shipped?\n\nFix any finding and re-run step 6's gate fresh. Then overwrite the Serena memory 'task-task-2cf1c6bee5814ed98eb3d069d97b32b3-handoff' with the landed names (loopbackDaemonHost, MAX_HEALTH_BYTES, the new home of canonicalProjectPath, the /health bindHost field). CQ-R13 and verified-local activation will build on them.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-2f2484b426ef42aaa0566323da2d550e",
+    "task-d8fc3955a12949858a9be4f584a1cc67"
+  ],
+  "priority": "MEDIUM",
+  "order": 285.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:42:05.249Z",
+  "updatedAt": "2026-10-30T08:05:55.768Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:42:56.107Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 10
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T08:05:55.740Z",
+  "executionContract": {
+    "intendedBehavior": "The local runner admits a daemon only on the daemon's own report.\n- The guards: guest-session (at session start and before every forward), runner-client (before the key is read and /runner is dialed) and vm-control (readDaemonInfo, so every mcpCaller call).\n- Each sends GET /health to the loopback host at daemon.json's port. It admits only a 200, healthy answer that names this project (canonicalProjectPath) and reports bindHost exactly 127.0.0.1 or ::1.\n- daemon.json is repository content. A non-loopback bindHost or an unusable port still refuses on its own, with no request, but no field of it can admit.\n- The daemon's /health always reports bindHost: the host token it listens with ('127.0.0.1' by default, 'wsl', '0.0.0.0', ...). Every existing field stays.\n- Every failure refuses with the module's existing code: SESSION_DAEMON_NOT_LOOPBACK, RUNNER_DAEMON_NOT_LOOPBACK or DAEMON_UNREACHABLE. The failures are no answer, a timeout, a malformed, oversized or unhealthy reply, another project, and a missing or non-loopback bind.\n- File-shape failures keep SESSION_DAEMON_INFO_INVALID, RUNNER_DAEMON_INFO_INVALID or DAEMON_UNREACHABLE.\n- Nothing is persisted.",
+    "acceptanceCriteria": [
+      "A daemon.json without bindHost no longer admits a daemon whose /health reports '0.0.0.0' or 'wsl'. guest-session (at start and before a forward), runner-client and vm-control each refuse with their own code (DB2-DB4).",
+      "Each failure kind refuses in each module with that module's code, and the probe settles within its total deadline against silent and trickling servers (DB1-DB4).",
+      "A non-loopback daemon.json bindHost refuses in all three modules even when the daemon reports loopback, and no request is sent (DB5).",
+      "A loopback daemon of this project is still admitted with no file bindHost, with '127.0.0.1', with '::1' and in another spelling. runner-client and mcpCaller dial the host it answered on.",
+      "/health reports bindHost '127.0.0.1' by default, and 'wsl' under --host wsl or MOE_BIND_HOST=wsl, with every pre-existing field.",
+      "The existing local-runner suites pass with their fixtures moved onto a fake /health, with unchanged row names and codes."
+    ],
+    "invariants": [
+      "No byte of daemon.json can produce an admission. It can only refuse.",
+      "The probe targets only 127.0.0.1 or ::1, and only GET /health, with agent:false, one total deadline and a 64 KiB body cap. It never throws or rejects.",
+      "runner-client never reads the runner key before the daemon has proved a loopback bind for this project.",
+      "guest-session's expected project is the grandparent of the trusted daemonInfoPath, never daemon.json's projectPath field.",
+      "There are no new refusal codes, and errors carry no path, port or upstream text.",
+      "Nothing is persisted, and nothing under .moe is edited."
+    ],
+    "compatibility": [
+      "/health keeps status, version, pid, uptime, projectPath, stats and checks unchanged. bindHost is additive.",
+      "canonicalProjectPath stays importable from vm-control.mjs (re-exported), and MAX_DAEMON_INFO_BYTES from guest-session.mjs. readDaemonInfo additively returns host.",
+      "A daemon older than this change has no bindHost on /health, so it is refused until restarted. That is acceptable: verified-local is not enabled.",
+      "Every module keeps its refusal codes. An abort stays SESSION_ABORTED or RUNNER_ABORTED."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/index.ts: the /health JSON gains bindHost.",
+      "scripts/local-runner/guest-session.mjs: canonicalProjectPath (moved from vm-control.mjs), MAX_HEALTH_BYTES, loopbackDaemonHost, daemonRefusal and its two call sites.",
+      "scripts/local-runner/runner-client.mjs: discover, and the openRunnerChannel dial host.",
+      "scripts/local-runner/vm-control.mjs: the canonicalProjectPath import and re-export, readDaemonInfo, and the mcpCaller dial host.",
+      "Tests: the new local-runner-daemon-bind.test.mjs, the spawned rows in bindHosts.test.ts, and the fixture lines of the four existing local-runner suites."
+    ],
+    "reuse": [
+      "canonicalProjectPath (task-d8fc3955's port of comparableProjectPath) is moved, not copied.",
+      "Each module keeps its bounded daemon.json read and its refusal codes.",
+      "Tests reuse the bridge test's BINDING, HELLO, REQUEST and fakeProvider shapes, ownedInstanceName, and task-2f2484b4's spawned `_run` rows.",
+      "loopbackDaemonHost is new: nothing under scripts/ asks /health today. The daemon's probeDaemonHealth is TypeScript inside the daemon, keyed to daemon.json's pid."
+    ],
+    "sourceAssumptions": [
+      "guest-session.mjs: daemonRefusal (:78) admits a record without bindHost. It is called at session start (:66) and in reply (:173).",
+      "runner-client.mjs: discover (:46) refuses only a non-loopback file bindHost. openRunnerChannel (:107) dials [::1] only for bindHost '::1', and reads the key at runnerKeyFile(info.projectPath).",
+      "vm-control.mjs: readDaemonInfo (:117) checks the port, bindHost and the canonical projectPath. mcpCaller (:140) always dials 127.0.0.1. canonicalProjectPath (:32) uses windowsDrive (:28).",
+      "vm-control.mjs imports MAX_DAEMON_INFO_BYTES from guest-session.mjs, so guest-session cannot import vm-control.",
+      "index.ts startDaemon sets host = bindHost || DEFAULT_BIND_HOST. daemon.json records bindHost only when host is not '127.0.0.1'. /health answers {status, version, pid, uptime, projectPath, stats, checks}; task-2f2484b4 hoists that handler.",
+      "agent-lifecycle.mjs passes daemonInfoPath to runGuestSession unchanged."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm run build && npm test && cd ../.. && node --test scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-dispatch.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Mechanism, as the task asked the planner to pick one and record why: /health over an owner-only record.\n- /health is live truth from the process that is actually listening.\n- It persists nothing, so the owner-only-storage rail has nothing to cover.\n- It sits on the loopback port the readers already use.\n- An older daemon fails closed, because the field is missing.\n\nThe owner-only record next to runnerKeyPath was rejected:\n- It is a cache. It can go stale after a crash or a downgrade: an older daemon never rewrites it, so a stale '127.0.0.1' record could admit a later 0.0.0.0 daemon.\n- It needs per-OS owner-only checks (Windows ACLs).\n- It adds a daemon write and cleanup path.\n\nOther options rejected:\n- Keep trusting an absent daemon.json bindHost: that is the bug.\n- Ask through forward or MCP: no tool reports the bind, adding one changes the MCP contract, and a forward to an unadmitted daemon is the very thing being guarded.\n- A new module for the helper: it would be an 11th file, past the daemon's hard cap of 10. guest-session.mjs is already the shared daemon.json discipline that runner-client and vm-control import MAX_DAEMON_INFO_BYTES from.\n- An injectable probe seam: the existing suites would need edits anyway, and it is a bypass knob on a security check.\n- Splitting per module: the 'one shared helper' rule makes every slice touch the helper and the same new test file, and the runtime change is only about 70 LOC.",
+    "codebaseInsights": "Readers:\n- guest-session never checks daemon.json's projectPath; forward is the caller's trusted transport, and the daemon.json read is a tripwire.\n- runner-client reads the runner key only after discover().\n- vm-control's mcpCaller dials 127.0.0.1 even for a '::1' daemon. This row makes it dial the admitted host.\n- vm-control imports guest-session, so canonicalProjectPath moves DOWN into guest-session and is re-exported from vm-control.\n\nDaemon:\n- index.ts records bindHost in daemon.json only when the host is not 127.0.0.1. /health has no bind field today.\n- task-2f2484b4 hoists the /health handler and adds the 'wsl' token. Under 'wsl', server.address() of the primary is loopback, so the report must be the configured token.\n\nEnvironment:\n- Node 24's global WebSocket against an HTTP server with no upgrade listener gets error, then close 1006. runner-client maps that to RUNNER_CONNECT_FAILED.\n- CI's local-runner step (ci.yml:236) lists files explicitly and does not include local-runner-vm-control.test.mjs. The new test file will need adding too (a follow-up row).",
+    "risks": "- Hot files: local-runner-bridge.test.mjs and local-runner.test.mjs are edited by CQ-R rows. Follow step 3's protocol and edit fixture lines only, with the Edit tool.\n- A live fleet daemon may answer on 9876. A test row that reaches the probe must use a fake's port.\n- ::1 may be missing in some containers. ::1 rows skip with a reason, never fail.\n- channel C4-C9 run the BUILT daemon. A stale dist makes the readiness loop time out, so build first; step 3 adds a fast-fail freshness hint.\n- Abort precedence: SESSION_ABORTED and RUNNER_ABORTED must survive. Also, a per-forward probe aborted at teardown must not overwrite the session's failure code.\n- Size: about 70 runtime LOC plus 250-300 test LOC, against the 400 net-LOC review cap. Stay lean.\n- isEpicFinal comes only from order in this long-running epic. The gate is the full daemon suite plus every local-runner suite; the adversarial pass covers this row's diff and its seams with task-2f2484b4 and task-d8fc3955.\n- Residual: there is a TOCTOU window between the probe and the forward or dial. Exploiting it needs a local actor, which is out of scope.\n- Text rule: keep comments, test names and summaries at the problem-class level, with no exploit walkthrough.",
+    "keyFiles": [
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/runner-client.mjs",
+      "scripts/local-runner/vm-control.mjs",
+      "packages/moe-daemon/src/index.ts",
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/tests/local-runner-channel.test.mjs",
+      "scripts/tests/local-runner-vm-control.test.mjs",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T08:05:55.768Z",
+  "approvedPlanRevision": 1
+}

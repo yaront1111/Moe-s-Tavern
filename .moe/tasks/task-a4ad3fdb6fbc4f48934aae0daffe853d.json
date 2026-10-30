@@ -17,42 +17,66 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red), in packages/moe-proxy/src/utils.test.ts. Reuse the stampExecutionIdentity describe block's SESSION, FULL, IDENTITY, call() and refusal() helpers.\n\nAdd `describe('QA decision stamping')` with these cases:\n- (a) Each of moe.qa_approve, moe_qa_approve, qa_approve, moe.qa_reject, moe_qa_reject and qa_reject, called with { taskId: 't1', candidateId: 'cand-1', summary: 's' }, returns true. The arguments become exactly { taskId, candidateId, summary, ...IDENTITY }, with generation as a number.\n- (b) Presented values equal to the env complete the rest.\n- (c) A substituted attemptId, generation ('7' as a string, or 8) or sessionId on either tool is refused with refusal(-32003, 'EXECUTION_IDENTITY_SUBSTITUTED'), and the arguments are not mutated.\n- (d) A partial attempt env group (MOE_ATTEMPT_ID without MOE_ATTEMPT_GENERATION) gives refusal(-32602, 'EXECUTION_IDENTITY_INVALID') for both tools.\n- (e) An empty env returns false, with the arguments unchanged.\n\nThe ONLY edit to an existing test: in 'touches no other tool and no other method' (around line 784), replace the 'moe.qa_approve' entry of the not-stamped list with 'moe.add_comment'. This behavior change makes that one entry false. Every other existing assertion stays byte-identical.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-proxy/src/utils.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.test.ts"
+      ],
+      "note": "Added 'QA decision stamping' describe.each (qa_approve, qa_reject; 5 cases each), swapped moe.qa_approve -> moe.add_comment in the not-stamped list. Red in Linux snapshot: 8 failed (the 4 behavior cases per tool; passthrough cases pass). Shared checkout has Windows node_modules, so vitest not run there. 874 other dirty paths are peers'/pre-existing; untouched.",
+      "startedAt": "2026-10-30T08:04:41.046Z",
+      "completedAt": "2026-10-30T08:05:14.526Z"
     },
     {
       "stepId": "step-2",
       "description": "Implementation, packages/moe-proxy/src/utils.ts.\n- In the EXECUTION_IDENTITY_TOOLS initializer list, add `['qa_approve', ['attempt', 'session']]` and `['qa_reject', ['attempt', 'session']]` after complete_task. The existing loop registers all three spellings.\n- Update the doc comment above stampExecutionIdentity, which names the stamped tools (CQ-F09, CQ-F12a), to add moe.qa_approve and moe.qa_reject, citing CQ-V06a.\n- No other change. The env reading, the === comparison, the refusal codes and the fail-closed handling are reused as they are.\n\nError handling is unchanged by construction: a malformed or partial env refuses only the tools that carry that group, and a substituted value is refused before the call is forwarded.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-proxy/src/utils.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "note": "Two table entries + doc comment (CQ-V06a). No other change.",
+      "startedAt": "2026-10-30T08:05:16.169Z",
+      "completedAt": "2026-10-30T08:05:20.927Z"
     },
     {
       "stepId": "step-3",
       "description": "Docs, packages/moe-proxy/README.md.\n- In the stamped-tool table, add a row: `moe.qa_approve`, `moe.qa_reject` | `attemptId`, `generation`, `sessionId`.\n- Add one sentence after the table: under verified-local the daemon requires QA's own identity on these decisions (CQ-V06). Under legacy and observe, a presented attempt still gets the daemon's ATTEMPT_SUPERSEDED freshness check, as complete_task does.\n- Keep the 'covers no other tool' sentence; with the table updated it stays true.\n- The root CLAUDE.md and scripts/CLAUDE.md sentences are left for CQ-V12's docs sweep.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-proxy/README.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/README.md"
+      ],
+      "note": "Table row + one sentence added.",
+      "startedAt": "2026-10-30T08:05:22.987Z",
+      "completedAt": "2026-10-30T08:05:28.510Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE.\n\nNEVER run `npm test` for moe-proxy in the shared checkout: its pretest runs `npm run build`, which cleans and rebuilds packages/moe-proxy/dist, the proxy live agent seats execute.\n\n1. Mutants, on a scratch copy inside the snapshot, each restored and `cmp`'d afterwards:\n   1. Drop the qa_reject entry: case (a) fails.\n   2. Register qa_approve with ['session'] only: (a) fails.\n2. The GATE runs in an isolated Linux snapshot.\n   - Take `git archive HEAD` of the WHOLE repo into a scratch directory.\n   - Overlay ONLY this task's 3 files.\n   - Check that package.json and package-lock.json match the tree modulo CR, then run `npm ci --no-audit --no-fund` in packages/moe-proxy.\n   - Use `env -i` with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH, with no MOE_* variables.\n   - Run `cd packages/moe-proxy && npm test` fresh; it must exit 0.\n   - `cmp` the overlay against the worktree.\n3. Supply that command, its exit code and the output tail (the Test Files and Tests lines) to complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Mutants killed (drop qa_reject: 4 failed; qa_approve session-only: 4 failed), restored and cmp'd. Gate in Linux snapshot: npm test EXIT 0, 5 files / 188 tests passed. Needed `npm ci --ignore-scripts` of moe-daemon in the snapshot only, because workerType.integration.test.ts imports daemon source (first attempt failed on missing pino). Overlay cmp'd same as worktree. Shared dist/node_modules untouched. Peer-dirty packages/moe-proxy/src/index.ts, daemonIdentity*.ts are not mine.",
+      "startedAt": "2026-10-30T08:05:29.393Z",
+      "completedAt": "2026-10-30T08:06:19.614Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Check:\n\n1. The batch path: index.ts runs stampExecutionIdentity per batch element, so a batch holding qa_approve is stamped too.\n2. Aliases: grok's underscore names (moe_qa_approve) are covered.\n3. A legacy QA seat with a stale MOE_ATTEMPT_ID now gets ATTEMPT_SUPERSEDED from the daemon. This is the same F07 freshness rule as complete_task, and the wrapper refreshes the pair on resume. Record it as the accepted consequence in the step note.\n4. No other tool newly stamped.\n5. No dist/ or node_modules touched in the shared tree.\n6. Rails: no forbidden-pattern tokens, no .moe edits, no Git writes.\n\nWrite the Serena handoff memory 'task-task-a4ad3fdb6fbc4f48934aae0daffe853d-handoff' for CQ-V12 (task-b621ddc9): list the CLAUDE.md sentences to sweep, and note that the R08 bridge stamping for QA seats in VMs is still R-series work.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review: (1) index.ts:131 runs stampExecutionIdentity per batch element, so batches are covered. (2) moe_qa_* and bare spellings covered and tested. (3) Accepted consequence: a legacy QA seat with a stale MOE_ATTEMPT_ID now gets ATTEMPT_SUPERSEDED from the daemon, same F07 rule as complete_task. (4) No other tool newly stamped; the not-stamped list test still passes. (5) No dist/node_modules touched in shared tree. (6) No forbidden tokens, no .moe edits, no Git writes. Handoff memory written.",
+      "startedAt": "2026-10-30T08:06:20.435Z",
+      "completedAt": "2026-10-30T08:06:29.520Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -68,20 +92,28 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:56:02.151Z",
-  "updatedAt": "2026-10-29T17:57:29.543Z",
+  "updatedAt": "2026-10-30T08:06:34.432Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:56:15.773Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-0062feec"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T17:57:29.462Z",
   "executionContract": {
@@ -137,5 +169,20 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T17:57:29.543Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T08:04:41.046Z",
+  "reviewStartedAt": "2026-10-30T08:06:34.430Z",
+  "verification": {
+    "command": "cd packages/moe-proxy && npm test",
+    "exitCode": 0,
+    "outputTail": "Test Files  5 passed (5)\n      Tests  188 passed (188)\n(run in isolated Linux snapshot of git archive HEAD + overlay of the 3 task files; env -i, node v24.21.0)",
+    "reportedAt": "2026-10-30T08:06:34.430Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-proxy/src/utils.test.ts",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-proxy/README.md"
+  ],
+  "completionSummary": "CQ-V06a: moe-proxy now stamps attemptId, generation and sessionId onto moe.qa_approve / moe.qa_reject (moe.x, moe_x, bare x) via two EXECUTION_IDENTITY_TOOLS entries in utils.ts; stamping, EXECUTION_IDENTITY_SUBSTITUTED and EXECUTION_IDENTITY_INVALID paths reused unchanged; no-identity env stays byte-identical. Tests: new 'QA decision stamping' describe.each (5 cases x 2 tools); the only edited existing assertion is moe.qa_approve -> moe.add_comment in the not-stamped list. README table row + sentence. Red first (8 failed); 2 mutants killed. Files: packages/moe-proxy/src/utils.ts, src/utils.test.ts, README.md. Verified in an isolated Linux snapshot (git archive HEAD + overlay of the 3 files, native npm ci in proxy plus npm ci --ignore-scripts in daemon because workerType.integration.test.ts imports daemon source); shared dist/node_modules untouched."
 }
