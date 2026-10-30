@@ -32,28 +32,49 @@
     {
       "stepId": "step-2",
       "description": "scripts/local-runner/certify-bridge.mjs: the 'guest-network' check, appended to BRIDGE_CHECKS after 'bridge-eof'.\n\nThe prerequisite CQ-R13e1 (task-b29d022e) CREATES this file. It is listed under newFiles only because it is absent when this plan is submitted. This step EDITS R13e1's landed bytes, so keep its exports and rows intact. If watchedSession does not yet return runCheckSession's exitCode, add that one pass-through.\n\nCONSTANTS\n- DEFAULT_DAEMON_PORT = 9876. Comment it: packages/moe-daemon/src/index.ts DEFAULT_PORT. certify takes no project input. The certify listener carries the bind-level claim for any port. guest-session.mjs refuses a non-loopback daemon.json bindHost at every agent session.\n- CONNECT_PROBE, exactly this one line:\n  import socket,sys;socket.setdefaulttimeout(3);o=any(socket.socket().connect_ex((sys.argv[1],int(p)))==0 for p in sys.argv[2:]);print(\"open\" if o else \"closed\");sys.exit(int(o))\n  connect_ex returns an errno instead of raising, and a timeout is EWOULDBLOCK, so only a real connect prints open. A crash prints no token, which reads as unknown.\n- GATEWAY_PROBE = Object.freeze(['ip','-4','route','show','default']).\n\nHELPERS\n- export gatewayOf(stdout), returning the canonical dotted quad or null.\n  - The input must be a string whose only line (with at most one trailing '\\n') matches /^default via (\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3}) dev [A-Za-z0-9_.@-]{1,15}(?: [\\x20-\\x7e]*)?$/.\n  - Octets have no leading zero except '0' itself and are each <= 255. The first octet is 1..223 and not 127.\n  - The result is rebuilt from the parsed integers, so no guest text reaches an argv.\n- probe(context, argv): invoker(context.name, context.provider)(['exec','--no-map-working-directory',name,'--',...argv], QUERY_TIMEOUT_MS), handled exactly as guest-readiness.mjs runGuestProbe handles it:\n  - a resolved call is {code: 0, stdout};\n  - a rejection with an integer code, not killed, and a string stdout is {code, stdout};\n  - anything else throws providerError(classifyFailure(error)).\n- listen(): net.createServer(socket => { accepted += 1; socket.destroy(); }) on { host: '127.0.0.1', port: 0, exclusive: true }.\n  - It resolves { port, accepted(), close() }.\n  - An 'error' before 'listening' fails with CERTIFY_LISTENER_FAILED.\n  - It never binds a non-loopback address.\n\nTHE CHECK\n1. gateway = gatewayOf(stdout of GATEWAY_PROBE, used only when its code is 0). A null gateway fails with CERTIFY_GATEWAY_UNKNOWN, before any listener or session.\n2. listener = await listen(). Inside try { ... } finally { await listener.close() }:\n   - ports are [listener.port, DEFAULT_DAEMON_PORT], and args = [gateway, ...ports.map(String)].\n   - The check identity runs watchedSession(context, 'certify-network', `python3 -I -c '${CONNECT_PROBE}' ${args.join(' ')}`, { limit: 64 }).\n     - It is closed only when the outcome is 'passed', stdout is exactly 'closed\\n', and there is no overflow or broken frame.\n     - It is open only when the outcome is 'code-failure', exitCode is 1 and stdout is exactly 'open\\n'.\n     - Anything else is unknown.\n   - The agent identity runs probe(context, ['sudo','-n','-u',JOB_IDENTITIES[0],'python3','-I','-c',CONNECT_PROBE,...args]).\n     - It is closed only for code 0 with exactly 'closed\\n', and open only for code 1 with exactly 'open\\n'. Anything else is unknown.\n   - Both probes always run, check identity first.\n3. Read listener.accepted() after both probes. Then:\n   - either probe open, or accepted > 0, is CERTIFY_GUEST_NETWORK_REACHABLE. That takes precedence, because a confirmed exposure is the finding;\n   - else either probe unknown is CERTIFY_GUEST_NETWORK_UNKNOWN;\n   - else the check passes.\n\nERROR HANDLING\n- Results are fixed codes only. PROVIDER_* codes propagate through R13d's wrapper.\n- The listener is closed on every path.\n- No guest byte reaches an argv, a command or the report.\n- Each probe is bounded: 3 s per connect, QUERY_TIMEOUT_MS for the agent probe, and BRIDGE_BOUNDS for the session.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/local-runner/certify-bridge.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/certify-bridge.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "GREEN. certify-bridge.mjs adds 'guest-network' to BRIDGE_CHECKS, after bridge-eof.\n- Exports CONNECT_PROBE (the plan literal) and gatewayOf. gatewayOf uses a regex with no-leading-zero octets, checks each is <=255 and the first is 1-223 and not 127, and rebuilds the address from integers.\n- probe() follows runGuestProbe's handling; invoker is called outside the try, so a lifecycle input error keeps its own code.\n- listen() uses net.createServer on 127.0.0.1:0 (exclusive) and counts accepts. An error before listening gives CERTIFY_LISTENER_FAILED. close() is in finally.\n- Verdict order: REACHABLE (either token is open, or accepted>0), then the agent's PROVIDER_* rethrow, then UNKNOWN, then passed. A gateway problem gives CERTIFY_GATEWAY_UNKNOWN before any listener or session.\n- Took QA's R13e1 note: tee gets `onStdout && notify`.\n- The test file now uses one named import; the RED-phase namespace import is gone. No assertion changed.\n\nResults, under env -i with the nvm Node 24 PATH:\n- focused CF/CB/GN: 22/22 pass;\n- full local-runner + bundle: exit 0, 329 tests, 328 pass, 1 skip.\n- Real python3 run of CONNECT_PROBE: closed gives 0/'closed\\n', open gives 1/'open\\n', sh-quoted also gives 0/'closed\\n', a crash gives 1/'' (which reads as unknown).\n\nLogs: /tmp/moe-d00d-worker/green-*.log. Peer dirty paths untouched.",
+      "startedAt": "2026-10-30T17:30:32.721Z",
+      "completedAt": "2026-10-30T17:33:38.084Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY ONCE, fresh.\n\n1. Run `node --test scripts/tests/local-runner.test.mjs`. On WSL, run it under env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\". It must exit 0. Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. `git diff --check` over certify-bridge.mjs and the test file is clean.\n3. A read-only `git status --short` shows only those two files changed by this task. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nThe native run (real Multipass) is operator-only and is NOT part of this verification. CQ-R13 consumes its reports.\n\nError handling: fix a failing row in code, never by weakening an assertion.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/certify-bridge.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "VERIFIED, fresh.\n\nCommand: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs\n- exit 0: 316 tests, 315 pass, 0 fail, 1 skip. Log: /tmp/moe-d00d-worker/verify.log.\n- git diff --check over both files is clean.\n- Size against f7b5e172^: certify-bridge +84/-5, tests +144/-18. Total 251 changed lines.\n\nLANDING ANOMALY, not caused by this session (no Git writes here). At 19:33 a non-Moe commit, cd5227775414824b6f71aeb80943e41af1dcedb3 'docs(site): advertise Claude account rotation...', was made by yaront1111 with a Claude co-author. It has no Moe trailers. It swept this task's uncommitted step-2 bytes into itself: certify-bridge.mjs (+84/-5) and the test import fold (+2/-4). It also took two untracked peer files: scripts/mods/{moe-account-switch,moe-compaction-keeper}/tsconfig.json. It contains no docs/site file. It is pushed to origin/moe/work-2026-10-24.\n\nThe working tree is byte-identical to that commit for both of my files, so git status no longer shows them as dirty. The delivered bytes are on the branch. The wrapper's completion commit will likely carry only the BOARD record. QA should review f7b5e172 (step-1 tests) plus cd522777 (step-2 runtime) as this task's diff. History was not rewritten.\n\nPeer dirty .moe paths were left untouched.",
+      "startedAt": "2026-10-30T17:33:44.093Z",
+      "completedAt": "2026-10-30T17:35:29.450Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the two-file diff as an attacker:\n- Can a lying or compromised guest make guest-network pass while a guest identity reached the host? The host listener's own accept count is evidence that is independent of guest stdout.\n- Can any guest byte reach an argv or a command? Check the gateway rebuilt from integers, the exact token compares, and that stdout is never echoed into a code.\n- Can the listener outlive the check through a throw between listen() and the finally, or bind anything but 127.0.0.1?\n- Can either identity's probe read as 'closed' after a crash (empty stdout), after a sudo denial (exit 1, no token), or with Multipass's own exit codes 2/3? None of these may ever be closed.\n- Is everything bounded? Each connect is 3 s, the agent probe is QUERY_TIMEOUT_MS, and the session is BRIDGE_BOUNDS.\n- Are two concurrent certify runs on one host safe? They get separate ephemeral ports.\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 3's command fresh before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/certify-bridge.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "ADVERSARIAL SELF-REVIEW done. No code changes, so step-3's fresh verification still stands.\n\nChecked and holding:\n- Lying guest: listener.accepted() is the host's own count on 127.0.0.1. A connect it sees outranks any guest token, including an agent PROVIDER_* error (GN4 has a row for this).\n- Guest bytes never reach an argv. The gateway is rebuilt from Number octets, and ports are String(host ints). stdout is only compared exactly (latin1 for the Buffer) and never echoed into a code.\n- Listener lifetime: nothing can throw between listen() resolving and try. watchedSession or probe throws close it in finally. It binds only host '127.0.0.1', port 0. An accepted socket is destroyed at once, so server.close() always completes.\n- No false closed. A crash gives exit 1 with '' (real python3 confirmed). A sudo denial gives exit 1 with no token. Multipass's 2/3, exit 0 with 'open', and any extra byte all read as unknown. A non-string stdout or a missing exitCode also read as unknown.\n- Bounds: connect_ex has a 3 s timeout (it returns errno on timeout, it does not raise). Both probes use QUERY_TIMEOUT_MS with SIGKILL and maxBuffer 64K. The session uses BRIDGE_BOUNDS. ROUTE is a linear regex over at most 64K.\n- Concurrency: each run gets its own ephemeral port and VM, and 9876 is only connected to, never bound.\n\nTheoretical only, not fixed:\n(a) If the child-close callback and a pending accept land in the same epoll batch, accepted() could be read before Node accepts. That needs a guest that connected and then lied about it within the same batch. An honest guest prints 'open' anyway.\n(b) Certification trusts the fresh pinned image's `ip -4 route` output. A root-compromised guest could name a fake gateway, but that is outside the certify threat model.\n\nArchitect deviation (comment-038cd8f3): the ports are the listener plus 9876 instead of a daemon.json read, and bindHost is not recorded in the report.\n\nLanding anomaly: see step-3 (cd522777). #general was notified (msg-a75c6510).",
+      "startedAt": "2026-10-30T17:35:31.833Z",
+      "completedAt": "2026-10-30T17:36:54.105Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-73c29a03",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -72,7 +93,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:04:05.532Z",
-  "updatedAt": "2026-10-30T17:27:28.091Z",
+  "updatedAt": "2026-10-30T17:38:14.144Z",
   "dependsOn": [
     "task-a8a3a502b8264cc5adcb660f59656a00",
     "task-b29d022e7d9e4698b40517340f48e31c"
@@ -81,18 +102,22 @@
     "firstClaimAt": "2026-10-30T06:18:53.556Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 1
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-73c29a03"
+    "worker-73c29a03",
+    "worker-5ebbf433"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T06:34:06.277Z",
@@ -118,5 +143,43 @@
   },
   "planApprovedAt": "2026-10-30T06:34:06.297Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-10-30T17:22:36.587Z"
+  "workStartedAt": "2026-10-30T17:22:36.587Z",
+  "commits": [
+    {
+      "sha": "f7b5e1722a3ae3c79bbdeea235aa1c637113f13b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T17:18:48Z",
+      "paths": [
+        ".moe/tasks/task-d00dafdf2dde4a41bf5983b1f7d495de.json",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T17:28:07.866Z",
+      "treeId": "ede62738436b9798e419afd4cf22befbd0c085b6",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/certify-bridge.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-73c29a03@2026-10-30T17:18:48Z",
+    "at": "2026-10-30T17:28:07.866Z"
+  },
+  "reviewStartedAt": "2026-10-30T17:38:14.142Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ RA checkAgents reports AGENT_MISSING for an absent binary and AGENT_HASH_MISMATCH for a changed one, from the installed pins only (38.237769ms)\nℹ tests 316\nℹ suites 0\nℹ pass 315\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 51814.812513",
+    "reportedAt": "2026-10-30T17:38:14.142Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-R13e guest-network certify check, appended to BRIDGE_CHECKS after bridge-eof. Together with CQ-R13e1's bridge-framing/bridge-eof, this satisfies the DoD.\n\ncertify-bridge.mjs:\n- Exports CONNECT_PROBE (one fixed python3 -I literal, no quote/control char) and gatewayOf(). gatewayOf takes the single `ip -4 route show default` line and rebuilds a unicast dotted quad from integers (no leading zeros, <=255, first octet 1-223 and not 127), else null.\n- The check:\n  - The gateway probe runs first. A missing gateway gives CERTIFY_GATEWAY_UNKNOWN, with no listener or session.\n  - Then it opens a certify-owned listener on 127.0.0.1 with an ephemeral port that counts accepts (an open failure gives CERTIFY_LISTENER_FAILED). It is closed in finally.\n  - Then the check identity runs a session (frame certify-network, limit 64), then the agent identity runs `exec --no-map-working-directory NAME -- sudo -n -u moe-agent python3 -I -c PROBE <gw> <port> 9876`.\n  - REACHABLE if either side gives an exact 'open' token on exit 1, or the listener accepted anything. Otherwise the agent's PROVIDER_* error. Otherwise UNKNOWN unless both sides give exact 'closed' on exit 0.\n- QA's R13e1 note applied: tee gets `onStdout && notify`.\n- Ports are [listener, 9876], per the architect's deviation (comment-038cd8f3).\n\nTests: GN1-GN5 (argv/literal/order/listener held, gatewayOf table, pass, REACHABLE/UNKNOWN/GATEWAY/PROVIDER mapping with teardown and listener-closed assertions, composition), plus updated CF/CB ids.\n- Full run: 316 tests, 315 pass, 1 skip. With the bundle test: 329/328/1.\n- Real python3 run of the probe: closed gives 0/'closed', open gives 1/'open', a crash gives 1/''.\n- diff --check is clean. Total 251 changed lines.\n\nLANDING NOTE: the step-2 runtime bytes were swept into a non-Moe commit, cd522777 ('docs(site)...', pushed, no Moe trailers), made outside this session. Review f7b5e172^..cd522777 restricted to the two paths. No Git writes here; #general notified.\n\nNative Multipass run i"
 }
