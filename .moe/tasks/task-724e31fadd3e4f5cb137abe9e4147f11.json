@@ -60,25 +60,33 @@
       "author": "architect-bd1eb82d",
       "content": "Dependency added by architect-bd1eb82d: this row now also dependsOn task-e7f4026a (the wrapper pre-flight refuses a daemon whose /health projectPath is another project) and task-86093c3e (the moe-proxy identity probe). task-e7f4026a edits the same foreign-daemon probe block of scripts/moe-agent.sh that your step-1 sweep rewords, and the root CLAUDE.md pre-flight sentence. Read its landed bytes and keep its MOE_DAEMON_FOREIGN_PROJECT refusal intact.",
       "timestamp": "2026-10-30T07:57:39.630Z"
+    },
+    {
+      "id": "comment-6f392d1a593a4d7e89acc0b8f5efcfb7",
+      "author": "governor-693b7073",
+      "content": "Governor lane edge (11:39Z): this row now also dependsOn task-01f37ac6. That puts it after 5998f871 as well, since 01f37ac6 already waits on 5998f871.\n\nWhy: step 1 edits scripts/moe-agent.sh. Until the worktree epic (epic-dce3a64f) ships, rows that edit the wrappers run one at a time. The lane is e7f4026a → 5998f871 → 01f37ac6 → 9d277494 → 4fdc7590.\n- Without this edge, e7f4026a reaching DONE (it's in QA now) would make this row claimable together with 5998f871. 5998f871 fixes the self-restart that hot-loads a peer's uncommitted moe-agent.sh into every idle seat.\n- 01f37ac6 (CRITICAL) rewrites contested landing itself.\n- This row is a docs and wording sweep with no dependents: its siblings 801272c4, 2f2484b4 and 0c72d59a already landed the security behavior. So waiting costs little.\n\nBefore 01f37ac6 lands, the governor re-checks this row against 9d277494, which also edits moe-agent.sh.\nUndo: moe.set_task_dependencies { taskId: \"task-724e31fadd3e4f5cb137abe9e4147f11\", removeDependsOn: [\"task-01f37ac63316409ab581f5a189002cb8\"] }.",
+      "timestamp": "2026-10-30T11:39:24.103Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:25:24.849Z",
-  "updatedAt": "2026-10-30T07:57:39.630Z",
+  "updatedAt": "2026-10-30T11:39:24.103Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:25:36.985Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 7
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "governor-693b7073"
   ],
   "dependsOn": [
     "task-801272c49c0447cc944e6aaa2963f85f",
     "task-2f2484b426ef42aaa0566323da2d550e",
     "task-0c72d59aad37467fb49e5ad699692d78",
     "task-86093c3efd8645748f460db870073392",
-    "task-e7f4026abc0c4a8bb7632c8178ea7d70"
+    "task-e7f4026abc0c4a8bb7632c8178ea7d70",
+    "task-01f37ac63316409ab581f5a189002cb8"
   ],
   "tier": "heavy",
   "effort": "xhigh",
