@@ -63,7 +63,7 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -123,21 +123,24 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:27:38.551Z",
-  "updatedAt": "2026-10-30T15:28:21.258Z",
+  "updatedAt": "2026-10-30T15:49:37.849Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:33:18.537Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
     "executedStepCount": 9,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T15:49:37.849Z",
+    "wallClockMs": 62179312
   },
   "contextFetchedBy": [
     "worker-6e57c4f8",
     "architect-bd1eb82d",
     "qa-ba3f4f35",
     "architect-4ae016fb",
-    "worker-262588d0"
+    "worker-262588d0",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -256,7 +259,7 @@
     "sessionId": "worker-262588d0@2026-10-30T15:13:45Z",
     "at": "2026-10-30T15:28:21.258Z"
   },
-  "reviewCompletedAt": "2026-10-30T14:44:24.644Z",
+  "reviewCompletedAt": "2026-10-30T15:49:37.849Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Dependencies reach the check only through the decided, bounded path. A failed dependency phase is reported as infra-failure, never as code-failure or passed."
@@ -346,5 +349,8 @@
     "checkRefs": [
       "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-dispatch.test.mjs"
     ]
-  }
+  },
+  "completedAt": "2026-10-30T15:49:37.849Z",
+  "reviewSummary": "Reviewed rev-2 completion ef7497c9 (tree 13f1b1e1; on local+origin moe/work-2026-10-24). check-dispatch.mjs +20/-6, dispatch test +83/-9 = 118 changed/net +88; task total with 7a7f1044 +370/-73 (net +297). Rev-1 files untouched since 7a7f1044; checkpoint 64ebece7 board-only; diff --check clean, no forbidden patterns.\nExact-commit archive /tmp/qa2-r11e.Ky9jBk, env -i Node v24.21.0: six-file verification command exit 0, 438/435 pass/0 fail/3 existing skips (/tmp/qa2-r11e-six.log); five-file DoD command exit 0, 426/423/0/3 (/tmp/qa2-r11e-five.log).\nReject-#1 repro with DEFAULT loadRunCheck (real adapter + real runCheckJob steps, temp state dir, no VM/network): plain and lockfile-naming checks now reach real provisioning (failure CHECK_PROVISION_UNAVAILABLE, no Multipass here) instead of CHECK_JOB_INPUT_INVALID; uncovered gate stops RUNNER_DEPENDENCIES_UNDECLARED after get_context only (/tmp/qa2-repro2.log).\n9 own scratch mutations all killed (12/12 baseline+restore): drop runOnce pass-through, adapter default [], suffix w/o '/', no refusal, gate [], adapter drops steps, reversed order, dir-root inference, adapter infers lockfiles.\nDoD1 pinned/root-owned toolchain: landed code unchanged, TC/TT/KI green. DoD2: caller passes only literal package-lock.json configs dirs, MAX_LOCKFILES kept in runCheckJob; dependency failures are infra-failure before onReady, never passed/code-failure. DoD3: E9 + D's envOf(digest)/envOf(null). DoD4: evidence present, re-run green. Contract ACs/invariants hold; daemon normalizes configs.\nNon-blocking: row C is a disclosed test-only addition; runOnce bare-gate branches now unreachable, kept per plan, flagged in CQ-R13; >16 lockfiles stop as RUNNER_CHECK_FAILED without failure code (plan-accepted); D not run on macOS (worker Windows 1/1). Mid-epic, no daemon/schema change; executionReady false, no isolation claim.",
+  "requiredCheckAtDone": null
 }
