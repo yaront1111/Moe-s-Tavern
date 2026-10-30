@@ -11,9 +11,88 @@
     "The exact verification command exits 0 and the current proxy build is the binary under test."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "EOF drain for one-shot blocking calls, plus its tests (packages/moe-proxy/src/index.ts, src/index.test.ts).\n\nBlast-radius rule: every agent CLI talks MCP through this proxy, and an MCP client always sends `initialize` first. The wrapper one-shots never do: moe_rpc, Invoke-MoeRpc and moe-call.sh pipe one bare tools/call, then close stdin. So the long drain applies ONLY to a session that never sent `initialize`. An exiting CLI's proxy must not linger for up to 11 minutes holding a parked wait_for_task or chat_wait.\n\nindex.ts changes:\n- Track `sawInitialize`: true once any stdin message, or any batch element, has method 'initialize'.\n- Add `isBlockingLongPoll(parsed)`, which getRequestTimeout reuses. Give each pendingRequestTimes entry a `blocking` flag at BOTH places entries are created: the stdin send path and the ws 'open' flush of queued messages.\n- `BLOCKING_TIMEOUT_MS = parsePositiveIntEnv(process.env.MOE_BLOCKING_TIMEOUT_MS, 11 * 60 * 1000)` replaces WAIT_FOR_TASK_TIMEOUT_MS. The default is unchanged; tests need the knob.\n- Replace gracefulShutdown with `gracefulShutdown(cause: 'eof' | 'signal')`:\n  - A signal sets `signalCapAt = min(signalCapAt, now + 2000)`.\n  - A repeat call returns once the cap is recorded, so the old stacked intervals are gone.\n  - The first call keeps today's prologue: shuttingDown, clear the reconnect timer, stop the timeout checker, and exit 0 at once when nothing is pending. It then starts ONE 50ms drain interval.\n- Each drain tick:\n  - A sent pending id's deadline is `sentAt + timeoutMs` when cause is 'eof', !sawInitialize and it is blocking. It becomes `now` when that blocking request's socket is gone (currentWebSocket null: ws 'close' returns early during shutdown and emits nothing). Every other id gets `shutdownStartedAt + 2000`, today's flat grace. All deadlines are capped by signalCapAt and step 2's absolute deadline.\n  - Queued (unsent) messages keep the flat 2000ms. A queued blocking request flushed by a late 'open' gets its own deadline from then on.\n  - Due ids are removed from pendingRequestIds, pendingRequestTimes and pendingToolsListIds BEFORE their one error is written, so the existing unknown-id guard drops any late daemon reply.\n  - Error texts: `Request timed out after <timeoutMs>ms` for a blocking request past its deadline; 'Connection to daemon lost before response received' when its socket is gone; the unchanged 'Proxy shutting down before response received' and 'Proxy shutting down with message still queued' for the grace and signal paths.\n  - With nothing left: closeWebSocket() and exit 0.\n- stdin 'end'/'error' call gracefulShutdown('eof'); SIGTERM/SIGINT call gracefulShutdown('signal').\n\nError handling: every request id gets exactly one response; there is never a reconnect during shutdown, an unbounded wait, or a duplicate line; stdout EPIPE still exits through safeStdoutWrite.\n\nTests use the existing spawned `node dist/index.js` and mock WebSocketServer, and measure times from stdin EOF:\n- T1 (DoD 1): a bare tools/call moe.wait_for_resource with no initialize; the server replies after 3000ms; write then end() at once. Expect exactly one stdout line, a result for id 1, arriving >=2500ms after EOF, and exit 0. This fails on current source.\n- T2 (DoD 2): MOE_BLOCKING_TIMEOUT_MS=3000 and the server never replies. Expect one 'Request timed out after 3000ms' for id 1 between ~2.5s and 6s, and exit 0.\n- T3 (DoD 2): the server terminates the socket 1s after the blocking request arrives. Expect one 'Connection to daemon lost before response received' within ~1.5s of that, and exit.\n- T4 (DoD 2): daemon.json names a port with no listener, so the request stays queued. Expect one 'Proxy shutting down with message still queued' within ~3s, and exit.\n- T5 (DoD 3), it.each over SIGTERM and SIGINT, `it.skipIf(process.platform === 'win32')`: the server replies after 10s; end(), then the signal 500ms later. Expect one 'Proxy shutting down before response received' for id 1, exit within 2.5s of the signal, and no second line for id 1.\n- T6 (DoD 4): (a) an initialized session (initialize answered, then a blocking call the server answers after 3000ms) still errors at the ~2s grace; (b) a one-shot ordinary tools/list with no reply errors at ~2s.\nEvery existing test passes unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/index.test.ts"
+      ],
+      "note": "EOF drain: gracefulShutdown(cause) + drainVerdict/drainTick; trackRequest/forgetRequest used at both tracking sites (stdin send + ws 'open' flush) with a blocking flag; sawInitialize gate; BLOCKING_TIMEOUT_MS from MOE_BLOCKING_TIMEOUT_MS (default 11 min). 9 new spawned-proxy tests (T1 x2 after/before connect, T2, T3, T4, T5 x2 SIGTERM/SIGINT skipIf win32, T6a, T6b). RED on HEAD source: T1x2, T2, T3 failed (2s 'Proxy shutting down before response received'); GREEN after fix: src/index.test.ts 24/24 in Linux snapshot /tmp/moe-b5a1-gate.5lj7Mx (native node_modules hardlinked from a lock-matching tree; shared checkout node_modules is Windows-only). Drain does not itself cap at the absolute deadline: step 2's timer fires at its own time, so the earlier bound wins. Shared-checkout dirty paths from other sessions untouched.",
+      "startedAt": "2026-10-30T13:50:24.680Z",
+      "completedAt": "2026-10-30T13:57:31.449Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Opt-in absolute deadline MOE_PROXY_ONESHOT_DEADLINE_MS, plus its tests (src/index.ts, src/index.test.ts). This is the consumer contract WT-10 asked for in comment-8b75fe92: one bound over startup, connect, queued, sent and EOF drain together.\n- Parsing, at startup before connect(): unset or blank means no bound, and every existing behavior stays. Otherwise the value must be plain decimal digits forming a safe integer (Unix epoch ms). Anything else fails closed: write one JSON-RPC error with a null id, `Invalid MOE_PROXY_ONESHOT_DEADLINE_MS: <reason>` (never echo more than 64 chars of the value), and exit 1 without connecting.\n- When valid: one setTimeout at max(0, deadline - Date.now()) runs expireDeadline():\n  - set shuttingDown, which stops reconnects;\n  - clear the reconnect timer and the drain interval;\n  - write exactly one error, 'Proxy deadline exceeded (MOE_PROXY_ONESHOT_DEADLINE_MS)', for each known pending id, sent or queued;\n  - when no id is known yet (never connected, so stdin has not been read), write one null-id error with that message;\n  - closeWebSocket() and exit 1.\n  Ids are removed before writing, so no late success can follow.\n- Step 1's drain caps every deadline at this one, so the earlier of the two wins with exactly one response per id. A signal still exits within 2s.\n- Error handling: an expiry during the identity probe or a reconnect backoff exits the same way, and a deadline already in the past expires on the next tick.\n- Tests:\n  - never-connected: daemon.json removed, so the proxy is in its retry loop; deadline = now+1500 gives one null-id deadline error and exit 1 within 1.2-3s;\n  - waiting: a blocking call the server answers at 4000ms, deadline = now+2500, gives one deadline error for id 1 at ~2.5s, never the late result, and exit 1;\n  - invalid, it.each over 'abc', '-5' and '1e12' (each 'fails closed'): an immediate null-id error naming the variable, exit 1, and the mock server sees no connection.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/index.test.ts"
+      ],
+      "note": "MOE_PROXY_ONESHOT_DEADLINE_MS: parseOneShotDeadline (blank=unset; strict /^[0-9]+$/ + Number.isSafeInteger; invalid -> one null-id 'Invalid MOE_PROXY_ONESHOT_DEADLINE_MS: <reason>' with the value JSON-escaped and capped at 64 chars, exit 1 before connect()); armDeadline re-arms in 2^31-1 ms steps because setTimeout clamps longer delays to 1ms (a far-future deadline would otherwise fire at once); expireDeadline sets shuttingDown, clears reconnect/drain/timeout timers, forgets ids then writes one 'Proxy deadline exceeded (MOE_PROXY_ONESHOT_DEADLINE_MS)' per sent+queued id (null-id when none known), exit 1. Timer kept ref'd so the bound always fires. Tests: never-connected (1.5s, null-id, exit 1), waiting (2.5s cuts a 4s reply, exit 1, no late result), invalid it.each x5 (abc, -5, 1e12, 20 nines, 5000-char) fail closed with no ws connection and <200-char message, blank + 40-days-away leave a normal call alone. src/index.test.ts 33/33 in snapshot; mutation probe removing the re-arm makes the 40-days test fail.",
+      "startedAt": "2026-10-30T13:57:32.721Z",
+      "completedAt": "2026-10-30T14:00:00.119Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs and test isolation (packages/moe-proxy/README.md, packages/moe-proxy/vitest.config.ts).\n- README 'Environment Variables', two entries:\n  - `MOE_PROXY_ONESHOT_DEADLINE_MS`: wrapper-only. An absolute Unix-epoch-ms bound for one call; blank means unset; any other invalid value fails closed (exit 1). At expiry, one error per pending id, then exit 1.\n  - `MOE_BLOCKING_TIMEOUT_MS`: the per-request deadline of moe.wait_for_task, moe.chat_wait and moe.wait_for_resource, default 660000.\n- A short 'One-shot calls' section: in a session that never sent `initialize`, stdin EOF lets a pending blocking call finish up to its deadline. Initialized MCP sessions and ordinary calls keep the 2-second drain, and SIGINT/SIGTERM cap any drain at 2 seconds.\n- vitest.config.ts: add 'MOE_PROXY_ONESHOT_DEADLINE_MS' and 'MOE_BLOCKING_TIMEOUT_MS' to the blanked env list, so no developer or seat env leaks into a spawned test proxy (blank = unset, as for the other names).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/README.md",
+        "packages/moe-proxy/vitest.config.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/README.md",
+        "packages/moe-proxy/vitest.config.ts",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "README: env entries for MOE_BLOCKING_TIMEOUT_MS (default 660000) and MOE_PROXY_ONESHOT_DEADLINE_MS (wrapper-only, blank=unset, invalid fails closed), plus a 'One-shot calls' section (initialize gate, lost-socket fail-fast, 2s drain for initialized/ordinary/queued, signal cap, deadline expiry semantics). vitest.config.ts blanks both new env names. SCOPE GROWTH (one extra docs file): docs/CONFIGURATION.md 'Proxy Configuration' table is the repo's env-var reference and already lists every proxy env (MOE_MESSAGE_TIMEOUT_MS etc.), so two rows were added there to keep it complete; no daemon doc-contract test (executionContractDocs/daemonGitDocs/taskTimeBudgetDocs) asserts on those rows.",
+      "startedAt": "2026-10-30T14:00:01.366Z",
+      "completedAt": "2026-10-30T14:00:52.367Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, once, from the repo root. This is the exact command, and its fresh output is complete_task's evidence:\n(cd packages/moe-proxy && npm test) && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)\n- `npm test` runs pretest, which cleans and rebuilds dist with tsc, so the spawned binary is the current source (DoD 5).\n- Rail 2's parity-check runs on a HEAD snapshot of scripts/, because this task leaves the wrappers alone and a peer's mid-edit bytes must not fail it.\n- On a WSL seat the shared checkout's node_modules is a Windows install, so vitest cannot start there. Run the proxy half in a Linux snapshot per Serena gotcha-linux-vitest-reuse-native-node-modules: archive HEAD packages/moe-proxy, copy this task's 4 files over it and cmp them, `npm ci` or link a native node_modules, then `npm test`. Record the exact command you ran.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.test.ts"
+      ],
+      "note": "Before the run: test-only hardening in index.test.ts (afterEach SIGKILLs any spawned one-shot proxy still alive; upper timing bounds loosened for slow CI: queued <6000, signal <3000, 2s-grace cases <4000; all still discriminate old behavior). Mutation probe: making the ws 'open' flush track a non-blocking entry fails the 'written before connect' test, so both tracking sites are covered. Verification (WSL seat, shared node_modules is Windows): V=/tmp/moe-b5a1-verify.Yt3QrR = git archive HEAD packages/moe-proxy packages/moe-daemon, this task's 4 proxy files cp'd + cmp'd, native lock-matching node_modules hardlinked for proxy and daemon (workerType.integration.test.ts imports daemon source; first attempt without packages/moe-daemon failed only that suite with 'Cannot find module .../moe-daemon/src/tools/toolTestHarness.ts'). Ran: cd $V && (cd packages/moe-proxy && npm test) -> rc 0, 6 files / 290 tests passed (pretest clean+tsc rebuilt dist); then from repo root S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh) -> PASS rc 0.",
+      "startedAt": "2026-10-30T14:00:53.520Z",
+      "completedAt": "2026-10-30T14:04:18.231Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, the final step. Load adversarial-self-review and attack this diff:\n1. Can any request id get zero or two responses? Check the drain racing a late daemon reply, ws 'close' during shutdown, the deadline timer racing the drain, and a signal racing EOF.\n2. Can an initialized CLI session ever wait past 2s at EOF?\n3. Can a one-shot blocking call wait past min(its deadline, the absolute deadline, signal + 2s)?\n4. Does any timer, interval or socket outlive process.exit, or leak in tests?\n5. Does a queued message flushed by a late 'open' carry the right blocking flag and deadline?\n6. Error handling: is an invalid or blank env value handled exactly as documented, and is the env value never echoed unbounded?\n7. Are the timing assertions robust on a slow CI box? Use generous upper bounds and strict lower bounds only where the DoD needs them (>2s).\n8. Do all pre-existing tests pass unchanged?\nIf any byte changes, re-run step 4's command and submit that output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/index.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/README.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Adversarial review of git diff HEAD -- packages/moe-proxy docs/CONFIGURATION.md. FIXED: expiry docs/comment said null-id error 'when none is known'; actual behavior is 'when none is pending' (also fires if every request was already answered while stdin stays open) - wording corrected in index.ts comment, README, CONFIGURATION.md (no logic change). Checked: (1) one response per id - drain and expireDeadline forget ids before writing, the unknown-id guard drops late replies, ws 'close' returns early while shuttingDown, a repeat gracefulShutdown only tightens signalCapAt, expireDeadline exits synchronously; (2) sawInitialize forces the 2s grace for every id, queued msgs always use the grace; (3) waits bounded by min(sentAt+timeoutMs, signal+2s) in the drain (+<=50ms tick) and the absolute timer fires on its own; (4) process.exit ends all timers; tests clear reply timers and SIGKILL leftover children in afterEach; (5) flush path covered by a mutation probe; (6) blank=unset, ' 123' / '1e12' / '-5' / 20 digits fail closed, value JSON-escaped and capped at 64 chars; (7) strict lower bounds only where the DoD needs >2s, generous upper bounds; (8) pre-existing tests untouched and pass. THEORETICAL / pre-existing, not changed: JSON-RPC batch frames are never tracked as pending (unchanged; wrappers never batch); duplicate client ids collapse in the Set; MOE_BLOCKING_TIMEOUT_MS uses lenient parsePositiveIntEnv like MOE_MESSAGE_TIMEOUT_MS; index.ts was already 695 lines (>300) and is now ~800 as the plan kept everything in it. Re-ran step 4 fresh after the wording change: proxy 6 files/290 tests pass (rc 0), parity PASS (rc 0).",
+      "startedAt": "2026-10-30T14:04:19.579Z",
+      "completedAt": "2026-10-30T14:06:16.087Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -33,10 +112,94 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:34:38.414Z",
-  "updatedAt": "2026-10-30T13:41:10.540Z",
+  "updatedAt": "2026-10-30T14:06:50.206Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:41:10.540Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:43:07.966Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-899a90d6",
+    "worker-fe18a9a9"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:47:37.009Z",
+  "executionContract": {
+    "intendedBehavior": "In a proxy session that never sent the MCP `initialize`, which is a wrapper one-shot RPC, stdin EOF no longer cancels a pending moe.wait_for_task, moe.chat_wait or moe.wait_for_resource after 2s. Each such call drains until its daemon reply or its recorded deadline (sentAt + MOE_BLOCKING_TIMEOUT_MS, default 11 min), and fails at once if the daemon socket is lost. Ordinary calls, queued-unsent messages and every initialized MCP session keep today's 2s drain. SIGINT/SIGTERM cap any drain at 2s. The opt-in MOE_PROXY_ONESHOT_DEADLINE_MS bounds the whole process: at expiry it writes one error per known id (a null-id error before any id is known) and exits 1. A blank value means unset, and any other invalid value fails closed. Every request id gets exactly one response.",
+    "acceptanceCriteria": [
+      "A one-shot blocking call with EOF returns a daemon reply that arrives after >2s; the test fails on current source.",
+      "A one-shot blocking call with no reply errors within its recorded deadline; a lost socket, a never-opened socket and queued-unsent messages never hang.",
+      "SIGINT/SIGTERM during an EOF drain exit within 2s with exactly one response per id.",
+      "Ordinary requests, no-pending EOF and initialized sessions keep the 2s behavior; existing tests pass unchanged.",
+      "MOE_PROXY_ONESHOT_DEADLINE_MS bounds never-connected and waiting proxies (exit 1, no late success); invalid values fail closed.",
+      "`(cd packages/moe-proxy && npm test)` plus parity-check on a HEAD snapshot exits 0 against a freshly built dist."
+    ],
+    "invariants": [
+      "Exactly one response per request id; no reconnect after shutdown starts.",
+      "An initialized (CLI) session never waits more than 2s after stdin EOF.",
+      "No env value is echoed unbounded to stdout."
+    ],
+    "compatibility": [
+      "Existing stdout error texts are unchanged for the grace, queued and disconnect paths.",
+      "Unset or blank env vars leave all prior behavior intact.",
+      "Wrapper callers (moe_rpc, Invoke-MoeRpc, moe-call.sh) need no change to benefit."
+    ],
+    "checkRefs": [
+      "(cd packages/moe-proxy && npm test) && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- (1) Use each request's own timeout for every EOF, as the memory gotcha-moe-proxy-oneshot-kills-blocking-longpolls suggested. Rejected as stated: every exiting CLI with a parked chat_wait or wait_for_task would leave its proxy alive for up to 11 minutes, holding a daemon long-poll for a dead session. The `initialize` handshake is the protocol-level discriminator: MCP clients always send it, and wrapper one-shots never do.\n- (2) The wrappers hold stdin open instead. Rejected: the task forbids wrapper-specific stdin workarounds, and Windows PowerShell 5.1 has no clean equivalent.\n- (3) Derive the blocking deadline from the call's own timeoutMs argument. Rejected: it couples the proxy to three daemon schemas; the daemon answers at its own timeout anyway, which is always under the 11-minute tier.\n- (4) No absolute deadline. Rejected: WT-10 (comment-8b75fe92) needs one bound over connect, queue and drain, and without it would duplicate per-shell process supervision.",
+    "codebaseInsights": "- packages/moe-proxy/src/index.ts:\n  - gracefulShutdown (~L314) is a flat 2000ms wait polled every 50ms, then errors every pending id and exits 0; it is called from stdin end/error AND SIGTERM/SIGINT, and today stacks a second interval when called twice.\n  - The stdin reader is installed in openDaemonSocket (~L555), so a one-shot request written before the socket opens is queued in pendingMessages and flushed by ws 'open' (~L424), even during shutdown.\n  - ws 'close' returns early while shuttingDown (~L500), leaving emission to the drain.\n  - checkMessageTimeouts is skipped while shuttingDown.\n  - The unknown-id guard in ws 'message' drops late replies.\n  - getRequestTimeout returns the 11-minute tier for BLOCKING_LONG_POLLS.\n- index.ts runs main() at import, so tests drive the spawned dist (index.test.ts spawns `node ../dist/index.js`; `npm test`'s pretest rebuilds it).\n- vitest.config.ts blanks MOE_* env for spawned proxies.\n- moe_rpc (scripts/moe-agent.sh) does `echo \"$rpc\" | proxy || return 1`: a single bare tools/call, id 1, no initialize.",
+    "risks": "- Timing tests on slow CI: keep lower bounds only where the DoD needs them (>2s); give upper bounds generous slack.\n- Signals on Windows: node kill() has no handler semantics, so skip the signal tests on win32.\n- The ws 'open' flush during shutdown must set the blocking flag, or a queued one-shot call would fall back to 2s, which is the very bug.\n- Never echo the raw env value unbounded into stdout.\n- The fleet only gets this proxy through a rebuild or plugin reinstall; WT-10 tests must use the built source, and epic hardening owns rollout.",
+    "keyFiles": [
+      "packages/moe-proxy/src/index.ts",
+      "packages/moe-proxy/src/index.test.ts",
+      "packages/moe-proxy/README.md",
+      "packages/moe-proxy/vitest.config.ts",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:47:37.031Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T13:50:24.680Z",
+  "reviewStartedAt": "2026-10-30T14:06:50.204Z",
+  "verification": {
+    "command": "(cd packages/moe-proxy && npm test) && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)",
+    "exitCode": 0,
+    "outputTail": "Proxy half run from Linux snapshot /tmp/moe-b5a1-verify.xMCrn8 (git archive HEAD packages/moe-proxy packages/moe-daemon at a0031db8; packages/moe-proxy/{src/index.ts,src/index.test.ts,README.md,vitest.config.ts} copied from the shared checkout and cmp-identical; native lock-matching node_modules hardlinked for proxy and daemon, because the shared checkout's node_modules is a Windows install). Parity half run from repo root.\n\nnpm notice run tsc\nnpm notice run moe-proxy@0.8.0 test\nnpm notice run vitest run\n\n RUN  v5.0.5 /tmp/moe-b5a1-verify.xMCrn8/packages/moe-proxy\n\n Test Files  6 passed (6)\n      Tests  290 passed (290)\n   Start at  16:05:18\n   Duration  42.82s (tests 99%, transform 1%)\n\nproxy rc=0\nPASS parity-check.sh\nparity rc=0",
+    "reportedAt": "2026-10-30T14:06:50.204Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-proxy/src/index.ts",
+    "packages/moe-proxy/src/index.test.ts",
+    "packages/moe-proxy/README.md",
+    "packages/moe-proxy/vitest.config.ts",
+    "docs/CONFIGURATION.md"
+  ],
+  "completionSummary": "moe-proxy EOF drain for one-shot blocking calls + opt-in absolute deadline (packages/moe-proxy/src/index.ts). In a session that never sent `initialize` (the wrappers' moe_rpc / Invoke-MoeRpc / moe-call.sh), stdin EOF no longer cuts a pending moe.wait_for_task / chat_wait / wait_for_resource at 2s. It drains to sentAt + MOE_BLOCKING_TIMEOUT_MS (default 660000, unchanged) and gives `Request timed out after <n>ms`, or fails at once with the existing disconnect text if the socket drops. Initialized CLI sessions, ordinary calls and queued messages keep the 2s drain with unchanged texts. SIGINT/SIGTERM cap any drain at 2s, and a repeat shutdown call only tightens that cap; the old code stacked a second interval. Both tracking sites (stdin send, ws 'open' flush) record the blocking flag through trackRequest. MOE_PROXY_ONESHOT_DEADLINE_MS (epoch ms) bounds the whole process: one 'Proxy deadline exceeded' error per pending id, or one null-id error when none is pending, then exit 1. Blank means unset. Invalid values fail closed (null-id error, value escaped and capped at 64 chars, exit 1, no connect). Far deadlines re-arm past setTimeout's 2^31-1 clamp. Tests: 18 new spawned-proxy cases in src/index.test.ts. RED on HEAD: 4 tests failed (2s cut). Mutation probes confirm the flush-path and timer-overflow tests have teeth. Docs: README env entries and a One-shot calls section; vitest.config blanks both env names. Two CONFIGURATION.md rows are a docs scope addition noted in step 3. Verification ran in a Linux snapshot because the shared node_modules is Windows-only: HEAD proxy+daemon archive, the 4 proxy files cmp-identical, native lock-matching node_modules. Diff +373/-60."
 }

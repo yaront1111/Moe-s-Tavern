@@ -11,9 +11,56 @@
     "The verification command exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Add named worktree readiness probes and tests first (DoD1–2 plus latest gate requirement). Extend ProbeResult with info and emit [INFO]; existing pass/warn/fail meanings stay unchanged. Read .moe/project.json once without starting StateManager; absent file/settings uses WT01 resolver default; malformed JSON, unreadable file or invalid mode gets a named settings failure, never silently enables/off-defaults. Resolve target via landed WT01 resolveWorktreeTarget (literal trimmed consolidationBranch else main), do not duplicate its policy. Reuse runGit with argv, canonical cwd, timeout <=2s/call and <=128KiB output; For error handling, report bounded single-line error categories without dumping config/stdout. New labels: worktree git version, project root, control branch, target, quality gate. Check parsed git --version >=2.38 (Windows/Apple suffix allowed; malformed unknown fails), realpath project == rev-parse --show-toplevel, symbolic-ref -q HEAD exactly refs/heads/moe/control, and target is a valid fully-qualified local branch ref resolving to a commit. Require nonblank settings.qualityGate when on; do not execute it. Run worktree list --porcelain -z once, parse NUL fields/blank-record delimiters (never split a filename on whitespace/newlines), and fail target probe if any branch field equals refs/heads/<target>, including current checkout; detached roots are not target checkouts. Missing ref, timeout/truncated/malformed listing and spawn errors are named failures on, information off. All new worktree probe results are [INFO] with observed condition when mode off; they never change old probe severity/exit logic. Tests through runDoctor with stubbed read-only runner cover each failure individually on/off, all passing on exits0, absent settings preserves current health fixtures, absent/blank gate fails on, invalid mode/config not silently defaulted, version boundaries/suffixes, custom/glob/default target, and no shell/network/mutating command invocation.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Add conservative stale terminal-worktree warning (DoD3). Reuse the successful listing from step1; inspect only registered immediate canonical .worktrees/<full task-id> paths within this project, not arbitrary human names, outside roots, symlink escapes, prefix lookalikes or unregistered directories. Read corresponding regular .moe/tasks/<id>.json without writes; match record id, terminal status DONE/ARCHIVED and finite updatedAt older than strictly 24h. Using updatedAt is a conservative age bound because no archivedAt exists; document that fact in the probe message/comment. Count/name stale entries with [WARN] when on and [INFO] when off; exactly24h, future time, recent terminal, live tasks are not stale. Unreadable/invalid/missing task data or missing timestamp gives bounded 'age unknown' informational/soft warning, never a hard failure or deletion permission. Table-driven tests cover DONE and ARCHIVED, old-but-live, boundary times, missing/malformed JSON/id mismatch, nested/foreign paths and UNC/drive normalization. Add one real throwaway Git fixture for listing/target detection (path with spaces, task worktree and separate target checkout), preserving existing HTTP/socket cleanup. Snapshot source JSON bytes/mtimes, refs and index before/after doctor to prove read-only; clean only owned fixture after all processes exit.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Write the operator runbook (DoD4, corrected by latest comments). Add TOC entry and `Worktree mode: flip on / roll back` section to TROUBLESHOOTING.md from FINAL landed WT-S §7.3/7.4 and actual WT10M CLI. Explain info/off vs hard/on probes, required fast-per-landing qualityGate, git>=2.38/root/moe/control/free target, and soft stale warning (no automatic doctor cleanup). Flip: stop/drain all seats/open attempts and let REVIEW land/finalize; inspect git for-each-ref refs/moe/rescue and recover/archive live tasks first; through supported operator settings declare resources.git-land-main {capacity:1,maxLeaseMs:7200000,releaseOnDeregister:true} and configure gate; human runs Bash `scripts/moe-agent.sh --land-branch moe/work-2026-10-24` or PS `scripts/moe-agent.ps1 -LandBranch moe/work-2026-10-24`. Explain target must be ancestor of branch before flip so switch preserves dirty daemon files; conflict recovery merges main INTO the shared branch, never directly into main. Migration always gates in .moe-free candidate workspace, no task lease (drain), two-parent C, CAS/nonforced publish, no task ledger; on any failure/unknown stop flip, unknown settled by rerun, no force/manual push/reset. After confirmed branch inclusion use exact `git switch -c moe/control main`, set worktreeMode on and consolidationBranch main, run `node packages/moe-daemon/dist/index.js doctor`, restart only after pass. Rollback: drain, land remaining task branches or human preserve/merge them into non-main shared branch; set mode off, UNSET consolidationBranch (main is shared-mode opt-in), switch explicitly `git switch -c moe/work-<date> main` using fresh branch name; preserve worktrees/rescue refs until recovery, normal sweep handles terminal tasks. Pinned mismatch blocks for human. Rollback never moves main. No generic 'let peel run' alternative, no manual merge/push to main, no setting-default flip or wrappers edited by this task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/TROUBLESHOOTING.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Single verification gate (DoD5 and epic rail2). From repo root run exactly `(cd packages/moe-daemon && npm run build && npx vitest run src/commands/doctor.test.ts) && (S=$(mktemp -d) && trap 'rm -rf \"$S\"' EXIT && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh))`. Require exit0, doctor tests actually executed, parity PASS; archive uses committed wrapper bytes because this slice changes none. Run the same doctor test on native Windows if the development gate was POSIX, pinning path/listing behavior; no WSL result mislabeled Windows. Load regression-check/verification-before-completion, retain fresh exact command/exitCode/outputTail. Check runbook commands/settings/ordering against the landed producer contracts without executing migration/rollback on this project. No full unrelated IDE/wrapper postflight gate; WT19 owns whole-epic integration.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "docs/TROUBLESHOOTING.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "5. Final adversarial self-review once. Load adversarial-self-review; attack unreadable/malformed project/task JSON, invalid gate/mode, fake Git version, detached HEAD, invalid/injection-like branch names, unrelated GIT_* environment, NUL parsing, output/time bounds, Windows case vs POSIX identity and terminal timestamp boundaries. Confirm new off-mode failures do not suppress existing health errors; on-mode unknown is never ready; doctor never writes .moe/Git or starts daemon. Audit runbook rollback's unset+switch order and migration's no-lease exception versus normal landing lease, no main bypass, no destructive recovery suggestions. Keep <=400 net LOC/three files. If fixes arise rerun same gate; complete via Moe with actual paths/fresh evidence, wrapper owns Git writes. WT17/18 keep other docs.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "docs/TROUBLESHOOTING.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,7 +71,8 @@
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
     "task-6cf120a38b344e72b7bab8b9faf806f1",
-    "task-253884005a59471fb7c59ef38e1f3cc1"
+    "task-253884005a59471fb7c59ef38e1f3cc1",
+    "task-5c2e6cdf2494412ca0c2bc40e26d9da3"
   ],
   "priority": "MEDIUM",
   "order": 24,
@@ -52,14 +100,53 @@
       "author": "worker-0062feec",
       "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §7.3, §7.4; section numbers unchanged). Where this differs from the description or comments dc2a92ff/05d5eda8, this comment wins.\n\n1. Doctor: with worktreeMode 'on', a missing settings.qualityGate is a hard fail. Rail 1 needs L6 on every landing, and the wrappers ignore qualityGateScope in worktree mode. Add it to the failing-condition cases.\n2. Runbook step 3: set a qualityGate fast enough to run on every landing, because each landing runs it under the git-land-main lease.\n3. The migration landing takes no lease, because acquire_resource needs an owned task. The drain, the CAS and the non-forced push keep main safe.\n4. Rollback, in order:\n   - set worktreeMode 'off';\n   - UNSET consolidationBranch. Left at 'main', it is ensure_safe_branch's main-direct opt-in, and shared seats would commit on main;\n   - run `git switch -c moe/work-<date> main` in the control checkout. The peel reuses any non-default branch, moe/control included.\n   Drop the \"or unset consolidationBranch and let the peel run\" alternative.",
       "timestamp": "2026-10-30T13:53:19.691Z"
+    },
+    {
+      "id": "comment-0db1d2fc2c644b729c3ee609863544bd",
+      "author": "architect-6fc3dd5c",
+      "content": "For WT-16's runbook, from WT-10M's planner (architect-6fc3dd5c). The migration CLI takes the land lease after all; see the contract comment on task-25388400. This replaces WT-S §7.3's \"It takes no lease\" for runbook step 4, because WT-10M's DoD 3 is human-owned.\n\nRunbook step 4 must:\n(a) Create a dedicated board row for the migration, e.g. \"[migration] land moe/work-2026-10-24 on main\". Move it to PLANNING and leave it unassigned. The fleet is already drained by step 1, so no seat claims it.\n(b) Run `scripts/moe-agent.sh --project <p> --land-branch moe/work-2026-10-24 --lease-task <that row id>`, adding `--worker-id <id>` if wanted. The ps1 form is `-LandBranch … -LeaseTask …`.\n   - Exit 0 with MOE_MIGRATION_LANDED or MOE_COMMIT_NOTHING_TO_COMMIT means main contains the branch.\n   - Anything else stops the runbook before the flip.\n(c) Archive the row afterwards. Archiving also makes the daemon's reaper drop a lease that a killed run left behind.\n\nCodes to document:\n- MOE_MIGRATION_BAD_ARGS (exit 2).\n- MOE_MIGRATION_NO_GATE: no qualityGate, or MOE_DISABLE_QUALITY_GATE=1.\n- MOE_COMMIT_FAILED_LAND_LEASE.\n- MOE_LAND_FETCH_FAILED and MOE_LAND_TARGET_DIVERGED.\n- MOE_COMMIT_FAILED_CONFLICT: merge main into the branch, then re-run.\n- MOE_COMMIT_FAILED_GATE.\n- MOE_PUSH_FAILED.\n- MOE_PUSH_OUTCOME_UNKNOWN: re-run to settle it.\n- MOE_COMMIT_FAILED_REF_CONTENTION.\n- MOE_MIGRATION_LANDED.\n\nThe resource declaration `git-land-main` in step 3 stays as written.",
+      "timestamp": "2026-10-30T14:05:19.286Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:57:13.954Z",
-  "updatedAt": "2026-10-30T13:53:19.691Z",
+  "updatedAt": "2026-10-30T14:06:08.953Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:22.067Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:02:59.763Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-76a2c8bb"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:06:08.916Z",
+  "planningNotes": {
+    "approachesConsidered": "Extend the existing offline runDoctor with bounded read-only Git probes; no new command/service/schema/default change. Three files, <=60min and <=400 net LOC with table-driven tests. Pair diagnostics with precise operator flip/rollback steps. Latest WT-S comment-5957b3a6 overrides earlier text: gate required when on, migration has NO task lease, rollback must unset consolidationBranch and leave moe/control.",
+    "codebaseInsights": "doctor.ts currently has pass/warn/fail, runDoctor collects probes and fails only on fail; existing health tests have no project.json or Git repo, so absent settings must retain shared-mode success until WT19 default flips. Reuse util/cachedPlanPaths.ts runGit(args,cwd,timeout,maxBuffer), already masks GIT_* and global config, disables optional locks/network, uses pinned gitExecutable(). Do not use openProjectGit because it combines toplevel with trust checks and would hide separate named diagnostics. WT01 supplies resolveWorktreeMode and resolveWorktreeTarget; read their landed exports first. Task has updatedAt/completedAt/reviewCompletedAt but no archivedAt: stale terminal-age warning uses conservative updatedAt (state last changed) for both DONE/ARCHIVED; no false claim to know historic transition time. Git worktree porcelain -z documented at https://git-scm.com/docs/git-worktree .",
+    "risks": "Read-only must be literal: no fetch, config write, cleanup, prune or fixes. Missing Git/config/malformed output must not look ready; worktree failures info only when mode is explicitly/default off, malformed mode is not silently off. Unknown stale-task data only warns. Cross-platform path comparisons use native normalized/real paths (case-insensitive Windows only), never POSIX blanket lowercase or translating WSL paths. Existing WT10M dependency now owns CLI; direct WT10 edge added per comment. WT-S/01/M unlanded contracts must be reread before implementation.",
+    "keyFiles": [
+      "packages/moe-daemon/src/commands/doctor.ts",
+      "packages/moe-daemon/src/commands/doctor.test.ts",
+      "docs/TROUBLESHOOTING.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:06:08.953Z",
+  "approvedPlanRevision": 1
 }

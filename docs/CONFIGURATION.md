@@ -33,6 +33,8 @@ This document covers all configuration options for Moe's Tavern.
 |----------|-------------|---------|---------|
 | `MOE_PROJECT_PATH` | Project path (used to locate `.moe/daemon.json`) | Current directory | `/home/user/myproject` |
 | `MOE_MESSAGE_TIMEOUT_MS` | Per-message timeout for forwarded MCP calls | `30000` | `60000` |
+| `MOE_BLOCKING_TIMEOUT_MS` | Per-request deadline of the blocking long-polls `moe.wait_for_task`, `moe.chat_wait` and `moe.wait_for_resource`. A session that never sent `initialize` (a wrapper one-shot RPC) keeps such a call pending after stdin EOF up to this deadline; other sessions and calls get the 2s drain (`packages/moe-proxy/README.md`, One-shot calls) | `660000` | `120000` |
+| `MOE_PROXY_ONESHOT_DEADLINE_MS` | Wrapper-only absolute bound for one proxy process, in Unix epoch ms, over connect, queue, send and EOF drain. At expiry: one error per pending id (one null-id error when none is pending), exit 1. Blank = unset; any other non-digit or unsafe value fails closed (exit 1, no connection) | Unset | `1793366400000` |
 | `MOE_WORKER_ID` | Worker identity injected into every `tools/call` | Set by agent launchers | `worker-1` |
 | `MOE_RUNNER_PROCESS_STARTED_AT` | Runner process identity added, with `MOE_RUNNER_HOST`, to a `moe.claim_next_task` that names neither `processStartedAt` nor `host`, so a task the CLI claims inside its session can be reattached after a daemon restart. Both must be non-blank, else neither is sent | Set by agent launchers for architect, QA and governor seats only | `12345@987654` |
 | `MOE_RUNNER_HOST` | Host half of that runner identity | Set by agent launchers for architect, QA and governor seats only | `build-box` |

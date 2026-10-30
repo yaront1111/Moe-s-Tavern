@@ -52,6 +52,14 @@ Send JSON-RPC 2.0 messages via stdin:
 - `MOE_SESSION_ID` - The session id the proxy stamps onto the identity tools (see Execution identity)
 - `MOE_ATTEMPT_ID` and `MOE_ATTEMPT_GENERATION` - The execution attempt the proxy stamps onto the identity tools; set both or neither
 - `MOE_WORKER_TYPE` - The agent CLI the launcher started, added to the registration tools (see Worker type)
+- `MOE_BLOCKING_TIMEOUT_MS` - The per-request deadline of `moe.wait_for_task`, `moe.chat_wait` and `moe.wait_for_resource` (default: 660000)
+- `MOE_PROXY_ONESHOT_DEADLINE_MS` - Wrapper-only. An absolute bound for one call, in Unix epoch milliseconds, covering connect, queue, send and the EOF drain (see One-shot calls). Blank means unset; any other value that is not plain decimal digits forming a safe integer fails closed (one null-id error, exit 1, no connection)
+
+## One-shot calls
+
+The wrappers' RPC helpers pipe one bare `tools/call` into a fresh proxy and close stdin. In a session that never sent `initialize`, stdin EOF lets a pending blocking call (the three tools above) finish up to its deadline instead of the usual drain. It fails at once if the daemon socket is lost. Initialized MCP sessions, ordinary calls and queued (unsent) messages keep the 2-second drain, and SIGINT/SIGTERM cap any drain at 2 seconds.
+
+When `MOE_PROXY_ONESHOT_DEADLINE_MS` passes, the proxy writes one `Proxy deadline exceeded (MOE_PROXY_ONESHOT_DEADLINE_MS)` error for each pending request id (one null-id error when none is pending, as before the first connect) and exits 1. No late success follows.
 
 ## Execution identity
 

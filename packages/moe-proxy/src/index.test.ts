@@ -764,4 +764,199 @@ describe('moe-proxy graceful shutdown', () => {
     expect(p.lines).toEqual([ok({ id: 20 })]);
     await p.close();
   }, 20000);
+
+  // WT-10P: the wrappers' one-shot RPC writes one bare tools/call (no MCP
+  // `initialize`) and closes stdin. Every timing below is measured from that EOF.
+  type Line = { at: number; msg: { id?: unknown; result?: unknown; error?: { message?: string } } };
+  const replyTimers: NodeJS.Timeout[] = [];
+  const children: ChildProcess[] = [];
+  afterEach(() => {
+    replyTimers.splice(0).forEach(clearTimeout);
+    for (const child of children.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  });
+  const later = (fn: () => void, ms: number) => { replyTimers.push(setTimeout(fn, ms)); };
+  const blockingCall = (id = 1) => JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call',
+    params: { name: 'moe.wait_for_resource', arguments: { resourceId: 'gradle', taskId: 'task-1' } } });
+
+  // A mock daemon answering every request after delayMs (null: never), recording arrivals.
+  function mockDaemon(delayMs: number | null, onRequest?: (ws: WebSocket, msg: { id?: unknown; method?: string }) => void) {
+    const state = { connections: 0, arrivals: [] as number[] };
+    mockServer!.on('connection', (ws) => {
+      state.connections++;
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        state.arrivals.push(Date.now());
+        onRequest?.(ws, msg);
+        if (delayMs === null) return;
+        later(() => { try { ws.send(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'ok' }] } })); } catch { /* gone */ } }, delayMs);
+      });
+    });
+    return state;
+  }
+
+  function spawnOneShot(env: Record<string, string> = {}) {
+    const lines: Line[] = [];
+    const proxy = spawn('node', [path.join(__dirname, '../dist/index.js')], {
+      env: { ...process.env, MOE_PROJECT_PATH: testDir, ...env }, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    children.push(proxy);
+    let partial = '';
+    proxy.stdout!.on('data', (chunk) => {
+      const parts = (partial + chunk.toString()).split('\n');
+      partial = parts.pop()!;
+      for (const part of parts.filter(Boolean)) lines.push({ at: Date.now(), msg: JSON.parse(part) });
+    });
+    const closed = new Promise<{ code: number | null; at: number }>((resolve) => {
+      proxy.on('close', (code) => resolve({ code, at: Date.now() }));
+    });
+    // A proxy that outlives `ms` is SIGKILLed, so its exit code (null) fails the test.
+    const exit = async (ms: number) => { const t = setTimeout(() => proxy.kill('SIGKILL'), ms); const r = await closed; clearTimeout(t); return r; };
+    const send = (line: string) => { proxy.stdin!.write(line + '\n'); proxy.stdin!.end(); return Date.now(); };
+    return { proxy, lines, exit, send };
+  }
+  const until = async (cond: () => boolean, ms = 5000) => {
+    const t0 = Date.now();
+    while (!cond()) {
+      if (Date.now() - t0 > ms) throw new Error('condition not met');
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+
+  it.each(['after', 'before'])('a one-shot blocking call written %s connect returns a daemon reply arriving >2s after stdin EOF', async (when) => {
+    const daemon = mockDaemon(3000);
+    const p = spawnOneShot();
+    if (when === 'after') await until(() => daemon.connections > 0);
+    const eofAt = p.send(blockingCall());
+    const { code } = await p.exit(10000);
+    expect(p.lines.map((l) => l.msg)).toEqual([{ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: 'ok' }] } }]);
+    expect(p.lines[0].at - eofAt).toBeGreaterThanOrEqual(2500);
+    expect(code).toBe(0);
+  }, 15000);
+
+  it('a one-shot blocking call with no daemon reply errors at its recorded deadline', async () => {
+    const daemon = mockDaemon(null);
+    const p = spawnOneShot({ MOE_BLOCKING_TIMEOUT_MS: '3000' });
+    await until(() => daemon.connections > 0);
+    const eofAt = p.send(blockingCall());
+    const { code } = await p.exit(10000);
+    expect(p.lines.map((l) => l.msg)).toEqual([{ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'Request timed out after 3000ms' } }]);
+    expect(p.lines[0].at - eofAt).toBeGreaterThanOrEqual(2500);
+    expect(p.lines[0].at - eofAt).toBeLessThan(6000);
+    expect(code).toBe(0);
+  }, 15000);
+
+  it('a one-shot blocking call fails at once when the daemon drops the socket during the drain', async () => {
+    const daemon = mockDaemon(null, (ws) => later(() => ws.terminate(), 1000));
+    const p = spawnOneShot();
+    await until(() => daemon.connections > 0);
+    p.send(blockingCall());
+    const { code } = await p.exit(10000);
+    expect(p.lines.map((l) => l.msg)).toEqual([{ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'Connection to daemon lost before response received' } }]);
+    expect(p.lines[0].at - (daemon.arrivals[0] + 1000)).toBeLessThan(1500);
+    expect(code).toBe(0);
+  }, 15000);
+
+  it('a one-shot blocking call that never leaves the queue errors at the 2s grace', async () => {
+    const probe = new WebSocketServer({ port: 0 });
+    const deadPort = (probe.address() as { port: number }).port;
+    await new Promise((resolve) => probe.close(resolve));
+    const daemonJson = path.join(testDir, '.moe', 'daemon.json');
+    fs.writeFileSync(daemonJson, JSON.stringify({ ...JSON.parse(fs.readFileSync(daemonJson, 'utf-8')), port: deadPort }));
+    const p = spawnOneShot();
+    const eofAt = p.send(blockingCall());
+    const { code } = await p.exit(10000);
+    expect(p.lines.map((l) => l.msg)).toEqual([{ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'Proxy shutting down with message still queued' } }]);
+    expect(p.lines[0].at - eofAt).toBeLessThan(6000);
+    expect(code).toBe(0);
+  }, 15000);
+
+  it.skipIf(process.platform === 'win32').each(['SIGTERM', 'SIGINT'] as const)('%s caps a pending EOF drain at 2s with one response', async (signal) => {
+    const daemon = mockDaemon(10000);
+    const p = spawnOneShot();
+    await until(() => daemon.connections > 0);
+    p.send(blockingCall());
+    await new Promise((r) => setTimeout(r, 500));
+    p.proxy.kill(signal);
+    const signalAt = Date.now();
+    const { code, at } = await p.exit(10000);
+    expect(p.lines.map((l) => l.msg)).toEqual([{ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'Proxy shutting down before response received' } }]);
+    expect(at - signalAt).toBeLessThan(3000);
+    expect(code).toBe(0);
+  }, 15000);
+
+  it('an initialized session keeps the 2s EOF grace for a blocking call', async () => {
+    mockDaemon(null, (ws, msg) => {
+      if (msg.method === 'initialize') ws.send(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } }));
+      else later(() => { try { ws.send(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {} })); } catch { /* gone */ } }, 3000);
+    });
+    const p = spawnOneShot();
+    p.proxy.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'initialize', params: {} }) + '\n');
+    await until(() => p.lines.length > 0);
+    const eofAt = p.send(blockingCall());
+    const { code } = await p.exit(10000);
+    expect(p.lines.slice(1).map((l) => l.msg)).toEqual([{ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'Proxy shutting down before response received' } }]);
+    expect(p.lines[1].at - eofAt).toBeGreaterThanOrEqual(1800);
+    expect(p.lines[1].at - eofAt).toBeLessThan(4000);
+    expect(code).toBe(0);
+  }, 15000);
+
+  it('a one-shot ordinary request keeps the 2s EOF grace', async () => {
+    const daemon = mockDaemon(null);
+    const p = spawnOneShot();
+    await until(() => daemon.connections > 0);
+    const eofAt = p.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }));
+    const { code } = await p.exit(10000);
+    expect(p.lines.map((l) => l.msg)).toEqual([{ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'Proxy shutting down before response received' } }]);
+    expect(p.lines[0].at - eofAt).toBeGreaterThanOrEqual(1800);
+    expect(p.lines[0].at - eofAt).toBeLessThan(4000);
+    expect(code).toBe(0);
+  }, 15000);
+
+  // WT-10P step 2: MOE_PROXY_ONESHOT_DEADLINE_MS, one absolute bound over the whole process.
+  const deadlineError = (id: unknown) => ({ jsonrpc: '2.0', id, error: { code: -32000, message: 'Proxy deadline exceeded (MOE_PROXY_ONESHOT_DEADLINE_MS)' } });
+
+  it('the one-shot deadline bounds a proxy that never connects', async () => {
+    fs.rmSync(path.join(testDir, '.moe', 'daemon.json'));
+    const spawnAt = Date.now();
+    const p = spawnOneShot({ MOE_PROXY_ONESHOT_DEADLINE_MS: String(spawnAt + 1500) });
+    p.send(blockingCall());
+    const { code, at } = await p.exit(10000);
+    expect(p.lines.map((l) => l.msg)).toEqual([deadlineError(null)]);
+    expect(at - spawnAt).toBeGreaterThanOrEqual(1200);
+    expect(at - spawnAt).toBeLessThan(4000);
+    expect(code).toBe(1);
+  }, 15000);
+
+  it('the one-shot deadline cuts an EOF drain short with one error and no late success', async () => {
+    mockDaemon(4000);
+    const spawnAt = Date.now();
+    const p = spawnOneShot({ MOE_PROXY_ONESHOT_DEADLINE_MS: String(spawnAt + 2500) });
+    p.send(blockingCall());
+    const { code } = await p.exit(10000);
+    expect(p.lines.map((l) => l.msg)).toEqual([deadlineError(1)]);
+    expect(p.lines[0].at - spawnAt).toBeGreaterThanOrEqual(2200);
+    expect(p.lines[0].at - spawnAt).toBeLessThan(3800);
+    expect(code).toBe(1);
+  }, 15000);
+
+  it.each(['abc', '-5', '1e12', '9'.repeat(20), 'x'.repeat(5000)])('an invalid one-shot deadline (case %#) fails closed', async (value) => {
+    const daemon = mockDaemon(null);
+    const p = spawnOneShot({ MOE_PROXY_ONESHOT_DEADLINE_MS: value });
+    p.send(blockingCall());
+    const { code } = await p.exit(5000);
+    expect(p.lines.map((l) => l.msg)).toEqual([{ jsonrpc: '2.0', id: null,
+      error: { code: -32000, message: expect.stringMatching(/^Invalid MOE_PROXY_ONESHOT_DEADLINE_MS: /) } }]);
+    expect(p.lines[0].msg.error!.message!.length).toBeLessThan(200);
+    expect(code).toBe(1);
+    expect(daemon.connections).toBe(0);
+  }, 10000);
+
+  it.each([['blank', ' '], ['40 days away', String(Date.now() + 40 * 24 * 3600 * 1000)]])('a %s one-shot deadline leaves a normal call alone', async (_label, value) => {
+    mockDaemon(100);
+    const p = spawnOneShot({ MOE_PROXY_ONESHOT_DEADLINE_MS: value });
+    p.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }));
+    const { code } = await p.exit(5000);
+    expect(p.lines.map((l) => l.msg)).toEqual([{ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: 'ok' }] } }]);
+    expect(code).toBe(0);
+  }, 10000);
 });

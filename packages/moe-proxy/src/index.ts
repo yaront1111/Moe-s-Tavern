@@ -38,7 +38,8 @@ function parsePositiveIntEnv(value: string | undefined, fallback: number): numbe
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 const MESSAGE_TIMEOUT_MS = parsePositiveIntEnv(process.env.MOE_MESSAGE_TIMEOUT_MS, 30000);
-const WAIT_FOR_TASK_TIMEOUT_MS = 11 * 60 * 1000; // 11 minutes (longer than max wait_for_task timeout)
+// 11 minutes: longer than the daemon's longest blocking long-poll timeout.
+const BLOCKING_TIMEOUT_MS = parsePositiveIntEnv(process.env.MOE_BLOCKING_TIMEOUT_MS, 11 * 60 * 1000);
 const TIMEOUT_CHECK_INTERVAL_MS = 5000;
 
 let reconnectAttempts = 0;
@@ -50,9 +51,30 @@ let currentWebSocket: WebSocket | null = null;
 let pendingMessages: string[] = [];
 let pendingRequestIds = new Set<string | number>();
 // Track when each request was sent and its timeout for timeout detection
-let pendingRequestTimes = new Map<string | number, { sentAt: number; timeoutMs: number }>();
+type PendingRequest = { sentAt: number; timeoutMs: number; blocking: boolean };
+let pendingRequestTimes = new Map<string | number, PendingRequest>();
 let timeoutCheckTimer: NodeJS.Timeout | null = null;
 let shuttingDown = false;
+
+// Shutdown drain (see gracefulShutdown). An MCP client always sends
+// `initialize` first; the wrappers' one-shot RPC never does.
+type ShutdownCause = 'eof' | 'signal';
+const SHUTDOWN_GRACE_MS = 2000;
+const DRAIN_TICK_MS = 50;
+const SHUTDOWN_PENDING_MESSAGE = 'Proxy shutting down before response received';
+const SHUTDOWN_QUEUED_MESSAGE = 'Proxy shutting down with message still queued';
+let sawInitialize = false;
+let shutdownCause: ShutdownCause = 'eof';
+let shutdownStartedAt = 0;
+let signalCapAt = Number.POSITIVE_INFINITY;
+let drainTimer: NodeJS.Timeout | null = null;
+
+// Opt-in absolute deadline for one wrapper one-shot call (Unix epoch ms).
+const DEADLINE_ENV = 'MOE_PROXY_ONESHOT_DEADLINE_MS';
+const DEADLINE_MESSAGE = `Proxy deadline exceeded (${DEADLINE_ENV})`;
+const MAX_ECHOED_ENV_CHARS = 64;
+// setTimeout clamps a longer delay to 1ms, so a far deadline re-arms in steps.
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
 // Tool-name style (see utils.ts): `underscore` exposes `moe.<name>` as
 // `moe_<name>` for clients that drop dotted tool names (Grok Build). Aliases
@@ -219,14 +241,29 @@ function safeSend(ws: WebSocket, data: string): boolean {
  */
 const BLOCKING_LONG_POLLS = new Set(['moe.wait_for_task', 'moe.chat_wait', 'moe.wait_for_resource']);
 
+function isBlockingLongPoll(parsed: Record<string, unknown>): boolean {
+  if (parsed.method !== 'tools/call') return false;
+  const params = parsed.params as { name?: unknown } | undefined;
+  return typeof params?.name === 'string' && BLOCKING_LONG_POLLS.has(params.name);
+}
+
 function getRequestTimeout(parsed: Record<string, unknown>): number {
-  if (parsed.method === 'tools/call') {
-    const params = parsed.params as { name?: string } | undefined;
-    if (typeof params?.name === 'string' && BLOCKING_LONG_POLLS.has(params.name)) {
-      return WAIT_FOR_TASK_TIMEOUT_MS;
-    }
-  }
-  return MESSAGE_TIMEOUT_MS;
+  return isBlockingLongPoll(parsed) ? BLOCKING_TIMEOUT_MS : MESSAGE_TIMEOUT_MS;
+}
+
+/** Record a request id as in flight from sentAt (both the stdin send and the open flush). */
+function trackRequest(parsed: Record<string, unknown>, sentAt: number): void {
+  if (parsed.id === undefined || parsed.id === null) return;
+  const id = parsed.id as string | number;
+  pendingRequestIds.add(id);
+  pendingRequestTimes.set(id, { sentAt, timeoutMs: getRequestTimeout(parsed), blocking: isBlockingLongPoll(parsed) });
+}
+
+/** Forget a request id before answering it, so a late daemon reply is dropped. */
+function forgetRequest(id: string | number): void {
+  pendingRequestIds.delete(id);
+  pendingRequestTimes.delete(id);
+  pendingToolsListIds.delete(id);
 }
 
 /**
@@ -311,8 +348,20 @@ function closeWebSocket(): void {
   }
 }
 
-function gracefulShutdown(): void {
+/**
+ * Stop reading work and drain what is in flight, then exit 0. Every request
+ * gets the flat 2s grace, except a blocking long-poll after stdin EOF in a
+ * session that never sent `initialize` (a wrapper one-shot RPC): it drains to
+ * its own recorded deadline, or fails at once when its socket is gone. A
+ * signal caps any drain at 2s from that signal; a repeat call only tightens
+ * that cap. MOE_PROXY_ONESHOT_DEADLINE_MS bounds the whole process separately.
+ */
+function gracefulShutdown(cause: ShutdownCause): void {
+  if (cause === 'signal') signalCapAt = Math.min(signalCapAt, Date.now() + SHUTDOWN_GRACE_MS);
+  if (shuttingDown) return;
   shuttingDown = true;
+  shutdownCause = cause;
+  shutdownStartedAt = Date.now();
   if (reconnectTimer) clearTimeout(reconnectTimer);
   stopTimeoutChecker();
 
@@ -324,44 +373,96 @@ function gracefulShutdown(): void {
 
   const pendingCount = pendingRequestIds.size + pendingMessages.length;
   writeLog(`Waiting for ${pendingCount} pending request(s)...`);
-  const startTime = Date.now();
-  const maxWaitMs = 2000;
+  drainTimer = setInterval(drainTick, DRAIN_TICK_MS);
+}
 
-  const checkInterval = setInterval(() => {
-    if ((pendingRequestIds.size === 0 && pendingMessages.length === 0) ||
-        Date.now() - startTime >= maxWaitMs) {
-      clearInterval(checkInterval);
-      const remaining = pendingRequestIds.size + pendingMessages.length;
-      if (remaining > 0) {
-        writeLog(`Timeout waiting for ${remaining} pending request(s)`);
-        // Emit error responses so clients don't hang forever waiting for replies
-        for (const reqId of pendingRequestIds) {
-          safeStdoutWrite(JSON.stringify({
-            jsonrpc: '2.0',
-            id: reqId,
-            error: { code: -32000, message: 'Proxy shutting down before response received' }
-          }) + '\n');
-        }
-        pendingRequestIds.clear();
-        pendingRequestTimes.clear();
-        for (const msg of pendingMessages) {
-          try {
-            const parsed = JSON.parse(msg);
-            if (parsed.id !== undefined && parsed.id !== null) {
-              safeStdoutWrite(JSON.stringify({
-                jsonrpc: '2.0',
-                id: parsed.id,
-                error: { code: -32000, message: 'Proxy shutting down with message still queued' }
-              }) + '\n');
-            }
-          } catch { /* drop unparseable */ }
-        }
-        pendingMessages = [];
-      }
-      closeWebSocket();
-      process.exit(0);
+/** When, and with which error, the drain answers one sent request. */
+function drainVerdict(entry: PendingRequest | undefined, graceAt: number): { at: number; message: string } {
+  if (!entry?.blocking || shutdownCause !== 'eof' || sawInitialize) {
+    return { at: graceAt, message: SHUTDOWN_PENDING_MESSAGE };
+  }
+  // ws 'close' leaves emission to the drain while shutting down, and nothing
+  // reconnects, so a null socket means this request's reply can never come.
+  if (currentWebSocket === null) return { at: 0, message: 'Connection to daemon lost before response received' };
+  const ownAt = entry.sentAt + entry.timeoutMs;
+  return ownAt < signalCapAt
+    ? { at: ownAt, message: `Request timed out after ${entry.timeoutMs}ms` }
+    : { at: signalCapAt, message: SHUTDOWN_PENDING_MESSAGE };
+}
+
+function drainTick(): void {
+  const now = Date.now();
+  const graceAt = Math.min(shutdownStartedAt + SHUTDOWN_GRACE_MS, signalCapAt);
+  for (const id of [...pendingRequestIds]) {
+    const verdict = drainVerdict(pendingRequestTimes.get(id), graceAt);
+    if (now < verdict.at) continue;
+    forgetRequest(id);
+    writeLog(`Shutdown drain answering request ${id}: ${verdict.message}`);
+    writeErrorWithId(id, verdict.message);
+  }
+  // A queued message flushed by a late ws 'open' is tracked above from then on.
+  if (pendingMessages.length > 0 && now >= graceAt) {
+    const queued = pendingMessages;
+    pendingMessages = [];
+    writeLog(`Timeout waiting for ${queued.length} queued message(s)`);
+    for (const msg of queued) {
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed.id !== undefined && parsed.id !== null) writeErrorWithId(parsed.id, SHUTDOWN_QUEUED_MESSAGE);
+      } catch { /* drop unparseable */ }
     }
-  }, 50);
+  }
+  if (pendingRequestIds.size > 0 || pendingMessages.length > 0) return;
+  if (drainTimer) clearInterval(drainTimer);
+  drainTimer = null;
+  closeWebSocket();
+  process.exit(0);
+}
+
+/**
+ * Read MOE_PROXY_ONESHOT_DEADLINE_MS. Unset or blank means no bound; anything
+ * but plain decimal digits forming a safe integer is invalid, never ignored.
+ */
+function parseOneShotDeadline(value: string | undefined): { deadlineAt: number | null } | { invalid: string } {
+  if (value === undefined || value.trim() === '') return { deadlineAt: null };
+  const shown = JSON.stringify(value.length > MAX_ECHOED_ENV_CHARS ? `${value.slice(0, MAX_ECHOED_ENV_CHARS)}...` : value);
+  if (!/^[0-9]+$/.test(value)) return { invalid: `expected Unix epoch milliseconds as decimal digits, got ${shown}` };
+  const deadlineAt = Number(value);
+  if (!Number.isSafeInteger(deadlineAt)) return { invalid: `${shown} is not a safe integer` };
+  return { deadlineAt };
+}
+
+function armDeadline(deadlineAt: number): void {
+  const delay = Math.max(0, deadlineAt - Date.now());
+  if (delay > MAX_TIMER_DELAY_MS) setTimeout(() => armDeadline(deadlineAt), MAX_TIMER_DELAY_MS);
+  else setTimeout(expireDeadline, delay);
+}
+
+/**
+ * The absolute deadline: stop everything, answer each pending request id (sent
+ * or queued) once with the deadline error, or write one null-id error when none
+ * is pending (stdin is not read before the first socket is created), then exit
+ * 1. Ids are forgotten before writing, so no late daemon reply can follow.
+ */
+function expireDeadline(): void {
+  shuttingDown = true;
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  if (drainTimer) clearInterval(drainTimer);
+  stopTimeoutChecker();
+  const ids: (string | number)[] = [...pendingRequestIds];
+  for (const msg of pendingMessages) {
+    try {
+      const parsed = JSON.parse(msg);
+      if (parsed.id !== undefined && parsed.id !== null) ids.push(parsed.id);
+    } catch { /* drop unparseable */ }
+  }
+  pendingMessages = [];
+  ids.forEach(forgetRequest);
+  writeLog(`${DEADLINE_ENV} reached with ${ids.length} pending request(s)`);
+  if (ids.length === 0) writeError(DEADLINE_MESSAGE);
+  for (const id of ids) writeErrorWithId(id, DEADLINE_MESSAGE);
+  closeWebSocket();
+  process.exit(1);
 }
 
 function connect(projectPath: string): void {
@@ -435,11 +536,7 @@ function openDaemonSocket(projectPath: string, port: number): void {
     while (pendingMessages.length > 0) {
       const msg = pendingMessages.shift()!;
       try {
-        const parsed = JSON.parse(msg);
-        if (parsed.id !== undefined && parsed.id !== null) {
-          pendingRequestIds.add(parsed.id);
-          pendingRequestTimes.set(parsed.id, { sentAt: now, timeoutMs: getRequestTimeout(parsed) });
-        }
+        trackRequest(JSON.parse(msg), now);
       } catch { /* already validated */ }
       safeSend(ws, msg);
     }
@@ -593,6 +690,9 @@ function openDaemonSocket(projectPath: string, port: number): void {
         // Validate JSON before sending to daemon
         try {
           const parsed = JSON.parse(line);
+          if ((Array.isArray(parsed) ? parsed : [parsed]).some((m) => (m as { method?: unknown } | null)?.method === 'initialize')) {
+            sawInitialize = true;
+          }
           // Alias → daemon name first, so the timeout tier and the workerId
           // filter list below see the real tool name.
           const renamed = resolveToolCallName(parsed, toolAliases);
@@ -610,10 +710,7 @@ function openDaemonSocket(projectPath: string, port: number): void {
           }
           if (isSafeToSend()) {
             // Track request ID for proper pending count and timeout
-            if (parsed.id !== undefined && parsed.id !== null) {
-              pendingRequestIds.add(parsed.id);
-              pendingRequestTimes.set(parsed.id, { sentAt: Date.now(), timeoutMs: getRequestTimeout(parsed) });
-            }
+            trackRequest(parsed, Date.now());
             safeSend(currentWebSocket!, payload);
           } else {
             // Queue message for when connection is restored. If at cap, drop the
@@ -653,12 +750,12 @@ function openDaemonSocket(projectPath: string, port: number): void {
 
     process.stdin.on('end', () => {
       writeLog('stdin closed, shutting down');
-      gracefulShutdown();
+      gracefulShutdown('eof');
     });
 
     process.stdin.on('error', (err) => {
       writeLog(`stdin error: ${err.message || 'unknown'}`);
-      gracefulShutdown();
+      gracefulShutdown('eof');
     });
   }
 }
@@ -675,15 +772,25 @@ async function main() {
     }
   });
 
+  // Before connect(), so an invalid bound never reaches the daemon.
+  const deadline = parseOneShotDeadline(process.env[DEADLINE_ENV]);
+  if ('invalid' in deadline) {
+    writeLog(`Invalid ${DEADLINE_ENV}: ${deadline.invalid}`);
+    writeError(`Invalid ${DEADLINE_ENV}: ${deadline.invalid}`);
+    process.exit(1);
+    return;
+  }
+  if (deadline.deadlineAt !== null) armDeadline(deadline.deadlineAt);
+
   // Handle graceful shutdown
   process.on('SIGTERM', () => {
     writeLog('Received SIGTERM, shutting down');
-    gracefulShutdown();
+    gracefulShutdown('signal');
   });
 
   process.on('SIGINT', () => {
     writeLog('Received SIGINT, shutting down');
-    gracefulShutdown();
+    gracefulShutdown('signal');
   });
 
   connect(projectPath);
