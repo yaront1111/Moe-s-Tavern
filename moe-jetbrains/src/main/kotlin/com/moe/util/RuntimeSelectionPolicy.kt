@@ -50,6 +50,7 @@ fun interface DowngradeConfirmer {
  * selection. Anything the daemon would reject, or this IDE cannot read strictly, is PROTECTED.
  * The confirmed profile persists outside the repository: a weaker repository declaration cannot
  * downgrade a confirmed-protected project without human confirmation, effective after an IDE restart.
+ * On Windows a folder confirmed protected is also recognized under another spelling (subst, mapped, share or device) by file identity.
  */
 object RuntimeSelectionPolicy {
     private val log = Logger.getInstance(RuntimeSelectionPolicy::class.java)
@@ -74,6 +75,10 @@ object RuntimeSelectionPolicy {
 
     @Volatile
     internal var confirmer: DowngradeConfirmer = ProfileDowngradeDialog
+
+    // File identity for the profile lookup under another spelling; tests replace it.
+    @Volatile
+    internal var sameDirectory: (Path, Path) -> Boolean = Files::isSameFile
 
     private enum class StoredProfile { ABSENT, LEGACY, PROTECTED, UNTRUSTED }
     private val PROFILE_FIELDS = setOf("version", "project", "profile")
@@ -133,20 +138,27 @@ object RuntimeSelectionPolicy {
             pinned += key
             if (stored != StoredProfile.PROTECTED) persist(basePath, key, RuntimeProfile.PROTECTED)
         } else {
-            if (stored == StoredProfile.ABSENT || stored == StoredProfile.LEGACY) {
+            val weaker = stored == StoredProfile.ABSENT || stored == StoredProfile.LEGACY
+            val aliases = if (weaker) protectedAliases(basePath, key) else emptyList()
+            if (weaker && aliases.isEmpty()) {
                 // Another reader may have pinned and confirmed a downgrade while this one was reading the store.
                 return if (key in pinned) RuntimeProfile.PROTECTED else RuntimeProfile.LEGACY
             }
-            if (pinned.add(key)) askDowngrade(basePath, key)
+            if (aliases.isNotEmpty()) log.warn("Moe keeps the protected profile: ${aliases.size} other spelling(s) of this project were confirmed protected")
+            if (pinned.add(key)) askDowngrade(basePath, key, aliases)
         }
         return RuntimeProfile.PROTECTED
     }
 
-    private fun askDowngrade(basePath: String, key: String) {
+    // A confirmed downgrade also covers each matched spelling, under its own key, so no spelling of the folder asks again.
+    private fun askDowngrade(basePath: String, key: String, aliases: List<String>) {
         val answered = AtomicBoolean(false)
         try {
             confirmer.ask(basePath) { allow ->
-                if (answered.compareAndSet(false, true) && allow) persist(basePath, key, RuntimeProfile.LEGACY)
+                if (answered.compareAndSet(false, true) && allow) {
+                    persist(basePath, key, RuntimeProfile.LEGACY)
+                    aliases.forEach { persist(it, it, RuntimeProfile.LEGACY) }
+                }
             }
         } catch (ex: Exception) {
             log.warn("Moe keeps the protected profile: downgrade confirmation failed (${ex.javaClass.simpleName})")
@@ -183,15 +195,52 @@ object RuntimeSelectionPolicy {
     }
 
     /** The real path when it resolves, else the normalized absolute path, in comparable form. */
-    private fun projectKey(basePath: String): String {
-        val path = realPathOrNull(basePath) ?: try {
-            Paths.get(basePath).toAbsolutePath().normalize()
-        } catch (_: Exception) {
-            null
+    private fun projectKey(basePath: String): String = comparablePath(projectPath(basePath)?.toString() ?: basePath, defaultFoldCase)
+
+    private fun projectPath(basePath: String): Path? = realPathOrNull(basePath) ?: try {
+        Paths.get(basePath).toAbsolutePath().normalize()
+    } catch (_: Exception) {
+        null
+    } catch (_: IOError) {
+        null
+    }
+
+    /**
+     * On a Windows host, the projects of PROTECTED records stored under another spelling of this folder: toRealPath keeps
+     * a subst, mapped, share or device spelling, so each spelling keys its own record. It reads the store even where it is
+     * not usable for [basePath] (a share or device base), since a match only makes the answer stricter and nothing is
+     * written. Never throws: any failure matches nothing.
+     */
+    private fun protectedAliases(basePath: String, key: String): List<String> {
+        if (!windowsHost) return emptyList()
+        return try {
+            val store = store() ?: return emptyList()
+            val base = projectPath(basePath) ?: return emptyList()
+            // A root (Z:\, \\srv\share\) has no name, so every named record is compared.
+            val name = base.fileName?.let { comparablePath(it.toString(), defaultFoldCase) }
+            store.names().mapNotNull { aliasOrNull(store, it, key, name, base) }
+        } catch (ex: Exception) {
+            log.warn("Moe runtime selection looked up no other spelling of the project: ${describe(ex)}")
+            emptyList()
         } catch (_: IOError) {
-            null
+            log.warn("Moe runtime selection looked up no other spelling of the project: IOError")
+            emptyList()
         }
-        return comparablePath(path?.toString() ?: basePath, defaultFoldCase)
+    }
+
+    // [file]'s project when it is a strict protected record, under its own name, of another plain local spelling with
+    // [base]'s folder name. Every check runs before anything is opened, so a share or device key from the store is never contacted.
+    private fun aliasOrNull(store: ProtectedStateStore, file: String, key: String, name: String?, base: Path): String? = try {
+        val record = store.read(file)?.let { parseStrict(it, "the profile record").fields(PROFILE_FIELDS, "the profile record") }
+        val project = record?.takeIf { it.get("version").exactLong() == 1L && it.get("profile").stringOrNull() == "protected" }
+            ?.get("project")?.stringOrNull()
+        val stored = project?.takeIf { it != key && isPlainLocalPath(it) && recordsFile("profile:$it") == file }?.let { Paths.get(it) }
+        val storedName = stored?.fileName?.let { comparablePath(it.toString(), defaultFoldCase) }
+        if (storedName != null && (name == null || storedName == name) && sameDirectory(stored, base)) project else null
+    } catch (_: Exception) {
+        null
+    } catch (_: IOError) {
+        null
     }
 
     private fun realPathOrNull(path: String): Path? = try {
@@ -778,6 +827,7 @@ object RuntimeSelectionPolicy {
         forgetSessionForTest()
         store = { ideStore }
         confirmer = DowngradeConfirmer { _, _ -> }
+        sameDirectory = Files::isSameFile
         windowsDriveTarget = ::queryWindowsDriveTarget
     }
 

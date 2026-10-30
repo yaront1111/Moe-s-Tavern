@@ -36,6 +36,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOError
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -52,7 +53,9 @@ import java.nio.file.attribute.AclEntryType
 import java.nio.file.attribute.AclFileAttributeView
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermissions
+import java.security.MessageDigest
 import java.time.Instant
+import java.util.HexFormat
 import java.util.Optional
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
@@ -298,6 +301,86 @@ class RuntimeSelectionPolicyTest {
     }
 
     @Test
+    fun `D7 on Windows a protected record stored under the local spelling also pins its subst and device spellings`() = withProfileStore { store, dir, asks ->
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
+        assertEquals(profileJson(dir, "protected"), store.read(name))
+        writeProfile(dir, "legacy")
+        val stranger = project("""{"settings":{"executionProfile":"legacy"}}""")
+        val twin = File(temporaryFolder.newFolder(), dir.name).also { writeProfile(it, "legacy") }
+        withSubst(dir) { root -> withSubst(dir.parentFile) { parent ->
+            // The volume GUID spelling is the local, no-network stand-in for a share base.
+            val aliases = listOfNotNull("$root\\", "$parent\\${dir.name}", volumeSpelling(dir))
+            aliases.forEach { alias ->
+                RuntimeSelectionPolicy.forgetSessionForTest()
+                assertEquals(alias, RuntimeProfile.PROTECTED, RuntimeSelectionPolicy.profile(alias))
+                assertEquals(alias, asks.paths.last())
+            }
+            assertEquals("a stranger", RuntimeProfile.LEGACY, RuntimeSelectionPolicy.profile("$parent\\${stranger.name}"))
+            assertEquals("a same-named twin", RuntimeProfile.LEGACY, profileOf(twin))
+            assertEquals(aliases, asks.paths)
+            asks.answers.last()(true)
+            assertEquals("a downgrade through an alias", profileJson(dir, "legacy"), store.read(name))
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            (aliases + dir.path).forEach { assertEquals(it, RuntimeProfile.LEGACY, RuntimeSelectionPolicy.profile(it)) }
+            assertEquals("no new ask", aliases.size, asks.paths.size)
+        } }
+    }
+
+    @Test
+    fun `D8 another spelling matches only a protected, plain, same-named record of the same folder, and only on Windows`() = withProfileStore { store, _, asks ->
+        val base = File(temporaryFolder.newFolder("b"), "proj").also { writeProfile(it, "legacy") }
+        // Stands in for the folder a share or mapped spelling of base reaches.
+        val local = File(temporaryFolder.newFolder("a"), "proj").also { writeProfile(it, "legacy") }
+        val elsewhere = File(temporaryFolder.newFolder("c"), "other").also { writeProfile(it, "legacy") }
+        val localName = recordName(key(local))
+        assertEquals(RuntimeSelectionPolicy.profileRecordName(local.path), localName)
+        val asked = CopyOnWriteArrayList<Path>()
+        var identity: (Path) -> Boolean = { it == Paths.get(key(local)) }
+        RuntimeSelectionPolicy.sameDirectory = { stored, _ -> asked.add(stored); identity(stored) }
+        store.write(localName, profileJson(local, "legacy"))
+        store.write(NAME_A, profileJson(local, "protected"))
+        store.write(recordName(key(elsewhere)), profileJson(elsewhere, "protected"))
+        listOf("//srv/sh/proj", "volume{00000000-0000-0000-0000-000000000000}/b/proj").forEach {
+            store.write(recordName(it), Gson().toJson(linkedMapOf("version" to 1, "project" to it, "profile" to "protected")))
+        }
+        assertEquals(RuntimeProfile.LEGACY, profileOf(base))
+        assertEquals("nothing was opened, no share was touched", emptyList<Path>(), asked)
+        store.write(localName, profileJson(local, "protected"))
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        if (!RuntimeSelectionPolicy.windowsHost) {
+            assertEquals(RuntimeProfile.LEGACY, profileOf(base))
+            assertEquals(emptyList<Path>(), asked)
+            assertTrue(asks.paths.isEmpty())
+            return@withProfileStore
+        }
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(base))
+        assertEquals(listOf(Paths.get(key(local))), asked)
+        assertEquals(listOf(base.path), asks.paths)
+        asks.answers.single()(true)
+        assertEquals(profileJson(local, "legacy"), store.read(localName))
+        assertEquals(profileJson(base, "legacy"), store.read(RuntimeSelectionPolicy.profileRecordName(base.path)))
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        assertEquals(RuntimeProfile.LEGACY, profileOf(base))
+        store.write(localName, profileJson(local, "protected"))
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        assertEquals("a legacy record does not hide another spelling's", RuntimeProfile.PROTECTED, profileOf(base))
+        assertEquals(2, asks.paths.size)
+        listOf(IOException("gone"), IllegalStateException("native"), IOError(null)).forEach { failure ->
+            identity = { throw failure }
+            RuntimeSelectionPolicy.forgetSessionForTest()
+            assertEquals("$failure", RuntimeProfile.LEGACY, profileOf(base))
+        }
+        // The profile read skips a store inside the project, so only the lookup lists this regular-file root.
+        val unlistable = File(base, "state").apply { writeText("not a directory") }
+        RuntimeSelectionPolicy.store = { ProtectedStateStore(unlistable.toPath()) }
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        assertEquals("an unlistable store", RuntimeProfile.LEGACY, profileOf(base))
+        assertEquals("no new ask", 2, asks.paths.size)
+    }
+
+    @Test
     fun `D3 untrusted profile documents fail closed and explicit confirmation repairs them`() = withProfileStore { store, dir, asks ->
         val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
         val valid = profileJson(dir, "protected")
@@ -414,6 +497,13 @@ class RuntimeSelectionPolicyTest {
 
     private fun profileJson(dir: File, value: String): String = Gson().toJson(linkedMapOf(
         "version" to 1, "project" to comparable(realFile(dir).path, RuntimeSelectionPolicy.defaultFoldCase), "profile" to value))
+
+    /** How a profile record keys [dir]: its comparable real path. */
+    private fun key(dir: File): String = comparable(realFile(dir).path, RuntimeSelectionPolicy.defaultFoldCase)
+
+    /** The file a profile record for [key] is stored under, computed independently of the policy. */
+    private fun recordName(key: String): String =
+        HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest("profile:$key".toByteArray(Charsets.UTF_8))) + ".json"
 
     @Test
     fun `P1 absent, legacy and observe settings keep the legacy selection`() {
@@ -1131,6 +1221,22 @@ class RuntimeSelectionPolicyTest {
         assertNull("fresh root below a linked directory", linkedParent.read(NAME_A))
         linkedParent.write(NAME_A, "round trip")
         assertEquals("round trip", linkedParent.read(NAME_A))
+    }
+
+    @Test
+    fun `PS8 names lists only valid record names, sorted, under the read rules`() {
+        val store = newStore()
+        assertEquals("no root yet", emptyList<String>(), store.names())
+        assertFalse("listing never creates the root", Files.exists(store.root, LinkOption.NOFOLLOW_LINKS))
+        store.write(NAME_B, "b")
+        store.write(NAME_A, "a")
+        // NAME_C is never written, so its upper-case form cannot fold onto a valid file on Windows.
+        listOf("notes.txt", "state-1.tmp", NAME_C.uppercase()).forEach { Files.writeString(store.root.resolve(it), "stray") }
+        assertEquals(listOf(NAME_A, NAME_B), store.names())
+        val file = temporaryFolder.newFile("not-a-root").toPath()
+        assertThrows("regular-file root", ProtectedStateStore.Untrusted::class.java) { ProtectedStateStore(file).names() }
+        assumeTrue("cannot grant another principal access on this host", loosen(store.root, directory = true))
+        assertThrows("loosened root", ProtectedStateStore.Untrusted::class.java) { store.names() }
     }
 
     @Test

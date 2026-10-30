@@ -1,0 +1,32 @@
+{
+  "id": "task-c7ee939a460641eab87eb799a38e6ff9",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: worktree resume silently reverts tracked edits when W's index file is missing",
+  "description": "QA (qa-4b0c6c8e) found this while reviewing WT-04's reopen-1 round (task-c20464ff, completion b3b53625). That round did not cause it: the earlier 5657d186 ls-files signal does the same thing on this input.\n\nWhat happens: WT-04's reuse path reads \"W has no per-worktree index file\" as a half-made W. It finishes W with sparse-checkout set, then `git read-tree -mu HEAD`. See moe-agent.sh provision_worktree around :2951-2967, and moe-agent.ps1 Install-MoeTaskWorktree around :2745-2760. With sparse checkout on and no index, read-tree does not refuse to overwrite a file that is already there:\n- it prints `error: Path 'a.txt' already present; will not overwrite with sparse update.` for each path (git demotes the check to a warning);\n- it exits 0;\n- it overwrites the file with HEAD's content anyway.\nUntracked new files survive. Measured on git 2.43.0 (WSL) and 2.54.0.windows.1.\n\nEnd-to-end repro on Linux bash, with the WT-04 `[worktree reuse]` fixture:\n1. Create W through the wrapper.\n2. Edit tracked src/a.txt in W and add an untracked src/new.txt.\n3. Run `rm \"$(git -C W rev-parse --path-format=absolute --git-path index)\"`.\n4. Resume the task.\nResult: `[worktree] reused`, exit 0, the CLI launches, no report_blocked. src/a.txt is back to its seed content: the edit is lost and no rescue ref holds it. new.txt survives.\nProbe files: /mnt/d/moe-scratch/qa-c20464ff-r2.Wnnxai/section-idxdel.sh and driver.sh. Run `bash driver.sh <scripts snapshot root> section-idxdel.sh`.\n\nWhen it can happen: something deletes W's index file (for example an agent recovering a corrupt index with `rm <index>`, then `git reset`), and the session dies before the index is rebuilt. Git itself never leaves a worktree without an index file. Exposure today is zero: worktree mode is off by default, and the CLI only moves into W with WT-05. It should land before WT-19 flips the default.\n\nFix direction (the planner decides): a genuine half-made W from `worktree add --no-checkout` holds nothing but its `.git` file. Finish W only when that is true. If W has no index file but holds any other entry, refuse with MOE_WORKTREE_CREATE_FAILED and touch nothing, so a human inspects it. That means `[ERROR]`, one report_blocked, no CLI and exit 1. Apply the same rule in both twins.",
+  "definitionOfDone": [
+    "postflight case in both postflight.sh and postflight.ps1: W has no index file but holds an edited tracked file and an untracked file. The run refuses with MOE_WORKTREE_CREATE_FAILED: exactly one report_blocked, no CLI, exit 1. Both files keep their bytes.",
+    "A genuine half-made W, with no index file and nothing but .git, is still finished. WT-04's `[worktree reuse]` case (b) and the held-out postflight-worktree.cjs half-made case pass unchanged.",
+    "The sorted MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ token sets of moe-agent.sh and moe-agent.ps1 are identical, and bash scripts/tests/parity-check.sh passes.",
+    "node scripts/tests/postflight-safe.mjs bash and node scripts/tests/postflight-safe.mjs powershell both exit 0, run in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c20464ff64ca49fca4371dd9b5194364"
+  ],
+  "priority": "MEDIUM",
+  "order": 30,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T22:26:28.006Z",
+  "updatedAt": "2026-10-30T22:26:28.006Z"
+}

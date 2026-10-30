@@ -56,6 +56,19 @@ class ProtectedStateStore internal constructor(val root: Path) {
         return String(bytes, Charsets.UTF_8)
     }
 
+    /**
+     * The valid file names in the root, sorted; empty for a missing root below a directory, which is never created.
+     * No file is read. Throws as [read] does for a root the IDE would not have made, and an IOException otherwise.
+     */
+    fun names(): List<String> {
+        if (!present(root)) {
+            requireDirectoryAbove(root)
+            return emptyList()
+        }
+        requireOwnerOnly(root, directory = true)
+        return Files.newDirectoryStream(root).use { entries -> entries.map { it.fileName.toString() }.filter(NAME::matches).sorted() }
+    }
+
     private fun present(path: Path): Boolean = try {
         Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
         true
