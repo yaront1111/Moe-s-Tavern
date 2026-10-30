@@ -138,9 +138,27 @@ test('executable selection rejects absent, relative, unresolved and non-file can
         assert.deepEqual(plain(api.installedExecutable(candidate, project)), { rejected: reason });
     }
     assert.deepEqual(plain(api.installedExecutable(f.node, f.project)), { accepted: real(f.node) });
-    assert.deepEqual([...api.protectedPathEntries(`rel|"${f.project}"| "${f.outside}" `, f.project, '|')], [` "${f.outside}" `]);
+    const quoted = `rel|"${f.project}"| "${f.outside}" |${f.outside}'|${f.outside}"|'${f.outside}|"${f.outside}`;
+    assert.deepEqual([...api.protectedPathEntries(quoted, f.project, '|')], [f.outside]);
     assert.equal(api.isOutsideProject(path.join(f.project, 'absent'), f.project), false);
     assert.equal(api.isOutsideProject(path.join(f.outside, 'absent'), f.project), true);
+});
+
+test('Windows paths qualify only drive-qualified or UNC; rooted and drive-relative ones follow the current drive', t => {
+    const { isFullyQualified } = fixture(t).api;
+    for (const [p, expected] of [['\\x', false], ['/x', false], ['C:x', false], ['\\\\', false], ['C:\\x', true], ['c:/x', true],
+        ['\\\\srv\\sh', true], ['//srv/sh', true], ['\\\\?\\C:\\x', true]]) { assert.equal(isFullyQualified(p, true), expected, p); }
+    assert.deepEqual([isFullyQualified('/x', false), isFullyQualified('x', false)], [true, false]);
+});
+
+test('Windows rooted PATH and node spellings are refused on any host drive', { skip: process.platform !== 'win32' && 'Windows only' }, t => {
+    const f = fixture(t), api = f.api, device = `\\\\?\\${f.outside}`;
+    // QA repro: host cwd on D:, temp project on C:; rooted spellings resolved against D: and passed.
+    const rooted = [f.project, f.outside].flatMap(p => [p.slice(2), p.slice(2).replace(/\\/g, '/')]);
+    for (const entry of rooted) { assert.equal(api.isOutsideProject(entry, f.project), false, entry); }
+    assert.deepEqual(plain(api.installedExecutable(f.node.slice(2), f.project)), { rejected: 'node executable is not an absolute path' });
+    const env = api.protectedDaemonEnvironment({ PATH: [...rooted, f.outside, device].join(';') }, f.project, f.node, true, undefined);
+    assert.equal(env.PATH, [path.dirname(f.node), f.outside, device].join(';'));
 });
 
 for (const code of ['ENOENT', 'EACCES']) {

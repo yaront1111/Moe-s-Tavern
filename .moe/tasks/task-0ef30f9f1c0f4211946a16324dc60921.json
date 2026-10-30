@@ -1,0 +1,27 @@
+{
+  "id": "task-0ef30f9f1c0f4211946a16324dc60921",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: JetBrains protected PATH filter keeps entries as written, so an edge-quoted or space-padded entry escapes the project check",
+  "description": "MoeDaemonSupervisor.protectedPathEntries validates unquoted(entry) (trim plus surrounding \") but keeps the as-written entry.\n- Windows: libuv's PATH search strips one leading or trailing ' or \". Verified on node v24.16.0: PATH=C:\\Windows\\System32' still runs whoami. So `<project>'` passes isOutsideProject (realpath ENOENT, and the normalized form differs from the project), and the daemon's bare-name spawns then search the project.\n- POSIX: ` /x` survives as a relative execvp entry.\nVS Code fixed this in RF06b reopen 1 (task-032c973941bc41d9b051eedacb7de0b6): keep the validated spelling and drop entries ending in a quote.",
+  "definitionOfDone": [
+    "JetBrains protectedPathEntries/protectedDaemonEnvironment keep only validated spellings (trimmed, surrounding quotes removed) and drop any entry that still starts or ends with ' or \". A test shows `<project>'` dropped and a space-padded outside entry kept unpadded.",
+    "cd moe-jetbrains && ./gradlew test passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 295.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T15:22:33.524Z",
+  "updatedAt": "2026-10-30T15:22:33.524Z"
+}

@@ -224,7 +224,7 @@ export function installedArtifact(root: string, relative: string, basePath: stri
 /** A bare name is never resolved by spawn; the first selected candidate must pass these checks. */
 export function installedExecutable(p: string | undefined, basePath: string, foldCase = defaultFoldCase): ArtifactSelection {
     if (!p?.trim()) { return { rejected: 'node executable not found' }; }
-    if (!path.isAbsolute(p)) { return { rejected: 'node executable is not an absolute path' }; }
+    if (!isFullyQualified(p)) { return { rejected: 'node executable is not an absolute path' }; }
     return selectInstalledFile(p, 'node executable', basePath, foldCase);
 }
 
@@ -251,9 +251,14 @@ function selectInstalledFile(file: string, label: string, basePath: string, fold
     return { accepted: real };
 }
 
+/** Windows `\x`, `/x` and `C:x` follow the current drive or directory; only `C:\` and `\\` forms (either slash) qualify. */
+export function isFullyQualified(p: string, windows = process.platform === 'win32'): boolean {
+    return windows ? /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(p) : path.posix.isAbsolute(p);
+}
+
 export function isOutsideProject(p: string, basePath: string, foldCase = defaultFoldCase): boolean {
     try {
-        if (!path.isAbsolute(p)) { return false; }
+        if (!isFullyQualified(p)) { return false; }
         const projects = pathForms(basePath);
         return !pathForms(p).some(form => projects.some(project => isWithin(comparablePath(form, foldCase), comparablePath(project, foldCase))));
     } catch { return false; }
@@ -276,13 +281,14 @@ function pathNames(env: NodeJS.ProcessEnv, windows: boolean): string[] {
     return windows ? Object.keys(env).filter(key => key.toUpperCase() === 'PATH').sort() : ['PATH'];
 }
 
+/** Validated spellings only: libuv's Windows PATH search strips an edge quote (`C:\proj'` searches `C:\proj`). */
 export function protectedPathEntries(value: string, basePath: string, delimiter = path.delimiter): string[] {
-    return value.split(delimiter).filter(entry => isOutsideProject(unquoted(entry), basePath));
+    return value.split(delimiter).map(unquoted).filter(entry => !/["']$/.test(entry) && isOutsideProject(entry, basePath));
 }
 
 /** In-process lookup: neither which/where nor a bare node can execute workspace code. */
 export function nodeOnProtectedPath(value: string, basePath: string, windows: boolean): string | undefined {
-    return protectedPathEntries(value, basePath).map(entry => path.join(unquoted(entry), windows ? 'node.exe' : 'node'))
+    return protectedPathEntries(value, basePath).map(entry => path.join(entry, windows ? 'node.exe' : 'node'))
         .find(file => safeStat(file)?.isFile());
 }
 
@@ -337,7 +343,7 @@ export function protectedDaemonEnvironment(env: NodeJS.ProcessEnv, basePath: str
             if (safeStat(directory)?.isDirectory()) { entries.push(directory); }
         }
     }
-    result[name] = protectedPathEntries([...new Set(entries.filter(entry => entry.trim()))].join(path.delimiter), basePath).join(path.delimiter);
+    result[name] = [...new Set(protectedPathEntries(entries.join(path.delimiter), basePath))].join(path.delimiter);
     return result;
 }
 
