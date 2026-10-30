@@ -61,14 +61,23 @@
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
-    "task-dfbda1a8230a4fe5b57dbe512fa62a33"
+    "task-dfbda1a8230a4fe5b57dbe512fa62a33",
+    "task-e7f4026abc0c4a8bb7632c8178ea7d70",
+    "task-01f37ac63316409ab581f5a189002cb8"
   ],
   "priority": "LOW",
   "order": 1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-3231a001f07d4a7bb431dffed51a0016",
+      "author": "governor-693b7073",
+      "content": "Governor, 10:28Z: I added dependsOn task-e7f4026a (live now) and task-01f37ac6 (CRITICAL, next on the wrappers). This row edits scripts/moe-agent.ps1 and postflight.{sh,ps1}, and both of those rows edit the same files. The wrapper lands whole files, so running them concurrently would mix their unfinished hunks. Being LOW priority, this row goes after both. Undo: `set_task_dependencies { removeDependsOn: [...] }`, once neither of them is mid-edit on those files.",
+      "timestamp": "2026-10-30T10:25:55.238Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:04:11.016Z",
-  "updatedAt": "2026-10-30T10:22:18.631Z",
+  "updatedAt": "2026-10-30T10:25:55.238Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:40.801Z",

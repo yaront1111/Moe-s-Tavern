@@ -88,14 +88,22 @@
   "dependsOn": [
     "task-f943b6877b5f48aeb282d819f9da013d",
     "task-a2f243a111654c7fbb2a28848a923e8c",
-    "task-dfbda1a8230a4fe5b57dbe512fa62a33"
+    "task-dfbda1a8230a4fe5b57dbe512fa62a33",
+    "task-e7f4026abc0c4a8bb7632c8178ea7d70"
   ],
   "priority": "CRITICAL",
   "order": 282.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-6c14bd64952641bf9d5c29bda7a9f457",
+      "author": "governor-693b7073",
+      "content": "Governor, 10:27Z: I added dependsOn task-e7f4026a. That row has been live since 10:23Z (worker-e60b90bd), and its steps 2-3 edit scripts/moe-agent.sh and moe-agent.ps1. This row's steps 2, 3, 5 and 6 edit the same two files. The wrapper lands whole files, and the MOE_ATTR_CONTESTED_EDITING guard only ships with this row's own change. So if both run at once, one landing would carry the other's unfinished wrapper hunks, which is the same tangle local-runner.test.mjs went through this morning. Undo: `set_task_dependencies { taskId: task-01f37ac6…, removeDependsOn: [task-e7f4026a…] }`, but only if e7f4026a has landed and nobody is mid-edit on the wrappers.",
+      "timestamp": "2026-10-30T10:25:39.892Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:11:20.155Z",
-  "updatedAt": "2026-10-30T09:58:36.360Z",
+  "updatedAt": "2026-10-30T10:25:39.892Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:15:38.804Z",

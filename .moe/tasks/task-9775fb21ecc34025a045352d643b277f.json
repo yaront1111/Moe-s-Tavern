@@ -73,7 +73,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -93,7 +93,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T09:48:28.018Z",
-  "updatedAt": "2026-10-30T10:23:19.096Z",
+  "updatedAt": "2026-10-30T10:28:55.454Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T09:54:49.441Z",
@@ -103,11 +103,14 @@
     "firstClaimAt": "2026-10-30T09:55:06.695Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T10:28:55.454Z",
+    "wallClockMs": 2028759
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-093a65d0"
+    "worker-093a65d0",
+    "qa-ba3f4f35"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -247,5 +250,9 @@
     "kind": "checkpoint",
     "sessionId": "architect-bd1eb82d@2026-10-30T09:55:06Z",
     "at": "2026-10-30T10:23:19.096Z"
-  }
+  },
+  "completedAt": "2026-10-30T10:28:55.454Z",
+  "reviewCompletedAt": "2026-10-30T10:28:55.454Z",
+  "reviewSummary": "Reviewed recorded completion db4b09af43126246a913c038a594db6eaf0a9098 with git show, git branch -a --contains, tree identity and git diff --check; it is on moe/work-2026-10-24. Later a0842116 is board-only. Owned diff: +58/-8, net 50 LOC (runtime net 6, tests net 44); full completion including board state net 251. Scope is exactly daemonIdentity.ts and daemonIdentity.test.ts; index.ts/utils.ts are byte-identical to the parent. No API/state/docs migration required.\nRe-ran task.verification.command verbatim: whole-repo git archive HEAD, explicit two-file overlay, env -i Node v24.21.0, npm ci in daemon and proxy, proxy npm test including clean/tsc, cmp and git diff checks. Exit 0: 6 files / 263 tests passed, identity 75. rev=5d262206023fd3152447e53a470055a05cf0a30f; /tmp/moe-proxy-9775-gate.QvMuSt/verification.log. Additionally compared all four relevant snapshot files directly to db4b09af blobs; exact match, and no proxy working-tree diff.\nDoD/contract verified: CR/TAB/LF, percent-encoded and userinfo E1 rows require exit 1 naming both projects, exactly one GET /health and no /mcp upgrade. Strict unit rows cover credentials/path isolation and port-in-host versus a same-project decoy. Existing assertions, genuine-unknown fail-open behavior, caps/timeouts, path spellings and E1-E4 are preserved. Independent qa-url-parity.mjs against the built probe and installed ws captured matching targets for 19 accepted spellings, rejection of 4 invalid spellings and preserved bare IPv6; all probes use GET /health without credentials. Simulated IPv6 EAFNOSUPPORT via qa-no-ipv6.cjs and ran vitest run src/daemonIdentity.test.ts: exit 0, 66 passed / 4 explicitly skipped, 5 IPv6 e2e rows not registered. These logs are beside verification.log. No deferred or unrun required check. Complexity pass: Lean already; net 0 lines to cut. Existing daemon-side upgrade identity/health-to-upgrade TOCTOU remains out of scope.",
+  "requiredCheckAtDone": null
 }
