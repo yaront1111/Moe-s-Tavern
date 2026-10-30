@@ -94,11 +94,17 @@
       "author": "governor-4764040b",
       "content": "@architect-915213a1 From the governor: this row is no longer yours on the board, and you need to re-claim it before submit_plan.\n- You claimed it at 20:24:27Z. At 20:25:31Z it was released from the board (WORKER_RELEASED, \"stripped from architect-915213a1 ... Released from board\"). The likeliest cause is the human acting late on an earlier ask about the frozen architect-899a90d6.\n- It's now PLANNING, unassigned and HIGH. Your transcript shows you're still planning it.\n- Re-claim it now, before submit_plan: moe.claim_next_task {statuses:[\"PLANNING\"], taskId:\"task-d45d52c0bb3d4569b3b6b5a757812b19\"}. That also stops architect-4ff0711c from picking it up when it frees.\n- Your exploration so far still counts.\n- Before you submit, read governor-693b7073's lane-swap comment above (20:31Z). The row now dependsOn R13h 4132ab1c, which worker-c75a6f39 is coding, so your checks go in before LIFECYCLE_CHECKS on R13h's certify.mjs. The human's split decisions in comment-9ec65797 stand.",
       "timestamp": "2026-10-30T20:37:59.483Z"
+    },
+    {
+      "id": "comment-2a5fd5f4a22f4be1935fbf3ca7cdcdfc",
+      "author": "architect-915213a1",
+      "content": "Planner note (architect-915213a1, 21:24Z). Read this before step 1.\n\nR13h (4132ab1c) was QA-rejected at 21:13Z, against the 2cd85cc0 this plan builds on. Its fix adds rows to scripts/tests/local-runner.test.mjs (at least two LC5 recovery cases), and it may also touch recovered() in certify-lifecycle.mjs. This row's files and DoD are unchanged, and so are its steps. Apply them to R13h's FINAL landed bytes, not to 2cd85cc0 or 757dcce4.\n\n1. Step 1, item 1, \"LC7\": this means the R13h row that asserts CERTIFY_CHECKS' last four ids (`.slice(-4)`) are ['check-containment', 'cancellation', 'recovery', 'teardown']. Its title reads \"... run after check-containment, before teardown ...\". Edit the row that holds that content after R13h lands, whatever its number is.\n2. Step 5's `--test-name-pattern='^(WC|CR|CF1 |LC7)'`: use that row's final number.\n3. Step 4's \"338 tests, 337 pass, 1 skip\" was measured on 757dcce4. Re-measure the base on R13h's final tree, then expect base + 5 tests with the same single skip.\n4. R13h's new LC5 rows run with this row's three checks ahead of recovery, and they must pass unmodified. If one fails, the cause is in this row's code, e.g. an exec interception or the GUEST-keyed hash flip matching too broadly. Fix it there. Never edit R13h's LC5 rows or certify-lifecycle.mjs: neither is in this plan's files.\n5. The prototype's hunks (Serena memory task-task-d45d52c0…-prototype) are against 757dcce4. Where R13h's fix moved an anchor, apply the same intent to the landed bytes, as step 1 already says.",
+      "timestamp": "2026-10-30T21:23:54.178Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:04:16.594Z",
-  "updatedAt": "2026-10-30T21:16:33.406Z",
+  "updatedAt": "2026-10-30T21:23:54.178Z",
   "dependsOn": [
     "task-d00dafdf2dde4a41bf5983b1f7d495de",
     "task-001d8ab383ef41088e045b2e41ed0e1e",
@@ -138,19 +144,35 @@
       "treeId": "127745b71a8381bc861ffaccebc88dc0b252d63a",
       "status": "PLANNING",
       "pushed": false
+    },
+    {
+      "sha": "aed10c40cc0c2dfdd653525acb7cdde2d9b882b9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-915213a1@2026-10-30T20:24:29Z",
+      "paths": [
+        ".moe/tasks/task-2c95c5d1d2bd4dcc9d16fbff1fdb9654.json"
+      ],
+      "recordedBy": "architect-915213a1",
+      "recordedAt": "2026-10-30T21:18:08.004Z",
+      "treeId": "be2c883071368eeb9b99fefd63cdb5b128939b18",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
     ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
     ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
-    ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json"
+    ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
+    ".moe/tasks/task-2c95c5d1d2bd4dcc9d16fbff1fdb9654.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
     "sessionId": "architect-915213a1@2026-10-30T20:24:29Z",
-    "at": "2026-10-30T20:24:42.164Z"
+    "at": "2026-10-30T21:18:08.004Z"
   },
   "tier": "standard",
   "effort": "xhigh",

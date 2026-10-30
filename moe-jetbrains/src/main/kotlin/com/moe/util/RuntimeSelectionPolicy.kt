@@ -83,11 +83,13 @@ object RuntimeSelectionPolicy {
 
     private fun storedProfile(basePath: String, key: String): StoredProfile {
         return try {
-            // A pin only restricts, so it is read even from a store no drive mapping can place, or for a base that is not a
-            // plain local base: unprovable is not absent, and must not turn a pinned project legacy. Writes still need a
-            // store provably outside the project.
+            // A pin only restricts, so it is read even for a base that is not a plain local base, or when the store root or
+            // the base has no physical folder: a drive mapping cannot place it (as written, or through a junction, link or
+            // subst), its real path cannot be found, or it has no drive at all. Unprovable is not absent, and must not turn
+            // a pinned project legacy; a missing base reads as absent. Writes still need a store provably outside the project.
             val readable = store()?.takeIf {
-                it.usableFor(basePath) || windowsHost && (unprovableDrive(it.root.toString()) || unplainBase(basePath))
+                it.usableFor(basePath) ||
+                    windowsHost && (physicalFolder(it.root) == null || unplainBase(basePath) || physicalFolder(Paths.get(basePath)) == null)
             }
             val text = readable?.read(recordsFile("profile:$key")) ?: return StoredProfile.ABSENT
             val root = parseStrict(text, "the profile record").fields(PROFILE_FIELDS, "the profile record")
@@ -466,24 +468,15 @@ object RuntimeSelectionPolicy {
      * On Windows toRealPath calls GetFinalPathNameByHandle only at a reparse point, so a subst letter is never
      * resolved: `Q:\bin` can be `<project>\bin` with no shared prefix, and as a drive root `Z:\` for `<project>\bin`
      * has no parent, hiding every folder above it. So [path] is expanded ([resolveWindowsDrivePath]), its nearest existing
-     * folder resolved to its [physicalPath], and from there each folder up to the root compared with the physical
-     * [project] by file identity (volume serial + file index). True only when one comparison ran and none matched; a
-     * missing folder defers to its parent, and any other failure, unprovable mapping or missing project answers false.
-     * Node's realpath.native resolves these letters, so VS Code needs no twin.
+     * folder resolved to its [physicalPath] ([physicalFolder]), and from there each folder up to the root compared with
+     * the physical [project] by file identity (volume serial + file index). True only when one comparison ran and none
+     * matched; a missing folder defers to its parent, and any other failure, unprovable mapping or missing project
+     * answers false. Node's realpath.native resolves these letters, so VS Code needs no twin.
      */
     private fun outsideByIdentity(path: Path, project: Path?): Boolean {
         if (project == null) return false
         try {
-            var current: Path? = Paths.get(resolveWindowsDrivePath(path.toString()) ?: return false)
-            var real: Path? = null
-            while (real == null && current != null) {
-                try {
-                    real = current.toRealPath()
-                } catch (_: NoSuchFileException) {
-                    current = current.parent
-                }
-            }
-            var folder = real?.let(::physicalPath)
+            var folder = physicalFolder(path)
             var proved = false
             while (folder != null) {
                 if (Files.isSameFile(folder, project)) return false
@@ -495,6 +488,30 @@ object RuntimeSelectionPolicy {
             return false
         } catch (_: IOError) {
             return false
+        }
+    }
+
+    /**
+     * [path]'s nearest existing folder as file identity compares it ([physicalPath]). Null when a drive on the way cannot be
+     * proved local, a resolution fails, or nothing on the way exists. The drive lookup is asked before NIO opens anything,
+     * so nothing is opened through a drive its spelling cannot place. Never throws.
+     */
+    private fun physicalFolder(path: Path): Path? {
+        try {
+            var current: Path? = Paths.get(resolveWindowsDrivePath(path.toString()) ?: return null)
+            var real: Path? = null
+            while (real == null && current != null) {
+                try {
+                    real = current.toRealPath()
+                } catch (_: NoSuchFileException) {
+                    current = current.parent
+                }
+            }
+            return real?.let(::physicalPath)
+        } catch (_: Exception) {
+            return null
+        } catch (_: IOError) {
+            return null
         }
     }
 

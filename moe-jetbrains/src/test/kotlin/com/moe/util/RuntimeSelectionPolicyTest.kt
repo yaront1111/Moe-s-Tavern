@@ -189,6 +189,115 @@ class RuntimeSelectionPolicyTest {
     }
 
     @Test
+    fun `D10 a protected pin survives a restart on which a junction leads the store or the project onto a drive no mapping can place`() = withProfileStore { _, dir, asks ->
+        assumeTrue("Windows drive mappings", RuntimeSelectionPolicy.windowsHost)
+        val stores = temporaryFolder.newFolder("stores")
+        val link = File(temporaryFolder.root, "system-link")
+        assertTrue("a junction to $stores", junction(link.toPath(), stores.toPath()))
+        val far = File(stores, "proj").also { writeProfile(it, "verified-local") }
+        temporaryFolder.newFolder("state")
+        val fresh = project("""{"settings":{"executionProfile":"legacy"}}""")
+        val physical = realFile(stores).path.substring(0, 2).uppercase()
+        val native = RuntimeSelectionPolicy.windowsDriveTarget
+        // y's root IS the junction, so toRealPath keeps y: and only drive expansion reaches the junction.
+        withSubst(temporaryFolder.root) { z -> withSubst(link) { y ->
+            val near = "$z\\${dir.name}"
+            val cases = listOf(
+                Triple("store through a junction", near, ProtectedStateStore(Paths.get("$z\\system-link\\moe\\protected-state"))),
+                Triple("store on a drive rooted at a junction", near, ProtectedStateStore(Paths.get("$y\\moe\\protected-state"))),
+                Triple("project on a drive rooted at a junction", "$y\\proj", ProtectedStateStore(Paths.get("$z\\state\\moe\\protected-state"))))
+            cases.forEach { (label, base, store) ->
+                RuntimeSelectionPolicy.store = { store }
+                RuntimeSelectionPolicy.forgetSessionForTest()
+                assertEquals(label, RuntimeProfile.PROTECTED, RuntimeSelectionPolicy.profile(base))
+                assertTrue(label, store.usableFor(base))
+                assertEquals(label, profileJson(File(base), "protected"), store.read(RuntimeSelectionPolicy.profileRecordName(base)))
+            }
+            val sandbox = ProtectedStateStore(Paths.get("$near\\build\\idea-sandbox\\system\\moe\\protected-state"))
+            sandbox.write(RuntimeSelectionPolicy.profileRecordName(near), profileJson(File(near), "protected"))
+            writeProfile(dir, "legacy")
+            writeProfile(far, "legacy")
+            listOf<(String) -> String?>({ "\\Device\\ImDisk0" }, { null }, { throw IllegalStateException("native") },
+                { throw UnsatisfiedLinkError("jnidispatch") }).forEachIndexed { i, unplaceable ->
+                // z stands for a drive the lookup places, physical for one it cannot; y expands through z to the folder it names natively.
+                withDriveTargets({
+                    when (it) { z -> "\\Device\\HarddiskVolume1"; y -> "\\??\\$z\\system-link"; physical -> unplaceable(it); else -> native(it) }
+                }) {
+                    cases.forEach { (label, base, store) ->
+                        val name = RuntimeSelectionPolicy.profileRecordName(base)
+                        assertFalse("$label $i", store.usableFor(base))
+                        RuntimeSelectionPolicy.store = { store }
+                        RuntimeSelectionPolicy.forgetSessionForTest()
+                        val asked = asks.paths.size
+                        assertEquals("$label $i", RuntimeProfile.PROTECTED, RuntimeSelectionPolicy.profile(base))
+                        assertEquals("$label $i", listOf(base), asks.paths.drop(asked))
+                        asks.answers.last()(true)
+                        assertEquals("$label $i", profileJson(File(base), "protected"), store.read(name))
+                        assertEquals("$label $i", listOf(name), storeFiles(store))
+                    }
+                    RuntimeSelectionPolicy.store = { cases[0].third }
+                    assertEquals("fresh $i", RuntimeProfile.LEGACY, RuntimeSelectionPolicy.profile("$z\\${fresh.name}"))
+                    // On a placed drive a sandbox under the project is provably inside it (D2): its record is never read.
+                    RuntimeSelectionPolicy.store = { sandbox }
+                    RuntimeSelectionPolicy.forgetSessionForTest()
+                    assertEquals("sandbox $i", RuntimeProfile.LEGACY, RuntimeSelectionPolicy.profile(near))
+                }
+            }
+            assertEquals("a fresh legacy project and a sandbox store are never asked", 12, asks.paths.size)
+        } }
+    }
+
+    @Test
+    fun `D11 a protected pin survives a restart on which the store is spelled without a drive`() = withProfileStore { store, dir, asks ->
+        assumeTrue("Windows drive mappings", RuntimeSelectionPolicy.windowsHost)
+        val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
+        assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+        val device = volumeSpelling(store.root.toFile()) ?: throw AssumptionViolatedException("mountvol names the volume")
+        val deviceStore = ProtectedStateStore(Paths.get(device))
+        writeProfile(dir, "legacy")
+        assertFalse(device, deviceStore.usableFor(dir.path))
+        RuntimeSelectionPolicy.store = { deviceStore }
+        RuntimeSelectionPolicy.forgetSessionForTest()
+        assertEquals(device, RuntimeProfile.PROTECTED, profileOf(dir))
+        assertEquals(listOf(dir.path), asks.paths)
+        asks.answers.last()(true)
+        assertEquals(profileJson(dir, "protected"), store.read(name))
+        assertEquals(listOf(name), storeFiles(store))
+        assertEquals("a fresh legacy project", RuntimeProfile.LEGACY, profileOf(project("""{"settings":{"executionProfile":"legacy"}}""")))
+        assertEquals(1, asks.paths.size)
+    }
+
+    @Test
+    fun `D12 a protected pin survives a restart on which the store or the project has no real path`() = withProfileStore { store, dir, asks ->
+        assumeTrue("Windows drive mappings", RuntimeSelectionPolicy.windowsHost)
+        val lockedStore = temporaryFolder.newFolder("locked-store")
+        val lockedProject = temporaryFolder.newFolder("locked-project")
+        val proj = File(lockedProject, "proj").also { writeProfile(it, "legacy") }
+        writeProfile(dir, "legacy")
+        listOf(
+            "store below an unlistable folder" to Triple(lockedStore, dir.path, ProtectedStateStore(lockedStore.toPath().resolve("moe/protected-state"))),
+            // The real spelling: with no real path projectKey falls back to the spelling, which must still name the record.
+            "project below an unlistable folder" to Triple(lockedProject, realFile(proj).path, store)
+        ).forEach { (shape, fixture) ->
+            val (locked, base, side) = fixture
+            val name = RuntimeSelectionPolicy.profileRecordName(base)
+            val record = profileJson(File(base), "protected")
+            side.write(name, record)
+            RuntimeSelectionPolicy.store = { side }
+            withUnlistable(locked) {
+                assertFalse(shape, side.usableFor(base))
+                RuntimeSelectionPolicy.forgetSessionForTest()
+                assertEquals(shape, RuntimeProfile.PROTECTED, RuntimeSelectionPolicy.profile(base))
+                assertEquals(shape, base, asks.paths.last())
+                asks.answers.last()(true)
+                assertEquals(shape, record, side.read(name))
+                assertEquals(shape, listOf(name), storeFiles(side))
+            }
+        }
+        assertEquals("one ask per case", 2, asks.paths.size)
+    }
+
+    @Test
     fun `D3 untrusted profile documents fail closed and explicit confirmation repairs them`() = withProfileStore { store, dir, asks ->
         val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
         val valid = profileJson(dir, "protected")
@@ -1957,6 +2066,24 @@ class RuntimeSelectionPolicyTest {
             return body()
         } finally {
             RuntimeSelectionPolicy.windowsDriveTarget = previous
+        }
+    }
+
+    /**
+     * Runs [body] while [dir]'s owner may not list it, then restores its ACL in a finally block. toRealPath lists each folder
+     * on the way, so it fails below [dir], while opening a known path still works, because traverse checking is bypassed.
+     * That is what a junction onto a volume Windows cannot name (an ImDisk RAM disk outside the mount manager) does to it.
+     */
+    private fun <T> withUnlistable(dir: File, body: () -> T): T {
+        val view = Files.getFileAttributeView(dir.toPath(), AclFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS)
+            ?: throw AssumptionViolatedException("no ACL view for $dir")
+        val previous = view.acl
+        view.acl = listOf(AclEntry.newBuilder().setType(AclEntryType.DENY).setPrincipal(view.owner)
+            .setPermissions(AclEntryPermission.LIST_DIRECTORY).build()) + previous
+        try {
+            return body()
+        } finally {
+            view.acl = previous
         }
     }
 

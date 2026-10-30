@@ -1,0 +1,26 @@
+{
+  "id": "task-54fe1615fb3e49b8ac6dd384108d6ef5",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: moe-agent.ps1 agent git guard fails under PS 5.1 when TEMP contains a space",
+  "description": "Initialize-MoeAgentGitGuard runs `& node - $projectPath ([IO.Path]::GetTempPath())`. GetTempPath() ends in `\\`, and PS 5.1 quotes a native argument that holds a space as `\"C:\\x y\\tmp\\\"`, so node gets `C:\\x y\\tmp\"`. mkdtemp then throws, the seat logs MOE_AGENT_GIT_GUARD_FAILED and no CLI ever launches. PS 7.6 passes the argument intact.\nRepro: run worktree-landing.ps1 with TMP/TEMP = `C:\\...\\c1 x\\tmp`, or under PS 5.1 run `& node -e \"console.log(process.argv)\" 'C:\\a b\\tmp\\'`, which prints `C:\\a b\\tmp\"`. Found by WT-08T (task-c12f9463), which now keeps TMP space-free to avoid it.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 29,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T21:21:59.634Z",
+  "updatedAt": "2026-10-30T21:21:59.634Z"
+}
