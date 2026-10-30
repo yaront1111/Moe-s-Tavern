@@ -146,7 +146,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:07:30.476Z",
-  "updatedAt": "2026-10-30T05:31:02.484Z",
+  "updatedAt": "2026-10-30T05:31:32.233Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T19:06:04.530Z",
@@ -267,7 +267,8 @@
     "scripts/moe-agent.ps1",
     "docs/MCP_SERVER.md",
     ".moe/tasks/task-95b610e3726c4e099c84eaedf098602a.json",
-    ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json"
+    ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json",
+    ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json"
   ],
   "completionSummary": "The owner guard in both wrappers now takes the finalizing hold from get_commit_scope.finalizingAttempt instead of scanning every .moe/attempts record.\n- The field decides only when it came from the RPC scope (sh fallback != '1'; ps1 Source 'rpc') and is null or well-formed: non-blank string ids and an int generation in 1..2^53-1.\n  - Another worker's attempt is refused with MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE and the same detail text, 'attempt <id> of <worker> is still finalizing'.\n  - The caller's own attempt, or null, lands.\n- An absent field (older daemon), a malformed value or the disk fallback runs the old scan, byte-for-byte unchanged.\n\nChanges:\n- moe-agent.sh: +12/-1.\n- moe-agent.ps1: +12/-2. FinalizingSet and Finalizing are added to both scope hashtables, the raw property is kept, and the guard block uses Get-MoeProp, Test-MoeGeneration and -cne. BOM kept.\n- Fake proxy: knob FAKE_SCOPE_FINALIZING=computed|null|malformed. When unset there is no key, so the default reply is unchanged.\n- Owner guard: new cases finalizing-field, finalizing-own, finalizing-null and finalizing-malformed, plus a shared detail assertion. 16 cases total.\n\nEvidence:\n- RED: finalizing-null fails against HEAD's wrapper on both sh and ps1, because the scan refuses.\n- GATE: the amended step-6 command, run once as one invocation, exits 0. Daemon 5408 passed. sh: scope 13/13, frozen 3, owner guard 16, parity. ps1: frozen 3, owner guard 16.\n- An 18-case edge matrix run against the real guard code gives identical results on python3, PS 5.1 and pwsh 7. It covers string, bool, float, 0 and 2^53 generations, 'null', arrays, blank ids, case, an empty WORKER_ID and the disk fallback.\n\nDelivery note for QA:\n- The docs/MCP_SERVER.md hunk (the Returns entry and the **Finalizing hold.** note, +5) is already on the branch. Peer task-95b610e3's completion 6ead6a0 landed the file whole, with the trailer `Moe-Contested: docs/MCP_SERVER.md (task-d3cd966c…)`, so this completion shows no docs diff. Check it w",
   "commits": [
@@ -304,6 +305,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "5f2660c32dc719c7ad3f21714650a17039fa5e60",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T05:20:38Z",
+      "paths": [
+        ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json",
+        ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T05:31:32.233Z",
+      "treeId": "0be6afc8c42800ef104575bd29988ed6b626e85b",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -315,9 +332,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-093a65d0@2026-10-30T04:56:18Z",
-    "at": "2026-10-30T05:17:00.725Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T05:20:38Z",
+    "at": "2026-10-30T05:31:32.233Z"
   },
   "completedAt": "2026-10-30T05:31:02.484Z",
   "reviewCompletedAt": "2026-10-30T05:31:02.484Z",
