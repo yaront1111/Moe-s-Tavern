@@ -100,7 +100,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:10:57.855Z",
-  "updatedAt": "2026-10-30T08:21:20.153Z",
+  "updatedAt": "2026-10-30T08:21:44.804Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:15:35.745Z",
@@ -172,20 +172,46 @@
       "treeId": "2d14fb6cd9f5f1fa0c562492fdd20f63fd0b2aa6",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "8d977add40bf6c33c54b7cf80952152b946fed96",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T08:04:20Z",
+      "paths": [
+        ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T08:21:44.804Z",
+      "treeId": "5948d5216d877abcf56228f7e0afb8dd54c2fcf2",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/state/deliveryProjection.ts",
+          "taskId": "task-6339299aa3b743d1948ffbd880a5c34a"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
     "packages/moe-daemon/src/delivery/requiredChecks.ts",
     "packages/moe-daemon/src/delivery/policy.ts",
-    "packages/moe-daemon/src/state/deliveryProjection.ts"
+    "packages/moe-daemon/src/state/deliveryProjection.ts",
+    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-5ebbf433@2026-10-30T07:24:45Z",
-    "at": "2026-10-30T07:26:29.500Z"
+    "kind": "completion",
+    "sessionId": "worker-093a65d0@2026-10-30T08:04:20Z",
+    "at": "2026-10-30T08:21:44.804Z"
   },
   "workStartedAt": "2026-10-30T08:05:54.747Z",
   "reviewStartedAt": "2026-10-30T08:21:20.151Z",
@@ -196,5 +222,8 @@
     "reportedAt": "2026-10-30T08:21:20.151Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Bug efbf1742: under verified-local, a candidate-built architecture checker never delivers. 4 files, about 114 net non-board LOC (runtime about 46, tests 68).\n- delivery/requiredChecks.ts +29:\n  - INSTALLED_ARCHITECTURE_CHECK, the plan regex verbatim: single spaces, no quote, operator, variable, glob or redirection.\n  - untrustedArchitectureChecks(defs): pure and never throws. A def is an architecture check when its command matches /check-?architecture/i, or when any configs/scripts/assertionRoots path ends with the checker or engine source.\n  - Two deliberate widenings over the plan, both fail closed: camelCase is detected, and all three path kinds are read, not just scripts.\n  - Refused unless the trimmed command is the installed form. A malformed def is refused.\n- delivery/policy.ts:\n  - UNTRUSTED_CHECKER_PREFIX 'required-check-untrusted-checker:' plus untrustedCheckerToken.\n  - protectedCheckShortfall puts one token per refused id first, only when trusted !== null (verified-local), in both the normal and catch returns.\n  - describeMissingEvidence names only the approved def id and the installed form.\n- SCOPE GROWTH: state/deliveryProjection.ts gets +1 condition. requiredCheckSatisfiedFor enumerates token kinds, so without it the board projected requiredCheckSatisfied:true while qa_approve refused. V12b's planned hunk in that file (latestCheckRun outcome) is disjoint.\n- Tests (requiredChecks.strong.test.ts +69):\n  - UC1: 31 classifier rows plus order.\n  - UC2 (DoD1): the dist form with a passing authenticated run and equal protectedEntries gives missing [untrusted:arch]; the projection is false; dependents are withheld.\n  - UC3: the installed form delivers.\n  - UC4 (DoD2): legacy and observe verdicts are unchanged.\n  - UC5: the reason text.\n- RED: 33 failed / 37 passed. Mutants M1 (projection ignores the token), M2 (token outside verified-local) and M3 (token dropped) were each killed, and the sources restored cmp-identical.\n- Test-file tsc via a scratch tsconfig "
+  "completionSummary": "Bug efbf1742: under verified-local, a candidate-built architecture checker never delivers. 4 files, about 114 net non-board LOC (runtime about 46, tests 68).\n- delivery/requiredChecks.ts +29:\n  - INSTALLED_ARCHITECTURE_CHECK, the plan regex verbatim: single spaces, no quote, operator, variable, glob or redirection.\n  - untrustedArchitectureChecks(defs): pure and never throws. A def is an architecture check when its command matches /check-?architecture/i, or when any configs/scripts/assertionRoots path ends with the checker or engine source.\n  - Two deliberate widenings over the plan, both fail closed: camelCase is detected, and all three path kinds are read, not just scripts.\n  - Refused unless the trimmed command is the installed form. A malformed def is refused.\n- delivery/policy.ts:\n  - UNTRUSTED_CHECKER_PREFIX 'required-check-untrusted-checker:' plus untrustedCheckerToken.\n  - protectedCheckShortfall puts one token per refused id first, only when trusted !== null (verified-local), in both the normal and catch returns.\n  - describeMissingEvidence names only the approved def id and the installed form.\n- SCOPE GROWTH: state/deliveryProjection.ts gets +1 condition. requiredCheckSatisfiedFor enumerates token kinds, so without it the board projected requiredCheckSatisfied:true while qa_approve refused. V12b's planned hunk in that file (latestCheckRun outcome) is disjoint.\n- Tests (requiredChecks.strong.test.ts +69):\n  - UC1: 31 classifier rows plus order.\n  - UC2 (DoD1): the dist form with a passing authenticated run and equal protectedEntries gives missing [untrusted:arch]; the projection is false; dependents are withheld.\n  - UC3: the installed form delivers.\n  - UC4 (DoD2): legacy and observe verdicts are unchanged.\n  - UC5: the reason text.\n- RED: 33 failed / 37 passed. Mutants M1 (projection ignores the token), M2 (token outside verified-local) and M3 (token dropped) were each killed, and the sources restored cmp-identical.\n- Test-file tsc via a scratch tsconfig ",
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/requiredChecks.ts"
+  ]
 }

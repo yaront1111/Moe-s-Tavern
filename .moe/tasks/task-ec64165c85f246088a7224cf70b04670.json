@@ -84,11 +84,17 @@
       "author": "architect-4ae016fb",
       "content": "architect-4ae016fb, 2026-10-30: I planned this row and removed the CQ-RF02 dependency I added earlier.\n\nThe plan touches only MoeDaemonSupervisor.kt and MoeDaemonSupervisorTest.kt (the RP1-RP5 rows). RF02's files are RuntimeSelectionPolicy.kt, RuntimeSelectionPolicyTest.kt and ProfileDowngradeDialog.kt, so the two rows share no file and can run in parallel after RF01. dependsOn is back to [RF01].",
       "timestamp": "2026-10-30T07:13:09.584Z"
+    },
+    {
+      "id": "comment-08300e6714524aa39f21dbe2857b1f0e",
+      "author": "architect-4ae016fb",
+      "content": "architect-4ae016fb, 2026-10-30: three notes for this row's worker. I agreed them in #architects with RF04's architect (architect-e4b7eee0).\n\n1. `--host` once task-0c72d59a lands. This row now dependsOn 0c72d59a, a HIGH security fix: JetBrains WSL agent mode starts the daemon with `--host wsl` instead of `--host 0.0.0.0`.\n   - Where steps 1 and 2 say \"--host 0.0.0.0\", read it as \"the WSL host that protectedDaemonCommand produces in the landed bytes\".\n   - Keep 0c72d59a's constant, and never write 0.0.0.0 back.\n   - RP1 asserts the landed value on 'start'. 'stop' never carries --host.\n\n2. On Windows, the stop leaves daemon.json behind. There, Node's process.kill(pid, 'SIGTERM') is TerminateProcess, so `_run`'s shutdown cleanup never runs. After a successful stop, daemon.json usually still names the now-dead pid.\n   - Step 3's condition \"daemon.json absent, or names a pid that isProcessAlive denies\" is deliberate. Do not narrow it to \"absent\".\n   - RP1's fake stop deletes the file, so add one RP1 variant that pins the Windows shape. runStop returns 0; target and parent die, processAliveProbe included; daemon.json stays in place, naming 4242.\n   - Expected: the replacement proceeds, the existing stale cleanup removes the file, and processStarter runs the installed start once.\n\n3. stopCommandOrNull has no side effect apart from its warn log. RF04 (task-de91373a) also calls it from the Windows Restart Daemon path under LEGACY, and treats null as a failed stop.\n   - On a Refused selection it neither calls onStatus nor sets selectionRefusal; those stay with protectedCommandOrRefuse.\n   - Node resolves exactly as in protectedCommandOrRefuse: the nodeExecutable seam, else resolveNodeExecutable with nodeOnProtectedPath. Share that resolution rather than copying it.\n   - RF04's plan cites stopCommandOrNull, runStop, sleep, EXIT_TIMEOUT_MS and POLL_MS by name, so keep those names.",
+      "timestamp": "2026-10-30T08:21:37.632Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:32.776Z",
-  "updatedAt": "2026-10-30T07:33:20.912Z",
+  "updatedAt": "2026-10-30T08:21:37.632Z",
   "dependsOn": [
     "task-fd653cfbaea541c39569dfed9452cf5c",
     "task-0c72d59aad37467fb49e5ad699692d78"
