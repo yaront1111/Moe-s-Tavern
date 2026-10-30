@@ -61,7 +61,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -78,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T17:03:44.888Z",
-  "updatedAt": "2026-10-30T22:22:42.510Z",
+  "updatedAt": "2026-10-30T22:26:00.826Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T17:07:01.125Z",
@@ -88,11 +88,14 @@
     "firstClaimAt": "2026-10-30T17:07:10.745Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T22:26:00.826Z",
+    "wallClockMs": 19130081
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-c0a1ac70"
+    "worker-c0a1ac70",
+    "qa-12f7cf2d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -180,17 +183,36 @@
       "treeId": "9926cd31957f34877a5be30e264896db79757b34",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "5e0ba02bc88cdb239d868d3deab16f28dc4b7136",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-30T22:18:17Z",
+      "paths": [
+        ".moe/tasks/task-6bc91f38c840496c894434404760f3a3.json",
+        ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-30T22:22:59.264Z",
+      "treeId": "30acf7d4aed390927a9762ebe98e8715cdb049e5",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    "scripts/tests/local-runner.test.mjs"
+    "scripts/tests/local-runner.test.mjs",
+    ".moe/tasks/task-6bc91f38c840496c894434404760f3a3.json",
+    ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-bd1eb82d@2026-10-30T17:07:10Z",
-    "at": "2026-10-30T17:23:51.074Z"
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-30T22:18:17Z",
+    "at": "2026-10-30T22:22:59.264Z"
   },
   "workStartedAt": "2026-10-30T22:18:37.043Z",
   "reviewStartedAt": "2026-10-30T22:22:42.508Z",
@@ -201,5 +223,12 @@
     "reportedAt": "2026-10-30T22:22:42.508Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Hoisted transferRefused in place (const arrow -> function declaration, predicate byte-identical) so ^CB3 alone no longer hits a TDZ ReferenceError; added CB7, which re-runs CB3 alone in a child process (NODE_TEST_CONTEXT removed) and asserts '# pass 1'/'# fail 0'. RED: CB7 failed with an AssertionError carrying the child's \"Cannot access 'transferRefused' before initialization\"; GREEN after the hoist. Full file: 339 tests (baseline 338 + 1), 338 pass, 0 fail, 1 skip. Scratch probes: const revert makes CB7 and CB3 fail on the TDZ; length-only framing mutant makes ^CB3 alone fail with AssertionError and no TDZ text; scratch restored cmp-identical. Every CB row alone is green on Node 24, ^CB is 10/10 on Node 22. Diff is +11/-2 in scripts/tests/local-runner.test.mjs only; git diff --check clean. No product source or .moe edits, no Git writes."
+  "completionSummary": "Hoisted transferRefused in place (const arrow -> function declaration, predicate byte-identical) so ^CB3 alone no longer hits a TDZ ReferenceError; added CB7, which re-runs CB3 alone in a child process (NODE_TEST_CONTEXT removed) and asserts '# pass 1'/'# fail 0'. RED: CB7 failed with an AssertionError carrying the child's \"Cannot access 'transferRefused' before initialization\"; GREEN after the hoist. Full file: 339 tests (baseline 338 + 1), 338 pass, 0 fail, 1 skip. Scratch probes: const revert makes CB7 and CB3 fail on the TDZ; length-only framing mutant makes ^CB3 alone fail with AssertionError and no TDZ text; scratch restored cmp-identical. Every CB row alone is green on Node 24, ^CB is 10/10 on Node 22. Diff is +11/-2 in scripts/tests/local-runner.test.mjs only; git diff --check clean. No product source or .moe edits, no Git writes.",
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs"
+  ],
+  "completedAt": "2026-10-30T22:26:00.826Z",
+  "reviewCompletedAt": "2026-10-30T22:26:00.826Z",
+  "reviewSummary": "Reviewed completion commit 5e0ba02b (on moe/work-2026-10-24, pushed). Product diff is scripts/tests/local-runner.test.mjs only, +11/-2 (plus two .moe board files). -U0 shows two hunks only: new row CB7 after CB6, and the transferRefused declaration plus comment. git diff --check clean; no scripts/local-runner/** change; CB3 and all call sites untouched. Predicate text byte-identical; only const arrow -> function declaration at the same position.\n\nRe-ran task.verification under the env -i Node 24.21.0 prefix: ^CB3 alone exit 0 (1 test, 1 pass, 0 fail, no 'before initialization'/unhandledRejection); full file exit 0, 339 tests, 338 pass, 0 fail, 1 skip (baseline 338+1, skip unchanged), CB7 passed.\n\nScratch-copy probes (outside repo, removed): (a) reverting to const: ^CB3 alone fails with ReferenceError 'transferRefused' before initialization; ^CB7 fails with an AssertionError carrying the child's TDZ text, so CB7 guards the regression. (b) length-only framing mutant in certify-bridge.mjs: ^CB3 alone fails with AssertionError 'a flipped byte', no TDZ text; scratch restored cmp-identical, shared tree untouched. Every CB row alone passes on Node 24 (CB1-CB7 incl. both CB5 rows); ^CB on Node 22.23.4 is 10/10.\n\nDoD, executionContract criteria and invariants met: no assertion weakened, CB3 unchanged, no product source change. CB7 is lean (reuses imported spawnSync/fileURLToPath, deletes NODE_TEST_CONTEXT, ^CB3\\b cannot recurse, diagnostics in the message). 13 changed lines, far under the cap. Mid-epic test-only fix, so no wider suite needed. Complexity pass found nothing to cut.",
+  "requiredCheckAtDone": null
 }
