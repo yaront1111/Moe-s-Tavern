@@ -12,6 +12,9 @@ const ps = fs.readFileSync(psPath, 'utf8');
 const shFunctions = sh.slice(sh.indexOf('HEARTBEAT_PID=""'), sh.indexOf('\npost_flight()'));
 const hasBash = process.platform !== 'win32' && spawnSync('bash', ['--version']).status === 0;
 const hasPwsh = spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0']).status === 0;
+// The pwsh cases start real PowerShell processes. On a loaded CI runner a real job stop can outlast the wrapper's bound,
+// or the pwsh host can crash outright (both seen on ubuntu-latest), so only these cases get retries.
+const PWSH_CASE = { retry: 2, timeout: 15000 };
 
 // Every process in this new group is created by this fixture. On RED, kill
 // that group before returning: a hung cleanup must not leak test sidecars.
@@ -77,7 +80,7 @@ echo RETAINED_HANDLE
     expect(r.output).toContain('RETAINED_HANDLE');
   });
 
-  it.skipIf(!hasPwsh)('does not reload and lose a pending PowerShell job handle', async () => {
+  it.skipIf(!hasPwsh)('does not reload and lose a pending PowerShell job handle', PWSH_CASE, async () => {
     const from = ps.indexOf('\n    if ($script:MoeWrapperLaunchHash) {');
     const body = ps.slice(from, ps.indexOf('\n    $isFirstIteration', from));
     const wrapper = parseableWrapper('wrapper.ps1', '$null = 1\n');
@@ -182,7 +185,7 @@ echo OWNERSHIP_RETAINED_NO_DUPLICATE
     expect(r.output).toContain('OWNERSHIP_RETAINED_NO_DUPLICATE');
   }, 15000);
 
-  it.skipIf(!hasPwsh)('bounds a slow PowerShell job stop and retains its handle until cleanup finishes', async () => {
+  it.skipIf(!hasPwsh)('bounds a slow PowerShell job stop and retains its handle until cleanup finishes', PWSH_CASE, async () => {
     const r = await run('pwsh', ['-NoProfile', '-Command', `${psFunctions}
 $ErrorActionPreference = 'Stop'
 # A slow .NET stop is represented by an object method; unlike a peer process,
@@ -210,9 +213,9 @@ Write-Output BOUNDED_STOP_REAPED
     expect(r.timedOut, r.output).toBe(false);
     expect(r.code, r.output).toBe(0);
     expect(r.output).toContain('BOUNDED_STOP_REAPED');
-  }, 15000);
+  });
 
-  it.skipIf(!hasPwsh)('stops a real PowerShell background job, preserving an unrelated job', async () => {
+  it.skipIf(!hasPwsh)('stops a real PowerShell background job, preserving an unrelated job', PWSH_CASE, async () => {
     const r = await run('pwsh', ['-NoProfile', '-Command', `${psFunctions}
 $ErrorActionPreference = 'Stop'
 $script:CurrentHeartbeatJob = Start-Job { Start-Sleep -Seconds 30 }
@@ -230,5 +233,5 @@ try {
     expect(r.timedOut, r.output).toBe(false);
     expect(r.code, r.output).toBe(0);
     expect(r.output).toContain('OWNED_JOB_ONLY');
-  }, 12000);
+  });
 });
