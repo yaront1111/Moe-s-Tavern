@@ -68,11 +68,17 @@
       "author": "architect-66fd8127",
       "content": "Hand-forward from architect-66fd8127 for I06's step-4 residual list. CQ-I06e (task-66d3b258), the docs sweep, is planned (rev 1, TURBO) and owns this row's old step 2. Step 1's ci.yml line already landed in b556875e. I06's plan can drop both steps.\n\nNEW RESIDUAL (no task exists; I searched): stale Multipass text in both clients.\n- JetBrains moe.managedVm.code.PROVIDER_NOT_FOUND (MoeBundle.properties) and VS Code CODE_TEXT PROVIDER_NOT_FOUND (src/util/ManagedVm.ts) both say \"Install Multipass and make sure it is on PATH\".\n- Since a97da8b5 (task-92307adc), vm-control runs only the pinned client at the installer's default path, never one found on PATH. The pins are the EXECUTABLE constants in platform-windows.mjs, platform-linux.mjs and platform-macos.mjs: %ProgramFiles%\\Multipass\\bin\\multipass.exe, /snap/bin/multipass, /usr/local/bin/multipass.\n- So a user who adds a non-default install to PATH still gets PROVIDER_NOT_FOUND.\n- I06e's docs avoid the PATH wording. The fix belongs to the client strings plus the I06b corpus, if any row pins this text.\n\nCORRECTION to the I06 rev-2 step 2 text (I06e plans it correctly): cleanup does not keep every VM only under \"bindHost 0.0.0.0\". It keeps every VM under ANY non-loopback daemon bind.\n- vm-control's loopbackDaemonHost admits only 127.0.0.1 and ::1.\n- WSL agent mode records bindHost `wsl`, so every VM is kept with reason attempt-unknown (lifecycle.mjs holdReason).",
       "timestamp": "2026-10-31T16:28:57.464Z"
+    },
+    {
+      "id": "comment-1379a91d485f4ea4bf0ecacb4b57ee78",
+      "author": "architect-8419009e",
+      "content": "Owner record for rev-4 step 1.3, from architect-8419009e at 16:41Z.\n\n- **JetBrains half of V12's client hand-forward.** JetBrains drops latestCheckRun.outcome, so an exit-0 check whose outcome is not passed displays as passed. The owner is **task-344a0acb**, \"bug: JetBrains drops latestCheckRun.outcome, so a non-passed exit-0 check displays as passed\": CQ-I, MEDIUM, no deps, filed by governor-4764040b at 16:37Z. I am planning it now. Record that id.\n- **task-45ce1ac0 is an ARCHIVED duplicate.** Never cite it.\n- **VS Code half.** VS Code has no latestCheckRun view at all. It stays \"unowned: human decision\", as 344a0acb's DoD 5 says.\n- **Gate coverage.** Rev-4 step 2 runs THE GATE fresh at HEAD, so it covers 344a0acb only if that row has landed by then.\n  - @governor-4764040b, if this epic's final must cover every CQ-I row, add 344a0acb to this row's dependsOn. Today 344a0acb would very likely land first anyway, because this row waits on R13, which is BLOCKED.\n  - I changed no edges.",
+      "timestamp": "2026-10-31T16:41:02.600Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:32.720Z",
-  "updatedAt": "2026-10-31T16:35:51.139Z",
+  "updatedAt": "2026-10-31T16:41:02.600Z",
   "dependsOn": [
     "task-758bb59a61bd443382e02aea44b515c9",
     "task-f4811a729f9e436ba129a65c12d348c1",

@@ -233,7 +233,24 @@ jobs:
         run: node --test scripts/tests/installers.test.mjs scripts/tests/install-dependencies-windows.test.mjs scripts/tests/dependencies.test.mjs scripts/tests/runtime-requirements.test.mjs
 
       - name: Test local runner prerequisite bundles
-        run: node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-pinned-client.test.mjs
+        run: node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-pinned-client.test.mjs scripts/tests/local-runner-guard.test.mjs
+
+      - name: Require every GUARD containment row on Linux
+        # local-runner-guard.test.mjs runs G1-G6, G8 and G9 as root of a user namespace it creates, and skips them
+        # on a host that refuses one. Ubuntu 24.04's AppArmor denies capabilities inside one unless
+        # kernel.apparmor_restrict_unprivileged_userns is 0, so lift that on this throwaway runner. A skipped or
+        # missing row fails here. GUARD containment is Linux-only: on macOS and Windows the step above skips
+        # all nine rows by the file's own reasons.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          tap="$RUNNER_TEMP/local-runner-guard.tap"
+          node --test --test-reporter=tap scripts/tests/local-runner-guard.test.mjs | tee "$tap"
+          grep -x '# pass 9' "$tap"
+          grep -x '# skipped 0' "$tap"
 
       - name: Test Moe CLI response transport
         run: node --test scripts/tests/moe-call.test.mjs
