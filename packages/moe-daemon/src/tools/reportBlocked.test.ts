@@ -167,6 +167,41 @@ describe('moe.report_blocked', () => {
     expect(state.getWorker('governor-1')).toMatchObject({ status: 'GOVERNING', currentTaskId: null });
   });
 
+  // A governor never holds a task, so parking an unassigned row as a third party
+  // must not hand it the END_SESSION meant for a seat whose own task was dropped:
+  // the moe-account-switch mod would end the governance TUI mid-incident.
+  it.each([
+    ['governor-1', null, 'GOVERNING'],
+    ['ops-seat', 'governor', 'IDLE'],
+  ] as const)('a governor (%s, team role %s) parking an unassigned row gets no handoff and keeps its status', async (governor, role, status) => {
+    await state.updateTask('task-1', { assignedWorkerId: null });
+    await addWorker(governor, role, 1);
+    await state.updateWorker(governor, { status });
+
+    const result = await report({ workerId: governor, reason: 'parked by governance' });
+
+    expect(result.sessionHandoff).toBeUndefined();
+    expect(result.workerStatus).toBe(status);
+    expect(state.getTask('task-1')).toMatchObject({ status: 'BLOCKED', assignedWorkerId: null, blockedReason: 'parked by governance' });
+    expect(state.getWorker(governor)).toMatchObject({ status, currentTaskId: null });
+  });
+
+  // The fallback exists for a seat whose own task lost its assignment before it
+  // reported the block: that session must still end so its wrapper checkpoints.
+  it.each([
+    ['worker-1', 'worker', 'WORKING'],
+    ['qa-1', 'qa', 'REVIEW'],
+    ['architect-1', 'architect', 'PLANNING'],
+  ] as const)('a dropped-assignment %s (%s) still gets END_SESSION addressed to itself', async (caller, role, status) => {
+    await state.updateTask('task-1', { status, assignedWorkerId: null });
+    if (caller !== 'worker-1') await addWorker(caller, role, 1);
+
+    const result = await report({ workerId: caller });
+
+    expect(result.sessionHandoff).toMatchObject({ action: 'END_SESSION', taskId: 'task-1', workerId: caller });
+    expect(state.getTask('task-1')).toMatchObject({ status: 'BLOCKED', assignedWorkerId: null, blockedFromStatus: status });
+  });
+
   it('preserves dependency-resolution guidance without an executable next-task hint', async () => {
     const prerequisite = await state.createTask({ epicId: 'epic-1', title: 'Producer', status: 'WORKING' });
     const result = await report({ blockedOnTaskIds: [prerequisite.id] });

@@ -5,6 +5,7 @@ import { AGENT_CLAIMABLE_STATUSES } from '../util/claimableStatuses.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { findFreshestLiveWorkerByRole } from '../util/workerLiveness.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 import { RESOURCE_ID_RE } from '../state/resourceStore.js';
 import { MAX_TASK_DEPENDENCY_IDS } from '../state/taskStore.js';
 import {
@@ -35,7 +36,7 @@ const BLOCKABLE_STATUSES = new Set(['PLANNING', 'WORKING', 'REVIEW']);
 export function reportBlockedTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.report_blocked',
-    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. Non-resource blocks reported by the ASSIGNEE (or on an unassigned task) FREE YOUR SEAT: the task parks unassigned and you go IDLE. End the current session so its wrapper can checkpoint this task; claim other work only after a fresh wrapper preflight, never inside the same CLI (a third-party/workerId-less block on an assigned task keeps the hold). Always pass blockedOnTaskIds explicitly (including [] for no task dependencies): the list wins and reason ids are not parsed. Only when omitted are reason ids auto-parsed as a legacy fallback — the daemon auto-unblocks the task when they are all DONE/ARCHIVED (under a strict settings.deliveryPolicy a DONE task counts only once its required check is recorded). If EVERY selected dependency already counts that way the task is NOT blocked (dependenciesSatisfied:true — there is nothing to wait on; continue); an id that would close a dependency cycle is dropped with a warning. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks (seat KEPT — the grant returns it to you) and is auto-unblocked when the lease is granted. A repeat call on an already-BLOCKED task OVERWRITES blockedReason and unions new blockedOnTaskIds (keeping the original blockedFromStatus/blockedAt) and answers alreadyBlocked:true with reasonUpdated:true; a byte-identical repeat pages nobody and answers reasonUpdated:false. An assignee repeat also frees a still-assigned non-resource hold (even with an identical reason), preserving block provenance and task-keyed leases; otherwise an identical repeat writes nothing. Only PLANNING/WORKING/REVIEW rows can be parked and only a BLOCKED row updated: a human-gated row (BACKLOG, AWAITING_APPROVAL, DONE, ARCHIVED) is refused with INVALID_STATE before any write or page — record a hold there with moe.add_comment or a task rail, or move the row with moe.set_task_status first.',
+    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. Non-resource blocks reported by the ASSIGNEE (or on an unassigned task) FREE YOUR SEAT: the task parks unassigned and you go IDLE. End the current session so its wrapper can checkpoint this task; claim other work only after a fresh wrapper preflight, never inside the same CLI (a third-party/workerId-less block on an assigned task keeps the hold; a governor parking an unassigned task keeps its own session and status). Always pass blockedOnTaskIds explicitly (including [] for no task dependencies): the list wins and reason ids are not parsed. Only when omitted are reason ids auto-parsed as a legacy fallback — the daemon auto-unblocks the task when they are all DONE/ARCHIVED (under a strict settings.deliveryPolicy a DONE task counts only once its required check is recorded). If EVERY selected dependency already counts that way the task is NOT blocked (dependenciesSatisfied:true — there is nothing to wait on; continue); an id that would close a dependency cycle is dropped with a warning. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks (seat KEPT — the grant returns it to you) and is auto-unblocked when the lease is granted. A repeat call on an already-BLOCKED task OVERWRITES blockedReason and unions new blockedOnTaskIds (keeping the original blockedFromStatus/blockedAt) and answers alreadyBlocked:true with reasonUpdated:true; a byte-identical repeat pages nobody and answers reasonUpdated:false. An assignee repeat also frees a still-assigned non-resource hold (even with an identical reason), preserving block provenance and task-keyed leases; otherwise an identical repeat writes nothing. Only PLANNING/WORKING/REVIEW rows can be parked and only a BLOCKED row updated: a human-gated row (BACKLOG, AWAITING_APPROVAL, DONE, ARCHIVED) is refused with INVALID_STATE before any write or page — record a hold there with moe.add_comment or a task rail, or move the row with moe.set_task_status first.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -476,7 +477,12 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // successful claim changes board ownership, not the launcher's baseline.
       // Return terminal handoff guidance, never an executable next-task hint.
       // A dangling old assignment must not end a different task's live session.
-      const seatWorker = prevAssignee || params.workerId;
+      // The caller fallback is for a seat whose own task lost its assignment
+      // before it reported. A governor never holds a task, so its third-party
+      // park of an unassigned row must not end the governance session.
+      const callerSeat = params.workerId && resolveWorkerRole(state, params.workerId) !== 'governor'
+        ? params.workerId : undefined;
+      const seatWorker = prevAssignee || callerSeat;
       const currentTaskId = seatWorker ? state.getWorker(seatWorker)?.currentTaskId : undefined;
       const sessionHandoff = freeSeat && seatWorker && !currentTaskId
         ? {
@@ -549,8 +555,8 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         // unassigned block keeps its own status), else IDLE when no seat is
         // involved at all. The old literal 'BLOCKED' on the no-assignee arms
         // was the phantom-block report this tool is no longer allowed to make.
-        workerStatus: freeSeat
-          ? (prevAssignee ? state.getWorker(prevAssignee)?.status ?? 'IDLE' : 'IDLE')
+        workerStatus: freeSeat && prevAssignee
+          ? state.getWorker(prevAssignee)?.status ?? 'IDLE'
           : task.assignedWorkerId
             ? state.getWorker(task.assignedWorkerId)?.status ?? (workerMarkedBlocked ? 'BLOCKED' : 'IDLE')
             : params.workerId
