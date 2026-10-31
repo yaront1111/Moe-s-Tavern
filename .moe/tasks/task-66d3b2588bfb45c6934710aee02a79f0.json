@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -85,17 +85,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T16:10:03.275Z",
-  "updatedAt": "2026-10-31T16:30:25.573Z",
+  "updatedAt": "2026-10-31T16:32:53.184Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T16:12:11.511Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T16:32:53.184Z",
+    "wallClockMs": 1241673
   },
   "contextFetchedBy": [
     "architect-66fd8127",
     "architect-b58e1112",
-    "worker-3a9b4568"
+    "worker-3a9b4568",
+    "qa-4398294e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -192,7 +195,50 @@
   "filesModified": [
     "docs/DEVELOPMENT.md",
     "moe-vscode/README.md",
+    "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+    ".moe/tasks/task-25d76cd54c274ff989f655f5743f730e.json",
+    ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+    ".moe/tasks/task-66d3b2588bfb45c6934710aee02a79f0.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "completionSummary": "CQ-I06e docs sweep. DEVELOPMENT.md '## Plugin Bundling': tree for both bundles (lib/ and full docs/roles JetBrains-only; VS Code ships 3 role docs), 'Packaging guards' (required-asset lists, onboarding.mjs packaged checks, local-runner-bundle.test.mjs, each with where it runs), and '### Client verification record (CQ-I)' with 7 rows (native row links CERTIFICATION.md#certified-platforms; no counts/versions/dates). moe-vscode/README.md: Managed VMs Features bullet, Getting started step 3 + sentence, 3 exact command titles, one Known issues line (Node 22+ and loopback-only daemon). plugin.xml: one Managed VMs <li> in <description>. Only those 3 files changed.",
+  "commits": [
+    {
+      "sha": "3d6f8cb3256caa934b9fb41ab3f1c6caa3752a76",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3a9b4568@2026-10-31T16:28:56Z",
+      "paths": [
+        ".moe/tasks/task-25d76cd54c274ff989f655f5743f730e.json",
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-66d3b2588bfb45c6934710aee02a79f0.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "docs/DEVELOPMENT.md",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+        "moe-vscode/README.md"
+      ],
+      "recordedBy": "worker-3a9b4568",
+      "recordedAt": "2026-10-31T16:30:46.355Z",
+      "treeId": "8a4bbca3efd15161c48d68c4f8ac5d2fcc8d9dd8",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/DEVELOPMENT.md",
+    "moe-vscode/README.md",
     "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
   ],
-  "completionSummary": "CQ-I06e docs sweep. DEVELOPMENT.md '## Plugin Bundling': tree for both bundles (lib/ and full docs/roles JetBrains-only; VS Code ships 3 role docs), 'Packaging guards' (required-asset lists, onboarding.mjs packaged checks, local-runner-bundle.test.mjs, each with where it runs), and '### Client verification record (CQ-I)' with 7 rows (native row links CERTIFICATION.md#certified-platforms; no counts/versions/dates). moe-vscode/README.md: Managed VMs Features bullet, Getting started step 3 + sentence, 3 exact command titles, one Known issues line (Node 22+ and loopback-only daemon). plugin.xml: one Managed VMs <li> in <description>. Only those 3 files changed."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3a9b4568@2026-10-31T16:28:56Z",
+    "at": "2026-10-31T16:30:46.355Z"
+  },
+  "completedAt": "2026-10-31T16:32:53.184Z",
+  "reviewCompletedAt": "2026-10-31T16:32:53.184Z",
+  "reviewSummary": "APPROVED (docs-only; legacy policy; no currentCandidate, so no candidateId).\nDelivery: completion commit 3d6f8cb3 recorded in task.commits, on moe/work-2026-10-24. Non-.moe diff: DEVELOPMENT.md +39/-8 (all in '## Plugin Bundling'), README +4/-2, plugin.xml +1; ~44 net LOC. <change-notes>/<listener> untouched.\nRe-ran task.verification from repo root: exit 0 (lint OK, 'OK docs', 'plugin.xml well-formed'); git diff --check clean. Diff grep for dates/versions/counts empty; no 'on PATH' Multipass wording; no daemonGitDocs NEVER_RUNS_GIT phrase; CERTIFICATION.md:114 '## Certified platforms' exists.\nDoD 1: tree and guards match build.gradle.kts (prepareSandbox, requireBundledAssets) and bundle-assets.mjs (lib/ and full docs/roles JetBrains-only; VS Code 3 role docs; only JetBrains requires the wrapper scripts; both require 5 local-runner files and fresh dist/node_modules). onboarding.mjs packaged block, local-runner-bundle.test.mjs, and CI/release placement (build-plugin ubuntu, 3-OS matrix, release.yml zip+.vsix) all verified.\nDoD 2: 7 rows; every cited test/corpus/source file exists; no CLIENT_HELLO sender in IDE sources; powershell launch lines, cli.mjs certify/native-smoke, EXECUTION_PROFILE_NOT_READY verified.\nDoD 3: 3 titles match package.json exactly; README and plugin.xml claims match ManagedVm.ts, ManagedVmTreeProvider.ts, actions(), vm-control.mjs (Node 22 WebSocket, loopback), loopbackDaemonHost, holdReason 'attempt-unknown', WSL_BIND_HOST='wsl'.\nDoD 4: statements trace to landed code; only the 3 files changed; lint passes.\nNot run, per rails: no npm install/build/test in shared checkout; cited vitest/JUnit/node:test/CI jobs were not re-run. No ponytail findings.",
+  "requiredCheckAtDone": null
 }
