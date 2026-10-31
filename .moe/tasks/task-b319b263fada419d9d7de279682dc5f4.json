@@ -182,7 +182,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:51:18.624Z",
-  "updatedAt": "2026-10-31T13:44:36.337Z",
+  "updatedAt": "2026-10-31T13:45:09.711Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:03.133Z",
@@ -282,7 +282,8 @@
     "scripts/tests/postflight-worktree.cjs",
     "scripts/moe-agent.ps1",
     ".moe/tasks/task-5ee846b62b81438c9d508160235d15ac.json",
-    ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json"
+    ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json",
+    ".moe/epics/epic-dce3a64f31a44d948f771137a2c0dbed.json"
   ],
   "completionSummary": "WT-07: worktree-mode checkpoint landing in both wrappers (moe-agent.sh/.ps1, kept in parity).\n- A WORKING/UNKNOWN exit in W (.worktrees/<id>) commits dirty non-DENY W paths to refs/heads/moe/task/<id> as a temp index + commit-tree + ONE update-ref CAS, with the parent = the previous tip. A moved tip goes to a rescue ref (ref-contention) and is never rebased. An unresolvable tip refuses with MOE_COMMIT_FAILED_REF_CONTENTION, and the bytes stay in W, so there is never an orphan commit.\n- record_commit carries ref refs/heads/moe/task/<id>. Pushes follow settings.checkpointPush (CHECKPOINT-UNPUSHED on failure).\n- DENY paths (plus .claude/skills under W) print MOE_ATTR_EXCLUDED. Worktree mode takes no baseline.\n- W dirt at pre-flight becomes a checkpoint (MOE_CHECKPOINT_RECOVERED).\n- Architect/QA seats on moe/control record MOE_COMMIT_NOTHING_TO_COMMIT.\n- Control-checkout writes print MOE_WORKTREE_STRAY_EDIT plus one add_comment. They are never committed or reverted. The dirt list is <common-dir>/moe/worktree/<id>.control-dirt.\n- A worktree completion makes a checkpoint on the task branch only and finalizes 'failed' (target landing is WT-08). This also holds after an interrupt after the CAS, which was fixed in the self-review via a MOE_WT_COMPLETION flag.\n- Teardown in worktree mode makes no rescue ref; the bytes stay in W.\n- Shared mode is unchanged: the full bash and ps1 suites are green.\nTests: scripts/tests/postflight-worktree.cjs has wt-checkpoint, wt-deny, wt-recover, wt-recover-moe, wt-control-seats, wt-stray, wt-push, wt-completion, wt-contention and codes. postflight.sh and postflight.ps1 both run it.\nDeviations:\n- The scenarios live in the shared cjs suite rather than duplicated postflight.ps1 blocks.\n- Wrapper edits were made in place with the Edit tool (the TOOL-witness rail) instead of a whole-file mv.\n- The unresolvable-tip refusal and the completion finalize flag were added.\nSize: +752/-21 (ps1 +363/-4, sh +259/-9, cjs +130/-8); the exception is prop-08f64",
   "commits": [
@@ -304,6 +305,22 @@
       "treeId": "d058b75bced2450e1b50b6a82ebca2483f12d0a5",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "b6cfcc4ebed611c34e4b818950d23a3afd9a6282",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-31T13:12:15Z",
+      "paths": [
+        ".moe/epics/epic-dce3a64f31a44d948f771137a2c0dbed.json",
+        ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-31T13:45:09.711Z",
+      "treeId": "acf1d11f8372b10109c86f1d24c7f4f7a335ae86",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -314,9 +331,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-88af1437@2026-10-31T11:42:59Z",
-    "at": "2026-10-31T13:12:05.568Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-31T13:12:15Z",
+    "at": "2026-10-31T13:45:09.711Z"
   },
   "completedAt": "2026-10-31T13:44:36.337Z",
   "reviewCompletedAt": "2026-10-31T13:44:36.337Z",
