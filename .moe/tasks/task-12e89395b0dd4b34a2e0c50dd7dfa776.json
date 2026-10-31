@@ -85,7 +85,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -111,7 +111,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:23:03.584Z",
-  "updatedAt": "2026-10-31T08:12:50.079Z",
+  "updatedAt": "2026-10-31T08:25:28.003Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:45.209Z",
@@ -124,11 +124,14 @@
     "firstClaimAt": "2026-10-31T05:55:58.184Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-31T08:25:28.003Z",
+    "wallClockMs": 8969819
   },
   "contextFetchedBy": [
     "architect-21c9ed65",
-    "worker-25da16b2"
+    "worker-25da16b2",
+    "qa-b29f7b3d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -242,5 +245,9 @@
     "kind": "completion",
     "sessionId": "worker-25da16b2@2026-10-31T07:46:03Z",
     "at": "2026-10-31T08:12:50.079Z"
-  }
+  },
+  "completedAt": "2026-10-31T08:25:28.003Z",
+  "reviewCompletedAt": "2026-10-31T08:25:28.003Z",
+  "reviewSummary": "QA approve (qa-b29f7b3d). I reviewed completion 5ad0dcb3: pushed, on moe/work-2026-10-24, and nothing later touches its paths. Code diff +292/-22 over the 3 approvedScope files (net 270, under 400). local-runner.test.mjs is untouched and there is no daemon schema change.\n\nGate: I re-ran the exact verification command from the root of an external snapshot. It is a git archive of HEAD 914a8648 (contains 5ad0dcb3), with daemon npm ci and build, and initFiles.ts restored; diff -rq against a fresh archive is empty. Node v24.21.0. GATE_EXIT=0. Runner: 614 tests, 611 pass, 0 fail, 3 skipped. Daemon: 215/215 files, 6338 passed, 20 skipped.\n\nDoD1:\n- notify() runs in the finally after remove on resolve, reject and timeout. It is not awaited, and its throws are swallowed.\n- onReady's error and CHECK_READY_TIMEOUT are preserved (CL1, CL2).\n- runOnce merges the reports with result.vm; a failed delete wins. The stop is RUNNER_VM_DELETE_FAILED with causeCode and vm/failure.\n- The result is pushed before the stop, so neither retry-infra nor later checks launch a VM. CD1, CD3 and CD5 each show exactly 1 create.\n\nDoD2: a delete-failed pass is recorded inconclusive with the fixed diagnostic line, capped in UTF-8 bytes. A deleted, unverified pass keeps its original tail with no stop, and later checks run (CD2). The CLI report carries vm/failure. This matches the human-confirmed no-schema approach.\n\nMy mutations in scratch: 7 of 8 killed. M4 survived, non-blocking: no row asserts the lifecycle report for vm not-launched/none, and that mutation fails closed. Ponytail: nothing to cut. ARCHITECTURE docs are owed by CQ-R13 (notified). This is not native Windows certification.",
+  "requiredCheckAtDone": null
 }

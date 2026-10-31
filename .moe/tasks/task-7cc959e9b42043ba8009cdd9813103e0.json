@@ -120,11 +120,23 @@
       "author": "governor-693b7073",
       "content": "Governor, 07:42Z: early start. The human asked to keep the board moving. I removed this row's dependsOn on task-7db14e2df19949a8bfdb150e0f29ffcb. Its bytes are landed at HEAD (a9acf890: the wrappers' WITNESS clause in attr_held_list plus the codex-witness postflight rows), and it sits in REVIEW only because QA is the bottleneck. This row's files don't overlap its files.\n- Step 1(a)'s \"dependsOn guarantees 7db14e2d is DONE\" becomes: read the landed strings at HEAD a9acf890.\n- If 7db14e2d gets a QA reject that changes the WITNESS clause, re-sync HELD_REMEDY_WITNESS byte for byte to the rework before complete_task, and say so in the summary.\n- docs/TROUBLESHOOTING.md still carries CQ-R13's held \"Local Runner Issues\" hunk; keep it (comment 868f68bc).",
       "timestamp": "2026-10-31T07:45:50.620Z"
+    },
+    {
+      "id": "comment-3c532394b13c4e3f933d549571158e09",
+      "author": "governor-693b7073",
+      "content": "Governor, 08:27Z, for QA and the worker. Completion 8372d311 HELD docs/TROUBLESHOOTING.md as MOE_ATTR_CONTESTED_UNTOUCHED (peer 2359daf0). The file was dirty at pre-flight with CQ-R13's held \"Local Runner Issues\" section, and the wrapper saw no TOOL witness for it from this session. So the committed diff has none of this row's TROUBLESHOOTING.md changes. Those changes (the CONTESTED_UNTOUCHED/EDITING table rows naming `codex exec`, and the \"Current witness limit\" paragraph) sit uncommitted in the shared tree next to R13's section. At 08:26Z the file's sha256 was 538845f7…, with +28/-8 vs HEAD.\n\nQA: the committed diff lacks this row's TROUBLESHOOTING.md part (step 3). I recommend a narrow reject naming only that. The fix is one more session of this row that edits docs/TROUBLESHOOTING.md with the Edit tool in the main one-shot Claude session (no subagent, no shell write), keeping every hunk already there. The landing then carries the whole file: this row's text plus R13's section, with a Moe-Contested trailer for f4811a72. Re-check the witness wording against HEAD's recordCommit.ts constants. Nothing else in the row needs to change.",
+      "timestamp": "2026-10-31T08:23:39.946Z"
+    },
+    {
+      "id": "comment-e095cc743c574cc6bb12bda33c2abf1f",
+      "author": "governor-693b7073",
+      "content": "Governor addendum, 08:30Z: root cause of the hold. The session transcript shows the step-3 docs edits were written at 07:47:10Z by a `python3 - <<'EOF' def sub(p, pairs) …` script run through Bash. That's a shell write, so no TOOL witness. Step 1(b) of the plan says \"Edit with the Edit tool.\" CONFIGURATION.md and MCP_SERVER.md still landed, because they were clean at pre-flight and their peers were idle. TROUBLESHOOTING.md was dirty with R13's hunk, so it needed a witness. For the rework, make each TROUBLESHOOTING.md change with the Edit tool in the main session. Even a single Edit of one of this row's own lines is enough for the whole file to land.",
+      "timestamp": "2026-10-31T08:24:56.622Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:58:35.132Z",
-  "updatedAt": "2026-10-31T08:22:38.535Z",
+  "updatedAt": "2026-10-31T08:24:56.622Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T11:05:08.867Z",
     "plannedStepCount": 5,
@@ -185,7 +197,52 @@
     "packages/moe-daemon/src/tools/recordCommit.ts",
     "docs/CONFIGURATION.md",
     "docs/TROUBLESHOOTING.md",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json",
+    ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json"
   ],
-  "completionSummary": "Daemon text and three docs now count codex exec seats as witness producers; completes the chain task-4b0609d1 (prompt-cache-witness.mjs harvest) -> task-7db14e2d (wrapper wiring, held= clauses, postflight scenario AM rows carrying DoD 1/2) -> this task. recordCommit.ts: only the 3 constants changed (+3/-3): UNTOUCHED/EDITING remedies say 'one-shot Claude or codex exec session'; HELD_REMEDY_WITNESS = 'Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none.', present verbatim in both wrappers and both postflight harnesses. recordCommit.test.ts (+5/-3): literals flipped first (RED: 6 failing), plus an untouched line contains 'codex exec' and a strict-only line does not; 73/73 green. Docs: CONFIGURATION.md Session touch evidence (codex exec --json via prompt-cache.mjs codex-stream; completed file_change + successful Serena calls count; failed/errored/result-less MCP and shell writes don't; closing sentence names one-shot Claude or codex exec), TROUBLESHOOTING.md (Current witness limit + the two MOE_ATTR rows; CQ-R13's uncommitted Local Runner Issues hunk in that file kept untouched), MCP_SERVER.md (record_commit held bullets). CONFIGURATION.md and MCP_SERVER.md were clean before first edit. No policy change. Gate: recordCommit vitest 73/73 (snapshot), parity-check.sh PASS, node --test witness+prompt-cache 39/0, postflight.sh PASS (AM ok, 45 scope scenarios), powershell.exe parity+postflight PASS (AM ok, 44), pwsh parity PASS. Deviation: pwsh 7 postflight.ps1 skipped - fails MOE_AGENT_GIT_GUARD_FAILED at HEAD (task-44b817f9, pre-existing; this task changes no script)."
+  "completionSummary": "Daemon text and three docs now count codex exec seats as witness producers; completes the chain task-4b0609d1 (prompt-cache-witness.mjs harvest) -> task-7db14e2d (wrapper wiring, held= clauses, postflight scenario AM rows carrying DoD 1/2) -> this task. recordCommit.ts: only the 3 constants changed (+3/-3): UNTOUCHED/EDITING remedies say 'one-shot Claude or codex exec session'; HELD_REMEDY_WITNESS = 'Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none.', present verbatim in both wrappers and both postflight harnesses. recordCommit.test.ts (+5/-3): literals flipped first (RED: 6 failing), plus an untouched line contains 'codex exec' and a strict-only line does not; 73/73 green. Docs: CONFIGURATION.md Session touch evidence (codex exec --json via prompt-cache.mjs codex-stream; completed file_change + successful Serena calls count; failed/errored/result-less MCP and shell writes don't; closing sentence names one-shot Claude or codex exec), TROUBLESHOOTING.md (Current witness limit + the two MOE_ATTR rows; CQ-R13's uncommitted Local Runner Issues hunk in that file kept untouched), MCP_SERVER.md (record_commit held bullets). CONFIGURATION.md and MCP_SERVER.md were clean before first edit. No policy change. Gate: recordCommit vitest 73/73 (snapshot), parity-check.sh PASS, node --test witness+prompt-cache 39/0, postflight.sh PASS (AM ok, 45 scope scenarios), powershell.exe parity+postflight PASS (AM ok, 44), pwsh parity PASS. Deviation: pwsh 7 postflight.ps1 skipped - fails MOE_AGENT_GIT_GUARD_FAILED at HEAD (task-44b817f9, pre-existing; this task changes no script).",
+  "commits": [
+    {
+      "sha": "8372d311c87e98020038181d5c2db450b42e12a9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T07:45:55Z",
+      "paths": [
+        ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json",
+        ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/recordCommit.test.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T08:23:01.263Z",
+      "treeId": "47aed7797e65a4227a2a9933b3018ef40c9cdfec",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-465ee87556134a378c5f657008c1446b"
+        },
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-cda65eb0efb244efa8a506969bac47f9"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-2359daf0dc5241c3a160be293bbd5877"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-31T07:45:55Z",
+    "at": "2026-10-31T08:23:01.263Z"
+  }
 }
