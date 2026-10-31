@@ -8,13 +8,16 @@
 # host frames on stdin into WORKSPACE) and 'export' (CQ-R09:
 # WORKSPACE's changes against its manifest, as frames on stdout, walked as the AGENT_IDENTITY account).
 # Exit codes: 0 relay, materialization or export complete; 64 usage; 65 malformed or mismatched snapshot stream, an
-# unreadable export manifest or workspace root, an export over its bounds, or a malformed or disallowed job frame; 66 no
-# materialized workspace for the job; 71 the job could not start, or the export could not become the AGENT_IDENTITY
-# account; 73 the workspace or its manifest already exists; 74 I/O failure or host EOF; 75 SIGTERM, SIGHUP or SIGINT; 76
-# host protocol violation; 77 not root. A bridge refusal before relay() writes no frame and starts no job: 74 EOF before
-# a whole job frame, 65, 66, and 71 for no AGENT_IDENTITY account, session home or launch config; nor does 77 write one.
-# After relay()'s hello, 71 (the guard, the job or the agent socket could not start), 74, 75 and 76 kill the child group
-# and end the stream with no observation; only 0 follows the one observation frame.
+# unreadable export manifest or workspace root, an export over its bounds, a malformed or disallowed job frame, or a
+# codex job's workspace holding .codex; 66 no materialized workspace for the job; 71 the job could not start,
+# materialize found no AGENT_IDENTITY account, or the export could not become that account; 73 the workspace or its
+# manifest already exists; 74 I/O failure or host EOF; 75 SIGTERM, SIGHUP or SIGINT; 76 host protocol violation; 77 not
+# root. A bridge refusal before relay() writes no frame and starts no job: 74 a failed read or EOF before a whole job
+# frame, 65, 66, and 71 for no AGENT_IDENTITY account, session home or launch config; nor does 77 write one. relay()
+# returns 74 with no job if it cannot write hello. After hello a failure never completes an observation frame: 71 for a
+# failed bridge setup (the wakeup pipe, host stream or agent socket) or a guard that could not start comes before any
+# child exists, while 71 for a guard that could not start the job, 74, 75 and 76 kill the child group before the stream
+# ends. relay() returns 0 only once the one observation frame is written.
 # Mode 'check' (CQ-R11a): one host check frame on stdin, then that approved command as the CHECK_IDENTITY account. It
 # shares the bridge's codes, and none writes a frame: 65 also for a malformed protected entry or a workspace entry reown
 # refuses, 66 no workspace, 71 no CHECK_IDENTITY account, a failed re-own, no session home or no protected-path mount

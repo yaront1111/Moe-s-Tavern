@@ -282,11 +282,17 @@
       "author": "worker-88af1437",
       "content": "supervisorSha256 handoff from task-97341ad5 (reopen-1 fix, worker-88af1437). This supersedes comment-873e7ccb.\n- scripts/local-runner/guest-supervisor.py is now sha256 24e6746d1da930fa672207840ac217f8066be4bac78b46a6ecc386101e4d6b2c. Earlier hashes: 27b4a266a42fe4510671d624e7bcd8c59c5cfc2ed59a9f0405a37e65dde38d71 (b245f476, superseded), and 8a631957... before this task.\n- Since 27b4a266 only the exit-code header comment changed; the runtime code is byte-identical to b245f476. The header now names materialize's no-account 71 again. It also claims the child-group kill only where a group exists: a no-child 71 comes from the bridge setup or the guard Popen.\n- Native certification must be re-run against these bytes. No certification or verified-local claim is made; verified-local stays unavailable.\n- Gate on these bytes: a full archive of HEAD d8681900 plus the 2 owned overlays, npm ci/build in the snapshot only, env -i Node 24.21.0, Python 3.12.3, WSL2 6.18.33.1, uid 1000. node --test local-runner*: 647 tests, 644 pass, 0 fail, 3 skips (LA5, K9, macOS smoke). Daemon vitest: 215 files, 6341 passed. GATE_EXIT=0.",
       "timestamp": "2026-10-31T15:03:46.927Z"
+    },
+    {
+      "id": "comment-b187a175bd4147628e24e310973f7a9f",
+      "author": "worker-88af1437",
+      "content": "supervisorSha256 correction from task-97341ad5 (worker-88af1437). This supersedes comment-494b6ad6.\n\nThe 24e6746d... hash in that comment is stale. At 15:07Z the branch merged main (c9b771ea, containing PR #232 merge 439709fd), and the IDE re-applied my uncommitted change on top of the merged file.\n- scripts/local-runner/guest-supervisor.py as this task lands it: sha256 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190. That is HEAD e8df3882's supervisor (be208fae2db17d0a3cd370814d6b44c91f0daaa5aef049d1a6ad9c43b9433fd1) plus this task's comment-only exit-code header change; the change lines are byte-identical to the version I gated before the merge.\n- Superseded: 24e6746d... (pre-merge base), 27b4a266... (b245f476), 8a631957... (before this task).\n- Your sequencing precondition is now met on the branch: origin/fix/ci-pr230's tip e7860e7f, a58a50af (MAX_JSON_DEPTH) and a4c8204d (GROUP_GONE) are all ancestors of HEAD.\n- Take the sha256 at the commit you verify. Any further landing that touches this file moves it again.\n- Gate on these bytes: a full archive of HEAD e8df3882 plus the 2 overlays, npm ci/build in the snapshot only, env -i Node 24.21.0, Python 3.12.3, WSL2 6.18.33.1, uid 1000.\n  - node --test local-runner*: 648 tests, 645 pass, 0 fail, 3 skips (LA5, K9, macOS smoke).\n  - Daemon vitest: 215 files, 6341 passed.\n  - GATE_EXIT=0, finished 15:22:36Z.\n- No certification or verified-local claim is made. Native certification against these bytes is still R13's.",
+      "timestamp": "2026-10-31T15:24:06.156Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T15:13:20.691Z",
+  "updatedAt": "2026-10-31T15:24:06.156Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

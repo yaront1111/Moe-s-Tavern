@@ -1208,7 +1208,7 @@ reported, dead = bytearray(), None
 def done(pid):
     try:
         status = dict(line.split(':\\t', 1) for line in open('/proc/%d/status' % pid) if ':\\t' in line)
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):  # reaped before the open, or between the open and the read (ESRCH)
         return True
     return status['State'][0] == 'Z' or bool(int(status['ShdPnd'], 16) & (1 << signal.SIGKILL - 1))
 write = m.write_frame
@@ -1454,6 +1454,53 @@ ${RELAY}`, 'import time\ntime.sleep(600)\n');
   assert.deepEqual([run.status, decoder.push(run.stdout).map(parseGuestFrame)], [74, [HELLO]], String(run.error ?? run.stderr));
   decoder.end();
 });
+
+// S20's job enlarges one output pipe (F_SETPIPE_SZ, Linux only), writes 512 KiB to it without blocking and exits 3. The
+// harness holds back the first output frame until the guard has exited (waitid WNOWAIT leaves it for relay() to reap),
+// so the start pipe's EOF arrives with all but one read of that output unrelayed. The other pipe stays empty, so each
+// row pins its own stream's drain to EOF.
+const FILL = `import fcntl, os, sys
+fd = int(sys.argv[1])
+fcntl.fcntl(fd, fcntl.F_SETPIPE_SZ, 1 << 20)
+view = memoryview(bytes(range(256)) * 2048)
+while view:
+    view = view[os.write(fd, view):]
+sys.exit(3)
+`;
+const FILLED = Buffer.from(Uint8Array.from({ length: 512 * 1024 }, (_, index) => index % 256));
+const HOLD = `import subprocess, time
+popen, guards, held = subprocess.Popen, [], []
+def spawn(*args, **kwargs):  # relay() starts only the guard
+    guards.append(popen(*args, **kwargs))
+    return guards[-1]
+subprocess.Popen = spawn
+write = m.write_frame
+def write_frame(fd, value):
+    if value['kind'] == 'output' and not held:
+        deadline = time.monotonic() + 10
+        while not (exited := os.waitid(os.P_PID, guards[0].pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        held.append(exited is not None)
+    write(fd, value)
+m.write_frame = write_frame
+code = m.relay(['python3', '-I', '-c', *sys.argv[2:]], in_fd=os.pipe()[0])
+print(json.dumps(held), file=sys.stderr)
+sys.exit(code)
+`;
+
+for (const [fd, stream, other] of [[1, 'stdout', 'stderr'], [2, 'stderr', 'stdout']]) {
+  test(`S20 ${stream} the job left unread when its guard exited is relayed whole and in order before the one observation, which keeps the job's status`,
+    { skip: NO_GUEST || (process.platform !== 'linux' && 'only Linux F_SETPIPE_SZ lets a job exit with more than one read unrelayed'), timeout: 30_000 }, () => {
+      // SIGKILL: relay() would turn a timeout's SIGTERM into a 75 and kill the group itself.
+      const run = spawnSync('python3', ['-I', '-B', '-c', LOAD + HOLD, SUPERVISOR, FILL, String(fd)], { maxBuffer: 64 << 20, timeout: 20_000, killSignal: 'SIGKILL' });
+      const relayed = session(run);
+      assert.deepEqual(JSON.parse(String(run.stderr).trim().split('\n').at(-1)), [true], 'the guard had not exited while the first output frame was held');
+      assert.equal(relayed[stream].length, FILLED.length, `relayed ${stream} bytes`);
+      assert.ok(relayed[stream].equals(FILLED), `the relayed ${stream} is not the job's output`);
+      assert.equal(String(relayed[other]), '');
+      assert.deepEqual(relayed.exit, { ...EXIT, code: 3 });
+    });
+}
 
 // CQ-R10b: a root bridge reads one job frame from stdin before hello, then runs that agent CLI as the agent identity.
 // Paths, the identity and the job table reach main() only as Python keywords, through the harness's own argv. A non-root
