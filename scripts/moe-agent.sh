@@ -2801,6 +2801,7 @@ read_commit_settings() {
     CS_ATTR_CONTESTED="skip-untouched"
     CS_ATTR_EXCLUDE=""
     CS_CONSOLIDATION_BRANCH=""
+    CS_QUALITY_GATE=""
     local parsed
     parsed=$($PYTHON_CMD -c "
 import json, os, sys
@@ -2830,8 +2831,10 @@ exc = attr.get('exclude')
 exc = [clean(e.strip()) for e in exc if isinstance(e, str) and e.strip()] if isinstance(exc, list) else []
 cb = s.get('consolidationBranch')
 cb = cb.strip() if isinstance(cb, str) and cb.strip() and '*' not in cb else ''
+qg = s.get('qualityGate')
+qg = qg.strip() if isinstance(qg, str) else ''
 fields = [flag('autoCommit', 'true'), flag('checkpointCommits', 'true'), flag('checkpointPush', 'true'),
-          flag('commitBoardState', 'true'), flag('commitHooks', 'false'), und, con, '\x1e'.join(exc), clean(cb)]
+          flag('commitBoardState', 'true'), flag('commitHooks', 'false'), und, con, '\x1e'.join(exc), clean(cb), clean(qg)]
 sys.stdout.write('\x1f'.join(fields) + '\x1f')
 " "$MOE_DIR" 2>/dev/null) || parsed=""
     if [ -n "$parsed" ]; then
@@ -2844,8 +2847,11 @@ sys.stdout.write('\x1f'.join(fields) + '\x1f')
           IFS= read -r -d $'\x1f' CS_ATTR_CONTESTED
           IFS= read -r -d $'\x1f' CS_ATTR_EXCLUDE
           IFS= read -r -d $'\x1f' CS_CONSOLIDATION_BRANCH
+          IFS= read -r -d $'\x1f' CS_QUALITY_GATE
         } <<< "$parsed" 2>/dev/null || true
     fi
+    # Same opt-out as the completion gate (twin: Read-MoeCommitSettings).
+    [ "${MOE_DISABLE_QUALITY_GATE:-0}" != 1 ] || CS_QUALITY_GATE=""
     CS_AUTO_COMMIT="${CS_AUTO_COMMIT:-true}"
     CS_CHECKPOINT_COMMITS="${CS_CHECKPOINT_COMMITS:-true}"
     CS_CHECKPOINT_PUSH="${CS_CHECKPOINT_PUSH:-true}"
@@ -5028,9 +5034,12 @@ write_rescue_message() { # $1 reason, $2 out
 # ---- landing -----------------------------------------------------------------
 # Run hooks against the validated private index. The detached helper worktree
 # owns HEAD; GIT_WORK_TREE preserves hooks' project cwd without re-reading paths.
+# A 6th argument `worktree` (WT-08) runs them in that helper instead: sparse
+# without .moe/, the tree read into its own index while HEAD stays BASE, and a
+# hook that leaves unstaged edits or a .moe path behind refuses the commit.
 moe_commit_with_hooks() {
     local base="$1" tree="$2" index="$3" msgfile="$4" err="$5" work scratch private_git sha="" actual_tree="" parents="" rc=1
-    local hook_directory setting source_value private_value source_rc private_rc signing_matches=true
+    local hook_directory setting source_value private_value source_rc private_rc signing_matches=true root="$MOE_TOP"
     local -a configuration=()
     local -a query=()
     HOOK_COMMIT_SHA=""
@@ -5045,6 +5054,13 @@ moe_commit_with_hooks() {
         return 1
     fi
     private_git=$(git -C "$scratch" rev-parse --absolute-git-dir 2>/dev/null) || private_git=""
+    if [ "${6:-}" = worktree ] && [ -n "$private_git" ]; then
+        root="$scratch"; index="$private_git/index"
+        if ! { MSYS2_ARG_CONV_EXCL='*' git -C "$scratch" sparse-checkout set --no-cone '/*' '!/.moe/' \
+            && git -C "$scratch" read-tree -mu "$tree"; } > "$err" 2>&1 || [ -e "$scratch/.moe" ] || [ -L "$scratch/.moe" ]; then
+            private_git=""
+        fi
+    fi
     if [ -f "$MOE_GITDIR/config.worktree" ]; then
         configuration=(-c "include.path=$MOE_GITDIR/config.worktree")
     fi
@@ -5056,7 +5072,7 @@ moe_commit_with_hooks() {
         query=(config --get "$setting")
         [ "$setting" = commit.gpgSign ] && query=(config --bool --get "$setting")
         if source_value=$(git -C "$MOE_TOP" "${query[@]}" 2>/dev/null); then source_rc=0; else source_rc=$?; fi
-        if private_value=$(GIT_DIR="$private_git" GIT_WORK_TREE="$MOE_TOP" git -C "$MOE_TOP" "${configuration[@]}" "${query[@]}" 2>/dev/null); then private_rc=0; else private_rc=$?; fi
+        if private_value=$(GIT_DIR="$private_git" GIT_WORK_TREE="$root" git -C "$root" "${configuration[@]}" "${query[@]}" 2>/dev/null); then private_rc=0; else private_rc=$?; fi
         if [ "$source_rc" -gt 1 ] || [ "$private_rc" -gt 1 ]; then signing_matches=false; break; fi
         case "$setting" in
             commit.gpgSign)
@@ -5072,13 +5088,14 @@ moe_commit_with_hooks() {
     done
     if [ "$signing_matches" != true ]; then
         printf '%s\n' 'hooked-commit-config-mismatch' > "$err"
-    elif [ -n "$private_git" ] && GIT_DIR="$private_git" GIT_WORK_TREE="$MOE_TOP" GIT_INDEX_FILE="$index" \
-        git -C "$MOE_TOP" "${configuration[@]}" commit -F "$msgfile" > "$err" 2>&1; then
+    elif [ -n "$private_git" ] && GIT_DIR="$private_git" GIT_WORK_TREE="$root" GIT_INDEX_FILE="$index" \
+        git -C "$root" "${configuration[@]}" commit -F "$msgfile" > "$err" 2>&1; then
         sha=$(git -C "$scratch" rev-parse HEAD 2>/dev/null) || sha=""
         if [ -n "$sha" ]; then
             actual_tree=$(git -C "$MOE_TOP" rev-parse "$sha^{tree}" 2>/dev/null) || actual_tree=""
             parents=$(git -C "$MOE_TOP" show -s --format=%P "$sha" 2>/dev/null) || parents=""
-            if [ "$actual_tree" = "$tree" ] && [ "$parents" = "$base" ]; then
+            if [ "$actual_tree" = "$tree" ] && [ "$parents" = "$base" ] && { [ "$root" = "$MOE_TOP" ] \
+                || { git -C "$scratch" diff --quiet 2>/dev/null && [ ! -e "$scratch/.moe" ] && [ ! -L "$scratch/.moe" ]; }; }; then
                 HOOK_COMMIT_SHA="$sha"
                 rc=0
             else
@@ -5401,12 +5418,16 @@ finish_gate_observation() {
     fi
 }
 finalize_postflight() {
-    [ "${MOE_FINALIZE_DONE:-false}" != true ] || return 0
+    # Memoized with its answer: a worktree completion finalizes inside its
+    # landing (signals deferred), and the later calls repeat that answer.
+    [ "${MOE_FINALIZE_DONE:-false}" != true ] || return "${MOE_FINALIZE_RC:-0}"
     MOE_FINALIZE_DONE=true
+    MOE_FINALIZE_RC=1
     local outcome=failed
     case "${LAND_OUTCOME:-nothing}" in
-        # A worktree completion's checkpoint is not a landing (WT-08 lands the
-        # target), even when an interrupt skipped worktree_postflight's tail.
+        # A worktree completion is landed only once its C is on the target
+        # (land_worktree_completion clears MOE_WT_COMPLETION then); until then a
+        # committed outcome is its task-branch commit, even after an interrupt.
         committed) [ "${MOE_WT_COMPLETION:-}" = true ] || outcome=landed ;;
         nothing) outcome=nothing-to-commit ;;
         *) [ -z "${LAND_RESCUE_SHA:-}" ] || outcome=rescued ;;
@@ -5418,9 +5439,11 @@ finalize_postflight() {
     if [ "$outcome" = landed ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] \
         && { [ "${LAND_PROOF_UNTRANSFERRED:-}" = true ] || { [ -n "${RECEIPT_JOURNAL:-}" ] && [ -e "$RECEIPT_JOURNAL" ]; }; }; then
         echo -e "${YELLOW}[WARN]${NC} MOE_FINALIZE_DEFERRED_RECEIPT: task ${LAND_TASK_ID:-} -- the delivery receipt of $LAND_SHA is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes."
+        MOE_FINALIZE_RC=0
         return 0
     fi
-    finalize_attempt_rpc "$outcome" "${LAND_SHA:-}"
+    finalize_attempt_rpc "$outcome" "${LAND_SHA:-}" || return 1
+    MOE_FINALIZE_RC=0
 }
 
 # rescue_ref REASON CAND_FILE -- park the candidate snapshot on
@@ -5889,16 +5912,21 @@ print(d["candidateId"]); print(json.dumps(p))
 }
 
 # receipt_journal_fields JOURNAL -- the replay's fields of a well-formed journal,
-# \x1f-separated (the last is 1 while it owes a ledger row); 1 when malformed.
-# The optional `ledger` must be {sessionId, role, status?} inside the bounds
-# moe.record_commit takes. Twin: Invoke-MoeReceiptReplay's check + Test-MoeOwedLedger.
+# \x1f-separated (owed is 1 while it owes a ledger row; the last, wt, is 1 for a
+# worktree local landing's journal: no candidate, and its ledger is the exact
+# committed row); 1 when malformed. The optional `ledger` must be {sessionId,
+# role, status?} inside the bounds moe.record_commit takes.
+# Twin: Invoke-MoeReceiptReplay's check + Test-MoeOwedLedger.
 receipt_journal_fields() {
     $PYTHON_CMD - "$1" <<'PY' 2>/dev/null
 import json,os,re,sys
 f=sys.argv[1]; d=json.load(open(f,encoding='utf-8'))
 rev=re.compile(r'[0-9a-fA-F]{40}'); ids=re.compile(r'[A-Za-z0-9_-]{1,128}'); g=d.get('generation'); l=d.get('ledger')
+wt=d.get('workspaceMode')=='worktree' and d.get('publicationMode')=='local'
+if wt and not (isinstance(l,dict) and l.get('pushed') is False and l.get('sha')==d.get('targetAfter') and l.get('ref')==d.get('target')
+    and all(isinstance(l.get(k),list) for k in ('paths','inferredPaths','unattributedPaths'))): sys.exit(1)
 ok=(os.path.basename(f)==str(d.get('taskId'))+'.json' and re.fullmatch(r'[A-Za-z0-9_.-]+',str(d.get('taskId')))
-    and all(isinstance(d.get(k),str) and ids.fullmatch(d[k]) for k in ('candidateId','attemptId'))
+    and all(isinstance(d.get(k),str) and ids.fullmatch(d[k]) for k in (('attemptId',) if wt else ('candidateId','attemptId')))
     and type(g)==int and 0<g<=9007199254740991 and isinstance(d.get('workerId'),str) and d['workerId']
     and isinstance(d.get('target'),str) and d['target']
     and all(isinstance(d.get(k),str) and rev.fullmatch(d[k]) for k in ('targetBefore','targetAfter','landedRevision'))
@@ -5907,7 +5935,7 @@ ok=(os.path.basename(f)==str(d.get('taskId'))+'.json' and re.fullmatch(r'[A-Za-z
 strong=d.get('profile')=='verified-local'
 if not ok or (strong and not (isinstance(d.get('treeSha'),str) and rev.fullmatch(d['treeSha']))): sys.exit(1)
 print('\x1f'.join([d['taskId'],d['target'],d['targetAfter'],d['attemptId'],str(g),d['workerId'],d['targetBefore'],'' if l is None else '1',
-    '1' if strong else '',d['treeSha'].lower() if strong else '']))
+    '1' if strong else '',d['treeSha'].lower() if strong else '','1' if wt else '']))
 PY
 }
 
@@ -5940,12 +5968,14 @@ receipt_landed_as() {
 # receipt_ledger_send JOURNAL SHA -- the committed ledger row a journal still
 # owes, recorded for the commit git shows on the target (the daemon merges a
 # repeated sha). pushed follows the journaled push result and is omitted while
-# that is unknown. 0 once moe.record_commit answered. Twin: Send-MoeOwedLedgerRow.
+# that is unknown. A worktree journal's ledger is the exact row, sent as it is.
+# 0 once moe.record_commit answered. Twin: Send-MoeOwedLedgerRow.
 receipt_ledger_send() {
     local row
     row=$($PYTHON_CMD - "$1" "$2" "$WORKER_ID" <<'PY' 2>/dev/null
 import json,sys
 f,sha,worker=sys.argv[1:]; d=json.load(open(f,encoding='utf-8')); l=d['ledger']; push=d.get('pushResult')
+if d.get('workspaceMode')=='worktree': print(json.dumps(l)); sys.exit(0)
 t=d['target']; p='refs/heads/'; ref=t[len(p):] if t.startswith(p) and len(t)>len(p) else t
 row=dict(taskId=d['taskId'],outcome='committed',kind='completion',sha=sha,ref=ref,role=l['role'],sessionId=l['sessionId'],workerId=worker)
 if l.get('status'): row['status']=l['status']
@@ -5975,7 +6005,7 @@ PY
 # Twin: Invoke-MoeReceiptReplay.
 receipt_replay() {
     [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
-    local MOE_TOP="" MOE_REL="" MOE_GITDIR="" f fields tid target after aid gen owner before owed strong tree ltree landed args report
+    local MOE_TOP="" MOE_REL="" MOE_GITDIR="" f fields tid target after aid gen owner before owed strong tree wt ltree landed args report
     git_top || return 0
     [ -d "$MOE_GITDIR/moe/receipt" ] || return 0
     for f in "$MOE_GITDIR"/moe/receipt/*.json; do
@@ -5984,10 +6014,19 @@ receipt_replay() {
             echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: malformed journal"
             continue
         fi
-        IFS=$'\x1f' read -r tid target after aid gen owner before owed strong tree <<< "$fields" || true
+        IFS=$'\x1f' read -r tid target after aid gen owner before owed strong tree wt <<< "$fields" || true
         if live_marker_foreign_live "$tid"; then continue; fi
         if ! landed=$(receipt_landed_as "$target" "$after" "$before"); then
             echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: $landed"
+            continue
+        fi
+        # A worktree journal (WT-08) whose C is absent stays for the task's next
+        # worktree landing to supersede; one whose C is there owes its exact row.
+        if [ -n "$wt" ] && [ -z "$landed" ]; then
+            echo -e "${BLUE}[receipt]${NC} $target does not contain $after; $f kept until task $tid lands again."
+            continue
+        elif [ -n "$wt" ] && { [ "$landed" != "$after" ] || ! receipt_ledger_send "$f" "$after"; }; then
+            echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: the completion row of $after on $target is not recorded"
             continue
         fi
         if [ -z "$landed" ]; then
@@ -6009,7 +6048,7 @@ receipt_replay() {
         fi
         [ "$landed" = "$after" ] || echo -e "${BLUE}[receipt]${NC} a pull --rebase rewrote $after; $target carries it as $landed."
         echo -e "${BLUE}[receipt]${NC} replaying the delivery receipt of task $tid from $f"
-        if [ -n "$owed" ]; then
+        if [ -n "$owed" ] && [ -z "$wt" ]; then
             echo -e "${BLUE}[receipt]${NC} recording the owed ledger row of task $tid: $landed on $target"
             if ! receipt_ledger_send "$f" "$landed"; then
                 echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: moe.record_commit did not record the owed ledger row"
@@ -6018,12 +6057,16 @@ receipt_replay() {
             report=$($PYTHON_CMD -c 'import json,sys;d=json.load(open(sys.argv[1],encoding="utf-8"));d.pop("ledger",None);print(json.dumps(d))' "$f" 2>/dev/null) || report=""
             receipt_journal_write "$f" "$report"
         fi
-        receipt_send "$(cat "$f")" "$f" || continue
-        [ "$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")" = finalizing ] || continue
-        args=$($PYTHON_CMD -c 'import json,sys;t,a,g,w,r,s=sys.argv[1:];print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,runnerId=r,outcome="landed",landedRevision=s)))' \
-            "$tid" "$aid" "$gen" "$owner" "$MOE_RUNNER_ID" "$landed") || continue
-        moe_evidence_rpc finalize_attempt "$args" 3 \
-            || echo -e "${YELLOW}[WARN]${NC} attempt $aid is still finalizing after its replayed receipt; its finalizing holds stay until it closes."
+        [ -n "$wt" ] || receipt_send "$(cat "$f")" "$f" || continue
+        if [ "$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")" = finalizing ]; then
+            args=$($PYTHON_CMD -c 'import json,sys;t,a,g,w,r,s=sys.argv[1:];print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,runnerId=r,outcome="landed",landedRevision=s)))' \
+                "$tid" "$aid" "$gen" "$owner" "$MOE_RUNNER_ID" "$landed") || continue
+            if ! moe_evidence_rpc finalize_attempt "$args" 3; then
+                echo -e "${YELLOW}[WARN]${NC} attempt $aid is still finalizing after its replayed receipt; its finalizing holds stay until it closes."
+                continue
+            fi
+        fi
+        [ -z "$wt" ] || rm -f "$f"
     done
     return 0
 }
@@ -6363,10 +6406,13 @@ push_task_branch() {
 # never touched. MOE_TOP/MOE_GITDIR are shadowed, so every helper runs on W.
 # Callers set LAND_TASK_ID/TITLE/STATUS/REOPEN/CLI_EXIT/RECOVERED; a recovery
 # with nothing to land records nothing and never marks this session's landing
-# done. Returns 1 on a failed landing. Twin: Invoke-MoeWorktreeCheckpoint.
+# done. Returns 1 on a failed landing. LAND_WT_INTERNAL=true is a completion's
+# own L2 (land_worktree_completion): no ledger row, push or test hook, and an
+# owner refusal is the completion's. Twin: Invoke-MoeWorktreeCheckpoint.
 land_worktree_checkpoint() {
-    local w="$1" branch="$2" work rc=0
+    local w="$1" branch="$2" work rc=0 kind=checkpoint
     local MOE_TOP="$1" MOE_GITDIR LAND_ONE_CAS=true
+    if [ "${LAND_WT_INTERNAL:-}" = true ]; then local MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF=""; kind=completion; fi
     MOE_GITDIR=$(git -C "$w" rev-parse --absolute-git-dir 2>/dev/null) || MOE_GITDIR=""
     LAND_KIND=checkpoint; LAND_OUTCOME=failed; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""
     LAND_BRANCH="$branch"; LAND_PUSHED=""; LAND_RECORDED=""; LAND_N_PATHS=0; LAND_N_INFERRED=0
@@ -6378,7 +6424,7 @@ land_worktree_checkpoint() {
     : > "$LAND_STAGED_FILE"; : > "$LAND_DROPPED_FILE"
     commit_scope postflight "$LAND_TASK_ID" "$work/scope.json"
     if ! landing_owner_guard "$LAND_TASK_ID" "$work/scope.json"; then
-        landing_refuse_owner checkpoint
+        landing_refuse_owner "$kind"
         return 0
     fi
     if [ -z "$MOE_GITDIR" ] || ! git_dirty_snapshot "$work/S.tsv"; then
@@ -6406,7 +6452,9 @@ land_worktree_checkpoint() {
     fi
     [ "$LAND_OUTCOME" != nothing ] || LAND_CODE=MOE_COMMIT_NOTHING_TO_COMMIT
     [ "${LAND_RECOVERED:-false}" = true ] || MOE_LANDING_DONE=true
-    if [ "$LAND_OUTCOME" = committed ]; then
+    if [ "$kind" = completion ]; then
+        [ "$LAND_OUTCOME" != committed ] || echo -e "${GREEN}[OK]${NC} task $LAND_TASK_ID: $LAND_N_PATHS path(s) committed to $branch as $LAND_SHA"
+    elif [ "$LAND_OUTCOME" = committed ]; then
         echo -e "${GREEN}[OK]${NC} Committed checkpoint for task $LAND_TASK_ID on $branch: $LAND_SHA ($LAND_N_PATHS paths)"
         LAND_PUSHED=false
         if [ "$CS_CHECKPOINT_PUSH" != true ]; then
@@ -6423,6 +6471,212 @@ land_worktree_checkpoint() {
     LAND_SUMMARY_SHA="${LAND_SHA:-${LAND_RESCUE_SHA:-none}}"; LAND_SUMMARY_KIND=checkpoint; LAND_SUMMARY_PATHS="$LAND_N_PATHS"
     LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""; LAND_SUMMARY_OUTCOME="$LAND_OUTCOME"; LAND_SUMMARY_CODE="${LAND_CODE:-}"
     return "$rc"
+}
+
+# ---- worktree completion (WT-08; design §2.2 L4-L12, §2.3, §2.7, §2.9) -------
+# wt_target_checked_out TARGET -- 0 when refs/heads/TARGET is checked out in any
+# worktree (the control checkout included), 1 when not, 2 when git cannot tell.
+wt_target_checked_out() {
+    local list
+    list=$(set -o pipefail; git -C "$MOE_TOP" worktree list --porcelain -z 2>/dev/null | tr '\0' '\n') || return 2
+    printf '%s\n' "$list" | grep -Fxq "branch refs/heads/$1"
+}
+
+# worktree_sync_branch W BRANCH C -- L11: T' = commit-tree C^{tree} -p T -p C, and
+# W fast-forwards onto it with hooks off: never a reset, never over new dirt. A
+# failure is MOE_WORKTREE_SYNC_FAILED only: the landing stands and the next
+# pre-flight retries. Twin: Sync-MoeTaskBranch.
+worktree_sync_branch() {
+    local t tp hooks
+    hooks="$(create_secure_temp)/wt-no-hooks"
+    if mkdir -p "$hooks" && t=$(git -C "$1" rev-parse -q --verify "refs/heads/$2^{commit}" 2>/dev/null) \
+        && tp=$(git -C "$1" commit-tree "$3^{tree}" -p "$t" -p "$3" -m "sync($LAND_TASK_ID): $2 takes the landed $3" 2>/dev/null) \
+        && git -C "$1" -c core.hooksPath="$hooks" merge -q --ff-only "$tp" >/dev/null 2>&1; then
+        return 0
+    fi
+    echo -e "${YELLOW}[WARN]${NC} MOE_WORKTREE_SYNC_FAILED: task $LAND_TASK_ID -- $2 did not take the landed $3; the landing stands and the next pre-flight retries."
+    return 1
+}
+
+# wt_journal_write PATH B C -- L8, the strict worktree journal: identity, target,
+# B, C, W, the task branch and the exact completion row it owes (no candidate,
+# no delivery receipt). 1 on any write, rename or read-back failure, and then no
+# journal describes C.
+wt_journal_write() {
+    local report
+    report=$($PYTHON_CMD - "$2" "$3" "$LAND_TASK_ID" "$WORKER_ID" "${MOE_ATTEMPT_ID:-}" "${MOE_ATTEMPT_GENERATION:-}" \
+        "${MOE_SID:-$WORKER_ID@unknown}" "refs/heads/$LAND_BRANCH" "$MOE_WT_PATH" "refs/heads/$MOE_WT_BRANCH" "$ROLE" \
+        "${LAND_STATUS:-}" "${MOE_REL:-}" "$LAND_STAGED_FILE" <<'PY' 2>/dev/null
+import json,re,sys
+b,c,t,w,a,g,sid,target,wt,br,role,status,rel,staged=sys.argv[1:]
+if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',a) or not re.fullmatch(r'[1-9][0-9]{0,15}',g): sys.exit(1)
+paths=[]
+for r in open(staged,'rb').read().decode('utf-8','surrogateescape').split('\0'):
+    p='\t'.join(r.split('\t')[2:])
+    if p: paths.append(p[len(rel):] if rel and p.startswith(rel) else p)
+row=dict(taskId=t,outcome='committed',kind='completion',sha=c,ref=target,role=role,sessionId=sid,workerId=w,
+    paths=paths[:500],inferredPaths=[],unattributedPaths=[],pushed=False)
+if status: row['status']=status
+print(json.dumps(dict(taskId=t,workerId=w,attemptId=a,generation=int(g),sessionId=sid,workspaceMode='worktree',publicationMode='local',
+    target=target,targetBefore=b,targetAfter=c,landedRevision=c,worktree=wt,taskBranch=br,ledger=row)))
+PY
+    ) && intent_journal_write "$1" "$report" || return 1
+    [ "$(cat "$1" 2>/dev/null)" = "$report" ] && return 0
+    rm -f "$1" 2>/dev/null
+    return 1
+}
+
+# INT/TERM wait from the CAS through the ledger row and finalize_attempt, then
+# act; a hard kill there is the journal replay's.
+wt_defer_signals() { MOE_WT_SIGNALED=""; trap 'MOE_WT_SIGNALED=1' INT TERM; }
+wt_release_signals() {
+    trap 'echo ""; echo "Agent stopped."; exit 0' INT TERM
+    [ -z "${MOE_WT_SIGNALED:-}" ] || { echo ""; echo "Agent stopped."; exit 0; }
+}
+
+# wt_land_rounds JOURNAL WORK -- L4-L9 onto refs/heads/$LAND_BRANCH from the task
+# tip LAND_WT_T, at most three rounds (§2.3): B read fresh each round,
+# merge-tree, the .moe guard, C, the strict journal, the S1 test hook, ONE CAS.
+# 0 with LAND_OUTCOME committed (this C, or a journaled C the target holds while
+# T adds nothing, §2.9; signals stay deferred) or nothing; 1 with LAND_CODE and
+# LAND_MESSAGE set and no ref moved by this session.
+wt_land_rounds() {
+    local journal="$1" work="$2" ref="refs/heads/$LAND_BRANCH" round b bt m c rc tip hook names p jf jt ja jb jw jc=""
+    if [ -e "$journal" ]; then
+        jf=$(receipt_journal_fields "$journal") || { LAND_MESSAGE="receipt journal $journal is malformed; kept"; return 1; }
+        IFS=$'\x1f' read -r p jt ja p p p jb p p p jw <<< "$jf" || true
+        if [ -z "$jw" ] || ! jc=$(receipt_landed_as "$jt" "$ja" "$jb") || { [ -n "$jc" ] && [ "$jc" != "$ja" ]; }; then
+            LAND_MESSAGE="receipt journal $journal kept: its landing cannot be confirmed"; return 1
+        fi
+        [ -n "$jc" ] || rm -f "$journal"   # its C never reached the target: this fresh round supersedes it
+    fi
+    for round in 1 2 3; do
+        LAND_OUTCOME=failed; LAND_CODE=MOE_COMMIT_FAILED; LAND_MESSAGE=""; names=""; m=""
+        b=$(git -C "$MOE_TOP" rev-parse -q --verify "$ref^{commit}" 2>/dev/null) \
+            && bt=$(git -C "$MOE_TOP" rev-parse -q --verify "$b^{tree}" 2>/dev/null) || { LAND_MESSAGE="$ref does not resolve"; return 1; }
+        rc=0; git -C "$MOE_TOP" merge-tree --write-tree -z --name-only "$b" "$LAND_WT_T" > "$work/merge.z" 2> "$work/merge.err" || rc=$?
+        { IFS= read -r -d '' m; while IFS= read -r -d '' p && [ -n "$p" ]; do names="$names $p"; done; } < "$work/merge.z" 2>/dev/null || true
+        if [ "$rc" -eq 1 ] && [[ $m =~ ^[0-9a-f]{40}$ ]]; then
+            LAND_CODE=MOE_COMMIT_FAILED_CONFLICT; LAND_MESSAGE="merging $LAND_WT_T into $ref conflicts in:$names"; return 1
+        elif [ "$rc" -ne 0 ] || ! [[ $m =~ ^[0-9a-f]{40}$ ]] || [ "$(git -C "$MOE_TOP" cat-file -t "$m" 2>/dev/null)" != tree ]; then
+            LAND_MESSAGE="git merge-tree exited $rc"; return 1
+        fi
+        rc=0; git -C "$MOE_TOP" diff-tree --quiet "$bt" "$m" -- .moe || rc=$?
+        if [ "$rc" -eq 1 ]; then LAND_CODE=MOE_WORKTREE_BOARD_PATH; LAND_MESSAGE="the merged tree changes .moe/ on $ref"; return 1; fi
+        [ "$rc" -eq 0 ] || { LAND_MESSAGE="git diff-tree exited $rc"; return 1; }
+        if [ "$m" = "$bt" ]; then
+            LAND_OUTCOME=nothing; LAND_CODE=MOE_COMMIT_NOTHING_TO_COMMIT
+            [ -n "$jc" ] || return 0
+            wt_defer_signals; LAND_SHA="$jc"; LAND_OUTCOME=committed; LAND_CODE=""; LAND_WT_RECOVERED=true; return 0
+        elif [ -n "$jc" ]; then
+            LAND_OUTCOME=refused; LAND_CODE=MOE_COMMIT_REFUSED_UNRECONCILED_INTENT
+            LAND_MESSAGE="receipt journal $journal still owes the completion row of $jc"; return 1
+        fi
+        LAND_N_PATHS=0
+        git -C "$MOE_TOP" diff-tree -r -z --name-only --no-renames "$bt" "$m" > "$work/diff.z" 2>/dev/null || { LAND_MESSAGE="git diff-tree failed"; return 1; }
+        while IFS= read -r -d '' p; do printf 'WORKTREE\t-\t%s\0' "$p"; LAND_N_PATHS=$((LAND_N_PATHS + 1)); done < "$work/diff.z" > "$LAND_STAGED_FILE"
+        write_commit_message completion "$work/msg.txt" "$LAND_N_PATHS" 0
+        c=""
+        if [ "$CS_COMMIT_HOOKS" != true ]; then
+            c=$(git -C "$MOE_TOP" commit-tree "$m" -p "$b" -F "$work/msg.txt" 2> "$work/commit.err") || c=""
+        elif moe_commit_with_hooks "$b" "$m" "" "$work/msg.txt" "$work/commit.err" worktree; then
+            c="$HOOK_COMMIT_SHA"
+        fi
+        [ -n "$c" ] || { LAND_MESSAGE="the completion commit was refused: $(tail -n 2 "$work/commit.err" 2>/dev/null | tr '\n' ' ')"; return 1; }
+        wt_journal_write "$journal" "$b" "$c" || { LAND_MESSAGE="the receipt journal $journal could not be written"; return 1; }
+        if [ -n "${MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF:-}" ]; then
+            hook="$MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF"
+            unset MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF
+            (cd "$MOE_TOP" && bash -c "$hook") >/dev/null 2>&1 || true
+        fi
+        wt_defer_signals
+        rc=0; wt_target_checked_out "$LAND_BRANCH" || rc=$?
+        if [ "$rc" -ne 1 ]; then
+            rm -f "$journal"; wt_release_signals
+            [ "$rc" -ne 0 ] || LAND_CODE=MOE_LAND_TARGET_CHECKED_OUT
+            LAND_MESSAGE="$ref is checked out in a worktree, or git worktree list failed"; return 1
+        fi
+        if git -C "$MOE_TOP" update-ref -m "moe: land $LAND_TASK_ID" "$ref" "$c" "$b" >/dev/null 2>&1; then rc=0
+        elif ! tip=$(git -C "$MOE_TOP" rev-parse -q --verify "$ref^{commit}" 2>/dev/null); then rc=2
+        else rc=0; git -C "$MOE_TOP" merge-base --is-ancestor "$c" "$tip" 2>/dev/null || rc=$?
+        fi
+        if [ "$rc" -eq 0 ]; then LAND_SHA="$c"; LAND_OUTCOME=committed; LAND_CODE=""; return 0; fi
+        wt_release_signals
+        [ "$rc" -eq 1 ] || { LAND_MESSAGE="$ref could not be read after a lost CAS; receipt journal $journal kept"; return 1; }
+        rm -f "$journal"
+        echo -e "${YELLOW}[branch]${NC} $ref moved while landing task $LAND_TASK_ID (round $round/3); rebuilding on the new tip."
+    done
+    LAND_CODE=MOE_COMMIT_FAILED_REF_CONTENTION; LAND_MESSAGE="$ref moved under all 3 rounds"
+    return 1
+}
+
+# wt_land_published W BRANCH JOURNAL -- L11-L12 once C is on the target (signals
+# deferred): sync BRANCH (best-effort), send the journal's exact completion row
+# and finalize_attempt landed; the journal goes once both answered.
+wt_land_published() {
+    local ok=true
+    MOE_WT_COMPLETION=false
+    echo -e "${GREEN}[OK]${NC} Landed task $LAND_TASK_ID on $LAND_BRANCH: $LAND_SHA ($LAND_N_PATHS paths)"
+    git -C "$1" merge-base --is-ancestor "$LAND_SHA" "refs/heads/$2" 2>/dev/null || worktree_sync_branch "$1" "$2" "$LAND_SHA" || true
+    if receipt_ledger_send "$3" "$LAND_SHA"; then LAND_RECORDED=true; else ok=false; fi
+    finalize_postflight || ok=false
+    if [ "$ok" = true ]; then
+        rm -f "$3"
+    else
+        echo -e "${YELLOW}[WARN]${NC} receipt journal $3 kept: the completion row or finalize_attempt got no answer; the next pre-flight replays it."
+    fi
+    wt_release_signals
+}
+
+# land_worktree_completion W BRANCH -- a worktree completion exit (design §2.2):
+# L0-L2 commit W's dirt to BRANCH (owner guard, no ledger row of its own), then
+# the net change lands on the target (literal consolidationBranch, else main) as
+# ONE squash commit by a local CAS. A configured or unknown remote, or any
+# qualityGate, fails closed here (WT-09/WT-10 own those). Never
+# peel_target_branch, ensure_safe_branch or the shared push.
+# Twin: Invoke-MoeWorktreeCompletion.
+land_worktree_completion() {
+    local w="$1" branch="$2" work journal target="${CS_CONSOLIDATION_BRANCH:-main}" l2 rc=0 rescue=false reason=commit-failed
+    LAND_WT_INTERNAL=true; land_worktree_checkpoint "$w" "$branch" || true; LAND_WT_INTERNAL=""
+    [ "$LAND_OUTCOME" != refused ] || return 0
+    l2="$LAND_OUTCOME"
+    case "$target" in *'?'*|*'['*) target=main ;; esac
+    work="$(create_secure_temp)/wt-complete-$$"
+    rm -rf "$work" 2>/dev/null || true
+    [ "$l2" = failed ] || LAND_CODE=MOE_COMMIT_FAILED
+    LAND_KIND=completion; LAND_BRANCH="$target"; LAND_OUTCOME=failed; LAND_SHA=""; LAND_MESSAGE=""; LAND_RECORDED=""; LAND_PUSHED=false
+    LAND_N_PATHS=0; LAND_TREE=""; LAND_TOOL_FILE_EFFECTIVE=""; LAND_WT_RECOVERED=""; LAND_WT_T=""; LAND_STAGED_FILE="$work/staged.z"; LAND_DROPPED_FILE=""
+    journal=$(receipt_journal_path "$LAND_TASK_ID")
+    if [ "$l2" = failed ]; then
+        LAND_CODE="${LAND_CODE:-MOE_COMMIT_FAILED}"; LAND_MESSAGE="the task-branch commit failed"
+    elif [ -z "$journal" ] || ! mkdir -p "$work" || ! LAND_WT_T=$(git -C "$MOE_TOP" rev-parse -q --verify "refs/heads/$branch^{commit}" 2>/dev/null); then
+        LAND_MESSAGE="refs/heads/$branch does not resolve"
+    elif ! git check-ref-format "refs/heads/$target" || ! git -C "$MOE_TOP" rev-parse -q --verify "refs/heads/$target^{commit}" >/dev/null 2>&1; then
+        LAND_MESSAGE="the target refs/heads/$target is not an existing branch"
+    elif [ -n "${CS_QUALITY_GATE:-}" ]; then
+        LAND_MESSAGE="settings.qualityGate is set and gated worktree landing is not available yet"
+    elif ! no_git_remote; then
+        LAND_MESSAGE="a git remote is configured (or git could not list them) and remote worktree landing is not available yet"
+    else
+        wt_target_checked_out "$target" || rc=$?
+        if [ "$rc" -eq 0 ]; then LAND_CODE=MOE_LAND_TARGET_CHECKED_OUT; LAND_MESSAGE="refs/heads/$target is checked out in a worktree"
+        elif [ "$rc" -ne 1 ]; then LAND_MESSAGE="git worktree list failed"
+        elif ! wt_land_rounds "$journal" "$work"; then rescue=true
+        fi
+    fi
+    if [ "$LAND_OUTCOME" = committed ]; then
+        wt_land_published "$w" "$branch" "$journal"
+    elif [ "$LAND_OUTCOME" = nothing ]; then
+        echo -e "${BLUE}[info]${NC} $LAND_CODE: task $LAND_TASK_ID -- $target already holds everything on $branch."
+        record_commit_rpc nothing completion "" "refs/heads/$target" "$LAND_CODE" "" "" "" "" || true
+    else
+        echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $LAND_MESSAGE; $target did not move and the task's bytes stay on $branch."
+        [ "$LAND_CODE" != MOE_COMMIT_FAILED_REF_CONTENTION ] || reason=ref-contention
+        [ "$rescue" != true ] || rescue_ref_from_commit "$LAND_WT_T" "$reason" || true
+        record_commit_rpc "$LAND_OUTCOME" completion "" "refs/heads/$target" "$LAND_CODE" "$LAND_MESSAGE" "" "" "" || true
+    fi
+    LAND_SUMMARY_SHA="${LAND_SHA:-${LAND_RESCUE_SHA:-none}}"; LAND_SUMMARY_KIND=completion; LAND_SUMMARY_PATHS="$LAND_N_PATHS"
+    LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""; LAND_SUMMARY_OUTCOME="$LAND_OUTCOME"; LAND_SUMMARY_CODE="${LAND_CODE:-}"
 }
 
 # worktree_control_dirt OUT -- the control checkout's dirty paths minus
@@ -6442,9 +6696,20 @@ worktree_control_dirt() {
 # session left in W becomes a recovery checkpoint on the task branch
 # (MOE_CHECKPOINT_RECOVERED; a failure leaves it in W), then the control
 # checkout's dirt is listed in <common gitdir>/moe/worktree/<id>.control-dirt
-# for the stray-edit check. No baseline, rescue replay or notice.
+# for the stray-edit check. No baseline, rescue replay or notice. First of all,
+# L11's retry (WT-08): the task's last recorded completion that its branch
+# lacks is synced in; git refuses over W's dirt, which then stays.
 worktree_preflight() {
-    local list
+    local list c
+    c=$(printf '%s' "${PREFLIGHT_CONTEXT:-}" | $PYTHON_CMD -c 'import json,re,sys
+try: cs=json.load(sys.stdin)["task"]["commits"]
+except Exception: cs=[]
+cs=[x["sha"] for x in cs if isinstance(x,dict) and x.get("kind")=="completion" and x.get("outcome","committed")=="committed" and re.fullmatch(r"[0-9a-f]{40}",str(x.get("sha")))]
+print(cs[-1] if cs else "")' 2>/dev/null) || c=""
+    if [ "$CS_AUTO_COMMIT" = true ] && [ -n "$c" ] && git -C "$MOE_TOP" cat-file -e "$c^{commit}" 2>/dev/null \
+        && ! git -C "$MOE_TOP" merge-base --is-ancestor "$c" "refs/heads/$MOE_WT_BRANCH" 2>/dev/null; then
+        LAND_TASK_ID="$1"; worktree_sync_branch "$MOE_WT_PATH" "$MOE_WT_BRANCH" "$c" || true
+    fi
     if [ "$CS_AUTO_COMMIT" = true ] && [ "$CS_CHECKPOINT_COMMITS" = true ] && [ "${MOE_DISABLE_CHECKPOINT:-0}" != 1 ]; then
         LAND_TASK_ID="$1"; LAND_TITLE="$2"; LAND_STATUS="${3:-UNKNOWN}"; LAND_REOPEN=0; LAND_CLI_EXIT=0; LAND_RECOVERED=true
         if land_worktree_checkpoint "$MOE_WT_PATH" "$MOE_WT_BRANCH" && [ "$LAND_OUTCOME" = committed ]; then
@@ -6492,11 +6757,10 @@ $(printf '%s\n' "$stray" | head -n 20 | sed 's/^/- /')$more"
     return 0
 }
 
-# worktree_postflight -- a worktree worker's exit (design §2.4, §3): its W
-# bytes go to the task branch only, then the stray-edit check. Never
-# run_landing, the peel, the shared push or a baseline. A completion has no
-# target landing here yet (WT-08): its bytes are checkpointed and the outcome
-# stays failed, so the attempt never finalizes as landed.
+# worktree_postflight -- a worktree worker's exit (design §2.4, §3): a
+# checkpoint exit commits W's bytes to the task branch only, a completion lands
+# them on the target (land_worktree_completion), then the stray-edit check.
+# Never run_landing, the peel, the shared push or a baseline.
 worktree_postflight() {
     local status="${FINAL_STATUS:-UNKNOWN}" completion=false
     [ -z "${STATUS_LOOKUP_ERROR:-}" ] || status=UNKNOWN
@@ -6507,13 +6771,13 @@ worktree_postflight() {
     elif [ "$completion" = true ] || { [ "$CS_CHECKPOINT_COMMITS" = true ] && [ "${MOE_DISABLE_CHECKPOINT:-0}" != 1 ]; }; then
         LAND_TASK_ID="$PREFLIGHT_TASK_ID"; LAND_TITLE="$PREFLIGHT_TASK_TITLE"; LAND_STATUS="$status"
         LAND_REOPEN="${FINAL_REOPEN_COUNT:-0}"; LAND_CLI_EXIT="${CLI_EXIT_CODE:-0}"; LAND_RECOVERED=false
-        land_worktree_checkpoint "$MOE_WT_PATH" "$MOE_WT_BRANCH" || true
+        if [ "$completion" = true ]; then
+            land_worktree_completion "$MOE_WT_PATH" "$MOE_WT_BRANCH" || true
+        else
+            land_worktree_checkpoint "$MOE_WT_PATH" "$MOE_WT_BRANCH" || true
+        fi
     else
         echo -e "${BLUE}[info]${NC} no landing for task $PREFLIGHT_TASK_ID (checkpointCommits=$CS_CHECKPOINT_COMMITS MOE_DISABLE_CHECKPOINT=${MOE_DISABLE_CHECKPOINT:-0}); its bytes stay in $MOE_WT_PATH."
-    fi
-    if [ "$completion" = true ]; then
-        echo -e "${YELLOW}[WARN]${NC} worktree completion landing to the target is not available in this wrapper; the bytes are on $MOE_WT_BRANCH and nothing reached $MOE_WT_TARGET"
-        LAND_OUTCOME=failed
     fi
     worktree_stray_check
 }
@@ -7448,7 +7712,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     # Claim the next task, fetch context, read chat backlog.
     # Results are baked into SYSTEM_APPEND/PROMPT below so the agent starts
     # already initialized instead of being told to do these via prompt.
-    MOE_FINALIZE_DONE=false; FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
+    MOE_FINALIZE_DONE=false; MOE_FINALIZE_RC=0; FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
     LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
     # Exported blank: no CLI inherits a previous task's attempt (sh hot reload keeps env).
@@ -7495,7 +7759,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     # and the attempt pair onto the last three.
     export MOE_SESSION_ID="$MOE_SID"
     MOE_TOP=""
-    MOE_WT_MODE=shared; MOE_WT_PATH=""; MOE_WT_BRANCH=""; MOE_WT_TARGET=""; MOE_WT_DIRT_LIST=""; MOE_WT_COMPLETION=""
+    MOE_WT_MODE=shared; MOE_WT_PATH=""; MOE_WT_BRANCH=""; MOE_WT_TARGET=""; MOE_WT_DIRT_LIST=""; MOE_WT_COMPLETION=""; LAND_WT_INTERNAL=""
     CLI_ROOT=""; unset MOE_WORKTREE_PATH MOE_TASK_BRANCH MOE_LAND_TARGET
     MOE_REL=""
     MOE_GITDIR=""

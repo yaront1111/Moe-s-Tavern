@@ -15,11 +15,18 @@
     {
       "stepId": "step-1",
       "description": "1. Integrate the local completion driver after WT-07's ownership-guarded L0-L2. Goal: REVIEW completion publishes one linear squash on the local target, never whole-file attribution from control. Architecture: W's task branch stores T; merge-tree produces M from fresh target B; journal precedes the single CAS publication. Tech: Git plumbing, Bash/Python, PS5.1. Read WT-07's landed helpers and WT-08T's held-out `local` cases before editing; do not modify scripts/tests/worktree-landing.{sh,ps1}. The revised comments dated 13:01/13:12 and design §2.2/2.3/2.7/2.9 govern. Reuse WT-07's dirty-set/DENY/temp-index task-branch commit and owner guard, but on completion do not emit a checkpoint ledger row or checkpoint push for that internal commit. Dispatch before all shared baseline, peel_target_branch, ensure_safe_branch/Ensure-MoeSafeBranch and generic push paths; shared mode must remain unchanged. Resolve target from a nonempty literal consolidationBranch (no *, ? or [), else main; validate with Git check-ref-format and require an existing commit. Read git worktree list --porcelain and refuse any checkout of refs/heads/<target> with MOE_LAND_TARGET_CHECKED_OUT, including the control checkout. This slice supports only positively confirmed no-remote and unset qualityGate: configured/unknown remote or any configured quality gate fails closed, preserving T and reporting failed, never entering a local fallback or silently skipping the required gate. Remote publication and gated publication remain WT-09/WT-10; no fabricated pass evidence. Set LAND/result fields consistently so teardown cannot invoke shared landing.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Driver + guards in both twins:\n- sh: land_worktree_completion (worktree_postflight dispatches it at REVIEW+autoCommit).\n- ps1: Invoke-MoeWorktreeCompletion (Invoke-MoeWorktreePostflight's completion arm).\n\nWhat runs first: an internal L2 commit of W's net change to moe/task/<id>. It reuses land_worktree_checkpoint / Invoke-MoeWorktreeCheckpoint -Internal. Kind is completion, and the PRE_UPDATE_REF test hook is suppressed.\n\nTarget: settings.consolidationBranch unless it holds glob chars, else main.\n\nGuards, in order (each fails closed with MOE_COMMIT_FAILED, target untouched, failed ledger row, no rescue):\n- L2 failed\n- T unresolvable\n- check-ref-format / no target commit\n- settings.qualityGate set (MOE_DISABLE_QUALITY_GATE opt-out), with \"gated worktree landing is not available yet\" (WT-10 scope)\n- any git remote, or remote listing failed, with \"remote worktree landing is not available yet\" (WT-09 scope)\n- target checked out in any worktree: MOE_LAND_TARGET_CHECKED_OUT (helpers wt_target_checked_out / Test-MoeTargetCheckedOut over `worktree list --porcelain -z`)\n\nNever in worktree mode: peel and ensure_safe_branch; the control checkout is never touched.\n\nVerified: held-out `worktree-landing.sh --only local` 8/8 on sh. On Windows PS 5.1, `worktree-landing.ps1 --only local` 8/8.\n\nFixed a ps1 bug where the case-insensitive $m collided with a [hashtable]$M param (renamed to $Meta).\n\nOthers' dirty paths left untouched (not mine): docs/ARCHITECTURE.md, docs/CERTIFICATION.md, docs/TROUBLESHOOTING.md, scripts/local-runner/check-session.mjs, .moe/tasks/task-a46b…json, .moe/tasks/task-f481…json, .moe/decisions/, untracked .moe/tasks/task-25d7…json.",
+      "startedAt": "2026-10-31T15:17:52.358Z",
+      "completedAt": "2026-10-31T16:01:26.742Z"
     },
     {
       "stepId": "step-2",
@@ -88,7 +95,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-632cd3f0",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -143,7 +150,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:52:45.478Z",
-  "updatedAt": "2026-10-30T21:58:36.981Z",
+  "updatedAt": "2026-10-31T16:01:26.742Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:05.195Z",
@@ -152,18 +159,22 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T13:24:20.447Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-eb7de546",
     "architect-76a2c8bb",
-    "qa-b29f7b3d"
+    "qa-b29f7b3d",
+    "worker-632cd3f0"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T13:28:31.554Z",
   "planningNotes": {
@@ -184,5 +195,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T13:28:31.580Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T15:17:52.358Z"
 }
