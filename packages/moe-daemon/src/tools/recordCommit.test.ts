@@ -400,9 +400,9 @@ describe('moe.record_commit', () => {
   describe('held contested paths (MOE_CONTESTED_HELD)', () => {
     const UNTOUCHED = (peer: string) => `MOE_ATTR_CONTESTED_UNTOUCHED(${peer})`;
     // Literal copies on purpose: never import these from recordCommit.ts, or the exact-string rows prove nothing.
-    const UNTOUCHED_REMEDY = "MOE_ATTR_CONTESTED_UNTOUCHED: verify these bytes are this task's and coordinate any live peer. Before the next landing, either a one-shot Claude session of this task edits the path with a wrapper-observed successful editing tool (not a shell write), or a later session of this task that found the path clean at its pre-flight edits it while every contesting peer stays idle, or the stale peer task is legitimately completed or archived.";
-    const EDITING_REMEDY = "MOE_ATTR_CONTESTED_EDITING: a contesting peer task was mid-step on the path with an active session at this landing, so this session's editing tool did not release it (the file can carry that peer's unfinished hunks). Coordinate that peer; after its step completes, either a one-shot Claude session of this task edits the path with a wrapper-observed successful editing tool before the next landing, or the peer's own landing carries these bytes (name its commit in the summary).";
-    const WITNESS = "Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none.";
+    const UNTOUCHED_REMEDY = "MOE_ATTR_CONTESTED_UNTOUCHED: verify these bytes are this task's and coordinate any live peer. Before the next landing, either a one-shot Claude or codex exec session of this task edits the path with a wrapper-observed successful editing tool (not a shell write), or a later session of this task that found the path clean at its pre-flight edits it while every contesting peer stays idle, or the stale peer task is legitimately completed or archived.";
+    const EDITING_REMEDY = "MOE_ATTR_CONTESTED_EDITING: a contesting peer task was mid-step on the path with an active session at this landing, so this session's editing tool did not release it (the file can carry that peer's unfinished hunks). Coordinate that peer; after its step completes, either a one-shot Claude or codex exec session of this task edits the path with a wrapper-observed successful editing tool before the next landing, or the peer's own landing carries these bytes (name its commit in the summary).";
+    const WITNESS = "Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none.";
     const STRICT_REMEDY = "MOE_ATTR_CONTESTED (attribution.contested=skip) holds the path whatever the session's tools did: only resolving or legitimately completing or archiving the peer task releases it.";
     const NEVER_REMEDY = 'declare_files, unblocking or a shell touch alone does not release a hold; never change the policy as the fix.';
     const OLD_PHRASES = ['Claude Edit/Write family or a supported Serena editor', "this task's own assignee session edits"];
@@ -423,6 +423,7 @@ describe('moe.record_commit', () => {
       expect(line).toBe(`MOE_CONTESTED_HELD task=task-1: src/held.ts(task-peer) — ${UNTOUCHED_REMEDY} ${WITNESS} ${NEVER_REMEDY}`);
       for (const phrase of OLD_PHRASES) expect(line).not.toContain(phrase);
       expect(line).not.toContain('attribution.contested=skip');
+      expect(line).toContain('codex exec');
       expect(gov).toHaveBeenCalledTimes(1);
       expect(gov).toHaveBeenCalledWith('governors', expect.stringContaining(line!));
     });
@@ -438,6 +439,7 @@ describe('moe.record_commit', () => {
       // Byte-identical to the pre-witness line: a literal, deliberately not built from the constants.
       expect(line).toBe("MOE_CONTESTED_HELD task=task-1: src/strict.ts(task-peer2), src/orphan.ts(?) — MOE_ATTR_CONTESTED (attribution.contested=skip) holds the path whatever the session's tools did: only resolving or legitimately completing or archiving the peer task releases it. declare_files, unblocking or a shell touch alone does not release a hold; never change the policy as the fix.");
       expect(line).not.toContain(WITNESS);
+      expect(line).not.toContain('codex exec');
       expect(gov).toHaveBeenCalledWith('governors', expect.stringContaining('MOE_CONTESTED_HELD task=task-1'));
       expect(h.state.getTask('task-1')!.lastCommitOutcome).toMatchObject({ outcome: 'nothing', code: 'MOE_COMMIT_NOTHING_TO_COMMIT' });
     });

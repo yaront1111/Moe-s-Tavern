@@ -346,11 +346,15 @@ the `moe.finalize_attempt` escape in `docs/MCP_SERVER.md`.
 ### Session touch evidence
 
 The wrapper currently obtains per-session TOOL witnesses only from **Claude one-shot
-`stream-json` editing events**, including supported native and Serena editing tools. An editing
-call contributes only after its matching successful `tool_result`; a failed call or a call
-without a result supplies no witness. Codex, Gemini, Grok and interactive Claude do not
-currently supply this witness. Their edits can be real while their session's TOOL set remains
-empty. A dirty Git tree, a change since baseline,
+`stream-json` editing events** and **`codex exec --json` events** (piped through
+`scripts/prompt-cache.mjs codex-stream`, harvested by `prompt-cache-witness.mjs`), including
+supported native and Serena editing tools. An editing call contributes only after its matching
+successful `tool_result`; a failed call or a call without a result supplies no witness. From
+`codex exec` that is each path of a completed `file_change` (Codex `apply_patch`) and a
+successful Serena editing MCP call under the per-tool rules below; a failed `file_change`, a
+failed, errored or result-less MCP call and a shell write (`command_execution`) witness nothing.
+Codex TUI, Gemini, Grok and interactive Claude do not currently supply this witness. Their
+edits can be real while their session's TOOL set remains empty. A dirty Git tree, a change since baseline,
 `moe.declare_files`, `complete_step.modifiedFiles`, or an earlier session's `touchedFiles` does
 not establish a current-session TOOL witness. File declarations and completed-step reports
 still contribute to ASSERTED scope.
@@ -396,8 +400,8 @@ line as `held=<path>(task-<peer>)`, comma-joined, at most five entries then `+N 
 followed by one `MOE_CONTESTED_HELD remedy:` for the policy that held it (under
 `skip-untouched`, a clause per held kind).
 `moe.declare_files` does not release a hold. Under `skip-untouched`, verify the bytes are the
-task's and coordinate any live peer; then either the task's assignee session edits the path
-with a supported editing tool before its next exit, or the stale peer task is legitimately
+task's and coordinate any live peer; then either a one-shot Claude or `codex exec` session of the task edits
+the path with a supported editing tool before its next exit, or the stale peer task is legitimately
 completed or archived. An EDITING hold first waits for the peer's step to finish (then
 re-edit), or the peer's own landing carries the bytes. Under `skip` only the peer route
 works. Never change the policy as the fix. `contested: "commit"` is permission to
