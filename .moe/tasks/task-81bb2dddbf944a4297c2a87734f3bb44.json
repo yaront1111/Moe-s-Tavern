@@ -50,7 +50,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -66,16 +66,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:50:23.670Z",
-  "updatedAt": "2026-10-31T22:08:07.719Z",
+  "updatedAt": "2026-10-31T22:11:07.639Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T21:50:26.479Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-31T22:11:07.639Z",
+    "wallClockMs": 1241160
   },
   "contextFetchedBy": [
     "architect-54e5eb09",
-    "worker-f21b922a"
+    "worker-f21b922a",
+    "qa-1f1f912c"
   ],
   "tier": "light",
   "effort": "medium",
@@ -146,7 +149,54 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    ".moe/tasks/task-77b0637fbe0043da988ea8206e5aaadb.json",
+    ".moe/tasks/task-81bb2dddbf944a4297c2a87734f3bb44.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "completionSummary": "Added one row to the win32 identity-proof table in scripts/tests/local-runner.test.mjs (+5/-0): a full 64-hex image_hash sharing the pin's 12-char prefix, expecting IMAGE_PROVIDER_HASH_MISMATCH. M03 evidence (temporary edit on a /tmp git-archive copy only): provision.mjs:114 changed to `providerImageHash.slice(0, 12) !== source.imageSha256.slice(0, 12)`; the new row fails with 'Missing expected rejection (quiet): a full id sharing only the 12-character pin prefix' (pass 1, fail 1), while HEAD's table passes under the same mutant (pass 2). Shared provision.mjs blob 920da2c0 before and after; guest-supervisor.py sha 3a19f3bf OK. Gate in a git-archive snapshot under env -i, Node v24.21.0: 356 tests, 355 pass, 0 fail, 1 skipped. No Multipass run.",
+  "commits": [
+    {
+      "sha": "f20486207cbf0b90f68827b3675717cec6ac53a6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f21b922a@2026-10-31T22:05:48Z",
+      "paths": [
+        ".moe/tasks/task-77b0637fbe0043da988ea8206e5aaadb.json",
+        ".moe/tasks/task-81bb2dddbf944a4297c2a87734f3bb44.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-f21b922a",
+      "recordedAt": "2026-10-31T22:08:26.452Z",
+      "treeId": "06d3594077683b9dd77840fe4c60664bdc85144d",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-47d21b835b5e4f28bb08b17f83d22256"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "scripts/tests/local-runner.test.mjs"
   ],
-  "completionSummary": "Added one row to the win32 identity-proof table in scripts/tests/local-runner.test.mjs (+5/-0): a full 64-hex image_hash sharing the pin's 12-char prefix, expecting IMAGE_PROVIDER_HASH_MISMATCH. M03 evidence (temporary edit on a /tmp git-archive copy only): provision.mjs:114 changed to `providerImageHash.slice(0, 12) !== source.imageSha256.slice(0, 12)`; the new row fails with 'Missing expected rejection (quiet): a full id sharing only the 12-character pin prefix' (pass 1, fail 1), while HEAD's table passes under the same mutant (pass 2). Shared provision.mjs blob 920da2c0 before and after; guest-supervisor.py sha 3a19f3bf OK. Gate in a git-archive snapshot under env -i, Node v24.21.0: 356 tests, 355 pass, 0 fail, 1 skipped. No Multipass run."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-f21b922a@2026-10-31T22:05:48Z",
+    "at": "2026-10-31T22:08:26.452Z"
+  },
+  "completedAt": "2026-10-31T22:11:07.639Z",
+  "reviewCompletedAt": "2026-10-31T22:11:07.639Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit f2048620 (on moe/work-2026-10-24, recorded kind=completion): test file diff is +5/-0 (git diff --numstat), only scripts/tests/local-runner.test.mjs; the rest are the wrapper's board task JSONs. The diff adds a prefixTwin const (64 lowercase hex = pin's first 12 chars + 52 zeros) with two self-check asserts (regex, notEqual to pin), plus one row in the win32 identity-proof table expecting IMAGE_PROVIDER_HASH_MISMATCH; no existing row, loop body or test edited, no forbidden tokens. The table loop's record/commands/ledger/presence/quiet assertions apply unchanged. Re-ran the task.verification gate myself in a git-archive HEAD snapshot (03deb05c) under env -i with Node v24.21.0: guest-supervisor.py sha 3a19f3bf OK; tests 356, pass 355, fail 0, skipped 1; exit 0. Re-ran the M03 probe on a /tmp archive copy only: unmutated 'a Windows guest' tests 2/2 pass; mutant = provision.mjs:114 changed to providerImageHash.slice(0,12) !== source.imageSha256.slice(0,12); with the new row it fails 1 with 'Missing expected rejection (quiet): a full id sharing only the 12-character pin prefix'; with the pre-row table (f2048620~1) the same mutant passes 2/2, so the gap is real and now closed. provision.mjs blob 920da2c0 before and after (equals HEAD blob); guest-supervisor.py unchanged; test file clean vs HEAD; temp snapshot dirs removed (only logs left). No Multipass run. DoD 1-3 all met. Mid-epic test-only row; no size or complexity concerns.",
+  "requiredCheckAtDone": null
 }
