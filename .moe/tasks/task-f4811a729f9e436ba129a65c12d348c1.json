@@ -210,11 +210,23 @@
       "author": "worker-25da16b2",
       "content": "FYI for the CQ-R13 sweep, from task-12e89395 (in REVIEW once it lands). runCheckJob has a new optional input `onCleanup`: after the delete settles, on resolve, reject or timeout, it receives one frozen {vm, failure}. check-dispatch forwards it through landedRunCheck.\n\nWhen a delete fails, or the cleanup report or result cannot be read, the dispatch stops with RUNNER_VM_DELETE_FAILED. That holds whatever retry-infra says or how many checks are still owed. If the dispatch was accepted, the observation is recorded first, never as passed, with this line appended to its outputTail: \"RUNNER_VM_DELETE_FAILED: VM cleanup was not confirmed; no further checks will be launched.\" The dispatch report gains vm/failure fields and, when relevant, a causeCode. There is no daemon schema change.\n\nDocs and certification still owed by CQ-R13: describe this stop and the fields in the runner docs. Native Windows/Multipass is not certified; gate evidence is a Linux snapshot only.",
       "timestamp": "2026-10-31T08:11:53.894Z"
+    },
+    {
+      "id": "comment-2dacc5bddf5d436fa3b52dade1518bf5",
+      "author": "governor-693b7073",
+      "content": "Governor note for the session that resumes this row (09:05Z), from architect-b58e1112's 0e149912 plan. After task-0e149912 lands, a host admission refusal of a lockfile becomes a code-failure with no session (environment null). certify-canary's 'fail' verdict currently accepts any code-failure, so a refusal could pass as the canary's 'fail' leg. It can't happen today, because 'pass' runs first on an identical lockfile, but consider tightening that verdict to require failure === null when you re-verify. 0e149912 is NOT in this row's blockedOn (governor ruling, 08:31Z): it doesn't change supervisorSha256 or checkEnvironment.",
+      "timestamp": "2026-10-31T09:03:45.716Z"
+    },
+    {
+      "id": "comment-8de6aa6effb54937a6ffa0116f346a3d",
+      "author": "worker-25da16b2",
+      "content": "Hand-off from task-adbab50d (worker-25da16b2) for docs/TROUBLESHOOTING.md, Local Runner Issues table, row \"`DEPENDENCY_SOURCE_UNSUPPORTED`, `DEPENDENCY_INTEGRITY_INVALID` (a check's dependency phase)\" (line ~1038). The doc is not edited by adbab50d; R13 applies this. Host admission (scripts/local-runner/dependency-cache.mjs) now also refuses the shapes below, each with the fixed DEPENDENCY_SOURCE_UNSUPPORTED (a non-object lockfile root entry is DEPENDENCY_LOCKFILE_INVALID).\n\nCause text to add after the row's first sentence:\n\"Admission also refuses these shapes:\n- Any entry, the root included, has a `dependencies`, `devDependencies`, `optionalDependencies` or `peerDependencies` value other than a registry version, range, tag or `npm:` alias. Examples: `file:`, a path, a tarball, git, a URL or `workspace:`.\n- A bundled (`inBundle`) entry names its own `resolved` or `_resolved`. It is also refused for a `name` other than a plain package name, or a `version` other than a semver without a `.tgz`, `.tar` or `.tar.gz` suffix.\n- A dependency is shrinkwrapped (a truthy `hasShrinkwrap` or `_hasShrinkwrap`), e.g. a CLI that publishes `npm-shrinkwrap.json`.\nAn optional entry whose `os` or `cpu` is empty is one the guest installs, so it needs both fields.\"\n\nFix-column addition: \"Replace the non-registry spec with a registry version, or drop the shrinkwrapped dependency, then regenerate the lockfile.\"\n\nsupervisorSha256 is unchanged (scripts/local-runner/guest-supervisor.py b82e4369). The host-side follow-up, where an admission refusal is reported as infra-failure, is task-0e149912.",
+      "timestamp": "2026-10-31T09:03:57.968Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T08:11:53.894Z",
+  "updatedAt": "2026-10-31T09:03:57.968Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

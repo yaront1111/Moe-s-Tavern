@@ -1447,6 +1447,102 @@ test('DA5 bounds refuse with fixed codes, and the repository lockfile is admitte
   }
 });
 
+// task-adbab50d: shapes that passed admission and made the pinned npm 11.19.1's offline npm ci install workspace bytes. A
+// non-registry spec in any entry's dependency maps (the root's too, which package.json must equal): npm re-resolves an
+// edge the locked node does not satisfy from its spec. A bundled entry naming its own resolved or legacy _resolved: npm
+// fetches it when the root bundles it or its bundler's tarball lacks it. A truthy hasShrinkwrap or _hasShrinkwrap: npm
+// installs what the tarball's own npm-shrinkwrap.json names.
+const NON_REGISTRY = ['file:stub/a-1.0.0.tgz', 'FILE:a', './a', '../a', '.', '.a', '/a', '~/a', 'C:a', 'stub/a', 'a-1.0.0.tgz', '1.0.0-x.TAR',
+  'a.tar.gz', 'github:x/a', 'git+file:///ws/a.git', 'https://registry.npmjs.org/a/-/a-1.0.0.tgz', 'link:a', 'workspace:*', 'x@y', 'a#b', '%41',
+  'NPM:a@1.0.0', '\t1.0.0', 'a\\b'];
+const REGISTRY = ['', '*', 'latest', '1.0.0', '^1.2.3', '~1.2.3', '>=1 <2', '1.2.3 - 2.3.4', '^1 || ^2', '1.x', 'v1.0.0', '=1.0.0',
+  '1.0.0-beta.1+build.5', ' 1.0.0', 'npm:a@^1.0.0', 'npm:@s/a@1.0.0', 'npm:a'];
+// The labels are JSON, never a bare spec: a secret such as '.' or 'a' occurs in the fixed message itself.
+const unsupported = (packages, label) => refused(() => admit([{ dir: 'secret-dir', bytes: lock(packages) }]), 'DEPENDENCY_SOURCE_UNSUPPORTED',
+  JSON.stringify(label), 'secret-dir');
+
+test('DA6 a non-registry or malformed dependency spec in any entry, the root included, refuses with DEPENDENCY_SOURCE_UNSUPPORTED', () => {
+  const at = (where, map, value) => (where === ''
+    ? { '': { name: 'fixture', [map]: value }, 'node_modules/a': ok('a') } : { 'node_modules/a': ok('a', { [map]: value }), 'node_modules/b': ok('b') });
+  for (const where of ['', 'node_modules/a']) {
+    for (const map of DEPENDENCY_MAPS) {
+      for (const spec of NON_REGISTRY) unsupported(at(where, map, { b: spec }), [where, map, spec]);
+      for (const value of [null, [], 'b', 5, { b: 5 }, { b: null }, { b: ['1.0.0'] }, { b: {} }]) unsupported(at(where, map, value), [where, map, value]);
+    }
+  }
+  for (const root of [5, null, [], 'x']) refused(() => admit([{ dir: '.', bytes: lock({ '': root }) }]), 'DEPENDENCY_LOCKFILE_INVALID', JSON.stringify(root));
+});
+
+test('DA7 registry specs, bundled entries with no resolved and a registry name@version, and falsy shrinkwrap flags are admitted, with the same packages', () => {
+  const plain = { 'node_modules/a': ok('a'), 'node_modules/b': ok('b'),
+    'node_modules/a/node_modules/c': { version: '1.0.0', inBundle: true, integrity: sri('c'), dependencies: { d: '^1.0.0' } } };
+  const want = admit([{ dir: '.', bytes: lock(plain) }]);
+  assert.deepEqual(want.packages.map(({ url }) => url).sort(), [regUrl('a'), regUrl('b')]);
+  for (const map of DEPENDENCY_MAPS) {
+    for (const spec of REGISTRY) {
+      const packages = { ...plain, '': { name: 'fixture', [map]: { a: spec } }, 'node_modules/a': ok('a', { [map]: { b: spec } }) };
+      assert.deepEqual(admit([{ dir: '.', bytes: lock(packages) }]), want, JSON.stringify([map, spec]));
+    }
+  }
+  for (const key of ['hasShrinkwrap', '_hasShrinkwrap']) {
+    for (const flag of [false, 0, '', null]) assert.deepEqual(admit([{ dir: '.', bytes: lock({ ...plain, 'node_modules/b': ok('b', { [key]: flag }) }) }]), want, `${key} ${flag}`);
+  }
+  // An npm alias keeps its real name; a version near a tarball suffix is still a registry version.
+  for (const extra of [{}, { name: 'string-width', version: '4.2.3' }, { name: '@s/c', version: '1.0.0' }, { version: '1.0.0-tgz' },
+    { version: '1.0.0-x.tgz.1+build.5' }]) {
+    assert.deepEqual(admit([{ dir: '.', bytes: lock({ ...plain, 'node_modules/a/node_modules/c': { inBundle: true, ...extra } }) }]), want, JSON.stringify(extra));
+  }
+});
+
+test('DA8 a bundled entry naming a resolved or _resolved, or a shrinkwrapped entry, refuses before any fetch or cache write', async t => {
+  const bundled = extra => ({ version: '1.0.0', integrity: sri('stub'), inBundle: true, ...extra });
+  const parent = { 'node_modules/a': ok('a', { dependencies: { e: '1.0.0' } }) };
+  const rows = [];
+  // node_modules/e is bundled by the root, so npm fetches it; node_modules/a/node_modules/e when a's tarball lacks it.
+  for (const key of ['node_modules/e', 'node_modules/a/node_modules/e']) {
+    for (const extra of [{ resolved: 'file:stub/e-1.0.0.tgz' }, { resolved: regUrl('e') }, { resolved: null }, { resolved: '' },
+      { _resolved: 'file:stub/e-1.0.0.tgz' }, { _resolved: regUrl('e') }, { resolved: 'file:stub/e-1.0.0.tgz', optional: true, os: ['darwin'] }]) {
+      rows.push({ ...parent, [key]: bundled(extra) });
+    }
+  }
+  for (const key of ['hasShrinkwrap', '_hasShrinkwrap']) {
+    for (const value of [true, 1, 'yes', {}, []]) {
+      rows.push({ 'node_modules/a': ok('a', { [key]: value }) }, { ...parent, 'node_modules/a/node_modules/e': bundled({ [key]: value }) },
+        { 'node_modules/o': ok('o', { optional: true, os: ['darwin'], [key]: value }) });
+    }
+  }
+  // The two routes as filed: a lock root (and the matching package.json) naming a file: spec, and a root-level bundled file: entry.
+  const filed = [{ '': { name: 'moe-kir', version: '1.0.0', dependencies: { a: 'file:stub/a-1.0.0.tgz' } }, 'node_modules/a': ok('a') },
+    { '': { name: 'moe-kir', version: '1.0.0', dependencies: { a: '1.0.0' } }, 'node_modules/a': bundled({ resolved: 'file:stub/a-1.0.0.tgz' }) }];
+  for (const packages of [...rows, ...filed]) unsupported(packages, packages);
+  for (const packages of filed) {
+    const server = fixtureFetch(servedBy({ a: tarball('a') }));
+    const cacheDir = join(scratchDir(t), 'cache');
+    await assert.rejects(buildDependencyCache({ lockfiles: [{ dir: '.', bytes: lock(packages) }], cpu: 'x64', cacheDir }, { fetch: server.fetch }),
+      dependencyRefusal('DEPENDENCY_SOURCE_UNSUPPORTED'));
+    assert.deepEqual([server.calls, existsSync(cacheDir)], [[], false]);
+  }
+});
+
+// task-adbab50d review: shapes the rules above still admitted, each measured installing workspace bytes with the pinned npm.
+// npm fetches a root-bundled or bundle-missing entry naming no resolved from `${name}@${version}`, which a file: version, a
+// name carrying a spec, or a semver version ending in a tarball suffix makes a file spec. npm-install-checks reads an
+// empty os or cpu as no constraint, so the optional entry carrying one is installed and must not be skipped.
+test('DA11 a bundled entry whose name@version is no registry spec, or an optional entry with an empty os or cpu, refuses with DEPENDENCY_SOURCE_UNSUPPORTED', () => {
+  const parent = { 'node_modules/a': ok('a', { dependencies: { e: '*' } }) };
+  for (const key of ['node_modules/e', 'node_modules/a/node_modules/e']) {
+    for (const version of ['file:stub/e-1.0.0.tgz', '1.0.0-x.tgz', '1.0.0+b.tar', '1.0.0-a.tar.gz', '1.0.0-X.TGZ', ['file:stub/e-1.0.0.tgz'], ['1.0.0'], 1, null]) {
+      unsupported({ ...parent, [key]: { version, inBundle: true } }, [key, version]);
+    }
+    for (const name of ['e@file:stub/x', 'e@file:stub/e-1.0.0.tgz#', 'e@1.0.0', 'stub/e', '../e', ['e@file:stub/x'], ['e'], null]) {
+      unsupported({ ...parent, [key]: { name, version: '1.0.0', inBundle: true } }, [key, name]);
+    }
+  }
+  for (const extra of [{ os: '' }, { cpu: '' }, { os: '', cpu: ['x64'] }, { os: ['linux'], cpu: '' }]) {
+    unsupported({ 'node_modules/o': ok('o', { optional: true, resolved: 'file:stub/o-1.0.0.tgz', ...extra }) }, extra);
+  }
+});
+
 // CQ-R11e1: the host's pinned Node toolchain cache (rows TC1-TC7). Bodies come from an injected fetch over fixture
 // routes, never the network; test manifests keep the shipped fixed URLs and swap in fixture sizes and hashes.
 import { cpSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -1936,3 +2032,53 @@ test('KI8 with the real npm, a file: spec or override naming a same-version cand
       }
     }
   });
+
+// task-adbab50d's oracle: every dependency spec, and every bundled entry's name@version, admission accepts resolves to the
+// registry, or is refused, under the host npm's own npm-package-arg (13.0.2 in the pinned npm 11.19.1), over the fixed
+// lists and a seeded spread of risky spellings.
+import { createRequire } from 'node:module';
+const npa = (() => { try { return createRequire(NPM_CLI)('npm-package-arg'); } catch { return null; } })();
+test('DA9 a spec that admission accepts, as an edge or a bundled entry\'s name@version, is a registry spec, or one npm refuses, under the host npm\'s npm-package-arg', { skip: !npa && 'the host npm has no npm-package-arg' }, () => {
+  const accepted = spec => { try { return admit([{ dir: '.', bytes: lock({ '': { name: 'fixture', dependencies: { a: spec } } }) }]) !== null; } catch { return false; } };
+  const registry = spec => { try { return npa.resolve('a', spec, '/ws').registry === true; } catch { return true; } };
+  let state = 0x9e3779b9;
+  const next = () => { state ^= state << 13; state ^= state >>> 17; state ^= state << 5; return state >>> 0; };
+  const alphabet = "abvxX019.-_+*^~<>=| !'()tgzr/:@#%\\";
+  const spread = Array.from({ length: 4000 }, () => Array.from({ length: next() % 12 }, () => alphabet[next() % alphabet.length]).join('') + (next() % 16 ? '' : '.tgz'));
+  assert.deepEqual([REGISTRY.filter(spec => !accepted(spec)), NON_REGISTRY.filter(accepted)], [[], []]);
+  assert.deepEqual([...REGISTRY, ...NON_REGISTRY, ...spread].filter(spec => accepted(spec) && !registry(spec)), []);
+  assert.ok(spread.filter(accepted).length > 1000);
+  // npm extracts a root-bundled or bundle-missing entry naming no resolved from `${name}@${version}`.
+  const bundled = (name, version) => { try { return admit([{ dir: '.', bytes: lock({ 'node_modules/e': { name, version, inBundle: true } }) }]) !== null; } catch { return false; } };
+  const fromRegistry = (name, version) => { try { return npa(`${name}@${version}`, '/ws').registry === true; } catch { return true; } };
+  const ids = ['x', 'a', '1', '0', 'tgz', 'tar', 'gz', 'TGZ', 'Tar'];
+  const id = () => Array.from({ length: 1 + (next() % 3) }, () => ids[next() % ids.length]).join('.');
+  const semverish = Array.from({ length: 400 }, () => `${next() % 2}.${next() % 2}.${next() % 2}${['', `-${id()}`, `+${id()}`, `-${id()}+${id()}`][next() % 4]}`);
+  const pairs = ['e', '@s/e', 'E', '~e', 'e.tgz', 'x.tar', 'e-1.0.0.tgz', '@s/e.tar.gz', 'e@file:stub/x', 'e@1.0.0', 'stub/e', '../e', 'file:e']
+    .flatMap(name => [...REGISTRY, ...NON_REGISTRY, ...semverish].map(version => [name, version]));
+  const admitted = pairs.filter(([name, version]) => bundled(name, version));
+  assert.deepEqual(admitted.filter(([name, version]) => !fromRegistry(name, version)), []);
+  assert.ok(admitted.length > 1000);
+});
+
+// task-adbab50d with the real npm: a registry tarball that bundles its dependency, the one bundled shape admission keeps
+// (an inBundle entry with no resolved and a registry name@version), installs offline from the admitted tree through the
+// supervisor's own run_install.
+test('DA10 with the real npm, a bundled dependency inside an admitted tarball installs offline from the tree', { skip: INSTALLS_RUN || NO_NPM, timeout: 180_000 }, async t => {
+  if (busy(t)) return;
+  const [a, e] = ['moe-fixture-a', 'moe-fixture-e'];
+  const bundler = tgz({ 'package/package.json': JSON.stringify({ name: a, version: '1.0.0', dependencies: { [e]: '^1.0.0' }, bundleDependencies: [e] }),
+    [`package/node_modules/${e}/package.json`]: manifestOf(e), [`package/node_modules/${e}/bundled.txt`]: 'inside a\n' });
+  const project = { name: 'moe-da10', version: '1.0.0', dependencies: { [a]: '1.0.0' } };
+  const lockBytes = lock({ '': project, [`node_modules/${a}`]: entryOf(a, bundler, { dependencies: { [e]: '^1.0.0' }, bundleDependencies: [e] }),
+    [`node_modules/${a}/node_modules/${e}`]: { version: '1.0.0', inBundle: true } });
+  const { tree } = await buildDependencyCache({ lockfiles: [{ dir: '.', bytes: lockBytes }], cpu: process.arch, cacheDir: join(scratchDir(t), 'cache') },
+    { fetch: fixtureFetch(servedBy({ [a]: bundler })).fetch });
+  const full = Object.fromEntries(tree.entries.map(({ path, data }) => [path, Buffer.from(data)]));
+  const files = { 'package.json': bytesOf(project), 'package-lock.json': lockBytes };
+  const result = installRun(t, null, [], { toolchain: JSON.stringify(dirname(dirname(process.execPath))), timeout: 25,
+    more: `plant(deps, ${pyFiles(full)})\nplant(workspace, ${pyFiles(files)})\n` });
+  const bundled = join(result.dir, 'ws', 'node_modules', a, 'node_modules', e, 'bundled.txt');
+  assert.deepEqual([result.status, result.relays.length, tree.entries.length, existsSync(bundled) && readFileSync(bundled, 'utf8')], [42, 1, 2, 'inside a\n'],
+    String(result.stderr));
+});

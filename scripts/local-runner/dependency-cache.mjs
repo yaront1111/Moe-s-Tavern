@@ -7,9 +7,16 @@
 // - lockfileVersion 2 or 3 only. Every packages key except '' (the root project) must be a node_modules location;
 //   workspace folder keys and links (even one flagged inBundle or optional) are refused, because npm could extract a
 //   tarball over a source path.
-// - Skipped, never fetched: inBundle entries (they ship inside their parent's verified tarball) and optional entries
-//   whose os excludes linux or whose cpu excludes the guest cpu (npm-install-checks checkList semantics). libc is
-//   deliberately never filtered: an extra package is harmless, a missing one fails the offline install.
+// - Every entry, the root included, is an object whose dependencies, devDependencies, optionalDependencies and
+//   peerDependencies hold only registry specs: npm ci re-resolves an edge its locked node does not satisfy from its spec.
+// - No entry is shrinkwrapped (a truthy hasShrinkwrap or _hasShrinkwrap): npm installs what the tarball's own
+//   npm-shrinkwrap.json names, which admission never sees.
+// - Skipped, never fetched: inBundle entries naming no resolved or _resolved, with any name a plain package name and any
+//   version a semver with no tarball suffix (they ship inside their parent's verified tarball; npm fetches a root-bundled
+//   or bundle-missing entry from the resolved it names, else from name@version, which must then be a registry spec), and
+//   optional entries whose os excludes linux or whose cpu excludes the guest cpu (npm-install-checks checkPlatform
+//   semantics: a falsy list, even '', excludes nothing). libc is deliberately never filtered: an extra package is
+//   harmless, a missing one fails the offline install.
 // - Every other entry needs a semver version, a resolved that EQUALS the canonical registry.npmjs.org tarball URL for
 //   its name (an npm alias uses entry.name) and one canonical sha512 SRI token. Plain string equality: no URL parsing.
 // The cache itself (CQ-R11e3): buildDependencyCache keeps each admitted tarball through agent-cache.mjs fetchPinnedFile in
@@ -76,6 +83,20 @@ const hasExactKeys = (value, keys) => {
   const own = Reflect.ownKeys(value);
   return own.length === keys.length && keys.every(key => own.includes(key));
 };
+// The dependency maps npm ci builds an entry's edges from, and the specs npm-package-arg resolves only from the registry
+// or refuses: an npm: alias, whose target it requires to be a registry spec, or a version, range or tag. Those hold no
+// ':', '/', '\\', '@', '#' or '%', start with no '.' and end in no tarball suffix, which it reads as a URL, git or a path.
+const DEPENDENCY_MAPS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
+const RANGE_OR_TAG = /^(?!\.)[\w !'()*+.<=>^|~-]*$/;
+const TARBALL = /[.](?:tgz|tar\.gz|tar)$/i;
+const registrySpec = spec => typeof spec === 'string' && (spec.startsWith('npm:') || (RANGE_OR_TAG.test(spec) && !TARBALL.test(spec)));
+const registrySpecs = entry => DEPENDENCY_MAPS.every(key => entry[key] === undefined
+  || (isRecord(entry[key]) && Object.values(entry[key]).every(registrySpec)));
+// npm extracts a bundled entry naming no resolved from `${name}@${version}` (an absent name is its location's). That is a
+// registry spec, which the offline tree cannot serve, only for a plain name and a semver version with no tarball suffix:
+// npm-package-arg reads `e@1.0.0-x.tgz` as a file.
+const bundledSpec = entry => (entry.name === undefined || (typeof entry.name === 'string' && NAME_ONLY.test(entry.name)))
+  && (entry.version === undefined || (typeof entry.version === 'string' && SEMVER.test(entry.version) && !TARBALL.test(entry.version)));
 
 export function dependencyError(code) {
   const known = typeof code === 'string' && Object.hasOwn(MESSAGES, code) ? code : 'DEPENDENCY_INPUT_INVALID';
@@ -84,8 +105,10 @@ export function dependencyError(code) {
   return error;
 }
 
-// npm-install-checks checkList. Anything that is not a list of strings never excludes a package.
+// npm-install-checks checkPlatform: a falsy list, even '', never excludes a package, and any other goes through checkList.
+// Anything that is not a list of strings never excludes one either.
 function passes(value, list) {
+  if (!list) return true;
   const items = typeof list === 'string' ? [list] : list;
   if (!Array.isArray(items) || !items.every(item => typeof item === 'string')) return true;
   if (items.length === 1 && items[0] === 'any') return true;
@@ -119,14 +142,24 @@ function readLockfile(element) {
 // Adds each admitted entry to found, keyed by sha512 and keeping the smallest url, and refuses past the package bound at once.
 function admitEntries(packages, cpu, found) {
   for (const [key, entry] of Object.entries(packages)) {
-    if (key === '') continue;
-    const location = LOCATION.exec(key);
-    if (location === null) throw dependencyError('DEPENDENCY_LOCATION_INVALID');
+    const location = key === '' ? null : LOCATION.exec(key);
+    if (key !== '' && location === null) throw dependencyError('DEPENDENCY_LOCATION_INVALID');
     if (!isRecord(entry)) throw dependencyError('DEPENDENCY_LOCKFILE_INVALID');
+    // The root's edges too: npm ci re-resolves an edge its locked node does not satisfy from that edge's spec.
+    if (!registrySpecs(entry)) throw dependencyError('DEPENDENCY_SOURCE_UNSUPPORTED');
+    if (key === '') continue;
     // Before both skips: npm 12.2.0 still creates the symlink for a link entry flagged inBundle or optional, and a later
     // node_modules/<link>/node_modules/<name> key would then extract a tarball under the link's target.
     if (entry.link === true) throw dependencyError('DEPENDENCY_SOURCE_UNSUPPORTED');
-    if (entry.inBundle === true) continue;
+    // npm installs what a truthy hasShrinkwrap or legacy _hasShrinkwrap entry's own npm-shrinkwrap.json names.
+    if (entry.hasShrinkwrap || entry._hasShrinkwrap) throw dependencyError('DEPENDENCY_SOURCE_UNSUPPORTED');
+    // npm fetches a bundled entry when the root bundles it or its bundler's tarball lacks it: from its own resolved (or legacy
+    // _resolved), else from its name@version. Only one naming neither, with a registry name@version, ships solely inside a
+    // verified tarball or fails offline.
+    if (entry.inBundle === true) {
+      if (entry.resolved !== undefined || entry._resolved !== undefined || !bundledSpec(entry)) throw dependencyError('DEPENDENCY_SOURCE_UNSUPPORTED');
+      continue;
+    }
     if (entry.optional === true && !(passes('linux', entry.os) && passes(cpu, entry.cpu))) continue;
     const name = entry.name === undefined ? location[1] : entry.name;
     const version = entry.version;
