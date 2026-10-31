@@ -69,7 +69,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -82,16 +82,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T20:14:45.851Z",
-  "updatedAt": "2026-10-31T20:42:21.324Z",
+  "updatedAt": "2026-10-31T20:45:26.029Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T20:14:55.874Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T20:45:26.029Z",
+    "wallClockMs": 1830155
   },
   "contextFetchedBy": [
     "architect-b742aab1",
-    "worker-bdf1153c"
+    "worker-bdf1153c",
+    "qa-1f1f912c"
   ],
   "tier": "standard",
   "effort": "high",
@@ -178,7 +181,52 @@
   },
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-bootstrap.mjs",
+    ".moe/tasks/task-62a909c1005946db8f9f73e31bf362ec.json"
+  ],
+  "completionSummary": "buildUserData now emits `mounts: [[ephemeral0], [swap]]` instead of `mounts: []`, which cloud-init 26.1 refused (minItems 1). Delivered in guest-bootstrap.mjs (+6/-1, including a JSDoc that names the construct and why it keeps the no-mounts guarantee) and local-runner.test.mjs (+25/-1: updated pin, plus new UD1). DoD 1: user-data built from the real guest-supervisor.py and a random 32-byte credential; `/usr/bin/cloud-init schema -c <file>` (26.1-0ubuntu1~24.04.1) printed 'Valid schema <file>', exit 0, with no schema-error or deprecation line. DoD 3: UD1 ran (not skipped) and failed against HEAD's `mounts: []` in the RED run (status 1, 'mounts: [] is too short'); readiness is untouched, and the degraded-done and CF2 rows pass unedited. DoD 4: guest-supervisor.py sha256 is still 3a19f3bf…8190 and guest-readiness.mjs has no diff. The full local-runner suite ran in a git-archive snapshot under env -i with Node v24.21.0: 352 tests, 351 pass, 0 fail, 1 skip (macOS smoke), exit 0. Follow-up for the governor at R13 certify, because no seat runs Multipass: on a real guest, fstab has no cloud-init entry, swapon is empty, and `cloud-init status --format json` exits 0 with done/done.",
+  "commits": [
+    {
+      "sha": "fbece19715bd347091944988c135ed41f02e963b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-bdf1153c@2026-10-31T20:39:34Z",
+      "paths": [
+        ".moe/tasks/task-62a909c1005946db8f9f73e31bf362ec.json",
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-bdf1153c",
+      "recordedAt": "2026-10-31T20:42:43.835Z",
+      "treeId": "9ec4d802a7c9877dc4b4b7c8880651df89af8b9e",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-47d21b835b5e4f28bb08b17f83d22256"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-bootstrap.mjs"
   ],
-  "completionSummary": "buildUserData now emits `mounts: [[ephemeral0], [swap]]` instead of `mounts: []`, which cloud-init 26.1 refused (minItems 1). Delivered in guest-bootstrap.mjs (+6/-1, including a JSDoc that names the construct and why it keeps the no-mounts guarantee) and local-runner.test.mjs (+25/-1: updated pin, plus new UD1). DoD 1: user-data built from the real guest-supervisor.py and a random 32-byte credential; `/usr/bin/cloud-init schema -c <file>` (26.1-0ubuntu1~24.04.1) printed 'Valid schema <file>', exit 0, with no schema-error or deprecation line. DoD 3: UD1 ran (not skipped) and failed against HEAD's `mounts: []` in the RED run (status 1, 'mounts: [] is too short'); readiness is untouched, and the degraded-done and CF2 rows pass unedited. DoD 4: guest-supervisor.py sha256 is still 3a19f3bf…8190 and guest-readiness.mjs has no diff. The full local-runner suite ran in a git-archive snapshot under env -i with Node v24.21.0: 352 tests, 351 pass, 0 fail, 1 skip (macOS smoke), exit 0. Follow-up for the governor at R13 certify, because no seat runs Multipass: on a real guest, fstab has no cloud-init entry, swapon is empty, and `cloud-init status --format json` exits 0 with done/done."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-bdf1153c@2026-10-31T20:39:34Z",
+    "at": "2026-10-31T20:42:43.835Z"
+  },
+  "completedAt": "2026-10-31T20:45:26.029Z",
+  "reviewCompletedAt": "2026-10-31T20:45:26.029Z",
+  "reviewSummary": "Approved. Reviewed completion fbece197 (on moe/work-2026-10-24; wrapper-recorded, pushed): guest-bootstrap.mjs +6/-1, local-runner.test.mjs +25/-1, plus the task JSON. 31 net lines, well under 400. The worker's changes are only the buildUserData mounts line, its JSDoc, the pin, and UD1.\n\nRe-ran task.verification (git-archive snapshot, env -i, Node v24.21.0). Working-tree bytes of both owned files equal HEAD, so it tested the recorded bytes: exit 0, 352 tests, 351 pass, 0 fail, 1 skip (macOS smoke), 82 s. UD1 ran (✔, not SKIP) and CF2 degraded-done passed unedited.\n\nDoD 1: built user-data from the real guest-supervisor.py plus randomBytes(32). `/usr/bin/cloud-init schema -c <file>` (26.1-0ubuntu1~24.04.1) printed 'Valid schema <file>', exit 0, with no schema-error or deprecation line; only the WSL 'datasource not detected' WARNING. YAML parses mounts as [['ephemeral0'],['swap']]. The same file with `mounts: []` gives 'Cloud config schema errors: mounts: [] is too short', exit 1, so UD1 would fail the old bytes.\nDoD 2: read cc_mounts.py 26.1 myself. Defaults are skipped when sanitize_devname returns None, and DataSource.device_name_to_device returns None (NoCloud does not override it). An fs_spec-only entry also gets dropped by remove_nonexistent_devices. The JSDoc matches these facts.\nDoD 3: UD1 and the pin are updated and strictness is untouched: git diff shows no hunk outside the two edits, and readiness rows pass unedited.\nDoD 4: guest-supervisor.py sha256 3a19f3bf…8190 and clean vs HEAD; guest-readiness.mjs unchanged.\n\nNo forbidden tokens. Contested test-file path was attributed in the landing trailer. Not verified (no seat runs Multipass): a real-guest boot reaching done/done with exit 0, an empty fstab entry and an empty swapon. This is the governor's R13-certify follow-up.",
+  "requiredCheckAtDone": null
 }
