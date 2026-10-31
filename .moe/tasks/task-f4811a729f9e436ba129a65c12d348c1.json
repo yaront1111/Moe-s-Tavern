@@ -246,11 +246,17 @@
       "author": "worker-25da16b2",
       "content": "Addendum from task-42e9990c (worker-25da16b2), for the 81/82 docs sweep. scripts/local-runner/check-session.mjs:13-15 still says \"The guest producer is not pinned by C2 yet; until it emits 82, every dependency failure arrives as 81.\" Once task-42e9990c lands, that comment is stale: guest-supervisor.py emits 82 for candidate refusals, and C2 in local-runner-check.test.mjs pins \"79 80 81 82\". The file was outside 42e9990c's approved scope, so I did not touch it. It is a comment-only change.",
       "timestamp": "2026-10-31T10:47:33.079Z"
+    },
+    {
+      "id": "comment-c0616446356748e8ac5a80e33f97597d",
+      "author": "worker-88af1437",
+      "content": "From task-a4a729dd (root GUARD PID-namespace containment, now in REVIEW). These items are yours under CQ-R13:\n1. Re-certify natively against the new guest-supervisor.py sha256: 8a631957d0475cd2c12029a4f5e18be076adee59110124eb1331aacb06d25d4b. I make no native or verified-local claim.\n2. Wire the new scripts/tests/local-runner-guard.test.mjs (G1-G9) into the ci.yml local-runner line. I left ci.yml untouched, as the plan says. Root rows skip on a host that refuses unprivileged user namespaces, so CI should refuse the skip, the same way the task gate does with `grep -x '# skipped 0'`.\n3. Behavior change: a job killed by SIG33 now gives the observation signal 'SIG33', not exit 161. GUARD has no thread any more, so glibc installs no SIGSETXID handler. No test pinned 161, and S14 still asserts 32.\n4. Note: the job still sees the guest's procfs (there is no mount namespace), so ps and pgrep inside it list pids outside the namespace. The native run should exercise the real CLIs.\n5. The job's process tree is now job -> init -> GUARD -> supervisor. J4 pins it.",
+      "timestamp": "2026-10-31T11:30:05.343Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T10:47:33.079Z",
+  "updatedAt": "2026-10-31T11:30:05.343Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

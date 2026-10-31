@@ -82,25 +82,22 @@ CODE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
 # CQ-R10a: these end relay() through its teardown; SIGKILL of the supervisor is left to GUARD.
 TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 EX_TERMINATED = os.EX_TEMPFAIL
-# The job's session leader. It runs the job in its own group and exits with the job's status. On EOF of the life pipe
-# (the supervisor died before reaping it) it SIGKILLs that group, whose id this live member pins. A stand-down byte,
-# sent after the output pipes close, lets it exit once the job has; the start pipe gets '+' once the job runs, and
-# EOF once this process is gone. argv[3] is the job's Popen identity, groups, umask and cwd as JSON (CQ-R10b); the job's
-# environment is this process's own, so a credential travels in no argv or file. On Linux the job, and anything it
-# execs, can never gain privileges (PR_SET_NO_NEW_PRIVS); a guard that cannot set the bit never starts the job.
+# The job's session leader. It runs the job in its own group and exits with the job's status. As root it first unshares
+# a PID namespace, so its one fork is that namespace's init: init starts the job, reaps orphans until the job's own
+# status, sends it up a private pipe and exits, and the kernel kills every other descendant, setsid or not, before init
+# can be reaped. Root that cannot unshare never starts the job; a non-root import fixture runs uncontained and certifies
+# nothing. On EOF of the life pipe (the supervisor died before reaping it) it SIGKILLs init, then its own group, whose
+# id this live member pins. A stand-down byte, sent after the output pipes close, lets it exit once init has; the start
+# pipe gets '+' once the job runs, and EOF once this process is gone. argv[3] is the job's Popen identity, groups, umask
+# and cwd as JSON (CQ-R10b); the job's environment is this process's own, so a credential travels in no argv or file. On
+# Linux the job, and anything it execs, can never gain privileges (PR_SET_NO_NEW_PRIVS); a guard that cannot set the bit
+# never starts the job.
 # CQ-R11a: a check job's argv[3] also carries its rlimits and network namespace, which this process applies to itself
 # before the Popen, for the job to inherit; a guard that cannot apply them never starts the job either.
-GUARD = '''import json, os, resource, signal, subprocess, sys, threading
+GUARD = '''import json, os, resource, signal, selectors, subprocess, sys
 life, start = int(sys.argv[1]), int(sys.argv[2])
 for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
     signal.signal(number, lambda *_: None)  # group-wide signals are for the job; a caught signal resets at its exec
-released = threading.Event()
-def watch():
-    while True:
-        if not os.read(life, 1):
-            os.killpg(0, signal.SIGKILL)  # the supervisor died; this live leader pins the group id
-        released.set()
-threading.Thread(target=watch, daemon=True).start()
 try:
     spawn = json.loads(sys.argv[3])
     if sys.platform == 'linux':
@@ -109,7 +106,7 @@ try:
             raise OSError(ctypes.get_errno(), 'PR_SET_NO_NEW_PRIVS')
     if spawn.pop('netns', False):
         # Root in the Linux guest only (Python 3.12+ os.unshare; a non-root test passes netns False); CQ-R13 certifies it
-        # on a real VM. This thread forks the job into the new namespace, whose own loopback comes up: SIOCGIFFLAGS, then
+        # on a real VM. Init forks the job into the new namespace, whose own loopback comes up: SIOCGIFFLAGS, then
         # SIOCSIFFLAGS with IFF_UP, on a 40-byte ifreq.
         import fcntl, socket, struct
         os.unshare(os.CLONE_NEWNET)
@@ -118,19 +115,58 @@ try:
             fcntl.ioctl(sock, 0x8914, struct.pack('16sH22x', b'lo', flags | 1))
     for name, value in spawn.pop('rlimits', {}).items():
         resource.setrlimit(getattr(resource, name), (value, value))  # soft = hard; root is exempt from NPROC at fork
-    job = subprocess.Popen(sys.argv[4:], **spawn)  # in C, after fork: groups, gid, uid, then exec
+    if os.geteuid() == 0:
+        # The next fork is init of a PID namespace whose exit kills every descendant, setsid or not. The kernel then
+        # refuses this process any thread, so the loop below watches the life pipe.
+        os.unshare(os.CLONE_NEWPID)
+    report, told = os.pipe()  # init writes '+' once the job runs, then the job's raw wait status
+    init = os.fork()
+    if init == 0:
+        job = subprocess.Popen(sys.argv[4:], **spawn)  # in C, after fork: groups, gid, uid, then exec
 except Exception:
     os._exit(1)  # no '+': the supervisor reports EX_OSERR
-try:
-    os.write(start, b'+')
+if init == 0:
+    os.write(told, b'+')
     null = os.open(os.devnull, os.O_RDWR)
     os.dup2(null, 1)
-    os.dup2(null, 2)  # only the job and its descendants hold the output pipes
-    status = os.waitpid(job.pid, 0)[1]
-    released.wait()
+    os.dup2(null, 2)
+    while (reaped := os.waitpid(-1, 0))[0] != job.pid:
+        pass  # as pid 1, init adopts orphans: reap them until the job's own status
+    os.write(told, b'%d' % reaped[1])
+    os._exit(0)  # the kernel kills and reaps the rest of the namespace before this exit can be reaped
+os.close(told)
+try:
+    selector = selectors.DefaultSelector()
+    selector.register(life, selectors.EVENT_READ)
+    selector.register(report, selectors.EVENT_READ)
+    data, released, exited = b'', False, None
+    while exited is None or not released:
+        for key, _ in selector.select():
+            chunk = os.read(key.fd, 8)
+            if key.fd == life:
+                if not chunk:  # the supervisor died
+                    if exited is None:
+                        os.kill(init, signal.SIGKILL)  # from the parent namespace; the kernel then kills the rest of it
+                        os.waitpid(init, 0)  # reaped only once its namespace is empty
+                    os.killpg(0, signal.SIGKILL)  # this live leader pins the group id
+                released = True  # still watched: a supervisor that dies after standing down still kills the group
+            elif chunk and len(data) < 8:
+                if not data and chunk[:1] == b'+':
+                    os.write(start, b'+')
+                    null = os.open(os.devnull, os.O_RDWR)
+                    os.dup2(null, 1)
+                    os.dup2(null, 2)  # only the job and its descendants hold the output pipes
+                data += chunk
+            else:
+                selector.unregister(report)
+                exited = os.waitpid(init, 0)[1]  # init is reaped only once its namespace is empty
+                if data[:1] != b'+':
+                    os._exit(1)  # init could not start the job: no '+'
+    if exited != 0 or not data[1:].isdigit() or len(data) > 6:
+        raise OSError('incomplete job status')
+    code = os.waitstatus_to_exitcode(int(data[1:]))
 except BaseException:
-    os.killpg(0, signal.SIGKILL)  # never orphan a started job
-code = os.waitstatus_to_exitcode(status)
+    os.killpg(0, signal.SIGKILL)  # never orphan a started job, nor mirror an incomplete status
 if code >= 0:
     os._exit(code)
 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))  # die by the job's signal without writing a core file
