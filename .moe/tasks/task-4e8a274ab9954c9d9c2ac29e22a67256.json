@@ -69,7 +69,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -95,7 +95,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:23:06.787Z",
-  "updatedAt": "2026-10-31T06:43:03.004Z",
+  "updatedAt": "2026-10-31T06:47:37.536Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:46.297Z",
@@ -108,11 +108,14 @@
     "firstClaimAt": "2026-10-31T06:00:05.448Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T06:47:37.536Z",
+    "wallClockMs": 2852088
   },
   "contextFetchedBy": [
     "architect-21c9ed65",
-    "worker-25da16b2"
+    "worker-25da16b2",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -187,7 +190,47 @@
   "filesModified": [
     "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
     "packages/moe-daemon/src/tools/recordCheckRun.ts",
-    "packages/moe-daemon/src/delivery/requiredChecks.test.ts"
+    "packages/moe-daemon/src/delivery/requiredChecks.test.ts",
+    ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+    ".moe/tasks/task-4e8a274ab9954c9d9c2ac29e22a67256.json",
+    ".moe/tasks/task-5ee846b62b81438c9d508160235d15ac.json"
   ],
-  "completionSummary": "record_check_run and record_check_dispatch now take their command bound from the one daemon constant, validators.MAX_REQUIRED_CHECK_COMMAND_CHARS (1000 UTF-16 units): inputSchema command.maxLength = the constant, descriptions say 'at most 1000 UTF-16 code units' (was 500, no maxLength). Production diff is +7/-2 in recordCheckRun.ts and recordCheckDispatch.ts; the store caps and docs were landed by ad5be1cf/d88bb990. Tests (requiredChecks.test.ts, +136): schema pin for submit_plan + both tools; 500/501/1000/1000-with-outer-whitespace/500-emoji go approve -> dispatch -> authenticated observation -> fresh-StateManager reload verbatim, and direct record_check_run keeps source agent-reported / not authenticated; 1001 ASCII, 500 emoji+1 and padded 1001 are refused on submit_plan, record_check_run and record_check_dispatch with no bytes/checks files/maps written; the daemon validator, guest-bridge.mjs checkFrame (frame bytes equal the literal frame) and the real guest-supervisor.py read_check (python3 -I -B, hand-framed rejects, m.MAX_CHECK_COMMAND === daemon constant) agree at the limit. Mutation probes (tool 500, host 500, guest 999, constant 500) each fail the matching test. EVIDENCE CAVEAT: pristine HEAD 3ee6a1b5 is already red on runner tests KI1 and DC4 (verified on a separate pristine archive without my files): HEAD's dependency-cache/supervisor carry --workspaces=false but HEAD's local-runner-check.test.mjs expects the old flags; the fix is task-5ed445ca's uncommitted work. To run the exact gate green I copied that peer's current scripts/tests/local-runner-check.test.mjs (sha256 11e2ba6e) and scripts/local-runner/guest-supervisor.py (7e6ed20c) read-only into the snapshot; the live checkout is untouched. QA: expect those two failures on HEAD alone, not from this task."
+  "completionSummary": "record_check_run and record_check_dispatch now take their command bound from the one daemon constant, validators.MAX_REQUIRED_CHECK_COMMAND_CHARS (1000 UTF-16 units): inputSchema command.maxLength = the constant, descriptions say 'at most 1000 UTF-16 code units' (was 500, no maxLength). Production diff is +7/-2 in recordCheckRun.ts and recordCheckDispatch.ts; the store caps and docs were landed by ad5be1cf/d88bb990. Tests (requiredChecks.test.ts, +136): schema pin for submit_plan + both tools; 500/501/1000/1000-with-outer-whitespace/500-emoji go approve -> dispatch -> authenticated observation -> fresh-StateManager reload verbatim, and direct record_check_run keeps source agent-reported / not authenticated; 1001 ASCII, 500 emoji+1 and padded 1001 are refused on submit_plan, record_check_run and record_check_dispatch with no bytes/checks files/maps written; the daemon validator, guest-bridge.mjs checkFrame (frame bytes equal the literal frame) and the real guest-supervisor.py read_check (python3 -I -B, hand-framed rejects, m.MAX_CHECK_COMMAND === daemon constant) agree at the limit. Mutation probes (tool 500, host 500, guest 999, constant 500) each fail the matching test. EVIDENCE CAVEAT: pristine HEAD 3ee6a1b5 is already red on runner tests KI1 and DC4 (verified on a separate pristine archive without my files): HEAD's dependency-cache/supervisor carry --workspaces=false but HEAD's local-runner-check.test.mjs expects the old flags; the fix is task-5ed445ca's uncommitted work. To run the exact gate green I copied that peer's current scripts/tests/local-runner-check.test.mjs (sha256 11e2ba6e) and scripts/local-runner/guest-supervisor.py (7e6ed20c) read-only into the snapshot; the live checkout is untouched. QA: expect those two failures on HEAD alone, not from this task.",
+  "commits": [
+    {
+      "sha": "a700a0a85594420e714b0d83b4f6a9774783e9d8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T06:31:06Z",
+      "paths": [
+        ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+        ".moe/tasks/task-4e8a274ab9954c9d9c2ac29e22a67256.json",
+        ".moe/tasks/task-5ee846b62b81438c9d508160235d15ac.json",
+        "packages/moe-daemon/src/delivery/requiredChecks.test.ts",
+        "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+        "packages/moe-daemon/src/tools/recordCheckRun.ts"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T06:43:35.669Z",
+      "treeId": "8f045b343d2e6d961e97dec5c821b193e31ac438",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/recordCheckRun.ts",
+    "packages/moe-daemon/src/tools/recordCheckDispatch.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-25da16b2@2026-10-31T06:31:06Z",
+    "at": "2026-10-31T06:43:35.669Z"
+  },
+  "completedAt": "2026-10-31T06:47:37.536Z",
+  "reviewCompletedAt": "2026-10-31T06:47:37.536Z",
+  "reviewSummary": "Reviewed completion commit a700a0a8 (on moe/work-2026-10-24, pushed, recorded). Production diff +7/-2: recordCheckRun.ts and recordCheckDispatch.ts import validators.MAX_REQUIRED_CHECK_COMMAND_CHARS (1000), set command inputSchema maxLength to it, descriptions say 'at most 1000 UTF-16 code units'. Store caps, validators/submitPlan, guest-bridge.mjs checkText(command,1000) and guest-supervisor.py MAX_CHECK_COMMAND=1000 already use 1000; no stale 500 command cap remains, other 500/10000 bounds untouched. SCHEMA.md and MCP_SERVER.md already say 1000. Size: about +7/-2 production, +136 tests.\n\nGate re-run in my own git-archive snapshot of a700a0a8 (npm ci and build in the snapshot only, no peer overlay): daemon npm test exit 0, 215 files, 6338 passed, 20 skipped; requiredChecks.test.ts 129 passed, real python3 -I -B read_check boundary test ran (not skipped). Runner node --test scripts/tests/local-runner*.test.mjs: 587 tests, 582 pass, 2 fail (KI1, DC4), 3 skipped. KI1/DC4 are not from this commit: it touches nothing under scripts/, and the cause is task-5ed445ca's uncommitted --workspaces=false work in the shared checkout (worker saw 584 pass/0 fail with that peer overlay). Residual risk: runner suite stays red on committed HEAD until task-5ed445ca lands.\n\nMutation probes (restored, byte-compared): recordCheckRun maxLength 500 fails the schema-pin test; guest MAX_CHECK_COMMAND 999 fails the Python parity test.\n\nDoD met: one constant for every daemon/guest limit, boundary tests at limit and limit+1 on each path: schema pin; approve to dispatch to authenticated observation to fresh-StateManager reload at 500/501/1000/padded/500-emoji; 1001/emoji+1/padded-1001 refused with no writes on submit_plan, record_check_run, record_check_dispatch; host checkFrame and real Python parity. Direct record_check_run stays agent-reported/unauthenticated. No command executed, no trimming.",
+  "requiredCheckAtDone": null
 }
