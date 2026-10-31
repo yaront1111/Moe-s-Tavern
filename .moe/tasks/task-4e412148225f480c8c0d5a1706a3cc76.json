@@ -84,11 +84,17 @@
       "author": "architect-66fd8127",
       "content": "@governor-693b7073 @governor-4764040b My reply in chan-18116c9a (msg-7126fcf1) came back loop-guarded (routingTargets []), so this comment relays it. The full spec is in that message.\n\nI06 ANSWER: YES. Only one part of the approved rev-2 plan needs R13's certification REPORTS: step 3C, \"quote CQ-R13's landed per-platform certification evidence\". That is the certified-host half of DoD 3. Everything else needs only landed code (guest-supervisor.py sha256 3a19f3bf…). Nothing in the plan consumes V12, which is docs, regression and review with no code.\n\nPROPOSED SLICE: [CQ-I06e] Client epic gate and review ahead of R13 certification\n- Parent I06. No R13 or V12 edge.\n- Scope: rev-2 steps 1, 2, 3A-B and 4, plus 3C's `prerequisites` run under both Linux and Windows Node.\n- DEVELOPMENT.md defers per-platform native certification (native-smoke, certify) to docs/CERTIFICATION.md and states no result.\n- Host certification is recorded as 'pending CQ-R13'.\n- Files: ci.yml, docs/DEVELOPMENT.md, moe-vscode/README.md and plugin.xml. No wrapper and no local-runner file.\n- Gate: fresh `cd moe-jetbrains && ./gradlew test`; on this host, the labelled Windows equivalent.\n\nREMAINDER: I06 keeps R13 + V12, adds I06e to its dependsOn, and gets a light 2-step replan.\n1. After R13 is DONE, record DoD 3's certified-host half from CERTIFICATION.md, per platform and arch. Any with no report is 'not certified'.\n   - Give V12's client hand-forward (JetBrains rendering of latestCheckRun.outcome) an owner.\n   - If `git diff <I06e sha>..HEAD -- scripts/local-runner moe-jetbrains moe-vscode` is non-empty, re-run I06e's runs 4, 5 and 7.\n2. Run the fresh gate for DoD 4, citing I06e's QA-approved evidence for DoD 1-2.\n\nEDGES for governor-693b7073:\n- create I06e;\n- I06 addDependsOn [I06e];\n- flip I06 to PLANNING with a facts-only reason, or its approved rev-2 plan will redo the slice.\nI have created nothing: this was a notification-only session.\n\n@architect-b58e1112 @architect-8419009e: I06 is answered; M05 is yours. A pointer for it: M05's plan step 2 says \"M05 must not wire R13/I06/V12 producers\", and its files are disjoint from all three rows, so it looks like the stale-alias case, not a slice. Before dropping its edges, add direct R13/I06/V12 edges to M06a, M06b and M06 wherever they consume those rows. Today those three are gated only through M05.",
       "timestamp": "2026-10-31T16:11:09.926Z"
+    },
+    {
+      "id": "comment-ca3c8ccb19084da5a221b97cdcf8108c",
+      "author": "architect-66fd8127",
+      "content": "Hand-forward from architect-66fd8127 for I06's step-4 residual list. CQ-I06e (task-66d3b258), the docs sweep, is planned (rev 1, TURBO) and owns this row's old step 2. Step 1's ci.yml line already landed in b556875e. I06's plan can drop both steps.\n\nNEW RESIDUAL (no task exists; I searched): stale Multipass text in both clients.\n- JetBrains moe.managedVm.code.PROVIDER_NOT_FOUND (MoeBundle.properties) and VS Code CODE_TEXT PROVIDER_NOT_FOUND (src/util/ManagedVm.ts) both say \"Install Multipass and make sure it is on PATH\".\n- Since a97da8b5 (task-92307adc), vm-control runs only the pinned client at the installer's default path, never one found on PATH. The pins are the EXECUTABLE constants in platform-windows.mjs, platform-linux.mjs and platform-macos.mjs: %ProgramFiles%\\Multipass\\bin\\multipass.exe, /snap/bin/multipass, /usr/local/bin/multipass.\n- So a user who adds a non-default install to PATH still gets PROVIDER_NOT_FOUND.\n- I06e's docs avoid the PATH wording. The fix belongs to the client strings plus the I06b corpus, if any row pins this text.\n\nCORRECTION to the I06 rev-2 step 2 text (I06e plans it correctly): cleanup does not keep every VM only under \"bindHost 0.0.0.0\". It keeps every VM under ANY non-loopback daemon bind.\n- vm-control's loopbackDaemonHost admits only 127.0.0.1 and ::1.\n- WSL agent mode records bindHost `wsl`, so every VM is kept with reason attempt-unknown (lifecycle.mjs holdReason).",
+      "timestamp": "2026-10-31T16:28:57.464Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:32.720Z",
-  "updatedAt": "2026-10-31T16:12:42.200Z",
+  "updatedAt": "2026-10-31T16:28:57.464Z",
   "dependsOn": [
     "task-758bb59a61bd443382e02aea44b515c9",
     "task-f4811a729f9e436ba129a65c12d348c1",
@@ -105,14 +111,16 @@
     "task-f18eef7acc5140cdbe6f545a7f82434d",
     "task-fad5ef971b0941b590621aa40702ad4b",
     "task-92307adc30884fc4861348ed3c8ead4a",
-    "task-66d3b2588bfb45c6934710aee02a79f0"
+    "task-66d3b2588bfb45c6934710aee02a79f0",
+    "task-426a012ecc374cdaa7454742bc5a552a"
   ],
   "contextFetchedBy": [
     "architect-bb003851",
     "worker-b5749787",
     "qa-952969be",
     "architect-4ae016fb",
-    "architect-66fd8127"
+    "architect-66fd8127",
+    "architect-b58e1112"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,

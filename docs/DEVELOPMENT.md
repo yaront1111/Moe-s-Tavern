@@ -243,24 +243,55 @@ The script loads role-specific documentation from `.moe/roles/<role>.md` (projec
 
 ## Plugin Bundling
 
-The JetBrains plugin bundles everything needed to run agents:
+Both IDE plugins bundle everything needed to run agents. The JetBrains zip ships a `moe-jetbrains/` directory (the installed plugin directory). The VS Code extension ships `moe-vscode/bundled/`, which becomes `extension/bundled/` in the `.vsix`. Both have the same layout below `<root>`, except `lib/` and `docs/roles/`:
 
 ```
-moe-jetbrains/          (installed plugin directory)
-├── lib/                # Plugin JARs
-├── daemon/             # Bundled moe-daemon (dist + node_modules)
-├── proxy/              # Bundled moe-proxy (dist + node_modules)
-├── scripts/            # moe-agent.ps1, moe-agent.sh
-└── docs/roles/         # Role documentation (architect.md, worker.md, qa.md)
+<root>/                 (JetBrains: moe-jetbrains/ · VS Code: bundled/)
+├── lib/                # Plugin JARs (JetBrains only)
+├── daemon/             # moe-daemon dist minus *.test.* / *.spec.*, its package.json, node_modules minus .bin
+├── proxy/              # moe-proxy dist minus *.test.* / *.spec.*, its package.json, node_modules minus .bin
+├── scripts/
+│   ├── moe-agent.ps1, moe-agent.sh, moe-call.sh   # the .sh files are LF-normalized
+│   ├── prompt-cache*.mjs, usage-receipt.mjs, usage-session.mjs, usage-report.mjs, analyze-usage.mjs
+│   ├── moe-account-lease.mjs
+│   ├── local-runner/   # everything except *.test.* / *.spec.* and any tests/, __tests__/, fixtures/, __fixtures__/ dir
+│   │                   # (includes certified-provider.json, multipass.mjs, doctor.mjs, cli.mjs, vm-control.mjs)
+│   └── mods/           # everything except *.test.ts and .claude-plugin/types/
+└── docs/
+    ├── roles/          # JetBrains: the whole docs/roles/ dir · VS Code: architect.md, qa.md, worker.md only
+    ├── agent-context.md
+    └── skills/
 ```
 
-The `build.gradle.kts` copies these from the repo during `prepareSandbox` and `buildPlugin`. When building from source, ensure daemon and proxy are built first:
+JetBrains copies these from the repo in `build.gradle.kts` (`prepareSandbox`, also run by `buildPlugin`); VS Code copies them in `moe-vscode/scripts/bundle-assets.mjs`, which `vscode:prepublish` runs. When building from source, ensure daemon and proxy are built first:
 
 ```bash
 cd packages/moe-daemon && npm install && npm run build
 cd ../moe-proxy && npm install && npm run build
 cd ../../moe-jetbrains && ./gradlew buildPlugin
 ```
+
+### Packaging guards
+
+Three guards keep a bundle complete and test-free:
+
+1. **Required-asset lists that fail the build.** JetBrains `requireBundledAssets()` (run in `prepareSandbox`'s `doFirst`) and the checks in `bundle-assets.mjs` fail on a missing or stale (older than its `src/`) daemon or proxy `dist`, on missing `node_modules`, and on a missing `local-runner/` `certified-provider.json`, `multipass.mjs`, `doctor.mjs`, `cli.mjs` or `vm-control.mjs`. Only JetBrains also requires `moe-agent.ps1`, `moe-agent.sh` and `moe-call.sh`; the VS Code bundler copies the other scripts only when they are present.
+2. **Packaged checks in `node scripts/tests/onboarding.mjs <extracted bundle>`.** They require the helper files above. They run the bundled `vm-control.mjs` with no arguments and expect exit 2 with `{"code":"VM_CONTROL_INPUT_INVALID"}`, which proves its whole import closure loads from the bundle. They also fail on any test artifact under `daemon/`, `proxy/` or `scripts/` (`node_modules` is skipped). The full onboarding flow then runs on the bundled daemon and proxy. CI runs it on the extracted JetBrains zip (`build-plugin`, 'Verify packaged JetBrains onboarding'); `release.yml` ('Verify packaged onboarding') also runs it on the extracted `.vsix`.
+3. **`scripts/tests/local-runner-bundle.test.mjs`** runs the real VS Code bundler on a fixture and replays onboarding's packaged checks on its output. It also statically checks `build.gradle.kts` and `ci.yml`. CI runs it on ubuntu, windows and macos ('Test local runner prerequisite bundles').
+
+### Client verification record (CQ-I)
+
+What proves each client contract, where it runs, and what is not certified. Evidence for a given change (counts, versions, dates) belongs in that task's completion record, not here.
+
+| Contract | Proved by | Where it runs | Not certified |
+|---|---|---|---|
+| `/ws` `CLIENT_HELLO` and approval admission | Daemon vitest `src/server/WebSocketServer.test.ts` ('capability negotiation v1') and `src/server/planApproval.test.ts` | CI `test-typescript` (ubuntu) | No IDE sends `CLIENT_HELLO`: there is no sender in `moe-jetbrains/src/main` or `moe-vscode/src` |
+| Shared verdict corpus (approval binding, reconnect, managed-VM decode) | `moe-jetbrains/src/test/resources/client-verdicts.json` (sections `approval`, `vm`), read by JUnit `ClientVerdictCorpusTest` and by node:test `moe-vscode/tests/plan-review.test.cjs` and `managed-vm-verdicts.test.cjs` | JUnit: CI `build-plugin` (ubuntu). node:test: 'Test VS Code daemon startup' (ubuntu, windows, macos) | JetBrains JUnit runs on ubuntu only |
+| Packaging | The three guards above | Guard 1: every plugin build. Guard 2: CI `build-plugin` (JetBrains zip), `release.yml` (JetBrains zip and `.vsix`). Guard 3: CI ubuntu, windows, macos | CI does not run onboarding on the VS Code bundle; only `release.yml` does |
+| Windows engines | Both IDEs launch Windows seats with Windows PowerShell 5.1 (`powershell`): JetBrains `util/TerminalAgentLauncher.kt` `powerShellLine`, VS Code `src/util/AgentLauncher.ts` `buildPowerShellCommand`. CI `windows-latest` runs the landing-guard and wrapper post-flight suites under Windows PowerShell 5.1 and PowerShell 7, onboarding on Windows Node, and the VS Code tests | CI `build-all-platforms` (windows-latest) | JetBrains JUnit does not run on Windows |
+| Native provider smoke and isolation certification | `node scripts/local-runner/cli.mjs certify --work-dir <abs>`, and `native-smoke --work-dir <abs>` (provider-support evidence only, never certification). Per-platform state: [CERTIFICATION.md](CERTIFICATION.md#certified-platforms) | Operator-invoked on real hardware; never in CI | This row states no result; read the linked section |
+| Headless only | Every row above runs headless (vitest, JUnit, node:test, Node scripts); the Managed VMs tests use fakes | CI and local | No IntelliJ sandbox (`runIde`) or VS Code Extension Host interaction is certified, and no test launches a real VM |
+| `verified-local` stays unavailable | The daemon refuses it with `EXECUTION_PROFILE_NOT_READY` (`packages/moe-daemon/src/delivery/executionProfile.ts` and its test). Both Managed VMs surfaces always show the strong profile as unavailable (`ManagedVmPresentationTest`, `managed-vm.test.cjs`). VS Code settings never send `executionProfile` or `deliveryPolicy` (`settings-wire.test.cjs`, S6) | Daemon: CI `test-typescript`. Clients: as the corpus row | Neither IDE offers `verified-local` |
 
 ---
 

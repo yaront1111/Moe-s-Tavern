@@ -1,0 +1,198 @@
+{
+  "id": "task-66d3b2588bfb45c6934710aee02a79f0",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "[CQ-I06e] Client docs sweep",
+  "description": "Re-slice of CQ-I06 (task-4e412148), on architect-8419009e's spec (#architects msg-c3c72ad1, 16:08Z). The spec is CQ-I06's plan step 2, \"DOCS SWEEP for the CQ-I epic\", carried over unchanged. This slice needs R13's landed code but none of its certification reports. Everything it documents is DONE: I03, I05, I06a-d. It can therefore run now instead of waiting behind R13's operator certification and V12.\n\nFiles (only these three):\n- docs/DEVELOPMENT.md\n- moe-vscode/README.md\n- moe-jetbrains/src/main/resources/META-INF/plugin.xml\nNo other open row plans them except the parent I06, which now dependsOn this slice. V12 owns MCP_SERVER, SCHEMA, ARCHITECTURE, CONFIGURATION and the CLAUDE.md files, not these.\n\nScope:\n1. docs/DEVELOPMENT.md '## Plugin Bundling'. Replace the tree, which today lists only moe-agent.ps1/.sh under scripts/, with what both bundles ship after CQ-I06c (JetBrains `<plugin>/`, VS Code `bundled/`). Name the guards:\n   - the bundlers' required-asset lists, which fail the build;\n   - the packaged checks in `node scripts/tests/onboarding.mjs <extracted bundle>`;\n   - scripts/tests/local-runner-bundle.test.mjs.\n2. docs/DEVELOPMENT.md: a short '### Client verification record (CQ-I)' table of what proves each contract, where it runs, and what is NOT certified. It covers:\n   - /ws CLIENT_HELLO and approval admission;\n   - the shared verdict corpus;\n   - packaging;\n   - Windows engines;\n   - native provider smoke (operator-invoked, never in CI);\n   - the headless-only scope;\n   - verified-local staying unavailable.\n   The native row cites the landed `cli.mjs certify --work-dir <abs>` and links docs/CERTIFICATION.md '## Certified platforms' rather than restating per-platform state. Keep run counts, versions and dates out of the doc.\n3. Managed VMs user docs:\n   - moe-vscode/README.md: Features, Getting started, Commands (exact titles from the landed package.json), and one Known issues line;\n   - the plugin.xml <description> <li>.\nRead the landed code first: CQ-I03 (ManagedVmPresentation.kt, ManagedVmPanel.kt, MoeBundle.properties) and CQ-I05 (moe-vscode/src/util/ManagedVm.ts, its tree provider, package.json contributes). Claim nothing beyond them.\n\nCQ-I06's step 1 (ci.yml wiring of local-runner-vm-control.test.mjs) already landed (b556875e) and is not part of this slice.",
+  "definitionOfDone": [
+    "docs/DEVELOPMENT.md '## Plugin Bundling' lists what both bundles ship after CQ-I06c, and names the guards: the bundlers' required-asset lists, the onboarding.mjs packaged checks, and local-runner-bundle.test.mjs.",
+    "docs/DEVELOPMENT.md has a '### Client verification record (CQ-I)' table covering every contract listed in the description. Its native-smoke row links docs/CERTIFICATION.md '## Certified platforms' rather than restating per-platform state, and it carries no run counts, versions or dates.",
+    "moe-vscode/README.md documents the Managed VMs view: Features, Getting started, Commands with the exact titles from package.json, and one Known issues line. plugin.xml's <description> gains the Managed VMs <li>.",
+    "Every statement matches the landed code (I03, I05, I06a-d), checked by reading that code. Only the three named files change, and `npm run lint` passes at the repo root."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DOCS 1 (DoD 1, 2): docs/DEVELOPMENT.md '## Plugin Bundling' only. Edit only from that heading to the `---` before '## Current Feature Coverage'; every other section stays byte-identical. Use the main session's Edit tool: no shell writes, no subagent edits.\n\nREAD FIRST (claim nothing beyond these files):\n- moe-jetbrains/build.gradle.kts: requireBundledAssets() and the prepareSandbox from/exclude blocks;\n- moe-vscode/scripts/bundle-assets.mjs;\n- scripts/tests/onboarding.mjs, the `if (bundle)` block;\n- scripts/tests/local-runner-bundle.test.mjs;\n- .github/workflows/ci.yml (test-typescript, build-plugin, build-all-platforms) and release.yml ('Verify packaged onboarding').\n\n(a) TREE. Replace the stale tree, which lists only moe-agent.ps1/.sh, with what both bundles ship. JetBrains ships `moe-jetbrains/` in the zip, beside `lib/`. VS Code ships `moe-vscode/bundled/`, which becomes `extension/bundled/` in the .vsix.\n- lib/: JetBrains only (plugin JARs).\n- daemon/ and proxy/: that package's dist minus *.test.* and *.spec.*, its package.json, and node_modules minus .bin.\n- scripts/: moe-agent.ps1, plus moe-agent.sh and moe-call.sh (LF-normalized), prompt-cache*.mjs, usage-receipt.mjs, usage-session.mjs, usage-report.mjs, analyze-usage.mjs and moe-account-lease.mjs.\n- scripts/local-runner/: everything except *.test.*, *.spec.* and any tests/, __tests__/, fixtures/ or __fixtures__/ dir. This includes certified-provider.json and vm-control.mjs.\n- scripts/mods/: everything except *.test.ts and .claude-plugin/types/.\n- docs/roles/: JetBrains ships the whole dir. VS Code ships only architect.md, qa.md and worker.md.\n- docs/agent-context.md and docs/skills/.\nKeep the build-from-source commands. A `cd moe-vscode && npm run package` line is optional; vscode:prepublish runs the bundler.\n\n(b) GUARDS, one bullet each:\n1. Required-asset lists that fail the build: JetBrains requireBundledAssets() (prepareSandbox doFirst) and the checks in bundle-assets.mjs. The build fails on a missing or stale (older than src) daemon/proxy dist, missing node_modules, or a missing local-runner certified-provider.json, multipass.mjs, doctor.mjs, cli.mjs or vm-control.mjs. Only JetBrains also requires moe-agent.ps1, moe-agent.sh and moe-call.sh; VS Code copies the other scripts only when they are present.\n2. `node scripts/tests/onboarding.mjs <extracted bundle>` packaged checks:\n   - the required helpers exist;\n   - bundled vm-control.mjs run with no args exits 2 and prints {\"code\":\"VM_CONTROL_INPUT_INVALID\"}, so its whole import closure loads from the bundle;\n   - no test artifact under daemon/, proxy/ or scripts/, skipping node_modules.\n   The full onboarding flow then runs on the bundled daemon and proxy. CI runs it on the extracted JetBrains zip ('Verify packaged JetBrains onboarding'). release.yml also runs it on the extracted .vsix.\n3. scripts/tests/local-runner-bundle.test.mjs runs the real VS Code bundler on a fixture and replays onboarding's packaged checks on that output. It also statically checks build.gradle.kts and ci.yml. CI runs it on ubuntu, windows and macos ('Test local runner prerequisite bundles').\n\n(c) RECORD. Add '### Client verification record (CQ-I)' at the end of the section, before its `---`. Make it a short table with columns Contract | Proved by | Where it runs | Not certified, and these rows:\n1. /ws CLIENT_HELLO and approval admission. Proved by daemon vitest src/server/WebSocketServer.test.ts ('capability negotiation v1') and src/server/planApproval.test.ts. Runs in CI test-typescript (ubuntu). Not certified: no IDE sends CLIENT_HELLO; there is no sender in moe-jetbrains/src/main or moe-vscode/src.\n2. Shared verdict corpus (approval binding, reconnect, managed-VM decode). The corpus is moe-jetbrains/src/test/resources/client-verdicts.json, sections approval and vm. JUnit ClientVerdictCorpusTest reads it in CI build-plugin (ubuntu). node:test moe-vscode/tests/plan-review.test.cjs and managed-vm-verdicts.test.cjs read it in 'Test VS Code daemon startup' (3 OS).\n3. Packaging: the three guards above.\n4. Windows engines.\n   - Both IDEs launch Windows seats with Windows PowerShell 5.1 (`powershell`): JetBrains util/TerminalAgentLauncher.kt powerShellLine, VS Code src/util/AgentLauncher.ts buildPowerShellCommand.\n   - CI windows-latest runs the landing-guard and wrapper post-flight suites under Windows PowerShell 5.1 and PowerShell 7, onboarding on Windows Node, and the VS Code tests.\n   - Not certified: JetBrains JUnit runs on ubuntu only.\n5. Native provider smoke and isolation certification: `node scripts/local-runner/cli.mjs certify --work-dir <abs>`, plus `native-smoke --work-dir <abs>`, which is provider-support evidence only. Both are operator-invoked on real hardware, never in CI. For per-platform state, link [CERTIFICATION.md](CERTIFICATION.md#certified-platforms) and state no result.\n6. Headless only. Every row runs headless (vitest, JUnit, node:test, Node scripts), and the Managed VMs tests use fakes. No IntelliJ sandbox (runIde) or VS Code Extension Host interaction is certified, and no test launches a real VM.\n7. verified-local stays unavailable. The daemon refuses it with EXECUTION_PROFILE_NOT_READY (packages/moe-daemon/src/delivery/executionProfile.ts and its test). Neither IDE offers it:\n   - both Managed VMs surfaces always show the strong profile as unavailable (ManagedVmPresentationTest, managed-vm.test.cjs);\n   - VS Code settings never send executionProfile or deliveryPolicy (settings-wire.test.cjs S6).\n\nRULES:\n- No run counts, versions or dates; evidence belongs in complete_task. Engine names such as Windows PowerShell 5.1 and PowerShell 7 are identities, not evidence, and stay.\n- Restate no per-platform certification state.\n- Never write that the daemon never runs git (packages/moe-daemon/src/util/daemonGitDocs.test.ts scans this file).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/DEVELOPMENT.md"
+      ],
+      "modifiedFiles": [
+        "docs/DEVELOPMENT.md"
+      ],
+      "note": "Rewrote Plugin Bundling tree, added Packaging guards and Client verification record (7 rows). Facts checked against build.gradle.kts, bundle-assets.mjs, onboarding.mjs, ci.yml, release.yml.",
+      "startedAt": "2026-10-31T16:29:15.142Z",
+      "completedAt": "2026-10-31T16:29:53.091Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DOCS 2 (DoD 3): Managed VMs user docs. Edit only moe-vscode/README.md and the <description> of moe-jetbrains/src/main/resources/META-INF/plugin.xml, with the main session's Edit tool.\n\nREAD FIRST:\n- VS Code: package.json contributes (view moe.managedVms 'Managed VMs' in the Moe activity-bar container; 3 commands, each a view/title button), src/providers/ManagedVmTreeProvider.ts, src/util/ManagedVm.ts.\n- JetBrains: ManagedVmPanel.kt, ManagedVmPresentation.kt (readiness, strongProfile, actions), MoeBundle.properties ~333-386.\n- Producer:\n  - scripts/local-runner/vm-control.mjs: header, readDaemonInfo, mcpCaller;\n  - guest-session.mjs loopbackDaemonHost (LOOPBACK = 127.0.0.1 and ::1);\n  - lifecycle.mjs holdReason;\n  - platform-*.mjs EXECUTABLE.\n\nREADME. Keep every existing section and line; only Getting started step 3's view list is extended.\n- Features: one **Managed VMs** bullet.\n  - It lists only the local Linux VMs Moe launched and recorded for this project; other VMs are never listed or touched.\n  - It shows provider readiness, execution readiness and verification as separate lines.\n  - Refresh, reconcile and cleanup run one at a time.\n  - The strong profile (verified-local) always shows as unavailable, and the view never changes the execution profile or delivery policy.\n- Getting started: add Managed VMs to step 3's view list. Add one sentence: Reconcile needs a ready VM provider (Multipass at its installer's default location); Clean up owned also needs a launched VM row and asks for confirmation.\n- Commands: append exactly `Moe: Refresh Managed VMs`, `Moe: Reconcile Managed VMs` and `Moe: Clean Up Owned VMs`, in the existing backtick style. Say they are the view's title-bar buttons.\n- Known issues: one line. Clean up owned deletes nothing unless both hold:\n  - Node.js 22 or later runs the bundled vm-control.mjs (it needs the global WebSocket);\n  - the project's daemon is bound to loopback only (127.0.0.1 or ::1, the default).\n  Otherwise, including a daemon started with --host such as JetBrains' WSL agent mode, it keeps every VM and reports that the daemon could not confirm the attempt is closed.\n\nplugin.xml: add exactly one <li> as the last item of the <description> Features <ul>:\n- <b>Managed VMs</b>: a tab listing only the local VMs Moe launched and recorded for this project, with provider readiness and reconcile/cleanup of those Moe-owned VMs;\n- it never enables the verified-local strong profile.\nTouch nothing else: not <change-notes>, the CDATA markers, or the listener registration that WorktreeExclusionTest reads.\n\nNever say Multipass must be on PATH. vm-control runs only the pinned client at the installer default path (platform-*.mjs EXECUTABLE, since a97da8b5). The client PROVIDER_NOT_FOUND strings that still say PATH are I06's residual, not this task's.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/README.md",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/README.md",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+      ],
+      "note": "README Features/Getting started/Commands/Known issues + plugin.xml one <li>.",
+      "startedAt": "2026-10-31T16:29:53.888Z",
+      "completedAt": "2026-10-31T16:30:07.663Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE (DoD 4). Run this exact command from the repo root of the shared checkout. It is read-only; never run npm install/ci/build there.\n\nnpm run lint && git diff --check HEAD -- docs/DEVELOPMENT.md moe-vscode/README.md moe-jetbrains/src/main/resources/META-INF/plugin.xml && node -e 'const f=require(\"fs\"),R=n=>f.readFileSync(n,\"utf8\"),r=R(\"moe-vscode/README.md\"),x=R(\"moe-jetbrains/src/main/resources/META-INF/plugin.xml\"),v=R(\"docs/DEVELOPMENT.md\"),m=JSON.parse(R(\"moe-vscode/package.json\")).contributes.commands.map(c=>c.title).filter(t=>!r.includes(t)),li=x.slice(x.indexOf(\"<description>\"),x.indexOf(\"</description>\")).includes(\"Managed VMs\"),d=[\"### Client verification record (CQ-I)\",\"CERTIFICATION.md#certified-platforms\",\"local-runner-bundle.test.mjs\",\"onboarding.mjs\",\"vm-control.mjs\"].filter(s=>!v.includes(s));if(m.length||!li||d.length){console.error(\"FAIL\",m,li,d);process.exit(1)}console.log(\"OK docs\")' && python3 -I -c 'import xml.etree.ElementTree as E;E.parse(\"moe-jetbrains/src/main/resources/META-INF/plugin.xml\");print(\"plugin.xml well-formed\")'\n\nIt must exit 0 and end with 'OK docs' then 'plugin.xml well-formed'. The architect's dry run before any edit exited 1: lint passed, then FAIL listing the 3 managed-VM titles, false (no plugin.xml li) and the 5 missing DEVELOPMENT.md anchors.\n\nError handling for a red run:\n- A FAIL line names the missing title, anchor or li. git diff --check names the whitespace line, and the python parse names the XML line. Fix only that gap in your three files, then re-run the whole command.\n- If `npm run lint` fails on a docs/roles file you did not touch, a peer edit is the cause. Show it fails at HEAD too (`git stash` is forbidden; use `git show HEAD:<path> | wc -l`). Never edit docs/roles: report_blocked naming the peer path, with blockedOnTaskIds: [].\n- Never weaken or shorten the command.\n\nThen run `git status --short -- docs/DEVELOPMENT.md moe-vscode/README.md moe-jetbrains/src/main/resources/META-INF/plugin.xml` and report exactly those three paths in complete_step.modifiedFiles.\n\nPeers' dirty paths are not yours: .moe/**, docs/ARCHITECTURE.md, docs/CERTIFICATION.md, docs/TROUBLESHOOTING.md, scripts/local-runner/check-session.mjs and anything else. Never revert, stage or edit them. Give the command, its exit code and its output tail to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/DEVELOPMENT.md",
+        "moe-vscode/README.md",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+      ],
+      "note": "Verify command exit 0, OK docs, plugin.xml well-formed.",
+      "startedAt": "2026-10-31T16:30:08.225Z",
+      "completedAt": "2026-10-31T16:30:14.839Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, last. Load adversarial-self-review. Read `git diff HEAD -- docs/DEVELOPMENT.md moe-vscode/README.md moe-jetbrains/src/main/resources/META-INF/plugin.xml` as QA will. For every factual statement you added, name the file:symbol that proves it. Fix or cut any statement that has none.\n\nTraps:\n(1) VS Code ships only 3 role docs, and only JetBrains requires the wrapper scripts.\n(2) CI runs the onboarding packaged checks on the JetBrains zip only. Only release.yml checks the .vsix; local-runner-bundle.test.mjs checks the VS Code bundler output.\n(3) Daemon vitest runs in CI on ubuntu only.\n(4) native-smoke is never certification (CERTIFICATION.md 'What it never claims').\n(5) Cleanup needs Node 22+ AND a loopback-only bindHost. WSL agent mode records bindHost `wsl` (bindHosts.ts WSL_BIND_HOST), so every VM is kept as attempt-unknown.\n(6) No 'on PATH' wording for Multipass.\n(7) No counts, versions or dates in the record. `git diff -U0 HEAD -- docs/DEVELOPMENT.md | grep -E '^\\+.*([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]+\\.[0-9]+\\.[0-9]+|[0-9]+ (tests|passed|runs))'` must print nothing.\n(8) CERTIFICATION.md#certified-platforms matches HEAD's '## Certified platforms' heading.\n(9) plugin.xml keeps exactly one <description>, and its CDATA closes once.\n(10) Concurrency: another seat may edit these files mid-task. Re-read before each Edit and preserve peer bytes.\n\nIf this review changes any byte, re-run step 3's exact command and submit that fresh output to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review: no counts/versions/dates in the diff (grep empty), one <description>, no 'on PATH' wording, no bytes changed after step 3 verify.",
+      "startedAt": "2026-10-31T16:30:15.388Z",
+      "completedAt": "2026-10-31T16:30:21.565Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-63930ba4a46344f9af3c41cfef60ae0d",
+    "task-758bb59a61bd443382e02aea44b515c9",
+    "task-f2d3d553bd684eff997498a55c564f13",
+    "task-f18eef7acc5140cdbe6f545a7f82434d"
+  ],
+  "priority": "HIGH",
+  "order": 261.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T16:10:03.275Z",
+  "updatedAt": "2026-10-31T16:30:25.573Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T16:12:11.511Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-66fd8127",
+    "architect-b58e1112",
+    "worker-3a9b4568"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T16:28:46.921Z",
+  "executionContract": {
+    "intendedBehavior": "Docs only.\n- DEVELOPMENT.md '## Plugin Bundling' shows what both IDE bundles ship after CQ-I06c, names the three packaging guards, and ends with '### Client verification record (CQ-I)'.\n- moe-vscode/README.md and plugin.xml's <description> document the Managed VMs surface.\nNo code, test, workflow or .moe change.",
+    "acceptanceCriteria": [
+      "The tree matches build.gradle.kts prepareSandbox and bundle-assets.mjs, including where they differ: JetBrains has lib/ and all of docs/roles, VS Code ships only architect/qa/worker role docs.",
+      "The guards name requireBundledAssets() and the bundle-assets.mjs checks, the onboarding.mjs packaged checks, and local-runner-bundle.test.mjs, each with where it runs.",
+      "The record has 7 rows: /ws CLIENT_HELLO and approval admission, shared verdict corpus, packaging, Windows engines, native smoke/certify (linking CERTIFICATION.md#certified-platforms), headless-only, verified-local unavailable.",
+      "README: one Features bullet, Getting started, the 3 exact package.json command titles, and one Known issues line. plugin.xml: one new Managed VMs <li>."
+    ],
+    "invariants": [
+      "Only docs/DEVELOPMENT.md, moe-vscode/README.md and moe-jetbrains/src/main/resources/META-INF/plugin.xml change. Other DEVELOPMENT.md sections and plugin.xml <change-notes> stay byte-identical.",
+      "No statement goes beyond landed code at HEAD (I03, I05, I06a-d and the producers they consume).",
+      "The record carries no run counts, versions or dates, and no per-platform certification state.",
+      "No text claims verified-local is available, that Multipass is found on PATH, or that any runIde, Extension Host or real-VM run is certified."
+    ],
+    "compatibility": [
+      "Existing README sections, settings table, command titles and release notes stay. Getting started step 3 only gains Managed VMs.",
+      "plugin.xml's <listener> registration (read by WorktreeExclusionTest) and <change-notes> stay untouched."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/build.gradle.kts: requireBundledAssets() and the prepareSandbox from/exclude blocks.",
+      "moe-vscode/scripts/bundle-assets.mjs main(): the required local-runner list, copyDir excludeTests/excludeBin, and roleDocs = architect/qa/worker.",
+      "scripts/tests/onboarding.mjs `if (bundle)` block: the required helpers, vm-control exit 2 with VM_CONTROL_INPUT_INVALID, and the test-artifact scan.",
+      "ci.yml:\n- build-plugin 'Verify packaged JetBrains onboarding';\n- build-all-platforms 'Test local runner prerequisite bundles', the powershell/pwsh steps and 'Test VS Code daemon startup';\n- test-typescript on ubuntu.\nrelease.yml 'Verify packaged onboarding' covers the .vsix.",
+      "scripts/local-runner/cli.mjs USAGE has `certify --work-dir` and `native-smoke --work-dir`. docs/CERTIFICATION.md '## Certified platforms' exists at HEAD.",
+      "vm-control.mjs readDaemonInfo/mcpCaller plus guest-session.mjs loopbackDaemonHost: LOOPBACK is 127.0.0.1 and ::1. lifecycle.mjs holdReason gives 'attempt-unknown'. The daemon's WSL bindHost is 'wsl' (server/bindHosts.ts WSL_BIND_HOST).",
+      "moe-vscode/package.json: view moe.managedVms 'Managed VMs'; titles 'Moe: Refresh Managed VMs', 'Moe: Reconcile Managed VMs', 'Moe: Clean Up Owned VMs'.",
+      "ManagedVmPresentation.kt and ManagedVm.ts actions(): reconcile needs providerReady and nothing running; cleanup also needs a LAUNCHED row. strongProfile is a constant."
+    ],
+    "checkRefs": [
+      "npm run lint && git diff --check HEAD -- docs/DEVELOPMENT.md moe-vscode/README.md moe-jetbrains/src/main/resources/META-INF/plugin.xml && node -e 'const f=require(\"fs\"),R=n=>f.readFileSync(n,\"utf8\"),r=R(\"moe-vscode/README.md\"),x=R(\"moe-jetbrains/src/main/resources/META-INF/plugin.xml\"),v=R(\"docs/DEVELOPMENT.md\"),m=JSON.parse(R(\"moe-vscode/package.json\")).contributes.commands.map(c=>c.title).filter(t=>!r.includes(t)),li=x.slice(x.indexOf(\"<description>\"),x.indexOf(\"</description>\")).includes(\"Managed VMs\"),d=[\"### Client verification record (CQ-I)\",\"CERTIFICATION.md#certified-platforms\",\"local-runner-bundle.test.mjs\",\"onboarding.mjs\",\"vm-control.mjs\"].filter(s=>!v.includes(s));if(m.length||!li||d.length){console.error(\"FAIL\",m,li,d);process.exit(1)}console.log(\"OK docs\")' && python3 -I -c 'import xml.etree.ElementTree as E;E.parse(\"moe-jetbrains/src/main/resources/META-INF/plugin.xml\");print(\"plugin.xml well-formed\")'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "I carried the CQ-I06 rev-2 step 2 spec over and corrected it against the landed code:\n(a) The native row cites `cli.mjs certify --work-dir <abs>` (cli.mjs USAGE) and links CERTIFICATION.md#certified-platforms, which exists at HEAD (spec msg-c3c72ad1).\n(b) The Known-issues cause is any non-loopback daemon bind: vm-control's LOOPBACK set is 127.0.0.1 and ::1, and WSL agent mode records bindHost `wsl`. It is not '0.0.0.0'.\n(c) The JetBrains launch line is now util/TerminalAgentLauncher.kt powerShellLine, not toolwindow :468.\n\nThe record goes at the end of '## Plugin Bundling', so DEVELOPMENT.md changes in one contiguous hunk.\n\nThe gate adds mechanical presence checks and an XML well-formedness parse, because `npm run lint` covers docs/roles only. A presence check that the 3 package.json titles appear in the README pins DoD 3.\n\nRejected:\n- a new doc file;\n- fixing '## Current Feature Coverage' (also stale, but out of scope);\n- fixing the client PROVIDER_NOT_FOUND 'on PATH' strings (code, not docs; handed to I06's review).",
+    "codebaseInsights": "The two bundles differ in a few ways:\n- JetBrains adds lib/ and ships all of docs/roles. VS Code ships only architect/qa/worker.md.\n- Only JetBrains requires moe-agent.ps1/.sh and moe-call.sh. VS Code copies non-local-runner scripts only if they exist.\n- Both require the same 5 local-runner files and refuse a stale dist.\n- CI runs onboarding on the built JetBrains zip (build-plugin, ubuntu) and runs local-runner-bundle.test.mjs on 3 OS. release.yml alone runs onboarding on the extracted .vsix (extension/bundled).\n- Daemon vitest runs on ubuntu only (test-typescript). JUnit runs on ubuntu only (build-plugin).\n- Windows CI runs the landing guard and wrapper post-flight under both powershell and pwsh, plus VS Code npm test.\n- No IDE sends CLIENT_HELLO.\n- VM cleanup goes through holdReason, which turns an unreachable daemon into 'attempt-unknown' (kept). vm-control's Multipass is pinned per platform (platform-*.mjs EXECUTABLE).",
+    "risks": "- Overclaiming is the main QA-reject risk. Every added line needs a code proof, so QA will grep each one.\n- The shared tree holds peers' dirty docs (ARCHITECTURE, CERTIFICATION, TROUBLESHOOTING). Touch only the 3 paths.\n- packages/moe-daemon/src/util/daemonGitDocs.test.ts scans DEVELOPMENT.md for 'daemon never runs git' wording.\n- WorktreeExclusionTest regex-reads plugin.xml's <listener>. Edit only inside the description <ul>, and keep the CDATA intact.\n- Engine names (Windows PowerShell 5.1, PowerShell 7) are spec-mandated identities, not rot-prone evidence versions.\n- Do not quote CERTIFICATION.md's Multipass version or per-platform rows; link them.",
+    "keyFiles": [
+      "docs/DEVELOPMENT.md",
+      "moe-vscode/README.md",
+      "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+      "moe-jetbrains/build.gradle.kts",
+      "moe-vscode/scripts/bundle-assets.mjs",
+      "scripts/tests/onboarding.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs",
+      ".github/workflows/ci.yml",
+      ".github/workflows/release.yml",
+      "moe-vscode/package.json",
+      "moe-vscode/src/util/ManagedVm.ts",
+      "moe-vscode/src/providers/ManagedVmTreeProvider.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "scripts/local-runner/vm-control.mjs",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/cli.mjs",
+      "docs/CERTIFICATION.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "550d2eb197c60300e1e1fdc88f4006e260613f71",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T16:28:46.942Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T16:29:15.142Z",
+  "reviewStartedAt": "2026-10-31T16:30:25.571Z",
+  "verification": {
+    "command": "npm run lint && git diff --check HEAD -- docs/DEVELOPMENT.md moe-vscode/README.md moe-jetbrains/src/main/resources/META-INF/plugin.xml && node -e '<presence check: 3 package.json titles in README, Managed VMs in plugin.xml <description>, 5 DEVELOPMENT.md anchors>' && python3 -I -c 'import xml.etree.ElementTree as E;E.parse(\"moe-jetbrains/src/main/resources/META-INF/plugin.xml\");print(\"plugin.xml well-formed\")' (exact plan command from step 3)",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 35 lines (max 40)\nOK docs\nplugin.xml well-formed\nEXIT=0",
+    "reportedAt": "2026-10-31T16:30:25.571Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/DEVELOPMENT.md",
+    "moe-vscode/README.md",
+    "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+  ],
+  "completionSummary": "CQ-I06e docs sweep. DEVELOPMENT.md '## Plugin Bundling': tree for both bundles (lib/ and full docs/roles JetBrains-only; VS Code ships 3 role docs), 'Packaging guards' (required-asset lists, onboarding.mjs packaged checks, local-runner-bundle.test.mjs, each with where it runs), and '### Client verification record (CQ-I)' with 7 rows (native row links CERTIFICATION.md#certified-platforms; no counts/versions/dates). moe-vscode/README.md: Managed VMs Features bullet, Getting started step 3 + sentence, 3 exact command titles, one Known issues line (Node 22+ and loopback-only daemon). plugin.xml: one Managed VMs <li> in <description>. Only those 3 files changed."
+}
