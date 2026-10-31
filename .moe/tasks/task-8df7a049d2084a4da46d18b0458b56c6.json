@@ -1,0 +1,251 @@
+{
+  "id": "task-8df7a049d2084a4da46d18b0458b56c6",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "bug: JetBrains settings dialog closes and drops the edits when UPDATE_SETTINGS was not sent (disconnected save)",
+  "description": "This is the JetBrains sibling of f2048cbf (VS Code SettingsPanel says 'Settings saved.' after a failed send). governor-4764040b found it at 17:42Z while promoting f2048cbf; governor-693b7073 verified it on HEAD 3f87ff37.\n\n- MoeSettingsDialog.createActions: the Save action calls `service.updateSettings(settings)`, then `close(OK_EXIT_CODE)` with no condition.\n- MoeCommandSender.updateSettings returns Unit. When `!ensureConnected()`, it returns silently, with only a `log.warn` (\"Operation attempted without active connection\").\n- MoeCommandSender.sendMessage (:301) drops the Boolean that the injected `send: (String, String) -> Boolean` returns.\n- MoeProjectService.updateSettings (:487) forwards to the sender and returns Unit.\n\nResult: saving while disconnected, or with a send the socket refused, closes the dialog and loses the edits. No warning is shown.\n\nFix:\n- updateSettings returns whether the UPDATE_SETTINGS message was handed to the socket: false when not connected, or when send returned false. MoeProjectService forwards that Boolean.\n- On false, the dialog stays open and shows a not-connected warning. On true it closes as it does today.\n- Put the save decision in a pure function so it can be asserted headlessly. The JetBrains `test` task runs on a bare JVM with no IntelliJ Application; see MoeSettingsDialogTest's effectivePolicyRows tests.\n\nScope: moe-jetbrains only, off the wrapper lane. No other open row plans MoeSettingsDialog.kt, MoeCommandSender.kt or MoeProjectService.kt.",
+  "definitionOfDone": [
+    "MoeCommandSender.updateSettings returns true only when the UPDATE_SETTINGS message was handed to the socket. It returns false, sending nothing, when not connected, and false when send returns false.",
+    "A disconnected or refused save keeps the settings dialog open with a not-connected warning, and the edited values are kept. A connected save is unchanged: it sends once and closes.",
+    "Headless JUnit tests cover both branches: the sender result next to the existing updateSettings case in PlanApprovalContractTest, and the dialog's save decision in MoeSettingsDialogTest.",
+    "`cd moe-jetbrains && ./gradlew test` passes, run in a snapshot (never an in-place build in the shared checkout), and its output is supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Sender: report whether UPDATE_SETTINGS reached the socket (DoD 1, 3a).\n- `sendMessage(type, payload): Boolean` returns `dispatch(type, payload)`. The existing catch keeps its debug log and returns false. Background callers ignore the value, so their best-effort behaviour (never throw, never call onDisconnected) is unchanged. MoeProjectService's private `sendMessage` (:565) and its two GET_STATE calls (:349, :646) compile unchanged.\n- `updateSettings(settings): Boolean`. Not connected: `ensureConnected()` has already fired onDisconnected once, so return false and send nothing. Connected: build the same four-key payload, then `val delivered = sendMessage(\"UPDATE_SETTINGS\", payload)`, `if (!delivered) onDisconnected()`, `return delivered`. This mirrors approveTask's contract: false means nothing reached the socket and the disconnected status fired exactly once. Error handling: sendMessage catches a throwing transport and reports false. It is never rethrown (unlike approveTask), so the dialog shows its warning instead of an IDE error.\n- KDoc: the class doc now says approveTask and updateSettings report the transport result, and only approveTask lets a failure escape. updateSettings gets an @return: true = handed to the socket, never daemon acceptance.\n- Do NOT edit MoeProjectService.kt. `fun updateSettings(...) = commandSender.updateSettings(settings)` (:487) is an expression body, so it forwards the Boolean by inference.\nTests in PlanApprovalContractTest, next to `updating settings sends exactly the four editable keys...`:\n1. That test also asserts `assertTrue(connectedSender(sent).updateSettings(settings))`. connectedSender already fails on any onDisconnected.\n2. New `a disconnected settings save sends nothing, notifies once and reports false`: connectedCheck false, and a recording send that returns true. Assert false, `sent` empty, disconnections == 1.\n3. New `a refused or throwing settings save reports false and notifies once`: a send that records and returns false gives false, sent.size == 1, disconnections == 1. A second sender whose send throws IllegalStateException gives false, lets nothing escape, and its own counter == 1.\n`unrelated commands keep their best-effort transport behaviour` stays unchanged and green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
+      ],
+      "note": "sendMessage/updateSettings now return Boolean; 2 new tests + true assert. Peer dirty paths untouched.",
+      "startedAt": "2026-10-31T17:56:01.042Z",
+      "completedAt": "2026-10-31T17:56:32.446Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Dialog: keep the edits and warn when the save was not sent (DoD 2, 3b).\n- In MoeSettingsDialog, beside PolicyRow: `sealed interface SaveDecision { data object Close : SaveDecision; data class StayOpen(val warningKey: String) : SaveDecision }`. In the companion: `const val NOT_CONNECTED_KEY = \"moe.settings.notConnected\"` and `fun saveDecision(settings: ProjectSettings, send: (ProjectSettings) -> Boolean): SaveDecision`. It calls send exactly once: true gives Close, false gives StayOpen(NOT_CONNECTED_KEY). Do no MoeBundle lookup inside it, because the test JVM has no IntelliJ Application.\n- Save action: build `settings` exactly as today, then `when (val decision = saveDecision(settings, service::updateSettings)) { SaveDecision.Close -> close(OK_EXIT_CODE); is SaveDecision.StayOpen -> setErrorText(MoeBundle.message(decision.warningKey)) }`. setErrorText is DialogWrapper's own in-dialog error line. The StayOpen branch must not close, reset a field or re-read currentSettings, so the Swing fields keep the edits. Save is our own DialogWrapperAction, not the OK action, so the error line cannot disable it, and pressing Save again after a reconnect works.\n- MoeBundle.properties, after moe.settings.enableAgentTeamsHint: `moe.settings.notConnected=Not connected to the Moe daemon - the settings were not saved. Your edits are kept; Save again once it reconnects.` Use no apostrophes (MessageFormat).\nTests in MoeSettingsDialogTest (headless; never instantiate the dialog):\n1. `a save handed to the socket closes after exactly one send`: a recording send returns true. Assert `assertEquals(SaveDecision.Close, ...)`, one call, and `assertSame` on the settings.\n2. `a disconnected or refused save stays open with the not-connected warning`: send returns false. Assert `assertEquals(SaveDecision.StayOpen(\"moe.settings.notConnected\"), ...)`, one call (no retry), and assertSame on the settings. Load /messages/MoeBundle.properties from the classpath as AccountPresentationTest does; the key's value is non-blank and contains \"not saved\".\n3. Source guard, following the PlanReviewDialog pattern (a DialogWrapper cannot be built in these tests). Read src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt: try the module-relative path, then the moe-jetbrains/-prefixed one, and throw if neither exists. Slice from `override fun createActions()` to `return arrayOf(saveAction, cancelAction)`, failing if either anchor is missing. Assert that the slice contains `saveDecision(` and `is SaveDecision.StayOpen ->`, matches the regex `SaveDecision\\.Close\\s*->\\s*close\\(OK_EXIT_CODE\\)`, and contains `close(` exactly once. This test fails if Save goes back to an unconditional close.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MoeSettingsDialogTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MoeSettingsDialogTest.kt"
+      ],
+      "note": "SaveDecision + saveDecision + bundle key + 3 tests. MoeBundle.properties had a pre-existing peer-dirty line (managedVm PROVIDER_NOT_FOUND) which I did not touch.",
+      "startedAt": "2026-10-31T17:56:33.442Z",
+      "completedAt": "2026-10-31T17:57:01.523Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify once, in a snapshot. Never build or test in the shared checkout. Java exists only on Windows, so gradlew.bat runs through cmd.exe in a /mnt/d snapshot. First acquire the shared lease: moe.acquire_resource {resourceId: \"jetbrains-gradle\", taskId, workerId, note: \"8df7 snapshot gradlew test\"}. If it is queued, call moe.report_blocked with that resourceId and wait for the grant. Then run exactly:\nset -o pipefail; R=/mnt/d/projexts/moes; P=moe-jetbrains/src; S=$(mktemp -d /mnt/d/moe-scratch/8df7-gate-XXXXXX) && git -C $R archive HEAD moe-jetbrains | tar -x -C $S && (for f in main/kotlin/com/moe/{services/MoeCommandSender,toolwindow/MoeSettingsDialog}.kt main/resources/messages/MoeBundle.properties test/kotlin/com/moe/{services/PlanApprovalContractTest,toolwindow/MoeSettingsDialogTest}.kt; do cp $R/$P/$f $S/$P/$f && cmp $R/$P/$f $S/$P/$f || exit 9; done) && cd $S/moe-jetbrains && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& .\\gradlew.bat test --rerun'; GE=$?; echo GATE_EXIT=$GE SNAP=$S; T=$S/moe-jetbrains/build/test-results/test; ls $T/TEST-*.xml | wc -l; grep -lE '(failures|errors)=\"[1-9]' $T/TEST-*.xml; grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $T/TEST-com.moe.{services.PlanApprovalContractTest,toolwindow.MoeSettingsDialogTest}.xml; (exit $GE)\nRelease the lease with moe.release_resource even when the run fails. Pass requires GATE_EXIT=0, no output from the failing-suite grep, and failures=\"0\" errors=\"0\" on both named suites. Against HEAD, PlanApprovalContractTest gains 2 tests and MoeSettingsDialogTest gains 3. `--rerun` stops :test from being UP-TO-DATE or FROM-CACHE. Error handling for a red run:\n- Read the failing TEST-*.xml in the snapshot.\n- If GATE_EXIT is non-zero but no XML failed, grep the Gradle daemon log for MessageIOException, a known IPC flake on this box, and re-run the whole command once.\n- Fix real failures in steps 1-2, then re-run the whole command.\nThe JansiLoader OutOfMemoryError line is noise. Afterwards, delete only your own $S directory.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Snapshot gate green: GATE_EXIT=0, 28 XMLs, PlanApprovalContractTest 20/0/0, MoeSettingsDialogTest 11/0/0. Lease released, snapshot deleted.",
+      "startedAt": "2026-10-31T17:57:02.687Z",
+      "completedAt": "2026-10-31T17:59:45.055Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff, once, as the last step. Load adversarial-self-review, then check:\n(a) Every false path of updateSettings sends nothing that reached the socket and fires onDisconnected exactly once. The not-connected path must not fire it twice, because ensureConnected already did.\n(b) No background command changed behaviour: sendMessage still swallows exceptions and never calls onDisconnected. The unchanged best-effort test proves it.\n(c) close(OK_EXIT_CODE) is reachable only from SaveDecision.Close, and the StayOpen branch only sets the error text. The source guard proves it.\n(d) A connected save sends one UPDATE_SETTINGS envelope with the same bytes as today. The four-key test proves it.\n(e) `git diff --stat` touches exactly the five planned files, and nothing in MoeProjectService.kt, moe-vscode/, packages/ or docs/. Peers' dirty paths are not yours: never revert or stage them.\nIf the review changes any byte, re-run step 3's whole command, so the evidence comes from the final bytes. Then call moe.complete_task with verification {command: step 3's command, exitCode: GATE_EXIT, outputTail: the GATE_EXIT line, the XML count and both suites' counts}. The summary must say that the VS Code half belongs to task-f2048cbfbf824af0b8072cb7c1e08bc4, and that MoeProjectService is unchanged by design because it forwards the Boolean by inference.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review of committed diff (83692c69): (a) false paths fire onDisconnected once (ensureConnected for not-connected, delivered==false for refused/throwing; sendMessage catch returns false, no double fire); (b) sendMessage still swallows, never calls onDisconnected; (c) close() only on SaveDecision.Close, StayOpen only setErrorText; (d) payload unchanged four keys; (e) MoeProjectService/vscode/packages/docs untouched. No byte changed after the green gate. Note: MoeBundle.properties checkpoint also carried a peer's PROVIDER_NOT_FOUND line (task-426a012e, contested) - not mine.",
+      "startedAt": "2026-10-31T17:59:48.122Z",
+      "completedAt": "2026-10-31T17:59:52.818Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 268.5,
+  "comments": [
+    {
+      "id": "comment-72878cb4b1e340dba4737aa537c410ad",
+      "author": "architect-8419009e",
+      "content": "Planning constraint from governor-4764040b (chat msg-fb59bc16, 2026-10-31). moe-jetbrains/src/main/resources/messages/MoeBundle.properties is declared on task-426a012e (worker-c0a1ac70) and holds I06f's uncommitted fix-forward (the :373 PROVIDER_NOT_FOUND text). When planning this task:\n- Default: don't edit MoeBundle.properties. Reuse an existing bundle key for the not-connected warning.\n- If a new key is really needed: before submit_plan, ask in #governors for a dependsOn on task-426a012e (edges are governor-only). Don't submit a plan that names that file until the edge is set. Under TURBO the task becomes claimable as soon as the plan lands.\n- The governor lists MoeSettingsDialog.kt, MoeCommandSender.kt and MoeProjectService.kt as free. However, the 2026-10-31 session-start git status also showed uncommitted edits in moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt (and PlanApprovalContractTest.kt). Run git status and git diff on that file, and check the governor's reply (asked in chat msg-f4069d59), before naming it in the plan.",
+      "timestamp": "2026-10-31T17:58:03.158Z"
+    },
+    {
+      "id": "comment-9da8f30f3ea24058a46ccb2412e169a6",
+      "author": "governor-693b7073",
+      "content": "Governor note for QA, 17:59Z. Attribution only; it needs no action.\n\nThis row's wip checkpoint 83692c69 changed two lines in MoeBundle.properties:\n- `moe.settings.notConnected` is this row's.\n- The `moe.managedVm.code.PROVIDER_NOT_FOUND` rewording (\"…a copy elsewhere, even on PATH, is not used\") is not. It's task-426a012e's (CQ-I06f) review fix-forward, edited at 17:55:08Z in the same file, and this row's landing staged the whole file.\n\nDon't revert it, and don't treat it as scope creep. Its VS Code twin (ManagedVm.ts plus managed-vm.test.cjs) lands with I06f, and a parity test there asserts that the two texts match word for word.",
+      "timestamp": "2026-10-31T17:58:27.641Z"
+    },
+    {
+      "id": "comment-1211648265b44e9bbbc277a44230c4b4",
+      "author": "governor-4764040b",
+      "content": "Governor landing note (governor-4764040b, 17:59Z), for this row's QA.\n\nMoeBundle.properties is co-edited with task-426a012e (CQ-I06f, worker-c0a1ac70). That row's declared fix-forward changes :373 moe.managedVm.code.PROVIDER_NOT_FOUND to \"Multipass was not found at its default install location…\". The hunk is uncommitted in the shared tree, next to this row's new moe.settings.notConnected key.\n\nThis row's session has the editing-tool record on the file, and I06f's does not. So under skip-untouched, this row's completion commit lands the whole file with a `Moe-Contested: …MoeBundle.properties (task-426a012e)` trailer, and that includes I06f's :373 hunk.\n\nThat hunk is I06f's work, not scope creep here. Judge this row's DoD by its own key and the dialog/sender behaviour. The :373 line belongs to I06f's review.",
+      "timestamp": "2026-10-31T17:59:14.577Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T17:43:58.671Z",
+  "updatedAt": "2026-10-31T17:59:59.284Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T17:44:01.797Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-8419009e",
+    "worker-632cd3f0"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T17:55:16.347Z",
+  "executionContract": {
+    "intendedBehavior": "Save in the JetBrains settings dialog closes the dialog only when UPDATE_SETTINGS was handed to the daemon socket. A disconnected, refused or throwing send keeps the dialog open with the user's edits and the not-connected warning (MoeBundle moe.settings.notConnected). It also publishes the existing 'Not connected to daemon' status exactly once. A connected save behaves exactly as before: it sends once and closes.",
+    "acceptanceCriteria": [
+      "MoeCommandSender.updateSettings returns true only when send returned true. When not connected it returns false with nothing sent. When send returns false or throws it returns false. Every false fires onDisconnected exactly once.",
+      "MoeSettingsDialog.saveDecision calls send exactly once. true gives Close; false gives StayOpen(\"moe.settings.notConnected\"), and that key resolves to a non-blank value in MoeBundle.properties.",
+      "The Save action closes only on SaveDecision.Close, and StayOpen only sets the error text. A source guard in MoeSettingsDialogTest pins this.",
+      "The snapshot `gradlew.bat test --rerun` gate is green, and its output is the complete_task evidence."
+    ],
+    "invariants": [
+      "Background commands keep their best-effort transport behaviour: sendMessage never throws and never calls onDisconnected.",
+      "approveTask's behaviour, including its exception propagation, is unchanged.",
+      "The UPDATE_SETTINGS payload is still exactly approvalMode, speedModeDelayMs, agentCommand and enableAgentTeams."
+    ],
+    "compatibility": [
+      "No wire change: a connected save sends a byte-identical UPDATE_SETTINGS envelope.",
+      "MoeProjectService.updateSettings is not edited. Its inferred return type becomes Boolean, and callers that ignore the value are unaffected."
+    ],
+    "approvedScope": [
+      "MoeCommandSender.sendMessage and MoeCommandSender.updateSettings (Boolean results) and the class KDoc",
+      "MoeSettingsDialog.SaveDecision, MoeSettingsDialog.NOT_CONNECTED_KEY, MoeSettingsDialog.saveDecision, and the Save action in createActions",
+      "MoeBundle key moe.settings.notConnected"
+    ],
+    "reuse": [
+      "approveTask's delivered/onDisconnected contract (MoeCommandSender.kt:125-137)",
+      "PlanReviewApprovalState's decision-with-bundle-key pattern",
+      "DialogWrapper.setErrorText for the in-dialog warning",
+      "AccountPresentationTest's classpath load of MoeBundle.properties",
+      "The PlanReviewDialog source-order guard pattern"
+    ],
+    "sourceAssumptions": [
+      "MoeProjectService.kt:487 `fun updateSettings(settings) = commandSender.updateSettings(settings)` forwards the sender result by type inference.",
+      "The MoeProjectService.kt:75-89 send lambda returns false when wsClient is null or not open. client.send may still throw.",
+      "moe-jetbrains/build.gradle.kts strips IntelliJPlatformArgumentProvider from the test task, so no DialogWrapper can be instantiated in tests."
+    ],
+    "checkRefs": [
+      "set -o pipefail; R=/mnt/d/projexts/moes; P=moe-jetbrains/src; S=$(mktemp -d /mnt/d/moe-scratch/8df7-gate-XXXXXX) && git -C $R archive HEAD moe-jetbrains | tar -x -C $S && (for f in main/kotlin/com/moe/{services/MoeCommandSender,toolwindow/MoeSettingsDialog}.kt main/resources/messages/MoeBundle.properties test/kotlin/com/moe/{services/PlanApprovalContractTest,toolwindow/MoeSettingsDialogTest}.kt; do cp $R/$P/$f $S/$P/$f && cmp $R/$P/$f $S/$P/$f || exit 9; done) && cd $S/moe-jetbrains && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& .\\gradlew.bat test --rerun'; GE=$?; echo GATE_EXIT=$GE SNAP=$S; T=$S/moe-jetbrains/build/test-results/test; ls $T/TEST-*.xml | wc -l; grep -lE '(failures|errors)=\"[1-9]' $T/TEST-*.xml; grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $T/TEST-com.moe.{services.PlanApprovalContractTest,toolwindow.MoeSettingsDialogTest}.xml; (exit $GE)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected alternatives:\n- Let updateSettings throw like approveTask. The dialog would then raise an IDE error instead of the warning. A throw also means the message was not handed to the socket, so false is the accurate result.\n- Messages.showWarningDialog on top of the modal. That nests a modal; setErrorText is the native in-dialog line.\n- Edit MoeProjectService to declare `: Boolean` explicitly. Inference already forwards the Boolean, and a 6th file floors the tier to heavy.\n- A plain-Kotlin warning string like effectivePolicyRows. A user-facing warning belongs in MoeBundle, like the two existing notConnected keys, and the key is still asserted headlessly.\n- Only the dialog's own line, without onDisconnected on a refused send. Firing it keeps the tool-window status honest and matches approveTask.",
+    "codebaseInsights": "- Not every MoeCommandSender command is best-effort. approveTask is the precedent for a result the user sees: it returns `delivered` and calls onDisconnected on false.\n- ensureConnected() already calls onDisconnected() on the not-connected path.\n- MoeSettingsDialog's companion functions are called from bare-JVM tests (effectivePolicyRows). Nested types and companion functions are safe to load headlessly.\n- Kotlin 2.4.21: `data object` is used elsewhere (DaemonIdentity.kt).\n- The VS Code sibling task-f2048cbfbf824af0b8072cb7c1e08bc4 is planned separately (architect-b58e1112). There is no file overlap.",
+    "risks": "- setErrorText is a protected DialogWrapper method. Called from the Save action object inside the dialog, it resolves to the dialog (qualify with this@MoeSettingsDialog if the compiler wants it).\n- The bundle value must contain no apostrophe (MessageFormat).\n- Gradle traps on this box: UP-TO-DATE, FROM-CACHE, and an IPC MessageIOException that leaves a false red. The gate uses --rerun in a fresh snapshot, and step 3 says how to handle a red run.\n- Never run Gradle in the shared checkout; the DoD requires the snapshot.\n- Keep the tests compact. Expected size is about 150 changed lines in total, well under QA's 400 net-LOC cap.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MoeSettingsDialogTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt (read only)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "330b035b12e1bd9b9939fa55c6f315ca1cc190a4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T17:55:16.385Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T17:56:01.042Z",
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedOnTaskIds": null,
+  "commits": [
+    {
+      "sha": "83692c690c4b91c1aebc3320d35f748f663f88e1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-632cd3f0@2026-10-31T17:55:41Z",
+      "paths": [
+        ".moe/tasks/task-f2048cbfbf824af0b8072cb7c1e08bc4.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MoeSettingsDialogTest.kt"
+      ],
+      "recordedBy": "worker-632cd3f0",
+      "recordedAt": "2026-10-31T17:57:42.445Z",
+      "treeId": "84fb4193c334e140fcb194efccdeb31adc28c00b",
+      "status": "BLOCKED",
+      "contested": [
+        {
+          "path": "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+          "taskId": "task-426a012ecc374cdaa7454742bc5a552a"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MoeSettingsDialogTest.kt"
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MoeSettingsDialogTest.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-632cd3f0@2026-10-31T17:55:41Z",
+    "at": "2026-10-31T17:57:42.445Z"
+  },
+  "reviewStartedAt": "2026-10-31T17:59:59.282Z",
+  "verification": {
+    "command": "set -o pipefail; R=/mnt/d/projexts/moes; P=moe-jetbrains/src; S=$(mktemp -d /mnt/d/moe-scratch/8df7-gate-XXXXXX) && git -C $R archive HEAD moe-jetbrains | tar -x -C $S && (for f in main/kotlin/com/moe/{services/MoeCommandSender,toolwindow/MoeSettingsDialog}.kt main/resources/messages/MoeBundle.properties test/kotlin/com/moe/{services/PlanApprovalContractTest,toolwindow/MoeSettingsDialogTest}.kt; do cp $R/$P/$f $S/$P/$f && cmp $R/$P/$f $S/$P/$f || exit 9; done) && cd $S/moe-jetbrains && cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& .\\\\gradlew.bat test --rerun'; GE=$?; echo GATE_EXIT=$GE SNAP=$S; T=$S/moe-jetbrains/build/test-results/test; ls $T/TEST-*.xml | wc -l; grep -lE '(failures|errors)=\"[1-9]' $T/TEST-*.xml; grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $T/TEST-com.moe.{services.PlanApprovalContractTest,toolwindow.MoeSettingsDialogTest}.xml; (exit $GE)",
+    "exitCode": 0,
+    "outputTail": "BUILD SUCCESSFUL in 43s\n11 actionable tasks: 11 executed\nGATE_EXIT=0 SNAP=/mnt/d/moe-scratch/8df7-gate-Vr0xaB\n28\nTEST-com.moe.services.PlanApprovalContractTest.xml:tests=\"20\" skipped=\"0\" failures=\"0\" errors=\"0\"\nTEST-com.moe.toolwindow.MoeSettingsDialogTest.xml:tests=\"11\" skipped=\"0\" failures=\"0\" errors=\"0\"",
+    "reportedAt": "2026-10-31T17:59:59.282Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "JetBrains settings Save now closes only when UPDATE_SETTINGS was handed to the socket. MoeCommandSender.updateSettings/sendMessage return Boolean (false = not connected, send false or throw; onDisconnected fires exactly once). MoeSettingsDialog.saveDecision (pure) returns Close or StayOpen(moe.settings.notConnected); Save calls setErrorText and keeps edits on StayOpen. New bundle key moe.settings.notConnected. Tests: 2 new in PlanApprovalContractTest (+ true assert), 3 new in MoeSettingsDialogTest (incl. source guard). MoeProjectService is unchanged by design: its expression body forwards the Boolean by inference. The VS Code half belongs to task-f2048cbfbf824af0b8072cb7c1e08bc4. Note: my checkpoint commit also carried a peer's uncommitted PROVIDER_NOT_FOUND line in MoeBundle.properties (task-426a012e)."
+}

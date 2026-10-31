@@ -74,11 +74,17 @@
       "author": "architect-8419009e",
       "content": "Owner record for rev-4 step 1.3, from architect-8419009e at 16:41Z.\n\n- **JetBrains half of V12's client hand-forward.** JetBrains drops latestCheckRun.outcome, so an exit-0 check whose outcome is not passed displays as passed. The owner is **task-344a0acb**, \"bug: JetBrains drops latestCheckRun.outcome, so a non-passed exit-0 check displays as passed\": CQ-I, MEDIUM, no deps, filed by governor-4764040b at 16:37Z. I am planning it now. Record that id.\n- **task-45ce1ac0 is an ARCHIVED duplicate.** Never cite it.\n- **VS Code half.** VS Code has no latestCheckRun view at all. It stays \"unowned: human decision\", as 344a0acb's DoD 5 says.\n- **Gate coverage.** Rev-4 step 2 runs THE GATE fresh at HEAD, so it covers 344a0acb only if that row has landed by then.\n  - @governor-4764040b, if this epic's final must cover every CQ-I row, add 344a0acb to this row's dependsOn. Today 344a0acb would very likely land first anyway, because this row waits on R13, which is BLOCKED.\n  - I changed no edges.",
       "timestamp": "2026-10-31T16:41:02.600Z"
+    },
+    {
+      "id": "comment-06c4e11f83024f61bf8733ae82b75ff1",
+      "author": "worker-c0a1ac70",
+      "content": "CQ-I06f (task-426a012e) is done, gated at SHA 96f7bdd4 (all CQ-I commits plus I06e and 344a0acb). Full evidence is in Serena memory `task-task-426a012ecc374cdaa7454742bc5a552a-handoff`.\n\nAll green:\n- Linux: daemon 6420, proxy 314, claude-plugin 18 and vscode 344/0 tests passed. All 50 corpus rows pass (corpus sha256 0537c9f2…). Also green: the 12-file local-runner line, onboarding on bundled/ and the source, lint.\n- Windows gate (gradlew.bat test --rerun, the Windows equivalent): 512/0 tests, ClientVerdictCorpusTest 3/0.\n- The JetBrains zip passes onboarding with no test artifacts.\n- Wrapper suites under Windows node: PS 5.1.26100 postflight NONE, pwsh 7.6.9 postflight NONE, parity PASS, guards 48/0 and 9/0.\n- prerequisites exits 2 with PROVIDER_NOT_FOUND on both Nodes.\n- Host certification: pending CQ-R13.\n\nFixed forward: identical PROVIDER_NOT_FOUND text in both clients, plus a VS Code parity guard over every moe.managedVm.code.* text.\n\nResidual owners:\n- task-01020adf: code texts.\n- task-f2048cbf: SettingsPanel (DONE).\n- task-5c8c22d7: proxy dist tests.\n- task-d4c4a758: VS Code vm-control env.\n- Unowned, human decision: the profile/evidence UI, JSON.parse lossy literals (fail-closed), headless only, and the VS Code latestCheckRun view.\n\nRe-run trigger: if `git diff 96f7bdd4..HEAD -- scripts/local-runner moe-jetbrains moe-vscode` is non-empty, re-run A5, A6 and B1. It is already non-empty from this row's fix and peers.",
+      "timestamp": "2026-10-31T17:59:12.724Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:32.720Z",
-  "updatedAt": "2026-10-31T16:41:02.600Z",
+  "updatedAt": "2026-10-31T17:59:12.724Z",
   "dependsOn": [
     "task-758bb59a61bd443382e02aea44b515c9",
     "task-f4811a729f9e436ba129a65c12d348c1",
