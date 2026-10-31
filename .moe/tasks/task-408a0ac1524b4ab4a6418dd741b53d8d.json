@@ -65,11 +65,17 @@
       "author": "architect-bd1eb82d",
       "content": "Planner measurements and native-argument audit. Measured by architect-bd1eb82d on 2026-10-30 at HEAD 864d787c, Windows PowerShell 5.1.26100.9711, in snapshots outside the checkout.\n\n1. RED. The case 'PS5.1 custom headless plumbing completion', run with TMP/TEMP set to '…\\tmp x y', fails in 3 s with 'CLI did not run: exit=1; codes=null'.\n- stderr: 'MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI', then the throw at moe-agent.ps1:5987.\n- codes= is null because the shared check scans r.stdout only.\n\n2. Fix. Changing only `([IO.Path]::GetTempPath() + '.')` on the node call line makes all 24 existing PS 5.1 guard cases pass under that spaced TMP/TEMP, in 134 s: every CLI, interactive and headless, plus the fail-closed and concurrent cases.\n- Node receives 'C:\\…\\x y\\.' and path.join gives '…\\x y\\moe-git-guard-'.\n- 'C:\\' + '.' gives 'C:\\moe-git-guard-'.\n- '\\\\srv\\share\\x y\\' + '.' stays UNC.\n\n3. Linux. All 24 cases pass unchanged with a spaced TMPDIR, in 51 s. moe-agent.sh needs no edit.\n\n4. Audit of the other native calls.\n- No other temp consumer passes a path that ends in a separator to a native command:\n  - L2629, L4100 and L4658 use Join-Path;\n  - L4609 only compares with StartsWith;\n  - every $env:TEMP use is a Join-Path to a file;\n  - GetTempFileName returns a file path.\n- Not fixed here, because it is not the same one-token change: Resolve-Path (L373) keeps a trailing backslash. So `-Project 'C:\\x y\\'` reaches every native call that passes $projectPath:\n  - the guard's node call;\n  - Get-MoeGitTop's `& git -C $projectPath` (L2529-2545);\n  - the codex `-C \"$projectPath\"` launch lines that codexDescriptor.ts pins.\n- Measured: `& git -C 'C:\\…\\x y\\' rev-parse --show-prefix` fails with \"fatal: cannot change to 'C:\\…\\x y\" rev-parse --show-prefix': Invalid argument\". The trailing \\\" swallows every later argument.\n- The fix belongs at L373 (trim a trailing separator that is not a root), and 3ad573a7 is rewriting that line.\n- JetBrains passes project.basePath, which has no trailing separator, so only hand-typed launches are exposed.\n- This is a candidate follow-up row. Filing it is the governor's call.",
       "timestamp": "2026-10-30T19:18:36.184Z"
+    },
+    {
+      "id": "comment-d70e0b6b0ca44344bb9cfdbb22ae3019",
+      "author": "architect-b58e1112",
+      "content": "Planner heads-up from architect-b58e1112. task-44b817f9 (pwsh 7 PSModulePath guard fix) lands before task-76ae5c47 and this row. It reshapes scripts/tests/agent-git-guard.test.mjs; details are in my comment on task-76ae5c47:\n- the matrix 5th element becomes an options object (today `{ engine: 'pwsh.exe' }`), so a 'spaced-temp' mode goes in there as `{ mode: … }`;\n- launch() reads f.engine;\n- `clean` strips PSModulePath.\nIt also adds a twin test asserting both wrappers embed one guard program, so your step-4 manual twin check is automated. The '4453 equal chars' figure will grow, because the program gains two lines in its win32 ACL block. Your `GetTempPath() + '.'` token is outside the here-string and does not conflict.",
+      "timestamp": "2026-10-31T06:29:54.542Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:06:05.143Z",
-  "updatedAt": "2026-10-30T19:21:00.578Z",
+  "updatedAt": "2026-10-31T06:29:54.542Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T19:06:13.181Z",
     "plannedStepCount": 4,

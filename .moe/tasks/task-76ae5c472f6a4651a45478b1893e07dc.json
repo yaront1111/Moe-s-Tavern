@@ -91,11 +91,17 @@
       "author": "architect-6fc3dd5c",
       "content": "Architect plan delta 2, from QA's review baseline (chan-845e71c6 msg-2514b792; architect reply msg-5bae5856). Apply it with the approved plan and delta 1 (comment-4326866d). Files and DoD are unchanged, and nothing else changes.\n\n1. Step 1, Windows only, both non-ascii-temp cases (gemini and grok).\n- Give this case's `<cli>.ps1` stub one extra first line, before the existing `& node … cli @args` line, that records the seat's console code page. For example: `[Console]::OutputEncoding.CodePage | Set-Content -LiteralPath '<f.result>.codepage' -Encoding ASCII`.\n- Assert that the file reads 850 for both seats. This is in addition to delta 1's driver-finally 850.\n- Why: Invoke-MoeGuardedCommand runs the .ps1 stub in-process (`& $Command @args`, ps1:5999). Gemini headless (ps1:7307) and grok headless (ps1:7442) both go through it. So the 850 shows that the guard restores the encoding before the CLI call, not merely by wrapper exit.\n- Every other case's stub and driver stays byte-identical.\n- Step 5 gains one check: the restore sits inside Initialize-MoeAgentGitGuard, before any CLI call.\n\n2. Step 4 evidence counts are relative to the completion's parent, not to today's numbers.\n- Guard suite: the parent's count + 2, with 0 skipped on Linux and on Windows.\n- Prompt-cache and usage launcher harnesses: the parent's counts, with 0 failed.\n- Windows: 0 skipped. Linux: skips only the PS-only cases.\n- If the parent's counts differ from 24, 38 (+2 PS-only skips) and 126, give them beside the new counts in the completion summary.\n- QA will re-run both new cases on the parent under native Windows node and expects 'CLI did not run' for gemini and grok.\n\n3. Review boundary. When the temp path contains a space, every PS 5.1 seat fails at ps1 ~L5986, with or without this fix. That bug is task-408a0ac1524b4ab4a6418dd741b53d8d (MEDIUM), not this row. Keep delta 1's space-free 'témp' name.",
       "timestamp": "2026-10-30T19:06:48.306Z"
+    },
+    {
+      "id": "comment-7ef35407e2cc48abb33a8eec7d412466",
+      "author": "architect-b58e1112",
+      "content": "Planner heads-up from architect-b58e1112. task-44b817f9 (pwsh 7 PSModulePath guard fix) lands before this row in the wrapper lane, and it changes the shape your step 1 builds on. Re-read the files at start_step.\n- scripts/tests/agent-git-guard.test.mjs:\n  - The CLI matrix gains an optional 5th tuple element that is an OPTIONS OBJECT (`opts = {}`). Today one win32-only row passes `{ engine: 'pwsh.exe' }` and is titled 'PS7 …'. Put your planned 'non-ascii-temp' mode in that object (`{ mode: … }`), not in a positional 5th element.\n  - launch() now reads `f.engine` (default powershell.exe). The fixture is built with `Object.assign(fixture(...), opts)`.\n  - `clean` also strips PSModulePath.\n  - The 'CLI did not run' message takes codes from stdout+stderr.\n  - A new test asserts that both wrappers embed the same guard program. It automates the manual twin cut in your self-review.\n- The embedded program gains two lines in its win32 ACL block: an env without PSModulePath for the powershell.exe child. Your Initialize-MoeAgentGitGuard encoding change is outside the here-string, so it does not conflict. The program must still stay byte-identical across the twins.\nDetails: mem:task-task-44b817f973374dffb578308278050497-handoff.",
+      "timestamp": "2026-10-31T06:29:54.476Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T18:19:53.148Z",
-  "updatedAt": "2026-10-30T19:08:02.711Z",
+  "updatedAt": "2026-10-31T06:29:54.476Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T18:25:23.864Z",

@@ -69,7 +69,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,16 +92,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T06:02:37.974Z",
-  "updatedAt": "2026-10-31T06:28:46.177Z",
+  "updatedAt": "2026-10-31T06:30:49.883Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T06:07:22.469Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T06:30:49.883Z",
+    "wallClockMs": 1407414
   },
   "contextFetchedBy": [
     "architect-21c9ed65",
-    "worker-c0a1ac70"
+    "worker-c0a1ac70",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -177,7 +180,53 @@
   "filesModified": [
     "packages/moe-daemon/src/state/checkObservationStore.ts",
     "packages/moe-daemon/src/state/checkObservationStore.test.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-44b817f973374dffb578308278050497.json",
+    ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+    ".moe/tasks/task-d88bb99057b54b3bb02241557886aa85.json"
   ],
-  "completionSummary": "validateDispatch now bounds the dispatch command with the imported MAX_REQUIRED_CHECK_COMMAND_CHARS (1000 UTF-16 units) instead of a literal 500; nothing else in the store changed (production +2/-1). Tests: 500/501/1000, 1000 with outer whitespace and 500 emoji (1000 units) go dispatch -> authenticated observation -> stored CheckRun verbatim; 1001 ASCII, 500 emoji+1 and padded 1001 refuse before any file/map write; a 1000-unit command survives identical replay, a changed-command CHECK_DISPATCH_IMMUTABLE refusal and a fresh StateManager. docs/MCP_SERVER.md record_check_run command param, its INVALID_INPUT prose and record_check_dispatch command param say 1000 UTF-16 code units. Out of scope and still 500: the tool descriptions/schemas in tools/recordCheckRun.ts and the dispatch tool (parent 4e8a274a). Gate ran in an external git-archive snapshot of HEAD 8f059bec with an overlay of exactly the 3 owned files."
+  "completionSummary": "validateDispatch now bounds the dispatch command with the imported MAX_REQUIRED_CHECK_COMMAND_CHARS (1000 UTF-16 units) instead of a literal 500; nothing else in the store changed (production +2/-1). Tests: 500/501/1000, 1000 with outer whitespace and 500 emoji (1000 units) go dispatch -> authenticated observation -> stored CheckRun verbatim; 1001 ASCII, 500 emoji+1 and padded 1001 refuse before any file/map write; a 1000-unit command survives identical replay, a changed-command CHECK_DISPATCH_IMMUTABLE refusal and a fresh StateManager. docs/MCP_SERVER.md record_check_run command param, its INVALID_INPUT prose and record_check_dispatch command param say 1000 UTF-16 code units. Out of scope and still 500: the tool descriptions/schemas in tools/recordCheckRun.ts and the dispatch tool (parent 4e8a274a). Gate ran in an external git-archive snapshot of HEAD 8f059bec with an overlay of exactly the 3 owned files.",
+  "commits": [
+    {
+      "sha": "cc08e66981f6b4a1bffb2a7ed380fcb9e95daa53",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T06:26:06Z",
+      "paths": [
+        ".moe/tasks/task-44b817f973374dffb578308278050497.json",
+        ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+        ".moe/tasks/task-d88bb99057b54b3bb02241557886aa85.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+        "packages/moe-daemon/src/state/checkObservationStore.ts"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T06:29:03.425Z",
+      "treeId": "adf2ff36784859a70a5ecf04a1c859e30d7d9284",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+    "packages/moe-daemon/src/state/checkObservationStore.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-31T06:26:06Z",
+    "at": "2026-10-31T06:29:03.425Z"
+  },
+  "completedAt": "2026-10-31T06:30:49.883Z",
+  "reviewCompletedAt": "2026-10-31T06:30:49.883Z",
+  "reviewSummary": "Reviewed completion commit cc08e669 (on moe/work-2026-10-24, in task.commits, pushed) via git show. Production diff +2/-1 in checkObservationStore.ts: imports MAX_REQUIRED_CHECK_COMMAND_CHARS (1000, single definition in validators.ts) and passes it to requireText for command only. Length is measured on the untrimmed string, matching checkRunStore. The check runs in validateDispatch before replay/currency/case-collision logic, so over-limit input writes nothing. Runner identity, binding, marker and write-order code untouched.\n\nTests (+46): 500/501/1000, 1000 with outer whitespace and 500 emoji (1000 UTF-16 units) go dispatch -> authenticated observation -> stored CheckRun verbatim (isAuthenticatedCheckRun true). 1001 ASCII, 500 emoji+1 and padded 1001 refuse with state unchanged; limit-message test; 1000-unit command survives identical replay, changed-command CHECK_DISPATCH_IMMUTABLE and a fresh StateManager. The old 501 row was replaced by 1001 rows; no other test weakened.\n\nDocs: MCP_SERVER.md record_check_run command param, its INVALID_INPUT prose and record_check_dispatch command param now say 1000 UTF-16 code units; no unrelated limits touched.\n\nGate re-run by me: git archive of cc08e669 in /tmp, npm ci only there, node v24.21.0, packages/moe-daemon npm test -> exit 0, 215 files, 6327 passed, 20 skipped. Mutation probe: restoring literal 500 in the snapshot fails 6 new tests (45/51 pass). Snapshot removed; no live-checkout install/build/test, no process killed.\n\n~92 LOC excluding .moe JSON, under 400. Tool schemas in tools/recordCheckRun.ts and the dispatch tool still say 500, by design (parent 4e8a274a). verified-local stays unavailable.",
+  "requiredCheckAtDone": null
 }
