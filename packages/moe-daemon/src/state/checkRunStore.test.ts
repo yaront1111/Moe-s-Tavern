@@ -4,15 +4,17 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import {
+  CHECK_OUTCOMES,
   MAX_CHECK_LOG_BYTES,
   getCheckRun,
   listCheckRunsForCandidate,
   recordCheckRun,
   validateCheckRunParams,
   type RecordCheckRunParams,
+  type ValidCheckRunParams,
 } from './checkRunStore.js';
-import { recordCandidate } from './candidateStore.js';
-import { openAttempt } from './attemptStore.js';
+import { getCandidate, listCandidatesForAttempt, recordCandidate } from './candidateStore.js';
+import { openAttempt, setAttemptPhase } from './attemptStore.js';
 import { StateManager } from './StateManager.js';
 import { MoeError } from '../util/errors.js';
 import { CURRENT_SCHEMA_VERSION, type CheckRun } from '../types/schema.js';
@@ -60,7 +62,7 @@ describe('checkRunStore', () => {
   });
 
   /** The held-out acceptance test's record_check_run payload, minus its id. */
-  const base: RecordCheckRunParams = {
+  const base: ValidCheckRunParams = {
     candidateId: 'cand-a',
     treeSha: SHA.treeA,
     command: GATE,
@@ -69,6 +71,10 @@ describe('checkRunStore', () => {
     runnerId: 'runner-pilot',
     source: 'runner-observed',
   };
+
+  /** A report carrying every execution identity; the environment keeps its spaces (verbatim, never trimmed). */
+  const BOUND: Override = { outcome: 'passed', planRevision: 2, environment: ' ubuntu-24.04/node-22 ', dispatchId: 'dispatch-1', attemptId: 'attempt-1' };
+  const OUTCOME_ERR = 'Invalid outcome: must be one of passed, code-failure, infra-failure, timeout, skipped, inconclusive when supplied';
 
   const checksDir = (): string => path.join(h.moePath, 'checks');
   const checkFile = (id: string): string => path.join(checksDir(), `${id}.json`);
@@ -140,8 +146,19 @@ describe('checkRunStore', () => {
     ['the largest safe exit code', { exitCode: Number.MAX_SAFE_INTEGER }],
     ['a command with inner and outer spaces', { command: '  node  gate.cjs --name "a b"  ' }],
     ['a command of exactly 500 characters', { command: 'x'.repeat(500) }],
+    ['a command of 501 characters', { command: 'x'.repeat(501) }],
+    ['a command of exactly 1000 characters', { command: 'x'.repeat(1000) }],
+    ['a 1000-unit command with outer whitespace', { command: ` \t${'x'.repeat(996)}\n ` }],
+    ['a command of 500 supplementary characters (1000 UTF-16 units)', { command: FOUR.repeat(500) }],
     ['an upper-case tree token', { candidateId: 'cand-upper', treeSha: SHA.upper }],
     ['a 7-character tree token', { candidateId: 'cand-short', treeSha: SHA.short }],
+    ['a fully bound report', BOUND],
+    ['outcome passed at exit 0', { outcome: 'passed', exitCode: 0 }],
+    ['outcome code-failure at exit 1', { outcome: 'code-failure', exitCode: 1 }],
+    ['outcome infra-failure at exit 0', { outcome: 'infra-failure', exitCode: 0 }],
+    ['outcome timeout at exit 124', { outcome: 'timeout', exitCode: 124 }],
+    ['outcome skipped at exit 0', { outcome: 'skipped', exitCode: 0 }],
+    ['outcome inconclusive at exit 0', { outcome: 'inconclusive', exitCode: 0 }],
   ];
 
   it.each(preserved)('records %s exactly as reported', async (_label, override) => {
@@ -149,6 +166,14 @@ describe('checkRunStore', () => {
     const expected = { id: 'check-1', ...base, ...override, createdAt: checkRun.createdAt };
     expect(checkRun).toStrictEqual(expected);
     expect(readRecord('check-1')).toStrictEqual(expected);
+    expect(getCheckRun(h.state, 'check-1')).toStrictEqual(expected);
+  });
+
+  // A report without an outcome is an unclassified legacy report: nothing is inferred from its exit code.
+  it.each([0, 1])('infers no outcome for a report without one at exit %i', async (exitCode) => {
+    const { checkRun } = await record({ id: 'check-1', exitCode });
+    expect('outcome' in checkRun).toBe(false);
+    expect(Object.keys(readRecord('check-1'))).not.toContain('outcome');
   });
 
   it('records a negative-zero exit code as a plain 0, in memory and on disk alike', async () => {
@@ -188,6 +213,7 @@ describe('checkRunStore', () => {
   it('exports no update or delete path at all', async () => {
     const store = await import('./checkRunStore.js');
     expect(Object.keys(store).sort()).toEqual([
+      'CHECK_OUTCOMES',
       'MAX_CHECK_LOG_BYTES',
       'getCheckRun',
       'listCheckRunsForCandidate',
@@ -195,6 +221,7 @@ describe('checkRunStore', () => {
       'validateCheckRunParams',
     ]);
     expect(MAX_CHECK_LOG_BYTES).toBe(16384);
+    expect(CHECK_OUTCOMES).toEqual(['passed', 'code-failure', 'infra-failure', 'timeout', 'skipped', 'inconclusive']);
   });
 
   it('never runs the reported command: no child process in the store', () => {
@@ -248,7 +275,7 @@ describe('checkRunStore', () => {
     expect(snapshot()).toEqual(before);
   });
 
-  it('refuses in the specified order: input, then candidate, then tree, then the same-id comparison', async () => {
+  it('refuses in the specified order: input, candidate, tree, the same-id comparison, then the attempt', async () => {
     await record({ id: 'check-1' });
     const before = snapshot();
     const codeNameOf = async (override: Override): Promise<string> =>
@@ -258,6 +285,35 @@ describe('checkRunStore', () => {
     expect(await codeNameOf({ candidateId: 'cand-ghost', exitCode: 1 })).toBe('CANDIDATE_NOT_FOUND');
     expect(await codeNameOf({ treeSha: SHA.treeB, exitCode: 1 })).toBe('CHECK_RUN_TREE_MISMATCH');
     expect(await codeNameOf({ candidateId: 'cand-b', treeSha: SHA.treeB })).toBe('CHECK_RUN_IMMUTABLE');
+    expect(await codeNameOf({ attemptId: 'attempt-ghost' })).toBe('CHECK_RUN_IMMUTABLE');
+    expect(snapshot()).toEqual(before);
+  });
+
+  // The candidate names its PRODUCER attempt; a run names the attempt it ran under, a reviewer's included.
+  it("binds a run to a reviewer's attempt while the candidate keeps its producer attempt", async () => {
+    await setAttemptPhase(h.state, 'attempt-1', 'closed');
+    await openAttempt(h.state, { id: 'attempt-2', taskId: 'task-1', workerId: 'qa-1', runnerId: 'runner-qa', workspace: 'D:/wt/qa' });
+
+    const { checkRun } = await record({ id: 'check-1', attemptId: 'attempt-2' });
+
+    expect([checkRun.attemptId, readRecord('check-1').attemptId]).toEqual(['attempt-2', 'attempt-2']);
+    expect(getCandidate(h.state, 'cand-a')?.attemptId).toBe('attempt-1');
+    expect(listCandidatesForAttempt(h.state, 'attempt-2')).toEqual([]);
+    expect((await record({ id: 'check-1', attemptId: 'attempt-2' })).duplicate).toBe(true);
+    expect((await record({ id: 'check-2', attemptId: 'attempt-1' })).checkRun.attemptId).toBe('attempt-1');
+  });
+
+  it.each([
+    ['an unknown attempt', 'attempt-ghost', -32001, 'ATTEMPT_NOT_FOUND'],
+    ["another task's attempt", 'attempt-other', -32002, 'ATTEMPT_ID_TASK_MISMATCH'],
+  ])('refuses %s as the run attempt, writing nothing', async (_label, attemptId, code, codeName) => {
+    await openAttempt(h.state, { id: 'attempt-other', taskId: 'task-2', workerId: 'worker-2', runnerId: 'runner-2', workspace: 'D:/wt/b' });
+    await record({ id: 'check-keep' });
+    const before = snapshot();
+
+    const error = await refusal(record({ id: 'check-1', attemptId }));
+
+    expect([error.code, error.codeName]).toEqual([code, codeName]);
     expect(snapshot()).toEqual(before);
   });
 
@@ -273,6 +329,12 @@ describe('checkRunStore', () => {
     ['runnerId', { runnerId: 'runner-other' }, ['runnerId']],
     ['source', { source: 'agent-reported' }, ['source']],
     ['candidateId and treeSha', { candidateId: 'cand-b', treeSha: SHA.treeB }, ['candidateId', 'treeSha']],
+    // The stored run carries no identities: a report adding one never upgrades it in place.
+    ['outcome (added to a run recorded without one)', { outcome: 'passed' }, ['outcome']],
+    ['planRevision', { planRevision: 1 }, ['planRevision']],
+    ['environment', { environment: 'env-b' }, ['environment']],
+    ['dispatchId', { dispatchId: 'dispatch-b' }, ['dispatchId']],
+    ['attemptId', { attemptId: 'attempt-1' }, ['attemptId']],
   ];
 
   it.each(changed)('refuses a same-id report that differs in %s, writing nothing', async (_label, override, differingFields) => {
@@ -291,6 +353,18 @@ describe('checkRunStore', () => {
         'check runs are immutable, so a different result needs a new check-run id',
       context: { checkRunId: 'check-1', differingFields },
     });
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('freezes a bound run: dropping or changing an identity is refused, an identical replay is not', async () => {
+    await record({ id: 'check-1', ...BOUND });
+    const before = snapshot();
+    const contextOf = async (override: Override): Promise<unknown> => (await refusal(record({ id: 'check-1', ...override }))).context;
+
+    const all = ['outcome', 'planRevision', 'environment', 'dispatchId', 'attemptId'];
+    expect(await contextOf({})).toEqual({ checkRunId: 'check-1', differingFields: all });
+    expect(await contextOf({ ...BOUND, planRevision: 3 })).toEqual({ checkRunId: 'check-1', differingFields: ['planRevision'] });
+    expect((await record({ id: 'check-1', ...BOUND })).duplicate).toBe(true);
     expect(snapshot()).toEqual(before);
   });
 
@@ -392,6 +466,45 @@ describe('checkRunStore', () => {
     const retried = await record({ id: 'check-1' });
     expect(retried.duplicate).toBe(false);
     expect(readRecord('check-1')).toStrictEqual(retried.checkRun);
+  });
+
+  it('keeps a 1000-unit command verbatim through replay, a conflicting replay and a restart', async () => {
+    const command = `  ${FOUR.repeat(498)}x `;
+    expect(command.length).toBe(1000);
+    clockAt(T1);
+    const first = await record({ id: 'check-long', command });
+    expect(readRecord('check-long').command).toBe(command);
+    const before = snapshot();
+    clockAt(T2);
+    const write = vi.spyOn(h.state, 'writeEntity');
+
+    expect(await record({ id: 'check-long', command })).toStrictEqual({ checkRun: first.checkRun, duplicate: true });
+    const error = await refusal(record({ id: 'check-long', command: command.trim() }));
+    expect(error.codeName).toBe('CHECK_RUN_IMMUTABLE');
+    expect(write).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(before);
+    vi.useRealTimers();
+
+    const restarted = new StateManager({ projectPath: h.testDir });
+    await restarted.load();
+    try {
+      expect(getCheckRun(restarted, 'check-long')?.command).toBe(command);
+    } finally {
+      restarted.clearEmitter();
+    }
+  });
+
+  it('refuses a 1001-unit command before any write, leaving files and maps unchanged', async () => {
+    await record({ id: 'check-keep' });
+    const before = snapshot();
+    const write = vi.spyOn(h.state, 'writeEntity');
+
+    const error = await refusal(record({ id: 'check-1', command: 'x'.repeat(1001) }));
+
+    expect([error.code, error.codeName]).toEqual([-32602, 'INVALID_INPUT']);
+    expect(write).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(before);
+    expect(getCheckRun(h.state, 'check-1')).toBeNull();
   });
 
   it('loads persisted runs into a fresh StateManager after a restart', async () => {
@@ -537,7 +650,9 @@ describe('checkRunStore', () => {
     ['a missing command', { command: undefined }, 'MISSING_REQUIRED', 'Missing required field: command'],
     ['a non-string command', { command: ['node', 'gate.cjs'] }, 'INVALID_INPUT', 'Invalid command: must be a string (got a value of type object)'],
     ['a blank command', { command: ' \t\n' }, 'INVALID_INPUT', 'Invalid command: must be a non-blank string'],
-    ['a 501-character command', { command: 'x'.repeat(501) }, 'INVALID_INPUT', 'Invalid command: must be 500 characters or fewer (got 501)'],
+    ['a 1001-character command', { command: 'x'.repeat(1001) }, 'INVALID_INPUT', 'Invalid command: must be 1000 characters or fewer (got 1001)'],
+    ['500 supplementary characters plus one unit', { command: `${FOUR.repeat(500)}x` }, 'INVALID_INPUT', 'Invalid command: must be 1000 characters or fewer (got 1001)'],
+    ['a 1001-unit command padded with whitespace', { command: ` ${'x'.repeat(999)} ` }, 'INVALID_INPUT', 'Invalid command: must be 1000 characters or fewer (got 1001)'],
     ['a missing exitCode', { exitCode: undefined }, 'MISSING_REQUIRED', 'Missing required field: exitCode'],
     ['a string exitCode', { exitCode: '0' }, 'INVALID_INPUT', 'Invalid exitCode: must be a safe integer (got "0")'],
     ['a fractional exitCode', { exitCode: 1.5 }, 'INVALID_INPUT', 'Invalid exitCode: must be a safe integer (got 1.5)'],
@@ -551,6 +666,23 @@ describe('checkRunStore', () => {
     ['a padded source', { source: 'agent-reported ' }, 'INVALID_INPUT', 'Invalid source: must be one of runner-observed, agent-reported (got "agent-reported ")'],
     ['a numeric outputTail', { outputTail: 42 }, 'INVALID_INPUT', 'Invalid outputTail: must be a string when supplied (got 42)'],
     ['a null outputTail', { outputTail: null }, 'INVALID_INPUT', 'Invalid outputTail: must be a string when supplied (got null)'],
+    ['an outcome in another case', { outcome: 'PASSED' }, 'INVALID_INPUT', `${OUTCOME_ERR} (got "PASSED")`],
+    ['an empty outcome', { outcome: '' }, 'INVALID_INPUT', `${OUTCOME_ERR} (got "")`],
+    ['a numeric outcome', { outcome: 42 }, 'INVALID_INPUT', `${OUTCOME_ERR} (got 42)`],
+    ['a null outcome', { outcome: null }, 'INVALID_INPUT', `${OUTCOME_ERR} (got null)`],
+    ['a passed outcome at exit 1', { outcome: 'passed', exitCode: 1 }, 'INVALID_INPUT', 'Invalid outcome: passed requires exitCode 0 (got 1)'],
+    ['a code-failure outcome at exit 0', { outcome: 'code-failure' }, 'INVALID_INPUT', 'Invalid outcome: code-failure requires a nonzero exitCode (got 0)'],
+    ...([0, -1, 1.5, '2', null] as unknown[]).map((planRevision): [string, Override, string, string] => [
+      `a planRevision of ${JSON.stringify(planRevision)}`, { planRevision }, 'INVALID_INPUT', 'Invalid planRevision: must be a safe integer of at least 1 when supplied',
+    ]),
+    ['an empty environment', { environment: '' }, 'INVALID_INPUT', 'Invalid environment: must be a non-blank string when supplied (got "")'],
+    ['a blank environment', { environment: '  ' }, 'INVALID_INPUT', 'Invalid environment: must be a non-blank string when supplied'],
+    ['a numeric environment', { environment: 7 }, 'INVALID_INPUT', 'Invalid environment: must be a non-blank string when supplied (got 7)'],
+    ['a 256-character environment', { environment: 'e'.repeat(256) }, 'INVALID_INPUT', 'Invalid environment: must be 255 characters or fewer (got 256)'],
+    ['an environment with a newline', { environment: 'a\nb' }, 'INVALID_INPUT', 'Invalid environment: must not contain control characters'],
+    ['an empty dispatchId', { dispatchId: '' }, 'INVALID_INPUT', 'Invalid dispatchId: must be a non-blank string when supplied (got "")'],
+    ['a dispatchId with a space', { dispatchId: 'bad id' }, 'INVALID_INPUT', 'Invalid dispatchId: must contain only alphanumeric characters'],
+    ['an attemptId with a space', { attemptId: 'bad id' }, 'INVALID_INPUT', 'Invalid attemptId: must contain only alphanumeric characters'],
   ];
 
   it.each(malformed)('refuses %s without writing', async (_label, override, codeName, text) => {

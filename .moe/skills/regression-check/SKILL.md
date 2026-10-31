@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=bd6cbf72fd97
+# moe-generated: sha=974cd9e9ac0e
 name: regression-check
 description: Use before moe.complete_task. Runs the suite the plan named — narrow for a mid-epic task, full for the epic's final task — to confirm nothing unrelated broke. The goal is zero regressions. Better to find out now than in a QA reject comment.
 when_to_use: Worker, after the final implementation step is done, before moe.complete_task.
@@ -28,16 +28,18 @@ The plan should name the suite. If it doesn't, work out from your changes:
 |---------|----------------|
 | `packages/moe-daemon/src/...` | `cd packages/moe-daemon && npm test` |
 | `packages/moe-proxy/src/...` | `cd packages/moe-proxy && npm test` |
+| `packages/moe-claude-plugin/src/...` | `cd packages/moe-claude-plugin && npm test` |
 | `moe-jetbrains/src/...` | `cd moe-jetbrains && ./gradlew test` |
+| `moe-vscode/src/...` | `cd moe-vscode && npm test && npm run compile` |
 | Multi-package or shared types | All of the above |
-| Scripts / wrappers | Manually exercise the wrapper end-to-end |
-| Docs only | Optional; lint the markdown |
+| Scripts / wrappers | `bash scripts/tests/postflight.sh` + `bash scripts/tests/parity-check.sh` |
+| Docs only | `npm run lint` at the repo root (role-doc line caps) |
 
 If a project has a `test:all` or `npm run check` script, prefer that — it usually wires lint + type-check + tests in the right order.
 
 ## How to read the output
 
-- **All green?** Capture the test count + pass count in your `complete_step` summary as evidence. Don't claim green without numbers.
+- **All green?** Submit this run as `moe.complete_task { verification: { command, exitCode: 0, outputTail } }` (required) and put the test/pass counts in your summary. Don't claim green without numbers.
 - **Failures in tests you didn't touch?** That's a regression. Investigate before `complete_task`. Usual suspects: shared util change, type-signature change, fixture / seed dependency, test ordering.
 - **Failures in tests you did touch?** Either the test is wrong or the code is wrong. Fix one.
 - **Flake?** Run it again. If it's still red on the second run, it's not flake, it's a bug.

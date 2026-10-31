@@ -1,0 +1,256 @@
+{
+  "id": "task-f981d0597b26401a974c0fcd8829107e",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R08a] Host bridge frame protocol",
+  "description": "Objective: Define the host side of the CQ-R08 host-guest bridge wire protocol as pure functions. That means bounded length-prefixed stdio frames, the strict schema of every frame a guest may send, the scoping that binds every agent request to the host-owned task and worker identity, and the one fixed command that opens the bridge. This is the first slice of the original CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced), split on 2026-10-25 because the whole bridge is far over the 400-net-LOC review limit.\n\nDeliverable: a new scripts/local-runner/guest-bridge.mjs exporting the frame limits, encodeFrame, a streaming frame decoder, parseGuestFrame, scopeRequest and bridgeArgv. Its tests go in a new scripts/tests/local-runner-bridge.test.mjs, and that file is added to the CI local-runner step in .github/workflows/ci.yml. This module is the protocol source of truth that CQ-R08b and CQ-R08c (the guest supervisor, in Python) and CQ-R08 (the host bridge session) implement and consume.\n\nProtocol contract:\n- A frame is a 4-byte unsigned big-endian length L followed by exactly L bytes of UTF-8 JSON encoding one plain object. Guest-to-host frames allow 1 <= L <= 262144 (MAX_GUEST_FRAME_BYTES). Host-to-guest frames allow 1 <= L <= 4194304 (MAX_HOST_FRAME_BYTES); the daemon's WebSocket maxPayload is 2 MiB.\n- Guest kinds, with exact keys:\n  - {kind:'hello', protocol:1}\n  - {kind:'request', id, tool, args}: id is a safe integer from 1 to 2^31-1, tool is 'moe.<name>', args is a plain object.\n  - {kind:'output', stream:'stdout'|'stderr', data}: data is canonical base64.\n  - {kind:'observation', type:'exit', code, signal}: exactly one of code (0-255) and signal ('SIG...') is non-null.\n- Host kinds: {kind:'response', id, ok:true, result} or {kind:'response', id, ok:false, error:{code}}.\n- Scoping: the host binding {role:'worker'|'qa', workerId, taskId, attemptId, generation} comes from the host's claim and the R06 ledger record, never from a frame. Each role has a fixed tool table listing the exact argument keys a guest may send. workerId and taskId may be omitted or must equal the binding, and they are stamped from the binding only for tools whose daemon schema has them. role, attemptId, generation, processStartedAt and host are never accepted from a guest.\n\nNot in scope:\n- Spawning the bridge or any provider call, forwarding to the daemon, the handshake and state machine, and timeouts (all CQ-R08).\n- The guest supervisor (CQ-R08b and CQ-R08c).\n- Job execution (CQ-R10 and CQ-R11).\n- Any change to existing local-runner modules or to scripts/tests/local-runner.test.mjs.\nverified-local stays unavailable.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-bridge.test.mjs",
+  "definitionOfDone": [
+    "The frame decoder round-trips frames split at every byte boundary. It refuses each of the following with BRIDGE_FRAME_INVALID: a zero or over-limit length header (before buffering the body), invalid UTF-8, non-object JSON, and a truncated final frame. Proven by tests in scripts/tests/local-runner-bridge.test.mjs.",
+    "parseGuestFrame accepts only hello, request, output and observation(exit) frames with exact keys, and returns output data as bytes without ever parsing it. It rejects each of the following with BRIDGE_PROTOCOL_VIOLATION: an unknown kind, type or key, a host-only kind, non-canonical base64, and an out-of-range id or exit code.",
+    "scopeRequest refuses every tool outside the binding role's table with BRIDGE_TOOL_DENIED, including moe.set_task_dependencies, moe.set_task_status, moe.update_epic, moe.propose_rail, moe.claim_next_task, and moe.qa_approve for a worker binding. It refuses any argument key outside the tool's table with BRIDGE_ARGUMENT_DENIED.",
+    "A request is refused with BRIDGE_IDENTITY_MISMATCH if its workerId or taskId differs from the binding, or if it carries role, attemptId, generation, processStartedAt or host. Accepted requests carry the binding's workerId and taskId exactly where the tool's daemon schema has them.",
+    "bridgeArgv(name) returns exactly ['exec','--no-map-working-directory',name,'--','sudo','-n','/opt/moe/bin/moe-supervisor','bridge'] for an owned instance name and refuses any other name. .github/workflows/ci.yml runs scripts/tests/local-runner-bridge.test.mjs in the local-runner step.",
+    "Fresh verification `node --test scripts/tests/local-runner-bridge.test.mjs` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "FRAME CODEC, TESTS FIRST. Create scripts/tests/local-runner-bridge.test.mjs and scripts/local-runner/guest-bridge.mjs. Write the tests in the style of scripts/tests/local-runner.test.mjs (node:test with node:assert/strict, table-driven) and watch them fail before writing the code.\n\nGive the module a header comment. It should say this is the host-side wire protocol of the CQ-R08 host-guest bridge: pure functions only, with no provider call, no spawn and no daemon forwarding, and verified-local stays unavailable. It should also state the frame format.\n\nExports for this step:\n- MAX_GUEST_FRAME_BYTES = 262_144 and MAX_HOST_FRAME_BYTES = 4_194_304. Add a comment that the daemon's WebSocket maxPayload is 2 MiB (packages/moe-daemon/src/server/WebSocketServer.ts).\n- bridgeError(code). Error handling follows the local-runner pattern of lifecycleError and bootstrapError: a MESSAGES map plus Object.assign(new Error(message), { code }), with an unknown code mapped to BRIDGE_INPUT_INVALID. The codes are BRIDGE_INPUT_INVALID, BRIDGE_FRAME_INVALID, BRIDGE_PROTOCOL_VIOLATION, BRIDGE_TOOL_DENIED, BRIDGE_ARGUMENT_DENIED and BRIDGE_IDENTITY_MISMATCH. Messages are fixed text and never include frame, tool or argument content.\n- encodeFrame(value, maxBytes = MAX_HOST_FRAME_BYTES). value must be a plain object (an isRecord helper as in lifecycle.mjs). JSON.stringify must return a string whose UTF-8 byte length L is between 1 and maxBytes. It returns a Buffer: a 4-byte big-endian L followed by the body. Any other value is BRIDGE_FRAME_INVALID. maxBytes must be a safe integer from 1 to MAX_HOST_FRAME_BYTES, else BRIDGE_INPUT_INVALID.\n- createFrameDecoder(maxBytes = MAX_GUEST_FRAME_BYTES), returning { push(chunk) -> object[], end() }. It validates maxBytes the same way.\n  - push accepts a Buffer or Uint8Array (anything else is BRIDGE_INPUT_INVALID). It appends the chunk and returns every complete frame in order.\n  - As soon as 4 header bytes are buffered it reads L with readUInt32BE. It refuses L === 0 or L > maxBytes with BRIDGE_FRAME_INVALID right away, without waiting for any body byte.\n  - The body is decoded with new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }). That refuses invalid UTF-8, including overlong sequences, and does not strip a leading BOM, so JSON.parse refuses it.\n  - JSON.parse must yield a plain object. Arrays, null, numbers, strings, booleans and malformed JSON are BRIDGE_FRAME_INVALID.\n  - After the first error the decoder is poisoned: every later push or end throws BRIDGE_FRAME_INVALID. This fails closed, and the CQ-R08 session tears the bridge down.\n  - end() throws BRIDGE_FRAME_INVALID while any byte, whether a partial header or a partial body, is still buffered.\n  - Bytes held between pushes never exceed 4 + maxBytes.\n\nTests:\n- Round trip: encode and concatenate three frames: a hello, a request whose args include multi-byte UTF-8 ('é' and an emoji), and an output. They decode to deepEqual objects when pushed whole, byte by byte, and split into two pieces at EVERY byte offset.\n- A body of exactly maxBytes is accepted. maxBytes + 1 is refused from the 4-byte header alone (push only the header and assert the throw), and so is L = 0.\n- Each of these throws BRIDGE_FRAME_INVALID: invalid UTF-8 bodies [0xff] and [0xc0, 0xaf], a BOM-prefixed '{}', and the bodies '[]', 'null', '1', '\"x\"', 'true' and '{'.\n- end() throws after a 2-byte partial header and after a header plus a partial body. On an empty decoder it returns normally.\n- A poisoned decoder throws on a later valid frame.\n- encodeFrame refuses an array, null, a body over maxBytes and a bad maxBytes, and its output decodes back to an equal object.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Frame codec done test-first. RED: 6/6 failed against a throwing stub. GREEN: 6/6 pass (B1-B6), Linux Node 24.21.0, env -i. The decoder is an O(n) state machine with a fixed 4-byte header plus one preallocated bounded body; it does not concat buffers per push, so a guest dribbling one byte at a time cannot cause quadratic copying. A zero or over-limit header (including 0xFFFFFFFF) is refused from the header alone. Body decoding uses a fatal TextDecoder with ignoreBOM. Any error poisons the decoder. encodeFrame takes plain objects only (prototype Object.prototype or null), so Date, arrays and BigInt are refused. Pre-existing dirty paths in the shared checkout are untouched.",
+      "startedAt": "2026-10-25T10:41:48.685Z",
+      "completedAt": "2026-10-25T10:44:48.510Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GUEST FRAME SCHEMA. Add parseGuestFrame(frame) to scripts/local-runner/guest-bridge.mjs, with tests. Its input is one object from the decoder. Every check compares exact own keys (Object.keys, sorted, against the expected list). Anything else throws BRIDGE_PROTOCOL_VIOLATION. It returns frozen objects:\n- hello: exactly {kind:'hello', protocol:1}.\n- request: exactly {kind, id, tool, args}. id passes Number.isSafeInteger and is between 1 and 2147483647. tool matches /^moe\\.[a-z][a-z_]{0,63}$/; this is shape only, since scopeRequest owns the allowlist. args is a plain object. It returns {kind, id, tool, args}.\n- output: exactly {kind, stream, data}. stream is 'stdout' or 'stderr'. data is a non-empty string in canonical base64, checked with Buffer.from(data, 'base64').toString('base64') === data. Node's decoder is lenient, so this round trip is what rejects stray characters, missing padding and non-zero pad bits. It returns {kind, stream, data: Buffer}. Those bytes are handed back untouched and are NEVER JSON-parsed or decoded as frames. This is the host half of the DoD item that child stdout cannot impersonate supervisor frames.\n- observation: exactly {kind, type, code, signal}. type is 'exit' only. Exactly one of code (an integer 0-255) and signal (a string matching /^SIG[A-Z0-9]{1,15}$/) is non-null, and the other is null.\n- Anything else is BRIDGE_PROTOCOL_VIOLATION, including the host-only kind 'response', an unknown kind or type, and a non-object input.\n\nTests:\n- Each valid shape parses. Output returns a Buffer equal to the original bytes. An output whose bytes are a complete encodeFrame({kind:'observation', type:'exit', code:0, signal:null}) frame comes back as exactly those bytes, with kind 'output'.\n- A violation table:\n  - a missing key, an extra key, kind 'response', kind 'connect', hello protocol 2;\n  - request id 0, 2147483648, 1.5 and '1'; tool 'get_context' and 'moe.GetContext'; args [] and null;\n  - stream 'stdin'; data '', 'QQ', 'QR==' and 'Q Q==';\n  - observation type 'started'; code 256, -1 and 1.5; code and signal both null; both set; signal 'KILL'.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "parseGuestFrame done test-first. RED: B7/B8 failed against a stub. GREEN: 8/8 pass. Each shape needs exactly its own keys (same key count and Object.hasOwn on each). Output data must be canonical base64 (checked by round trip) and comes back as a Buffer that is never parsed. An output whose bytes are a complete encoded exit observation stays kind 'output'. Results are frozen. The violation table covers every row in the plan, plus protocol '1', code '0', data 7, a missing args key, and a tool name with a trailing '\\n'. JS '$' has no trailing-newline leniency, and the test proves it.",
+      "startedAt": "2026-10-25T10:44:49.341Z",
+      "completedAt": "2026-10-25T10:45:49.616Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "REQUEST SCOPING. Add scopeRequest(request, binding) to scripts/local-runner/guest-bridge.mjs, with tests. request is a parseGuestFrame result of kind 'request'; anything else is BRIDGE_PROTOCOL_VIOLATION.\n\nBinding: the host supplies it, never a frame. It has exactly the keys {role, workerId, taskId, attemptId, generation}:\n- role is 'worker' or 'qa';\n- workerId is a string of 1 to 128 characters with no control characters;\n- taskId matches /^task-[A-Za-z0-9]{1,64}$/, attemptId matches /^attempt-[A-Za-z0-9]{1,64}$/, and generation is a positive safe integer. These are the shapes of validOwner in scripts/local-runner/lifecycle.mjs; copy them with a comment and do not edit lifecycle.mjs.\nAnything else is BRIDGE_INPUT_INVALID.\n\nTOOLS is a frozen table mapping role -> tool -> { args: [guest keys], taskId: boolean, workerId: boolean }. It comes from each tool's daemon inputSchema in packages/moe-daemon/src/tools/<name>.ts, all of which set additionalProperties:false.\nworker:\n  moe.get_context: args [view, commentsLimit, commentsMaxChars]; taskId and workerId\n  moe.start_step: args [stepId]; taskId and workerId\n  moe.complete_step: args [stepId, modifiedFiles, note]; taskId and workerId\n  moe.complete_task: args [verification, summary]; taskId and workerId\n  moe.report_blocked: args [reason, needsFrom, currentStepId, blockedOnTaskIds]; taskId and workerId\n  moe.add_comment: args [content]; taskId and workerId\n  moe.get_handoff_history: args []; taskId only, because its schema has no workerId\n  moe.heartbeat: args [presenceKind]; workerId only, because its schema has no taskId\nqa:\n  moe.get_context, moe.add_comment, moe.get_handoff_history and moe.heartbeat, as above\n  moe.qa_approve: args [summary, candidateId]; taskId and workerId\n  moe.qa_reject: args [reason, failedDodItems, issues, candidateId]; taskId and workerId\nSome keys are deliberately absent; give each a one-line comment in the table. complete_task's prLink and currentBranch and qa_approve's manualArtifact and mergedPullRequest are caller-asserted delivery evidence, which the epic rail forbids minting. report_blocked's resourceId is out because host resource leases are not reachable from the guest.\n\nThe checks run in this order:\n1. Look up the tool in the role's table with Object.hasOwn; a miss is BRIDGE_TOOL_DENIED. Object.hasOwn means names like moe.constructor and moe.toString can never reach Object.prototype.\n2. Identity keys are BRIDGE_IDENTITY_MISMATCH: role, attemptId, generation, processStartedAt or host present at all, or workerId or taskId present but !== the binding's value.\n3. Every remaining key must be in the tool's args list, else BRIDGE_ARGUMENT_DENIED.\n\nThe result is a frozen {id, tool, args}. args holds the allowed guest keys with their values unchanged, plus taskId and workerId copied from the binding only where the table says the tool has them. So a guest-sent workerId that equals the binding is dropped for get_handoff_history. The daemon still validates the values.\nNever write the double-underscore prototype property name anywhere, in code or tests. It is in the global forbiddenPatterns rail (see Serena gotcha-local-runner-tests), and unknown keys are already covered by the allowlist.\n\nTests:\n(a) Every table entry accepts a minimal request, and the forwarded args deepEqual the expected object, including the get_handoff_history and heartbeat asymmetries.\n(b) BRIDGE_TOOL_DENIED for moe.set_task_dependencies, moe.set_task_status, moe.update_epic, moe.propose_rail, moe.claim_next_task, moe.submit_plan, moe.record_check_run and moe.constructor. Also for moe.qa_approve and moe.qa_reject under a worker binding (including with args {role:'qa'}), and moe.complete_task under a qa binding.\n(c) BRIDGE_ARGUMENT_DENIED for complete_task prLink and currentBranch, report_blocked resourceId, qa_approve manualArtifact and mergedPullRequest, and an unknown 'extra'.\n(d) BRIDGE_IDENTITY_MISMATCH for a different workerId, a different taskId, and each of role, attemptId, generation, processStartedAt and host, even when equal to the binding's value.\n(e) BRIDGE_INPUT_INVALID for these bindings: a missing key, an extra key, role 'architect', role 'governor', taskId 'task-a/b', and generation 0.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "scopeRequest and the exported frozen TOOLS table are done test-first. RED: B9-B14 failed against a stub. GREEN: 14/14 pass. I re-read every daemon inputSchema (getContext, startStep, completeStep, completeTask, reportBlocked, addComment, getHandoffHistory, heartbeat, qaApprove, qaReject); all are additionalProperties:false and match the plan's table. Checks run in order: tool allowlist (Object.hasOwn), then identity keys, then argument allowlist. Identity is stamped per table: get_handoff_history gets taskId only, heartbeat gets workerId only. The binding's role is checked with === 'worker'|'qa', so a coerced ['worker'] is refused. workerId refuses any Unicode Cc character (C0, DEL and C1), not just C0. The taskId, attemptId and generation shapes are copied from validOwner with a comment; lifecycle.mjs is untouched. B9 pins the exact allowlist so any accidental addition fails. The double-underscore prototype name is not written anywhere.",
+      "startedAt": "2026-10-25T10:45:50.486Z",
+      "completedAt": "2026-10-25T10:47:32.561Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "FIXED BRIDGE COMMAND AND CI. Add bridgeArgv(name) to scripts/local-runner/guest-bridge.mjs, with tests, and register the new test file in CI.\n- Import isOwnedInstanceName from ./lifecycle.mjs and GUEST_LAYOUT from ./guest-bootstrap.mjs. A non-owned name throws BRIDGE_INPUT_INVALID. Otherwise return a frozen ['exec', '--no-map-working-directory', name, '--', 'sudo', '-n', GUEST_LAYOUT.supervisor, 'bridge']. --no-map-working-directory stops Multipass mapping the host cwd (see the exec.cpp note in guest-readiness.mjs). Every element except the validated name is a constant, so no caller data reaches the guest command. Say this in the function's comment.\n- Tests:\n  - The exact argv for ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) }), checked with deepEqual and Object.isFrozen.\n  - Refusals for 'primary', 'moe-vm-', 'moe-vm-' + 'A'.repeat(20), 'moe-vm-' + 'a'.repeat(21), a name containing a space, '' and a non-string.\n- In .github/workflows/ci.yml, in the step 'Test local runner prerequisite bundles', append scripts/tests/local-runner-bridge.test.mjs to the existing node --test command. Change nothing else in the file.\n\nDo NOT touch scripts/tests/local-runner.test.mjs (CQ-R04 and CQ-R05 are WORKING on it) or any existing scripts/local-runner module. Both IDE bundlers already copy scripts/local-runner/** minus test patterns, so the new module ships without any packaging change.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "bridgeArgv done test-first. RED: B15 failed against a stub. GREEN: 15/15 pass. It imports isOwnedInstanceName from lifecycle.mjs and GUEST_LAYOUT from guest-bootstrap.mjs, neither module modified. It returns a frozen constant argv, with only the validated name variable. Refusals cover every name in the plan, plus a trailing space, an embedded space, undefined and 7. ci.yml: the one run line of the 'Test local runner prerequisite bundles' step now also runs scripts/tests/local-runner-bridge.test.mjs; git diff shows a 1+/1- change and nothing else. The local-runner bundle test still passes 7/7 (the bundlers copy local-runner/** by glob, so there is no packaging change). scripts/tests/local-runner.test.mjs is untouched.",
+      "startedAt": "2026-10-25T10:47:33.336Z",
+      "completedAt": "2026-10-25T10:48:05.059Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY, ONCE. Run fresh from the repo root with the local-runner gate environment: env -i with HOME preserved and a Linux-only PATH whose node is Linux node (see Serena gotcha-local-runner-tests). The command is\n  node --test scripts/tests/local-runner-bridge.test.mjs\nIt must exit 0 with zero failures and zero skips; nothing in this slice needs a skip. Its output is the complete_task verification evidence.\nAlso confirm with read-only git (diff --stat, plus line counts of the two new files) that the slice stays under the 400-net-changed-LOC review limit. Aim for about 130 runtime lines and about 220 test lines. Confirm that scripts/tests/local-runner.test.mjs and every existing scripts/local-runner file are byte-identical to HEAD.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Fresh gate run (env -i HOME, Linux Node v24.21.0 PATH): `node --test scripts/tests/local-runner-bridge.test.mjs` exit 0, 15/15 pass, 0 fail/skipped/cancelled (log /tmp/cq-r08a-verification.log).\n\nSize: the first count was 449 lines, over the 400 limit, so I compacted.\n- Decoder: one pending-buffer state machine.\n- Comments: single-line instead of docblocks.\n- Regex type checks: a matches() helper.\n- Tests: a refuses() and a decodeAll() helper, with single-statement loops collapsed (max width 155; lifecycle.mjs reaches 164).\nNo test case was dropped. Now guest-bridge.mjs is 185 lines, the test file 200 and ci.yml +1/-1, so 386 net lines.\n\nThe compaction added one guard: encodeFrame now requires the body's first byte to be '{', which closes a toJSON loophole that let a non-object top level through. A new B6 row covers it.\n\nIdentity: `git diff --quiet HEAD -- scripts/local-runner` passes, so every existing local-runner module is byte-identical. scripts/tests/local-runner.test.mjs is NOT identical to HEAD, but I never touched it. Its dirty +7/-2 hunk is CQ-R04's in-flight Linux-platform test change ('R04 gave Linux a platform module'). I left it alone and it is not in my modifiedFiles.",
+      "startedAt": "2026-10-25T10:48:05.895Z",
+      "completedAt": "2026-10-25T10:51:00.937Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW (load adversarial-self-review). Read the diff as an attacker who controls every guest byte. Try:\n- a 0xFFFFFFFF length header;\n- a frame delivered one byte at a time, and a valid frame after a poisoned one;\n- output data that encodes a perfect observation frame;\n- tool names that are Object.prototype members;\n- args carrying identity keys equal to the binding;\n- a worker binding asking for QA tools, and a binding with the wrong shape.\nConfirm that:\n- every refusal is a code with fixed text and never echoes guest content;\n- the TOOLS table and every returned object are frozen;\n- the diff contains nothing listed in the project's globalRails.forbiddenPatterns;\n- ci.yml changed by exactly one command line, and no other existing file changed.\nFix anything you find. If any byte changed, re-run step 5's command and submit that fresh output as the evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Adversarial review, done as attacker probes in a /tmp scratch script plus a mutation sweep on a /tmp snapshot.\n\nProbe results, all safe:\n- A 0xFFFFFFFF header is refused from the header alone.\n- Byte-at-a-time decoding works, and a poisoned decoder refuses a later valid frame.\n- Output whose data encodes a valid observation frame comes back as plain bytes with kind 'output'.\n- The double-underscore prototype key, built dynamically in the scratch probe only, is refused: as a frame key (PROTOCOL_VIOLATION), as an args key (ARGUMENT_DENIED) and as a tool name (it fails the shape check).\n- moe.constructor is TOOL_DENIED. base64url characters are rejected.\n- Identity keys equal to the binding are IDENTITY_MISMATCH, except an equal workerId or taskId, which is dropped and restamped.\n- A worker asking for QA tools is TOOL_DENIED, and a bad binding is INPUT_INVALID.\n- A Proxy whose getPrototypeOf throws, and a Uint8ClampedArray chunk, are both refused.\n- Every message is fixed text, never guest content.\n- TOOLS, its role tables, entries and args arrays, and every returned object are frozen.\n\nMutation sweep: 24 mutants. 21 were killed at first. 3 survived, all test gaps and not code bugs:\n- poison: B5's '{' case left the decoder state corrupt anyway.\n- fatal: bare invalid bytes become U+FFFD, which JSON.parse refuses regardless.\n- plain-proto: the '{' guard masked Date.\nI fixed only the tests: B3 now has invalid UTF-8 inside a JSON string, including an overlong form and a lone surrogate; B5 now poisons by header(0), '{' and a non-buffer chunk; B6 adds a Map. All 24 are now killed and the runtime bytes are unchanged.\n\nOut-of-scope findings went to CQ-R08 as comment-647799a9 on task-7a77465621dc4d6588d5747394cb0ced: unbounded nesting depth (forwarding must catch stringify errors), JSON duplicate keys are last-wins on both sides, and frames decoded in the same push are lost on error.\n\nFresh re-run after the test change: named command exit 0, 15/15, 0 skipped. Slice is guest-bridge.mjs 185 + test 203 + ci.yml +1/-1 = 389 net lines.\n\nShared-tree note: scripts/local-runner/cli.mjs, provision.mjs and the new platform-linux.mjs, plus scripts/tests/local-runner.test.mjs, are dirty from CQ-R04's in-flight work. I did not touch them and guest-bridge.mjs imports none of them.",
+      "startedAt": "2026-10-25T10:51:01.878Z",
+      "completedAt": "2026-10-25T10:53:33.882Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-84c2da018ce74995b609805dab4fe7da"
+  ],
+  "priority": "HIGH",
+  "order": 222.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T10:33:14.692Z",
+  "updatedAt": "2026-10-25T11:06:45.983Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-25T10:34:45.259Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-25T11:05:59.870Z",
+    "wallClockMs": 1874611
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "worker-c1d9de02",
+    "qa-b0c1741e"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T10:40:51.590Z",
+  "planningNotes": {
+    "approachesConsidered": "Length-prefixed frames over NDJSON: the 4-byte header refuses an oversize frame before any body is buffered, and needs no delimiter scanning or CR handling. An exact per-tool argument allowlist rather than a denylist of dangerous tools or arguments, so any new daemon tool or argument is refused until someone deliberately adds it. Identity keys that differ from the binding are refused, not silently overwritten, so a substitution attempt is visible rather than masked. A new test file instead of extending scripts/tests/local-runner.test.mjs, which CQ-R04 and CQ-R05 (WORKING) also edit; the epic rail requires file-disjoint parallel work. No response-frame builder here: the CQ-R08 session builds responses with encodeFrame (YAGNI).",
+    "codebaseInsights": "scripts/local-runner modules are dependency-free ESM. They share these conventions:\n- a MESSAGES map with an xxxError(code) helper (lifecycleError, bootstrapError, provisionError);\n- isRecord and CONTROL helpers;\n- Object.freeze on exported constants and results;\n- fixed argv constants (GUEST_PROBES in guest-readiness.mjs);\n- header comments citing the external facts they rely on.\nTests use node:test with assert/strict and are table-driven. Both IDE bundlers (moe-jetbrains/build.gradle.kts include(\"local-runner/**\") and moe-vscode/scripts/bundle-assets.mjs) copy the whole directory minus test patterns, so the new module ships automatically. Owned instance names match /^moe-vm-[0-9a-f]{20}$/ (isOwnedInstanceName). The supervisor path is GUEST_LAYOUT.supervisor = /opt/moe/bin/moe-supervisor. The daemon tool schemas, all additionalProperties:false, are the source of the TOOLS table. get_handoff_history has no workerId and heartbeat has no taskId, so stamping must follow the table.",
+    "risks": "- Node's base64 decoder is lenient; only the round-trip equality makes \"canonical\" true.\n- TextDecoder strips a BOM unless ignoreBOM:true.\n- Table lookups must use Object.hasOwn.\n- The global forbiddenPatterns rail bans the double-underscore prototype property name, in tests as well as code.\n- Error messages cross a trust boundary, so they must never echo guest content.\n- Keep the slice under the 400-net-LOC QA limit by making the tests table-driven.\n- This module is the protocol the CQ-R08b and CQ-R08c Python supervisor must match. Don't rename exports or limits casually after landing.\n- scripts/tests/local-runner.test.mjs and the existing local-runner modules must stay untouched.",
+    "keyFiles": [
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/heartbeat.ts",
+      "packages/moe-daemon/src/tools/getHandoffHistory.ts",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T10:40:51.707Z",
+  "workStartedAt": "2026-10-25T10:41:48.685Z",
+  "reviewStartedAt": "2026-10-25T10:54:11.208Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner-bridge.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ B1 frames round-trip whole, byte by byte and split at every byte offset\n✔ B2 the length header is bounded before any body byte is buffered\n✔ B3 invalid UTF-8, a BOM and non-object JSON bodies are refused\n✔ B4 end refuses a partial header or body and passes when nothing is buffered\n✔ B5 a decoder stays poisoned after its first error\n✔ B6 encodeFrame writes a big-endian length and refuses non-objects and oversize bodies\n✔ B7 parseGuestFrame accepts exactly the four guest shapes and returns frozen copies\n✔ B8 parseGuestFrame refuses every other shape with BRIDGE_PROTOCOL_VIOLATION\n✔ B9 the role tool tables are exact, frozen allowlists\n✔ B10 every table entry forwards guest args with identity stamped only where the daemon schema has it\n✔ B11 tools outside the binding role table are BRIDGE_TOOL_DENIED\n✔ B12 argument keys outside the tool table are BRIDGE_ARGUMENT_DENIED\n✔ B13 identity keys from a guest are BRIDGE_IDENTITY_MISMATCH unless workerId/taskId equal the binding\n✔ B14 a malformed binding is BRIDGE_INPUT_INVALID and a non-request frame is BRIDGE_PROTOCOL_VIOLATION\n✔ B15 bridgeArgv is the one fixed supervisor command for an owned instance name only\nℹ tests 15\nℹ suites 0\nℹ pass 15\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 284.578672\n(env -i HOME=$HOME PATH=<Linux Node v24.21.0>:/usr/bin:/bin; exit=0)",
+    "reportedAt": "2026-10-25T10:54:11.208Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/guest-bridge.mjs",
+    "scripts/tests/local-runner-bridge.test.mjs",
+    ".github/workflows/ci.yml",
+    ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+    ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+    ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json",
+    ".moe/tasks/task-f981d0597b26401a974c0fcd8829107e.json",
+    ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+    ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json"
+  ],
+  "completionSummary": "CQ-R08a delivered as pure functions in the new scripts/local-runner/guest-bridge.mjs, with tests B1-B15 in the new scripts/tests/local-runner-bridge.test.mjs. ci.yml changed by one line, adding the bridge test to the local-runner step. Net size: 185 + 203 + 1 = 389 lines, under the 400 limit.\n\nDoD:\n1. The decoder round-trips frames whole, byte by byte, and split at every offset. A zero, over-limit or 0xFFFFFFFF header is refused from the header alone. Invalid UTF-8 (overlong forms and lone surrogates included), a BOM, non-object JSON and a truncated frame all give BRIDGE_FRAME_INVALID. The decoder is O(n), with a preallocated bounded body, and any error poisons it.\n2. parseGuestFrame accepts hello, request, output and observation(exit) frames with exact keys. Output returns canonical-base64 bytes untouched, so an encoded observation stays 'output'. Everything else is BRIDGE_PROTOCOL_VIOLATION.\n3-4. The frozen TOOLS table was sourced from the daemon schemas and re-verified (all additionalProperties:false). The listed tools are TOOL_DENIED, including moe.constructor and the QA tools for a worker binding. prLink, currentBranch, resourceId, manualArtifact and mergedPullRequest are ARGUMENT_DENIED. role, attemptId, generation, processStartedAt and host are IDENTITY_MISMATCH even when equal to the binding; workerId or taskId give IDENTITY_MISMATCH when they differ. The binding's ids are stamped per daemon schema: get_handoff_history gets taskId only, heartbeat gets workerId only.\n5. bridgeArgv returns a frozen constant argv for an owned name only.\n6. The fresh named run is above: exit 0, 15/15, 0 skipped.\n\nSelf-review: attacker probes plus a 24-mutant sweep on a /tmp snapshot. All mutants are killed; three test gaps were fixed in tests only. One guard was added beyond the plan: encodeFrame requires the body to start with '{', which closes a toJSON loophole.\n\nOut of scope, commented on CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced): forwarding must handle deeply nested arg",
+  "commits": [
+    {
+      "sha": "17bc7ac06bda38f81c652f48dc58536831d9cda8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T10:40:51Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+        ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+        ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json",
+        ".moe/tasks/task-f981d0597b26401a974c0fcd8829107e.json",
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T10:54:43.990Z",
+      "treeId": "e17cf9a2b61df212c8874d774f2158cfc51bb9cc",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "77cfe99e07c07b1fdeea24d4534165899ed586a1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T11:01:00Z",
+      "paths": [
+        ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
+        ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+        ".moe/tasks/task-f981d0597b26401a974c0fcd8829107e.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T11:06:45.982Z",
+      "treeId": "da7588ce4f5c58e823e5b6a177179d0984c905dd",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-bridge.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T11:01:00Z",
+    "at": "2026-10-25T11:06:45.982Z"
+  },
+  "completedAt": "2026-10-25T11:05:59.870Z",
+  "reviewCompletedAt": "2026-10-25T11:05:59.870Z",
+  "reviewSummary": "Reviewed completion commit 17bc7ac (on moe/work-2026-10-24; HEAD bytes identical). Size: 185 + 203 + 1 = 389 net LOC. No forbidden patterns.\n\nRe-ran (env -i, Linux Node 24.21.0):\n- `node --test scripts/tests/local-runner-bridge.test.mjs`: exit 0, 15/15, 0 skipped, in the working tree and in a clean `git archive 17bc7ac` snapshot.\n- The full CI step (local-runner, bundle and bridge tests): exit 0, 203/203, 0 skipped.\n\nDoD:\n1. Covered by B1-B5: split at every offset, zero/max+1/0xFFFFFFFF headers refused from the header alone, fatal UTF-8 and BOM, non-object JSON, truncation, poison.\n2. Covered by B7/B8: exact-key shapes only, output as an unparsed Buffer, the full violation table.\n3. Covered by B11/B12: every listed tool is TOOL_DENIED, and evidence and unknown keys are ARGUMENT_DENIED.\n4. Covered by B13/B10. I checked every TOOLS entry against the committed daemon inputSchemas (all additionalProperties:false; handoff_history taskId-only, heartbeat workerId-only). The binding shapes match validOwner.\n5. Covered by B15: exact frozen argv; GUEST_LAYOUT.supervisor and isOwnedInstanceName confirmed. ci.yml is a single-line append to the local-runner step.\n6. Evidence reproduces.\n\nIndependent 24-mutant sweep: 23 killed. The survivor (hasOwn to `in`) is equivalent, because the /^moe\\./ regex excludes prototype members.\n\nNote, non-blocking: the uncommitted CQ-F06 edit adds get_context.sessionId, which the bridge refuses (fails closed). I commented on CQ-R08 asking for a stamp-or-refuse decision. Complexity pass: nothing to cut. verified-local stays unavailable.",
+  "requiredCheckAtDone": null
+}

@@ -122,7 +122,7 @@
       "completedAt": "2026-07-30T22:23:30.538Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -135,7 +135,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:27.657Z",
-  "updatedAt": "2026-07-30T22:26:24.106Z",
+  "updatedAt": "2026-10-24T15:18:56.853Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:05:37.465Z",
     "plannedStepCount": 7,
@@ -197,5 +197,6 @@
   ],
   "completedAt": "2026-07-30T22:26:24.106Z",
   "reviewCompletedAt": "2026-07-30T22:26:24.106Z",
-  "reviewSummary": "Re-ran the required command myself from packages/moe-daemon: `npx vitest run src/util/affectedFiles.test.ts` -> 1 file / 27 tests passed, exit 0. Also `npx tsc --noEmit` clean and `npx vitest run src/tools/governanceFeatures.test.ts src/state/StateManager.test.ts` -> 132 passed (no regression in the existing collision/settings coverage). DoD verified against the diff, not the summary: (1) computeFileCollisions (affectedFiles.ts:285-316) filters candidate paths through compiled anchored matchers before the ownership lookup, so suppressed paths cannot reach the returned/channel warning; grouping, WORKING-only scoping and sorting are unchanged. (2) DEFAULT_APPEND_ONLY_FILES is a frozen ['CHANGELOG.md'] used as the parameter default, and claimNextTask.ts:325 reads `state.project?.settings?.appendOnlyFiles ?? DEFAULT_APPEND_ONLY_FILES` — nullish, so an explicit [] genuinely disables suppression (test asserts all three overlaps return). (3) appendOnlyFiles added to ProjectSettings (schema.ts), whitelisted in validateSettingsUpdate with validateStringArrayValue(100,500) + normalizeAffectedFiles, throwing before `next` is written (test proves memory AND project.json are unchanged after 6 invalid-input shapes), and documented in docs/SCHEMA.md + docs/CONFIGURATION.md incl. the replaces-default and [] semantics. Tests are mutation-resistant (exact toEqual on fileCollision entries) and cover edges: literal / `*` single-segment / `**` cross-dir / `**/` zero-dir, regex-metachar escaping, whole-path anchoring, platform case policy, backslash + non-array + non-string/over-long hand-edited settings. Scope matches the plan; the other hunks in schema.ts/StateManager.ts/SCHEMA.md (pacePerStepMs, newFiles) belong to sibling tasks in the shared tree, not to this one. No forbidden patterns, no I/O added under the claim mutex (matchers compiled once per computation)."
+  "reviewSummary": "Re-ran the required command myself from packages/moe-daemon: `npx vitest run src/util/affectedFiles.test.ts` -> 1 file / 27 tests passed, exit 0. Also `npx tsc --noEmit` clean and `npx vitest run src/tools/governanceFeatures.test.ts src/state/StateManager.test.ts` -> 132 passed (no regression in the existing collision/settings coverage). DoD verified against the diff, not the summary: (1) computeFileCollisions (affectedFiles.ts:285-316) filters candidate paths through compiled anchored matchers before the ownership lookup, so suppressed paths cannot reach the returned/channel warning; grouping, WORKING-only scoping and sorting are unchanged. (2) DEFAULT_APPEND_ONLY_FILES is a frozen ['CHANGELOG.md'] used as the parameter default, and claimNextTask.ts:325 reads `state.project?.settings?.appendOnlyFiles ?? DEFAULT_APPEND_ONLY_FILES` — nullish, so an explicit [] genuinely disables suppression (test asserts all three overlaps return). (3) appendOnlyFiles added to ProjectSettings (schema.ts), whitelisted in validateSettingsUpdate with validateStringArrayValue(100,500) + normalizeAffectedFiles, throwing before `next` is written (test proves memory AND project.json are unchanged after 6 invalid-input shapes), and documented in docs/SCHEMA.md + docs/CONFIGURATION.md incl. the replaces-default and [] semantics. Tests are mutation-resistant (exact toEqual on fileCollision entries) and cover edges: literal / `*` single-segment / `**` cross-dir / `**/` zero-dir, regex-metachar escaping, whole-path anchoring, platform case policy, backslash + non-array + non-string/over-long hand-edited settings. Scope matches the plan; the other hunks in schema.ts/StateManager.ts/SCHEMA.md (pacePerStepMs, newFiles) belong to sibling tasks in the shared tree, not to this one. No forbidden patterns, no I/O added under the claim mutex (matchers compiled once per computation).",
+  "planRevision": 0
 }

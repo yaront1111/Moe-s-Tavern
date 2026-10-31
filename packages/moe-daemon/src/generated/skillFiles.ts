@@ -1090,7 +1090,7 @@ The template enables \`compile_commands.json\` export for IDE support:
 ln -s build/compile_commands.json .
 \`\`\``,
   'explore-before-assume/SKILL.md': `---
-# moe-generated: sha=9f64d49809db
+# moe-generated: sha=2d705d327503
 name: explore-before-assume
 description: Use before referencing any function, model, method, relationship, constant, or import in a plan or implementation. Verifies things actually exist in the codebase before building on top of them. Eliminates an entire class of hallucinated-API bugs.
 when_to_use: Architect during planning before naming symbols in implementationPlan; worker on first start_step before editing unfamiliar code.
@@ -1104,6 +1104,10 @@ Before referencing a symbol — any symbol — verify it exists. The cheapest bu
 ## The rule
 
 For every function, class, method, model, attribute, relationship, constant, env var, file path, or import you're about to reference: **grep for it first**. If it doesn't show up, either it doesn't exist or you have the name wrong. Either way, stop and find out before writing a line that depends on it.
+
+## Reuse what was already verified
+
+Moe may already have checked a reference for you: the approved plan names a symbol with its file, \`moe.get_context\` serves a section, or a landed prerequisite carries its evidence. Start from that instead of searching again: a supplied location needs no fresh grep. Still read a definition before you depend on its signature, and verify anything the context marks truncated, omitted, missing or stale, anything a listed limitation leaves out (\`no-repository-source\`: no source was served), and anything the supplied slice does not cover. A supplied slice is a navigation aid, never a reason to skip a read the change needs.
 
 ## Why this matters
 
@@ -1143,7 +1147,7 @@ If you're an architect: bake the verified symbol names into the step \`descripti
 
 Trivial doc edits, comment changes, formatting-only steps. If you're not naming a symbol, you don't need to verify one.`,
   'moe-epic-breakdown/SKILL.md': `---
-# moe-generated: sha=8826b404fe9c
+# moe-generated: sha=f64c839b34e9
 name: moe-epic-breakdown
 description: Use when an architect is turning an epic into a set of tasks (moe.create_task), before planning any single one. Covers where to cut the seams, how to size and order tasks, what each task's Definition of Done must carry, and the mandatory final integration-and-hardening task. Distinct from moe-planning, which plans the steps inside one task.
 when_to_use: Architect facing an epic with no tasks yet, or an epic whose remaining work needs re-slicing. Run this before moe.create_task; run moe-planning later, per task.
@@ -1243,6 +1247,8 @@ Skip the pair for trivial slices (config, docs, mechanical renames) — two clai
 
 Always create one, at the highest \`order\`, unless the epic is 1–2 tasks total. It exists because verification is concentrated, not smeared — see \`moe-planning\`'s "Where the gate goes". Mid-epic tasks prove their own slice with focused tests and move on; this task is where the epic actually gets gated.
 
+Designate it with \`moe.update_epic { epicId, finalTaskId }\` right after \`moe.create_task\` returns its id: \`order\` is a per-column sort position that board drags and new rows rewrite, so it cannot name the final task on its own. If the epic later grows past that task (a new closing task replaces it, or work is re-sliced after it), re-designate with \`moe.update_epic\` and the new id, so \`get_context\` \`isEpicFinal\` and the quality gate follow the real closing task.
+
 Its DoD covers what no individual slice could see:
 
 - Full regression across every package the epic touched, green, with numbers.
@@ -1262,7 +1268,7 @@ If the epic touched shared types, schema, wire protocol, or migrations, say so i
 
 Create the tasks, then stop. Each one gets planned separately — when it reaches \`PLANNING\` and you claim it, that's when \`moe-planning\` runs, with the task's epic position already decided here.`,
   'moe-planning/SKILL.md': `---
-# moe-generated: sha=f5b965bd9d2f
+# moe-generated: sha=a2881f92c874
 name: moe-planning
 description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Provides the canonical 8-phase template (plan, explore, tests, minimum impl, verify, document, adversarial review, QA loop), rules for when to skip phases on trivial tasks, and where the verification gate belongs — once at the end of a task, and at full scope only on the epic's final task.
 when_to_use: After moe.get_context returns a PLANNING task, before drafting implementationPlan.steps for moe.submit_plan.
@@ -1288,7 +1294,7 @@ Verification is a real cost. Paying it on every step of every task is how a 12-t
 - **Inside a task: the gate is at the end, not on every step.** A step is *implement the thing + write the tests for the thing it changed*. There is exactly **one** adversarial self-review step, and it is the last one. The regression run happens **once**, before \`moe.complete_task\`. Never emit a "verify" / "review" / "run the suite" step after each implementation step.
 - **Inside an epic: the gate is on the last task, not on every task.** Mid-epic tasks build their slice, prove that slice with focused tests, and hand off. The epic's **final** task is where the full-system check lives: full suite, cross-package integration, docs sweep, adversarial pass over the whole epic diff.
 
-So when you decompose a big epic, **end it with an explicit integration-and-hardening task** (\`moe.create_task\` with the highest \`order\`). That task owns the epic's end-to-end verification, its documentation, and its "would I be embarrassed if this shipped" pass. Everything before it stays lean and moves. Decomposing an epic is its own pass with its own skill — \`moe-epic-breakdown\`; this skill starts once the tasks exist and you're planning one of them.
+So when you decompose a big epic, **end it with an explicit integration-and-hardening task** (\`moe.create_task\` with the highest \`order\`), then designate it with \`moe.update_epic { epicId, finalTaskId }\`: \`order\` is a per-column sort position that board drags and new rows rewrite, so it cannot name the final task on its own. That task owns the epic's end-to-end verification, its documentation, and its "would I be embarrassed if this shipped" pass. Everything before it stays lean and moves. Decomposing an epic is its own pass with its own skill — \`moe-epic-breakdown\`; this skill starts once the tasks exist and you're planning one of them.
 
 "Lean" does **not** mean sloppy. Mid-epic tasks still write real tests for their own behavior, still handle errors, still get reviewed by QA. Lean means their tests are scoped to what *they* changed and their verification command is the targeted suite, not the whole system.
 
@@ -1300,7 +1306,7 @@ So when you decompose a big epic, **end it with an explicit integration-and-hard
 | Epic-final, or a standalone task with no epic siblings | The above, plus integration / end-to-end covering the epic's whole flow | Full regression across every affected package + adversarial review of the epic diff |
 | Any position, if the task touches shared types, schema, wire protocol, or migrations | Whatever the change needs | Full regression regardless of position — these break things outside the task's blast radius |
 
-If you can't tell where the task sits, \`moe.list_tasks {epicId}\` and compare \`order\` against the siblings. No epic siblings → treat it as epic-final.
+If you can't tell where the task sits, read \`moe.get_context\` → \`task.isEpicFinal\`. It is true for the epic's designated final task (\`epic.finalTaskId\`); an epic with no valid designation falls back to the highest \`order\` among its non-ARCHIVED tasks. No epic siblings → treat it as epic-final.
 
 ## The 8 phases
 
@@ -1343,6 +1349,8 @@ The worker's job ends at \`moe.complete_task\`. The QA agent reviews and may cal
 One step per phase is a fine starting point for non-trivial work. For larger tasks, Phase 4 (minimum implementation) usually expands into multiple steps — one per logical concern. **Only Phase 4 expands.** Phases 5 and 7 are one step each, at the end, no matter how many implementation steps precede them. Always:
 
 - Set \`affectedFiles\` tight per step.
+- When a Serena memory bears on a step, name it in that step's description as \`mem:<name>\` (for example \`mem:gotcha-moe-doc-generated-artifacts\`), so the worker calls read_memory on exactly that memory instead of scanning list_memories.
+- Cite only live names. A name under \`_archive/\` is hidden from Serena by .serena/project.yml ignored_memory_patterns, and read_memory refuses it.
 - Map every Definition-of-Done item to at least one step.
 - State non-obvious design choices in the step \`description\` so the worker doesn't re-derive them.
 
@@ -1373,7 +1381,7 @@ Skip aggressively for genuinely trivial work. A typo fix doesn't need 8 steps.
 
 If the task conflicts with an existing rail, requires missing prerequisites, or is ambiguous in a way only a human can resolve — call \`moe.report_blocked\` instead of submitting a bad plan.`,
   'moe-qa-loop/SKILL.md': `---
-# moe-generated: sha=b60336ae50e9
+# moe-generated: sha=88c5caad1a5d
 name: moe-qa-loop
 description: Use when reviewing a task in REVIEW status as the QA agent. Provides the structured decision flow for moe.qa_approve vs moe.qa_reject, with rejectionDetails that drive a clean fix on the worker side.
 when_to_use: QA agent claims a task in REVIEW status; replaces ad-hoc "looks fine to me" reviews.
@@ -1407,8 +1415,8 @@ For each task in \`REVIEW\`:
 
 Plans deliberately concentrate the heavy verification at the **end of an epic**, not on every task. Review against what *this* task promised, not against the epic's finish line.
 
-- **Mid-epic task** (sibling tasks come after it — check \`moe.list_tasks {epicId}\` and compare \`order\`): the bar is "this slice works and is proven by focused tests." Do **not** reject it for lacking end-to-end coverage, full-suite output, or docs the plan assigned to a later task. That work isn't missing; it's scheduled.
-- **Epic-final / hardening task, or a task with no epic siblings**: this is the real gate. Full regression evidence, integration coverage of the epic's whole flow, docs, and a clean adversarial pass are all in scope — and their absence *is* a reject.
+- **Mid-epic task** (\`moe.get_context\` returns \`task.isEpicFinal: false\`; it follows the epic's designated \`finalTaskId\`, which a dragged or newly created row does not change, else the highest-\`order\` fallback): the bar is "this slice works and is proven by focused tests." Do **not** reject it for lacking end-to-end coverage, full-suite output, or docs the plan assigned to a later task. That work isn't missing; it's scheduled.
+- **Epic-final / hardening task, or a task with no epic siblings** (\`task.isEpicFinal: true\`): this is the real gate. Full regression evidence, integration coverage of the epic's whole flow, docs, and a clean adversarial pass are all in scope — and their absence *is* a reject.
 - **Any task touching shared types, schema, wire protocol, or migrations**: full regression evidence regardless of position.
 
 Still reject at any position for: a DoD item with no code, tests that pass when the code does nothing, scope creep beyond the plan, an unhandled error path, or a \`complete_step\` claim that doesn't hold when re-run. Lean scope is not lower quality.
@@ -1853,7 +1861,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 - Appended \`## Moe integration\` footer wiring the skill to \`moe.qa_reject\` recovery, \`rejectionDetails\`, and the \`regression-check\` follow-up.
 - Replaced the "Forbidden phrases" banned-phrase list with a one-line positive statement of how to respond (technical content only; verify before agreeing).`,
   'regression-check/SKILL.md': `---
-# moe-generated: sha=974cd9e9ac0e
+# moe-generated: sha=fb882949cdf7
 name: regression-check
 description: Use before moe.complete_task. Runs the suite the plan named — narrow for a mid-epic task, full for the epic's final task — to confirm nothing unrelated broke. The goal is zero regressions. Better to find out now than in a QA reject comment.
 when_to_use: Worker, after the final implementation step is done, before moe.complete_task.
@@ -1868,11 +1876,11 @@ Before \`moe.complete_task\` — **once, not after every step** — run the suit
 
 The plan sizes this deliberately; don't silently upgrade it.
 
-- **Mid-epic task** (there are sibling tasks after this one in the epic): run the narrow suite the plan named — your package, or the test files covering what you changed. You are proving *your slice*. The epic's final task owns the full-system pass.
+- **Mid-epic task** (\`moe.get_context\` \`task.isEpicFinal\` is false): run the narrow suite the plan named — your package, or the test files covering what you changed. You are proving *your slice*. The epic's final task owns the full-system pass.
 - **Epic-final task, or a task with no epic siblings**: run the full thing. Every affected package, plus whatever integration/smoke the plan named.
 - **Any task that touched shared types, schema, wire protocol, or a migration**: full suite regardless of position. These break code outside your blast radius, and the epic's final task is too late to find out.
 
-Unsure of your position? \`moe.list_tasks {epicId}\` and compare \`order\`. No siblings after you → treat it as epic-final.
+Unsure of your position? Read \`moe.get_context\` → \`task.isEpicFinal\`: true means epic-final (the full run), false means mid-epic. A task with no epic reads true.
 
 ## What to run
 

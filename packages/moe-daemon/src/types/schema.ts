@@ -149,6 +149,35 @@ export interface AttributionSettings {
   exclude?: string[];
 }
 
+/** Workflow selection; independent of the existing deliveryPolicy requirements. */
+export type ExecutionProfile = 'legacy' | 'observe' | 'verified-local';
+
+/**
+ * Configuration identity captured with the canonical Task.planRevision: which
+ * execution profile and (from v2) which deliveryPolicy were configured. It is
+ * NOT plan approval, a model receipt, runner trust, isolation readiness, a
+ * required-check definition, a delivery destination or verified completion.
+ * Decode it with readExecutionPolicySnapshot (delivery/executionProfile.ts);
+ * task persistence is taskStore's; attempt capture is the claim path's;
+ * admission is later rollout work.
+ */
+export type ExecutionPolicySnapshot = ExecutionPolicySnapshotV1 | ExecutionPolicySnapshotV2;
+
+/** The original shape. It carries no deliveryPolicy identity, and nothing may fill one in from current settings. */
+export interface ExecutionPolicySnapshotV1 {
+  version: 1;
+  profile: ExecutionProfile;
+  planRevision: number;
+}
+
+/** v1 plus the captured deliveryPolicy. Strict: a missing or null policy is malformed, never read as 'legacy'. */
+export interface ExecutionPolicySnapshotV2 {
+  version: 2;
+  profile: ExecutionProfile;
+  planRevision: number;
+  deliveryPolicy: DeliveryPolicy;
+}
+
 /**
  * What DONE requires: settings.deliveryPolicy, judged by delivery/policy.ts.
  * 'legacy' is the default, and what an absent or null value means: the soft
@@ -156,7 +185,20 @@ export interface AttributionSettings {
  */
 export type DeliveryPolicy = 'legacy' | 'local-branch' | 'remote-push' | 'merged-pull-request' | 'manual-artifact';
 
+export type WorktreeMode = 'off' | 'on';
+export type ExecutionWorkspaceMode = 'shared' | 'worktree';
+
+/** Claim/context workspace: branch and target are null for shared attempts. */
+export interface AttemptWorkspace {
+  mode: ExecutionWorkspaceMode;
+  path: string;
+  branch: string | null;
+  target: string | null;
+}
+
 export interface ProjectSettings {
+  /** Absent = legacy. Observe never weakens deliveryPolicy; verified-local is not yet runnable. */
+  executionProfile?: ExecutionProfile;
   approvalMode: 'CONTROL' | 'SPEED' | 'TURBO';
   speedModeDelayMs: number;
   autoCreateBranch: boolean;
@@ -202,6 +244,15 @@ export interface ProjectSettings {
    */
   deliveryPolicy?: DeliveryPolicy;
   /**
+   * Human-approved isolated check environment ids: the exact CheckRun.environment
+   * values a runner reports, e.g. 'moe-local-vm-v1:<sha256>'. Absent or empty
+   * approves none. Read live by delivery/policy.ts and moe.record_check_dispatch
+   * for verified-local tasks, so removing an id revokes the evidence recorded in
+   * it. Set in .moe/project.json, like deliveryPolicy: validateSettingsUpdate
+   * refuses it as unknown and preserves it, so the IDE never edits it.
+   */
+  checkEnvironments?: string[];
+  /**
    * Branch a worker is expected to be on when it calls `moe.complete_task`.
    * Either a literal branch name or a `*` glob (e.g. "moe/work-*", which is
    * what the agent wrappers peel onto). Matching is case-sensitive because git
@@ -210,6 +261,13 @@ export interface ProjectSettings {
    * #governors, so wrapper rollout stays graceful.
    */
   consolidationBranch?: string;
+  /**
+   * 'on' runs each new WORKING claim in <projectPath>/.worktrees/<taskId>
+   * on moe/task/<taskId>. Read once at claim time, pinned on the attempt's
+   * workspaceMode. Absent means 'off' only in resolveWorktreeMode (WT-19
+   * flips that default); any other value is refused.
+   */
+  worktreeMode?: WorktreeMode;
   /**
    * Master switch for the agent wrapper's git activity. When true (default)
    * the wrapper lands the task's attributed paths on every session exit: a
@@ -340,7 +398,9 @@ export interface Team {
    * Members whose WORKER RECORD was evicted (stale sweep, DEAD prune, startup
    * purge) while they still belonged to this team. The record — and with it
    * worker.teamId — dies on eviction, so the membership tombstone has to live
-   * on the team, which survives. Read only to auto-rejoin a returning worker;
+   * on the team, which survives. Also written when a join into a full team
+   * evicts its DEAD members: those records stay DEAD, with teamId cleared,
+   * until the stale prune. Read only to auto-rejoin a returning worker;
    * never counted toward maxSize and never routed to. Cleared the moment the
    * worker joins, or deliberately leaves, any team.
    */
@@ -359,6 +419,14 @@ export interface Epic {
   epicRails: string[];
   status: EpicStatus;
   order: number;
+  /**
+   * The epic's designated final (integration-and-hardening) task, set or
+   * cleared with moe.update_epic. It counts only while it names an existing,
+   * non-ARCHIVED task of this epic; otherwise isEpicFinalTask
+   * (delivery/policy.ts) falls back to the highest `order`. Optional, so epic
+   * files written before it existed load unchanged.
+   */
+  finalTaskId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -689,6 +757,125 @@ export interface TaskDeliveryEvidence {
   recordedAt: string; // ISO
 }
 
+/** Approved commands and their defining configs/scripts and protected assertion roots; approval material, never evidence. */
+export interface ProtectedCheckDefinition {
+  id: string;
+  command: string;
+  configs?: string[];
+  scripts?: string[];
+  assertionRoots?: string[];
+}
+
+/** Git object identity of every blob under the approved protected paths. Never evidence by itself. */
+export interface RequiredCheckSnapshot {
+  version: 1;
+  /** Resolved tree id, not a mutable ref. */
+  revision: string;
+  definitionDigest: string;
+  entries: { path: string; oid: string }[];
+}
+
+/** The full 40/64-hex commit `HEAD^{commit}` resolved to when submit_plan ran, and the planRevision that write committed. */
+export interface PlanSourceBasis {
+  version: 1;
+  commit: string;
+  planRevision: number;
+}
+
+/** How the task last entered PLANNING: the status it left, the write's ISO time, a per-task counter from 1. */
+export interface PlanningEntry {
+  from: TaskStatus;
+  at: string;
+  seq: number;
+}
+
+export type PlanReuseDecision = 'reuse' | 'refresh' | 'reassess' | 'replan';
+
+/** A recorded approved-plan reuse assessment (CQ-C07). Never approval, readiness or evidence. */
+export interface PlanReuseRecord {
+  version: 1;
+  decision: PlanReuseDecision;
+  planRevision: number;
+  entrySeq: number;
+  /** 0-32 items of 1-300 chars, no control characters. */
+  reasons: string[];
+  assessedAt: string;
+  basisCommit?: string;
+  headCommit?: string;
+  /** At most 64 normalized repo-relative paths. */
+  changedPaths?: string[];
+  candidate?: 'current' | 'revalidate';
+}
+
+/** One recipe (CQ-C08) in RECIPE_DEFINITIONS_PATH (context/recipes/recipe.ts), read only from committed bytes. */
+export interface RecipeDefinition {
+  id: string;
+  kind: string;
+  version: number;
+  /** Become the instantiated plan's protected checks. */
+  requiredChecks: ProtectedCheckDefinition[];
+  /** Kind-specific settings, checked by the kind's validateDefinition. */
+  params?: Record<string, unknown>;
+}
+
+/** Which recipe produced the current plan (CQ-C08). Decode with readRecipeInstance. Never approval or evidence. */
+export interface RecipeInstance {
+  version: 1;
+  recipeId: string;
+  kind: string;
+  recipeVersion: number;
+  definitionDigest: string;
+  /** Where the definitions, the source and the protected snapshot were read. */
+  commit: string;
+  inputs: Record<string, string | number | boolean>;
+  inputsDigest: string;
+  /** The revision the PLAN_SUBMITTED write committed; a later plan edit makes the binding stale. */
+  planRevision: number;
+}
+
+/**
+ * Optional execution intent, canonicalized by validateExecutionContract. A docs
+ * fix may supply only intendedBehavior; an API change may also need compatibility.
+ * Every field is approval-relevant: changes advance planRevision in the same write.
+ * This contract alone is never approval, readiness or verification evidence.
+ */
+export interface TaskExecutionContract {
+  /** Observable behavior or outcome the change must produce. */
+  intendedBehavior?: string;
+  /** Behavior-level criteria; definitionOfDone remains human-owned. */
+  acceptanceCriteria?: string[];
+  invariants?: string[];
+  /** Legacy data, wire shapes and callers that must keep working. */
+  compatibility?: string[];
+  /** Symbols/interfaces/producer-consumer surfaces; file scope stays in steps. */
+  approvedScope?: string[];
+  /** Existing implementations reused, or why a new one is introduced. */
+  reuse?: string[];
+  /** Source facts with path/symbol references. */
+  sourceAssumptions?: string[];
+  /** Required verification commands, exactly as they will be run. */
+  checkRefs?: string[];
+  requiredChecks?: ProtectedCheckDefinition[];
+}
+
+export const UNLANDED_REASONS = ['conflict', 'contention', 'gate', 'diverged', 'remote'] as const;
+export type UnlandedReason = typeof UNLANDED_REASONS[number];
+
+export interface LandingRetry {
+  /** Why the worktree landing published nothing. */
+  reason: UnlandedReason;
+  /** Normalized project-relative conflict paths, when reported. */
+  paths: string[];
+  /** Task-scoped rescue ref holding the unpublished bytes. */
+  rescueRef: string;
+  /** The attempted 40-hex target tip B, or null when not reported. */
+  targetTip: string | null;
+  /** Consecutive unlanded finalizes since landed/nothing-to-commit, starting at 1. */
+  count: number;
+  /** ISO timestamp of this unlanded finalize. */
+  at: string;
+}
+
 export interface Task {
   id: string;
   epicId: string;
@@ -698,13 +885,14 @@ export interface Task {
   taskRails: string[];
   implementationPlan: ImplementationStep[];
   /**
-   * Monotonic version of the approval-relevant plan surface
-   * (`implementationPlan` + `definitionOfDone`), owned exclusively by the
-   * daemon: `createTask` stamps 0, and `taskStore.updateTask` derives the next
-   * value inside the SAME task write that persists the surface — every
-   * successful `moe.submit_plan` (even a byte-identical resubmission) plus any
-   * write that actually changes the sanitized steps or DoD, whoever the writer
-   * is. Metadata-only writes keep it; reopen never resets it.
+   * Monotonic version of the canonical approval projection: ordered step ids,
+   * original/effective (active-amendment) instructions, affectedFiles/newFiles,
+   * definitionOfDone and executionContract. Owned exclusively by the daemon:
+   * createTask stamps 0; updateTask derives it in the SAME durable task write.
+   * Every PLAN_SUBMITTED advances once, as does a material change by any writer.
+   * Execution status, startedAt/completedAt, reported modifiedFiles, progress
+   * notes, amendment audit fields and inactive amendment history are not material.
+   * Reopen neither resets it nor advances it by clearing execution evidence.
    *
    * A caller-supplied value is stripped, so it can be neither forged nor reset.
    * Optional because records written before this field exist: an absent stamp
@@ -717,6 +905,66 @@ export interface Task {
    * revision they rendered against this one; see docs/SCHEMA.md.
    */
   planRevision?: number;
+  /**
+   * The planRevision an approval was bound to: the revision a token-checked
+   * human approval reviewed (approveTask, PLAN_APPROVED), or the revision a
+   * SPEED/TURBO plan submission committed (PLAN_AUTO_APPROVED). Daemon-owned:
+   * only those approval writes set it, in the same task image as status and
+   * planApprovedAt and only when it equals the planRevision that write
+   * commits; every caller update (and the /ws UPDATE_TASK denylist) strips it.
+   * Absent means an unchecked or legacy approval: a historical unstamped human
+   * approval or a relaxed moe.set_task_status. A current human approval
+   * requires expectedPlanRevision and omitting it is refused INVALID_INPUT, so
+   * it never produces an absent value. The daemon never
+   * writes null, and a stored null or non-integer reads exactly like absence.
+   * Never backfilled from status, planApprovedAt or event names. A material
+   * change advances only planRevision and keeps this number as history: it is
+   * a current association only while it is a non-negative safe integer equal
+   * to planRevision.
+   */
+  approvedPlanRevision?: number;
+  /**
+   * Configuration identity (see ExecutionPolicySnapshot). Daemon-owned:
+   * written only inside the PLAN_SUBMITTED write, together with the
+   * planRevision it records, and stripped from every caller update (and by the
+   * /ws UPDATE_TASK denylist). No other write backfills, refreshes or erases it,
+   * so rows that predate capture stay without one. A stored verified-local
+   * snapshot is a floor a project rollback cannot lower. Decode it with
+   * readExecutionPolicySnapshot and never read it as approval or readiness.
+   */
+  executionPolicySnapshot?: ExecutionPolicySnapshot;
+  /**
+   * Absent means no contract: legacy rows load unchanged, with no migration or
+   * schemaVersion bump. Null or an empty contract clears it. Test absence with
+   * === undefined, not key ownership: a clear leaves an own undefined key in
+   * memory that is omitted on disk and after reload.
+   */
+  executionContract?: TaskExecutionContract;
+  /**
+   * Daemon-owned, measured only by submit_plan: Git object ids of every blob
+   * under the approved protected paths at revision (a tree id). Valid only
+   * while definitionDigest matches the current contract; readers must use
+   * readRequiredCheckSnapshot. Never verification evidence by itself.
+   */
+  requiredCheckSnapshot?: RequiredCheckSnapshot;
+  /**
+   * Daemon-owned, written only by taskStore.updateTask in the PLAN_SUBMITTED write (submit_plan's capture).
+   * Stripped from caller updates and the /ws denylist. Decode with readPlanSourceBasis (context/planReuseState).
+   * Never approval, readiness or evidence.
+   */
+  planSourceBasis?: PlanSourceBasis;
+  /**
+   * Daemon-owned, stamped only by taskStore.updateTask on a status change into PLANNING. Stripped from caller
+   * updates and the /ws denylist. Decode with readPlanningEntry. Never approval, readiness or evidence.
+   */
+  planningEntry?: PlanningEntry;
+  /**
+   * Daemon-owned, written only through taskStore.updateTask's private daemonOwned argument. Stripped from caller
+   * updates and the /ws denylist. Decode with readPlanReuseRecord. Never approval, readiness or evidence.
+   */
+  planReuse?: PlanReuseRecord;
+  /** Daemon-owned: set only on PLAN_SUBMITTED by submit_plan's internal recipe channel; stripped from caller updates. */
+  recipeInstance?: RecipeInstance;
   status: TaskStatus;
   assignedWorkerId: string | null;
   branch: string | null;
@@ -808,6 +1056,8 @@ export interface Task {
   hasPendingQuestion?: boolean;
   contextFetchedBy?: string[];
   stepsCompleted?: string[];
+  /** finalize_attempt alone sets unlanded worktree retries; landed/nothing-to-commit null it. Absent until first retry. */
+  landingRetry?: LandingRetry | null;
   /**
    * Handoff notes accumulated when workers release the task. Newest-first.
    * Surfaced to the next claimer via `moe.get_handoff_history`.
@@ -1089,6 +1339,11 @@ export interface ExecutionAttempt {
   generation: number;
   /** Checkout/worktree the attempt runs against. */
   workspace: string;
+  /**
+   * Set once by the claim; 'worktree' means workspace is the task's worktree.
+   * Absent on older records, which read as 'shared': no migration/version bump.
+   */
+  workspaceMode?: ExecutionWorkspaceMode;
   phase: ExecutionAttemptPhase;
   startedAt: string;
   /** When `phase` last changed. */
@@ -1114,6 +1369,71 @@ export interface ExecutionAttempt {
    */
   presenceKind?: AttemptPresenceKind;
   presenceAt?: string;
+  /**
+   * Configuration identity (see ExecutionPolicySnapshot). Captured once by the
+   * claim path (tools/claimNextTask.ts deriveAttemptPolicySnapshot) when a NEW
+   * attempt opens; repair and own-seat resume keep the original, and a
+   * successor records a fresh identity. Never rewritten or backfilled, so it is
+   * absent on every record opened before capture existed. Readers get detached
+   * copies. Decode it with readExecutionPolicySnapshot and never read it as
+   * approval or readiness.
+   */
+  executionPolicySnapshot?: ExecutionPolicySnapshot;
+  /** The latest get_context packet served to this attempt's own worker (see ServedContextReceipt). */
+  contextReceipt?: ServedContextReceipt;
+  /** Strict step completions on this attempt, oldest first; absent until the first (see StepCompletionEvidence). */
+  stepCompletions?: StepCompletionEvidence[];
+}
+
+/**
+ * One step completion recorded under strict (verified-local) authorization
+ * (CQ-F08). Execution evidence, appended only by attemptStore.recordStepCompletion
+ * on the attempt that completed the step, never rewritten or deleted. Purely
+ * additive: no migration, no schemaVersion bump. Decode it with
+ * readStepCompletions. It counts toward moe.complete_task only while that
+ * attempt is current and planRevision is the task's approved revision, and it
+ * is NEVER approval.
+ */
+export interface StepCompletionEvidence {
+  stepId: string;
+  /** The task's approved planRevision the step was completed under. */
+  planRevision: number;
+  completedAt: string;
+}
+
+/**
+ * The latest default or view:"full" get_context packet served to an attempt's
+ * own worker for one receiving session. Written only by
+ * attemptStore.recordContextReceipt, persisted before it is served; a later
+ * receipt replaces it. Never backfilled. Purely additive: no migration, no
+ * schemaVersion bump. Decode it with readContextReceipt.
+ *
+ * It records what was served to whom. It is NEVER approval, model
+ * understanding, readiness or liveness, and a packet id never substitutes for
+ * plan approval (that stays Task.approvedPlanRevision === Task.planRevision).
+ */
+export interface ServedContextReceipt {
+  /** 'ctxreceipt-<32 hex>'. */
+  id: string;
+  /** 'sha256:<64 hex>' of the served payload without its servedContext block. */
+  packetId: string;
+  taskId: string;
+  attemptId: string;
+  generation: number;
+  workerId: string;
+  /**
+   * The receiving session's incarnation exactly as its runner names it (the
+   * wrapper's MOE_SESSION_ID `<workerId>@<preflight-iso>`, one per CLI launch).
+   * The daemon never derives it; it is never evidence of liveness.
+   */
+  sessionId: string;
+  /** The task's planRevision when served. */
+  planRevision: number;
+  /** Task.approvedPlanRevision when it was a non-negative safe integer; else ABSENT, never null (the F04 rule). */
+  approvedPlanRevision?: number;
+  /** Which non-status read was served. */
+  view: 'default' | 'full';
+  servedAt: string;
 }
 
 // =============================================================================
@@ -1150,6 +1470,12 @@ export interface Candidate {
   readonly treeSha: string;
   /** Where the runner intends to deliver the bytes, e.g. `refs/heads/wave1-pilot`. */
   readonly deliveryTarget: string;
+  /**
+   * The runner's `git ls-tree -r` entries for the task's protected check paths in
+   * this tree, strictly ascending by path (UTF-8 bytes). Reported, never verified
+   * by the daemon (V03 authenticates runners). Absent means not measured.
+   */
+  readonly protectedEntries?: readonly { readonly path: string; readonly oid: string }[];
   /** Daemon clock when the candidate was first recorded. */
   readonly createdAt: string;
 }
@@ -1214,6 +1540,21 @@ export interface Review {
  */
 export type CheckRunSource = 'runner-observed' | 'agent-reported';
 
+/** How a check run ended, as REPORTED. Only `passed` can ever count toward a gate. */
+export type CheckOutcome =
+  /** Ran to completion and passed (exit 0). */
+  | 'passed'
+  /** Ran to completion and the code under test failed (nonzero exit). */
+  | 'code-failure'
+  /** The runner or environment failed, which says nothing about the code. */
+  | 'infra-failure'
+  /** Stopped at its time budget. */
+  | 'timeout'
+  /** Never ran. */
+  | 'skipped'
+  /** Ran, but the result cannot be judged. */
+  | 'inconclusive';
+
 /**
  * One reported command result for one candidate; persisted at
  * .moe/checks/<id>.json (daemon sole-writer, via state/checkRunStore.ts only).
@@ -1242,12 +1583,61 @@ export interface CheckRun {
   /** The runner the report names. Reported, not authenticated. */
   readonly runnerId: string;
   readonly source: CheckRunSource;
+  // Execution identities. REPORTED like treeSha: shape-validated, never
+  // authenticated. ABSENT on every row recorded before they existed and on any
+  // report that omits them; such a row is an unclassified legacy report. Nothing
+  // defaults, infers (no outcome from exitCode) or backfills them, and no stored
+  // row is rewritten.
+  /** How the run ended. `passed` requires exit 0, `code-failure` a nonzero exit. */
+  readonly outcome?: CheckOutcome;
+  /** The Task.planRevision the reporter ran under. */
+  readonly planRevision?: number;
+  /** Opaque execution-environment identity (e.g. an image or toolchain digest): compared exactly, never parsed. */
+  readonly environment?: string;
+  /** The dispatch request this run answers. */
+  readonly dispatchId?: string;
+  /**
+   * The ExecutionAttempt the check ran under: the producer's or a REVIEWER's.
+   * Distinct from Candidate.attemptId, which is always the producer.
+   */
+  readonly attemptId?: string;
   /**
    * Daemon clock when the run was first recorded. Every NEW record is stamped
    * with it, and a caller can never supply it. Optional ONLY so rows written
    * before the field existed still load; lists order such rows first.
    */
   readonly createdAt?: string;
+}
+
+/**
+ * Which check a trusted runner was asked to run; .moe/checks/dispatches/<id>.json, written only by
+ * state/checkObservationStore.ts. Pinned while current: the task's current candidate, its tree, its approved
+ * planRevision (at least 1) and the channel's runnerId, never caller-supplied. Never edited or deleted.
+ */
+export interface CheckDispatch {
+  readonly id: string;
+  readonly taskId: string;
+  readonly candidateId: string;
+  readonly treeSha: string;
+  readonly planRevision: number;
+  /** Verbatim, under the CheckRun command rule. */
+  readonly command: string;
+  readonly checkId?: string;
+  /** Opaque and verbatim: compared exactly. */
+  readonly environment: string;
+  readonly runnerId: string;
+  readonly createdAt: string;
+}
+
+/**
+ * The one CheckRun observed for a dispatch, whose id it carries; .moe/checks/observations/<dispatchId>.json,
+ * written only by state/checkObservationStore.ts after that run, never edited. A record_check_run run has none.
+ */
+export interface CheckObservation {
+  readonly id: string;
+  readonly checkRunId: string;
+  readonly runnerId: string;
+  readonly createdAt: string;
 }
 
 // =============================================================================
@@ -1461,7 +1851,7 @@ export interface DaemonInfo {
   pid: number;
   startedAt: string;
   projectPath: string;
-  /** Present only when the daemon listens beyond loopback (e.g. '0.0.0.0' for WSL agents). */
+  /** Present only when the bind host is not '127.0.0.1' (e.g. 'wsl' for WSL agents: loopback plus the WSL adapter). */
   bindHost?: string;
 }
 

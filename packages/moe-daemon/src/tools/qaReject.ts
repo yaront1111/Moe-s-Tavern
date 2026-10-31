@@ -6,7 +6,8 @@ import { missingRequired, invalidInput, notFound, invalidState } from '../util/e
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
 import { resetPlanStepsToPending } from '../util/reopen.js';
 import { bumpEffort, bumpTier, defaultModel, isEffort, isTier, planSizeFloor, tierEffort } from '../util/routing.js';
-import { recordReview, resolveReviewedCandidate } from '../state/reviewStore.js';
+import { recordReview } from '../state/reviewStore.js';
+import { assertReviewBinding } from '../delivery/reviewBinding.js';
 
 const VALID_ISSUE_TYPES: QAIssueType[] = [
   'test_failure', 'lint', 'security', 'missing_feature', 'regression', 'other'
@@ -15,7 +16,7 @@ const VALID_ISSUE_TYPES: QAIssueType[] = [
 export function qaRejectTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.qa_reject',
-    description: 'QA rejects a task in REVIEW status. Normally moves it back to WORKING for the worker to fix. Escalates automatically: when this rejection reaches the task\'s reopen cap (task.maxReopens, default 3) or a failedDodItems entry has now failed twice, the task goes to PLANNING for one re-plan; past the cap it stays in REVIEW, unassigned and flagged for a human. Name the exact DoD items in failedDodItems so repeat failures are detected, and pass candidateId for the bytes you reviewed.',
+    description: 'QA rejects a task in REVIEW status. Normally moves it back to WORKING for the worker to fix. Escalates automatically: when this rejection reaches the task\'s reopen cap (task.maxReopens, default 3) or a failedDodItems entry has now failed twice, the task goes to PLANNING for one re-plan; past the cap it stays in REVIEW, unassigned and flagged for a human. Name the exact DoD items in failedDodItems so repeat failures are detected, and pass candidateId for the bytes you reviewed. Under verified-local, rejection needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -47,7 +48,10 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
           type: 'string',
           description: 'The candidate you actually reviewed (get_context.currentCandidate.id). Refused with CANDIDATE_MISMATCH if the task has moved on to a different candidate, so a rejection names the bytes it judged. Optional only for projects that record no candidates.'
         },
-        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' },
+        attemptId: { type: 'string', maxLength: 128, description: 'The attemptId moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
+        generation: { type: 'integer', minimum: 1, description: 'The generation moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
+        sessionId: { type: 'string', description: 'The sessionId this session passed to moe.get_context. Optional under legacy/observe; required under verified-local.' }
       },
       required: ['taskId', 'reason'],
       additionalProperties: false
@@ -60,6 +64,9 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         issues?: QAIssue[];
         candidateId?: string;
         workerId?: string;
+        attemptId?: unknown;
+        generation?: unknown;
+        sessionId?: unknown;
       };
 
       if (!params.taskId) {
@@ -119,8 +126,11 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       // must name the bytes it judged, or the worker re-reads feedback written
       // against a tree that no longer exists. Refuses BEFORE every write —
       // nothing here has mutated state yet — and a task with no candidate
-      // recorded behaves exactly as it did before the gate existed.
-      const binding = resolveReviewedCandidate(state, task.id, params.candidateId, 'qa_reject');
+      // recorded behaves exactly as it did before the gate existed. Under
+      // verified-local it also fences QA's own attempt and requires the
+      // candidate (delivery/reviewBinding.ts); a reject never delivers, so a
+      // candidate from another plan revision can still be rejected.
+      const binding = assertReviewBinding(state, task, params, 'reject');
 
       // Dedupe + trim the failed-DoD payload up front. Two callers listing the
       // same item twice in ONE rejection must not fake a "same item failed

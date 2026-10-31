@@ -1,0 +1,240 @@
+{
+  "id": "task-f23c4464c8f24efeb8d62973111839ce",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: Legacy supervisor no-store test conflates profile reads with provenance reads",
+  "description": "CQ-RF02 must consult persisted profile state even for repository legacy/absent declarations. RF01's MoeDaemonSupervisorTest line 175 calls real profile() and expects store provider consult count 0, so the required gate fails expected 0 / actual 3. Isolate the legacy supervisor/provenance assertion using the existing injected profile seam, while retaining a real fresh-project LEGACY selection assertion; coordinate this overlapping test file with RF03. Evidence: /tmp/rf02-green.log.",
+  "definitionOfDone": [
+    "The legacy supervisor test still detects any provenance store read/write from spawn or activation, independently of legitimate profile-record reads.",
+    "Fresh-project profile selection remains asserted LEGACY and RF02 persisted-profile tests remain intact.",
+    "Fresh Windows JetBrains gate passes under jetbrains-gradle lease; overlapping supervisor-test edits are serialized."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED, then the fix. Load test-driven-development. The reporter already traced the cause: see mem:gotcha-protected-state-absent-root and /tmp/rf02-green.log.\n\nREAD FIRST\n- MoeDaemonSupervisorTest.kt: the row `a legacy spawn and activation neither write nor read the protected state store` (about lines 159-179).\n- MoeDaemonSupervisor.kt:\n  - the constructor seams `profile` and `installedRoot`;\n  - in ensureDaemonRunning, `if (isProtected && direct != null) recordProtectedSpawn(...)`;\n  - activationRefusal.\n- RuntimeSelectionPolicy.kt: profile → storedProfile → usableStore → `store()`. Since CQ-RF02, profile selection reads its own record through the same `store` provider.\n\nRun `git status --short -- moe-jetbrains/` before editing. Every dirty path you did not write belongs to a peer (for example task-90664db1's DaemonIdentity*.kt, MoeProjectForeignDaemonTest.kt and MoeProjectService.kt). Preserve its bytes: no checkout, stash or revert.\n\n1. RED BASELINE, fresh, in an archive copy so peers' in-progress files cannot interfere (mem:gotcha-jetbrains-qa-mutants-in-archive-copy).\n   - Acquire the lease with moe.acquire_resource {resourceId:'jetbrains-gradle'} (mem:convention-jetbrains-gradle-lease). If the request is queued, call moe.report_blocked with that resourceId. Hold the lease through step 2. Release it at the end of step 2 and on every failure path.\n   - `rm -rf /mnt/d/moe-scratch/f23c4464 && mkdir -p /mnt/d/moe-scratch/f23c4464/repo && git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/f23c4464/repo`. Record the HEAD sha.\n   - Run: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\f23c4464\\repo\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeDaemonSupervisorTest --rerun\"\n   - Expect exit 1. The fresh TEST-com.moe.services.MoeDaemonSupervisorTest.xml must show exactly one failing testcase: the legacy row, `legacy never consults the store expected:<0> but was:<N>` with N >= 1 (RF02's log shows 3).\n   - Anything else means the premise changed: green, a compile error, or another failing row. Then do not edit; add_comment the evidence and stop.\n\n2. moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt: edit ONLY that row. The `supervisor(...)` helper and every other row stay byte-identical, because RF03, RF04 and task-0c72d59a extend this harness next.\n   - Rename the row to `a legacy spawn and activation neither write nor read daemon provenance`.\n   - Keep these unchanged:\n     - the repo packages/moe-daemon/dist/index.js fixture;\n     - the counting seam `RuntimeSelectionPolicy.store = { consulted++; store }`;\n     - FakeProcess(self);\n     - the spawn's `Files.exists(store.root)` assertFalse;\n     - the garbage write;\n     - the activation assertNull;\n     - `finally { RuntimeSelectionPolicy.resetForTest() }`.\n   - Real selection stays asserted (DoD 2). With the counting seam installed:\n     - `assertEquals(RuntimeProfile.LEGACY, RuntimeSelectionPolicy.profile(root.absolutePath))`;\n     - then `assertTrue(\"the counting store seam is live\", consulted > 0)`. Reading the fresh project's own profile record is legitimate since RF02.\n     - then `consulted = 0`.\n   - Build the supervisor with named arguments. That is how the file passes seams the helper lacks (see the size-cap rows):\n     `MoeDaemonSupervisor(root.absolutePath, \"Test Project\", processStarter = { FakeProcess(self) }, profile = { RuntimeProfile.LEGACY }, installedRoot = { installed })`\n     - The profile seam keeps profile-record reads out of the count.\n     - `installed` is a new temp folder OUTSIDE the project that holds daemon/index.js. It is needed because verifyProvenance gives up before it touches the store when no installed daemon resolves, and the default installedRoot() resolves none under plain JUnit. Without it, an activation provenance READ would go uncounted.\n   - End with `assertEquals(\"a legacy spawn and activation never consult the store\", 0, consulted)`.\n   - Add one short why-comment for the pinned profile and one for the installed layout.\n\n3. moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt: COMMENT ONLY.\n   - activationRefusal's KDoc says \"LEGACY never reads the store\". RF02 made that false, because profile() now reads the profile record.\n   - Reword it: under LEGACY no daemon provenance is read, and profile selection reads only its own record.\n   - No code change.\n\n4. GREEN in the copy.\n   - Copy both edited files over the archive copy, and cmp each against the shared tree.\n   - Rerun the command from point 1 there. Expect exit 0, and 21 tests with 0 failures in the fresh XML.\n\nError handling:\n- Never weaken or delete an assertion to get green.\n- Never edit RuntimeSelectionPolicy.kt or RuntimeSelectionPolicyTest.kt. RF02's persisted-profile rows, and the D4 row that task-bf4debb3 owns, stay intact.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Resumed IN_PROGRESS step (start_step correctly refused re-entry). Fresh archive HEAD cfd583a8f3d53611be771b3c27511d0ef364986f RED: Windows focused command exit 1, fresh XML 21 tests/one failure, original legacy row expected 0 actual 3. Traced legitimate profile() -> storedProfile -> usableStore provider reads. Edited only legacy row: separate real LEGACY/liveness assertion, reset counter, pin supervisor profile and install external daemon fixture, retain spawn/activation/store assertions and finally reset. Supervisor production change KDoc only. Archive copied files cmp-identical, GREEN same focused command exit 0, fresh XML 21/21 with renamed row. Evidence /mnt/d/moe-scratch/f23c4464/{red,green}.log. Peer ProtectedStateStore.kt/RuntimeSelectionPolicyTest.kt dirty bytes preserved; lease retained for step-2.",
+      "startedAt": "2026-10-30T08:45:30.160Z",
+      "completedAt": "2026-10-30T08:49:22.403Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "VERIFY ONCE, still holding the jetbrains-gradle lease. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. MUTANTS, in the archive copy only. Never mutate the shared tree. Follow the harness pattern in mem:gotcha-jetbrains-qa-mutants-in-archive-copy and mem:pattern-qa-mutation-red-under-gradle-lease.\n   For each mutant:\n   - make an exact-anchor replacement in the copy's MoeDaemonSupervisor.kt, asserting the anchor occurs once;\n   - run step 1's archive command;\n   - read only the XML newer than the run's start;\n   - restore the file and check its sha256.\n   A kill counts only as an assertion failure of the renamed legacy row, never as a compile error.\n   - MA, a spawn that writes provenance: replace `if (isProtected && direct != null) recordProtectedSpawn(` with `if (direct != null) recordProtectedSpawn(`. The row must fail: the store root exists, or the count is above 0.\n   - MB, an activation that reads provenance but returns the same result: in activationRefusal, run the existing installedArtifact + verifyProvenance lookup BEFORE the `if (profile() != RuntimeProfile.PROTECTED) return null` guard, and discard its result. The row must fail on the zero count ALONE, since assertNull still passes. If MB survives, the installed layout is not reaching verifiedFromStore; fix the fixture.\n   Record each mutant's anchor and the failing assertion text in the step note.\n\n2. OFFICIAL GATE on the shared tree, fresh.\n   - First check `git status --porcelain -- moe-jetbrains/`, and that `.\\gradlew.bat --status` is idle (mem:gotcha-jetbrains-concurrent-gradle-cache).\n   - Run: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeDaemonSupervisorTest --rerun\"\n   - It must exit 0.\n   - Count from build/test-results/test/TEST-com.moe.services.MoeDaemonSupervisorTest.xml, using a timestamp after your recorded start time. Expect tests equal to the file's @Test count (21 at plan time), with 0 failures, 0 errors and 0 skipped. The renamed row must be present.\n   - This command, its exit code and its output tail are complete_task's verification evidence. Label it Windows evidence.\n   - The gate is focused on purpose: RuntimeSelectionPolicyTest's D4 row stays red until task-bf4debb3 lands, and RF02 (task-f3485ac9) reruns the full gate after both fixes.\n   - If a peer's in-progress .kt breaks the shared-tree compile, follow mem:gotcha-jetbrains-shared-tree-gate-peer-red:\n     - release the lease;\n     - keep the archive GREEN as interim evidence;\n     - wait for the peer to go green;\n     - rerun this exact command on the shared tree.\n     Never touch the peer's files.\n\n3. Release the lease, on failure paths too.\n\n4. Final checks.\n   - `git diff --check` over the two files is clean.\n   - `git status --short` shows only those two paths changed by this task.\n   - Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "No further project edits. Archive-only mutants both assertion-killed, 21 tests/exactly one failure each, fresh XML and exit 1 (not compile errors). MA anchor `if (isProtected && direct != null) recordProtectedSpawn(` -> `if (direct != null) recordProtectedSpawn(`: renamed row fails `a legacy spawn persists nothing`. MB anchor activationRefusal opening + `if (profile() != RuntimeProfile.PROTECTED) return null`: inserted installedArtifact/verifyProvenance lookup before guard and discarded result; renamed row fails only zero count, `a legacy spawn and activation never consult the store expected:<0> but was:<1>`, assertNull still passed. Restored SHA256 abed9fc3e0d18be0b65e7f6352939ae5a8cd16e95b7164aadec2f5252e53e463 after each; both copy files cmp shared. Windows official shared-tree focused plan command exit 0, Gradle IDLE first, fresh XML timestamp 2026-10-30T08:49:47.931Z (see official.log/XML), 21 tests matching @Test count, zero failures/errors/skipped, renamed row present. git diff --check clean, only task's two plugin paths dirty. Peer changes left untouched; byte checks prove rest of test file and all production code unchanged vs recorded archive HEAD. Lease released.",
+      "startedAt": "2026-10-30T08:49:22.430Z",
+      "completedAt": "2026-10-30T08:50:09.175Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the two-file diff as an attacker:\n- Could a future LEGACY spawn or activation read or write provenance and still pass this row?\n  - MA and MB are killed.\n  - Is any other route to the store left, for example a provider other than RuntimeSelectionPolicy.store?\n- Is the zero count vacuous anywhere?\n  - Is the counting seam installed before every call it must observe?\n  - Does the liveness check run before the reset?\n- Does pinning profile = LEGACY hide a real-path regression?\n  - The real profile() assertion must still cover fresh-project selection.\n  - RF02's persisted-profile rows must be untouched.\n- Does the row leak JVM-global state (the store seam, pinned, spawns) into other tests? Does resetForTest run on every path?\n- On Windows: 8.3 temp path names, the installed layout really outside the project, and file locks on the store root.\n- Is the KDoc now true for LEGACY in both ensureDaemonRunning and activationRefusal?\n- Would I be embarrassed if this shipped?\n\nFix any finding, then rerun step 2's gate command fresh, under the lease, before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Adversarial review once: no findings requiring edits. Both provenance mutants killed; current production routes use the observed store provider. Counting seam installed before real profile() assertion/liveness check; reset count only after liveness. External sibling installed folder canonicalizes outside project on Windows (MB reaches verifiedFromStore). Real fresh LEGACY selection retained; RF02 rows untouched. finally resetForTest clears store/pinned/spawns on assertion failures. Fixture IO closes handles, FakeProcess does not signal self; JUnit existing serial model unchanged (global seam unsuitable for future parallel tests). No production behavior/input surface changed; KDoc now distinguishes provenance from legitimate profile reads. Byte-scope check confirmed other rows/helper identical to archive HEAD. Final exact shared-tree Windows focused command rerun under reacquired lease: exit 0, 21/21 tests, 0 errors/skipped. Windows clock start 2026-10-30T08:50:55.437554Z, fresh XML 08:50:57.698Z, matching @Test count and renamed row. WSL clock measured ~2.6s ahead, so an earlier short rerun's WSL timestamp check rejected it; final freshness uses same Windows clock as Gradle and verifies both XML mtime and suite timestamp. Evidence final-windows.log and final-windows-start.txt in /mnt/d/moe-scratch/f23c4464. diff --check clean; lease released.",
+      "startedAt": "2026-10-30T08:50:09.199Z",
+      "completedAt": "2026-10-30T08:51:42.136Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 292.6,
+  "comments": [
+    {
+      "id": "comment-10251a35d4fd438298b0d97f9becad97",
+      "author": "worker-6e57c4f8",
+      "content": "Evidence correction: step-2's official XML timestamp was 2026-10-30T08:49:44.138Z (not the mistyped 08:49:47.931Z in its note). Counts/result were correct: 21 tests, 0 failures/errors/skipped. Running an additional exact shared-tree Windows gate after final adversarial review; final evidence will supersede that run.",
+      "timestamp": "2026-10-30T08:50:27.017Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T08:25:16.157Z",
+  "updatedAt": "2026-10-30T09:01:17.839Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T08:28:59.859Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3,
+    "doneAt": "2026-10-30T09:00:36.787Z",
+    "wallClockMs": 1896928
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-6e57c4f8",
+    "qa-ba3f4f35"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T08:44:30.509Z",
+  "executionContract": {
+    "intendedBehavior": "MoeDaemonSupervisorTest's legacy row proves that a LEGACY spawn and activation never read or write daemon provenance in the protected state store. It counts only spawn and activation, because the supervisor's profile is pinned through the existing constructor seam. A fresh project's real RuntimeSelectionPolicy.profile() is still asserted LEGACY; since CQ-RF02 it legitimately reads its own profile record. No production behavior changes; MoeDaemonSupervisor.kt changes only a KDoc sentence.",
+    "acceptanceCriteria": [
+      "The legacy row asserts zero store consultations across ensureDaemonRunning() and activationRefusal(), with profile = { LEGACY } and an installed daemon/index.js layout outside the project injected.",
+      "Mutant MA (LEGACY spawn records provenance) and mutant MB (LEGACY activation reads provenance, result unchanged) each fail that row with an assertion failure.",
+      "The row still asserts RuntimeSelectionPolicy.profile(freshProject) == LEGACY, with the counting seam proven live (consulted > 0) before the reset.",
+      "The focused Windows gate exits 0 under the jetbrains-gradle lease, with fresh XML counts."
+    ],
+    "invariants": [
+      "RuntimeSelectionPolicy.kt and RuntimeSelectionPolicyTest.kt are not edited, including RF02's persisted-profile rows and the D4 row owned by task-bf4debb3.",
+      "The supervisor(...) helper and every other MoeDaemonSupervisorTest row stay byte-identical.",
+      "Mutants run only in the /mnt/d/moe-scratch/f23c4464 archive copy, never in the shared tree."
+    ],
+    "compatibility": [
+      "LEGACY spawn and activation behavior is byte-for-byte unchanged."
+    ],
+    "approvedScope": [
+      "The MoeDaemonSupervisorTest legacy-store row (rename plus body).",
+      "The MoeDaemonSupervisor.activationRefusal KDoc sentence about LEGACY and the store."
+    ],
+    "sourceAssumptions": [
+      "MoeDaemonSupervisor's constructor has the seams `profile: () -> RuntimeProfile` and `installedRoot: () -> File?` (MoeDaemonSupervisor.kt:33-34).",
+      "RuntimeSelectionPolicy.store is the internal provider seam (RuntimeSelectionPolicy.kt:299). usableStore() calls it before checking usableFor.",
+      "verifyProvenance → verifiedFromStore returns false before usableStore() when installedDaemonKey(installedDaemon) is null.",
+      "buildDirectDaemonCommand returns a direct command for the repo dist fixture, falling back to node \"node\". So MA reaches recordProtectedSpawn."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeDaemonSupervisorTest --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Count only provenance file names by wrapping the store. Rejected: ProtectedStateStore is a final class with no read hook, and reads leave no filesystem trace.\n- Assert an exact count for the profile read and subtract it. Rejected: it couples the provenance row to RF02's internal read count.\n- Change the supervisor(...) helper to take a profile. Rejected: RF03, RF04 and task-0c72d59a extend that harness next. Direct construction with named arguments is already the file's idiom (the size-cap rows).\n- Chosen, as the task names it: pin the supervisor's profile through its existing constructor seam, and keep the real selection assertion separate. Also add an installed layout, so an activation provenance read is actually observable; without it the zero count is blind to activation reads, which MB proves.",
+    "codebaseInsights": "- RF02's 3 consults are all profile-record reads: the test's own profile() call, ensureDaemonRunning's profile() and activationRefusal's profile(). None of them is a provenance read.\n- verifyProvenance gives up before touching the store when no installed daemon resolves. Under plain JUnit, installedRoot() is null or build/classes, which has no daemon/index.js.\n- usableStore() increments a counting provider before its usableFor check.\n- profile() for an unpinned fresh project calls storedProfile → usableStore exactly once.\n- buildDirectDaemonCommand falls back to node \"node\", so the LEGACY direct command exists with the repo dist fixture.",
+    "risks": "- Serialization (DoD 3), done at plan time: task-f23c4464 is added to the dependsOn of RF03 (task-ec64165c) and task-0c72d59a, which both edit MoeDaemonSupervisorTest.kt and MoeDaemonSupervisor.kt. RF04 follows through RF03. None of them is in flight, and no in-flight task edits either file.\n- The shared tree holds task-90664db1's in-progress .kt files. RED, GREEN and the mutants therefore run in an archive copy, and the official gate runs on the shared tree with the peer-red fallback.\n- RuntimeSelectionPolicyTest D4 stays red until task-bf4debb3 lands. The gate is the focused class, as the RF02 worker asked; RF02 owns the full gate.\n- Windows only: WSL has no JDK. Use the cmd.exe gradlew.bat route under the lease.\n- ProcessHandle.current() must report a start instant, which it does on Windows. Otherwise MB cannot reach the store.",
+    "keyFiles": [
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T08:44:30.534Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T08:45:30.160Z",
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "a0f538ffe3140995ac2896f63eb7a92d73a310d2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-6e57c4f8@2026-10-30T08:44:43Z",
+      "paths": [
+        ".moe/tasks/task-f23c4464c8f24efeb8d62973111839ce.json"
+      ],
+      "recordedBy": "worker-6e57c4f8",
+      "recordedAt": "2026-10-30T08:46:06.515Z",
+      "treeId": "7fc51bb2f7edaef2aec9fbbaa2258ed43ddb8c0b",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "8183aaf508e975b54f11b973a52bceeaf293e5b4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-6e57c4f8@2026-10-30T08:47:16Z",
+      "paths": [
+        ".moe/tasks/task-86093c3efd8645748f460db870073392.json",
+        ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+        ".moe/tasks/task-f23c4464c8f24efeb8d62973111839ce.json",
+        ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "recordedBy": "worker-6e57c4f8",
+      "recordedAt": "2026-10-30T08:52:11.640Z",
+      "treeId": "0db9b9ab26093567b5fea03af3f0e71c9c6cf6d6",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "bc1286afba7ca5edc46098a32e516317979867bf",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T08:55:39Z",
+      "paths": [
+        ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-f23c4464c8f24efeb8d62973111839ce.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T09:01:17.839Z",
+      "treeId": "11e7e23305d5af4610071edb74824c0461c05f45",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    ".moe/tasks/task-86093c3efd8645748f460db870073392.json",
+    ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+    ".moe/tasks/task-f23c4464c8f24efeb8d62973111839ce.json",
+    ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
+    ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T08:55:39Z",
+    "at": "2026-10-30T09:01:17.839Z"
+  },
+  "reviewStartedAt": "2026-10-30T08:51:55.770Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeDaemonSupervisorTest --rerun\"",
+    "exitCode": 0,
+    "outputTail": "Windows evidence (final-windows.log):\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 3s\n11 actionable tasks: 2 executed, 9 up-to-date\nFresh XML: tests=\"21\" skipped=\"0\" failures=\"0\" errors=\"0\" timestamp=\"2026-10-30T08:50:57.698Z\"; Windows run start 2026-10-30T08:50:55.437554Z. Tests equal file @Test count; renamed legacy provenance row present.",
+    "reportedAt": "2026-10-30T08:51:55.770Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Separated legitimate persisted-profile reads from legacy daemon provenance assertions. Kept real fresh-project LEGACY selection and added counting-seam liveness; pinned only supervisor profile and provided external installed daemon fixture. Only legacy test row changed; supervisor KDoc only, all other rows/helper and RF02 tests untouched. Fresh archive RED (expected 0 actual 3), GREEN 21/21, both spawn-write and activation-read mutants assertion-killed. Final shared-tree Windows gate 21/21 passing under jetbrains-gradle lease; fresh XML timestamp 2026-10-30T08:50:57.698Z after Windows start 08:50:55.437554Z. Adversarial review and diff --check clean. Lease released. Repro/evidence /mnt/d/moe-scratch/f23c4464; Serena handoff recorded. Peer bytes preserved; wrapper owns landing.",
+  "completedAt": "2026-10-30T09:00:36.787Z",
+  "reviewCompletedAt": "2026-10-30T09:00:36.787Z",
+  "reviewSummary": "Reviewed completion 8183aaf508e975b54f11b973a52bceeaf293e5b4 via git show/branch --contains (moe/work-2026-10-24); a0f538ff checkpoint is board-only. Source +14/-4 (net +10), exactly the legacy test row and supervisor KDoc; all other rows/helper, RF02 policy/tests and production code byte-unchanged. Board diffs are daemon state. diff --check clean; no shared plugin changes before/after QA.\nReran exact task.verification command under jetbrains-gradle after --status IDLE: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeDaemonSupervisorTest --rerun\". Exit 0; Windows start 08:56:59.405203Z, fresh XML 08:57:01.804Z: 21 tests, 0 failures/errors/skips, matching @Test count and renamed row present.\nIndependently verified 99-path completion archive; focused GREEN and restored GREEN each 21/21. Archive-only MA removed spawn isProtected guard: assertion-killed on 'a legacy spawn persists nothing'. MB eagerly read installed provenance before LEGACY guard while discarding result: assertion-killed solely on expected 0/actual 1 counter, with assertNull still passing. Each exit 1, exactly one failing renamed row, fresh XML; restored SHA256 verified. Evidence /mnt/d/moe-scratch/f23c4464/qa/.\nAll DoD met: fresh real LEGACY + seam-liveness assertions, isolated zero provenance counter, external installed fixture, finally cleanup; RF03 dependency serializes overlap. Lease released. Full regression remains unverified here and is explicitly RF02's gate after both child fixes; RF07 owns final integration. No config/migration needed. Complexity: Lean already. net: -0 lines possible. Reusable seam/vacuity lesson saved; task handoff will be safely archived.",
+  "requiredCheckAtDone": null
+}

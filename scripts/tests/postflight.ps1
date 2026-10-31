@@ -2,6 +2,8 @@
 $ErrorActionPreference = 'Stop'
 # Claude account rotation stays off unless the [accounts] scenario turns it on.
 $env:MOE_ACCOUNT_ROTATION = 'off'
+# A protected launch's marker never reaches the legacy rows; [protected runtime] sets it per row.
+Remove-Item Env:MOE_RUNTIME_PROTECTED -ErrorAction SilentlyContinue
 
 $root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $wrapper = Join-Path $root 'scripts\moe-agent.ps1'
@@ -82,554 +84,10 @@ try {
     Set-Content -Path (Join-Path $projectDir '.moe\project.json') -Value '{"id":"proj-smoke","name":"postflight-smoke","settings":{"autoCommit":false}}' -Encoding UTF8
     Set-Content -Path (Join-Path $projectDir '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
 
-    # Fake daemon+proxy: one node process per RPC, steered only by FAKE_* env
-    # vars. Twin of the script in postflight.sh — keep the two in step.
-    #   FAKE_CLAIM_MODE=resume|blocked   claim_next_task returns alreadyAssigned
-    #   FAKE_TASK_STATUS                 status get_context/list_tasks report
-    #   FAKE_GET_CONTEXT_FAIL=empty|mismatch
-    #   FAKE_SIBLING_ORDER, FAKE_LIST_TASKS_TRUNCATED   (epic-final / pagination)
-    #   FAKE_CTX_IS_EPIC_FINAL=true|false                daemon-computed
-    #                                    isEpicFinal in get_context (unset =
-    #                                    old daemon); FAKE_CTX_IS_EPIC_FINAL_AT=top
-    #                                    serves it top-level instead of task-level
-    #   FAKE_SCOPE_ASSERTED / FAKE_SCOPE_PLANNED         comma lists overriding
-    #                                    the on-disk record's declared sets
-    #   FAKE_SCOPE_PEER_DECLARED         "path:taskId,..." overriding the peer
-    #                                    union read from the other records
-    #   FAKE_SCOPE_PEERS_ACTIVE=1        another worker is live (livePeerIds)
-    #   FAKE_SCOPE_ASSIGNED              assignedWorkerId reported by the scope
-    #   FAKE_SCOPE_DECLARED_FIELD=1      serve `declared` (the record's
-    #                                    declaredFiles) as the current daemon
-    #                                    does; unset models a daemon from
-    #                                    before the field (every asserted
-    #                                    path lands regardless of baseline)
-    # Side effects: chat_send -> .moe/messages/<channel>.jsonl, heartbeat ->
-    # .moe/heartbeat.log, record_commit -> .moe/record_commit.jsonl.
+    # The fake daemon+proxy both postflight harnesses share (knobs at its
+    # handlers). Copy-Item keeps its bytes, so Windows PowerShell 5.1 adds no BOM.
     $fakeProxy = Join-Path $tempRoot 'fake-proxy.js'
-    Set-Content -Path $fakeProxy -Encoding UTF8 -Value @'
-const fs = require('fs');
-const path = require('path');
-const raw = fs.readFileSync(0, 'utf8').trim();
-const req = raw ? JSON.parse(raw) : { id: 1, params: { name: '', arguments: {} } };
-const tool = String(req.params?.name || '').replace(/^moe\./, '');
-const args = req.params?.arguments || {};
-const project = process.env.MOE_PROJECT_PATH || process.cwd();
-const moe = path.join(project, '.moe');
-function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true }); }
-function ok(payload) {
-  process.stdout.write(JSON.stringify({
-    jsonrpc: '2.0',
-    id: req.id || 1,
-    result: { content: [{ type: 'text', text: JSON.stringify(payload) }] }
-  }) + '\n');
-}
-function readTask(id) {
-  // Set-Content -Encoding UTF8 on Windows PowerShell 5.1 writes a BOM, which
-  // JSON.parse rejects — strip it.
-  try { return JSON.parse(fs.readFileSync(path.join(moe, 'tasks', `${id}.json`), 'utf8').replace(/^﻿/, '')); } catch { return null; }
-}
-function strList(v) { return Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x) : []; }
-function declaredSets(task) {
-  const asserted = new Set();
-  const planned = new Set();
-  for (const s of (task.implementationPlan || [])) {
-    if (!s) continue;
-    if (s.status === 'COMPLETED') for (const p of (s.modifiedFiles || s.affectedFiles || [])) asserted.add(p);
-    for (const p of [...strList(s.affectedFiles), ...strList(s.newFiles), ...strList(s.modifiedFiles)]) planned.add(p);
-  }
-  for (const p of [...strList(task.filesModified), ...strList(task.declaredFiles), ...strList(task.touchedFiles)]) asserted.add(p);
-  for (const p of strList(task.inferredPaths)) planned.add(p);
-  for (const p of asserted) planned.delete(p);
-  return { asserted: [...asserted], planned: [...planned] };
-}
-function csv(v) { return String(v || '').split(',').map((s) => s.trim()).filter(Boolean); }
-
-// Candidate/check/finalize recorder: reject invalid payloads instead of green
-// mocks accepting arbitrary calls. This fixture never calls the live daemon.
-const assert = require('node:assert/strict');
-const rpcLog = path.join(moe, 'evidence-rpcs.jsonl');
-const appendRpc = () => fs.appendFileSync(rpcLog, JSON.stringify({tool,args}) + '\n');
-function readRows(file) {
-  try { return fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse); }
-  catch (e) { if (e.code === 'ENOENT') return []; throw e; }
-}
-function attemptFixture() {
-  const id = 'attempt-postflight', generation = 7;
-  const taskId = process.env.FAKE_CLAIM_MODE === 'resume' ? 'task-resume' : 'task-postflight';
-  ensureDir(path.join(moe, 'attempts'));
-  const file = path.join(moe, 'attempts', id + '.json');
-  // openAttempt records the runner's pair exactly as the claim sent it.
-  // FAKE_ATTEMPT_PHASE=reconciling: a daemon restart parked the attempt before
-  // the wrapper pinned it (the window a resume after a restart lands in).
-  if (!fs.existsSync(file)) fs.writeFileSync(file, JSON.stringify({
-    id, generation, taskId, workerId: args.workerId, runnerId: args.workerId,
-    phase: process.env.FAKE_ATTEMPT_PHASE || 'running', workspace: project, startedAt: new Date().toISOString(), lastPhaseAt: new Date().toISOString(),
-    ...(args.processStartedAt === undefined ? {} : {processStartedAt: args.processStartedAt, host: args.host})
-  }));
-  if (process.env.FROZEN_MODE === 'claim-missing' || process.env.FAKE_CLAIM_TOKENS === 'missing') return {};
-  return {attemptId: id, generation: process.env.FROZEN_MODE === 'claim-malformed' ? '7' : generation};
-}
-const safeId = v => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(v);
-const sha = v => typeof v === 'string' && /^[a-f0-9]{40}$/.test(v);
-function candidateReply() {
-  let payload;
-  const a = JSON.parse(fs.readFileSync(path.join(moe,'attempts',args.attemptId+'.json'),'utf8'));
-  assert.equal(args.taskId,a.taskId); assert.equal(args.workerId,a.workerId);
-  assert.equal(args.generation,a.generation); assert.notEqual(a.phase,'closed');
-  assert.ok(safeId(args.id)); assert.ok(sha(args.treeSha)); assert.ok(sha(args.baseRevision));
-  assert.match(args.deliveryTarget,/^refs\/heads\/.+/);
-  const {generation,workerId,...candidate} = args;
-  payload = {success:true,candidate:{...candidate,createdAt:new Date().toISOString()},duplicate:false};
-  ensureDir(path.join(moe,'candidates'));
-  const file = path.join(moe,'candidates',args.id+'.json');
-  if (fs.existsSync(file)) {
-    payload.candidate = JSON.parse(fs.readFileSync(file,'utf8')); payload.duplicate = true;
-    for (const key of Object.keys(candidate)) assert.deepEqual(payload.candidate[key],candidate[key]);
-  } else fs.writeFileSync(file,JSON.stringify(payload.candidate));
-  return payload;
-}
-function checkReply() {
-  let payload;
-  const c = JSON.parse(fs.readFileSync(path.join(moe,'candidates',args.candidateId+'.json'),'utf8'));
-  assert.equal(args.treeSha,c.treeSha); assert.ok(safeId(args.id)); assert.ok(safeId(args.runnerId));
-  const tip = require('node:child_process').spawnSync('git',['-C',project,'rev-parse','--verify',c.deliveryTarget],{encoding:'utf8'});
-  if(tip.status===0) assert.equal(tip.stdout.trim(),c.baseRevision,'CheckRun must persist before CAS');
-
-  assert.equal(args.source,'runner-observed'); assert.ok(Number.isSafeInteger(args.exitCode));
-  assert.ok(typeof args.command === 'string' && args.command.trim() && args.command.length <= 500);
-  assert.ok(typeof args.outputTail === 'string' && Buffer.byteLength(args.outputTail,'utf8') <= 16384);
-  assert.ok(!args.outputTail.includes('\ufffd'));
-  const {workerId,...checkRun} = args;
-  payload = {success:true,checkRun:{...checkRun,createdAt:new Date().toISOString()},duplicate:false};
-  ensureDir(path.join(moe,'checks'));
-  fs.writeFileSync(path.join(moe,'checks',args.id+'.json'),JSON.stringify(payload.checkRun));
-  return payload;
-}
-function finalizeReply() {
-  let payload;
-  const mode = process.env.FAKE_EVIDENCE_MODE || '';
-  const file = path.join(moe,'attempts',args.attemptId+'.json');
-  const a = JSON.parse(fs.readFileSync(file,'utf8'));
-  assert.equal(args.taskId,a.taskId); assert.equal(args.workerId,a.workerId);
-  assert.equal(args.generation,a.generation); assert.ok(safeId(args.runnerId));
-  assert.ok(['finalizing','closed'].includes(a.phase));
-  assert.ok(['landed','nothing-to-commit','rescued','failed'].includes(args.outcome));
-  if (args.outcome === 'landed') {
-    assert.ok(sha(args.landedRevision));
-    const rows = readRows(rpcLog);
-    assert.ok(rows.some(r => r.tool === 'record_commit' && r.args.outcome === 'committed'
-      && r.args.kind === 'completion' && r.args.sha === args.landedRevision));
-  } else assert.equal(args.landedRevision,undefined);
-  a.phase = 'closed'; fs.writeFileSync(file,JSON.stringify(a));
-  payload = {success:true,taskId:a.taskId,attemptId:a.id,generation:a.generation,phase:'closed',
-    outcome:args.outcome,landedRevision:args.landedRevision || null};
-  if (mode === 'finalize-loss' || (mode === 'finalize-loss-once'
-    && readRows(rpcLog).filter(r=>r.tool === tool).length === 1)) return null;
-  return payload;
-}
-// receiptStore.ts in miniature: one receipt per candidate, an identical replay
-// writes nothing (duplicate), a differing one is DELIVERY_RECEIPT_CONFLICT.
-function receiptReply() {
-  assert.ok(safeId(args.candidateId));
-  assert.ok(typeof args.target === 'string' && args.target && args.target === args.target.trim() && args.target.length <= 255
-    && [...args.target].every(ch => ch.charCodeAt(0) > 31 && ch.charCodeAt(0) !== 127));
-  for (const key of ['targetBefore','targetAfter','landedRevision']) assert.ok(sha(args[key]), key);
-  const receipt = {candidateId:args.candidateId,target:args.target,targetBefore:args.targetBefore,
-    targetAfter:args.targetAfter,landedRevision:args.landedRevision,pushResult:args.pushResult ?? null};
-  if (receipt.pushResult !== null) assert.ok(typeof receipt.pushResult === 'string' && receipt.pushResult.trim() && receipt.pushResult.length <= 2000);
-  const file = path.join(moe,'receipts',args.candidateId+'.json');
-  if (fs.existsSync(file)) {
-    const stored = JSON.parse(fs.readFileSync(file,'utf8'));
-    const differing = Object.keys(receipt).filter(key => stored[key] !== receipt[key]);
-    if (differing.length) throw Object.assign(new Error('receipt differs in '+differing.join(', ')),{codeName:'DELIVERY_RECEIPT_CONFLICT'});
-    return {success:true,receipt:stored,duplicate:true};
-  }
-  assert.ok(fs.existsSync(path.join(moe,'candidates',args.candidateId+'.json')),'CANDIDATE_NOT_FOUND');
-  ensureDir(path.join(moe,'receipts'));
-  fs.writeFileSync(file,JSON.stringify({id:'receipt-'+args.candidateId,...receipt}));
-  return {success:true,receipt:{id:'receipt-'+args.candidateId,...receipt},duplicate:false};
-}
-// reattachAttempt.ts in miniature: the attempt id, generation, recorded process
-// start time and host must all match exactly (nothing recorded never matches),
-// and only a reconciling or already-running attempt returns to running.
-// FAKE_REATTACH_REFUSE=1 refuses even a matching identity, as a stranger's.
-function reattachReply() {
-  for (const key of ['taskId','workerId','runnerId','attemptId','processStartedAt','host'])
-    assert.ok(typeof args[key] === 'string' && args[key].trim(), key);
-  assert.ok(Number.isSafeInteger(args.generation) && args.generation > 0, 'generation');
-  const file = path.join(moe,'attempts',args.attemptId+'.json');
-  if (!fs.existsSync(file)) throw Object.assign(new Error('Attempt not found: '+args.attemptId),{codeName:'ATTEMPT_NOT_FOUND'});
-  const a = JSON.parse(fs.readFileSync(file,'utf8'));
-  if (a.taskId !== args.taskId) throw Object.assign(new Error('Attempt '+a.id+' belongs to '+a.taskId),{codeName:'ATTEMPT_ID_TASK_MISMATCH'});
-  const field = process.env.FAKE_REATTACH_REFUSE === '1' ? 'processStartedAt'
-    : ['generation','processStartedAt','host'].find(key => a[key] === undefined || a[key] !== args[key]);
-  if (field) throw Object.assign(new Error('Attempt '+a.id+' does not match the presented identity ('+field+' differs)'),{codeName:'ATTEMPT_IDENTITY_MISMATCH'});
-  if (!['reconciling','running'].includes(a.phase)) throw Object.assign(new Error('Attempt '+a.id+' is in phase '+a.phase),{codeName:'ATTEMPT_NOT_REATTACHABLE'});
-  a.phase = 'running'; fs.writeFileSync(file,JSON.stringify(a));
-  return {success:true,attemptId:a.id,taskId:a.taskId,generation:a.generation,phase:'running'};
-}
-// Teardown arms hold ONE call until the supervisor has interrupted the wrapper:
-// the post-flight landing's get_commit_scope (teardown-scope: no outcome yet), or
-// the completion's ledger row once it reached one (teardown-landed: a branch CAS,
-// teardown-nothing: nothing to commit). A proxy the interrupt kills never got its
-// call through, so a held call is logged only once its hold is over.
-function holdForInterrupt() {
-  const mode = process.env.FAKE_EVIDENCE_MODE, ready = path.join(moe, 'gate-ready');
-  const scope = mode === 'teardown-scope' && tool === 'get_commit_scope' && args.phase === 'postflight';
-  const ledger = tool === 'record_commit' && args.kind === 'completion'
-    && args.outcome === {'teardown-landed': 'committed', 'teardown-nothing': 'nothing'}[mode];
-  if (!(scope || ledger) || fs.existsSync(ready)) return;
-  fs.writeFileSync(ready, 'ready');
-  for (let i = 0; i < 1200 && !fs.existsSync(ready + '.sent'); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-}
-// receipt-ledger-replay: the FIRST committed completion row is never recorded;
-// the supervisor hard-kills the wrapper tree while its landing waits on it (a
-// crash between update-ref and record_commit), so no log shows the call.
-function holdLedgerForCrash() {
-  const held = path.join(moe, 'ledger-held');
-  if (process.env.FAKE_EVIDENCE_MODE !== 'receipt-ledger-replay' || tool !== 'record_commit' || args.outcome !== 'committed'
-    || args.kind !== 'completion' || fs.existsSync(held)) return;
-  fs.writeFileSync(held, 'held');
-  for (let i = 0; i < 1200; i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-  process.exit(1);
-}
-function evidenceRpc() {
-  appendRpc();
-  if (['record_commit','deregister_worker','add_comment'].includes(tool)) return false;
-  const refusal = (message, codeName) => process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,
-    error:{code:-32002,message,data:{codeName:codeName || 'FIXTURE_REFUSED'}}}) + '\n');
-  const mode = process.env.FAKE_EVIDENCE_MODE || '';
-  if (mode === tool + '-refuse') { refusal('fixture persistence refused'); return true; }
-  if (mode === tool + '-null') { ok(null); return true; }
-  if (mode === tool + '-malformed') { ok({success:true}); return true; }
-  if (tool === 'record_delivery_receipt' && mode === 'receipt-refused') { refusal('fixture receipt refused'); return true; }
-  if (tool === 'record_delivery_receipt' && mode === 'receipt-conflict') { refusal('fixture receipt conflict', 'DELIVERY_RECEIPT_CONFLICT'); return true; }
-  // receipt-replay, receipt-rebase-replay, receipt-foreign-replay: the FIRST
-  // receipt is never answered; the supervisor hard-kills the wrapper tree while
-  // it waits (acceptance case 6's crash).
-  const held = path.join(moe, 'receipt-held');
-  if (['receipt-replay','receipt-rebase-replay','receipt-foreign-replay'].includes(mode) && tool === 'record_delivery_receipt' && !fs.existsSync(held)) {
-    fs.writeFileSync(held, 'held');
-    for (let i = 0; i < 1200; i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-    process.exit(1);
-  }
-  try {
-    const payload = tool === 'record_candidate' ? candidateReply() : tool === 'record_check_run' ? checkReply()
-      : tool === 'record_delivery_receipt' ? receiptReply() : tool === 'reattach_attempt' ? reattachReply() : finalizeReply();
-    if (payload !== null) ok(payload);
-  } catch(e) { refusal(e.message, e.codeName); }
-  return true;
-}
-holdForInterrupt();
-holdLedgerForCrash();
-if (['record_candidate','record_check_run','record_delivery_receipt','finalize_attempt','record_commit','deregister_worker','add_comment','reattach_attempt'].includes(tool)) {
-  if (evidenceRpc()) process.exit(0);
-}
-// claimNextTask.ts readProcessIdentity in miniature: the runner's pair is
-// both-or-neither, non-blank, bounded (200 / 255) and free of control
-// characters, and a refused claim assigns nobody. Every claim is logged with
-// the pair it sent.
-if (tool === 'claim_next_task') {
-  appendRpc();
-  const bad = [['processStartedAt', 200], ['host', 255]].find(([key, max]) => args[key] !== undefined && !(typeof args[key] === 'string'
-    && args[key].trim() && args[key].length <= max && [...args[key]].every(ch => ch.charCodeAt(0) > 31 && ch.charCodeAt(0) !== 127)));
-  if (bad || (args.processStartedAt === undefined) !== (args.host === undefined)) {
-    console.log(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32602,message:'Invalid '+(bad ? bad[0] : 'runner identity: send processStartedAt and host together'),
-      data:{tool:'moe.claim_next_task',codeName:'INVALID_INPUT'}}}));
-    process.exit(0);
-  }
-}
-// FAKE_HEARTBEAT_REATTACH mirrors heartbeat.ts's reattach-required answer: `1`
-// reads the caller's attempt (attempt-reconciling while a restart has it parked,
-// a plain ack otherwise); `other` alternates the two reasons that name no
-// attempt. FAKE_HEARTBEAT_ATTEMPT names the attempt the seat's current task
-// holds (default attempt-postflight). .moe/heartbeat-count counts the pings.
-if (tool === 'heartbeat' && process.env.FAKE_HEARTBEAT_REATTACH) {
-  const counter = path.join(moe, 'heartbeat-count');
-  const n = Number(fs.existsSync(counter) ? fs.readFileSync(counter, 'utf8') : 0) + 1;
-  fs.writeFileSync(counter, String(n));
-  const reattach = (reason, a) => ({ok:false,reattachRequired:true,reason,reattachWith:'moe.reattach_attempt',...(a ? {attemptId:a.id,phase:a.phase} : {})});
-  let a = null;
-  try { a = JSON.parse(fs.readFileSync(path.join(moe,'attempts',(process.env.FAKE_HEARTBEAT_ATTEMPT || 'attempt-postflight')+'.json'),'utf8')); } catch {}
-  if (process.env.FAKE_HEARTBEAT_REATTACH === 'other') ok(reattach(n % 2 ? 'no-worker-record' : 'no-open-attempt'));
-  else ok(a && a.workerId === args.workerId && a.phase === 'reconciling' ? reattach('attempt-reconciling', a) : {ok:true});
-  process.exit(0);
-}
-// FAKE_CLAIM_MODE=finalizing: claimNextTask.ts refuses a seat whose own attempt
-// is still finalizing (ATTEMPT_FINALIZING); with none, nothing is claimable.
-if (tool === 'claim_next_task' && process.env.FAKE_CLAIM_MODE === 'finalizing') {
-  const dir = path.join(moe, 'attempts');
-  const open = (fs.existsSync(dir) ? fs.readdirSync(dir) : []).map(f => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return {}; } })
-    .find(a => a.workerId === args.workerId && a.phase === 'finalizing');
-  if (open) process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32002,message:'Attempt '+open.id+' is still finalizing',
-    data:{tool:'moe.claim_next_task',codeName:'ATTEMPT_FINALIZING'}}}) + '\n');
-  else ok({ hasNext: false });
-  process.exit(0);
-}
-// FAKE_CLAIM_ONCE=1: only the first claim hands out the task. Every later claim
-// answers idle and leaves .moe/second-claim, the proof that a --loop wrapper
-// went on claiming after its post-flight instead of stopping.
-// FAKE_CLAIM_LIMIT=N: the same, but the first N claims hand out the task.
-let claimOnceIdle = false;
-const claimLimit = process.env.FAKE_CLAIM_ONCE === '1' ? 1 : Number(process.env.FAKE_CLAIM_LIMIT || 0);
-if (tool === 'claim_next_task' && claimLimit > 0) {
-  const claimCount = path.join(moe, 'claim-count');
-  const claimN = Number(fs.existsSync(claimCount) ? fs.readFileSync(claimCount, 'utf8') : 0) + 1;
-  fs.writeFileSync(claimCount, String(claimN));
-  if (claimN > claimLimit) { claimOnceIdle = true; fs.writeFileSync(path.join(moe, 'second-claim'), String(claimN)); }
-}
-if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked','noteam','noteam-until-joined'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
-if (tool === 'get_context' && args.taskId) {
-  const countFile = path.join(moe,'context-count');
-  const count = Number(fs.existsSync(countFile) ? fs.readFileSync(countFile,'utf8') : 0) + 1;
-  fs.writeFileSync(countFile,String(count));
-  const file = path.join(moe,'attempts','attempt-postflight.json');
-  if (count > 1 && ['REVIEW','DONE','ARCHIVED'].includes(process.env.FAKE_TASK_STATUS) && fs.existsSync(file)) {
-    const a = JSON.parse(fs.readFileSync(file,'utf8'));
-    if (a.phase === 'running') { a.phase = 'finalizing'; fs.writeFileSync(file,JSON.stringify(a)); }
-  }
-}
-
-switch (tool) {
-  case 'create_team': ok({ team: { id: 'team-smoke', name: args.name || 'Smoke' } }); break;
-  case 'join_team': {
-    // FAKE_JOIN_FULL=1: refused the way teamStore refuses a join to a full team.
-    // FAKE_JOIN_FULL_UNTIL=N: only the first N joins are refused, as when a seat
-    // frees up (or maxSize is raised) after the wrapper launched. .moe/join-count
-    // counts every join; .moe/team-joined marks an accepted one.
-    ensureDir(moe);
-    const joinCount = path.join(moe, 'join-count');
-    const joinN = Number(fs.existsSync(joinCount) ? fs.readFileSync(joinCount, 'utf8') : 0) + 1;
-    fs.writeFileSync(joinCount, String(joinN));
-    if (process.env.FAKE_JOIN_FULL === '1' || joinN <= Number(process.env.FAKE_JOIN_FULL_UNTIL || 0)) {
-      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32000,message:'Team Smoke is full (max 10 members)',data:{tool:'moe.join_team'}}}) + '\n');
-      process.exit(0);
-    }
-    fs.writeFileSync(path.join(moe, 'team-joined'), String(joinN));
-    ok({ success: true }); break;
-  }
-  case 'chat_channels': ok({ channels: [{ id: 'chan-general', name: 'general', type: 'general' }] }); break;
-  case 'chat_join': ok({ success: true }); break;
-  case 'chat_read': {
-    // FAKE_MENTION=1 models one unread message tagging the caller. The record
-    // is also appended to the store the wrapper re-reads bodies from, so the
-    // mention passes provenance instead of degrading to a delivery marker.
-    if (process.env.FAKE_MENTION === '1' && args.channel === 'chan-general') {
-      const msg = { id: 'msg-fake-1', channel: 'chan-general', sender: 'human', content: 'ping', mentions: [args.workerId || 'all'], timestamp: new Date().toISOString() };
-      const dir = path.join(moe, 'messages');
-      ensureDir(dir);
-      fs.appendFileSync(path.join(dir, 'chan-general.jsonl'), JSON.stringify(msg) + '\n');
-      ok({ messages: [msg], cursor: null, truncated: 0 });
-      break;
-    }
-    ok({ messages: [], cursor: null, truncated: 0 });
-    break;
-  }
-  case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
-  case 'claim_next_task': {
-    if (claimOnceIdle) { ok({ hasNext: false }); break; }
-    if (process.env.FAKE_CLAIM_MODE === 'resume') {
-      // One-task-per-worker guard shape (claimNextTask.ts): the worker already
-      // holds an active task from a CLI session that died mid-task.
-      ok({
-        hasNext: false,
-        alreadyAssigned: { taskId: 'task-resume', title: 'Resume smoke', status: process.env.FAKE_TASK_STATUS || 'REVIEW' },
-        nextAction: { tool: 'moe.get_context', args: { taskId: 'task-resume' }, reason: 'One task per worker: you already hold task-resume.' },
-        // FAKE_CLAIM_LAUNCH: the per-task tier hint (claimNextTask.ts launch).
-        ...(process.env.FAKE_CLAIM_LAUNCH ? { launch: JSON.parse(process.env.FAKE_CLAIM_LAUNCH) } : {})
-      });
-    } else if (process.env.FAKE_CLAIM_MODE === 'blocked') {
-      // BLOCKED hold: the daemon parked the held task via report_blocked; the
-      // wrapper must suppress the relaunch (and land any lingering baseline).
-      ok({
-        hasNext: false,
-        alreadyAssigned: { taskId: 'task-resume', title: 'Resume smoke', status: 'BLOCKED', blockedReason: 'waiting on a peer' },
-        nextAction: { tool: 'moe.get_context', args: { taskId: 'task-resume' }, reason: 'One task per worker: you already hold task-resume (BLOCKED).' }
-      });
-    } else if (process.env.FAKE_CLAIM_MODE === 'noteam'
-      || (process.env.FAKE_CLAIM_MODE === 'noteam-until-joined' && !fs.existsSync(path.join(moe, 'team-joined')))) {
-      // claimNextTask.ts noTeamMembershipRefusal: a SOLO seat whose every
-      // candidate sits in an epic+status a live worker already holds.
-      // noteam-until-joined: the same until a join is accepted, then idle.
-      ok({ hasNext: false, code: 'NO_TEAM_MEMBERSHIP', nextAction: { tool: 'moe.join_team', args: { workerId: args.workerId }, reason: 'Worker belongs to no team.' } });
-    } else if (['idle', 'noteam-until-joined'].includes(process.env.FAKE_CLAIM_MODE)) {
-      // Nothing claimable and nothing held: the board state that used to make
-      // the wrapper launch a CLI and tell it to claim itself.
-      ok({ hasNext: false });
-    } else {
-      ok({ ...attemptFixture(), hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } });
-    }
-    break;
-  }
-  case 'get_context': {
-    // Mirrors getContext.ts: the task projection carries NO epicId and NO order
-    // (the resolved epic comes back alongside it instead). Daemons before the
-    // explicit-taskId NOT_FOUND fix let an unresolvable taskId fall back to the
-    // CALLER's currentTaskId rather than erroring -- so a stale id silently
-    // answered with a different task.
-    // 'empty'    => daemon answered but carried no task.
-    // 'mismatch' => the pre-fix fallback: some OTHER task comes back.
-    // get_context with NO taskId is the post-flight adoption probe
-    // (getContext.ts falls back to the caller's currentTaskId). Every other
-    // caller passes a taskId, so this cannot disturb the other scenarios.
-    if (!args.taskId) {
-      const adopted = process.env.FAKE_ADOPTED_TASK_ID;
-      ok(adopted ? { task: { id: adopted, status: 'WORKING' }, project: {}, epic: {} } : { project: {}, epic: {} });
-      break;
-    }
-    if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }
-    const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
-      ? 'task-someone-elses'
-      : (args.taskId || 'task-postflight');
-    const ctxPayload = {
-      task: {
-        id: ctxTaskId,
-        status: process.env.FAKE_TASK_STATUS || 'WORKING',
-        reopenCount: 0,
-        implementationPlan: [],
-        definitionOfDone: []
-      },
-      project: {}, epic: { id: 'epic-1', title: 'Smoke epic' }, nextAction: { tool: 'moe.start_step' }
-    };
-    // FAKE_CTX_IS_EPIC_FINAL=true|false models the newer daemon that computes
-    // epic-final board-side; unset = an old daemon that doesn't serve the
-    // field. FAKE_CTX_IS_EPIC_FINAL_AT=top places it top-level (beside the
-    // epic) instead of on the task projection -- the wrapper accepts both.
-    const fakeIef = process.env.FAKE_CTX_IS_EPIC_FINAL;
-    if (fakeIef === 'true' || fakeIef === 'false') {
-      const iefVal = fakeIef === 'true';
-      if (process.env.FAKE_CTX_IS_EPIC_FINAL_AT === 'top') ctxPayload.isEpicFinal = iefVal;
-      else ctxPayload.task.isEpicFinal = iefVal;
-    }
-    ok(ctxPayload);
-    break;
-  }
-  case 'list_tasks': {
-    const epicTasks = [
-      { id: 'task-postflight', status: process.env.FAKE_TASK_STATUS || 'WORKING', reopenCount: 0, epicId: 'epic-1', order: 1 },
-      ...(process.env.FAKE_SIBLING_ORDER
-        ? [{ id: 'task-sibling', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-1', order: Number(process.env.FAKE_SIBLING_ORDER) }]
-        : [])
-    ];
-    // An epic-scoped query asks about one epic's siblings, so it is bounded by
-    // construction and always answers in full.
-    if (args.epicId) { ok({ tasks: epicTasks.filter((t) => t.epicId === args.epicId) }); break; }
-    // FAKE_LIST_TASKS_TRUNCATED models the real daemon behaviour that made the
-    // production auto-commit path inert: an UNSCOPED list_tasks is capped at
-    // DEFAULT_TASK_LIST_LIMIT and, once the project outgrows one page, the
-    // just-completed task is simply not in the rows that come back.
-    if (process.env.FAKE_LIST_TASKS_TRUNCATED === '1') {
-      ok({
-        tasks: [{ id: 'task-other', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-other', order: 1 }],
-        pagination: { limit: 1, offset: 0, returned: 1, total: 2, hasMore: true }
-      });
-      break;
-    }
-    ok({ tasks: epicTasks });
-    break;
-  }
-  case 'get_commit_scope': {
-    // Mirrors tools/getCommitScope.ts: ASSERTED = completed steps' modifiedFiles
-    // ?? affectedFiles + filesModified + declaredFiles + touchedFiles; PLANNED =
-    // every step's affected/new/modified + inferredPaths minus ASSERTED; PEER =
-    // the same union over every other non-DONE/ARCHIVED record on disk.
-    const taskId = args.taskId || 'task-postflight';
-    const rec = readTask(taskId);
-    const sets = rec ? declaredSets(rec) : { asserted: [], planned: [] };
-    const asserted = process.env.FAKE_SCOPE_ASSERTED !== undefined ? csv(process.env.FAKE_SCOPE_ASSERTED) : sets.asserted;
-    const planned = process.env.FAKE_SCOPE_PLANNED !== undefined ? csv(process.env.FAKE_SCOPE_PLANNED) : sets.planned;
-    let peerDeclared = [];
-    if (process.env.FAKE_SCOPE_PEER_DECLARED !== undefined) {
-      peerDeclared = csv(process.env.FAKE_SCOPE_PEER_DECLARED).map((e) => { const i = e.lastIndexOf(':'); return { path: e.slice(0, i), taskId: e.slice(i + 1) }; });
-    } else {
-      let files = [];
-      try { files = fs.readdirSync(path.join(moe, 'tasks')).filter((f) => f.endsWith('.json')); } catch {}
-      for (const f of files) {
-        const other = readTask(f.replace(/\.json$/, ''));
-        if (!other || other.id === taskId || other.status === 'DONE' || other.status === 'ARCHIVED') continue;
-        const os = declaredSets(other);
-        for (const p of [...os.asserted, ...os.planned, ...strList(other.touchedFiles)]) peerDeclared.push({ path: p, taskId: other.id });
-      }
-    }
-    const peersActive = process.env.FAKE_SCOPE_PEERS_ACTIVE === '1';
-    ok({
-      taskId,
-      title: rec ? rec.title : 'Postflight smoke',
-      status: process.env.FAKE_TASK_STATUS || (rec ? rec.status : 'WORKING'),
-      epicId: 'epic-1',
-      reopenCount: rec && rec.reopenCount ? rec.reopenCount : 0,
-      assignedWorkerId: process.env.FAKE_SCOPE_ASSIGNED !== undefined ? process.env.FAKE_SCOPE_ASSIGNED : (args.workerId || ''),
-      assigneeAlive: true,
-      asserted, planned,
-      ...(process.env.FAKE_SCOPE_DECLARED_FIELD === '1' ? { declared: rec ? strList(rec.declaredFiles) : [] } : {}),
-      touchedFiles: rec ? strList(rec.touchedFiles) : [],
-      inferredPaths: rec ? strList(rec.inferredPaths) : [],
-      unattributedPaths: rec ? strList(rec.unattributedPaths) : [],
-      peerDeclared,
-      livePeerIds: peersActive ? ['worker-peer'] : [],
-      activePeerIds: peersActive ? ['worker-peer'] : [],
-      peersActive,
-      alwaysInclude: [],
-      excludePrefixes: [],
-      policy: { autoCommit: true, checkpointCommits: true, checkpointPush: true, commitBoardState: true, commitHooks: false, undeclared: 'solo', contested: 'commit' }
-    });
-    break;
-  }
-  case 'record_commit': {
-    ensureDir(moe);
-    fs.appendFileSync(path.join(moe, 'record_commit.jsonl'), JSON.stringify(args) + '\n');
-    ok({ success: true, taskId: args.taskId, sha: args.sha, kind: args.kind, outcome: args.outcome, commitCount: 1, filesModified: strList(args.paths), addedPaths: strList(args.paths) });
-    break;
-  }
-  case 'declare_files': ok({ success: true, taskId: args.taskId, declaredFiles: strList(args.paths) }); break;
-  case 'release_task': {
-    // releaseTask.ts in miniature for scenario AC: every call is logged in
-    // order with the other RPCs; FAKE_RELEASE_REFUSE=<codeName> refuses it the
-    // way the ownership and fencing gates do, before anything is written.
-    appendRpc();
-    const refuse = process.env.FAKE_RELEASE_REFUSE;
-    if (refuse) {
-      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32003,message:'['+refuse+'] fixture release refused',
-        data:{tool:'moe.release_task',codeName:refuse}}}) + '\n');
-      break;
-    }
-    ok({ success: true, taskId: args.taskId, previousWorkerId: args.workerId, releasedBy: args.workerId, status: 'WORKING', message: `Task ${args.taskId} released from ${args.workerId}` });
-    break;
-  }
-  case 'chat_send': {
-    const dir = path.join(moe, 'messages');
-    ensureDir(dir);
-    fs.appendFileSync(path.join(dir, `${args.channel}.jsonl`), JSON.stringify({ sender: args.workerId, content: args.content }) + '\n');
-    ok({ success: true });
-    break;
-  }
-  case 'heartbeat': {
-    fs.appendFileSync(path.join(moe, 'heartbeat.log'), `${new Date().toISOString()} ${args.workerId}\n`);
-    ok({ ok: true });
-    break;
-  }
-  case 'lease_account':
-  case 'report_account_usage': {
-    // leaseAccount.ts in miniature, for the [accounts] scenario: no rotation
-    // without FAKE_ACCOUNT_HOME; with FAKE_ACCOUNT_WAIT_ONCE the first lease
-    // finds every account spent; otherwise the first of acct-1, acct-2 that no
-    // report refused or signed out. Every call is logged.
-    const log = path.join(moe, 'account-rpcs.jsonl');
-    const rows = readRows(log);
-    fs.appendFileSync(log, JSON.stringify({ tool, args }) + '\n');
-    if (tool === 'report_account_usage') { ok({ recorded: true, blockedUntil: null, peakPercent: null }); break; }
-    const home = process.env.FAKE_ACCOUNT_HOME;
-    const spent = { rotation: true, accountId: null, retryAt: new Date(Date.now() + 3600000).toISOString(), retryInSec: 3600, switchAtPercent: 90 };
-    if (!home) { ok({ rotation: false, reason: null }); break; }
-    if (process.env.FAKE_ACCOUNT_WAIT_ONCE && !rows.some(r => r.tool === 'lease_account')) { ok(spent); break; }
-    const parked = new Set(rows.filter(r => r.tool === 'report_account_usage' && (r.args.refused === true || r.args.signIn)).map(r => r.args.accountId));
-    const id = ['acct-1', 'acct-2'].find(a => !parked.has(a));
-    ok(id ? { rotation: true, accountId: id, label: id, configDir: path.join(home, id), peakPercent: id === 'acct-1' ? 12.5 : null, switchAtPercent: 90 } : spent);
-    break;
-  }
-  default: ok({ success: true });
-}
-'@
+    Copy-Item -LiteralPath (Join-Path $root 'scripts\tests\postflight-fake-proxy.js') -Destination $fakeProxy -ErrorAction Stop
 
     $frozenSuite = Join-Path $tempRoot 'frozen-candidate.cjs'
     [IO.File]::WriteAllText($frozenSuite, @'
@@ -654,9 +112,11 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
 'receipt-replay','receipt-cached-check','receipt-same-tree-race','receipt-push','receipt-push-failed','receipt-refused','receipt-conflict',
 'receipt-ledger-replay','receipt-rebase-replay','receipt-push-rejected','receipt-foreign-replay',
+'intent-strong','intent-strong-cas','intent-strong-unwritable','intent-strong-nocandidate','intent-legacy-unwritable',
+'reconcile-strong-receipt-lost','reconcile-strong-unreconciled','reconcile-strong-target-moved','reconcile-strong-rewrite','reconcile-strong-rewrite-same-tree','reconcile-strong-no-rebase',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none','reattach-session',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
-'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
+'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running','teardown-protected'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
 // supervisor stops the wrapper as soon as that claim is seen. freed-* is a
 // seat-freeing report_blocked (the task exits BLOCKED): whatever became of the
@@ -678,9 +138,10 @@ const identityModes=['missing-attempt','stale-attempt','claim-missing','claim-ma
 // exactly once, before deregister_worker, with what it actually did to the bytes.
 // teardown-running is the control: its attempt is still `running` (no
 // complete_task), so the very same exit path must acknowledge NOTHING.
+// teardown-protected: that exit on a task another worker owns refuses instead.
 const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothing-to-commit','teardown-no-git':'nothing-to-commit','teardown-sha256':'nothing-to-commit',
   'teardown-no-baseline':'failed','teardown-recovered':'rescued','teardown-scope':'rescued','teardown-landed':'landed',
-  'teardown-nothing':'nothing-to-commit','teardown-running':''};
+  'teardown-nothing':'nothing-to-commit','teardown-running':'','teardown-protected':''};
 const teardownRescued=['teardown-finalizing','teardown-recovered','teardown-scope','teardown-running'];
 const noFinal=['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt',
   ...loopModes.filter(m=>!['finalizing-acked-continues','identity-claim','reattach-refused','gate-blank'].includes(m))];
@@ -742,7 +203,7 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
 `;
   write(path.join(nested,'gate.cjs'),gateSource);write(owned,'base\n');write(path.join(repo,'seed.txt'),'seed\n');
   const settings={qualityGate:'node gate.cjs',qualityGateScope:'everyTask',commitBoardState:false,attribution:{undeclared:'never'}};
-  if(mode==='disabled'||mode==='nogate-qa-claimed')settings.qualityGate='';
+  if(mode==='disabled'||mode==='nogate-qa-claimed'||mode==='intent-strong-nocandidate')settings.qualityGate='';
   if(mode==='deferred')settings.qualityGateScope='epicFinal';
   // Padding is not part of the command: '   ' is no gate, and a padded one runs trimmed.
   if(mode==='gate-blank')settings.qualityGate='   ';
@@ -752,7 +213,7 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
   write(path.join(nested,'.moe','project.json'),JSON.stringify({id:'proj-frozen',name:'Frozen',settings}));
   write(path.join(nested,'.moe','tasks','task-postflight.json'),JSON.stringify({id:'task-postflight',title:'Frozen',
     status:'WORKING',filesModified:ownedPaths,implementationPlan:[{stepId:'s1',status:'COMPLETED',modifiedFiles:ownedPaths}]}));
-  const noGit=mode==='no-git'||mode==='teardown-no-git',sha256=mode==='sha256-repo'||mode==='teardown-sha256';
+  const noGit=mode==='no-git'||mode==='teardown-no-git',sha256=mode==='sha256-repo'||mode==='teardown-sha256';let seeded='';
   if(!noGit){
     // A sha256 repository: both wrappers refuse it at their git probe, because
     // Moe's delivery records hold SHA-1 ids only. Creating one needs git 2.29+.
@@ -777,7 +238,7 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
     // (MOE_PUSH_REBASE=1), which rewrites the landed commit before the re-push;
     // receipt-push-rejected keeps the default, which announces the rejection and
     // leaves the checkout exactly as it was.
-    if(mode==='receipt-rebase-replay'||mode==='receipt-push-rejected'){const remote=path.join(root,mode+'-remote.git'),peer=path.join(root,mode+'-peer');
+    if(mode==='receipt-rebase-replay'||mode==='receipt-push-rejected'||mode==='reconcile-strong-no-rebase'){const remote=path.join(root,mode+'-remote.git'),peer=path.join(root,mode+'-peer');
       git(root,'init','-q','--bare',mode+'-remote.git');git(repo,'remote','add','origin',remote);git(repo,'push','-q','origin','moe/frozen');
       git(root,'clone','-q','-b','moe/frozen',remote,peer);
       for(const [key,value] of [['user.name','Moe Peer'],['user.email','peer@test.local'],['core.autocrlf','false']])git(peer,'config',key,value);
@@ -788,6 +249,29 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
     if(mode==='receipt-cached-check'){const hook=path.join(repo,'.git','hooks','reference-transaction');
       write(hook,'#!/bin/sh\n[ "$1" = prepared ] || exit 0\ngrep -q " refs/heads/moe/frozen$" || exit 0\n'+
         'm="$(git rev-parse --git-dir)/moe-cas-refused"\n[ -e "$m" ] && exit 0\n: > "$m"\nexit 1\n');fs.chmodSync(hook,0o755);}
+    // CQ-V08: an earlier strong landing of this task is on the branch, and its
+    // receipt journal is still unsettled.
+    if(mode==='reconcile-strong-unreconciled'){const base=git(repo,'rev-parse','HEAD');
+      git(repo,'commit','--allow-empty','-qm','feat(task-postflight): earlier','-m','Moe-Session: worker-old@seed','-m','Moe-Kind: completion');
+      const t=git(repo,'rev-parse','HEAD');
+      seeded=JSON.stringify({taskId:'task-postflight',workerId:'worker-old',attemptId:'attempt-old',generation:1,candidateId:'cand-old',
+        target:'refs/heads/moe/frozen',targetBefore:base,targetAfter:t,landedRevision:t,pushResult:null,
+        treeSha:git(repo,'rev-parse',t+'^{tree}'),baseRevision:base,planRevision:3,profile:'verified-local'});
+      write(path.join(repo,'.git','moe','receipt','task-postflight.json'),seeded);}
+    // CQ-V07: the claim's attempt is pinned on a strong (verified-local) or a legacy
+    // execution policy. The hook logs every prepared ref update -- old is the
+    // expected-old git was handed, so the CAS -- with the receipt journal as it
+    // stood at that instant. A regular file where the journal dir goes makes the
+    // journal unwritable.
+    if(/^(intent|reconcile)-/.test(mode)){const stamp=new Date().toISOString(),hook=path.join(repo,'.git','hooks','reference-transaction');
+      write(path.join(nested,'.moe','attempts','attempt-postflight.json'),JSON.stringify({id:'attempt-postflight',generation:7,taskId:'task-postflight',
+        workerId:'worker-frozen',runnerId:'worker-frozen',phase:'running',workspace:nested,startedAt:stamp,lastPhaseAt:stamp,
+        executionPolicySnapshot:{version:2,profile:/^(intent|reconcile)-strong/.test(mode)?'verified-local':'legacy',planRevision:3,deliveryPolicy:'local-branch'}}));
+      write(hook,['#!/bin/sh','[ "$1" = prepared ] || exit 0','d="$(git rev-parse --git-common-dir)"; j="$d/moe/receipt/task-postflight.json"',
+        'while read -r old new ref; do','  if [ -f "$j" ]; then c="$(tr -d \'\\r\\n\' < "$j")"; else c=null; fi',
+        '  printf \'{"ref":"%s","old":"%s","new":"%s","journal":%s}\\n\' "$ref" "$old" "$new" "$c" >> "$d/moe-intent-events.jsonl"','done',''].join('\n'));
+      fs.chmodSync(hook,0o755);
+      if(mode.endsWith('-unwritable'))write(path.join(repo,'.git','moe','receipt'),'not a directory\n');}
   }
   write(path.join(nested,'helper.txt'),'dirty helper\n');write(path.join(nested,'peer.txt'),'peer bytes\n');
   write(path.join(nested,'.codex','dirty.txt'),'denied bytes\n');
@@ -803,7 +287,7 @@ if(mode==='loop-land-twice'){const n=Number(fs.readFileSync(path.join(dir,'.moe'
  fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned '+(n===2?1:n)+'\\n');}
 else if(mode!=='no-change'&&mode!=='teardown-nothing')fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned\\n');
 const file=path.join(dir,'.moe','attempts','attempt-postflight.json');
-const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual|freed)-/.test(mode)||mode==='teardown-running';
+const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual|freed)-/.test(mode)||/^teardown-(running|protected)$/.test(mode);
 // reattach-sidecar/-refused: a daemon restart parks the attempt while this
 // session runs, and the session goes on once the wrapper reattached it (or once
 // the wait runs out, as under a restart nobody reattached). reattach-preflight
@@ -841,7 +325,8 @@ if(qaClaimed)fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-qa.json')
  workerId:'qa-frozen',runnerId:'qa-frozen',phase:'running',workspace:dir,startedAt:stamp,lastPhaseAt:stamp}));
 if(mode.endsWith('-unpinned')||mode==='freed-corrupt-sibling')fs.writeFileSync(path.join(dir,'.moe','attempts','zzz-broken.json'),'{not json');
 if(mode==='teardown-no-baseline')fs.rmSync(${JSON.stringify(baselineFile)},{force:true});
-if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
+if(mode==='teardown-protected')fs.copyFileSync(${JSON.stringify(baselineFile)},path.join(dir,'.moe','baseline-at-cli'));
+if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|protected)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
  const until=Date.now()+120000,wait=setInterval(()=>{if(fs.existsSync(ready+'.sent')||Date.now()>until)clearInterval(wait);},100);}
 `);
   const cli=path.join(root,mode+(win?'.cmd':'.sh'));
@@ -857,18 +342,23 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running)$/.
     FAKE_TASK_STATUS:'REVIEW',FAKE_SCOPE_PEERS_ACTIVE:'1',FAKE_SCOPE_PEER_DECLARED:'peer.txt:task-peer',
     FROZEN_FIXTURE:nested,FROZEN_MODE:mode,HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),
     FAKE_EVIDENCE_MODE:mode,FAKE_CTX_IS_EPIC_FINAL:mode==='deferred'?'false':'true'};
-  if(mode.startsWith('race-'))env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';
+  // CQ-V08 arms reuse the fake daemon's receipt knobs: a refused receipt, or a crash at the held ledger row.
+  env.FAKE_EVIDENCE_MODE={'reconcile-strong-receipt-lost':'receipt-refused','reconcile-strong-unreconciled':'receipt-refused',
+    'reconcile-strong-rewrite':'receipt-ledger-replay','reconcile-strong-rewrite-same-tree':'receipt-ledger-replay'}[mode]||mode;
+  if(mode.startsWith('race-')||mode==='reconcile-strong-target-moved')env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';
   // A peer lands an EMPTY commit before the CAS: new base, identical rebuilt tree.
-  if(mode==='receipt-same-tree-race'){write(race,"require('child_process').execFileSync('git',['commit','--allow-empty','-qm','peer-empty']);");
+  if(mode==='receipt-same-tree-race'||mode==='intent-strong-cas'){write(race,"require('child_process').execFileSync('git',['commit','--allow-empty','-qm','peer-empty']);");
     env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';}
-  // The pull --rebase retry is opt-in; only receipt-rebase-replay exercises it.
-  if(mode==='receipt-rebase-replay')env.MOE_PUSH_REBASE='1';
+  // The pull --rebase retry is opt-in; receipt-rebase-replay exercises it, and
+  // reconcile-strong-no-rebase shows a strong landing ignores it.
+  if(mode==='receipt-rebase-replay'||mode==='reconcile-strong-no-rebase')env.MOE_PUSH_REBASE='1';
   const args=win?['-NoProfile','-File',wrapper,'-Project',nested,'-WorkerId','worker-frozen','-Role','worker',
     '-Team','Smoke','-NoStartDaemon','-Command',cli,'-NoLoop','-PollInterval','0']:
     [wrapper,'--project',nested,'--worker-id','worker-frozen','--role','worker','--team','Smoke','--no-start-daemon',
     '--command',cli,'--no-loop','--poll-interval','0'];
 
-  if(/^(checkpoint|manual)-/.test(mode)||mode==='teardown-running')env.FAKE_TASK_STATUS='WORKING';
+  if(/^(checkpoint|manual)-/.test(mode)||/^teardown-(running|protected)$/.test(mode))env.FAKE_TASK_STATUS='WORKING';
+  if(mode==='teardown-protected')env.FAKE_SCOPE_ASSIGNEE='worker-live';
   if(mode.startsWith('freed-'))env.FAKE_TASK_STATUS='BLOCKED';
   if(mode.endsWith('-unpinned'))env.FAKE_CLAIM_TOKENS='missing';
   // Reattach arms: the sidecar pings every second against the fake heartbeat.
@@ -903,12 +393,12 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running)$/.
   // The crash-window arms die the same way: at the held ledger row (window 1) or
   // at the held receipt (windows 2 and 3).
   const ledgerHeld=path.join(nested,'.moe','ledger-held');
-  if(['receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay'].includes(mode)){
+  if(['receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay'].includes(env.FAKE_EVIDENCE_MODE)){
     env.TMPDIR=env.TMP=env.TEMP=wrapperTmp;
     const supervisor=path.join(root,'receipt-supervisor.cjs');
     write(supervisor,KILL_ON_MARKER);
     runEngine=process.execPath;
-    runArgs=[supervisor,mode==='receipt-ledger-replay'?ledgerHeld:receiptHeld,String((Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-15)*1000),engine,...args];
+    runArgs=[supervisor,env.FAKE_EVIDENCE_MODE==='receipt-ledger-replay'?ledgerHeld:receiptHeld,String((Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-15)*1000),engine,...args];
   }
   if(/^(interrupt|teardown)-/.test(mode)){
     const supervisor=path.join(root,mode+(win?'-supervisor.ps1':'-supervisor.sh'));
@@ -1086,7 +576,7 @@ exit "$rc"
     const {log2,rpc2}=replay(args),owed=ledgerRows();
     assert.equal(owed.length,1,'the replay records the owed ledger row once\n'+log2);
     assert.deepEqual([owed[0].taskId,owed[0].sha,owed[0].ref,owed[0].role,owed[0].sessionId,owed[0].status,owed[0].pushed],
-      ['task-postflight',after,'refs/heads/moe/frozen','worker',sid(after),'REVIEW',false],log2);
+      ['task-postflight',after,'moe/frozen','worker',sid(after),'REVIEW',false],log2);
     const receipts=replayed(rpc2,log2,reflog),c=candidates.at(-1).args,
       row=rpc2.find(r=>r.tool==='record_commit'&&r.args.outcome==='committed'&&r.args.kind==='completion');
     assert.equal(receipts.length,1,log2);
@@ -1129,6 +619,60 @@ exit "$rc"
     replayed(rpc2,log2,reflog);
     count++;continue;
   }
+  if(mode.startsWith('reconcile-strong-')){
+    // CQ-V08, strong profile only: no double land, no early finalize, and a proof
+    // never moves to a tree other than the verified candidate's.
+    const moved=rows(path.join(repo,'.git','moe-intent-events.jsonl')).filter(e=>e.ref==='refs/heads/moe/frozen'),
+      receipts=rpc.filter(r=>r.tool==='record_delivery_receipt'),[c1={},c2={}]=candidates.map(r=>r.args),
+      completions=()=>git(repo,'log','--format=%H','--fixed-strings','--grep=Moe-Kind: completion',before+'..moe/frozen').split('\n').filter(Boolean);
+    if(mode==='reconcile-strong-receipt-lost'){
+      // DoD1: a lost receipt holds the finalize; the replay records it, THEN finalizes, and never lands again.
+      assert.deepEqual({deferred:said('MOE_FINALIZE_DEFERRED_RECEIPT: task task-postflight --'),finals:finals.length,journal:fs.existsSync(journal),landed:after!==before},
+        {deferred:1,finals:0,journal:true,landed:true},log);
+      const reflog=reflogOf();env.FAKE_EVIDENCE_MODE=mode;
+      const {log2,rpc2}=replay(args),r2=replayed(rpc2,log2,reflog);
+      assert.equal(r2.length,2,log2);assert.deepEqual(r2[1].args,r2[0].args,'the replay re-sends the journaled report\n'+log2);
+      assert.deepEqual(completions(),[after],'no double land\n'+log2);
+    }else if(mode==='reconcile-strong-unreconciled'){
+      // DoD1: a journal the replay could not settle refuses the next landing before any effect.
+      assert.deepEqual({warned:said('MOE_COMMIT_REFUSED_UNRECONCILED_INTENT: task task-postflight --'),moved,head:after,journal:read(journal),
+        commits:rpc.filter(r=>r.tool==='record_commit').map(r=>[r.args.outcome,r.args.kind,r.args.code]),receipts:receipts.map(r=>r.args.targetAfter),
+        rescue:git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/'),owned:read(owned),baseline:fs.existsSync(baselineFile),
+        evidence:candidates.length+checks.length,finals:finals.map(f=>f.args.outcome)},
+        {warned:1,moved:[],head:before,journal:seeded,commits:[['refused','completion','MOE_COMMIT_REFUSED_UNRECONCILED_INTENT']],receipts:[before],
+        rescue:'',owned:'frozen owned\n',baseline:true,evidence:0,finals:['failed']},log);
+    }else if(mode==='reconcile-strong-target-moved'){
+      // DoD2: a moved target re-freezes and rechecks; only the second candidate is journaled, received and landed, on the peer's commit.
+      assert.deepEqual({ids:c1.id!==c2.id,trees:c1.treeSha!==c2.treeSha,checks:checks.map(r=>[r.args.candidateId,r.args.exitCode]),
+        intent:moved.at(-1)?.journal?.candidateId,receipts:receipts.map(r=>r.args.candidateId),journal:fs.existsSync(journal),completions:completions(),
+        parent:[git(repo,'rev-parse',after+'~1'),git(repo,'log','-1','--format=%s',after+'~1')],finals:finals.map(f=>[f.args.outcome,f.args.landedRevision])},
+        {ids:true,trees:true,checks:[[c1.id,0],[c2.id,0]],intent:c2.id,receipts:[c2.id],journal:false,completions:[after],
+        parent:[c2.baseRevision,'peer-race'],finals:[['landed',after]]},log);
+    }else if(mode==='reconcile-strong-no-rebase'){
+      // DoD3: a rejected strong push is never rebased; the branch keeps the verified commit.
+      const r=receipts[0]?.args||{};
+      assert.deepEqual({rebased:log.includes('trying git pull --rebase'),exact:said('strong delivery is exact'),tree:git(repo,'rev-parse',after+'^{tree}'),
+        state:['rebase-merge','rebase-apply'].some(d=>fs.existsSync(path.join(repo,'.git',d))),receipt:[r.targetAfter,/^push failed: /.test(String(r.pushResult))],
+        finals:finals.map(f=>[f.args.outcome,f.args.landedRevision])},
+        {rebased:false,exact:1,tree:c1.treeSha,state:false,receipt:[after,true],finals:[['landed',after]]},log);
+    }else{
+      // DoD3: run 1 died at its ledger row; the branch then carries the landing's
+      // trailers on a copy. A copy of another tree gets nothing; the same tree is that landing.
+      assert.ok(fs.existsSync(ledgerHeld),'run 1 must reach its ledger row\n'+log);
+      const j1=read(journal),same=mode.endsWith('-same-tree'),msg=path.join(root,mode+'-msg.txt');
+      write(msg,git(repo,'log','-1','--format=%B',after)+'\n');
+      const parent=same?git(repo,'commit-tree',before+'^{tree}','-p',before,'-m','peer-empty'):before;
+      const copy=git(repo,'commit-tree',(same?after:before)+'^{tree}','-p',parent,'-F',msg);
+      git(repo,'update-ref','refs/heads/moe/frozen',copy,after);
+      const n=rpc.length,{log2,rpc2}=replay(args),run2=log2.slice(log.length).split('MOE_DELIVERY_PROOF_NOT_TRANSFERRED: task task-postflight --').length-1;
+      const tail=rpc2.slice(n).filter(r=>['record_commit','record_delivery_receipt','finalize_attempt'].includes(r.tool))
+        .map(r=>[r.tool,r.tool==='record_commit'?r.args.sha:r.tool==='finalize_attempt'?r.args.outcome+' '+r.args.landedRevision:r.args.targetAfter]);
+      assert.deepEqual({warned:run2,tail,head:git(repo,'rev-parse','moe/frozen'),journal:fs.existsSync(journal)?read(journal):null},
+        same?{warned:0,tail:[['record_commit',copy],['record_delivery_receipt',after],['finalize_attempt','landed '+copy]],head:copy,journal:null}
+          :{warned:1,tail:[],head:copy,journal:j1},log2);
+    }
+    count++;continue;
+  }
   if(mode.startsWith('teardown-')){
     const want=teardownOutcome[mode],commits=rpc.filter(r=>r.tool==='record_commit'),at=r=>rpc.indexOf(r);
     const refs=noGit?[]:git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/').split('\n').filter(Boolean);
@@ -1158,6 +702,14 @@ exit "$rc"
       assert.equal(after,before,log);assert.equal(read(owned),'base\n');
       assert.deepEqual(checks.map(r=>r.args.exitCode),[0],'its gate ran once and passed\n'+log);
       assert.equal(commits.filter(r=>r.args.outcome!=='nothing').length,0,'a no-change landing records no failure\n'+log);
+    }else if(mode==='teardown-protected'){
+      // Another worker owns the task now: the interrupt parks none of its bytes
+      // and leaves the tree, the index and the baseline as the session found them.
+      assert.equal(refs.length+candidates.length+checks.length+seen.length,0,'nothing is parked, frozen or gated\n'+log);
+      assert.deepEqual(commits.map(r=>[r.args.outcome,r.args.kind,r.args.code,r.args.sha||null]),
+        [['refused','rescue','MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE',null]],'the teardown records its refusal\n'+log);
+      assert.equal(after,before,log);assert.deepEqual(fs.readFileSync(index),beforeIndex);assert.equal(read(owned),'frozen owned\n');
+      assert.deepEqual(fs.readFileSync(baselineFile),fs.readFileSync(path.join(nested,'.moe','baseline-at-cli')),'the baseline is untouched\n'+log);
     }else{
       assert.equal(candidates.length+checks.length+seen.length,0,'no landing ran, so no candidate and no gate\n'+log);
       if(teardownRescued.includes(mode)){
@@ -1228,6 +780,50 @@ exit "$rc"
       finals:finals.map(f=>f.args.outcome),owned:read(owned),committed:git(repo,'show','HEAD:nested project é/owned.txt')},
       {refused:1,named:true,head:true,rescue:'',evidence:0,commits:[],finals:['nothing-to-commit'],owned:'frozen owned\n',committed:'base'},log);
     count++;continue;
+  }
+  if(mode.startsWith('intent-')){
+    const moves=rows(path.join(repo,'.git','moe-intent-events.jsonl')),moved=moves.filter(e=>e.ref==='refs/heads/moe/frozen'),
+      blocker=path.join(repo,'.git','moe','receipt');
+    if(mode==='intent-strong-unwritable'||mode==='intent-strong-nocandidate'){
+      // Refused before the effect: no ref moves, nothing is parked or pushed, and the
+      // bytes, the index and the baseline stay as the session left them.
+      const code=mode==='intent-strong-unwritable'?'MOE_COMMIT_REFUSED_INTENT_UNWRITABLE':'MOE_COMMIT_REFUSED_INTENT_INCOMPLETE';
+      assert.deepEqual({commits:rpc.filter(r=>r.tool==='record_commit').map(r=>[r.args.outcome,r.args.kind,r.args.code]),warned:said(code+': task task-postflight --'),
+        head:after,reflog:reflogOf(),moved:moves.filter(e=>e.ref==='refs/heads/moe/frozen'||e.ref.startsWith('refs/moe/rescue/')),
+        rescue:git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/'),owned:read(owned),index:fs.readFileSync(index).equals(beforeIndex),
+        baseline:fs.existsSync(baselineFile),finals:finals.map(f=>[f.args.outcome,f.args.landedRevision]),
+        evidence:[candidates.length,checks.map(r=>r.args.exitCode)],receipts:rpc.filter(r=>r.tool==='record_delivery_receipt').length,pushBlocked},
+        {commits:[['refused','completion',code]],warned:1,head:before,reflog:before,moved:[],rescue:'',owned:'frozen owned\n',index:true,
+        baseline:true,finals:[['failed',undefined]],evidence:mode==='intent-strong-unwritable'?[1,[0]]:[0,[]],receipts:0,pushBlocked:false},log);
+      if(mode==='intent-strong-unwritable'){assert.equal(read(blocker),'not a directory\n',log);
+        assert.deepEqual(fs.readdirSync(path.join(repo,'.git','moe')).filter(f=>f.includes('.tmp.')),[],'a failed write leaves no journal behind\n'+log);
+        assert.equal(log.includes('receipt journal not written'),false,'the strong profile never falls back to the best-effort journal\n'+log);}
+      count++;continue;
+    }
+    if(mode==='intent-legacy-unwritable'){
+      // Legacy stays best-effort: it warns, and lands with no journal at all.
+      assert.ok(log.includes('receipt journal not written'),log);
+      assert.deepEqual(moved.map(e=>[e.old,e.journal]),[[before,null]],log);
+      fs.rmSync(blocker);
+    }else{
+      // The intent is on disk before the target moves. It names this candidate, its
+      // tree, the CAS base and the plan revision, and the CAS git ran is that same base.
+      const c=candidates.at(-1).args,last=moved.at(-1)||{};
+      assert.equal(moved.length,mode==='intent-strong-cas'?2:1,log);
+      assert.deepEqual([last.old,last.new],[c.baseRevision,after],'the expected-old CAS is kept\n'+log);
+      assert.deepEqual(last.journal,{taskId:'task-postflight',workerId:'worker-frozen',attemptId:'attempt-postflight',generation:7,candidateId:c.id,
+        target:'refs/heads/moe/frozen',targetBefore:c.baseRevision,targetAfter:after,landedRevision:after,pushResult:null,
+        ledger:{sessionId:sid(after),role:'worker',status:'REVIEW'},treeSha:c.treeSha,baseRevision:c.baseRevision,planRevision:3,profile:'verified-local'},
+        'the intent is durable before the effect\n'+log);
+      assert.equal(c.treeSha,git(repo,'rev-parse',after+'^{tree}'),log);
+      if(mode==='intent-strong')assert.equal(c.baseRevision,before,log);
+      else{
+        // A peer moved the target first: the failed CAS left no intent behind, and
+        // the retry journaled the rebuilt candidate on the peer's commit.
+        assert.equal(candidates.length,2,log);assert.notEqual(candidates[0].args.id,c.id,log);
+        assert.deepEqual([moved[0].old,moved[0].new,moved[0].journal],[before,c.baseRevision,null],log);
+        assert.equal(git(repo,'rev-parse',after+'~1'),c.baseRevision,log);}
+    }
   }
   if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','record_candidate-refuse'].includes(mode))
     assert.equal(pushBlocked,true,'a real gate or evidence persistence failure stays PUSH-BLOCKED\n'+log);
@@ -1415,6 +1011,12 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
     & node $frozenSuite ps1 $wrapper $fakeProxy $tempRoot $psExe
     if ($LASTEXITCODE -ne 0) { throw 'Frozen candidate scenarios failed' }
     if ($env:MOE_FROZEN_TEST_ONLY) { exit 0 }
+    # Owner guard cases (one suite shared with postflight.sh).
+    & node (Join-Path $root 'scripts\tests\postflight-owner-guard.cjs') ps1 $wrapper $fakeProxy $tempRoot $psExe
+    if ($LASTEXITCODE -ne 0) { throw 'Owner guard scenarios failed' }
+    # Worktree provisioning cases (one suite shared with postflight.sh).
+    & node (Join-Path $root 'scripts\tests\postflight-worktree.cjs') ps1 $wrapper $fakeProxy $tempRoot $psExe
+    if ($LASTEXITCODE -ne 0) { throw 'Worktree provisioning scenarios failed' }
 
     $trueCmd = Join-Path $tempRoot 'true.cmd'
     Set-Content -Path $trueCmd -Encoding ASCII -Value "@echo off`r`nexit /b 0`r`n"
@@ -1472,8 +1074,12 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
     # File-creating fake CLIs. The ps1 claude launch does NOT cd into the
     # project (it binds via MOE_PROJECT_PATH), so every path is written via
     # %MOE_PROJECT_PATH% — a relative path would land in the harness cwd.
+    # create-file.cmd also writes FAKE_CLI_EXTRA_FILE when set (a Bash-style,
+    # unwitnessed write of a peer-declared path).
     $createFileCmd = Join-Path $tempRoot 'create-file.cmd'
-    Set-Content -Path $createFileCmd -Encoding ASCII -Value "@echo off`r`necho new> `"%MOE_PROJECT_PATH%\session-new.txt`"`r`nexit /b 0`r`n"
+    Set-Content -Path $createFileCmd -Encoding ASCII -Value ("@echo off`r`necho new> `"%MOE_PROJECT_PATH%\session-new.txt`"`r`n" +
+        "if defined FAKE_CLI_EXTRA_FILE echo extra> `"%MOE_PROJECT_PATH%\%FAKE_CLI_EXTRA_FILE%`"`r`n" +
+        "exit /b 0`r`n")
     $createPeerCmd = Join-Path $tempRoot 'create-peer.cmd'
     Set-Content -Path $createPeerCmd -Encoding ASCII -Value "@echo off`r`necho new> `"%MOE_PROJECT_PATH%\session-new.txt`"`r`necho peer> `"%MOE_PROJECT_PATH%\peer-plan.txt`"`r`nexit /b 0`r`n"
     # Rewrites the task's OWN board record and a peer's record mid-session
@@ -1709,6 +1315,24 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         Start-Sleep -Seconds 3
         $countAfterWait = if (Test-Path $heartbeatLogFile) { (Get-Content $heartbeatLogFile | Measure-Object -Line).Lines } else { 0 }
 
+        function Initialize-ReloadRepo {
+            $dir = Split-Path $reloadWrapper
+            foreach ($gitArgs in @(@('init', '-q'), @('config', 'user.name', 'Moe Test'),
+                @('config', 'user.email', 'moe@test.local'), @('config', 'commit.gpgsign', 'false'),
+                @('config', 'core.autocrlf', 'false'), @('add', '-A'), @('commit', '-qm', 'base'))) {
+                & git -C $dir @gitArgs 2>$null | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "HOT RELOAD FAILED: git $gitArgs exited $LASTEXITCODE" }
+            }
+        }
+        function Invoke-ReloadCommit([string]$Message) {
+            for ($i = 1; $i -le 3; $i++) {
+                & git -C (Split-Path $reloadWrapper) commit -qam $Message 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) { return }
+                Start-Sleep -Milliseconds 200
+            }
+            throw "HOT RELOAD FAILED: could not commit wrapper edit (git exited $LASTEXITCODE)"
+        }
+
         # --- Hot reload keeps ONE wrapper process. An edit to moe-agent.ps1
         # reloads every live seat at the top of its next iteration. df42861
         # handed over with `& <exe> <args>`: the seat kept its console, but the
@@ -1733,6 +1357,7 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
         $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
         $reloadOut = Join-Path $tempRoot 'wrapper-reload.out'
+        Initialize-ReloadRepo
         function Get-ReloadRows {
             $lines = @(); try { $lines = @(Get-Content -LiteralPath $reloadRpcLog -ErrorAction Stop) } catch {}
             foreach ($line in $lines) { try { $line | ConvertFrom-Json } catch {} }
@@ -1780,9 +1405,11 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
             $reloadEdited = $reloadText.Replace('restarting to load it"', 'restarting to load it (edit 1 loaded)"')
             if ($reloadEdited -eq $reloadText) { throw 'HOT RELOAD FAILED: the restart announcement is missing from the wrapper' }
             Set-ReloadWrapperText $reloadEdited
+            Invoke-ReloadCommit 'edit 1'
             Wait-ReloadSequence '^c+rc' 'claim after reload 1'
             $reloadCounts += @(Get-ReloadWrapperPids).Count
             Set-ReloadWrapperText ($reloadEdited + "# reload 2`n")
+            Invoke-ReloadCommit 'edit 2'
             Wait-ReloadSequence '^c+rc+rc' 'claim after reload 2'
             $reloadCounts += @(Get-ReloadWrapperPids).Count
         } finally {
@@ -1800,6 +1427,137 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         if ($reloadLog -notlike '*restarting to load it (edit 1 loaded)*') { $reloadProblems += 'the second reload did not run the edited bytes' }
         if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD FAILED: ' + ($reloadProblems -join ' | ')) }
         Write-Host '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity'
+
+        # --- Hot reload refused (twin: the refused-reload arm in postflight.sh).
+        # Seats launched from the shared checkout reload every edit of the real
+        # file, and a half-applied edit used to make each of them deregister and
+        # then stop on bytes the supervisor could not parse. An unparseable
+        # change must log one refusal and keep the one process registered; the
+        # next parseable change reloads once. The helpers above resolve their
+        # variables at call time, so they are re-pointed at a fresh copy. Edits
+        # are short APPENDS after the file's final `exit 0`, so they never run:
+        # a whole-file rewrite can be hashed half-written and refused twice. ---
+        $reloadWrapper = Join-Path $tempRoot 'reload-refused\scripts\moe-agent.ps1'
+        $reloadProject = Join-Path $tempRoot 'reload-refused\project'
+        New-Item -ItemType Directory -Force -Path @((Split-Path $reloadWrapper), (Join-Path $reloadProject '.moe\messages')) | Out-Null
+        Copy-Item -LiteralPath $wrapper -Destination $reloadWrapper
+        Get-ChildItem -LiteralPath (Split-Path $wrapper) -Filter '*.mjs' | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Split-Path $reloadWrapper)
+        }
+        Set-Content -Path (Join-Path $reloadProject '.moe\project.json') -Value '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}' -Encoding UTF8
+        Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
+        $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
+        $reloadOut = Join-Path $tempRoot 'wrapper-reload-refused.out'
+        Initialize-ReloadRepo
+        function Add-ReloadWrapperText([string]$Text) {
+            for ($i = 1; ; $i++) {
+                try { [IO.File]::AppendAllText($reloadWrapper, $Text, (New-Object System.Text.UTF8Encoding($false))); return }
+                catch { if ($i -ge 20) { throw }; Start-Sleep -Milliseconds 100 }
+            }
+        }
+        $reloadProc = $null
+        $refusedCount = $null
+        $env:FAKE_CLAIM_MODE = 'idle'
+        $env:MOE_DISABLE_HEARTBEAT = '1'
+        try {
+            $reloadArgs = @('-NoProfile', '-File', $reloadWrapper, '-Project', $reloadProject, '-WorkerId', 'worker-reload-refused', '-Role', 'worker', '-NoStartDaemon', '-Command', $trueCmd, '-Loop', '-PollInterval', '1') |
+                ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
+            $reloadProc = Start-Process -FilePath $psExe -ArgumentList $reloadArgs -RedirectStandardOutput $reloadOut -RedirectStandardError "$reloadOut.err" -PassThru -NoNewWindow
+            $null = $reloadProc.Handle
+            Wait-ReloadSequence '^c' 'first claim'
+            $refusedClaims = ((Get-ReloadSequence) -replace '[^c]', '').Length
+            # An open block at the end: ParseFile reports a missing closing '}'.
+            Add-ReloadWrapperText "if (`$true) {`n"
+            Invoke-ReloadCommit 'unparseable edit'
+            # Three more claims mean at least two loop tops hashed the refused bytes.
+            Wait-ReloadSequence ('^c{' + ($refusedClaims + 3) + ',}$|[rx]') 'three claims after the refused edit'
+            if ((Get-ReloadSequence) -match '[rx]') { throw "HOT RELOAD REFUSED FAILED: a refused edit must not deregister; RPC sequence '$(Get-ReloadSequence)'" }
+            $refusedCount = @(Get-ReloadWrapperPids).Count
+            Add-ReloadWrapperText "}`n"
+            Invoke-ReloadCommit 'parseable edit'
+            Wait-ReloadSequence '^c+rc' 'claim after the parseable edit'
+        } finally {
+            Remove-Item Env:FAKE_CLAIM_MODE, Env:MOE_DISABLE_HEARTBEAT -ErrorAction SilentlyContinue
+            if ($reloadProc -and -not $reloadProc.HasExited) { & taskkill /T /F /PID $reloadProc.Id 2>&1 | Out-Null; $reloadProc.WaitForExit(5000) | Out-Null }
+            foreach ($reloadPid in @(Get-ReloadWrapperPids)) { Stop-Process -Id $reloadPid -Force -ErrorAction SilentlyContinue }
+        }
+        $reloadSeq = Get-ReloadSequence
+        $reloadLog = [string](Get-Content -Raw -LiteralPath $reloadOut -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$reloadOut.err" -ErrorAction SilentlyContinue)
+        # A console host can wrap a long line; the reason is matched unwrapped.
+        $reloadFlat = $reloadLog -replace '\r?\n', ''
+        $reloadProblems = @()
+        if ($reloadSeq -notmatch '^c+rc+$') { $reloadProblems += "a refused edit must not deregister; the next parseable edit reloads once; RPC sequence '$reloadSeq'" }
+        $refusals = [regex]::Matches($reloadLog, 'MOE_WRAPPER_RELOAD_REFUSED').Count
+        if ($refusals -ne 1) { $reloadProblems += "one refusal line per refused hash, got $refusals" }
+        # The wrapper's own 'line N:' then the parser's (localized) message.
+        if ($reloadFlat -notmatch 'does not parse; staying on the current bytes until it changes again: line \d+: ') { $reloadProblems += "the refusal line must carry ParseFile's reason" }
+        if ($refusedCount -ne 1) { $reloadProblems += "expected exactly 1 wrapper process after the refused edit; counted $refusedCount" }
+        $restarts = [regex]::Matches($reloadLog, 'restarting to load it').Count
+        if ($restarts -ne 1) { $reloadProblems += "expected one restart announcement, got $restarts" }
+        if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD REFUSED FAILED: ' + ($reloadProblems -join ' | ')) }
+        Write-Host '[hot reload refused] ok: refused once, one process, reloaded on the next parseable edit'
+
+        # --- Hot reload deferred / unverifiable (twins in postflight.sh).
+        foreach ($reloadMode in @('deferred', 'unverifiable')) {
+            Write-Host "[hot reload $reloadMode] changed bytes keep serving until verified committed"
+            $reloadRoot = Join-Path $tempRoot "reload-$reloadMode"
+            $reloadWrapper = Join-Path $reloadRoot 'scripts\moe-agent.ps1'
+            $reloadProject = Join-Path $reloadRoot 'project'
+            New-Item -ItemType Directory -Force -Path @((Split-Path $reloadWrapper), (Join-Path $reloadProject '.moe\messages')) | Out-Null
+            Copy-Item -LiteralPath $wrapper -Destination $reloadWrapper
+            Get-ChildItem -LiteralPath (Split-Path $wrapper) -Filter '*.mjs' | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination (Split-Path $reloadWrapper)
+            }
+            if ($reloadMode -eq 'deferred') { Initialize-ReloadRepo }
+            Set-Content -Path (Join-Path $reloadProject '.moe\project.json') -Value '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}' -Encoding UTF8
+            Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
+            $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
+            $reloadOut = Join-Path $tempRoot "wrapper-reload-$reloadMode.out"
+            $reloadEdits = if ($reloadMode -eq 'deferred') { 2 } else { 1 }
+            $reloadProc = $null
+            $env:FAKE_CLAIM_MODE = 'idle'
+            $env:MOE_DISABLE_HEARTBEAT = '1'
+            if ($reloadMode -eq 'unverifiable') { $env:GIT_CEILING_DIRECTORIES = $reloadRoot }
+            try {
+                $reloadArgs = @('-NoProfile', '-File', $reloadWrapper, '-Project', $reloadProject, '-WorkerId', "worker-reload-$reloadMode", '-Role', 'worker', '-NoStartDaemon', '-Command', $trueCmd, '-Loop', '-PollInterval', '1') |
+                    ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
+                $reloadProc = Start-Process -FilePath $psExe -ArgumentList $reloadArgs -RedirectStandardOutput $reloadOut -RedirectStandardError "$reloadOut.err" -PassThru -NoNewWindow
+                $null = $reloadProc.Handle
+                Wait-ReloadSequence '^c' 'first claim'
+                for ($edit = 1; $edit -le $reloadEdits; $edit++) {
+                    $reloadClaims = (Get-ReloadSequence).Length
+                    Add-ReloadWrapperText "# deferred edit $edit`n"
+                    Wait-ReloadSequence ('^c{' + ($reloadClaims + 3) + ',}$|[rx]') 'three claims after the deferred edit'
+                    if ((Get-ReloadSequence) -match '[rx]') { throw "HOT RELOAD FAILED: a deferred edit must not deregister; RPC sequence '$(Get-ReloadSequence)'" }
+                }
+                $deferredCount = @(Get-ReloadWrapperPids).Count
+                if ($reloadMode -eq 'deferred') {
+                    Invoke-ReloadCommit 'deferred edits'
+                    Wait-ReloadSequence '^c+rc{2,}$' 'claims after committing deferred bytes'
+                }
+            } finally {
+                Remove-Item Env:FAKE_CLAIM_MODE, Env:MOE_DISABLE_HEARTBEAT, Env:GIT_CEILING_DIRECTORIES -ErrorAction SilentlyContinue
+                if ($reloadProc -and -not $reloadProc.HasExited) { & taskkill /T /F /PID $reloadProc.Id 2>&1 | Out-Null; $reloadProc.WaitForExit(5000) | Out-Null }
+                foreach ($reloadPid in @(Get-ReloadWrapperPids)) { Stop-Process -Id $reloadPid -Force -ErrorAction SilentlyContinue }
+            }
+            $reloadSeq = Get-ReloadSequence
+            $reloadLog = [string](Get-Content -Raw -LiteralPath $reloadOut -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$reloadOut.err" -ErrorAction SilentlyContinue)
+            $reloadFlat = $reloadLog -replace '\r?\n', ''
+            $reloadProblems = @()
+            if ($deferredCount -ne 1) { $reloadProblems += "expected one wrapper process, counted $deferredCount" }
+            $deferrals = [regex]::Matches($reloadFlat, 'MOE_WRAPPER_RELOAD_DEFERRED').Count
+            $restarts = [regex]::Matches($reloadFlat, 'restarting to load it').Count
+            if ($deferrals -ne $reloadEdits) { $reloadProblems += "expected $reloadEdits deferrals, got $deferrals" }
+            if ($reloadMode -eq 'deferred') {
+                if ($reloadSeq -notmatch '^c+rc{2,}$' -or $restarts -ne 1) { $reloadProblems += "expected one restart after commit; sequence '$reloadSeq', announcements $restarts" }
+                if ([regex]::Matches($reloadFlat, 'MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits').Count -ne 2 -or $reloadFlat -match 'cannot confirm') { $reloadProblems += 'expected two uncommitted-edit reasons and no git failure' }
+            } else {
+                if ($reloadSeq -notmatch '^c+$' -or $restarts -ne 0) { $reloadProblems += "unverifiable bytes must not restart; sequence '$reloadSeq', announcements $restarts" }
+                if ($reloadFlat -notmatch 'MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed') { $reloadProblems += 'expected git failure reason' }
+            }
+            if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD FAILED: ' + ($reloadProblems -join ' | ')) }
+            Write-Host "[hot reload $reloadMode] ok: $reloadEdits deferrals, $restarts restarts, 1 wrapper process"
+        }
 
         # --- Quality gate (settings.qualityGate): the post-flight runs the
         # configured command before a COMPLETION commit. Failing gate => no
@@ -2880,8 +2638,8 @@ if (process.env.SIBLING_TOUCH_RECORD === '1') {
                 # M3-d — the recovery exception. The idle paths recover under a
                 # fresh session id on every poll, so a recovery must set the flag
                 # itself (keeping the dead session's header session), or every
-                # later poll replays it. The ps1 fake answers the BLOCKED hold
-                # with task-resume.
+                # later poll replays it. The shared fake answers the BLOCKED
+                # hold with task-resume.
                 $scopeM3dDir = Join-Path $tempRoot 'scope-m3d'
                 New-M2Project $scopeM3dDir 'BLOCKED'
                 $scopeM3dBl = Join-Path $scopeM3dDir '.git\moe\baseline\task-resume.tsv'
@@ -3825,7 +3583,362 @@ else {
                 $scopeScenariosRun++
                 Write-Host '[scenario AB2] ok'
 
-                # Scenario AC -- launch outage mode (twin: scenario AC in
+                # Scenarios AC/AD — twin of postflight.sh: a file whose HEAD blob
+                # holds CRLF, under line-ending conversion. The snapshot's
+                # `hash-object` loads no index and normalizes CRLF to LF; `git add`
+                # into the temp index (seeded from HEAD) keeps CRLF under git's
+                # safer-autocrlf rule. Comparing the two dropped every edit to such
+                # a file as MOE_ATTR_CONCURRENT (CQ-M01d, 71c7dbe). AC: the edit
+                # lands, as the CRLF blob git add made, under each conversion mode;
+                # crlf.mjs is a source file the importee guard re-reads from the
+                # index. AD: a change after the snapshot still drops, a swap for a
+                # symlink to an identical copy too. Fixtures are
+                # raw bytes (Set-Content rewrites line endings on 5.1) and every
+                # seeding git call pins core.autocrlf (Git for Windows defaults it
+                # to true). Byte equality is `hash-object --no-filters` against the
+                # blob id: PowerShell cannot pipe CR bytes out of git intact.
+                function Write-CrlfBytes([string]$path, [string]$text) {
+                    [IO.File]::WriteAllBytes($path, [Text.Encoding]::ASCII.GetBytes($text))
+                }
+                function Get-GitId([string]$dir, [string[]]$gitArgs) {
+                    return ((& git -C $dir @gitArgs 2>$null) -join '').Trim()
+                }
+                function New-CrlfSeed([string]$dir, [string]$mode, [string]$name) {
+                    foreach ($f in 'crlf.txt', 'crlf.mjs') { Write-CrlfBytes (Join-Path $dir $f) "one`r`ntwo`r`n" }
+                    & git -C $dir -c core.autocrlf=false add crlf.txt crlf.mjs 2>$null | Out-Null
+                    & git -C $dir -c core.autocrlf=false commit -qm crlf-seed 2>$null | Out-Null
+                    switch ($mode) {
+                        'autocrlf-true' { & git -C $dir config core.autocrlf true 2>$null | Out-Null }
+                        'autocrlf-input' { & git -C $dir config core.autocrlf input 2>$null | Out-Null }
+                        'text-auto' {
+                            & git -C $dir config core.autocrlf false 2>$null | Out-Null
+                            Write-CrlfBytes (Join-Path $dir '.gitattributes') "* text=auto`n"
+                            & git -C $dir add .gitattributes 2>$null | Out-Null
+                            & git -C $dir commit -qm text-auto 2>$null | Out-Null
+                        }
+                    }
+                    if ((Get-GitId $dir @('rev-parse', 'HEAD:crlf.txt')) -ne (Get-GitId $dir @('hash-object', '--no-filters', '--', 'crlf.txt'))) {
+                        throw "SCENARIO $name FAILED: fixture: HEAD:crlf.txt must hold the raw CRLF bytes ($mode)"
+                    }
+                }
+
+                Write-Host '[scenario AC] an edit to a CRLF-committed file lands under autocrlf=true, autocrlf=input and text=auto'
+                foreach ($acMode in 'autocrlf-true', 'autocrlf-input', 'text-auto') {
+                    $scopeACDir = Join-Path $tempRoot "scope-ac-$acMode"
+                    $scopeACOut = Join-Path $tempRoot "scope-ac-$acMode.out"
+                    New-ScopeProject $scopeACDir @('crlf.txt', 'crlf.mjs')
+                    New-CrlfSeed $scopeACDir $acMode 'AC'
+                    foreach ($f in 'crlf.txt', 'crlf.mjs') { Write-CrlfBytes (Join-Path $scopeACDir $f) "one`r`ntwo edited`r`n" }
+                    Assert-ScopeRun 'AC' (Invoke-GateWrapper $scopeACDir $scopeACOut) $scopeACOut
+                    $acLedger = (Get-RecordCommitLines $scopeACDir) -join "`n"
+                    if ($acLedger.Contains('MOE_ATTR_CONCURRENT') -or "$(Get-Content -Raw -Path $scopeACOut)".Contains('MOE_ATTR_CONCURRENT')) {
+                        Write-Host $acLedger
+                        throw "SCENARIO AC FAILED: ${acMode}: crlf.txt was dropped as MOE_ATTR_CONCURRENT"
+                    }
+                    if ((Get-HeadSubject $scopeACDir) -notlike 'feat(task-postflight): *') {
+                        Get-Content $scopeACOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                        throw "SCENARIO AC FAILED: ${acMode}: HEAD is not the completion -- the edit never landed"
+                    }
+                    $acPaths = Get-CommittedPaths $scopeACDir
+                    if ($acPaths -ne 'crlf.mjs crlf.txt') { throw "SCENARIO AC FAILED: ${acMode}: the completion must contain exactly crlf.mjs and crlf.txt; got [$acPaths]" }
+                    foreach ($f in 'crlf.txt', 'crlf.mjs') {
+                        if ((Get-GitId $scopeACDir @('rev-parse', "HEAD:$f")) -ne (Get-GitId $scopeACDir @('hash-object', '--no-filters', '--', $f))) {
+                            throw "SCENARIO AC FAILED: ${acMode}: HEAD:$f must be the CRLF bytes git add staged, byte for byte"
+                        }
+                    }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AC] ok'
+
+                # Symlink support, probed once for AD's link variant and scenario
+                # AE: Windows needs admin rights or Developer Mode to create one.
+                # CI (windows-latest runs as admin) must run both, so a failed
+                # probe there is a failure, never a skip. Every link is made by
+                # node, which keeps the exact relative link text on both engines.
+                $symlinkCjs = Join-Path $tempRoot 'symlink-fixture.cjs'
+                Set-Content -Path $symlinkCjs -Encoding ASCII -Value @'
+const fs = require('fs'), path = require('path');
+const [mode, dir] = process.argv.slice(2);
+const link = (target, name) => fs.symlinkSync(target, path.join(dir, name), 'file');
+if (mode === 'probe') {
+  fs.writeFileSync(path.join(dir, 'symlink-probe-target'), '');
+  link('symlink-probe-target', 'symlink-probe');
+  if (!fs.lstatSync(path.join(dir, 'symlink-probe')).isSymbolicLink()) process.exit(1);
+} else if (mode === 'seed') {
+  link('same-a.txt', 'retarget-link');
+  link('target.txt', 'stay-link');
+  link('missing.txt', 'dangling-link');
+} else if (mode === 'session') {
+  fs.rmSync(path.join(dir, 'retarget-link'), { force: true });
+  link('same-b.txt', 'retarget-link');
+  fs.writeFileSync(path.join(dir, 'target.txt'), 'v2\n');
+} else {
+  process.exit(2);
+}
+'@
+                $symlinksOk = $false
+                try {
+                    & node $symlinkCjs probe $tempRoot 2>$null | Out-Null
+                    $symlinksOk = ($LASTEXITCODE -eq 0)
+                } catch { $symlinksOk = $false }
+                if (-not $symlinksOk -and $env:GITHUB_ACTIONS -eq 'true') {
+                    throw 'SCENARIO AE FAILED: CI must be able to create symlinks'
+                }
+
+                # AD: crlf-hook.cmd changes crlf.txt through node (cmd cannot quote
+                # CR bytes), then hook-peer.cmd commits a peer file, so the CAS
+                # retry rebuilds the temp index against the OLD snapshot (scenario
+                # O). A rewrite re-hashes differently; a delete leaves no staged
+                # entry; a directory in its place stages crlf.txt/inner while the
+                # re-hash fails; a symlink to an identical copy stages the link,
+                # whose link text re-hashes differently (a re-hash that followed
+                # the link read the copy's bytes, and it landed). None may land.
+                Set-Content -Path (Join-Path $tempRoot 'crlf-hook.cjs') -Encoding ASCII -Value @'
+const fs = require('fs'), path = require('path');
+const f = path.join(process.env.MOE_PROJECT_PATH, 'crlf.txt'), mode = process.env.CRLF_HOOK_MODE;
+if (mode === 'link') fs.copyFileSync(f, path.join(path.dirname(f), 'crlf-copy.txt'));
+fs.rmSync(f, { force: true });
+if (mode === 'rewrite') fs.writeFileSync(f, 'one\r\nconcurrent\r\n');
+if (mode === 'dir') { fs.mkdirSync(f); fs.writeFileSync(path.join(f, 'inner'), 'inner\n'); }
+if (mode === 'link') fs.symlinkSync('crlf-copy.txt', f, 'file');
+'@
+                $crlfHookCmd = Join-Path $tempRoot 'crlf-hook.cmd'
+                Set-Content -Path $crlfHookCmd -Encoding ASCII -Value ("@echo off`r`n" +
+                    "node `"%~dp0crlf-hook.cjs`" || exit /b 1`r`n" +
+                    "call `"%~dp0hook-peer.cmd`"`r`n")
+                Write-Host '[scenario AD] a CRLF-committed file rewritten, deleted, or replaced by a directory or a symlink after the snapshot still drops as MOE_ATTR_CONCURRENT'
+                $adVariants = @('rewrite', 'delete', 'dir')
+                if ($symlinksOk) {
+                    $adVariants += 'link'
+                } else {
+                    Write-Host '[scenario AD] link variant skipped: this host cannot create symlinks'
+                }
+                foreach ($adVariant in $adVariants) {
+                    $scopeADDir = Join-Path $tempRoot "scope-ad-$adVariant"
+                    $scopeADOut = Join-Path $tempRoot "scope-ad-$adVariant.out"
+                    New-ScopeProject $scopeADDir @('owned-a.txt', 'crlf.txt')
+                    New-CrlfSeed $scopeADDir 'autocrlf-true' 'AD'
+                    $adSeed = Get-GitId $scopeADDir @('rev-parse', 'HEAD:crlf.txt')
+                    Set-Content -Path (Join-Path $scopeADDir 'owned-a.txt') -Value 'owned-a'
+                    Write-CrlfBytes (Join-Path $scopeADDir 'crlf.txt') "one`r`ntwo edited`r`n"
+                    $env:CRLF_HOOK_MODE = $adVariant
+                    $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF = $crlfHookCmd
+                    try {
+                        Assert-ScopeRun 'AD' (Invoke-GateWrapper $scopeADDir $scopeADOut) $scopeADOut
+                    } finally {
+                        Remove-Item Env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF -ErrorAction SilentlyContinue
+                        Remove-Item Env:CRLF_HOOK_MODE -ErrorAction SilentlyContinue
+                    }
+                    if ((Get-HeadSubject $scopeADDir) -notlike 'feat(task-postflight): *') { throw "SCENARIO AD FAILED: ${adVariant}: ours must be on top; HEAD is [$(Get-HeadSubject $scopeADDir)]" }
+                    if ((Get-HeadSubject $scopeADDir 'HEAD~1') -ne 'peer-hook') { throw "SCENARIO AD FAILED: ${adVariant}: the hook's peer commit must be HEAD~1 (the CAS retry never ran); got [$(Get-HeadSubject $scopeADDir 'HEAD~1')]" }
+                    & git -C $scopeADDir cat-file -e HEAD:owned-a.txt 2>$null | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw "SCENARIO AD FAILED: ${adVariant}: owned-a.txt must be present in HEAD" }
+                    if ((Get-GitId $scopeADDir @('rev-parse', 'HEAD:crlf.txt')) -ne $adSeed) {
+                        throw "SCENARIO AD FAILED: ${adVariant}: crlf.txt changed after the snapshot, so HEAD must keep the seed blob"
+                    }
+                    $adDropped = @(Get-RecordCommitLines $scopeADDir | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.outcome -eq 'committed' } |
+                        ForEach-Object { @($_.skipped) } | Where-Object { $_ -and $_.path -eq 'crlf.txt' -and $_.code -eq 'MOE_ATTR_CONCURRENT' })
+                    if ($adDropped.Count -eq 0) {
+                        Write-Host ((Get-RecordCommitLines $scopeADDir) -join "`n")
+                        throw "SCENARIO AD FAILED: ${adVariant}: the committed record_commit row must report crlf.txt as MOE_ATTR_CONCURRENT"
+                    }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AD] ok'
+
+                # Scenario AE — a symlink is fingerprinted by its link text, the
+                # blob `git add` stores, not by its target's bytes (hash-object
+                # follows a link). Three links sit untracked in the baseline as
+                # foreign dirt:
+                #   retarget-link  retargeted by the session to a file with
+                #                  identical bytes: its link text changed, so it
+                #                  lands (MEASURED)
+                #   stay-link      the session edits its target, not the link:
+                #                  PREEXISTING
+                #   dangling-link  points nowhere and is never touched: PREEXISTING
+                if ($symlinksOk) {
+                    Write-Host '[scenario AE] a retargeted symlink lands; a symlink whose target changed, and a dangling one, stay MOE_ATTR_PREEXISTING'
+                    $scopeAEDir = Join-Path $tempRoot 'scope-ae'
+                    $scopeAEOut = Join-Path $tempRoot 'scope-ae.out'
+                    New-ScopeProject $scopeAEDir @('target.txt')
+                    foreach ($f in 'same-a.txt', 'same-b.txt') { [IO.File]::WriteAllText((Join-Path $scopeAEDir $f), "same`n") }
+                    [IO.File]::WriteAllText((Join-Path $scopeAEDir 'target.txt'), "v1`n")
+                    & git -C $scopeAEDir add same-a.txt same-b.txt target.txt 2>$null | Out-Null
+                    & git -C $scopeAEDir commit -qm ae-seed 2>$null | Out-Null
+                    & node $symlinkCjs seed $scopeAEDir 2>$null | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw 'SCENARIO AE FAILED: fixture: node could not create the three links' }
+                    $aeCmd = Join-Path $tempRoot 'ae-session.cmd'
+                    Set-Content -Path $aeCmd -Encoding ASCII -Value ("@echo off`r`n" +
+                        "node `"%~dp0symlink-fixture.cjs`" session `"%MOE_PROJECT_PATH%`" || exit /b 1`r`n" +
+                        "exit /b 0`r`n")
+                    Assert-ScopeRun 'AE' (Invoke-GateWrapper $scopeAEDir $scopeAEOut -Command $aeCmd) $scopeAEOut
+                    $aePaths = Get-CommittedPaths $scopeAEDir
+                    if ($aePaths -ne 'retarget-link target.txt') {
+                        Get-Content $scopeAEOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                        throw "SCENARIO AE FAILED: the completion must contain exactly retarget-link and target.txt; got [$aePaths]"
+                    }
+                    if ("$(& git -C $scopeAEDir ls-tree HEAD -- retarget-link 2>$null)" -notlike '120000 *') {
+                        throw 'SCENARIO AE FAILED: HEAD:retarget-link must be a symlink (mode 120000)'
+                    }
+                    if ((Get-GitId $scopeAEDir @('cat-file', 'blob', 'HEAD:retarget-link')) -ne 'same-b.txt') {
+                        throw 'SCENARIO AE FAILED: HEAD:retarget-link must hold the new link text same-b.txt'
+                    }
+                    $aeOutText = Get-Content -Raw -Path $scopeAEOut
+                    $aeStatus = @(& git -C $scopeAEDir status --porcelain 2>$null)
+                    foreach ($aeLink in 'stay-link', 'dangling-link') {
+                        if (-not $aeOutText.Contains("[skip] $aeLink MOE_ATTR_PREEXISTING")) {
+                            Write-Host $aeOutText
+                            throw "SCENARIO AE FAILED: expected '[skip] $aeLink MOE_ATTR_PREEXISTING'"
+                        }
+                        if ($aeStatus -notcontains "?? $aeLink") { throw "SCENARIO AE FAILED: $aeLink must stay untracked" }
+                    }
+                    $scopeScenariosRun++
+                    Write-Host '[scenario AE] ok'
+                } else {
+                    Write-Host '[scenario AE] skipped: this host cannot create symlinks'
+                }
+
+                # Scenario AF — the skip-untouched idle-peer exception
+                # (task-c2cb5cf7; same fixture as postflight.sh). An own
+                # contested path with no TOOL witness (a Bash-style write:
+                # create-file.cmd's FAKE_CLI_EXTRA_FILE) lands only when it was
+                # clean at this session's pre-flight AND every contesting task
+                # reports peerActive:false. Another worker stays active
+                # throughout (FAKE_SCOPE_PEERS_ACTIVE=1), so only the per-path
+                # flag can release a path.
+                #   AF1  idle peer, clean at pre-flight   -> lands, Moe-Contested trailer
+                #   AF2  live peer, clean at pre-flight   -> held, named in held=
+                #   AF3  idle peer, dirty at pre-flight   -> both held, named in held=
+                #        (one of the two rewritten during the session)
+                # K2's refused.txt covers the absent field (an older daemon): still held.
+                Write-Host '[scenario AF] an unwitnessed own contested path lands only when clean at pre-flight and every contesting task is idle'
+                function Get-ScopeAFEnded([string]$dir) {
+                    return "$(Get-Content -Path (Join-Path $dir '.moe\messages\chan-general.jsonl') | Where-Object { $_ -like '*worker session ended: task=task-postflight*' } | Select-Object -Last 1)"
+                }
+                $afRuns = @(
+                    @{ Name = 'AF1'; Files = @('owned-a.txt', 'contested.txt'); Pre = @('owned-a.txt'); Peers = 'contested.txt:task-peer'; Active = '0'; Extra = 'contested.txt' },
+                    @{ Name = 'AF2'; Files = @('owned-a.txt', 'contested.txt'); Pre = @('owned-a.txt'); Peers = 'contested.txt:task-peer'; Active = '1'; Extra = 'contested.txt' },
+                    @{ Name = 'AF3'; Files = @('owned-a.txt', 'pre-untouched.txt', 'pre-touched.txt'); Pre = @('owned-a.txt', 'pre-untouched.txt', 'pre-touched.txt')
+                       Peers = 'pre-untouched.txt:task-peer,pre-touched.txt:task-peer'; Active = '0'; Extra = 'pre-touched.txt' }
+                )
+                foreach ($af in $afRuns) {
+                    $afName = $af.Name
+                    $afDir = Join-Path $tempRoot "scope-$($afName.ToLower())"
+                    $afOut = Join-Path $tempRoot "scope-$($afName.ToLower()).out"
+                    New-ScopeProject $afDir $af.Files
+                    foreach ($f in $af.Pre) { Set-Content -Path (Join-Path $afDir $f) -Value 'pre' }
+                    $env:FAKE_SCOPE_PEERS_ACTIVE = '1'
+                    $env:FAKE_SCOPE_PEER_DECLARED = $af.Peers
+                    $env:FAKE_SCOPE_PEER_ACTIVE = $af.Active
+                    $env:FAKE_CLI_EXTRA_FILE = $af.Extra
+                    try {
+                        Assert-ScopeRun $afName (Invoke-GateWrapper $afDir $afOut -Command $createFileCmd) $afOut
+                    } finally {
+                        foreach ($v in 'FAKE_SCOPE_PEERS_ACTIVE', 'FAKE_SCOPE_PEER_DECLARED', 'FAKE_SCOPE_PEER_ACTIVE', 'FAKE_CLI_EXTRA_FILE') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $afPaths = Get-CommittedPaths $afDir
+                    $afText = Get-Content -Raw -Path $afOut
+                    $afStatus = @(& git -C $afDir status --porcelain 2>$null)
+                    $afLine = Get-ScopeAFEnded $afDir
+                    if (-not $afLine) { Write-Host $afText; throw "SCENARIO $afName FAILED: no session-ended line in #general" }
+                    if ($afName -eq 'AF1') {
+                        if ($afPaths -ne 'contested.txt owned-a.txt') { Write-Host $afText; throw "SCENARIO AF1 FAILED: an idle peer's clean contested path must land; got [$afPaths]" }
+                        if ($afText.Contains('[skip] contested.txt')) { Write-Host $afText; throw 'SCENARIO AF1 FAILED: contested.txt must not be skipped' }
+                        if ((@(& git -C $afDir log -1 --format=%B 2>$null) -join "`n") -notlike '*Moe-Contested: contested.txt (task-peer)*') { throw 'SCENARIO AF1 FAILED: the completion must keep the Moe-Contested trailer' }
+                        if ($afLine -like '* held=*' -or $afLine -like '*MOE_CONTESTED_HELD*') { throw "SCENARIO AF1 FAILED: nothing was held, so no held= suffix or remedy; got [$afLine]" }
+                        continue
+                    }
+                    if ($afPaths -ne 'owned-a.txt') { Write-Host $afText; throw "SCENARIO $afName FAILED: a live peer's or a pre-flight-dirty contested path must stay out; got [$afPaths]" }
+                    $afHeld = @($af.Peers -split ',' | ForEach-Object { $_.Split(':')[0] })
+                    foreach ($p in $afHeld) {
+                        if (-not $afText.Contains("[skip] $p MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)")) { Write-Host $afText; throw "SCENARIO $afName FAILED: expected '[skip] $p MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'" }
+                        if ($afStatus -notcontains "?? $p") { throw "SCENARIO $afName FAILED: $p must stay untracked" }
+                    }
+                    $afWant = if ($afName -eq 'AF2') { ' held=contested.txt(task-peer)' } else { ' held=pre-touched.txt(task-peer),pre-untouched.txt(task-peer)' }
+                    if (-not $afLine.Contains($afWant)) { throw "SCENARIO $afName FAILED: the session-ended line must name the held path(s) [$afWant]; got [$afLine]" }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AF] ok'
+
+                # Scenario AG — declare_files does not release a contested
+                # hold, and the session-ended line names the remedy that does
+                # (task-c2a900aa, option B; same fixture as postflight.sh). Six
+                # paths declared onto the owner (declaredFiles, served as
+                # `declared`), one with a space and a non-ASCII letter, are
+                # dirty BEFORE the pre-flight and declared by a peer too, so
+                # each stays held whatever the peer's state. held= shows five
+                # then `+1 more`, and one remedy follows. stream-json.cmd's
+                # witnessed Write of tool-written.txt (asserted, also
+                # peer-declared) lands under skip-untouched and is never held.
+                # Only a landed contested path gets a Moe-Contested trailer.
+                #   AG1  idle peer                    -> six held, untouched remedy, witnessed path lands
+                #   AG2  live peer                    -> same
+                #   AG3  no peerActive (older daemon) -> same
+                #   AG4  idle peer, contested=skip    -> the witnessed path is held too, strict remedy only
+                # The console [skip] lines are checked for the ASCII paths
+                # only: a redirected child's console encoding is the OEM code
+                # page. The ledger and the chat line are UTF-8 JSON.
+                Write-Host '[scenario AG] a declared, pre-flight-dirty contested path stays held and the session-ended line names the working remedy'
+                $agUntouched = "MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude or codex exec session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived. Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none. declare_files, unblocking or a shell touch alone does not release a hold."
+                $agStrict = "MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
+                $agDeclared = @("held $([char]0xE9).txt", 'z1.txt', 'z2.txt', 'z3.txt', 'z4.txt', 'z5.txt')
+                $agUtf8 = New-Object System.Text.UTF8Encoding($false)
+                foreach ($agRun in 1..4) {
+                    $agName = "AG$agRun"
+                    $agDir = Join-Path $tempRoot "scope-ag$agRun"
+                    $agOut = Join-Path $tempRoot "scope-ag$agRun.out"
+                    $agStrictRun = ($agRun -eq 4)
+                    $agSettings = if ($agStrictRun) { @{ attribution = @{ contested = 'skip' } } } else { $null }
+                    New-ScopeProject $agDir @('tool-written.txt') -Settings $agSettings
+                    # Literal JSON: PS 5.1's ConvertTo-Json unwraps one-element arrays.
+                    [System.IO.File]::WriteAllText((Join-Path $agDir '.moe\tasks\task-postflight.json'),
+                        ('{"id":"task-postflight","title":"Postflight smoke","status":"REVIEW","filesModified":["tool-written.txt"],"declaredFiles":["' + ($agDeclared -join '","') + '"]}'), $agUtf8)
+                    & git -C $agDir commit -qm ag-declared .moe/tasks/task-postflight.json 2>$null | Out-Null
+                    foreach ($p in $agDeclared) { [System.IO.File]::WriteAllText((Join-Path $agDir $p), "pre`n", $agUtf8) }
+                    $env:FAKE_SCOPE_DECLARED_FIELD = '1'
+                    $env:FAKE_SCOPE_PEERS_ACTIVE = '1'
+                    $env:FAKE_SCOPE_PEER_DECLARED = ((@($agDeclared) + 'tool-written.txt' | ForEach-Object { "${_}:task-peer" }) -join ',')
+                    if ($agRun -eq 2) { $env:FAKE_SCOPE_PEER_ACTIVE = '1' } elseif ($agRun -ne 3) { $env:FAKE_SCOPE_PEER_ACTIVE = '0' }
+                    try {
+                        Assert-ScopeRun $agName (Invoke-GateWrapper $agDir $agOut -Command $streamJsonCmd) $agOut
+                    } finally {
+                        foreach ($v in 'FAKE_SCOPE_DECLARED_FIELD', 'FAKE_SCOPE_PEERS_ACTIVE', 'FAKE_SCOPE_PEER_DECLARED', 'FAKE_SCOPE_PEER_ACTIVE') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $agText = Get-Content -Raw -Path $agOut
+                    $agWantPaths = if ($agStrictRun) { 'tool-edited.txt' } else { 'tool-edited.txt tool-written.txt' }
+                    if ((Get-CommittedPaths $agDir) -ne $agWantPaths) { Write-Host $agText; throw "SCENARIO $agName FAILED: expected [$agWantPaths] committed; got [$(Get-CommittedPaths $agDir)]" }
+                    # A Moe-Contested trailer claims a landed contested path: never a held one.
+                    $agTrailers = (@(& git -C $agDir log -1 --format=%B 2>$null) | Where-Object { $_ -like 'Moe-Contested:*' }) -join '|'
+                    $agWantTrailers = if ($agStrictRun) { '' } else { 'Moe-Contested: tool-written.txt (task-peer)' }
+                    if ($agTrailers -ne $agWantTrailers) { throw "SCENARIO $agName FAILED: Moe-Contested trailers must name only the landed contested paths; got [$agTrailers]" }
+                    $agCode = if ($agStrictRun) { 'MOE_ATTR_CONTESTED' } else { 'MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)' }
+                    foreach ($p in $agDeclared) {
+                        if ($p -match '^z' -and -not $agText.Contains("[skip] $p $agCode")) { Write-Host $agText; throw "SCENARIO $agName FAILED: expected '[skip] $p $agCode'" }
+                        & git -C $agDir cat-file -e "HEAD:$p" 2>$null
+                        if ($LASTEXITCODE -eq 0 -or [System.IO.File]::ReadAllText((Join-Path $agDir $p)) -ne "pre`n") { throw "SCENARIO $agName FAILED: $p must stay dirty and out of the commit" }
+                    }
+                    # The ledger's skipped data names every held path with its
+                    # code (AG4: the witnessed path too); the daemon builds
+                    # MOE_CONTESTED_HELD from it.
+                    $agRow = Get-Content -Encoding UTF8 -Path (Join-Path $agDir '.moe\record_commit.jsonl') | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json
+                    $agGot = (@($agRow.skipped | Where-Object { $_.code -eq $agCode } | ForEach-Object { $_.path }) | Sort-Object) -join '|'
+                    $agWantHeld = (@($agDeclared) + @(if ($agStrictRun) { 'tool-written.txt' }) | Sort-Object) -join '|'
+                    if ($agGot -ne $agWantHeld) { throw "SCENARIO $agName FAILED: record_commit skipped under $agCode must be [$agWantHeld]; got [$agGot]" }
+                    $agLine = Get-Content -Encoding UTF8 -Path (Join-Path $agDir '.moe\messages\chan-general.jsonl') |
+                        Where-Object { $_ -like '*worker session ended: task=task-postflight*' } | Select-Object -Last 1 | ConvertFrom-Json
+                    $agHeld = "$($agDeclared[0])(task-peer),z1.txt(task-peer),z2.txt(task-peer),z3.txt(task-peer),z4.txt(task-peer),+1 more"
+                    if ($agStrictRun) { $agHeld = "$($agDeclared[0])(task-peer),tool-written.txt(task-peer),z1.txt(task-peer),z2.txt(task-peer),z3.txt(task-peer),+2 more" }
+                    $agRemedy = if ($agStrictRun) { $agStrict } else { $agUntouched }
+                    $agOther = if ($agStrictRun) { $agUntouched } else { $agStrict }
+                    if (-not $agLine -or -not ([string]$agLine.content).EndsWith(" held=$agHeld $agRemedy", [System.StringComparison]::Ordinal)) {
+                        throw "SCENARIO $agName FAILED: the session-ended line must end with the bounded held= list and its one remedy; got [$($agLine.content)]"
+                    }
+                    if (([string]$agLine.content).Contains($agOther)) { throw "SCENARIO $agName FAILED: the other policy's remedy must not appear; got [$($agLine.content)]" }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AG] ok'
+
+                # Scenario AH -- launch outage mode (twin: scenario AH in
                 # postflight.sh). A codex TUI worker whose CLI exits 1 at once,
                 # the way a spent provider credit makes it (measured 2026-10-29:
                 # such seats kept their tasks for hours behind the launch-failure
@@ -3847,7 +3960,7 @@ else {
                 # that ran. The launch window is 10s here, not the sh twin's 5s:
                 # a Windows PowerShell child takes seconds to start, and the
                 # wrapper rounds the elapsed time instead of truncating it.
-                Write-Host '[scenario AC] launch outage: the third fast exit releases the held task once, then taskless probes until a launch runs'
+                Write-Host '[scenario AH] launch outage: the third fast exit releases the held task once, then taskless probes until a launch runs'
                 $outageBin = Join-Path $tempRoot 'outage-bin'
                 New-Item -ItemType Directory -Force -Path $outageBin | Out-Null
                 # The codex.cmd front above, in its own directory (the wrapper
@@ -3881,7 +3994,7 @@ exit 0
                     "exit /b %ERRORLEVEL%`r`n")
                 $outageCheck = Join-Path $tempRoot 'outage-check.cjs'
                 [IO.File]::WriteAllText($outageCheck, @'
-// One scenario AC run (twin: the same checker in postflight.ps1):
+// One scenario AH run (twin: the same checker in postflight.ps1):
 //   node outage-check.cjs <run> <exit> <wrapper out> <project dir> <worker id> <MOE_LAUNCH_FAIL_SEC>
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const [run, code, outFile, dir, worker, failSec] = process.argv.slice(2);
@@ -3957,7 +4070,7 @@ try {
 } catch (error) {
   console.error(out);
   console.error(`rpc sequence: ${seq}\nchat: ${JSON.stringify(chat, null, 1)}`);
-  console.error(`[scenario AC] ${run}: ${error.message}`);
+  console.error(`[scenario AH] ${run}: ${error.message}`);
   process.exit(1);
 }
 '@, [Text.UTF8Encoding]::new($false))
@@ -3980,7 +4093,7 @@ try {
                     $outagePrevEnv[$name] = [Environment]::GetEnvironmentVariable($name)
                     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
                 }
-                $scopeAC3Proc = $null
+                $scopeAH3Proc = $null
                 try {
                     $env:MOE_SERENA_PATH = $trueCmd
                     $env:MOE_DISABLE_HEARTBEAT = '1'
@@ -3989,18 +4102,18 @@ try {
                     $env:MOE_LAUNCH_BACKOFF_MAX_SEC = '1'
                     $env:FAKE_TASK_STATUS = 'WORKING'
                     $env:FAKE_OUTAGE_PROBE_SEC = '11'
-                    $scopeACDir = Join-Path $tempRoot 'scope-ac'
-                    New-ScopeProject $scopeACDir @() -Status 'WORKING'
-                    $scopeACOut = Join-Path $tempRoot 'scope-ac.out'
-                    $scopeACCode = Invoke-OutageWrapper $scopeACDir $scopeACOut 'worker-scope-ac'
-                    & node $outageCheck released $scopeACCode $scopeACOut $scopeACDir worker-scope-ac $outageFailSec
-                    if ($LASTEXITCODE -ne 0) { throw "SCENARIO AC FAILED: run 1 (released); log $scopeACOut" }
-                    $scopeAC2Dir = Join-Path $tempRoot 'scope-ac2'
-                    New-ScopeProject $scopeAC2Dir @() -Status 'WORKING'
-                    $scopeAC2Out = Join-Path $tempRoot 'scope-ac2.out'
-                    $scopeAC2Code = Invoke-OutageWrapper $scopeAC2Dir $scopeAC2Out 'worker-scope-ac2' @{ FAKE_CLAIM_MODE = 'resume'; FAKE_RELEASE_REFUSE = 'RELEASE_NOT_ASSIGNEE'; FAKE_OUTAGE_FAILS = '4' }
-                    & node $outageCheck refused $scopeAC2Code $scopeAC2Out $scopeAC2Dir worker-scope-ac2 $outageFailSec
-                    if ($LASTEXITCODE -ne 0) { throw "SCENARIO AC FAILED: run 2 (refused); log $scopeAC2Out" }
+                    $scopeAHDir = Join-Path $tempRoot 'scope-ah'
+                    New-ScopeProject $scopeAHDir @() -Status 'WORKING'
+                    $scopeAHOut = Join-Path $tempRoot 'scope-ah.out'
+                    $scopeAHCode = Invoke-OutageWrapper $scopeAHDir $scopeAHOut 'worker-scope-ah'
+                    & node $outageCheck released $scopeAHCode $scopeAHOut $scopeAHDir worker-scope-ah $outageFailSec
+                    if ($LASTEXITCODE -ne 0) { throw "SCENARIO AH FAILED: run 1 (released); log $scopeAHOut" }
+                    $scopeAH2Dir = Join-Path $tempRoot 'scope-ah2'
+                    New-ScopeProject $scopeAH2Dir @() -Status 'WORKING'
+                    $scopeAH2Out = Join-Path $tempRoot 'scope-ah2.out'
+                    $scopeAH2Code = Invoke-OutageWrapper $scopeAH2Dir $scopeAH2Out 'worker-scope-ah2' @{ FAKE_CLAIM_MODE = 'resume'; FAKE_RELEASE_REFUSE = 'RELEASE_NOT_ASSIGNEE'; FAKE_OUTAGE_FAILS = '4' }
+                    & node $outageCheck refused $scopeAH2Code $scopeAH2Out $scopeAH2Dir worker-scope-ah2 $outageFailSec
+                    if ($LASTEXITCODE -ne 0) { throw "SCENARIO AH FAILED: run 2 (refused); log $scopeAH2Out" }
                     # Run 3: one fast exit (streak 1, backoff 1s), then idle polls
                     # that launch nothing. The backoff must survive them: the old
                     # classifier read a skipped launch as a launch that ran, zeroed
@@ -4009,44 +4122,439 @@ try {
                     # line comes before it).
                     $outageFailCli = Join-Path $outageBin 'fail-cli.cmd'
                     Set-Content -Path $outageFailCli -Encoding ASCII -Value "@echo off`r`nexit /b 1`r`n"
-                    $scopeAC3Dir = Join-Path $tempRoot 'scope-ac3'
-                    New-ScopeProject $scopeAC3Dir @() -Status 'WORKING'
-                    $scopeAC3Out = Join-Path $tempRoot 'scope-ac3.out'
-                    $scopeAC3Rpc = Join-Path $scopeAC3Dir '.moe\evidence-rpcs.jsonl'
+                    $scopeAH3Dir = Join-Path $tempRoot 'scope-ah3'
+                    New-ScopeProject $scopeAH3Dir @() -Status 'WORKING'
+                    $scopeAH3Out = Join-Path $tempRoot 'scope-ah3.out'
+                    $scopeAH3Rpc = Join-Path $scopeAH3Dir '.moe\evidence-rpcs.jsonl'
                     $env:FAKE_CLAIM_LIMIT = '1'
                     $env:MOE_LAUNCH_FAIL_SEC = '30'
-                    $scopeAC3Args = @('-NoProfile', '-File', $wrapper, '-Project', $scopeAC3Dir, '-WorkerId', 'worker-scope-ac3', '-Role', 'worker', '-Team', 'Smoke', '-NoStartDaemon', '-Command', $outageFailCli, '-Loop', '-PollInterval', '1') |
+                    $scopeAH3Args = @('-NoProfile', '-File', $wrapper, '-Project', $scopeAH3Dir, '-WorkerId', 'worker-scope-ah3', '-Role', 'worker', '-Team', 'Smoke', '-NoStartDaemon', '-Command', $outageFailCli, '-Loop', '-PollInterval', '1') |
                         ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
-                    Remove-Item -LiteralPath $scopeAC3Out, "$scopeAC3Out.err" -Force -ErrorAction SilentlyContinue
-                    $scopeAC3Proc = Start-Process -FilePath $psExe -ArgumentList $scopeAC3Args -RedirectStandardOutput $scopeAC3Out -RedirectStandardError "$scopeAC3Out.err" -PassThru -NoNewWindow
-                    $null = $scopeAC3Proc.Handle
-                    $scopeAC3Deadline = (Get-Date).AddSeconds($wrapperTimeoutSec * 2)
-                    while ((Get-Date) -lt $scopeAC3Deadline -and -not $scopeAC3Proc.HasExited) {
-                        $scopeAC3Claims = 0
-                        try { $scopeAC3Claims = @(Get-Content -LiteralPath $scopeAC3Rpc -ErrorAction Stop | Where-Object { $_ -like '*"tool":"claim_next_task"*' }).Count } catch {}
-                        if ($scopeAC3Claims -ge 3) { break }
+                    Remove-Item -LiteralPath $scopeAH3Out, "$scopeAH3Out.err" -Force -ErrorAction SilentlyContinue
+                    $scopeAH3Proc = Start-Process -FilePath $psExe -ArgumentList $scopeAH3Args -RedirectStandardOutput $scopeAH3Out -RedirectStandardError "$scopeAH3Out.err" -PassThru -NoNewWindow
+                    $null = $scopeAH3Proc.Handle
+                    $scopeAH3Deadline = (Get-Date).AddSeconds($wrapperTimeoutSec * 2)
+                    while ((Get-Date) -lt $scopeAH3Deadline -and -not $scopeAH3Proc.HasExited) {
+                        $scopeAH3Claims = 0
+                        try { $scopeAH3Claims = @(Get-Content -LiteralPath $scopeAH3Rpc -ErrorAction Stop | Where-Object { $_ -like '*"tool":"claim_next_task"*' }).Count } catch {}
+                        if ($scopeAH3Claims -ge 3) { break }
                         Start-Sleep -Milliseconds 250
                     }
                 } finally {
-                    if ($scopeAC3Proc -and -not $scopeAC3Proc.HasExited) { & taskkill /T /F /PID $scopeAC3Proc.Id 2>&1 | Out-Null; $scopeAC3Proc.WaitForExit(5000) | Out-Null }
+                    if ($scopeAH3Proc -and -not $scopeAH3Proc.HasExited) { & taskkill /T /F /PID $scopeAH3Proc.Id 2>&1 | Out-Null; $scopeAH3Proc.WaitForExit(5000) | Out-Null }
                     foreach ($name in $outagePrevEnv.Keys) {
                         if ($null -ne $outagePrevEnv[$name]) { Set-Item "Env:$name" $outagePrevEnv[$name] }
                         else { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
                     }
                 }
-                $scopeAC3Text = [string](Get-Content -Raw -LiteralPath $scopeAC3Out -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$scopeAC3Out.err" -ErrorAction SilentlyContinue)
-                $scopeAC3Backoffs = ([regex]::Matches($scopeAC3Text, [regex]::Escape('Backing off 1s before relaunching (streak 1)'))).Count
-                if (-not $scopeAC3Text.Contains('MOE_TASKLESS_NO_LAUNCH reason=idle')) { Write-Host $scopeAC3Text; throw 'SCENARIO AC FAILED: run 3 never reached a skipped (taskless) launch' }
-                if ($scopeAC3Backoffs -lt 2) { Write-Host $scopeAC3Text; throw 'SCENARIO AC FAILED: a skipped launch reset the launch-failure streak and its backoff' }
-                if ($scopeAC3Text.Contains('Agent idle, checking for tasks')) { Write-Host $scopeAC3Text; throw 'SCENARIO AC FAILED: a skipped launch read as a launch that ran: the backoff was zeroed and the seat went back to idle polls' }
+                $scopeAH3Text = [string](Get-Content -Raw -LiteralPath $scopeAH3Out -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$scopeAH3Out.err" -ErrorAction SilentlyContinue)
+                $scopeAH3Backoffs = ([regex]::Matches($scopeAH3Text, [regex]::Escape('Backing off 1s before relaunching (streak 1)'))).Count
+                if (-not $scopeAH3Text.Contains('MOE_TASKLESS_NO_LAUNCH reason=idle')) { Write-Host $scopeAH3Text; throw 'SCENARIO AH FAILED: run 3 never reached a skipped (taskless) launch' }
+                if ($scopeAH3Backoffs -lt 2) { Write-Host $scopeAH3Text; throw 'SCENARIO AH FAILED: a skipped launch reset the launch-failure streak and its backoff' }
+                if ($scopeAH3Text.Contains('Agent idle, checking for tasks')) { Write-Host $scopeAH3Text; throw 'SCENARIO AH FAILED: a skipped launch read as a launch that ran: the backoff was zeroed and the seat went back to idle polls' }
                 $scopeScenariosRun++
-                Write-Host '[scenario AC] ok'
+                Write-Host '[scenario AH] ok'
+
+                # Scenario AI -- a held contested path reaches record_commit on
+                # BOTH nothing landings (task-a2f243a1; twin: scenario AI in
+                # postflight.sh). The task's only own path, held.txt, is
+                # declared (declaredFiles), dirty BEFORE the pre-flight and
+                # declared by a peer too, so it is held and nothing lands:
+                #   AI1  completion, skip-untouched -> zero candidates, one declared path: the unchanged-tree nothing
+                #   AI2  completion, contested=skip -> same; the strict code names no peer, only `contested` does
+                #   AI3  checkpoint, contested=skip -> zero candidates: the no-candidate nothing
+                # The last record_commit row carries both lists as JSON arrays
+                # (the daemon refuses a non-array, and one held path is the
+                # one-element case PS 5.1 can unwrap): skipped names held.txt
+                # under the run's code and contested names its peer. The daemon
+                # builds its MOE_CONTESTED_HELD task line and #governors alert
+                # from them. The console line pins which send ran; only its
+                # ASCII part is matched (the redirected child writes the OEM
+                # code page).
+                Write-Host '[scenario AI] a held contested path reaches record_commit on both nothing landings'
+                $aiCheck = Join-Path $tempRoot 'scope-ai-check.cjs'
+                [System.IO.File]::WriteAllText($aiCheck, @'
+const [f,kind,code]=process.argv.slice(2),assert=require("assert");
+const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse),r=rows[rows.length-1];
+try {
+  assert.deepStrictEqual([r.outcome,r.code,r.kind],["nothing","MOE_COMMIT_NOTHING_TO_COMMIT",kind],"last row");
+  assert.ok(Array.isArray(r.skipped)&&Array.isArray(r.contested),"skipped and contested must be JSON arrays");
+  assert.deepStrictEqual(r.skipped.filter(s=>String(s.code).startsWith("MOE_ATTR_CONTESTED")),[{path:"held.txt",code}],"skipped");
+  assert.ok(r.contested.some(c=>c.path==="held.txt"&&c.taskId==="task-peer"),"contested must name held.txt with task-peer");
+} catch (e) { console.error(e.message+"\nrow: "+JSON.stringify(r)); process.exit(1); }
+'@, (New-Object System.Text.UTF8Encoding($false)))
+                foreach ($aiRun in 1..3) {
+                    $aiName = "AI$aiRun"
+                    $aiDir = Join-Path $tempRoot "scope-ai$aiRun"
+                    $aiOut = Join-Path $tempRoot "scope-ai$aiRun.out"
+                    $aiStatus = if ($aiRun -eq 3) { 'WORKING' } else { 'REVIEW' }
+                    $aiKind = if ($aiRun -eq 3) { 'checkpoint' } else { 'completion' }
+                    $aiCode = if ($aiRun -eq 1) { 'MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)' } else { 'MOE_ATTR_CONTESTED' }
+                    $aiLine = if ($aiRun -eq 3) { 'no attributable changes to commit' } else { 'the attributable paths already match' }
+                    $aiSettings = if ($aiRun -eq 1) { $null } else { @{ attribution = @{ contested = 'skip' } } }
+                    New-ScopeProject $aiDir @() -Settings $aiSettings -Status $aiStatus
+                    # Literal JSON: PS 5.1's ConvertTo-Json unwraps one-element arrays.
+                    [System.IO.File]::WriteAllText((Join-Path $aiDir '.moe\tasks\task-postflight.json'),
+                        ('{"id":"task-postflight","title":"Postflight smoke","status":"' + $aiStatus + '","filesModified":[],"declaredFiles":["held.txt"]}'), (New-Object System.Text.UTF8Encoding($false)))
+                    & git -C $aiDir commit -qm ai-declared .moe/tasks/task-postflight.json 2>$null | Out-Null
+                    [System.IO.File]::WriteAllText((Join-Path $aiDir 'held.txt'), "pre`n", (New-Object System.Text.UTF8Encoding($false)))
+                    $aiCommits = (& git -C $aiDir rev-list --all --count 2>$null) -join ''
+                    $env:FAKE_SCOPE_DECLARED_FIELD = '1'
+                    $env:FAKE_SCOPE_PEERS_ACTIVE = '1'
+                    $env:FAKE_SCOPE_PEER_DECLARED = 'held.txt:task-peer'
+                    $env:FAKE_SCOPE_PEER_ACTIVE = '1'
+                    try {
+                        Assert-ScopeRun $aiName (Invoke-GateWrapper $aiDir $aiOut -Status $aiStatus) $aiOut
+                    } finally {
+                        foreach ($v in 'FAKE_SCOPE_DECLARED_FIELD', 'FAKE_SCOPE_PEERS_ACTIVE', 'FAKE_SCOPE_PEER_DECLARED', 'FAKE_SCOPE_PEER_ACTIVE') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $aiText = Get-Content -Raw -Path $aiOut
+                    if (((& git -C $aiDir rev-list --all --count 2>$null) -join '') -ne $aiCommits) { Write-Host $aiText; throw "SCENARIO $aiName FAILED: nothing may be committed" }
+                    if (-not (@(& git -C $aiDir status --porcelain 2>$null) -contains '?? held.txt') -or [System.IO.File]::ReadAllText((Join-Path $aiDir 'held.txt')) -ne "pre`n") {
+                        Write-Host $aiText; throw "SCENARIO $aiName FAILED: held.txt must stay untracked with its pre-flight bytes"
+                    }
+                    if (-not $aiText.Contains($aiLine)) { Write-Host $aiText; throw "SCENARIO $aiName FAILED: expected the '$aiLine' landing line" }
+                    & node $aiCheck (Join-Path $aiDir '.moe\record_commit.jsonl') $aiKind $aiCode
+                    if ($LASTEXITCODE -ne 0) { Write-Host $aiText; throw "SCENARIO $aiName FAILED: the $aiKind nothing row must name held.txt under $aiCode in skipped and its peer in contested" }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AI] ok'
+
+                # Scenario AJ -- held paths survive BOTH peel-failure sends
+                # and the rescue row. Twin: postflight.sh (task-dfbda1a8).
+                # Every row is checked: the no-candidate peel adds a second,
+                # finally-block row. AJ2 owns nothing but a TOOL-witnessed
+                # held.txt, so its completion refuses NO_OWNED_PATHS and takes
+                # the no-candidate peel.
+                Write-Host '[scenario AJ] peel failures and rescue records retain held contested paths'
+                $ajCli = Join-Path $tempRoot 'aj-cli.cmd'
+                Set-Content -Path $ajCli -Encoding ASCII -Value "@echo off`r`necho owned-a-session > `"%MOE_PROJECT_PATH%\owned-a.txt`"`r`nexit /b 0`r`n"
+                Set-Content -Path (Join-Path $tempRoot 'aj-tool.jsonl') -Encoding ASCII -Value @'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"aj-held","name":"mcp__serena__replace_content","input":{"relative_path":"held.txt","needle":"pre","repl":"pre","mode":"literal"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"aj-held","is_error":false,"content":[{"type":"text","text":"OK"}]}]}}
+'@
+                $ajToolCli = Join-Path $tempRoot 'aj-tool.cmd'
+                Set-Content -Path $ajToolCli -Encoding ASCII -Value "@echo off`r`ntype `"%~dp0aj-tool.jsonl`"`r`nexit /b 0`r`n"
+                $ajCheck = Join-Path $tempRoot 'scope-aj-check.cjs'
+                [System.IO.File]::WriteAllText($ajCheck, @'
+const [f,run]=process.argv.slice(2),assert=require("assert");
+const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse);
+const expected=run==="1"?[["committed","peel-failed","rescue"],["failed","MOE_COMMIT_FAILED_PEEL","completion"]]:[["failed","MOE_COMMIT_FAILED_PEEL","completion"]];
+try {
+  assert.ok(rows.length>=expected.length,"missing ledger rows");
+  rows.slice(-expected.length).forEach((r,i)=>assert.deepStrictEqual([r.outcome,r.code,r.kind],expected[i],expected[i].join("/")));
+  rows.forEach(r=>{
+    const label=[r.outcome,r.code,r.kind].join("/");
+    assert.ok(Array.isArray(r.skipped)&&Array.isArray(r.contested),label+": skipped and contested must be JSON arrays");
+    assert.deepStrictEqual(r.skipped.filter(s=>String(s.code).startsWith("MOE_ATTR_CONTESTED")),[{path:"held.txt",code:"MOE_ATTR_CONTESTED"}],label+": skipped");
+    assert.ok(r.contested.some(c=>c.path==="held.txt"&&c.taskId==="task-peer"),label+": contested must name held.txt with task-peer");
+  });
+} catch (e) { console.error(e.message+"\nrows: "+JSON.stringify(rows)); process.exit(1); }
+'@, (New-Object System.Text.UTF8Encoding($false)))
+                foreach ($ajRun in 1..2) {
+                    $ajName = "AJ$ajRun"
+                    $ajDir = Join-Path $tempRoot "scope-aj$ajRun"
+                    $ajOut = Join-Path $tempRoot "scope-aj$ajRun.out"
+                    $ajFiles = @(); if ($ajRun -eq 1) { $ajFiles = @('owned-a.txt') }
+                    $ajFilesJson = if ($ajRun -eq 1) { '["owned-a.txt"]' } else { '[]' }
+                    $ajDeclaredJson = if ($ajRun -eq 1) { '["held.txt"]' } else { '[]' }
+                    New-ScopeProject $ajDir $ajFiles -Status 'REVIEW' -Settings @{ attribution = @{ contested = 'skip' } }
+                    [System.IO.File]::WriteAllText((Join-Path $ajDir '.moe\tasks\task-postflight.json'),
+                        ('{"id":"task-postflight","title":"Postflight smoke","status":"REVIEW","filesModified":' + $ajFilesJson + ',"declaredFiles":' + $ajDeclaredJson + '}'), (New-Object System.Text.UTF8Encoding($false)))
+                    & git -C $ajDir commit -qm aj-declared .moe/tasks/task-postflight.json 2>$null | Out-Null
+                    [System.IO.File]::WriteAllText((Join-Path $ajDir 'held.txt'), "pre`n", (New-Object System.Text.UTF8Encoding($false)))
+                    $ajCmd = $ajToolCli
+                    if ($ajRun -eq 1) {
+                        Set-Content -Path (Join-Path $ajDir 'owned-a.txt') -Value 'owned-a'
+                        # declaredFiles enables the foreign-byte guard: change
+                        # this own file in-session so only held.txt stays held.
+                        $ajCmd = $ajCli
+                    }
+                    & git -C $ajDir branch moe 2>$null | Out-Null
+                    $ajHead = (& git -C $ajDir rev-parse HEAD 2>$null) -join ''
+                    $ajBranch = (& git -C $ajDir symbolic-ref HEAD 2>$null) -join ''
+                    $env:FAKE_SCOPE_DECLARED_FIELD = '1'
+                    $env:FAKE_SCOPE_PEERS_ACTIVE = '1'
+                    $env:FAKE_SCOPE_PEER_DECLARED = 'held.txt:task-peer'
+                    $env:FAKE_SCOPE_PEER_ACTIVE = '1'
+                    try {
+                        Assert-ScopeRun $ajName (Invoke-GateWrapper $ajDir $ajOut -Status 'REVIEW' -Command $ajCmd) $ajOut
+                    } finally {
+                        foreach ($v in 'FAKE_SCOPE_DECLARED_FIELD', 'FAKE_SCOPE_PEERS_ACTIVE', 'FAKE_SCOPE_PEER_DECLARED', 'FAKE_SCOPE_PEER_ACTIVE') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $ajText = Get-Content -Raw -Path $ajOut
+                    if (((& git -C $ajDir rev-parse HEAD 2>$null) -join '') -ne $ajHead -or ((& git -C $ajDir symbolic-ref HEAD 2>$null) -join '') -ne $ajBranch) {
+                        Write-Host $ajText; throw "SCENARIO $ajName FAILED: HEAD and branch must not move"
+                    }
+                    if ([System.IO.File]::ReadAllText((Join-Path $ajDir 'held.txt')) -ne "pre`n") { Write-Host $ajText; throw "SCENARIO $ajName FAILED: held.txt must keep its pre-flight bytes" }
+                    if ($ajRun -eq 2 -and $ajText -notmatch 'MOE_COMMIT_REFUSED_NO_OWNED_PATHS') { Write-Host $ajText; throw "SCENARIO $ajName FAILED: must take the no-candidate refused completion peel" }
+                    & node $ajCheck (Join-Path $ajDir '.moe\record_commit.jsonl') $ajRun
+                    if ($LASTEXITCODE -ne 0) { Write-Host $ajText; throw "SCENARIO $ajName FAILED: peel-failure and rescue rows must retain held paths" }
+                    Write-Host "[scenario $ajName] ok"
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AJ] ok'
+
+                # Scenario AK -- get_commit_scope's per-path peer lists
+                # (task-01f37ac6; twin: postflight.sh, same runs and strings).
+                # A peerDeclared entry may carry taskIds (every contesting
+                # task) and editingTaskIds (those mid-step on the path with a
+                # live session). Under skip-untouched an editing peer holds
+                # even the TOOL-witnessed tool-written.txt as
+                # MOE_ATTR_CONTESTED_EDITING; every contesting task gets a
+                # ledger row and is named in the path's ONE trailer.
+                #   AK1  editing [task-peer]        -> held, editing remedy
+                #   AK2  editing []                 -> lands, as before
+                #   AK3  no fields (older daemon)   -> lands, as before
+                #   AK4  taskIds [task-a, task-b]   -> lands, one trailer naming both
+                #   AK5  contested=skip, as AK1     -> strict MOE_ATTR_CONTESTED
+                #   AK6  contested=commit, as AK1   -> lands
+                #   AK7  disk fallback: an IN_PROGRESS peer step holds its path
+                #        as EDITING, a PENDING-only path lands naming both
+                #        contributors, a declared pre-flight-dirty path is held UNTOUCHED
+                Write-Host '[scenario AK] a contesting peer mid-step holds a witnessed path, and every contesting task is named'
+                $akUntouched = "verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude or codex exec session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived."
+                $akEdit = "the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude or codex exec session of this task re-edit the path, or let the peer's own landing carry the bytes."
+                $akWitness = "Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
+                $akNever = 'declare_files, unblocking or a shell touch alone does not release a hold.'
+                $akUtf8 = New-Object System.Text.UTF8Encoding($false)
+                # postflight.sh's scope_ak_check, reading its expectations from
+                # a file: PS 5.1 strips the quotes of a JSON native argument.
+                $akCheck = Join-Path $tempRoot 'scope-ak-check.cjs'
+                [System.IO.File]::WriteAllText($akCheck, @'
+const [dir,out,wantFile]=process.argv.slice(2),assert=require("assert"),fs=require("fs"),path=require("path");
+const {skipped,contested,held}=JSON.parse(fs.readFileSync(wantFile,"utf8"));
+const rows=fs.readFileSync(path.join(dir,".moe/record_commit.jsonl"),"utf8").trim().split("\n").map(JSON.parse),r=rows[rows.length-1];
+const line=fs.readFileSync(path.join(dir,".moe/messages/chan-general.jsonl"),"utf8").trim().split("\n").map(l=>String(JSON.parse(l).content)).filter(s=>s.includes("worker session ended: task=task-postflight")).pop()||"";
+const status=require("child_process").execFileSync("git",["-C",dir,"status","--porcelain"],{encoding:"utf8"}).split("\n"),text=fs.readFileSync(out,"utf8");
+try {
+  assert.deepStrictEqual((r.skipped||[]).filter(s=>String(s.code).startsWith("MOE_ATTR_CONTESTED")),skipped,"skipped");
+  assert.deepStrictEqual(r.contested||[],contested,"contested");
+  assert.strictEqual(line.includes(" held=")?line.slice(line.indexOf(" held=")):"",held,"held=");
+  for (const s of skipped) {
+    assert.ok(text.includes("[skip] "+s.path+" "+s.code),"console [skip] "+s.path+" "+s.code);
+    assert.ok(status.includes("?? "+s.path),s.path+" must stay untracked");
+    assert.strictEqual(fs.readFileSync(path.join(dir,s.path),"utf8").trim(),s.path==="held.txt"?"pre":"tool",s.path+" bytes");
+  }
+} catch (e) { console.error(e.message+"\nrow: "+JSON.stringify(r)+"\nline: "+line); process.exit(1); }
+'@, $akUtf8)
+                foreach ($akRun in 1..7) {
+                    $akName = "AK$akRun"
+                    $akDir = Join-Path $tempRoot "scope-ak$akRun"
+                    $akOut = Join-Path $tempRoot "scope-ak$akRun.out"
+                    $akSettings = $null; $akPeers = 'tool-written.txt:task-peer'; $akFail = $null
+                    $akFields = '{"taskIds":["task-peer"],"editingTaskIds":["task-peer"]}'
+                    $akRows = '{"path":"tool-written.txt","taskId":"task-peer"}'
+                    $akFiles = 'tool-edited.txt'; $akTrailer = ''
+                    $akSkips = '[{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED_EDITING(task-peer)"}]'
+                    $akHeld = " held=tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $akEdit $akWitness $akNever"
+                    if ($akRun -in 2, 3, 4, 6) {
+                        $akFiles = 'tool-edited.txt tool-written.txt'; $akTrailer = 'Moe-Contested: tool-written.txt (task-peer)'
+                        $akSkips = '[]'; $akHeld = ''
+                    }
+                    switch ($akRun) {
+                        2 { $akFields = '{"taskIds":["task-peer"],"editingTaskIds":[]}' }
+                        3 { $akFields = $null }
+                        4 {
+                            $akPeers = 'tool-written.txt:task-a'; $akFields = '{"taskIds":["task-a","task-b"],"editingTaskIds":[]}'
+                            $akTrailer = 'Moe-Contested: tool-written.txt (task-a, task-b)'
+                            $akRows = '{"path":"tool-written.txt","taskId":"task-a"},{"path":"tool-written.txt","taskId":"task-b"}'
+                        }
+                        5 {
+                            $akSettings = @{ attribution = @{ contested = 'skip' } }
+                            $akSkips = '[{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED"}]'
+                            $akHeld = " held=tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. $akNever"
+                        }
+                        6 { $akSettings = @{ attribution = @{ contested = 'commit' } } }
+                        7 {
+                            $akPeers = $null; $akFields = $null; $akFail = '1'
+                            $akTrailer = 'Moe-Contested: tool-edited.txt (task-peer, task-peer2)'
+                            $akSkips = '[{"path":"held.txt","code":"MOE_ATTR_CONTESTED_UNTOUCHED(task-peer2)"},{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED_EDITING(task-peer)"}]'
+                            $akRows = '{"path":"held.txt","taskId":"task-peer2"},{"path":"tool-edited.txt","taskId":"task-peer"},{"path":"tool-edited.txt","taskId":"task-peer2"},' + $akRows
+                            $akHeld = " held=held.txt(task-peer2),tool-written.txt(task-peer) MOE_CONTESTED_HELD remedy: $akUntouched $akEdit $akWitness $akNever"
+                        }
+                    }
+                    New-ScopeProject $akDir @('tool-written.txt') -Settings $akSettings
+                    if ($akRun -eq 7) {
+                        # The fallback owner guard lands only a task the record
+                        # assigns to this seat. Literal JSON: PS 5.1's
+                        # ConvertTo-Json unwraps one-element arrays.
+                        $akTasks = Join-Path $akDir '.moe\tasks'
+                        [System.IO.File]::WriteAllText((Join-Path $akTasks 'task-postflight.json'), '{"id":"task-postflight","title":"Postflight smoke","status":"REVIEW","assignedWorkerId":"worker-gate","filesModified":["tool-written.txt"],"declaredFiles":["held.txt"]}', $akUtf8)
+                        [System.IO.File]::WriteAllText((Join-Path $akTasks 'task-peer.json'), '{"id":"task-peer","status":"WORKING","implementationPlan":[{"status":"IN_PROGRESS","affectedFiles":["tool-written.txt"]},{"status":"PENDING","affectedFiles":["tool-edited.txt"]}]}', $akUtf8)
+                        [System.IO.File]::WriteAllText((Join-Path $akTasks 'task-peer2.json'), '{"id":"task-peer2","status":"WORKING","implementationPlan":[{"status":"PENDING","affectedFiles":["tool-edited.txt","held.txt"]}]}', $akUtf8)
+                        & git -C $akDir add .moe/tasks 2>$null | Out-Null
+                        & git -C $akDir commit -qm ak-records 2>$null | Out-Null
+                        [System.IO.File]::WriteAllText((Join-Path $akDir 'held.txt'), "pre`n", $akUtf8)
+                    }
+                    $akEnv = @{ FAKE_SCOPE_DECLARED_FIELD = '1'; FAKE_SCOPE_PEERS_ACTIVE = '1'; FAKE_SCOPE_PEER_ACTIVE = '1'
+                        FAKE_SCOPE_PEER_DECLARED = $akPeers; FAKE_SCOPE_PEER_FIELDS = $akFields; FAKE_SCOPE_FAIL = $akFail }
+                    foreach ($v in $akEnv.Keys) { if ($akEnv[$v]) { Set-Item -Path "Env:$v" -Value $akEnv[$v] } }
+                    try {
+                        Assert-ScopeRun $akName (Invoke-GateWrapper $akDir $akOut -Command $streamJsonCmd) $akOut
+                    } finally {
+                        foreach ($v in $akEnv.Keys) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $akText = Get-Content -Raw -Path $akOut
+                    if ((Get-CommittedPaths $akDir) -ne $akFiles) { Write-Host $akText; throw "SCENARIO $akName FAILED: expected [$akFiles] committed; got [$(Get-CommittedPaths $akDir)]" }
+                    $akGot = (@(& git -C $akDir log -1 --format=%B 2>$null) | Where-Object { $_ -like 'Moe-Contested:*' }) -join '|'
+                    if ($akGot -ne $akTrailer) { Write-Host $akText; throw "SCENARIO $akName FAILED: expected the trailers [$akTrailer]; got [$akGot]" }
+                    $akWant = Join-Path $tempRoot "scope-ak$akRun.want.json"
+                    [System.IO.File]::WriteAllText($akWant, ('{"skipped":' + $akSkips + ',"contested":[' + $akRows + '],"held":' + (ConvertTo-Json $akHeld) + '}'), $akUtf8)
+                    & node $akCheck $akDir $akOut $akWant
+                    if ($LASTEXITCODE -ne 0) { Write-Host $akText; throw "SCENARIO $akName FAILED: ledger, held= line or held paths differ" }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AK] ok'
+
+                # Scenario AL -- a hold names the peer that caused it
+                # (task-9d277494; twin: postflight.sh, same runs and strings).
+                # Contesting tasks are named in cause order: editingTaskIds,
+                # then activeTaskIds, then the rest, each in taskIds order.
+                # That order drives the UNTOUCHED code, held=, every contested
+                # row and the trailer; which paths land is unchanged. held.txt
+                # is declared and dirty at pre-flight; the witnessed
+                # tool-written.txt lands under skip-untouched.
+                #   AL1  idle task-a first, active task-b      -> held.txt(task-b), trailer (task-b, task-a)
+                #   AL2  contested=skip, as AL1                -> both held, strict label task-b
+                #   AL3  no activeTaskIds (older daemon)       -> task-a, as before
+                #   AL4  contested=skip, editing c, active b+c -> c, b, a
+                Write-Host '[scenario AL] a contested hold names the peer that caused it: editing, then active, then idle'
+                foreach ($alRun in 1..4) {
+                    $alName = "AL$alRun"
+                    $alDir = Join-Path $tempRoot "scope-al$alRun"
+                    $alOut = Join-Path $tempRoot "scope-al$alRun.out"
+                    $alFields = '{"taskIds":["task-a","task-b"],"activeTaskIds":["task-b"],"editingTaskIds":[]}'
+                    $alOrder = @('task-b', 'task-a')
+                    if ($alRun -eq 3) { $alFields = '{"taskIds":["task-a","task-b"]}'; $alOrder = @('task-a', 'task-b') }
+                    if ($alRun -eq 4) { $alFields = '{"taskIds":["task-a","task-b","task-c"],"activeTaskIds":["task-b","task-c"],"editingTaskIds":["task-c"]}'; $alOrder = @('task-c', 'task-b', 'task-a') }
+                    $alHead = $alOrder[0]
+                    $alRows = (@('held.txt', 'tool-written.txt') | ForEach-Object { $alP = $_; $alOrder | ForEach-Object { '{"path":"' + $alP + '","taskId":"' + $_ + '"}' } }) -join ','
+                    if ($alRun -in 2, 4) {
+                        $alSettings = @{ attribution = @{ contested = 'skip' } }; $alFiles = 'tool-edited.txt'; $alTrailer = ''
+                        $alSkips = '[{"path":"held.txt","code":"MOE_ATTR_CONTESTED"},{"path":"tool-written.txt","code":"MOE_ATTR_CONTESTED"}]'
+                        $alHeld = " held=held.txt($alHead),tool-written.txt($alHead) $agStrict"
+                    } else {
+                        $alSettings = $null; $alFiles = 'tool-edited.txt tool-written.txt'
+                        $alTrailer = "Moe-Contested: tool-written.txt ($($alOrder -join ', '))"
+                        $alSkips = '[{"path":"held.txt","code":"MOE_ATTR_CONTESTED_UNTOUCHED(' + $alHead + ')"}]'
+                        $alHeld = " held=held.txt($alHead) $agUntouched"
+                    }
+                    New-ScopeProject $alDir @('tool-written.txt') -Settings $alSettings
+                    # Literal JSON: PS 5.1's ConvertTo-Json unwraps one-element arrays.
+                    [System.IO.File]::WriteAllText((Join-Path $alDir '.moe\tasks\task-postflight.json'), '{"id":"task-postflight","title":"Postflight smoke","status":"REVIEW","filesModified":["tool-written.txt"],"declaredFiles":["held.txt"]}', $akUtf8)
+                    & git -C $alDir commit -qm al-declared .moe/tasks/task-postflight.json 2>$null | Out-Null
+                    [System.IO.File]::WriteAllText((Join-Path $alDir 'held.txt'), "pre`n", $akUtf8)
+                    $alEnv = @{ FAKE_SCOPE_DECLARED_FIELD = '1'; FAKE_SCOPE_PEERS_ACTIVE = '1'; FAKE_SCOPE_PEER_ACTIVE = '1'
+                        FAKE_SCOPE_PEER_DECLARED = 'held.txt:task-a,tool-written.txt:task-a'; FAKE_SCOPE_PEER_FIELDS = $alFields }
+                    foreach ($v in $alEnv.Keys) { Set-Item -Path "Env:$v" -Value $alEnv[$v] }
+                    try {
+                        Assert-ScopeRun $alName (Invoke-GateWrapper $alDir $alOut -Command $streamJsonCmd) $alOut
+                    } finally {
+                        foreach ($v in $alEnv.Keys) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $alText = Get-Content -Raw -Path $alOut
+                    if ((Get-CommittedPaths $alDir) -ne $alFiles) { Write-Host $alText; throw "SCENARIO $alName FAILED: expected [$alFiles] committed; got [$(Get-CommittedPaths $alDir)]" }
+                    $alGot = (@(& git -C $alDir log -1 --format=%B 2>$null) | Where-Object { $_ -like 'Moe-Contested:*' }) -join '|'
+                    if ($alGot -ne $alTrailer) { Write-Host $alText; throw "SCENARIO $alName FAILED: expected the trailers [$alTrailer]; got [$alGot]" }
+                    $alWant = Join-Path $tempRoot "scope-al$alRun.want.json"
+                    [System.IO.File]::WriteAllText($alWant, ('{"skipped":' + $alSkips + ',"contested":[' + $alRows + '],"held":' + (ConvertTo-Json $alHeld) + '}'), $akUtf8)
+                    & node $akCheck $alDir $alOut $alWant
+                    if ($LASTEXITCODE -ne 0) { Write-Host $alText; throw "SCENARIO $alName FAILED: ledger, held= line or held paths differ" }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AL] ok'
+
+                # Scenario AM -- a codex exec seat's --json stream feeds the
+                # TOOL tier (task-7db14e2d; twin: postflight.sh, same runs and
+                # strings). A codex.cmd front in its own directory rewrites
+                # sub\held.txt in every run, then prints one item.completed
+                # event shaped like prompt-cache-witness.test.mjs's captures.
+                # sub/held.txt is own, dirty at pre-flight and declared by a
+                # LIVE peer, so only a witness releases it. The Serena root is
+                # sub\, so AM3 also proves MOE_SERENA_PROJECT_ROOT reaches the
+                # helper. A worker defaults to codex exec.
+                #   AM1  completed file_change of held.txt      -> lands, trailer, touchedPaths [sub/held.txt]
+                #   AM2  failed file_change                     -> held UNTOUCHED, touchedPaths []
+                #   AM3  completed Serena replace_content 'OK'  -> lands, as AM1
+                #   AM4  failed Serena replace_content          -> held, as AM2
+                #   AM5  completed file_change outside the repo -> held, as AM2, plus the helper's WARN
+                Write-Host "[scenario AM] a codex exec seat's completed file_change or Serena edit witnesses its path; a failed or outside one does not"
+                $amBin = Join-Path $tempRoot 'codex-witness'
+                New-Item -ItemType Directory -Force -Path $amBin | Out-Null
+                Set-Content -Path (Join-Path $amBin 'codex-impl.ps1') -Encoding ASCII -Value @'
+[IO.File]::WriteAllText((Join-Path $env:MOE_PROJECT_PATH 'sub\held.txt'), "codex`n")
+$env:FAKE_CODEX_STREAM.Replace('@ROOT@', ($env:MOE_PROJECT_PATH -replace '\\', '/'))
+'{"type":"turn.completed","usage":{"input_tokens":48023,"cached_input_tokens":38912,"cache_write_input_tokens":0,"output_tokens":132,"reasoning_output_tokens":0}}'
+exit 0
+'@
+                $amCmd = Join-Path $amBin 'codex.cmd'
+                Set-Content -Path $amCmd -Encoding ASCII -Value ("@echo off`r`n" +
+                    "powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0codex-impl.ps1`" %*`r`n" +
+                    "exit /b %ERRORLEVEL%`r`n")
+                $amOutside = ($tempRoot -replace '\\', '/') + '/am-outside.txt'
+                function Get-AmChange([string]$p, [string]$s) { '{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"' + $p + '","kind":"update"}],"status":"' + $s + '"}}' }
+                $amSerena = '{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"serena","tool":"replace_content","arguments":{"relative_path":"held.txt","needle":"pre","repl":"codex","mode":"literal"},'
+                $amRuns = @(
+                    @{ Name = 'AM1'; Lands = $true; Stream = (Get-AmChange '@ROOT@/sub/held.txt' 'completed') },
+                    @{ Name = 'AM2'; Lands = $false; Stream = (Get-AmChange '@ROOT@/sub/held.txt' 'failed') },
+                    @{ Name = 'AM3'; Lands = $true; Stream = ($amSerena + '"result":{"content":[{"type":"text","text":"OK"}],"structured_content":{"result":"OK"}},"error":null,"status":"completed"}}') },
+                    @{ Name = 'AM4'; Lands = $false; Stream = ($amSerena + '"result":{"content":[{"type":"text","text":"Error executing tool replace_content: ValueError: No matches of the needle were found [trimmed]"}],"structured_content":null},"error":null,"status":"failed"}}') },
+                    @{ Name = 'AM5'; Lands = $false; Stream = (Get-AmChange $amOutside 'completed') }
+                )
+                foreach ($am in $amRuns) {
+                    $amName = $am.Name
+                    $amDir = Join-Path $tempRoot "scope-$($amName.ToLower())"
+                    $amOut = Join-Path $tempRoot "scope-$($amName.ToLower()).out"
+                    New-ScopeProject $amDir @('owned-a.txt', 'sub/held.txt')
+                    New-Item -ItemType Directory -Force -Path (Join-Path $amDir 'sub') | Out-Null
+                    [IO.File]::WriteAllText((Join-Path $amDir 'owned-a.txt'), "owned-a`n")
+                    [IO.File]::WriteAllText((Join-Path $amDir 'sub\held.txt'), "pre`n")
+                    $amEnv = @{ FAKE_SCOPE_PEERS_ACTIVE = '1'; FAKE_SCOPE_PEER_DECLARED = 'sub/held.txt:task-peer'; FAKE_SCOPE_PEER_ACTIVE = '1'
+                        MOE_SERENA_PROJECT = (Join-Path $amDir 'sub'); MOE_DISABLE_ARGV_PROBE = '1'; FAKE_CODEX_STREAM = $am.Stream }
+                    foreach ($v in $amEnv.Keys) { Set-Item -Path "Env:$v" -Value $amEnv[$v] }
+                    try {
+                        Assert-ScopeRun $amName (Invoke-GateWrapper $amDir $amOut -Command $amCmd -WorkerId 'worker-scope-am') $amOut
+                    } finally {
+                        foreach ($v in $amEnv.Keys) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $amText = Get-Content -Raw -Path $amOut
+                    $amPaths = Get-CommittedPaths $amDir
+                    $amTrailers = (@(& git -C $amDir log -1 --format=%B 2>$null) | Where-Object { $_ -like 'Moe-Contested:*' }) -join '|'
+                    $amRow = Get-Content -Encoding UTF8 -Path (Join-Path $amDir '.moe\record_commit.jsonl') | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json
+                    $amTouched = (@($amRow.touchedPaths) | Where-Object { $_ }) -join '|'
+                    $amSkips = (@($amRow.skipped) | Where-Object { $_ -and ([string]$_.code).StartsWith('MOE_ATTR_CONTESTED') } | ForEach-Object { "$($_.path)=$($_.code)" }) -join '|'
+                    $amLine = [string](Get-Content -Encoding UTF8 -Path (Join-Path $amDir '.moe\messages\chan-general.jsonl') |
+                        Where-Object { $_ -like '*worker session ended: task=task-postflight*' } | Select-Object -Last 1 | ConvertFrom-Json).content
+                    if ($am.Lands) {
+                        if ($amPaths -ne 'owned-a.txt sub/held.txt') { Write-Host $amText; throw "SCENARIO $amName FAILED: a witnessed contested path must land; got [$amPaths]" }
+                        if ((& git -C $amDir rev-parse HEAD:sub/held.txt 2>$null) -ne (& git -C $amDir hash-object sub/held.txt 2>$null)) { Write-Host $amText; throw "SCENARIO $amName FAILED: the codex session's bytes of sub/held.txt must land" }
+                        if ($amTrailers -ne 'Moe-Contested: sub/held.txt (task-peer)') { Write-Host $amText; throw "SCENARIO $amName FAILED: expected one Moe-Contested trailer for sub/held.txt; got [$amTrailers]" }
+                        if ($amText.Contains('[skip] sub/held.txt')) { Write-Host $amText; throw "SCENARIO $amName FAILED: sub/held.txt must not be skipped" }
+                        if ($amTouched -ne 'sub/held.txt' -or $amSkips) { Write-Host $amText; throw "SCENARIO $amName FAILED: record_commit touchedPaths must be exactly the witnessed path; got [$amTouched], skipped [$amSkips]" }
+                        if (-not $amLine -or $amLine -like '* held=*' -or $amLine -like '*MOE_CONTESTED_HELD*') { Write-Host $amText; throw "SCENARIO $amName FAILED: nothing was held, so no held= suffix or remedy; got [$amLine]" }
+                        continue
+                    }
+                    if ($amPaths -ne 'owned-a.txt') { Write-Host $amText; throw "SCENARIO $amName FAILED: an unwitnessed contested path must stay out; got [$amPaths]" }
+                    if (-not $amText.Contains('[skip] sub/held.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)')) { Write-Host $amText; throw "SCENARIO $amName FAILED: expected '[skip] sub/held.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'" }
+                    if (@(& git -C $amDir status --porcelain -uall 2>$null) -notcontains '?? sub/held.txt') { Write-Host $amText; throw "SCENARIO $amName FAILED: sub/held.txt must stay untracked" }
+                    if ($amTrailers) { Write-Host $amText; throw "SCENARIO $amName FAILED: a held path gets no Moe-Contested trailer; got [$amTrailers]" }
+                    if ($amTouched -or $amSkips -ne 'sub/held.txt=MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)') { Write-Host $amText; throw "SCENARIO $amName FAILED: record_commit must carry no touchedPaths and the UNTOUCHED skip; got [$amTouched], skipped [$amSkips]" }
+                    if ($amName -eq 'AM5' -and -not $amText.Contains("[WARN] tool write outside the repo not harvested: $amOutside")) { Write-Host $amText; throw "SCENARIO AM5 FAILED: expected the helper's WARN naming $amOutside" }
+                    if (-not $amLine.EndsWith(" held=sub/held.txt(task-peer) $agUntouched", [System.StringComparison]::Ordinal)) {
+                        Write-Host $amText; throw "SCENARIO $amName FAILED: the session-ended line must end with held=sub/held.txt(task-peer) and the untouched remedy; got [$amLine]"
+                    }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AM] ok'
 
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                if ($scopeScenariosRun -ne 35) {
-                    throw "Expected 35 commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC); ran $scopeScenariosRun"
+                $scopeExpectedRuns = 44
+                if ($symlinksOk) { $scopeExpectedRuns = 45 }
+                if ($scopeScenariosRun -ne $scopeExpectedRuns) {
+                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL, AM); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)
@@ -4342,6 +4850,213 @@ try {
         throw 'TEAM HEAL FAILED: a healed seat still reported itself teamless'
     }
     Write-Host '[team heal] ok'
+
+    # --- [worktree reuse] Worktree provisioning regressions beyond the shared suite
+    # (twin: the [worktree reuse] block in postflight.sh). Only a missing index file
+    # marks a half-made W, so a W whose agent emptied its index with `git rm` is
+    # reused as is, staged deletions and all. A failed Windows path-budget probe
+    # refuses with CREATE_FAILED instead of passing as length 0. ---
+    Write-Host '[worktree reuse] a half-made W is finished, an emptied index is kept, a failed budget probe refuses'
+    $wtrDir = Join-Path $tempRoot 'wtr-project'
+    $wtrW = Join-Path $wtrDir '.worktrees\task-postflight'
+    New-Item -ItemType Directory -Force -Path (Join-Path $wtrDir 'src'), (Join-Path $wtrDir '.moe\messages') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $wtrDir '.gitignore'), ".worktrees/`n.mcp.json`nlogs/`n")
+    [IO.File]::WriteAllText((Join-Path $wtrDir 'src\a.txt'), "seed a`n")
+    [IO.File]::WriteAllText((Join-Path $wtrDir '.moe\project.json'), '{"id":"proj-wtr","name":"postflight-wtr","settings":{"autoCommit":false}}')
+    [IO.File]::WriteAllText((Join-Path $wtrDir '.moe\messages\chan-general.jsonl'), '')
+    Write-TaskRecord $wtrDir @() 'WORKING'
+    # Invoke-WtrGit ARGS -- one fixture git call's output lines; a failed call fails the case.
+    function Invoke-WtrGit([string[]]$GitArgs) {
+        $ErrorActionPreference = 'Continue'
+        $out = @(& git @GitArgs 2>$null)
+        if ($LASTEXITCODE -ne 0) { throw "WORKTREE REUSE FAILED: fixture git $GitArgs exited $LASTEXITCODE" }
+        return $out
+    }
+    foreach ($a in @(@('init', '-q'), @('symbolic-ref', 'HEAD', 'refs/heads/main'), @('config', 'core.autocrlf', 'false'),
+            @('config', 'user.name', 'Moe Test'), @('config', 'user.email', 'moe@test.local'), @('add', '.gitignore', 'src', '.moe/project.json', '.moe/tasks'),
+            @('commit', '-qm', 'seed'), @('switch', '-q', '-c', 'moe/control'))) {
+        $null = Invoke-WtrGit (@('-C', $wtrDir) + $a)
+    }
+    # Invoke-WtrRun NAME [PATHPREFIX] -- one worker seat whose claim says worktree mode: @{ Code; Text }.
+    function Invoke-WtrRun([string]$Name, [string]$PathPrefix = '') {
+        foreach ($f in 'session-new.txt', '.moe\evidence-rpcs.jsonl', '.moe\attempts') { Remove-Item -LiteralPath (Join-Path $wtrDir $f) -Recurse -Force -ErrorAction SilentlyContinue }
+        $knobs = @{ MOE_PROXY_PATH = $fakeProxy; USERPROFILE = $homeDir; MOE_DISABLE_HEARTBEAT = '1'; FAKE_TASK_STATUS = 'WORKING'
+            FAKE_CLAIM_WORKSPACE = '{"mode":"worktree","target":"main"}'; PATH = $PathPrefix + $env:PATH }
+        $saved = @{}
+        foreach ($k in $knobs.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $knobs[$k]) }
+        $out = Join-Path $tempRoot "wrapper-wtr-$Name.out"
+        try {
+            $code = Invoke-WrapperProcess @('-Project', $wtrDir, '-WorkerId', 'worker-wtr', '-Role', 'worker', '-Team', 'Smoke', '-NoStartDaemon', '-Command', $createFileCmd, '-NoLoop', '-PollInterval', '0') $out
+        } finally {
+            foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+        }
+        return @{ Code = $code; Text = [string](Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue) }
+    }
+    function Get-WtrBlocks { @(Get-Content -LiteralPath (Join-Path $wtrDir '.moe\evidence-rpcs.jsonl') -ErrorAction SilentlyContinue | Where-Object { $_.Contains('"tool":"report_blocked"') }) }
+    function Stop-Wtr([string]$Name, [string]$Why, $Run) { Write-Host $Run.Text; throw "WORKTREE REUSE FAILED ($Name): $Why" }
+    # Assert-WtrReused NAME RUN -- W was reused: its line, exit 0, the CLI ran, no refusal, no W/.moe.
+    function Assert-WtrReused([string]$Name, $Run) {
+        if ($Run.Code -ne 0) { Stop-Wtr $Name "exit $($Run.Code), expected 0" $Run }
+        if ($Run.Text -cnotmatch '(?m)^\[worktree\] reused .+ on moe/task/task-postflight\r?$') { Stop-Wtr $Name 'no [worktree] reused line' $Run }
+        if (-not (Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) -or @(Get-WtrBlocks).Count -ne 0) { Stop-Wtr $Name 'the CLI did not run, or report_blocked was called' $Run }
+        if (Test-Path -LiteralPath (Join-Path $wtrW '.moe')) { Stop-Wtr $Name 'W/.moe exists' $Run }
+    }
+    # Assert-WtrKept NAME STAGED -- W's index is still empty and its staged deletions are unchanged.
+    function Assert-WtrKept([string]$Name, [string]$Staged) {
+        if (@(Invoke-WtrGit @('-C', $wtrW, 'ls-files')).Count -ne 0) { throw "WORKTREE REUSE FAILED ($Name): reuse refilled the emptied index" }
+        if ((@(Invoke-WtrGit @('-C', $wtrW, 'diff', '--cached', '--name-status')) -join "`n") -cne $Staged) { throw "WORKTREE REUSE FAILED ($Name): the staged deletions changed" }
+    }
+    # (b) A session died after sparse-checkout set, before read-tree: W has no index file yet.
+    $null = Invoke-WtrGit @('-C', $wtrDir, 'worktree', 'add', '-q', '--lock', '--reason', 'moe task-postflight', '--no-checkout', '--no-track', '-b', 'moe/task/task-postflight', $wtrW, 'main')
+    $null = Invoke-WtrGit @('-C', $wtrW, 'sparse-checkout', 'set', '--no-cone', '/*', '!/.moe/')
+    Assert-WtrReused 'half-made' (Invoke-WtrRun 'half-made')
+    if (-not (Test-Path -LiteralPath (Join-Path $wtrW 'src\a.txt'))) { throw 'WORKTREE REUSE FAILED (half-made): W/src/a.txt is not checked out' }
+    # (a) The agent emptied the index on purpose, first with --cached, then by deleting the files.
+    $null = Invoke-WtrGit @('-C', $wtrW, 'rm', '-q', '--cached', '--sparse', '-r', '.')
+    $wtrStaged = @(Invoke-WtrGit @('-C', $wtrW, 'diff', '--cached', '--name-status')) -join "`n"
+    if ($wtrStaged -cnotmatch 'src/a\.txt') { throw 'WORKTREE REUSE FAILED: the fixture staged no deletion' }
+    Assert-WtrReused 'emptied-cached' (Invoke-WtrRun 'emptied-cached')
+    Assert-WtrKept 'emptied-cached' $wtrStaged
+    $null = Invoke-WtrGit @('-C', $wtrW, 'reset', '-q')
+    $null = Invoke-WtrGit @('-C', $wtrW, 'rm', '-q', '--sparse', '-r', '.')
+    $wtrStaged = @(Invoke-WtrGit @('-C', $wtrW, 'diff', '--cached', '--name-status')) -join "`n"
+    Assert-WtrReused 'emptied-deleted' (Invoke-WtrRun 'emptied-deleted')
+    Assert-WtrKept 'emptied-deleted' $wtrStaged
+    if ((Test-Path -LiteralPath (Join-Path $wtrW 'src\a.txt')) -or (Test-Path -LiteralPath (Join-Path $wtrW '.gitignore'))) { throw 'WORKTREE REUSE FAILED (emptied-deleted): reuse restored a deleted file' }
+    # (c) The path-budget probe's ls-tree fails: CREATE_FAILED before any W work, no CLI.
+    # The stub is a git.ps1, which PowerShell finds on PATH before git.exe.
+    $null = Invoke-WtrGit @('-C', $wtrDir, 'worktree', 'remove', '--force', '--force', $wtrW)
+    $wtrStub = Join-Path $tempRoot 'wtr-git-stub'
+    New-Item -ItemType Directory -Force -Path $wtrStub | Out-Null
+    $wtrGit = (Get-Command git -CommandType Application | Select-Object -First 1).Source -replace "'", "''"
+    [IO.File]::WriteAllText((Join-Path $wtrStub 'git.ps1'), ("`$ErrorActionPreference = 'Continue'`r`n" +
+        "if (`$args -ccontains 'ls-tree') { [Console]::Error.WriteLine('fatal: stub fails ls-tree'); exit 1 }`r`n" +
+        "if (`$MyInvocation.ExpectingInput) { `$input | & '$wtrGit' @args } else { & '$wtrGit' @args }`r`n" +
+        "exit `$LASTEXITCODE`r`n"))
+    $run = Invoke-WtrRun 'budget-probe' ($wtrStub + [IO.Path]::PathSeparator)
+    if ($run.Code -ne 1) { Stop-Wtr 'budget-probe' "exit $($run.Code), expected 1" $run }
+    if ($run.Text -cnotmatch '\[ERROR\] MOE_WORKTREE_CREATE_FAILED: git ls-tree failed') { Stop-Wtr 'budget-probe' 'no CREATE_FAILED line from the budget probe' $run }
+    $blocks = @(Get-WtrBlocks)
+    if ($blocks.Count -ne 1 -or -not $blocks[0].Contains('"reason":"MOE_WORKTREE_CREATE_FAILED: git ls-tree failed')) { Stop-Wtr 'budget-probe' 'not exactly one report_blocked naming CREATE_FAILED' $run }
+    if ((Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) -or (Test-Path -LiteralPath $wtrW)) { Stop-Wtr 'budget-probe' 'the CLI ran, or W was made' $run }
+    # (d) W holds work, then loses its index FILE (an agent's `rm <index>`, then a crash). With
+    # no index a sparse read-tree overwrites the edit and still exits 0, so reuse refuses
+    # with CREATE_FAILED and touches nothing. (c) left no W, so the first run re-adds it.
+    $run = Invoke-WtrRun 'index-setup'
+    if ($run.Code -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $wtrW 'src\a.txt'))) { Stop-Wtr 'index-setup' 'W was not re-added' $run }
+    [IO.File]::WriteAllText((Join-Path $wtrW 'src\a.txt'), "agent edit`n")
+    [IO.File]::WriteAllText((Join-Path $wtrW 'src\new.txt'), "agent new`n")
+    $wtrIndex = "$(@(Invoke-WtrGit @('-C', $wtrW, 'rev-parse', '--path-format=absolute', '--git-path', 'index')) | Select-Object -First 1)"
+    Remove-Item -LiteralPath $wtrIndex -Force
+    $run = Invoke-WtrRun 'index-deleted'
+    if ($run.Code -ne 1) { Stop-Wtr 'index-deleted' "exit $($run.Code), expected 1" $run }
+    if ($run.Text -cnotmatch '\[ERROR\] MOE_WORKTREE_CREATE_FAILED: .+ has no index file but holds more than \.git') { Stop-Wtr 'index-deleted' 'no CREATE_FAILED line for the missing index' $run }
+    $blocks = @(Get-WtrBlocks)
+    if ($blocks.Count -ne 1 -or -not $blocks[0].Contains('"reason":"MOE_WORKTREE_CREATE_FAILED: ') -or -not $blocks[0].Contains(' has no index file')) { Stop-Wtr 'index-deleted' 'not exactly one report_blocked naming CREATE_FAILED' $run }
+    if (Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) { Stop-Wtr 'index-deleted' 'the CLI ran' $run }
+    if ([IO.File]::ReadAllText((Join-Path $wtrW 'src\a.txt')) -cne "agent edit`n" -or [IO.File]::ReadAllText((Join-Path $wtrW 'src\new.txt')) -cne "agent new`n") { Stop-Wtr 'index-deleted' 'the edited or the untracked file lost its bytes' $run }
+    if (Test-Path -LiteralPath $wtrIndex) { Stop-Wtr 'index-deleted' "the refusal wrote W's index" $run }
+    Write-Host '[worktree reuse] ok'
+
+    # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the
+    # JetBrains launcher sets beside MOE_PROXY_PATH and MOE_DAEMON_PATH) runs
+    # exactly those files or refuses before any MCP config, daemon, proxy or
+    # CLI. It never falls back to its own root or the global install; any other
+    # marker value stays legacy (CQ-R13c2). Every fixture and decoy appends one
+    # line to $prMarks. PowerShell cannot hold an empty variable, so P5 is unset.
+    # Twin: the [protected runtime] case in postflight.sh. ---
+    Write-Host '[protected runtime] a protected launch runs the exact runtime paths or refuses'
+    $prRoot = Join-Path $tempRoot 'protected'
+    $prProject = Join-Path $prRoot 'project'
+    $prHome = Join-Path $prRoot 'home'
+    $prMarks = Join-Path $prRoot 'marks'
+    $prMarkedProxy = Join-Path $prRoot 'marked-proxy.js'
+    $prDaemon = Join-Path $prRoot 'fake-daemon.js'
+    $prDir = Join-Path $prRoot 'dir.js'
+    $prNoProxy = Join-Path $prRoot 'missing\proxy.js'
+    $prNoDaemon = Join-Path $prRoot 'missing\daemon.js'
+    foreach ($d in @((Join-Path $prProject '.moe\messages'), (Join-Path $prHome '.moe'), $prDir)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+    [IO.File]::WriteAllText((Join-Path $prProject '.moe\project.json'), '{"id":"proj-protected","name":"postflight-protected","settings":{"autoCommit":false}}')
+    [IO.File]::WriteAllText((Join-Path $prProject '.moe\messages\chan-general.jsonl'), '')
+    [IO.File]::WriteAllText((Join-Path $prProject 'rel-proxy.js'), "require('fs').appendFileSync(require('path').join(__dirname,'..','marks'),'relative-proxy\n');`n")
+    $prMark = "require('fs').appendFileSync(require('path').join(__dirname,'marks'),"
+    $proxyBody = [IO.File]::ReadAllText($fakeProxy)
+    [IO.File]::WriteAllText($prMarkedProxy, "$prMark'protected-proxy\n');`n" + $proxyBody)
+    $prVanishProxy = Join-Path $prRoot 'vanish-proxy.js'
+    [IO.File]::WriteAllText($prVanishProxy, "$prMark'vanish-proxy\n');require('fs').unlinkSync(__filename);`n" + $proxyBody)
+    # process.ppid is the wrapper, which outlives the start poll that probes this pid.
+    [IO.File]::WriteAllText($prDaemon, ("$prMark'protected-daemon '+process.argv.slice(2).join(' ')+'\n');`n" +
+        "const p=process.argv[process.argv.indexOf('--project')+1];`n" +
+        "require('fs').writeFileSync(require('path').join(p,'.moe','daemon.json'),JSON.stringify({port:9876,pid:process.ppid,startedAt:new Date().toISOString(),projectPath:p}));`n"))
+    # The decoy global install: its proxy records, then serves, so legacy P7 runs.
+    $prDecoy = "require('fs').appendFileSync(require('path').join(__dirname,'..','..','..','..','marks'),"
+    foreach ($pkg in @('moe-daemon', 'moe-proxy')) {
+        $prDist = Join-Path $prRoot "install\packages\$pkg\dist"
+        New-Item -ItemType Directory -Force -Path $prDist | Out-Null
+        $prBody = if ($pkg -eq 'moe-proxy') { "$prDecoy'decoy-proxy\n');`n" + $proxyBody } else { "$prDecoy'decoy-install-moe-daemon\n');process.exit(1);`n" }
+        [IO.File]::WriteAllText((Join-Path $prDist 'index.js'), $prBody)
+    }
+    [IO.File]::WriteAllText((Join-Path $prHome '.moe\config.json'), ('{"installPath":' + (ConvertTo-Json (Join-Path $prRoot 'install')) + '}'))
+    $prSaved = @{}
+    foreach ($n in @('MOE_RUNTIME_PROTECTED', 'MOE_PROXY_PATH', 'MOE_DAEMON_PATH', 'USERPROFILE', 'TEMP', 'TMP', 'FAKE_CLAIM_MODE', 'MOE_TASKLESS_WAIT_SEC', 'MOE_DISABLE_HEARTBEAT')) { $prSaved[$n] = [Environment]::GetEnvironmentVariable($n) }
+    # Invoke-PrRow ROW MARKER PROXY DAEMON LIVE [EXTRA] -- MARKER '-' leaves it
+    # unset. LIVE 'live' writes a running daemon's daemon.json, as in a real
+    # protected launch.
+    function Invoke-PrRow([string]$Row, [string]$Marker, [string]$Proxy, [string]$Daemon, [string]$Live, [string[]]$Extra = @()) {
+        Remove-Item -LiteralPath $prMarks, (Join-Path $prProject '.moe\daemon.json') -Force -ErrorAction SilentlyContinue
+        if ($Live -eq 'live') { [IO.File]::WriteAllText((Join-Path $prProject '.moe\daemon.json'), ('{"port":9876,"projectPath":' + (ConvertTo-Json $prProject) + '}')) }
+        $tmp = Join-Path $prRoot "tmp-$Row"
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        $env:MOE_RUNTIME_PROTECTED = if ($Marker -eq '-') { $null } else { $Marker }
+        $env:MOE_PROXY_PATH = $Proxy; $env:MOE_DAEMON_PATH = $Daemon
+        $env:USERPROFILE = $prHome; $env:TEMP = $tmp; $env:TMP = $tmp
+        $env:FAKE_CLAIM_MODE = 'idle'; $env:MOE_TASKLESS_WAIT_SEC = '5'; $env:MOE_DISABLE_HEARTBEAT = '1'
+        $out = Join-Path $prRoot "$Row.out"
+        $code = Invoke-WrapperProcess (@('-Project', $prProject, '-WorkerId', 'worker-protected', '-Role', 'worker', '-Command', $trueCmd, '-NoLoop') + $Extra) $out
+        [pscustomobject]@{ Row = $Row; Code = $code; Tmp = $tmp; Text = [string](Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue) }
+    }
+    function Stop-Pr($R, [string]$Why) { Write-Host $R.Text; throw "PROTECTED RUNTIME FAILED ($($R.Row)): $Why" }
+    function Get-PrMarks { if (Test-Path -LiteralPath $prMarks) { @([IO.File]::ReadAllLines($prMarks)) } else { @() } }
+    # Exit 1 with one refusal line naming VAR, no value printed, nothing run
+    # and no MCP temp config written.
+    function Assert-PrRefused($R, [string]$Var, [string[]]$Values) {
+        if ($R.Code -ne 1) { Stop-Pr $R "exit $($R.Code), expected 1" }
+        $sentence = "MOE_RUNTIME_PROTECTED_PATH_MISSING: $Var must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start."
+        $lines = @($R.Text -split "`r?`n" | Where-Object { $_.Contains('MOE_RUNTIME_PROTECTED_PATH_MISSING') })
+        if ($lines.Count -ne 1 -or -not $lines[0].Contains($sentence)) { Stop-Pr $R "not exactly one refusal line naming $Var" }
+        foreach ($v in $Values) { if ($R.Text.IndexOf($v, [StringComparison]::OrdinalIgnoreCase) -ge 0) { Stop-Pr $R "the output prints $v" } }
+        if (Test-Path -LiteralPath $prMarks) { Stop-Pr $R ('something ran: ' + ((Get-PrMarks) -join ' ')) }
+        if (@(Get-ChildItem -LiteralPath $R.Tmp -Filter 'moe-mcp-config-*').Count -ne 0) { Stop-Pr $R 'an MCP config was written' }
+    }
+    # Exit 0, no refusal, and each wanted line is in the marks file.
+    function Assert-PrRan($R, [string[]]$Want) {
+        if ($R.Code -ne 0) { Stop-Pr $R "exit $($R.Code), expected 0" }
+        if ($R.Text.Contains('MOE_RUNTIME_PROTECTED_PATH_MISSING')) { Stop-Pr $R 'refused' }
+        $marks = Get-PrMarks
+        foreach ($w in $Want) { if ($marks -notcontains $w) { Stop-Pr $R "marks lack '$w'" } }
+    }
+    try {
+        Assert-PrRefused (Invoke-PrRow 'P1' '1' $prNoProxy $prDaemon 'live') 'MOE_PROXY_PATH' @($prNoProxy, $prDaemon)
+        Assert-PrRefused (Invoke-PrRow 'P2' '1' $prMarkedProxy $prNoDaemon 'live') 'MOE_DAEMON_PATH' @($prMarkedProxy, $prNoDaemon)
+        # Start-Process starts the wrapper in the current location, where rel-proxy.js exists.
+        Push-Location -LiteralPath $prProject
+        try { $r = Invoke-PrRow 'P3' '1' 'rel-proxy.js' $prDaemon 'live' } finally { Pop-Location }
+        Assert-PrRefused $r 'MOE_PROXY_PATH' @('rel-proxy.js', $prDaemon)
+        Assert-PrRefused (Invoke-PrRow 'P4' '1' $prMarkedProxy $prDir 'live') 'MOE_DAEMON_PATH' @($prMarkedProxy, $prDir)
+        Assert-PrRefused (Invoke-PrRow 'P5' '1' '' $prDaemon 'live') 'MOE_PROXY_PATH' @($prDaemon)
+        $r = Invoke-PrRow 'P6' '1' $prMarkedProxy $prDaemon 'none'
+        Assert-PrRan $r @("protected-daemon start --project $prProject", 'protected-proxy')
+        if (@(Get-PrMarks | Where-Object { $_.StartsWith('decoy') }).Count -ne 0) { Stop-Pr $r ('a decoy ran: ' + ((Get-PrMarks) -join ' ')) }
+        Assert-PrRan (Invoke-PrRow 'P7' '-' $prNoProxy $prDaemon 'none' @('-NoStartDaemon')) @('decoy-proxy')
+        Assert-PrRan (Invoke-PrRow 'P8' '01' $prMarkedProxy $prNoDaemon 'none' @('-NoStartDaemon')) @('protected-proxy')
+        # P9: the protected proxy deletes itself on its first call, after the gate.
+        # No later RPC, including the exit-time deregister, may fall back.
+        $r = Invoke-PrRow 'P9' '1' $prVanishProxy $prDaemon 'live' @('-NoStartDaemon')
+        if ((Test-Path -LiteralPath $prVanishProxy) -or (@(Get-PrMarks | Sort-Object -Unique) -join ' ') -cne 'vanish-proxy') { Stop-Pr $r ("marks are '" + ((Get-PrMarks) -join ' ') + "', not the vanished proxy alone") }
+    } finally {
+        foreach ($n in $prSaved.Keys) { [Environment]::SetEnvironmentVariable($n, $prSaved[$n]) }
+    }
+    Write-Host '[protected runtime] ok'
 
     Write-Host 'PASS postflight.ps1'
 } catch {

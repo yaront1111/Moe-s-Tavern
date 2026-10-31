@@ -1,0 +1,342 @@
+{
+  "id": "task-697fb2de19324ccb851defaf9f24043b",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R09b] Protected base and overlay export",
+  "description": "Objective: give the host controller one read-only exporter that turns a protected base commit and the checkout's current dirty bytes into sealed snapshot manifests. Every identity comes from the bytes the exporter read, never from Git's or any writer's declarations.\n\nContext: second slice of CQ-R09 (task-0dd1cce23a6646fd80cf401dd47c7b0f), split 3 ways on 2026-10-27 with the operator's approval in the architect REPL. CQ-R09c (copy into the guest) and CQ-R09 final (export back and host import) consume this module; CQ-C02b consumes the snapshot shape. It touches no guest or supervisor file, so it runs in parallel with CQ-R09c.\n\nDeliverable: new scripts/local-runner/source-export.mjs exporting exportSourceSnapshot({ repoDir, commit, git = 'git', timeoutMs }). It resolves a frozen SourceSnapshot { version: 1, commit, tree, base, overlay, excluded }:\n- commit: the caller's full lowercase hex id (40 or 64 chars), verified to name a commit object. A short, symbolic, uppercase, tree or unknown id is refused before any blob is read.\n- tree: that commit's tree id.\n- base: validateImport (scripts/local-runner/source-snapshot.mjs, CQ-R09a) of one {kind:'file', path, executable, data} entry per blob listed by `git ls-tree -r -z -l --full-tree <commit>`. Mode 100644 is executable false and 100755 true. The listing's count and sizes are checked against R09a's MAX_IMPORT_ENTRIES and MAX_IMPORT_BYTES before any blob is read; bytes come from one `git cat-file --batch` stream whose headers must match the listing.\n- overlay: validateImport of the dirty paths against that commit: tracked differences from `git diff --name-only -z --no-renames <commit> --` plus untracked, non-ignored paths from `git ls-files -z --others --exclude-standard`. A present path is read as a regular file whose every ancestor is a real directory, so no symlink is followed at any depth. A missing path becomes {kind:'delete', path}. executable is the owner-execute bit on POSIX; on win32 it is the committed mode for tracked paths and false for untracked ones.\n- excluded: how many base and overlay paths were left out because a segment is an R09a control path (validateImportPath's SNAPSHOT_CONTROL_PATH). Control paths never enter a snapshot.\n\nRefusals use fixed codes and carry no path or Git text. A tracked symlink (120000) or submodule (160000) refuses the export: v1 is fail-closed, like R09a. A symlink, directory or special file at a dirty worktree path refuses it too. validateImport's own codes (path, collision, limit) pass through unchanged.\n\nGit runs only inside the read-only envelope copied from the daemon's openProjectGit (packages/moe-daemon/src/util/cachedPlanPaths.ts):\n- inherited GIT_* environment removed; GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null (NUL on win32), GIT_NO_LAZY_FETCH=1, GIT_TERMINAL_PROMPT=0;\n- every command prefixed with --no-optional-locks --no-replace-objects -c protocol.allow=never -c core.fsmonitor=false -c safe.directory=<real root>;\n- the real repoDir must be the Git toplevel; partial-clone, promisor and core.worktree repositories are refused.\nNothing is written to the repository, its index, refs or config.\n\nTests: new E-rows in scripts/tests/local-runner-snapshot.test.mjs against real temporary Git repositories (symlink and submodule commits are built with update-index --cacheinfo, so they need no filesystem symlink), plus the two optional rows R09a's QA asked for: a Float64Array whose prototype is swapped to Uint8Array.prototype reaches the copy-length guard and is refused SNAPSHOT_ENTRY_INVALID, and COM/LPT with U+00B2 and U+00B3 are refused.\n\nNot in scope: any guest, Multipass or supervisor change; merging or transferring base and overlay (CQ-R09c); candidate import (CQ-R09 final); the daemon's C02 provider (CQ-C02b); symlink or submodule support. verified-local stays unavailable.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-snapshot.test.mjs",
+  "definitionOfDone": [
+    "exportSourceSnapshot resolves the frozen {version: 1, commit, tree, base, overlay, excluded} shape, and base and overlay are validateImport results whose sizes, sha256 values and digests are recomputed from the bytes read (E-rows compare against sha256 of known bytes and against validateImport of the same entries).",
+    "Only a full lowercase hex id naming a commit object is accepted; short, symbolic, uppercase, tree and unknown ids are refused before any blob is read.",
+    "Control paths are excluded from base and overlay and counted in excluded. Tracked symlinks and submodules, and symlinks or non-regular files at dirty worktree paths, refuse the export with fixed codes, and a worktree read never follows a symlinked ancestor directory.",
+    "Git runs only through the read-only envelope (no inherited GIT_* environment, replace objects, optional locks, or system or global config; protocol.allow=never; toplevel check), and an export leaves the repository's index, refs and config byte-identical.",
+    "`node --test scripts/tests/local-runner-snapshot.test.mjs` exits 0 and its fresh output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create scripts/local-runner/source-export.mjs: the read-only Git envelope, commit verification and the protected base, plus test rows E1-E4 and E7.\n\nRead first, without editing: scripts/local-runner/source-snapshot.mjs (validateImport, validateImportPath, snapshotError, MAX_IMPORT_ENTRIES, MAX_IMPORT_BYTES) and packages/moe-daemon/src/util/cachedPlanPaths.ts (readOnlyGitEnv, readOnlyGitArgs, openProjectGit). Follow the fixed-text error-helper style of guest-bridge.mjs and source-snapshot.mjs.\n\nModule:\n- Header comment. This is a host-only, read-only export, and every identity comes from the bytes read. Name the Git facts relied on:\n  - ls-tree -l prints '-' as the size of a gitlink;\n  - a cat-file --batch record is a header line '<oid> <type> <size>', then exactly size bytes, then one LF; an absent object prints '<oid> missing';\n  - --no-replace-objects stops refs/replace from substituting content;\n  - core.fsmonitor can name a hook command, so it is forced off.\n- exportError(code), backed by a fixed MESSAGES map with these codes: EXPORT_INPUT_INVALID, EXPORT_REPOSITORY_UNSUPPORTED, EXPORT_COMMIT_INVALID, EXPORT_ENTRY_UNSUPPORTED, EXPORT_GIT_FAILED and EXPORT_READ_FAILED. No message carries a path, Git output or file byte. R09a's SNAPSHOT_* errors pass through unchanged.\n- The Git runner:\n  - execFile, shell:false and windowsHide for the listings; spawn for the batch stream;\n  - cwd is the real repo root;\n  - env is process.env minus every key whose upper-cased name starts with GIT_, plus GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null ('NUL' on win32), GIT_NO_LAZY_FETCH=1 and GIT_TERMINAL_PROMPT=0;\n  - every argv starts with --no-optional-locks --no-replace-objects -c protocol.allow=never -c core.fsmonitor=false -c safe.directory=<real root>;\n  - one deadline covers every command: timeoutMs, default 120000, a safe integer from 1 to 600000. A timeout, spawn failure, nonzero exit or malformed output is EXPORT_GIT_FAILED. A listing that overflows its maxBuffer is snapshotError('SNAPSHOT_LIMIT_EXCEEDED').\n- exportSourceSnapshot({ repoDir, commit, git = 'git', timeoutMs }) validates its input before any Git call, else EXPORT_INPUT_INVALID:\n  - repoDir is an absolute string with no control characters;\n  - commit is exactly 40 or 64 lowercase hex characters;\n  - git is a non-empty string with no control characters.\n- Repository checks, copied from openProjectGit, else EXPORT_REPOSITORY_UNSUPPORTED:\n  - realpath(repoDir) must equal the realpath of `rev-parse --show-toplevel`;\n  - `config --local --includes --get-regexp` for extensions.partialclone, remote.*.promisor and core.worktree must print nothing; its exit 1 means none.\n- Commit checks, else EXPORT_COMMIT_INVALID:\n  - `rev-parse --verify --quiet --end-of-options <commit>^{commit}` must print exactly the input id. An annotated tag's id peels to a different id and is refused; a tree or unknown id fails;\n  - `rev-parse --verify --quiet --end-of-options <commit>^{tree}` then gives tree.\n  No blob is read before both checks pass.\n- Base listing: `ls-tree -r -z -l --full-tree <commit>`.\n  - Each NUL-terminated record is '<6-digit mode> <blob|commit|tree> <40 or 64 hex oid> <padded size or -><TAB><path>'; any other record is EXPORT_GIT_FAILED.\n  - Mode 120000 is snapshotError('SNAPSHOT_SYMLINK_DENIED'). Mode 160000, a submodule, is EXPORT_ENTRY_UNSUPPORTED. 100644 and 100755 are files. Anything else is EXPORT_ENTRY_UNSUPPORTED.\n  - Each path goes through validateImportPath. A SNAPSHOT_CONTROL_PATH increments excluded and drops the entry; any other path error propagates.\n  - The kept count must be <= MAX_IMPORT_ENTRIES and the sum of the listed sizes <= MAX_IMPORT_BYTES, else SNAPSHOT_LIMIT_EXCEEDED. Both are checked before any blob is read.\n- Blob bytes: one `cat-file --batch` child.\n  - Write every kept oid, one per line, then end stdin.\n  - Parse stdout incrementally (header line, exactly size bytes, one LF), never buffering more than the listed total plus headers.\n  - Each header must name the requested oid, type blob and the listed size, else EXPORT_GIT_FAILED.\n  - The child is killed on any failure and at the deadline.\n- base = validateImport(entries), where each entry is {kind:'file', path, executable: mode === '100755', data}. sha256, size and digest therefore come from the bytes read.\n\nTests go in a new 'CQ-R09b' section of scripts/tests/local-runner-snapshot.test.mjs, with a temp-repo fixture: git init in mkdtemp, -c user.name and -c user.email on every commit, core.autocrlf=false, and cleanup in t.after. Where a row must prove that a command did NOT run, pass git = a small POSIX logging wrapper script that appends its argv to a file and runs the real git; such rows skip on win32 with a reason.\n- E1 base identities. Files with known bytes (one executable, one nested, one empty, one with a non-ASCII NFC name written with \\u escapes) give entries whose size and sha256 equal Node's sha256 of those bytes, with executable taken from the mode. base.digest equals validateImport of the same entries. The result and its base are frozen, and commit and tree equal rev-parse's.\n- E2 commit ids. Each of these is refused with EXPORT_INPUT_INVALID or EXPORT_COMMIT_INVALID: a 7-character prefix, 'HEAD', a branch name, uppercase hex, the tree id, an annotated tag's id and an unknown full id. The logging-wrapper variant shows that no cat-file ran.\n- E3 control paths. Committed .moe/x, sub/.claude/y, .MCP.json and .grok/z are absent from base and counted in excluded. A committed 'aux.c', which is non-portable, refuses with SNAPSHOT_PATH_INVALID.\n- E4 A commit holding a symlink, made with `update-index --add --cacheinfo 120000,<blob>,link`, refuses with SNAPSHOT_SYMLINK_DENIED. One holding a gitlink (160000) refuses with EXPORT_ENTRY_UNSUPPORTED. Neither needs a filesystem symlink, so both run on win32.\n- E7 envelope:\n  - a `git replace` of a blob does not change the exported bytes;\n  - inherited GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE pointing elsewhere are ignored (set them and restore process.env in the test);\n  - a repoDir that is a subdirectory, and a repo with extensions.partialclone set, each give EXPORT_REPOSITORY_UNSUPPORTED.\n\nError handling: every child process is killed and every listener removed on every path. No unhandled rejection or stray child survives a failure.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "newFiles": [
+        "scripts/local-runner/source-export.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "note": "QA round-1 fix (DoD 4).\n- source-export.mjs: the repo refusal now runs `git config --includes --get-regexp` with no `--local`. System and global are env-masked, so it reads local, worktree and -c config. The openCommit comment says why `--local` is wrong (it skips config.worktree).\n- E7 now sets extensions.worktreeConfig=true and checks all 4 refused keys in both --local and --worktree scope (8 rows).\n- RED: against the old `--local` module, E7 failed at '--worktree extensions.partialclone' (actual 'resolved').\n- GREEN: the full file passes 22/22 under env -i nvm node v24.21.0.\n- QA's probe (/tmp/qa-r09b/probe-wt.mjs, run on the shared-tree module): local and worktree both give EXPORT_REPOSITORY_UNSUPPORTED, and the filter marker is never created (before the fix: worktree resolved and the filter ran).\n- Line-budget trims, no behavior change: the stdin error listener and end() are chained (3 lines to 1), and E7's non-root loop is a one-liner, as in E2.\n- Out of scope: the daemon's openProjectGit has the same `--local` gap. Filed as task-0b9db30f14454696977421b8c6138ddd (bug:, HIGH).\n- The shared checkout has about 600 dirty paths from other sessions; none were touched.",
+      "startedAt": "2026-10-29T12:20:18.223Z",
+      "completedAt": "2026-10-29T12:21:44.535Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Overlay and final assembly in scripts/local-runner/source-export.mjs, plus test rows E5, E6 and E8.\n\nDirty paths:\n- They are the union, deduplicated, of `diff --name-only -z --no-renames --no-ext-diff <commit> --` and `ls-files -z --others --exclude-standard`. Both run in the same envelope under the same deadline.\n- Each path goes through validateImportPath first. A SNAPSHOT_CONTROL_PATH increments excluded and drops the path; any other path error propagates. So no filesystem call ever sees an unvalidated path.\n\nWorktree read, for each kept path joined from the real root with path.join(root, ...segments):\n- Every ancestor directory is lstat-ed, with the results cached per run. A symlink ancestor is snapshotError('SNAPSHOT_SYMLINK_DENIED'). A missing ancestor, or one that is not a directory, makes the path a delete.\n- The path itself is lstat-ed:\n  - ENOENT or ENOTDIR gives {kind:'delete', path};\n  - a symlink is SNAPSHOT_SYMLINK_DENIED;\n  - a directory (an untracked nested repository or a submodule worktree), or any other non-regular file, is EXPORT_ENTRY_UNSUPPORTED.\n- A regular file:\n  - open it with O_RDONLY | (O_NOFOLLOW ?? 0) | (O_NONBLOCK ?? 0); fstat must show a regular file with the lstat's dev and ino;\n  - read at most size+1 bytes, so a file that grew past its fstat size is caught;\n  - a read error is EXPORT_READ_FAILED, and the handle closes on every path.\n- The running entry count and total of overlay file bytes are checked against MAX_IMPORT_ENTRIES and MAX_IMPORT_BYTES before each read (SNAPSHOT_LIMIT_EXCEEDED).\n- executable: on POSIX, (stat.mode & 0o100) !== 0. On win32, it is the base listing's mode for a tracked path, and false for an untracked one.\n\nAssembly: overlay = validateImport(overlayEntries). Resolve Object.freeze({ version: 1, commit, tree, base, overlay, excluded }).\n\nHeader comment additions:\n- why both listings are used: a path removed from the index but still on disk appears in both;\n- the v1 limits: a directory replaced by a file yields an ancestor collision that validateImport refuses; a line-ending-only difference is not dirty per git diff, so the base bytes stand;\n- that nothing is ever written.\n\nTests, in the CQ-R09b section:\n- E5 overlay. After the base commit:\n  - modify one file, add an untracked nested file, delete one file, add a file that .gitignore ignores, and stage a new file;\n  - the overlay holds exactly the modified, untracked, staged and deleted entries, each with the sha256 of its worktree bytes, and the ignored file is absent;\n  - a dirty .moe/state.json is excluded and counted;\n  - on POSIX, chmod +x shows executable true;\n  - the dirt leaves base unchanged.\n- E6, POSIX only (skip on win32 with a reason):\n  - an untracked symlink, a tracked file replaced by a symlink, and a tracked directory replaced by a symlink to a directory holding a same-named file each refuse with SNAPSHOT_SYMLINK_DENIED;\n  - the target's bytes are never read: put a FIFO or an unreadable file behind the link to prove it;\n  - an untracked FIFO refuses with EXPORT_ENTRY_UNSUPPORTED.\n- E8 read-only:\n  - exporting a dirty repo leaves .git/index, .git/config, .git/HEAD, packed-refs and the loose refs byte-identical (hash them before and after);\n  - on POSIX, a configured core.fsmonitor hook that would write a marker file never runs.\n\nError handling: every handle closes on every path, and a failure part-way leaves no partial snapshot.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "note": "QA's optional item (survivor `if (prior) entries.push` -> `entries.push`).\n- QA's suggested setup does not work as written. Probed on Git 2.43: diff-index never lists a staged new file that was then removed from disk (show_new_file drops a missing worktree file). Neither does an intent-to-add entry.\n- It does list a new index entry marked --skip-worktree or --assume-unchanged, because it never checks the disk for those.\n- So E5 adds one line: `update-index --add --cacheinfo 100644,<blob>,ghost --skip-worktree ghost`. diff-index lists 'ghost', but it is in neither base nor the worktree, so the overlay must not gain a delete. The existing exact overlay assertions are unchanged.\n- Mutation check in a scratch copy (/tmp/r09b-w2/mut): `entries.push` without the guard is now killed by E5, and restoring '--local' is killed by E7. Unmutated: 22/22.\n- No runtime change in this step.\n- Size, by git diff --numstat 01ca00b^: module +197, test +204/-1, so 400 net, at QA's bar.",
+      "startedAt": "2026-10-29T12:21:46.782Z",
+      "completedAt": "2026-10-29T12:22:42.621Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add the two optional rows R09a's QA asked for (task-491a2d8c reviewSummary) to the existing R09a section of scripts/tests/local-runner-snapshot.test.mjs. Do not edit source-snapshot.mjs.\n- A Float64Array whose prototype is set to Uint8Array.prototype with Object.setPrototypeOf passes the prototype check. Its element-wise copy has a different byte length, so validateImport refuses it with SNAPSHOT_ENTRY_INVALID. This is the only row that reaches the copy-length guard: mutating `copy.byteLength !== size` to false must fail it.\n- COM and LPT with U+00B2 and U+00B3 are refused with SNAPSHOT_PATH_INVALID, in the plain, '.txt' and ' .x' forms. Write the superscripts as \\u escapes so the test file stays ASCII-only, as the module is (S10).\nThese rows test the existing error handling of the R09a gate; they need no runtime change.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "note": "Nothing to change in round 2: both R09a QA rows landed in 01ca00b and QA raised no issue with them. This step re-proved they work, in a scratch copy (/tmp/r09b-w2/mut, using mutate-one.mjs):\n- S6 Float64Array row: mutating source-snapshot.mjs:112 `if (copy.byteLength !== size) throw` to `if (false) throw` is killed by S6.\n- S2 superscript rows: dropping ²³ from com[...] is killed by S2, and so is dropping ² from lpt[...].\n- source-snapshot.mjs is untouched. The test file stays ASCII-only (grep -P '[^\\x00-\\x7f]' finds nothing).",
+      "startedAt": "2026-10-29T12:22:46.967Z",
+      "completedAt": "2026-10-29T12:23:38.925Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run it once, fresh, from the repo root: `node --test scripts/tests/local-runner-snapshot.test.mjs`.\n\nOn WSL, run it as `env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-snapshot.test.mjs`, so the Windows PATH stays out. Exit 0 is required, and its output tail is the complete_task verification evidence.\n\nCI also runs this file on windows-latest. If you can, run it once under native Windows node too, for example `cmd.exe /c \"cd /d <Windows temp copy> && node --test scripts/tests/local-runner-snapshot.test.mjs\"`: E1-E5, E7 and E8 must pass there, and only the POSIX rows may skip.\n\nAlso confirm that `git diff --numstat` for the two task files stays within 400 changed lines, and that the shared repo's own .git/index is unchanged by your test runs.\n\nError handling for the gate itself: fix a failing row's cause with a test, never by weakening or skipping it.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh gate on WSL, from the repo root:\n- Command: `env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-snapshot.test.mjs`\n- Result: exit 0; tests 22, pass 22, fail 0, skipped 0 (Git 2.43.0).\n- The shared .git/index sha256 is identical before and after (516ab0ea...).\n\nNative Windows (cmd.exe, from a fresh %TEMP% copy, since removed): exit 0; tests 22, pass 21, fail 0, skipped 1 (E6, POSIX-only). That was node v24.16.0 with Git 2.54.0.windows.1, so E7's --worktree rows also pass on a newer Git.\n\nSize by `git diff --numstat 01ca00b^`: module +197/-0, test +204/-1. That is 400 net (401 added, 1 deleted), at QA's 400-net bar. Round 1 was 400 net and 402 changed; both figures are unchanged now.\n\nNo files changed in this step.",
+      "startedAt": "2026-10-29T12:23:48.804Z",
+      "completedAt": "2026-10-29T12:24:17.694Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff (load the adversarial-self-review skill). Check each of these:\n- A hostile or broken repository: a path with a newline or a tab, which -z must keep intact; a 64-hex SHA-256 repo; a blob whose size changes between ls-tree and cat-file (a replaced object); 10,001 entries; a 300 MiB blob; a symlinked parent directory; a FIFO; a file that grows while being read.\n- The environment: an inherited GIT_* variable, a global or system gitconfig with an fsmonitor or alias, safe.directory refusal on a foreign-owned checkout (a fixed code, not a crash), and Windows path and executable rules.\n- The code: every child is killed and every handle closed on every path; error handling never leaks Git stderr, a path or a byte; the deadline really bounds the whole export; nothing is written to the repository (index, refs, config, objects).\n- Each DoD item has a test that fails if its guard is removed. Spot-check by deleting one guard at a time in a scratch copy (git archive into a temp dir), never in the shared tree.\nFix anything found with a test, then re-run step 4's command and supply that fresh output to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/source-export.mjs"
+      ],
+      "note": "Adversarial self-review of the round-2 diff (git diff 01ca00b on the two task files).\n- Fix: the openCommit comment read like a statement of fact; it now states the requirement (\"No config scope left unmasked ... may set ...\"). Comment only, same 2 lines.\n\nScope probes (/tmp/r09b-w2/adv/probe-scopes.mjs, real Git 2.43):\n- No false refusal: `sparse-checkout init --cone` writes extensions.worktreeConfig and core.sparseCheckout into config.worktree, and the export still resolves. A plain linked worktree also resolves.\n- Still refused: a worktree-scoped include.path to a filter config, and a linked worktree's own config.worktree filter. The main worktree stays unaffected (resolves).\n- Command-line -c wins over the worktree scope, so core.fsmonitor=false still holds. None of our -c keys match the refusal regex, and a root path cannot inject a key into `-c safe.directory=<root>`.\n- `stdin.on(...).end(input)` is equivalent: on() returns the stream, and the listener is attached before end, as before.\n\nMutation sweep (QA's harness plus a '--local' mutant, in /tmp/r09b-w2/sweep-mut): 22 of 24 killed; QA's round 1 killed 20 of 23. The 2 survivors are the ones QA already accepted:\n- `filled !== now.size`, which only a read race can reach;\n- `endsWith('/*')`, a daemon-inherited guard that needs a directory literally named '*'.\n\nKnown limit for consumers (pre-existing, unchanged, and the same as `git diff`): an assume-unchanged or skip-worktree index flag hides that path's worktree bytes. A flagged base path with a staged change and no file on disk becomes a delete.\n\nFresh gate (env -i, nvm node v24.21.0): exit 0, 22/22, shared .git/index unchanged. Size: 400 net (module +197, test +204/-1). Both files are ASCII-only.",
+      "startedAt": "2026-10-29T12:24:20.230Z",
+      "completedAt": "2026-10-29T12:26:58.307Z"
+    }
+  ],
+  "planRevision": 22,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Almost everything holds up, but one fail-closed guard can be bypassed through a standard Git config scope. Git then runs a repository-configured command during the export.\n\nVerified:\n- The completion commit 01ca00b is on moe/work-2026-10-24, at 400 net lines.\n- I re-ran the gate fresh: exit 0, 22/22 pass, and the shared .git/index is unchanged.\n- In a scratch copy, 20 of 23 mutation probes were killed, covering every DoD 1-3 guard and the envelope mutants.\n\nFAILED (DoD 4):\n- source-export.mjs:79 uses `config --local`, which reads only .git/config and never $GIT_DIR/config.worktree.\n- With extensions.worktreeConfig=true, Git still applies config.worktree to every command, so a filter driver set there passes the refusal.\n- Probe (/tmp/qa-r09b/probe-wt.mjs): put `* filter=evil` in .gitattributes, then run `git config --worktree filter.evil.clean \"sh -c 'touch M; cat'\"` and stat-dirty a.txt. The export RESOLVES and the marker M is CREATED. In local scope the same driver gives REPOSITORY_UNSUPPORTED.\n- `git lfs install --worktree` writes exactly this config.\n- So the claim \"filter config repos are unsupported (fail-closed)\" is false, and R09c, R09 final and C02b rely on it.\n\nFix, verified in a scratch copy: drop `'--local',`.\n- System and global config are already masked by env, so the scopes left are local, worktree and command line.\n- No -c key matches the regex.\n- With the change, 22/22 rows still pass and the probe is refused.\n\nStay at or under 400 net lines: no size-exception rail covers this task.\n\nNote, out of scope: the daemon's openProjectGit (cachedPlanPaths.ts:134) uses the same `--local` scoping.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-491a2d8cff4d45afbdac79539098ebb1"
+  ],
+  "priority": "CRITICAL",
+  "order": 86,
+  "comments": [
+    {
+      "id": "comment-cf2f6bd153bb4d678a2c2874d2d12c5e",
+      "author": "worker-0062feec",
+      "content": "The completionSummary hit the 2000-char cap. Its tail was: \"...hide a path's worktree bytes. Filed task-0b9db30f14454696977421b8c6138ddd (bug, HIGH): the daemon's openProjectGit (cachedPlanPaths.ts:134) has the same --local gap.\" Step notes 1-5 carry the full RED/GREEN, probe and sweep evidence.",
+      "timestamp": "2026-10-29T12:28:03.834Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T16:54:17.650Z",
+  "updatedAt": "2026-10-29T12:38:09.848Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-27T17:00:08.522Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-29T12:37:22.033Z",
+    "wallClockMs": 157033511
+  },
+  "contextFetchedBy": [
+    "qa-952969be",
+    "worker-0062feec"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [
+    {
+      "item": "Git runs only through the read-only envelope (no inherited GIT_* environment, replace objects, optional locks, or system or global config; protocol.allow=never; toplevel check), and an export leaves the repository's index, refs and config byte-identical.",
+      "rejectedAt": "2026-10-29T11:58:32.818Z",
+      "rejectedBy": "qa-952969be"
+    }
+  ],
+  "planSubmittedAt": "2026-10-27T17:03:06.424Z",
+  "planningNotes": {
+    "approachesConsidered": "1) Trusting Git's object ids as identities. Rejected: DoD 2 requires identities derived from the transferred bytes, and cat-file does not re-verify loose objects on read. So the bytes are hashed by validateImport, which also gives one manifest format for base, overlay and candidates.\n2) One `git cat-file blob` per file. Rejected: about 1,400 process spawns for this repo. A single --batch stream with a pre-bounded listing is both faster and bounded.\n3) git archive or a tar stream. Rejected: it needs a tar parser and applies export-ignore and filter attributes, so the bytes would differ from the commit.\n4) `git status --porcelain` for the overlay. Rejected: it runs the untracked cache and fsmonitor paths and mixes in rename detection. diff --name-only --no-renames plus ls-files --others gives exactly the paths needed, inside the same envelope.\n5) Including control paths and letting the guest ignore them. Rejected: the import gate refuses them anyway, and .moe or .mcp.json content must never reach a guest. They are counted, not sent.",
+    "codebaseInsights": "- The read-only envelope is copied from packages/moe-daemon/src/util/cachedPlanPaths.ts. The env comes from readOnlyGitEnv and the argv prefix from readOnlyGitArgs; the toplevel realpath check and the partial-clone, promisor and core.worktree refusal come from openProjectGit. It is copied, not imported, because scripts/local-runner modules are standalone ESM with no daemon imports (R09a mirrored checkPortablePath the same way). Add -c core.fsmonitor=false, because git diff and ls-files can run a configured fsmonitor hook.\n- source-snapshot.mjs (R09a, landed 2dcddc3):\n  - validateImportPath checks control segments BEFORE portability, so '.git/CON' is a control path. Use its SNAPSHOT_CONTROL_PATH code to decide exclusion.\n  - validateImport returns frozen entries {kind, path, executable, size, sha256, data} sorted by UTF-8 path bytes, plus a framed digest.\n  - snapshotError, MAX_IMPORT_ENTRIES (10,000) and MAX_IMPORT_BYTES (256 MiB) are exported.\n- The SourceSnapshot shape is a contract that CQ-R09c (task-4af8b8c1, workspaceEntries/materializeSnapshot), CQ-R09 final (task-0dd1cce2, the X7 round trip) and CQ-C02b consume. Keep exactly {version: 1, commit, tree, base, overlay, excluded}.\n- Test file conventions (Serena gotcha-local-runner-tests):\n  - node --test with static imports, so one missing module fails the whole file;\n  - assert.throws returns undefined, so use a caught(fn) helper to inspect codes;\n  - the global forbiddenPatterns include the dunder-proto token, so use 'constructor' or 'valueOf' for prototype-key inputs;\n  - keep files ASCII-only.\n- The CI step at .github/workflows/ci.yml:236 already runs this test file on ubuntu, windows and macos, so no CI change is needed.",
+    "risks": "- Windows: there are no filesystem symlinks without privileges, so E4 builds its symlink and gitlink commits with update-index --cacheinfo, and E6 and E8's hook rows skip on win32. The executable rule differs: committed mode for tracked paths, false for untracked ones. safe.directory needs the realpath exactly as the daemon passes it. GIT_CONFIG_GLOBAL is 'NUL' on win32.\n- Tests must not inherit the developer's or CI's git config into fixture repos in a way that changes bytes. Set core.autocrlf=false in each fixture and pass identity with -c on commits. The export itself masks global and system config.\n- Batch-stream parsing: a blob can contain LF and NUL. Read by the header's size, never by lines. The trailing LF after each blob must be checked and consumed. Kill the child on any mismatch, and await its exit, so no stray git survives a test.\n- A path containing a newline is legal in Git; -z keeps it intact, and validateImportPath then refuses it as a control character, so the whole export fails. That is a fail-closed v1 limit.\n- An env mutation in E7 must be restored in t.after, even on failure, or later rows inherit GIT_DIR.\n- Size: about 150 runtime plus 200 test lines is expected; stay under 400 changed lines (comments and blanks count).\n- verified-local and executionReady are untouched. This module is never wired to a caller here.",
+    "keyFiles": [
+      "scripts/local-runner/source-snapshot.mjs",
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/tests/local-runner-snapshot.test.mjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-27T17:03:06.522Z",
+  "workStartedAt": "2026-10-27T17:08:32.514Z",
+  "reviewStartedAt": "2026-10-29T12:27:56.966Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-snapshot.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ S10 the module is pure, ASCII-only, and its fixed messages never echo input (10.800907ms)\n✔ E1 base entries carry the committed bytes, sizes and sha256 values, sealed by validateImport (55.195184ms)\n✔ E2 only a full lowercase commit id and bounded listings are exported; refusals come before any blob is read (588.945074ms)\n✔ E3 control paths are left out of base and counted, and a non-portable committed path refuses the export (105.085216ms)\n✔ E4 a tracked symlink or submodule refuses the export, unless it sits at a control path (96.261677ms)\n✔ E5 the overlay holds exactly the dirty worktree bytes, leaving out ignored files, control paths and stat-only changes (74.932893ms)\n✔ E6 a symlink at or above a dirty path, or a non-regular one, refuses the export without reading through it (317.182755ms)\n✔ E7 Git runs in the read-only envelope: no replace objects, no inherited GIT_* state, toplevel repositories only (144.531618ms)\n✔ E8 an export writes nothing to the repository and runs no fsmonitor hook (55.377943ms)\nℹ tests 22\nℹ suites 0\nℹ pass 22\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1723.516619\n(exit=0; shared .git/index sha256 identical before/after. Native Windows node v24.16.0 + Git 2.54 via cmd.exe from a %TEMP% copy: exit 0, 21 pass, 1 skipped (E6 POSIX-only), 0 fail)",
+    "reportedAt": "2026-10-29T12:27:56.966Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/source-export.mjs",
+    "scripts/tests/local-runner-snapshot.test.mjs",
+    ".moe/tasks/task-0b9db30f14454696977421b8c6138ddd.json",
+    ".moe/tasks/task-697fb2de19324ccb851defaf9f24043b.json",
+    ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json"
+  ],
+  "completionSummary": "Round 2 fixes QA's DoD-4 defect in scripts/local-runner/source-export.mjs.\n\nThe fix:\n- The repo refusal now runs `git config --includes --get-regexp` with no scope flag; it used `--local` before.\n- System and global config are masked by env, so the check reads every scope Git still applies: local, worktree ($GIT_DIR/config.worktree under extensions.worktreeConfig) and -c.\n- A repo whose local or worktree config sets extensions.partialclone, remote.*.promisor, core.worktree or filter.* is refused with EXPORT_REPOSITORY_UNSUPPORTED.\n- QA's probe-wt.mjs is now refused at both scopes, and the filter marker is never created.\n\nTests:\n- E7 enables extensions.worktreeConfig and checks all four keys in --local and --worktree scope (8 rows). Against the old module it fails, first at '--worktree extensions.partialclone'.\n- E5 adds a skip-worktree index-only 'ghost', which kills the `if (prior) entries.push` survivor. QA's suggested staged-then-removed file is never listed by diff-index, so it could not have killed it.\n- Mutation sweep (QA's harness plus a '--local' mutant): 22 of 24 killed. The survivors are the two QA already accepted: `filled !== now.size` (a read race) and `endsWith('/*')` (inherited from the daemon).\n- Probes:\n  - No false refusal: sparse-checkout cone (which writes config.worktree) and a plain linked worktree both resolve.\n  - Still refused: a worktree-scoped include.path to a filter.\n\nGate:\n- Linux (env -i, node v24.21.0): exit 0, 22/22, shared .git/index unchanged.\n- Native Windows (node v24.16.0, Git 2.54): exit 0, 21 pass, 1 skipped (E6 is POSIX-only).\n\nSize: 400 net (module +197, test +204/-1 vs 01ca00b^). To make room, the stdin on().end() calls are chained and E7's non-root loop is one line.\n\nKnown limits, unchanged:\n- Worktree reads are bounded in bytes, not time.\n- The overlay is not atomic across files.\n- Repos with local or worktree LFS/filter config are unsupported.\n- As in git diff, assume-unchanged or skip-worktree flags hide a path's worktr",
+  "commits": [
+    {
+      "sha": "01ca00b087e1f55ea74a5500371952654d8274bf",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-27T17:03:15Z",
+      "paths": [
+        ".moe/tasks/task-697fb2de19324ccb851defaf9f24043b.json",
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-27T17:44:11.586Z",
+      "treeId": "951dd985608a3149e7e49e53d805f7d52fbe1381",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "57870b7a7fc943412dd895726560c281246da429",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T11:50:49Z",
+      "paths": [
+        ".moe/tasks/task-697fb2de19324ccb851defaf9f24043b.json",
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
+        ".moe/tasks/task-f12b03e83a1a491494a08e42c7a58504.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T11:51:22.718Z",
+      "treeId": "122ad7994d832b26732f413d7cbb6da832f79831",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "0dd3ccc7945c4463a800ea6a2908856295fdcde6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T11:50:49Z",
+      "paths": [
+        ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+        ".moe/tasks/task-4af8b8c17d1f4949b0d85e24e69f986f.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T11:59:59.300Z",
+      "treeId": "98863c5e60c52ff24cfc873968be74e1e9fe63c6",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "e0dca627dc49df62091764a6cf2b50fc95aba1a8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T12:03:17Z",
+      "paths": [
+        ".moe/tasks/task-697fb2de19324ccb851defaf9f24043b.json"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T12:09:22.928Z",
+      "treeId": "1c18a7f5ee9a0a87f162c0354fa4d94be511c0ac",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "f0fac16ba8e84e0ff0a920fd7e1af553c9d71e89",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T12:09:26Z",
+      "paths": [
+        ".moe/tasks/task-0b9db30f14454696977421b8c6138ddd.json",
+        ".moe/tasks/task-697fb2de19324ccb851defaf9f24043b.json",
+        ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json",
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T12:28:40.416Z",
+      "treeId": "377f0f5305f51d9943368b44dd2a671b0bdf450d",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "145321743df6cc3b5f99c73584eac8007ad39e3e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T12:28:47Z",
+      "paths": [
+        ".moe/tasks/task-697fb2de19324ccb851defaf9f24043b.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T12:38:09.847Z",
+      "treeId": "f88314ad6dc9f01dd5a83b436aff5521902666f4",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/source-export.mjs",
+    "scripts/tests/local-runner-snapshot.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T12:28:47Z",
+    "at": "2026-10-29T12:38:09.847Z"
+  },
+  "reviewCompletedAt": "2026-10-29T12:37:22.033Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Git runs only through the read-only envelope (no inherited GIT_* environment, replace objects, optional locks, or system or global config; protocol.allow=never; toplevel check), and an export leaves the repository's index, refs and config byte-identical."
+    ],
+    "issues": [
+      {
+        "type": "security",
+        "file": "scripts/local-runner/source-export.mjs",
+        "line": 79,
+        "description": "`config --local` misses $GIT_DIR/config.worktree. Repro: extensions.worktreeConfig=true; `git config --worktree filter.evil.clean \"sh -c 'touch M; cat'\"`; .gitattributes '* filter=evil'; stat-dirty a.txt. The export resolves and M is created (the filter ran). `git lfs install --worktree` writes the same config. Fix: remove '--local' (system/global are masked by env). QA verified 22/22 stay green and the repro becomes EXPORT_REPOSITORY_UNSUPPORTED."
+      },
+      {
+        "type": "missing_feature",
+        "file": "scripts/tests/local-runner-snapshot.test.mjs",
+        "line": 385,
+        "description": "Add an E7 row: extensions.worktreeConfig=true plus `git config --worktree filter.x.clean cat` must give EXPORT_REPOSITORY_UNSUPPORTED. Restoring '--local' must fail it; the existing filter row only covers local scope. Update the summary and handoff wording from 'local config' to local + worktree config."
+      },
+      {
+        "type": "other",
+        "file": "scripts/local-runner/source-export.mjs",
+        "line": 161,
+        "description": "OPTIONAL, if the 400-line budget allows: the mutant `if (prior) entries.push` -> `entries.push` survives. No row covers 'a listed path missing from disk becomes a delete only if it is in base', for example a staged new file then removed from disk. One E5 setup line would kill it."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Almost everything holds up, but one fail-closed guard can be bypassed through a standard Git config scope. Git then runs a repository-configured command during the export.\n\nVerified:\n- The completion commit 01ca00b is on moe/work-2026-10-24, at 400 net lines.\n- I re-ran the gate fresh: exit 0, 22/22 pass, and the shared .git/index is unchanged.\n- In a scratch copy, 20 of 23 mutation probes were killed, covering every DoD 1-3 guard and the envelope mutants.\n\nFAILED (DoD 4):\n- source-export.mjs:79 uses `config --local`, which reads only .git/config and never $GIT_DIR/config.worktree.\n- With extensions.worktreeConfig=true, Git still applies config.worktree to every command, so a filter driver set there passes the refusal.\n- Probe (/tmp/qa-r09b/probe-wt.mjs): put `* filter=evil` in .gitattributes, then run `git config --worktree filter.evil.clean \"sh -c 'touch M; cat'\"` and stat-dirty a.txt. The export RESOLVES and the marker M is CREATED. In local scope the same driver gives REPOSITORY_UNSUPPORTED.\n- `git lfs install --worktree` writes exactly this config.\n- So the claim \"filter config repos are unsupported (fail-closed)\" is false, and R09c, R09 final and C02b rely on it.\n\nFix, verified in a scratch copy: drop `'--local',`.\n- System and global config are already masked by env, so the scopes left are local, worktree and command line.\n- No -c key matches the regex.\n- With the change, 22/22 rows still pass and the probe is refused.\n\nStay at or under 400 net lines: no size-exception rail covers this task.\n\nNote, out of scope: the daemon's openProjectGit (cachedPlanPaths.ts:134) uses the same `--local` scoping.",
+      "rejectedAt": "2026-10-29T11:58:32.818Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Git runs only through the read-only envelope (no inherited GIT_* environment, replace objects, optional locks, or system or global config; protocol.allow=never; toplevel check), and an export leaves the repository's index, refs and config byte-identical."
+      ],
+      "issues": [
+        {
+          "type": "security",
+          "file": "scripts/local-runner/source-export.mjs",
+          "line": 79,
+          "description": "`config --local` misses $GIT_DIR/config.worktree. Repro: extensions.worktreeConfig=true; `git config --worktree filter.evil.clean \"sh -c 'touch M; cat'\"`; .gitattributes '* filter=evil'; stat-dirty a.txt. The export resolves and M is created (the filter ran). `git lfs install --worktree` writes the same config. Fix: remove '--local' (system/global are masked by env). QA verified 22/22 stay green and the repro becomes EXPORT_REPOSITORY_UNSUPPORTED."
+        },
+        {
+          "type": "missing_feature",
+          "file": "scripts/tests/local-runner-snapshot.test.mjs",
+          "line": 385,
+          "description": "Add an E7 row: extensions.worktreeConfig=true plus `git config --worktree filter.x.clean cat` must give EXPORT_REPOSITORY_UNSUPPORTED. Restoring '--local' must fail it; the existing filter row only covers local scope. Update the summary and handoff wording from 'local config' to local + worktree config."
+        },
+        {
+          "type": "other",
+          "file": "scripts/local-runner/source-export.mjs",
+          "line": 161,
+          "description": "OPTIONAL, if the 400-line budget allows: the mutant `if (prior) entries.push` -> `entries.push` survives. No row covers 'a listed path missing from disk becomes a delete only if it is in base', for example a staged new file then removed from disk. One E5 setup line would kill it."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-10-29T12:37:22.033Z",
+  "reviewSummary": "Round 2 approved. The DoD-4 defect from round 1 is fixed.\n\nEvidence:\n- Completion commit f0fac16 is on moe/work-2026-10-24; the shared-tree files match it.\n- Size vs 01ca00b^: +401/-1, so 400 net, at the bar (no size rail covers R09b).\n- Fresh gate, exact task.verification command: exit 0, 22/22, shared .git/index unchanged.\n- Native Windows (node v24.16.0, Git 2.54): exit 0, 21 pass, 1 skip (E6, POSIX-only).\n\nDoD 4 fix (the config check has no scope flag):\n- My round-1 probe is now refused in local and worktree scope, and the filter never runs. The old 01ca00b module still resolves the worktree case and runs it.\n- Also refused, filter never run: a worktree include.path, a local includeIf gitdir, and a linked worktree's own config.worktree. The main worktree still exports.\n- No false refusal: sparse-checkout cone. On Windows, Git skips a %PROGRAMDATA% config under this env.\n\nMutation sweep, 33 mutants on a git archive of f0fac16: 27 killed.\n- Killed: restoring --local (E7), each of the 4 refused keys (E7), and the round-1 'if (prior)' survivor (E5 ghost).\n- Survivors, non-blocking:\n  - dropping --includes: equivalent (Git follows includes by default with no scope; probed);\n  - filled !== now.size and the dev/ino check: race-only;\n  - endsWith('/*'): accepted in round 1;\n  - the overlay names.length and now.size > room bounds: the final validateImport gives the same SNAPSHOT_LIMIT_EXCEEDED, so they only bound memory and work.\n\nOther checks:\n- DoD 1-3 guards are still killed by E1-E6. E8 still shows index, refs and config unchanged.\n- No test weakened: E7's non-root loop was folded with the same 3 paths.\n- Both files are ASCII-only, with no forbidden patterns and no verified-local change.\n- The worker was right that my optional setup could not reach the guard: diff-index drops a new index-only entry missing from disk unless it is skip-worktree.",
+  "requiredCheckAtDone": null
+}

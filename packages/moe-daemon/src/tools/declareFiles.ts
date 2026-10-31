@@ -10,7 +10,7 @@ const MAX_NOTE_CHARS = 2000;
 export function declareFilesTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.declare_files',
-    description: 'Declare project-relative paths as this task\'s own work (ASSERTED attribution tier): the agent wrapper commits them under the task id on its next exit regardless of the pre-task baseline. Use it for paths a step forgot to report in complete_step.modifiedFiles, for get_context.unattributedPaths that are yours, or — as a governor — to attribute stranded dirty sources to the live task that edited them instead of hand-landing a chore commit. Unions into task.declaredFiles; no ownership guard; allowed in every status.',
+    description: 'Declare project-relative paths as this task\'s own work (ASSERTED attribution tier): the agent wrapper commits them under the task id on its next exit regardless of the pre-task baseline. Declaring does not override a contested hold: a declared path that another nonterminal task also declares is still held at landing (MOE_ATTR_CONTESTED_UNTOUCHED(<peer>) / MOE_ATTR_CONTESTED), and moe.record_commit\'s MOE_CONTESTED_HELD line names the remedy. Use it for paths a step forgot to report in complete_step.modifiedFiles, for get_context.unattributedPaths that are yours, or — as a governor — to attribute stranded dirty sources to the live task that edited them instead of hand-landing a chore commit. Unions into task.declaredFiles; no ownership guard; allowed in every status.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -78,7 +78,7 @@ export function declareFilesTool(_state: StateManager): ToolDefinition {
         alreadyDeclared,
         ...(note ? { note } : {}),
         message: added.length > 0
-          ? `Declared ${added.length} new path(s) on ${task.id}; the wrapper commits them under the task on its next exit.`
+          ? `Declared ${added.length} new path(s) on ${task.id}; the wrapper commits them under the task on its next exit unless another open task also declares one (a contested hold; declaring does not release it).`
           : `All ${paths.length} path(s) were already declared on ${task.id}.`
       };
     }

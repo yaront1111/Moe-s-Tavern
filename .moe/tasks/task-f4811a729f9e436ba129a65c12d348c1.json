@@ -1,0 +1,496 @@
+{
+  "id": "task-f4811a729f9e436ba129a65c12d348c1",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R13] Isolation integration and hardening",
+  "description": "Objective: Certify provisioning, ownership, malicious writer/test containment, cancellation and recovery on supported hardware.\n\nDeliverable: Isolation integration and hardening. This is task R13 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/local-runner.test.mjs\n\nDependency aliases (wired by Moe task ids after import): R03, R04, R05, R10, R11, R12.",
+  "definitionOfDone": [
+    "Real Windows/Linux/macOS provisioning evidence establishes each support claim.",
+    "Host-key/state/ref/controller replacement attempts fail.",
+    "Unsupported certification remains blocked without silent fallback.",
+    "Fresh verification `node --test scripts/tests/local-runner.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST: the replacement-attempt and unsupported-certification regression, for DoD 2 and 3. Load test-driven-development. Every module named here has landed by the time this row is claimed. Re-read the landed bytes of lifecycle.mjs, provision.mjs, guest-readiness.mjs, guest-session.mjs, source-export.mjs, check-lifecycle.mjs and certify.mjs, and do not re-derive them from this plan.\n\nIn scripts/tests/local-runner.test.mjs, add one group, RX. Each row drives a replacement attempt through the real module and asserts its fixed refusal:\n- RX1 host key (the supervisor credential): in a fake-provider provision, the credential bytes appear in no provider argv, no file under cacheDir or the ledger, and no certify report. A second provision gets a different credential.\n- RX2 state:\n  - a ledger record rewritten to another owner, or to a non-owned instance name, is never launched, deleted or cleaned by provisionOwned, deleteOwned or cleanupOwned;\n  - a guest-session forward refuses a daemon.json whose bindHost is not loopback, both before the spawn and before each forward (R08).\n- RX3 ref: exportSourceSnapshot pinned to a full commit id yields the same snapshot digest after the branch ref moves, and after a replace object is added (R09b, E7).\n- RX4 controller:\n  - readiness refuses a guest whose reported supervisor sha256 differs from the installed bytes;\n  - certify's 'controller-replacement' maps that refusal to contained;\n  - the wrapper side is CQ-R13c2's postflight harness rows, which step 4 runs.\n- RX5, unsupported certification stays blocked:\n  - certify on a host with no platform module gives CERTIFY_UNSUPPORTED_HOST and certified false, with no fallback platform;\n  - the injected transport never certifies;\n  - validateCertificationReport refuses a report with a missing, extra or reordered check id, with transport 'injected', or with certified true while a check failed;\n  - no module under scripts/local-runner/ sets executionReady to true: scan every .mjs source for an `executionReady: true` literal, and assert executionReady === false on every result these rows produce.\n\nIf any RX row shows a replacement that SUCCEEDS, stop. Do not patch the owning module in this task. Call moe.report_blocked with the failing row, the module and a repro, so a fix row is filed, and continue once it lands.\n\nError handling: assertions name fixed codes, never messages. Scratch git repositories and directories are removed in t.after.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "RX group appended to scripts/tests/local-runner.test.mjs (+129/-1). The one helper change: dirtyRepo now also returns its git runner.\n- RX1 host key: two injected certify runs give 4 launches (certify VM + cancellation VM each); 4 distinct 32-byte credentials read from launch stdin user-data. No raw/hex/base64/base64url form appears in any provider argv or options, router/recovery-child spawn args or stdin, file under workDir (ledger, images, report) or the report.\n- RX2 state: (a) ledger records rewritten on disk to a forged owner, or to instance 'primary' (in place and as primary.json): provisionOwned/deleteOwned refuse with LIFECYCLE_NOT_OWNER / LEDGER_RECORD_INVALID / LIFECYCLE_INPUT_INVALID. cleanupOwned preserves the forged record (attempt-unknown) and lists both renamed records invalid. 0 provider calls, 0 launches, ledger bytes unchanged. (b) runAgentJob with daemon.json bindHost 0.0.0.0, ::, wsl or 10.0.2.2 gives SESSION_DAEMON_NOT_LOOPBACK with 0 spawns; a rebind at spawn, or inside the first forward, stops the session before the next forward.\n- RX3 ref: a real git repo. The export pinned to the full id deep-equals the original after `commit -a` moved the branch and `git replace` swapped README's blob (positive controls: the branch exports differently, and cat-file shows the replacement). HEAD, the branch name and a 12-char prefix give EXPORT_INPUT_INVALID.\n- RX4 controller: readiness refuses a supervisor sha256 of other bytes (SUPERVISOR_HASH_MISMATCH, no ledger write); certify's controller-replacement passes with hashed [false,true], and an accepted replacement fails CERTIFY_REPLACEMENT_ACCEPTED.\n- RX5: process.platform sunos/aix/freebsd/openbsd/android gives CLI certify exit 2 {CERTIFY_UNSUPPORTED_HOST, certified:false} and hostPrerequisites PLATFORM_UNSUPPORTED, and nothing is written to workDir. An all-passed injected report is uncertified, and its forged edits (injected+certified, missing/extra/reordered ids, certified with a failed check) give CERTIFY_REPORT_INVALID. No scripts/local-runner/*.mjs has an executionReady true literal.\nNo replacement succeeded, so no report_blocked.\nTDD RED evidence (scratch copies in /tmp, outside the checkout): 19 mutants, all killed by the expected row. Fixed credential in certify.mjs or certify-lifecycle.mjs; user-data or credential written under cacheDir; user-data in launch argv; owner check removed in provisionOwned or deleteOwned; unknown attempt treated as closed; record instance not bound to its file; pre-spawn or per-forward daemon check removed; --no-replace-objects removed; FULL_ID accepting refs; supervisorHash check removed; fallback platform in certify or hostPrerequisites; injected certifies; validator ignoring transport, failed checks, check count or id order; an executionReady:true literal in vm-control.mjs. Two first-try mutants survived because the mutants themselves were wrong (an operator-precedence slip; an extra check inserted before teardown). Both were corrected, and RX1/RX5 were tightened.\nVerification (env -i, nvm Node v24.21.0): `node --test scripts/tests/local-runner.test.mjs` gave tests 349, pass 348, fail 0, skipped 1 (the opt-in macOS native smoke), exit 0. The ^RX run gave 6/6 pass. git diff --check is clean, and there are no forbidden patterns.\nAccepted residual, not a defect: cleanupOwned trusts a record's attemptId. A same-user writer of the owner-only ledger who names a real closed attempt gets that OWNED VM purged by exact name, never a foreign one. Same-user host processes are outside the CQ-RF05 threat model.\nPeer dirty paths I did not touch: .moe/tasks/{28dfaeff,c4cccb84,f4811a72}.json, .moe/decisions/, scripts/tests/postflight-worktree.cjs.",
+      "startedAt": "2026-10-31T03:50:54.662Z",
+      "completedAt": "2026-10-31T04:06:46.441Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Docs sweep for the CQ-R epic. The slices held it back so the same docs are not re-edited per slice.\n\nNew docs/CERTIFICATION.md:\n- What certification proves: each certify check from CQ-R13d/e/f/h/g, by id, with what it shows.\n- What it never claims: certification is not activation, and verified-local stays unavailable until the client gates in other epics pass.\n- How to run it on each OS:\n  - `node scripts/local-runner/cli.mjs prerequisites --cache-dir <a directory under home with no hidden segment>` (the Linux snap rule);\n  - `node scripts/local-runner/cli.mjs certify --work-dir <absolute directory>`;\n  - the expected duration, and the network needed: the pinned image, the Node toolchain and one registry tarball;\n  - cleanup.\n- The report schema, and how CQ-R13 validates a report with validateCertificationReport.\n- A 'Certified platforms' table, empty until step 5.\n\ndocs/ARCHITECTURE.md, the local-runner isolation section. Read each module's header for the facts rather than restating code:\n- the protected control plane;\n- the owned VM lifecycle and ledger;\n- the pinned guest bootstrap and readiness;\n- the supervisor modes and their exit codes: bridge, check, materialize, export, verify, agents, toolchain and dependencies;\n- the check lifecycle, with the toolchain, the offline dependency install and workspace verify;\n- environment identity and evidence freshness;\n- certification, linking docs/CERTIFICATION.md.\n\ndocs/TROUBLESHOOTING.md: certify failure codes and their fixes, at least:\n- the snap cache-dir rule;\n- cloud-init degraded at boot;\n- mounts present;\n- a 0.0.0.0 daemon bind in WSL agent mode failing 'guest-network';\n- a lockfile entry with neither resolved nor integrity failing the dependency phase, which is packages/moe-claude-plugin's case today.\n\nEvery claim must come from the landed code, and no TODO may remain.\n\nError handling: a doc that cannot be sourced from landed code is left out and named in the step note, never guessed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "newFiles": [
+        "docs/CERTIFICATION.md"
+      ],
+      "modifiedFiles": [
+        "docs/CERTIFICATION.md",
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Docs sweep done. Every claim is sourced from the landed module headers and code: certify*.mjs, cli.mjs, platform-*.mjs, provision, lifecycle, vm-control, guest-bootstrap, guest-readiness, guest-supervisor.py, check-*, dependency-cache, guest-session, runner-client, admission, RuntimeSelectionPolicy.kt / TerminalAgentLauncher.kt, and moe-agent.{sh,ps1} / moe-call.sh.\n\nWhat changed:\n- NEW docs/CERTIFICATION.md (100 lines). It is named in the step text but not in affectedFiles, so it is listed here. It covers:\n  - the 13 check ids in registry order, with what each shows;\n  - non-claims (executionReady false; verified-local refused with EXECUTION_PROFILE_NOT_READY);\n  - per-OS run: certified-provider.json drivers, then `prerequisites --cache-dir <work-dir>/images`, then `certify --work-dir`. Linux needs a non-hidden dir under home (snap). Windows needs a drive-letter path (provision.mjs fileImageUrl);\n  - resources and duration, network, and cleanup (exact-name `multipass delete --purge`, never --all or purge);\n  - the report schema, the validateCertificationReport rules plus a tested node one-liner, CQ-R13's acceptance rule, and an empty 'Certified platforms' table.\n- docs/ARCHITECTURE.md: '## Local Runner Isolation' (+43). Covers the protected control plane, the owned VM lifecycle and ledger, pinned bootstrap and readiness, supervisor modes and exit codes, the check lifecycle, environment identity and freshness, and certification.\n- docs/TROUBLESHOOTING.md: '## Local Runner Issues' (+21/-2, with the TOC renumbered). Codes covered:\n  - CERTIFY_PROVISION_UNAVAILABLE (the snap cache rule);\n  - BOOTSTRAP_FAILED (degraded cloud-init) and BOOTSTRAP_TIMEOUT;\n  - MOUNTS_PRESENT / TRANSFER_MOUNTS_PRESENT;\n  - CERTIFY_GUEST_NETWORK_REACHABLE (a 0.0.0.0 or WSL-mode daemon bind);\n  - DEPENDENCY_SOURCE_UNSUPPORTED / DEPENDENCY_INTEGRITY_INVALID (a lockfile entry with neither resolved nor integrity);\n  - MOE_RUNTIME_PROTECTED_PATH_MISSING (R13c2; moe-call.sh also honors it, since c78916ea landed in c1f8f8c0).\n- SCOPE GROWTH, docs/MCP_SERVER.md (+1 line, in the record_check_dispatch admission list): the R11e lockfile-dir rule plus RUNNER_DEPENDENCIES_UNDECLARED. architect-4ae016fb asked for it in a docs-sweep comment at 2026-10-30T15:14Z, after this plan was submitted at 06:09Z.\n\nLeft out or corrected, never guessed:\n1. \"packages/moe-claude-plugin's case today\" does NOT hold at HEAD. admitLockfiles admits its package-lock.json (43 packages); only the version before 948bfe61 is refused, with DEPENDENCY_SOURCE_UNSUPPORTED. The probe ran outside the repo, in /tmp. The rule is documented generically, without naming the package.\n2. \"Expected duration\": no measured value exists in the code, so the docs give code bounds instead: 9 VMs, 2 at once, each 2 CPU / 4 GiB / 20 GiB, readiness up to 15 min per VM. Each report's startedAt/finishedAt is the measurement.\n\nChecks: `npm run lint` OK; `git diff --check` clean.\nSize so far (numstat, comments and blanks included): tests +129/-1, docs +165/-2 = 297 changed, 291 net.",
+      "startedAt": "2026-10-31T04:10:04.702Z",
+      "completedAt": "2026-10-31T04:27:15.969Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "ADVERSARIAL REVIEW of the whole CQ-R epic diff. Load adversarial-self-review.\n\nIt runs BEFORE the single verification and the operator runs, because the certification reports must be produced on the final reviewed code. Step 5 changes only the evidence record.\n\nDiff the epic's landed range, looking for what the slices got wrong about each other:\n- Producer/consumer drift:\n  - supervisor exit codes vs the check-session and transfer mappings;\n  - fetchNodeToolchain and buildDependencyCache shapes vs runCheckJob;\n  - runCheckJob's result vs certify and CQ-V04b's consumer contract;\n  - CHECK_BOUNDARIES vs the guest's actual spawn.\n- Duplicated helpers.\n- Error paths that fail only in combination, such as abort plus delete-failed, or an install timeout plus the host budget.\n- Any path that enables verified-local or sets executionReady.\n- Secrets in reports, logs or messages.\n- Every guest-supervisor.py mode's refusal leaving no partial state.\n- The accepted-risk list: the R08 per-request daemon.json TOCTOU belongs to CQ-RF05.\n\nFix in-scope defects in this step, with tests. When a fix touches a file this plan does not list, record it with moe.amend_plan_step first.\n\nError handling: out-of-scope findings go through moe.report_blocked for the governor to file as rows, and are listed in the completion summary. None is silently dropped.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/CERTIFICATION.md",
+        "docs/ARCHITECTURE.md",
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-check.test.mjs",
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/local-runner/certify-lifecycle.mjs",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/local-runner/dependency-cache.mjs"
+      ],
+      "note": "Adversarial review of the CQ-R epic diff: four review agents plus my own pass. I verified each finding below against the code; probes ran only under /tmp.\n\nIN-SCOPE FIXES (tests watched fail, then pass):\nA. runCheckJob copied the caller's provider without the platform's pinned client, and landedRunCheck passes none. So every call after provisioning (materialize, toolchain and deps install, session, verify, delete) ran a bare `multipass`. parse() now pins `provider.executable ?? platform.executable` (check-lifecycle.mjs). Test: RX6.\nB. The certify cancellation check reported NOT_STARTED or TIMED_OUT ahead of a failed VM delete, against CERTIFICATION.md. It now reports VM_NOT_DELETED first, as containment and canary do (certify-lifecycle.mjs). Test: LC2, three new rows.\nD. Dependency install. npm 11.19 (the pinned toolchain's npm) installs candidate bytes three ways:\n- it prefers an npm-shrinkwrap.json to the approved lockfile;\n- an .npmrc with dry-run=true keeps a committed node_modules;\n- it adopts a parent package.json or workspace root, with that parent's lockfile.\nConfirmed in the npm 11.19.0 source, plus probes. install_dependencies now requires a regular package.json and refuses an npm-shrinkwrap.json or .npmrc (exit 81, before any install). OFFLINE_INSTALL_ARGS gains --workspaces=false, in the JS list and its Python mirror. Tests: KI3 (three rows), DC4. DC5 passes against the real host npm.\nThe out-of-plan paths are recorded with declare_files, since there is no amend_plan_step tool.\n\nROWS FILED (WORKER, this epic):\n- task-5ed445ca HIGH: an unprotected package.json with a same-version file: spec still installs candidate bytes. Confirmed by probe with npm 11.19.0; the fix needs a design choice.\n- task-92307adc HIGH: bare `multipass`. Windows looks in the cwd first, and vm-control, doctor and agent-lifecycle are unpinned. CERTIFICATION.md now has certify run from the work dir.\n- task-42e9990c MEDIUM: exit 81 counts candidate-caused install failures as infra-failure.\n- task-12e89395 MEDIUM: dispatch loses vm/delete-failed, so retries relaunch VMs.\n- task-4e8a274a MEDIUM: check command limit 1000 vs a 500-character record cap.\n- task-97341ad5 LOW: relay has no killpg on a normal finish and stops watching host EOF after the job's pipes close; plus a pending bridge request and header nits.\n\nNOTED, NO ROW (reported, latent or not reachable):\n- Aborts spend the infra retry budget, and a second SIGINT can kill before the delete. Manual cleanup is documented.\n- The 900 s install timeout vs the 600 s canary budget.\n- validateCertificationReport checks shape only; a doc line now says so.\n- The agent credential is in the job env, by design.\n- materialize: no path cap (the host caps paths at 1024 bytes); a failed final frame leaves the workspace (a retry gets 73); a partial re-own on refusal; a chdir by path (reown leaves no links).\n\nCHECKED, NO DRIFT: exit codes vs check-session and transfer; the check frame; CHECK_BOUNDARIES vs the guest spawn; toolchain and cache shapes vs runCheckJob. Nothing sets executionReady true (RX5), and only fixed codes reach the reports.\n\nINCIDENT: at about 04:47Z, a review agent's probe pattern-killed `sleep 30`, which ended five idle seats' loops: worker-c75a6f39, architect-4ff0711c, qa-12f7cf2d, qa-4b0c6c8e and architect-915213a1. None held a task. I reported it in #governors (msg-7bdf9203) and wrote a gotcha memory.\n\nCERTIFICATION: task-5ed445ca and task-97341ad5 change guest-supervisor.py, so reports made before they land certify only the current supervisor hash.",
+      "startedAt": "2026-10-31T04:27:29.654Z",
+      "completedAt": "2026-10-31T05:26:01.249Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh, on the reviewed code. On WSL, run everything under env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\", so Windows Node is never used.\n\n1. `node --test scripts/tests/local-runner.test.mjs`: the DoD command, and the complete_task evidence.\n2. `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs`: CI's local-runner line.\n3. `cd packages/moe-daemon && npm test` and `cd packages/moe-proxy && npm test`: the epic's daemon and proxy fixes, and the execution-profile gate (verified-local stays EXECUTION_PROFILE_NOT_READY).\n4. `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`: CQ-R13c2.\n5. `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`: CQ-R13c1. There is no Linux JDK here.\n6. `npm run lint` at the repo root, and `git diff --check` over this task's files.\n\nRecord every command's pass and fail counts in the step note.\n\nError handling: a failure is fixed in code before step 5. Never weaken a test. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Step-4 verification, one fresh pass. Everything ran under env -i HOME PATH=nvm v24.21.0/bin:/usr/bin:/bin (npm 12.2.0). This step changed no code.\n1. DoD `node --test scripts/tests/local-runner.test.mjs`: exit 0. 350 tests: 349 pass, 0 fail, 1 skipped (the opt-in macOS native provider smoke).\n2. CI local-runner line (6 files): exit 0. 524 tests: 521 pass, 0 fail, 3 skipped (LA5 needs MOE_PINNED_CODEX, K9 needs root, the macOS smoke).\n3. Snapshot /tmp/rx-red-tools/snap4: git archive be889d73 plus this task's 10 dirty paths, with npm ci per package. It is code-identical to HEAD 76ea8633, since only .moe paths changed after be889d73.\n- Daemon `npm test`: exit 1. Files: 1 failed | 214 passed. Tests: 4 failed | 6250 passed | 20 skipped. All 4 failures are in src/providers/providerDescriptor.contract.test.ts, and none comes from this task.\n- A/B in the snapshot: with scripts/moe-agent.{sh,ps1} from be889d73^ that file passes 23/23. With be889d73's (WT-05, task-c4cccb84, DONE) it fails 4 and passes 19. WT-05 moved the codex config writer into write_codex_config() and Write-MoeCodexConfig, outside the test's BRANCH_ANCHORS.\n- I filed task-4aa5440b5d8f4eda846be5a430c34cb2 (HIGH, epic-be924fb8, the same class as 5b0e90fe) and pinged governor-693b7073 in #governors (msg-2c4ed2ef). Not fixed here: the files are out of scope and in the peer wrapper lane.\n- All 20 daemon test files naming EXECUTION_PROFILE_NOT_READY pass, so verified-local stays refused.\n- Proxy `npm test` (pretest build ran inside the snapshot): exit 0. 7 files, 314/314 pass.\n4. postflight.sh and parity-check.sh, first run in place (05:41-05:55Z): both exit 0, 65 scenarios ok. During that run the tree also held worker-632cd3f0's in-progress task-7db14e2d edits to scripts/moe-agent.sh and scripts/tests/postflight.{sh,ps1}, which I did not touch. I re-ran both in a clone at exact HEAD 76ea8633 plus this task's 10 paths (/tmp/rx-red-tools/clone4): postflight exit 0, PASS, 64 scenarios ok, 0 FAIL; parity exit 0, PASS.\n5. gradlew.bat test --rerun under the jetbrains-gradle lease (taken 05:56:09Z, then released): exit 0, BUILD SUCCESSFUL in 55s. JUnit XML: 28 suites, 499 tests, 0 failures, 0 errors, 0 skipped.\n6. Root `npm run lint`: exit 0 (architect 39, worker 30, qa 35 lines; cap 40). `git diff --check` over the 9 tracked files: exit 0. docs/CERTIFICATION.md (untracked) has no whitespace errors, a final newline and no CRs.\nPeer dirty paths were left untouched.",
+      "startedAt": "2026-10-31T05:26:03.594Z",
+      "completedAt": "2026-10-31T06:15:01.643Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "OPERATOR CERTIFICATION (DoD 1), on the code verified in step 4. This step changes no code; only docs/CERTIFICATION.md changes.\n\n1. Post in #general with moe.chat_send:\n   - the exact per-OS commands from docs/CERTIFICATION.md;\n   - the commit under test;\n   - a request for the three report files that `cli.mjs certify --work-dir <abs>` writes on Windows, Linux and macOS hardware, attached as task comments or placed at a path the operator names.\n2. Call moe.report_blocked naming what is awaited. No agent here can run Multipass, so this block is legitimate.\n3. When the reports arrive, check each one:\n   - validateCertificationReport accepts it;\n   - certified === true and transport === 'native';\n   - supervisorSha256 equals the sha256 of guest-supervisor.py at the verified commit;\n   - together, the reports cover win32, linux and darwin.\n4. A failing or stale report is never recorded. Block again with its failing check ids and codes so a fix row is filed. After that fix lands, re-run step 4 and then this step.\n5. Record each passing report in docs/CERTIFICATION.md:\n   - one table row: platform, arch, Multipass version, image sha256, supervisor sha256, finishedAt, and the sha256 of the report bytes;\n   - the report verbatim, in a fenced json block.\n   An arch with no report, such as the other macOS arch, stays listed as unsupported.\n6. Call moe.complete_task. The evidence is step 4's DoD command, and the summary lists the report validation.\n\nError handling: never edit, synthesize or accept an injected or out-of-schema report, and never enable verified-local.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-10-31T06:17:19.236Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 254.5,
+  "comments": [
+    {
+      "id": "comment-675edf9d50624e7d81e888d879507b3a",
+      "author": "architect-26ba32c3",
+      "content": "Architect note from planning CQ-R01 (task-3b760109…, plan rev 1): these strong-profile hardening items were deliberately deferred to this integration task.\n\nR01 ships IDE-session-scoped protection only. Its design (Serena mem: decision-protected-runtime-selection):\n- strict fail-closed profile read;\n- a JVM-session downgrade pin;\n- installed-only daemon, wrapper and proxy selection;\n- spawn-record provenance (pid + startInstant, or the direct parent) checked in doConnect.\n\nFollow-ups for R13:\n1. **Persistent provenance across IDE restarts.** Today an already-running daemon after an IDE restart is refused by design. Records need storage outside the repo (IDE system dir).\n2. **Persistent downgrade pin plus a confirmation UI.** A repo edit of project.json → legacy should need explicit human confirmation across restarts, not only within one session.\n3. **Auto-stop or replace of an unverified daemon** via the installed CLI's `stop`, taking care with daemons VS Code shares.\n4. **Windows restartDaemon race.** Process.destroy is TerminateProcess, which orphans `_run`, and an old supervisor can respawn it after Restart Daemon.\n5. **daemon.json port↔pid binding.** It is not portably verifiable; decide whether same-user host processes stay out of the threat model.\n6. **Wrapper-side fallbacks under strong.** Both moe-agent wrappers fall back to their own root, then the global install, when MOE_PROXY_PATH/MOE_DAEMON_PATH vanish.\n7. **VS Code parity** for the same selection and provenance rules.\n\nagentCommand/CUSTOM and WSL/native sessions under strong are R10's.",
+      "timestamp": "2026-10-24T18:34:47.675Z"
+    },
+    {
+      "id": "comment-be66dae19bd640a382e394ef16f5ae7a",
+      "author": "governor-187cc44e",
+      "content": "Carry-forward from R07 QA (qa-b0c1741e, 2026-10-25, on R07 completion 759cc61). guest-readiness treats any cloud-init \"degraded done\" (recoverable warnings such as deprecations) and any failed exec while the guest is Running as BOOTSTRAP_FAILED, and requires a fully clean \"done\". R13 certification on a real pinned Ubuntu 24.04 guest must confirm that a clean boot actually reaches done/done. Otherwise the strict readiness check will refuse a healthy guest.",
+      "timestamp": "2026-10-25T08:12:15.012Z"
+    },
+    {
+      "id": "comment-7d38965a2cd6456baf394cae5039cca6",
+      "author": "governor-187cc44e",
+      "content": "Governor relay of QA findings on CQ-R04 (task-120b6a11; approved at b129cfb, 2026-10-25). They are not R04 DoD failures, but this integration task must close them:\n1. On Linux, `scripts/local-runner/cli.mjs prerequisites` passes no cacheDir, so it can never exit 0. It fails closed. Wire cacheDir through the caller, and add an end-to-end check that a correctly provisioned Linux host reaches exit 0.\n2. Test gap: nothing asserts that an explicit provider.executable passed to provisionGuest takes precedence over the platform's default client. That was the one real survivor of QA's 28-mutation sweep.",
+      "timestamp": "2026-10-25T12:04:06.107Z"
+    },
+    {
+      "id": "comment-403c7eff3ff849c8874ad831989e7840",
+      "author": "worker-3729a0d6",
+      "content": "Handoff from CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced): what R08 did NOT certify, for R13 integration and hardening.\n1. The H tests run the real supervisor and agent as local processes through an injected spawn; no VM, Multipass or sudo is involved. A native probe still has to show that stdin EOF propagates through `multipass exec --no-map-working-directory <name> -- sudo -n <supervisor> bridge` with no pty, and that framing is byte-exact in both directions.\n2. Guest-to-host /mcp and /ws are unreachable only by design so far: the guest gets no daemon URL, and the host requires a loopback daemon.json bindHost before spawn and before each forward. No network probe has run from inside a guest.\n3. The per-request daemon.json re-check has a theoretical TOCTOU window before the forward.\n4. executionReady stays false. R08 evidence must not enable verified-local.",
+      "timestamp": "2026-10-26T10:50:57.261Z"
+    },
+    {
+      "id": "comment-72611d9c9fc7494e96f49bcd02f13df1",
+      "author": "qa-6fa5d758",
+      "content": "QA note from the CQ-R08 review (task-7a77465621dc4d6588d5747394cb0ced, completion b0e5982). Non-blocking, for the hardening pass.\n\nscripts/tests/local-runner-bridge.test.mjs:803 (H4) uses Promise.withResolvers(), which needs Node 22+. Under Node 20.18 (the WSL default /usr/local/bin/node) H4 fails with \"Promise.withResolvers is not a function\". Every pre-existing test in the 4-file local-runner gate still passes on 20.18, and CI (Node 24, all three OSes) is green. docs/DEVELOPMENT.md:9 says \"Node.js 18+ (Node 20/24 also works)\".\n\nPick one when hardening:\n- Replace it with a manual resolver: `let finish; const late = new Promise(resolve => { finish = resolve; });` (about +1 line).\n- Or state the Node 22+ floor for the script tests in DEVELOPMENT.md.\n\nThe runtime module guest-session.mjs is Node 18/20-safe, so this affects tests only.",
+      "timestamp": "2026-10-27T14:44:01.312Z"
+    },
+    {
+      "id": "comment-ae27a321d9db4542805322946e3b9ef4",
+      "author": "qa-952969be",
+      "content": "QA follow-up from CQ-R11c (task-53daa94f, approved at 2f2b5e48). It does not block that task, so it goes here for the hardening pass.\n\nIn scripts/tests/local-runner-check.test.mjs, C5's row 'close before EOF' emits proc.emit('close', 0, null) synchronously, before the PassThrough delivers HELLO and OBS. That row is infra-failure through !s.opened, so check-session.mjs outcomeOf's `|| !s.ended` guard is never pinned: a mutant that drops it survives `^C[1-7] `. The guard itself works, as a QA probe shows: frames parsed, then close 0 with stdout open, gives infra-failure.\n\nFix: defer the close, e.g. `setImmediate(() => proc.emit('close', 0, null))`. It changes one line and still kills the stop-after-settle mutant the row was added for.\n\nDetails are in comment-997358d583ff4f2b9c0f9c779df7172f on task-53daa94f.",
+      "timestamp": "2026-10-29T20:00:09.789Z"
+    },
+    {
+      "id": "comment-cc9c85467be54cbcbd28903bfb6bb952",
+      "author": "architect-e4b7eee0",
+      "content": "R13 split by architect-e4b7eee0 on 2026-10-30, after two human decisions in the architect REPL.\n\n1. Evidence: agents run in WSL with no Multipass, so the human runs certification on real hardware. An agent builds `node scripts/local-runner/cli.mjs certify --work-dir <abs>`, which writes a fixed-schema report. The human runs it on Windows, Linux and macOS and attaches the reports. R13 completes only once all three pass. verified-local stays off; activation is out of R13's scope.\n\n2. The deferred hardening items split by whether they gate certification.\n\nGating rows, all in this epic and all dependsOn of R13:\n- R13a task-6dd3ce1f: Linux prerequisites --cache-dir, plus the provider.executable precedence test (R04 QA relay).\n- R13b task-7fffec67: the H4 Node 20 resolver and C5's deferred close (QA notes).\n- R13c1 task-10af7335 and R13c2 task-6f5cf10f: the MOE_RUNTIME_PROTECTED marker and fail-closed wrapper runtime paths (R01 follow-up 6).\n- The certify chain, R13d task-a8a3a502 → R13e task-d00dafdf → R13f task-d45d52c0 → R13h task-4132ab1c → R13g task-ea8b44c9:\n  - R13d: the harness, report and provisioning/readiness checks, including R07's clean done/done boot;\n  - R13e: the R08 native bridge EOF, framing and guest-network probes;\n  - R13f: writer and check containment, and in-guest controller replacement;\n  - R13h: cancellation and recovery;\n  - R13g: the canary toolchain check.\nR13's dependsOn hit the 20-id cap, so it names R13g for the certify chain.\n\nNon-gating: R01 follow-ups 1-5 and 7 moved to the new epic CQ-RF (epic-5f4acf0a), as RF01-RF07 in BACKLOG. Follow-up 5 is now CQ-RF05's decision record, which also covers R08's per-request daemon.json TOCTOU.\n\nR13 itself keeps the epic-final work:\n- the host-side replacement-attempt matrix (DoD 2) and the unsupported-stays-blocked rows (DoD 3);\n- the docs sweep, including a new docs/CERTIFICATION.md;\n- the whole-epic adversarial review;\n- the full regression;\n- the operator certification step: request, block, then validate and record the three reports.",
+      "timestamp": "2026-10-30T06:08:02.162Z"
+    },
+    {
+      "id": "comment-164d20712a0f4421af7c8a37e91b8bc1",
+      "author": "architect-4ae016fb",
+      "content": "Docs-sweep note from architect-4ae016fb, who planned CQ-R13c2 (task-6f5cf10f) on 2026-10-30.\n- That row adds a wrapper contract: when MOE_RUNTIME_PROTECTED is exactly '1', moe-agent.{sh,ps1} run only MOE_PROXY_PATH and MOE_DAEMON_PATH. Each must be an absolute path to an existing file.\n- Otherwise the wrapper exits 1 with MOE_RUNTIME_PROTECTED_PATH_MISSING, naming the variable, never the path. It never falls back to PATH, the wrapper's own packages or the global install.\n- No doc names MOE_PROXY_PATH, MOE_DAEMON_PATH or the marker today, and R13c2 adds no docs. Consider one TROUBLESHOOTING/CERTIFICATION entry for this refusal in step 2's docs sweep.",
+      "timestamp": "2026-10-30T06:26:56.821Z"
+    },
+    {
+      "id": "comment-ea0235e7790d4e209db35e2bea5fc725",
+      "author": "architect-4ae016fb",
+      "content": "Docs note from CQ-R13g planning (task-ea8b44c9). The operator certify docs should cover the new 'canary-check' (scripts/local-runner/certify-canary.mjs):\n- It needs host network for the pinned Node toolchain (first run only) and for one registry tarball, is-number@7.0.0. Its altered-integrity run re-downloads that tarball on purpose.\n- It runs three more fresh check VMs one after another while certify's main VM is still running, so the host needs room for twice GUEST_RESOURCES at a time.\n- A network failure fails closed (CERTIFY_CANARY_NOT_PASSED or CERTIFY_CANARY_INTEGRITY_NOT_REFUSED). Re-run certify when that happens.",
+      "timestamp": "2026-10-30T06:56:27.861Z"
+    },
+    {
+      "id": "comment-41813abd9840457e86e806a2851f3d19",
+      "author": "architect-4ae016fb",
+      "content": "Docs-sweep item from CQ-R11e rev 2 (task-001d8ab3, plan revision 2). I kept it out of that row because docs/MCP_SERVER.md is planned by four WORKING rows.\n\nThe local runner's check dispatch (scripts/local-runner/check-dispatch.mjs) now decides a required check's offline npm dependency phase from its approved definition.\n- Each `configs` entry that is exactly `package-lock.json`, or ends in `/package-lock.json`, adds that dir: '.' for the root.\n- A configs directory root never adds one, and no other lockfile in the candidate is installed.\n- A definition naming no lockfile gets no dependency phase.\n- An owed quality gate with no required check of the same command stops the dispatch before any VM with RUNNER_DEPENDENCIES_UNDECLARED. The fix is to declare the gate's command as a required check, listing its lockfiles or none.\n\nPlease document this in docs/MCP_SERVER.md where requiredChecks is described, for approvers. Without it, an npm check that names no lockfile runs without node_modules.\n\nOpen design follow-up for this epic or the V epic, if the uncovered gate must run: a first-class `dependencies` field on ProtectedCheckDefinition plus a gate setting. That is a shared schema change. Until then, runOnce's gate-only dispatch shapes (no checkId) are unreachable.",
+      "timestamp": "2026-10-30T15:14:05.848Z"
+    },
+    {
+      "id": "comment-6c18191a9b6d4e84b8f6d195e5369a13",
+      "author": "architect-4ff0711c",
+      "content": "FYI from architect-4ff0711c. This is not a plan change.\n\nSame-epic bug row task-c78916ea (LOW, WORKING now) makes scripts/moe-call.sh honor MOE_RUNTIME_PROTECTED=1. Under the marker it runs only the exact MOE_PROXY_PATH, or refuses with MOE_RUNTIME_PROTECTED_PATH_MISSING. Its tests are in scripts/tests/moe-call.test.mjs. It adds no doc line.\n\nIf it lands before your step 4:\n- `node --test scripts/tests/moe-call.test.mjs` covers it (CI runs it on all three OSes).\n- If the step-2 docs sweep documents MOE_RUNTIME_PROTECTED, mention that moe-call.sh also honors it.",
+      "timestamp": "2026-10-31T02:23:05.311Z"
+    },
+    {
+      "id": "comment-992de4816e574551a7fa5c4fa2d6f838",
+      "author": "governor-693b7073",
+      "content": "Governor ruling, 05:40Z, for worker-25da16b2 (or whoever runs step 5). Your step-3 review filed 6 CQ-R findings. Two are HIGH: 5ed445ca (offline npm ci installs candidate bytes from a same-version file: spec) and 92307adc (Windows bare `multipass` resolves from the cwd). Both change code that step 5's operator certification exercises: the check dependency install, and the win32 provision/certify/doctor spawns. Your plan requires the certification reports to come from the final reviewed code.\n\nSo:\n- Finish step 4 as planned.\n- Then, before step 5, call moe.report_blocked yourself with blockedOnTaskIds [\"task-5ed445ca50f24cafbe6e42fbcba686fb\",\"task-92307adc30884fc4861348ed3c8ead4a\"]. As the assignee, that frees your seat. The row auto-unblocks when both are DONE.\n- The resuming session re-runs step 4's verification on the fixed code, then does step 5, so the human runs the hardware certification once.\n- The MEDIUM/LOW findings (12e89395, 42e9990c, 4e8a274a, 97341ad5) do not gate this row. List all 6 in the completion summary, as step 3 says.",
+      "timestamp": "2026-10-31T05:37:15.354Z"
+    },
+    {
+      "id": "comment-28257ed2f024421dbcfa6d9966d397f9",
+      "author": "governor-693b7073",
+      "content": "Governor, 05:45Z. This supersedes the 05:40Z timing (\"finish step 4 first\"). Your step-3 in-scope fixes are UNCOMMITTED in scripts/local-runner/guest-supervisor.py, check-lifecycle.mjs, certify-lifecycle.mjs, dependency-cache.mjs and scripts/tests/local-runner-check.test.mjs. Those are the files the HIGH rows 5ed445ca and 92307adc will edit, and step 4 has to re-run after those fixes anyway. Do this now:\n(1) moe.amend_plan_step to declare those 5 files on step 3 (your plan requires it for unlisted files).\n(2) moe.report_blocked with blockedOnTaskIds [\"task-5ed445ca50f24cafbe6e42fbcba686fb\",\"task-92307adc30884fc4861348ed3c8ead4a\"]. That frees your seat, and the wrapper checkpoints the step-3 bytes.\n(3) End the session.\nThe resuming session re-runs step 4 on the fixed code, then step 5. Keep the 4aa5440b regression finding and all 6 step-3 findings in the completion summary.",
+      "timestamp": "2026-10-31T05:44:15.493Z"
+    },
+    {
+      "id": "comment-e1add6c5edcf47c4b34960986b7bd308",
+      "author": "architect-66fd8127",
+      "content": "Heads-up from architect-66fd8127, who planned 92307adc (the bare `multipass` fix). This is not a plan change. It is for the session that resumes this row once 92307adc is DONE.\n\n1. Held rows. 92307adc changes exactly 7 expectations in scripts/tests/local-runner.test.mjs to the pinned client: 'Windows provisioning keeps its own multipass client…', CJ2, CJ9, CJ12, LC1, WC1 and AJ3. Its new tests are in scripts/tests/local-runner-pinned-client.test.mjs, which it appends to ci.yml's local-runner line. Your step 4 and step 5 re-runs should include that file. RX6 is untouched.\n\n2. Docs, for your step-5 edit of docs/CERTIFICATION.md. Lines 48-49 say to run the commands from the work dir because 'on Windows a bare `multipass` is looked up in the current directory before PATH'. Once 92307adc lands, that reason no longer holds: every path spawns the pinned client. On Windows that client is <ProgramFiles>\\Multipass\\bin\\multipass.exe, taken from ProgramFiles when it is drive-absolute, else C:\\Program Files. On macOS it is /usr/local/bin/multipass, and on Linux /snap/bin/multipass.\n   The operator fact to document instead: on Windows, keep the installer's default folder. The v1.17.0 MSI lets the user move it in its InstallDir dialog. A client anywhere else reports PROVIDER_NOT_FOUND, so certify fails closed. `cli.mjs doctor` and `cli.mjs prerequisites --executable <path>` still accept an explicit client for diagnosis.\n   Running from the work dir is still harmless advice.\n\n3. The pin was checked against canonical/multipass v1.17.0 packaging/windows/wix (Package.wxs and CLIClientComponents.wxs), not against a real install. Your Windows certify run is the first real-host check of it.",
+      "timestamp": "2026-10-31T06:15:31.346Z"
+    },
+    {
+      "id": "comment-aec7112395d740feb552d7bf161e09a8",
+      "author": "worker-25da16b2",
+      "content": "@governor-693b7073 @governor-4764040b Re-sent from chan-15c8e232 msg-cc1acaba, which routed to nobody. The 06:20Z checkpoint 80038a06 landed 7 of this row's 10 paths. Three are still dirty in the shared tree, and no rescue ref holds them:\n- scripts/local-runner/guest-supervisor.py (the step-3 install_dependencies guard, and --workspaces=false)\n- scripts/tests/local-runner-check.test.mjs (step-3 test edits)\n- docs/TROUBLESHOOTING.md (step-2 docs, +21/-2)\nThe temp edges are already gone, and both HIGH rows are WORKING: 5ed445ca on worker-3a9b4568, 92307adc on worker-88af1437. Please tell those seats the hunks belong to CQ-R13: keep them, don't revert them, and name them in the step note.\nFor the session that resumes this row: re-check these 3 paths before re-running step 4. The row blocks on [5ed445ca, 42e9990c, 97341ad5]. 92307adc is covered through 42e9990c -> a80f46db -> 92307adc.",
+      "timestamp": "2026-10-31T06:25:44.743Z"
+    },
+    {
+      "id": "comment-f642c5d8062e4cf38efef0bdefe1baca",
+      "author": "architect-b58e1112",
+      "content": "Architect heads-up from a4a729dd (planned 2026-10-31, root Linux GUARD PID-namespace containment). Three items for CQ-R13:\n1. CI wiring. a4a729dd adds scripts/tests/local-runner-guard.test.mjs (G1-G9). It does not edit .github/workflows/ci.yml, because that file is dirty and owned by peers. Please append the new file to the 'Test local runner prerequisite bundles' run line in your final integration. Its root rows skip when the host refuses unprivileged user namespaces.\n2. Re-certification. GUARD changes: as root it unshares a PID namespace and forks a trusted init. So the guest-supervisor.py sha256 changes, and native certification must run against the new bytes. a4a729dd claims no verified-local status.\n3. Watch item for the native run. The job still sees the guest's own procfs, because there is no mount namespace. ps and pgrep inside an agent job therefore list pids outside its namespace. Signals cannot cross out, so containment holds, but please exercise the real CLIs under the new GUARD.",
+      "timestamp": "2026-10-31T07:25:57.180Z"
+    },
+    {
+      "id": "comment-54ceb941d3304ef395cbea2195ccc984",
+      "author": "worker-3a9b4568",
+      "content": "From task-5ed445ca (worker-3a9b4568), step 4, for CQ-R13 and @governor-693b7073. The guest supervisor's bytes changed on top of R13's carried hunks (its 7e6ed20c bytes, all kept):\n- scripts/local-runner/guest-supervisor.py sha256 is now 83a1f9645bd2bad034b957bc1682e0f32b5cb2d183dba0d42038ae36954cbb36.\n- scripts/tests/local-runner-check.test.mjs is now b1734e1cf67c194ffbe2549a96323023c09ad161faa507fd57371f3cca2b1be8.\ninstall_dependencies' all-directories preflight now also exits 81 before hello on three cases: a package.json whose install metadata differs from the lockfile root, any overrides, bundleDependencies, bundledDependencies or workspaces, and a malformed, oversized or non-regular package.json or lockfile.\nCertify reports produced before this change, existing or injected, cannot certify these bytes. Every claimed platform needs a NEW operator-run certify report on them.\nGate: a git-archive snapshot of a97da8b5 (contains 80038a06) plus the two overlays, run with node v24.22.2 and npm 11.19.1. `node --test scripts/tests/local-runner-check.test.mjs` gave 55 tests, 54 pass, 0 fail, 1 skip (K9 needs root). The `--test-name-pattern='^CY[1-4] '` run of local-runner.test.mjs gave 4 of 4. Exit 0.\nCERTIFICATION.md and local-runner.test.mjs are untouched. Out of scope, filed as task-adbab50d16f048bd9e55fa43d8870927: a candidate-edited package-lock.json can still reach candidate bytes.",
+      "timestamp": "2026-10-31T07:26:36.401Z"
+    },
+    {
+      "id": "comment-1368664a10d740e6adc9a82ac680a8f1",
+      "author": "worker-3a9b4568",
+      "content": "Follow-up from task-5ed445ca (worker-3a9b4568). These are the FINAL hashes and supersede comment-54ceb941's 83a1f964/b1734e1c:\n- scripts/local-runner/guest-supervisor.py: b82e4369a501302ee411504c820d36be016809c5f638682b5fe2f7a52b707e03\n- scripts/tests/local-runner-check.test.mjs: 93e3c7fea073261f2728c6d8f0f5296d3f03d94a69a881f46f1e0c343102adef\nThe step-5 review changed only comments. Python tokens are identical to 83a1f964, and the test's non-comment lines are identical.\nI reran the same gate from a fresh git-archive snapshot of 16831409 plus the two overlays, with node v24.22.2 and npm 11.19.1. It exited 0: check file 55 tests, 54 pass, 0 fail, 1 skip (K9); CY1-CY4 4 of 4.\nThe certify requirement is unchanged: every claimed platform needs NEW operator-run certify reports on b82e4369.",
+      "timestamp": "2026-10-31T07:46:11.909Z"
+    },
+    {
+      "id": "comment-58aa917ba1fc4d4ebe130b0c8601a5e4",
+      "author": "worker-25da16b2",
+      "content": "FYI for the CQ-R13 sweep, from task-12e89395 (in REVIEW once it lands). runCheckJob has a new optional input `onCleanup`: after the delete settles, on resolve, reject or timeout, it receives one frozen {vm, failure}. check-dispatch forwards it through landedRunCheck.\n\nWhen a delete fails, or the cleanup report or result cannot be read, the dispatch stops with RUNNER_VM_DELETE_FAILED. That holds whatever retry-infra says or how many checks are still owed. If the dispatch was accepted, the observation is recorded first, never as passed, with this line appended to its outputTail: \"RUNNER_VM_DELETE_FAILED: VM cleanup was not confirmed; no further checks will be launched.\" The dispatch report gains vm/failure fields and, when relevant, a causeCode. There is no daemon schema change.\n\nDocs and certification still owed by CQ-R13: describe this stop and the fields in the runner docs. Native Windows/Multipass is not certified; gate evidence is a Linux snapshot only.",
+      "timestamp": "2026-10-31T08:11:53.894Z"
+    },
+    {
+      "id": "comment-2dacc5bddf5d436fa3b52dade1518bf5",
+      "author": "governor-693b7073",
+      "content": "Governor note for the session that resumes this row (09:05Z), from architect-b58e1112's 0e149912 plan. After task-0e149912 lands, a host admission refusal of a lockfile becomes a code-failure with no session (environment null). certify-canary's 'fail' verdict currently accepts any code-failure, so a refusal could pass as the canary's 'fail' leg. It can't happen today, because 'pass' runs first on an identical lockfile, but consider tightening that verdict to require failure === null when you re-verify. 0e149912 is NOT in this row's blockedOn (governor ruling, 08:31Z): it doesn't change supervisorSha256 or checkEnvironment.",
+      "timestamp": "2026-10-31T09:03:45.716Z"
+    },
+    {
+      "id": "comment-8de6aa6effb54937a6ffa0116f346a3d",
+      "author": "worker-25da16b2",
+      "content": "Hand-off from task-adbab50d (worker-25da16b2) for docs/TROUBLESHOOTING.md, Local Runner Issues table, row \"`DEPENDENCY_SOURCE_UNSUPPORTED`, `DEPENDENCY_INTEGRITY_INVALID` (a check's dependency phase)\" (line ~1038). The doc is not edited by adbab50d; R13 applies this. Host admission (scripts/local-runner/dependency-cache.mjs) now also refuses the shapes below, each with the fixed DEPENDENCY_SOURCE_UNSUPPORTED (a non-object lockfile root entry is DEPENDENCY_LOCKFILE_INVALID).\n\nCause text to add after the row's first sentence:\n\"Admission also refuses these shapes:\n- Any entry, the root included, has a `dependencies`, `devDependencies`, `optionalDependencies` or `peerDependencies` value other than a registry version, range, tag or `npm:` alias. Examples: `file:`, a path, a tarball, git, a URL or `workspace:`.\n- A bundled (`inBundle`) entry names its own `resolved` or `_resolved`. It is also refused for a `name` other than a plain package name, or a `version` other than a semver without a `.tgz`, `.tar` or `.tar.gz` suffix.\n- A dependency is shrinkwrapped (a truthy `hasShrinkwrap` or `_hasShrinkwrap`), e.g. a CLI that publishes `npm-shrinkwrap.json`.\nAn optional entry whose `os` or `cpu` is empty is one the guest installs, so it needs both fields.\"\n\nFix-column addition: \"Replace the non-registry spec with a registry version, or drop the shrinkwrapped dependency, then regenerate the lockfile.\"\n\nsupervisorSha256 is unchanged (scripts/local-runner/guest-supervisor.py b82e4369). The host-side follow-up, where an admission refusal is reported as infra-failure, is task-0e149912.",
+      "timestamp": "2026-10-31T09:03:57.968Z"
+    },
+    {
+      "id": "comment-79803c90c5834f419b468bf5ffb541eb",
+      "author": "governor-693b7073",
+      "content": "Governor check, 09:25Z, for this row's resume. I compared the 06:23Z reference diffs of the R13 hunks the 80038a06 checkpoint held against HEAD 9257b233.\n- docs/TROUBLESHOOTING.md: 17/17 added lines are present verbatim (carried by 7b818c9a).\n- guest-supervisor.py (7/16) and local-runner-check.test.mjs (8/13): the non-verbatim lines were reworked by their carrier, 5ed445ca (92d96620), not dropped.\n  - The comment block is rewrapped. The \"same-version file: spec … task-5ed445ca owns that fix\" note is gone because 5ed445ca made that fix.\n  - The `blob_oid(...package-lock.json) and blob_oid(...package.json)` check now lives in approved_project.\n  - The symlinked-directory test row survives, using the `OUTSIDE`/plant() fixtures.\nNo R13 hunk is lost. Your step-4 re-verify after the blockers land covers the evolved bytes. (worker-25da16b2 flagged this byte-level check as open in msg-5466369f.)",
+      "timestamp": "2026-10-31T09:16:53.395Z"
+    },
+    {
+      "id": "comment-8f1eaeb281674f1bad8abfe55c5fba7b",
+      "author": "governor-693b7073",
+      "content": "Governor, 09:27Z: my comment-2dacc5bd (tighten certify-canary's 'fail' verdict to failure === null) is SUPERSEDED, so no action is needed. Its premise was task-0e149912, which is now ARCHIVED. A host lockfile refusal stays infra-failure, and the 'fail' verdict (certify-canary.mjs:92) already rejects infra-failure (architect-b58e1112, msg-da149c19). Resume this row exactly as planned.",
+      "timestamp": "2026-10-31T09:17:10.566Z"
+    },
+    {
+      "id": "comment-2084f08ab33e467ebef3432c9e210f42",
+      "author": "worker-25da16b2",
+      "content": "From task-42e9990c (worker-25da16b2): guest-supervisor.py changes again. The pending sha256 is d149aa1986429b95d8747d9273a2a4acc0c76b46dbe2ec18e3dab621b695f18a. It is final only once this task lands and QA approves, and task-97341ad5 may still change it after that. What changed: check mode gains exit 82 (DEPENDENCIES_CANDIDATE_INVALID). The candidate's own package.json mismatch, overrides or bundling, a missing or linked package.json, npm-shrinkwrap.json and .npmrc now exit 82 before hello, with no frame and no install. runCheckSession maps that to code-failure, exitCode 82, and its fixed diagnostic. Lockfile, cache, toolchain, install and I/O faults stay 81, which is infra-failure. An 81 in any listed directory outranks an 82. For CQ-R13: (1) Any operator native-certification report made against an earlier supervisor sha does not cover this one. The environment identity changed, so fresh per-OS reports are needed after the last supervisor change lands. (2) The documentation sweep for the 81/82 meaning (docs/runbook) is CQ-R13's job. This task did not touch docs or the reserved scripts/tests/local-runner.test.mjs. Gate evidence is in the task-42e9990c step-4 note, run in an external snapshot. It is not a native-certification claim.",
+      "timestamp": "2026-10-31T10:44:44.526Z"
+    },
+    {
+      "id": "comment-b87b980345a342098b5d90e9b6c71804",
+      "author": "worker-25da16b2",
+      "content": "Addendum from task-42e9990c (worker-25da16b2), for the 81/82 docs sweep. scripts/local-runner/check-session.mjs:13-15 still says \"The guest producer is not pinned by C2 yet; until it emits 82, every dependency failure arrives as 81.\" Once task-42e9990c lands, that comment is stale: guest-supervisor.py emits 82 for candidate refusals, and C2 in local-runner-check.test.mjs pins \"79 80 81 82\". The file was outside 42e9990c's approved scope, so I did not touch it. It is a comment-only change.",
+      "timestamp": "2026-10-31T10:47:33.079Z"
+    },
+    {
+      "id": "comment-c0616446356748e8ac5a80e33f97597d",
+      "author": "worker-88af1437",
+      "content": "From task-a4a729dd (root GUARD PID-namespace containment, now in REVIEW). These items are yours under CQ-R13:\n1. Re-certify natively against the new guest-supervisor.py sha256: 8a631957d0475cd2c12029a4f5e18be076adee59110124eb1331aacb06d25d4b. I make no native or verified-local claim.\n2. Wire the new scripts/tests/local-runner-guard.test.mjs (G1-G9) into the ci.yml local-runner line. I left ci.yml untouched, as the plan says. Root rows skip on a host that refuses unprivileged user namespaces, so CI should refuse the skip, the same way the task gate does with `grep -x '# skipped 0'`.\n3. Behavior change: a job killed by SIG33 now gives the observation signal 'SIG33', not exit 161. GUARD has no thread any more, so glibc installs no SIGSETXID handler. No test pinned 161, and S14 still asserts 32.\n4. Note: the job still sees the guest's procfs (there is no mount namespace), so ps and pgrep inside it list pids outside the namespace. The native run should exercise the real CLIs.\n5. The job's process tree is now job -> init -> GUARD -> supervisor. J4 pins it.",
+      "timestamp": "2026-10-31T11:30:05.343Z"
+    },
+    {
+      "id": "comment-666e86e050d04f0db34ae8f12962ef38",
+      "author": "qa-4398294e",
+      "content": "@architect-b58e1112 QA finding from a4a729dd. a4a7 is approved and this is not a supervisor defect, but it lands on R13's certification path.\n\nSince b0734674, a root GUARD puts the job in its own PID namespace. Several existing tests carry pids out of the job and resolve them against the guest procfs or with a host-side kill. Under a root runner those pids are namespace-local numbers. The pid sources are:\n- os.getpid() / os.getppid();\n- $PPID;\n- a job that signals the harness by its outer pid, which the namespace now correctly blocks.\n\nRepro on a non-root host:\n`unshare -r env -i HOME=$HOME PATH=<node24 bin>:/usr/local/bin:/usr/bin:/bin node --test --test-reporter=tap scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs`\n- 65f78435: 131 tests, 129 pass, 0 fail (S8 and LA5 skip).\n- b0734674: 11 fail.\n  - S6, S10, I1, H5 and KI2: the host checks the liveness of pids the job reported.\n  - J4, K3 and KI1: getppid() is 1 inside the namespace, so /proc/$PPID is the wrong process. J4's PROBE crashes with exit 1.\n  - S12 and S16: the job signals the harness's outer pid, and that signal never arrives.\n  - S11: by design, root containment now kills its lingering grandchild.\n- G1-G6, G8 and G9 pass under fake root, and G7 skips.\n\nCI runs these files as the non-root runner user, so CI and the a4a7 gate are unaffected. The failures matter wherever the suite runs as root. Example: certifying K9 (root-only) on a real guest by running local-runner-check.test.mjs as root also hits K3, KI1 and KI2.\n\nSuggested fix:\n- Carry global pids out of the job: readlink('/proc/self'), and the ppid field of /proc/<pid>/stat, which procfs reports in its own namespace.\n- Give S11 a root expectation.\n- Send the S12/S16 signals from outside the job.\nThese files are outside a4a7's approved scope. They need a scoped follow-up task ordered before R13's native run, or folding into R13.",
+      "timestamp": "2026-10-31T11:57:22.507Z"
+    },
+    {
+      "id": "comment-5d2c81fe00274fa8973219af74d6e805",
+      "author": "architect-b58e1112",
+      "content": "Architect, answering qa-4398294e's comment-666e86e0 (the a4a7 root-runner PID-namespace test finding). I filed it as task-a46b60e6aa63422fbd63934d17238396 (MEDIUM, PLANNING). That row depends on 97341ad5. It is NOT folded into this row, and it is NOT a blocker of this row.\n\nWhy: this row's native evidence is the `cli.mjs certify` reports, and they are keyed to the guest-supervisor.py sha256. Certify never runs local-runner-bridge/check.test.mjs. The step-4 gate runs as non-root, with K9 recorded as a skip. The fix is test-only and its rails forbid touching guest-supervisor.py or anything certify hashes, so it invalidates no report, whether it lands before or after them.\n\nResume this row exactly as its blockedReason says. Its plan is unchanged, and the step-4 commands are unaffected. The one exception: if task-a46b60e6 reports that its fix needs a supervisor change, it blocks and names this row, and certification must then be re-sequenced after it.",
+      "timestamp": "2026-10-31T12:03:31.652Z"
+    },
+    {
+      "id": "comment-8725771eb3164baeac5b58f7d797b9ae",
+      "author": "governor-693b7073",
+      "content": "Governor sequencing note, 12:11Z. This is a blocker addendum (architect-b58e1112, msg-b0663ce2): certify only on a commit that contains the CI-fix branch fix/ci-pr230 (PR #232). That branch changes scripts/local-runner/guest-supervisor.py:\n- a58a50af: an explicit MAX_JSON_DEPTH = 512 check before json.loads (frames, package.json, lockfiles);\n- a4c8204d: GROUP_GONE, which tolerates darwin's EPERM from killpg (Linux unchanged).\nEither change moves supervisorSha256, so a report made before them is stale. The plan is for those commits to land on moe/work-2026-10-24 (an ff-only merge by the human) before 97341ad5 starts. When this row resumes, first check `git merge-base --is-ancestor <fix/ci-pr230 tip> HEAD`. If it fails, re-block and name the governor; do not post the certification request.",
+      "timestamp": "2026-10-31T12:10:18.767Z"
+    },
+    {
+      "id": "comment-873e7ccb91d244fe8ae61530556ed483",
+      "author": "worker-c0a1ac70",
+      "content": "Supervisor hash handoff from task-97341ad5be744d19ac869972299a2714, which is going to REVIEW now. It changes the relay completion: the guard stands down at once, pump watches the start pipe, and the job group is killed before the observation.\n- guest-supervisor.py sha256 at HEAD b6cfcc4e: 8a631957d0475cd2c12029a4f5e18be076adee59110124eb1331aacb06d25d4b\n- after 97341ad5's change: 27b4a266a42fe4510671d624e7bcd8c59c5cfc2ed59a9f0405a37e65dde38d71\nAny certification of an older hash is stale. If QA reopens 97341ad5 and the bytes change, the landed hash will differ, so take the sha256 of guest-supervisor.py at the commit you verify, as your step 5 already says. This WSL gate imported the supervisor as a non-root fixture plus userns-root rows and certifies nothing; native re-certification stays yours and the operator's.",
+      "timestamp": "2026-10-31T14:10:16.944Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:21.886Z",
+  "updatedAt": "2026-10-31T14:10:16.945Z",
+  "dependsOn": [
+    "task-120b6a11e9db4012964e865974696e59",
+    "task-6a742a093a37429c9467b23c3bc13d63",
+    "task-e6411b76f42a43c5b679c725947336af",
+    "task-0795112597cb453f93aaa5106e92d023",
+    "task-44a9e97be68a4166822b64416cea7ab5",
+    "task-3b760109c42544ab892199b3d5534b77",
+    "task-3ab82a8016514240b53d295792daebe1",
+    "task-84c2da018ce74995b609805dab4fe7da",
+    "task-7a77465621dc4d6588d5747394cb0ced",
+    "task-0dd1cce23a6646fd80cf401dd47c7b0f",
+    "task-2f16aba7f340439a86a41ae98c3173f1",
+    "task-90847011452544dc868039ff435b018b",
+    "task-001d8ab383ef41088e045b2e41ed0e1e",
+    "task-5b0a2bcf70f34c62ba29df0f7ff99988",
+    "task-ea8b44c9964442e3a5ca80b2a1cc2ad7",
+    "task-7fffec67fbb44d1e9a509f214105e2bb",
+    "task-10af73355e1b4748b1e07491a7a891cb",
+    "task-6f5cf10f78184c38a46e6973cadda817",
+    "task-2cf1c6bee5814ed98eb3d069d97b32b3",
+    "task-28dfaeff2d5146958a8529d9d281e9e4"
+  ],
+  "contextFetchedBy": [
+    "architect-bb003851",
+    "worker-b5749787",
+    "qa-952969be",
+    "architect-e4b7eee0",
+    "worker-25da16b2",
+    "governor-693b7073",
+    "worker-c75a6f39",
+    "governor-4764040b"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T23:06:03.532Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4
+  },
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:09:27.178Z",
+  "planningNotes": {
+    "approachesConsidered": "- Agents producing the real-hardware evidence: impossible. This WSL host has no Multipass, so the human decided (architect REPL, 2026-10-30) that an agent builds `cli.mjs certify` (CQ-R13d-g) and the human runs it on each OS. R13 completes only once all three reports pass.\n- Per-OS human-run rows: rejected. No agent could claim them usefully. One blocking step in R13 gathers the evidence and validates it mechanically with validateCertificationReport.\n- Recording support claims as code, such as a certified-platforms JSON that activation reads: rejected. Activation is out of R13's scope. The record is docs/CERTIFICATION.md, with each report verbatim and its byte digest.\n- Review as the very last step: moved earlier, before the single verification and the operator runs. The reports must be produced on the final reviewed code, and the last step changes only the evidence record.\n- Fixing a replacement gap inside R13: rejected as out of scope. It is filed as a row and blocks R13.\n- The non-gating R01 follow-ups went to the CQ-RF epic (epic-5f4acf0a), per the human.",
+    "codebaseInsights": "- native-smoke.mjs is the precedent: operator-only, its injected evidence never establishes support, and its header says 'CQ-R13 consumes its evidence'.\n- certify.mjs (CQ-R13d) holds CERTIFY_CHECKS and validateCertificationReport. CQ-R13e/f/h/g append checks to it.\n- The modules behind the RX rows: lifecycle.mjs (owner validation, deleteOwned/cleanupOwned), provision.mjs (credential via --cloud-init - stdin), guest-session.mjs (loopback daemon.json bindHost), source-export.mjs (full commit id, no replace objects) and guest-readiness.mjs (supervisor sha256).\n- CI's local-runner list is ci.yml:236. Kotlin tests run through cmd.exe gradlew.bat, as CQ-R01's verification recorded.\n- R13's dependsOn hits the 20-id cap, so it names CQ-R13g for the whole certify chain R13a → R13d → R13e → R13f → R13h → R13g.",
+    "risks": "- A real boot may report cloud-init degraded (R07's QA note). Readiness then refuses and the report fails, which needs a fix row rather than a looser check.\n- A report is valid only for the verified commit: its supervisorSha256 must match.\n- macOS has two arches, and only those with a passing report are claimed.\n- Docs must be sourced from the landed code; the R11e and R10d families land late.\n- RX3 needs a real temporary git repository, as the E rows have.\n- The certify run needs host network (image, toolchain, one registry tarball) and takes minutes per OS.\n- verified-local must stay EXECUTION_PROFILE_NOT_READY throughout.",
+    "keyFiles": [
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/local-runner/certify.mjs",
+      "scripts/local-runner/native-smoke.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/source-export.mjs",
+      "docs/ARCHITECTURE.md",
+      "docs/TROUBLESHOOTING.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:09:27.200Z",
+  "approvedPlanRevision": 1,
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-25da16b2@2026-10-31T03:42:18Z",
+    "at": "2026-10-31T06:20:02.778Z"
+  },
+  "priorHandoffs": [
+    {
+      "whatIsDone": "Seat outage, not a task refusal: this seat's CLI exited within 120s of launch 3 times in a row (last exit code 126), so this seat did no work in those launches; earlier progress on the task (completed steps, commits, handoff notes) is untouched.",
+      "whatRemains": "Everything the task had left before those launches: continue from its context, completed steps and earlier handoffs.",
+      "releasedAt": "2026-10-31T02:11:20.560Z",
+      "releasedBy": "worker-c75a6f39",
+      "reason": "seat launch outage"
+    },
+    {
+      "whatIsDone": "Seat outage, not a task refusal: this seat's CLI exited within 120s of launch 3 times in a row (last exit code 126), so this seat did no work in those launches; earlier progress on the task (completed steps, commits, handoff notes) is untouched.",
+      "whatRemains": "Everything the task had left before those launches: continue from its context, completed steps and earlier handoffs.",
+      "releasedAt": "2026-10-31T02:06:48.934Z",
+      "releasedBy": "worker-25da16b2",
+      "reason": "seat launch outage"
+    }
+  ],
+  "blockedReason": "Waiting on operator certification (DoD 1). No agent here can run Multipass, so certify needs real Windows x64, Linux x64 and macOS hardware. The #general request (msg-63e7fb95) has the per-OS commands. Steps 1-4 are COMPLETED, and the step-4 note holds the fresh evidence (DoD local-runner.test.mjs exit 0: 349 pass, 0 fail, 1 skipped).\nCertification is sequenced after task-5ed445ca50f24cafbe6e42fbcba686fb, task-42e9990c286a43fcab7edd716290a515 and task-97341ad5be744d19ac869972299a2714. All three change scripts/local-runner/guest-supervisor.py, and a report certifies only the supervisor sha256 it ran. Certifying before they land would mean re-running all three OSes.\nWhen all blockers are DONE this row auto-unblocks. The next session then:\n1. re-runs step 4 fresh;\n2. posts the exact commit and the expected supervisorSha256 in #general;\n3. blocks again with no task ids, waiting on the 3 report files.\nIf the reports arrive sooner, a human can set this row to WORKING to validate them. This row's Serena handoff memory holds the full recipe.\nOther rows filed during this task are not blockers: 92307adc (HIGH), 12e89395 and 4e8a274a (MEDIUM). Bug 4aa5440b, the daemon providerDescriptor contract regression from WT-05, is already DONE.\nGovernor addendum, 07:28Z: certification is also sequenced after task-adbab50d16f048bd9e55fa43d8870927 (HIGH, filed 07:23Z). A candidate-edited package-lock.json still sends the check's offline npm ci to candidate bytes. That fix changes the dependency install certification exercises, so certify after it lands.\nGovernor addendum, 12:18Z: certification is also sequenced after gate row task-d4810c9c0b0244598e275cc5cbe40ed7. The CI fix for PR #230 (branch fix/ci-pr230, PR #232) changes guest-supervisor.py: an explicit MAX_JSON_DEPTH check and darwin's GROUP_GONE. The gate closes once moe/work-2026-10-24 carries those bytes (the human's ff-only merge), so certify only after it is DONE.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-31T06:19:30.054Z",
+  "blockedOnTaskIds": [
+    "task-5ed445ca50f24cafbe6e42fbcba686fb",
+    "task-42e9990c286a43fcab7edd716290a515",
+    "task-97341ad5be744d19ac869972299a2714",
+    "task-adbab50d16f048bd9e55fa43d8870927",
+    "task-d4810c9c0b0244598e275cc5cbe40ed7"
+  ],
+  "workStartedAt": "2026-10-31T03:50:54.662Z",
+  "declaredFiles": [
+    "scripts/local-runner/check-lifecycle.mjs",
+    "scripts/local-runner/certify-lifecycle.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/local-runner/dependency-cache.mjs",
+    "scripts/tests/local-runner-check.test.mjs",
+    "docs/CERTIFICATION.md",
+    "docs/ARCHITECTURE.md",
+    "scripts/tests/local-runner.test.mjs"
+  ],
+  "commits": [
+    {
+      "sha": "80038a069d59cc9472d27e2d50e1e10ae85e5eb1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T03:42:18Z",
+      "paths": [
+        ".moe/tasks/task-12e89395b0dd4b34a2e0c50dd7dfa776.json",
+        ".moe/tasks/task-28dfaeff2d5146958a8529d9d281e9e4.json",
+        ".moe/tasks/task-42e9990c286a43fcab7edd716290a515.json",
+        ".moe/tasks/task-4aa5440b5d8f4eda846be5a430c34cb2.json",
+        ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json",
+        ".moe/tasks/task-a80f46db9a624295a3bdbe28dfa6b311.json",
+        ".moe/tasks/task-ad5be1cf18e6405bb562b172714debbc.json",
+        ".moe/tasks/task-befdddf7e1f047a0ba4f71dd900c9b8f.json",
+        ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
+        "docs/ARCHITECTURE.md",
+        "docs/CERTIFICATION.md",
+        "docs/MCP_SERVER.md",
+        "scripts/local-runner/certify-lifecycle.mjs",
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/local-runner/dependency-cache.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T06:20:02.778Z",
+      "treeId": "1ca8381923f3b885fe2cc5b9db7bdbcf9b6f7bc9",
+      "status": "BLOCKED",
+      "contested": [
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-1b2e6fe3ba1343c8ab02271510131155"
+        },
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-7cc959e9b42043ba8009cdd9813103e0"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-2359daf0dc5241c3a160be293bbd5877"
+        },
+        {
+          "path": "scripts/local-runner/check-lifecycle.mjs",
+          "taskId": "task-12e89395b0dd4b34a2e0c50dd7dfa776"
+        },
+        {
+          "path": "scripts/local-runner/guest-supervisor.py",
+          "taskId": "task-42e9990c286a43fcab7edd716290a515"
+        },
+        {
+          "path": "scripts/tests/local-runner-check.test.mjs",
+          "taskId": "task-42e9990c286a43fcab7edd716290a515"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-92307adc30884fc4861348ed3c8ead4a"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-12e89395b0dd4b34a2e0c50dd7dfa776.json",
+    ".moe/tasks/task-28dfaeff2d5146958a8529d9d281e9e4.json",
+    ".moe/tasks/task-42e9990c286a43fcab7edd716290a515.json",
+    ".moe/tasks/task-4aa5440b5d8f4eda846be5a430c34cb2.json",
+    ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json",
+    ".moe/tasks/task-a80f46db9a624295a3bdbe28dfa6b311.json",
+    ".moe/tasks/task-ad5be1cf18e6405bb562b172714debbc.json",
+    ".moe/tasks/task-befdddf7e1f047a0ba4f71dd900c9b8f.json",
+    ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-fbe8e3880ddf47dfa8546f220acea770.json",
+    "docs/ARCHITECTURE.md",
+    "docs/CERTIFICATION.md",
+    "docs/MCP_SERVER.md",
+    "scripts/local-runner/certify-lifecycle.mjs",
+    "scripts/local-runner/check-lifecycle.mjs",
+    "scripts/local-runner/dependency-cache.mjs",
+    "scripts/tests/local-runner.test.mjs"
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "docs/CERTIFICATION.md",
+    "docs/ARCHITECTURE.md",
+    "docs/MCP_SERVER.md",
+    "scripts/local-runner/check-lifecycle.mjs",
+    "scripts/local-runner/certify-lifecycle.mjs"
+  ]
+}

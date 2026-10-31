@@ -1,21 +1,28 @@
 // Serving-only evidence. Never attach it to a stored Task or write it to disk.
-import type { Candidate, CheckRun, CheckRunSource, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
+import type { Candidate, CheckOutcome, CheckRun, CheckRunSource, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
 import type { StateManager } from './StateManager.js';
 import { listCandidatesForTask, SHA_RE, REVISION_RE } from './candidateStore.js';
-import { listCheckRunsForCandidate } from './checkRunStore.js';
+import { CHECK_OUTCOMES, listCheckRunsForCandidate } from './checkRunStore.js';
 import { getDeliveryReceiptForCandidate } from './receiptStore.js';
 import { currentAttempt, getAttempt } from './attemptStore.js';
-import { evaluateDeliveryEvidence, EVIDENCE_TOKENS, REQUIRED_CHECK_TOKEN_PREFIX, requiredCheckCommand } from '../delivery/policy.js';
+import {
+  evaluateDeliveryEvidence, EVIDENCE_TOKENS, isVerifiedLocal, PROTECTED_CHECK_CHANGED_PREFIX, REQUIRED_CHECK_TOKEN_PREFIX, requiredCheckCommand,
+  UNTRUSTED_CHECKER_PREFIX,
+} from '../delivery/policy.js';
 import { logger } from '../util/logger.js';
 
 export interface TaskDelivery {
   currentCandidate?: Pick<Candidate, 'id' | 'treeSha' | 'baseRevision'> & { shortSha: string };
-  /** The LAST run reported on the current candidate, counted or not. A stored source that is not a CheckRunSource is omitted. */
-  latestCheckRun?: Pick<CheckRun, 'command' | 'exitCode'> & Partial<Pick<CheckRun, 'source'>>;
   /**
-   * delivery/policy.ts on the required check: false while it reports the check
-   * missing, true once an owed check is satisfied. Absent under the legacy policy,
-   * when no check is owed, or when the policy cannot be read.
+   * The LAST run reported on the current candidate, counted or not. A stored source that is not a CheckRunSource,
+   * or an outcome that is not a CheckOutcome (absent on rows recorded without one), is omitted. Display only.
+   */
+  latestCheckRun?: Pick<CheckRun, 'command' | 'exitCode'> & Partial<Pick<CheckRun, 'source' | 'outcome'>>;
+  /**
+   * delivery/policy.ts on the required check and protected required checks: false
+   * while it reports either missing or drifted, true once every owed check is satisfied. Absent under the legacy policy
+   * (except for a verified-local task, whose checks every policy judges), when no check is owed, or when the policy
+   * cannot be read.
    */
   requiredCheckSatisfied?: boolean;
   deliveryReceipt?: Pick<DeliveryReceipt, 'target' | 'landedRevision'>;
@@ -26,6 +33,7 @@ const isCandidateSha = (value: unknown): value is string => typeof value === 'st
 const isLandedRevision = (value: unknown): value is string => typeof value === 'string' && REVISION_RE.test(value);
 const isString = (value: unknown): value is string => typeof value === 'string';
 const isCheckSource = (value: unknown): value is CheckRunSource => value === 'runner-observed' || value === 'agent-reported';
+const isCheckOutcome = (value: unknown): value is CheckOutcome => CHECK_OUTCOMES.includes(value as CheckOutcome);
 
 /** Bad persisted metadata must not take down a board connection. No record is repaired here. */
 function readEvidence<T>(taskId: string, kind: string, read: () => T | undefined | null): T | undefined {
@@ -59,12 +67,18 @@ function checkFor(state: StateManager, task: Task, candidate: Candidate): TaskDe
       Number.isSafeInteger(c.exitCode) && c.treeSha === candidate.treeSha);
     return check ? {
       command: check.command, exitCode: check.exitCode, ...(isCheckSource(check.source) ? { source: check.source } : {}),
+      ...(isCheckOutcome(check.outcome) ? { outcome: check.outcome } : {}),
     } : undefined;
   });
 }
 
-/** Whether a check is owed, decided as policy.ts checkShortfall decides it: a DONE task's snapshot, else the live rule. */
+/**
+ * Whether a check is owed, decided as policy.ts decides it: declared protected
+ * requiredChecks, else a DONE task's gate snapshot, else the live gate rule.
+ */
 function checkOwed(state: StateManager, task: Task): boolean {
+  const declared: unknown = (task.executionContract as { requiredChecks?: unknown } | null | undefined)?.requiredChecks;
+  if (Array.isArray(declared) && declared.length > 0) return true;
   const snapshot: unknown = task.requiredCheckAtDone;
   if ((task.status === 'DONE' || task.status === 'ARCHIVED') && snapshot !== undefined) {
     return typeof snapshot === 'string' && snapshot.trim() !== '';
@@ -76,8 +90,10 @@ function checkOwed(state: StateManager, task: Task): boolean {
 function requiredCheckSatisfiedFor(state: StateManager, task: Task): boolean | undefined {
   return readEvidence(task.id, 'required-check', () => {
     const { policy, missingEvidence } = evaluateDeliveryEvidence(state, task);
-    if (policy === 'legacy') return undefined;
-    if (missingEvidence.some(t => t.startsWith(REQUIRED_CHECK_TOKEN_PREFIX) || t === EVIDENCE_TOKENS.unreadableRequiredCheck)) return false;
+    if (policy === 'legacy' && !isVerifiedLocal(state, task)) return undefined;
+    if (missingEvidence.some(t => t.startsWith(REQUIRED_CHECK_TOKEN_PREFIX) || t === EVIDENCE_TOKENS.unreadableRequiredCheck
+      || t.startsWith(PROTECTED_CHECK_CHANGED_PREFIX) || t === EVIDENCE_TOKENS.protectedChecksUnapproved
+      || t === EVIDENCE_TOKENS.protectedChecksUnmeasured || t.startsWith(UNTRUSTED_CHECKER_PREFIX))) return false;
     return checkOwed(state, task) ? true : undefined;
   });
 }

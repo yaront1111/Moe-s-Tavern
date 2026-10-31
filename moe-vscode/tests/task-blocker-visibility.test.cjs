@@ -16,6 +16,7 @@ const ts = require('typescript');
 const boardScriptPath = path.join(__dirname, '../media/board.js');
 const detailScriptPath = path.join(__dirname, '../media/taskDetail.js');
 const panelPath = path.join(__dirname, '../src/panels/TaskDetailPanel.ts');
+const planReviewPath = path.join(__dirname, '../src/panels/PlanReviewPanel.ts');
 
 function transpile(sourcePath) {
     return ts.transpileModule(fs.readFileSync(sourcePath, 'utf8'), {
@@ -26,6 +27,7 @@ function transpile(sourcePath) {
 const boardScript = fs.readFileSync(boardScriptPath, 'utf8');
 const detailScript = fs.readFileSync(detailScriptPath, 'utf8');
 const panelSource = transpile(panelPath);
+const planReviewSource = transpile(planReviewPath);
 
 // A stub that throws on any member it does not define, so a new IDE, DOM or
 // transport dependency fails loudly instead of rendering against undefined.
@@ -64,9 +66,14 @@ const fakeVscode = panel => ({
     window: strict('vscode.window', { createWebviewPanel: () => panel })
 });
 
+// TaskDetailPanel seeds its plan revision with PlanReviewPanel's real helper.
+const panelDependencies = vscode => ({
+    vscode, './PlanReviewPanel': loadModule(planReviewSource, planReviewPath, { vscode })
+});
+
 // The panel module also exports the canonical TypeScript copy of the rule; the
 // drift guard below asks it directly.
-const panelModule = loadModule(panelSource, panelPath, { vscode: fakeVscode(null) });
+const panelModule = loadModule(panelSource, panelPath, panelDependencies(fakeVscode(null)));
 
 // Renders one card with the real renderTaskCard of a freshly loaded board.js.
 // The script's load-time retry timers are real and always cleared.
@@ -99,9 +106,9 @@ function renderCard(task, columnStatus) {
 function renderDetail(task) {
     const webview = fakeWebview({ html: '', onDidReceiveMessage: subscription });
     const panel = strict('WebviewPanel', { webview: strict('Webview', webview), onDidDispose: subscription, dispose() {} });
-    const { TaskDetailPanel } = loadModule(panelSource, panelPath, { vscode: fakeVscode(panel) });
+    const { TaskDetailPanel } = loadModule(panelSource, panelPath, panelDependencies(fakeVscode(panel)));
     const state = { tasks: [task], epics: [] };
-    const client = strict('MoeDaemonClient', { currentState: state, onStateChanged: subscription });
+    const client = strict('MoeDaemonClient', { currentState: state, onStateChanged: subscription, onError: subscription, onConnectionChanged: subscription });
     let opened;
     try {
         opened = TaskDetailPanel.createOrShow({ path: '/extension' }, client, task.id, state);

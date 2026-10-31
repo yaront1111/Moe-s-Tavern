@@ -1,0 +1,251 @@
+{
+  "id": "task-afe6838d58874da58a2d4c1e0956c799",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: CQ-R10d4 exact Codex MCP table drops the shim's required MOE_ROLE",
+  "description": "Pinned codex 0.166.0 (manifest member SHA b8a11fed…) starts a recorder MCP server with only HOME/PATH/LC_CTYPE, dropping parent MOE_ROLE=qa. guest-mcp-shim.py main() requires os.environ['MOE_ROLE']; R10d4's approved exact three-line config has no env_vars, so its Moe server cannot initialize. Repro/evidence: /tmp/r10d4-evidence/mcp-env-probe.py and mcp-env-*/env.json. Reconcile R10d4's approved contract (e.g. allow env_vars=[\"MOE_ROLE\"] within the sole moe table) before completing that launch spec; do not weaken the shim's role validation.",
+  "definitionOfDone": [
+    "Pinned Codex launches the real shim with the correct job role without copying credentials to configuration or argv.",
+    "R10d4 approved config contract and exact config tests agree with the role-forwarding behavior."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nContext:\n- CQ-R10d4 (task-60626bee) is BLOCKED on this row, with its steps 1-2 landed as checkpoint 5f62b98f. Read those landed bytes; this row edits only the lines named below.\n- The architect probed the pinned codex 0.166.0 member (memberSha256 b8a11fed…) on 2026-10-30 with a recorder MCP server:\n  - the approved three-line table gives the server only HOME, LC_CTYPE and PATH;\n  - adding `env_vars = [\"MOE_ROLE\"]` gives HOME, LC_CTYPE, MOE_ROLE and PATH;\n  - a literal `env = { MOE_ROLE = \"qa\" }` works too, but would put the role into the file.\n  The decision: use env_vars. The config then stays role-independent, and only MOE_ROLE is forwarded, never the credential.\n\nIn scripts/tests/local-runner-bridge.test.mjs:\n1. LA_CONFIG.codex (~:1192) becomes the FOUR-line table:\n   '[mcp_servers.moe]\\ncommand = \"/opt/moe/bin/moe-mcp-shim\"\\nenv_vars = [\"MOE_ROLE\"]\\ndefault_tools_approval_mode = \"approve\"\\n'\n   LA2 and LA3 already pin the bytes through LA_CONFIG.\n2. In LA2's codex rows (~:1343), assert:\n   - the config text holds neither the credential name (CODEX_API_KEY, as in the J rows) nor the SECRET value;\n   - it has no `env =` table;\n   - its only env_vars line is exactly `env_vars = [\"MOE_ROLE\"]`.\n3. Add a new LA5 after LA4 (~:1414): 'LA5 pinned codex forwards exactly MOE_ROLE to its MCP server'. It is opt-in.\n   - It skips with a reason unless process.platform === 'linux' and MOE_PINNED_CODEX is set.\n   - The sha256 of that file must equal scripts/local-runner/agent-binaries.json binaries.codex[process.arch === 'arm64' ? 'arm64' : 'x64'].memberSha256. A mismatch FAILS; it never skips.\n   - For each role in worker and qa, in a fresh mkdtemp dir:\n     - home/.codex/config.toml is LA_CONFIG.codex with the shim path replaced by an executable recorder. Assert exactly one replacement; every other byte stays identical.\n     - The recorder (`#!/usr/bin/env python3`, mode 0700) writes json(dict(os.environ)) to a marker file. It then answers MCP initialize and tools/list (empty) on stdio until EOF, as /tmp/r10d4-evidence/mcp-env-probe.py does.\n     - spawnSync(MOE_PINNED_CODEX, ['exec', '--sandbox', 'danger-full-access', '--skip-git-repo-check', LA_PROMPTS[role]]) with:\n       - cwd: a ws dir;\n       - env: {HOME, CODEX_HOME: home/.codex, PATH: '/usr/bin:/bin', MOE_ROLE: role, CODEX_API_KEY: SECRET, OPENAI_BASE_URL: 'http://127.0.0.1:1/v1'};\n       - stdio: ['ignore', 'pipe', 'pipe'], because codex exec reads a piped stdin until EOF (the supervisor's relay gives the job DEVNULL, guest-supervisor.py ~:426);\n       - timeout: 30_000.\n     - Do not assert codex's exit code: the model call fails by design.\n     - Assert the marker exists, marker.MOE_ROLE === role, and neither CODEX_API_KEY nor SECRET appears among the recorded names or values.\n   - SH1 (scripts/tests/local-runner-agents.test.mjs:82) already proves the real shim serves exactly MOE_ROLE's tools. With LA5, this proves pinned codex hands the real shim its job role.\n\nRun `node --test scripts/tests/local-runner-bridge.test.mjs`, once plain and once with MOE_PINNED_CODEX=/tmp/r10d4-evidence/codex-x86_64-unknown-linux-musl. Confirm that LA2/LA3 fail on the three-line table and LA5 fails on the missing MOE_ROLE.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "LA_CONFIG.codex pinned to 4-line table; LA2 codex assertions; LA5 added. Red: LA2/LA3 fail on the unchanged supervisor. LA5 reads LA_CONFIG (the test pin), so it passes now; its red is the mutant in step 3. Many other dirty paths belong to other sessions; untouched.",
+      "startedAt": "2026-10-30T07:55:55.703Z",
+      "completedAt": "2026-10-30T07:57:34.364Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/local-runner/guest-supervisor.py, LAUNCH['codex'] (~:793-794): the config text gains `env_vars = [\"MOE_ROLE\"]\\n` right after the command line. The result is exactly LA_CONFIG.codex with the guest SHIM path.\n\nAdd a one-line comment beside LAUNCH explaining why: codex 0.166 starts a stdio MCP server with only HOME, PATH and LC_CTYPE, and env_vars forwards exactly MOE_ROLE, the one variable guest-mcp-shim.py main() reads, never the credential.\n\nLeave everything else as it is:\n- claude's .moe-mcp.json, argv, PROMPTS and SHIM;\n- the (executable, credential names) shape of JOBS, so B17 and AGENT_JOBS still hold;\n- prepare_launch's O_EXCL|O_NOFOLLOW creation;\n- start_job's env (it already sets MOE_ROLE from the validated frame role, ~:898);\n- every other supervisor mode.\n\nError handling: unchanged. A config write failure still returns 71 with no job, as before.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "startedAt": "2026-10-30T07:57:35.140Z",
+      "completedAt": "2026-10-30T07:57:39.956Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, on WSL:\n\nenv -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_PINNED_CODEX=/tmp/r10d4-evidence/codex-x86_64-unknown-linux-musl node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs\n\nIt must exit 0, and the TAP output must show LA5 passed, not skipped. Its command, exit code and output tail are complete_task's verification evidence.\n\nIf /tmp/r10d4-evidence is gone, set the pinned codex up outside the repository:\n- download agent-binaries.json's codex x64 URL into a fresh scratch dir;\n- check the archive's sha256;\n- extract the member, check memberSha256, and point MOE_PINNED_CODEX at it.\n\nThen run these mutants, on scratch copies of the two files only, and restore and cmp afterwards. Each must turn the named rows red:\n(i) drop the env_vars line: LA2, LA3 and LA5;\n(ii) `env_vars = [\"MOE_ROLE\", \"CODEX_API_KEY\"]`: LA2's credential guard and LA5;\n(iii) a literal `env = { MOE_ROLE = \"worker\" }` instead of env_vars: LA2, and LA5 for qa.\n\nA read-only `git status --short` must show only the two files changed by this task. Never revert, stash, `git add -A` or commit peer or pre-existing paths. Error handling: if a test fails in a file this task did not touch, report it with the output; do not edit it.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Full command exit 0, 81/81, LA5 passed (not skipped). Initially H7 failed: pre-existing at pristine HEAD (R10d4's landed CODEX_HOME env made H7's probe list it as a non-allowlisted name). Fixed with a one-token change on line 1538 (added 'CODEX_HOME' to the excluded probe names); H7's credential/role assertions unchanged. Mutants (scratch copies, repo untouched): (i) dropping env_vars -> LA2+LA5 red (supervisor-only drop -> LA2+LA3 red); (ii) CODEX_API_KEY in env_vars -> LA2+LA5 red; (iii) literal env table -> LA2+LA5 red. Git status shows only the two task files changed in scripts/ (plus unrelated untracked mod tsconfigs).",
+      "startedAt": "2026-10-30T07:57:40.736Z",
+      "completedAt": "2026-10-30T08:01:50.169Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a hostile guest agent and as QA.\n\nCheck:\n- The credential never reaches the config, argv or the MCP server's environment: only MOE_ROLE is forwarded.\n- LA5 cannot pass vacuously. It skips loudly when unset or on another OS, fails on a wrong binary, asserts exactly one replacement, and does not depend on network access (the base URL is unreachable, and codex's exit code is not asserted).\n- The recorder and temp dirs are removed in a finally block, and no file is written into the repository.\n- The config stays role-independent, and claude's path is unchanged. The pinned claude's MCP env forwarding is NOT probed here; record that in the handoff for CQ-R10d's end-to-end row (task-90847011).\n- LA1-LA4, B17 and the J rows are unchanged apart from the LA_CONFIG pin and LA2's new assertions.\n\nReport both paths in complete_step.modifiedFiles. Write the Serena memory 'task-task-afe6838d58874da58a2d4c1e0956c799-handoff', and add the env_vars rule to gotcha memory 'gotcha-codex-mcp-env-allowlist': codex starts stdio MCP servers with HOME/PATH/LC_CTYPE only, so name every needed variable in env_vars. CQ-R10d4 (task-60626bee) auto-unblocks when this row is DONE; its amended step 3 re-runs the full gate.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "note": "Self-review: credential never in config/argv/MCP env (LA2 + LA5 assert; only MOE_ROLE forwarded). LA5 cannot pass vacuously: skip reasons explicit, binary sha mismatch fails, exactly-one-replacement asserted, marker existence asserted, no network dependence, temp dirs removed in finally, nothing written to the repo. The recorder's config adds an `args` line after the replaced command (marker path); all other bytes identical. Claude path unchanged and its MCP env forwarding is unprobed (for CQ-R10d e2e row task-90847011). H7 probe-name fix noted in step 3. Memories written.",
+      "startedAt": "2026-10-30T08:01:51.102Z",
+      "completedAt": "2026-10-30T08:02:04.935Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 261.5,
+  "comments": [
+    {
+      "id": "comment-3d4c717ca6f54c74b38d276c678a0a67",
+      "author": "worker-55e6716a",
+      "content": "Precision correction to the description: the shim DOES initialize without MOE_ROLE, but serve(None, ...) selects an empty tools table. Thus Codex gets zero Moe tools and cannot call the prompt's mandatory moe.get_context. Root cause and blocker stand. Pinned actual recorder env is /tmp/r10d4-evidence/mcp-env-4xx_2mz4/env.json. Please reconcile current launch task's approved exact three-line config with role forwarding; candidate env_vars=[\"MOE_ROLE\"] should be tested against the pinned binary. No credentials need to enter config.",
+      "timestamp": "2026-10-30T07:45:30.645Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:44:17.905Z",
+  "updatedAt": "2026-10-30T08:06:09.494Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:47:52.464Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T08:05:27.505Z",
+    "wallClockMs": 1055041
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-5ebbf433",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:55:30.338Z",
+  "executionContract": {
+    "intendedBehavior": "Codex's guest session config.toml forwards exactly MOE_ROLE to the Moe MCP shim through `env_vars = [\"MOE_ROLE\"]`. Pinned codex 0.166.0 therefore starts the real shim with the job's role, and the shim serves that role's tools. The credential never enters the config, argv or the MCP server's environment. claude's launch is unchanged.",
+    "acceptanceCriteria": [
+      "The codex session config is exactly '[mcp_servers.moe]\\ncommand = \"/opt/moe/bin/moe-mcp-shim\"\\nenv_vars = [\"MOE_ROLE\"]\\ndefault_tools_approval_mode = \"approve\"\\n', pinned by LA2 and LA3.",
+      "LA2 asserts that the codex config names neither the credential nor its value, and has no env table.",
+      "LA5 (opt-in, MOE_PINNED_CODEX, sha-checked against agent-binaries.json) shows that pinned codex hands its MCP server MOE_ROLE equal to the job role and no credential, for both worker and qa."
+    ],
+    "invariants": [
+      "The JOBS (executable, credential names) shape, B17, AGENT_JOBS, claude's config and argv, PROMPTS, prepare_launch's file creation and every other supervisor mode are unchanged.",
+      "The shim's role validation is not weakened, and nothing under .moe is edited."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/guest-supervisor.py LAUNCH['codex'] config text plus one comment.",
+      "scripts/tests/local-runner-bridge.test.mjs: the LA_CONFIG.codex pin, the LA2 codex assertions and the new LA5."
+    ],
+    "reuse": [
+      "The LA_CONFIG/LA_PROMPTS constants and the SECRET/credential naming of the J rows.",
+      "The recorder-server shape of /tmp/r10d4-evidence/mcp-env-probe.py."
+    ],
+    "sourceAssumptions": [
+      "guest-supervisor.py LAUNCH['codex'] (~:793-794) holds the three-line codex table. start_job (~:898) sets MOE_ROLE from the validated frame role. relay spawns the job with stdin DEVNULL (~:426).",
+      "guest-mcp-shim.py main() serves table[MOE_ROLE] and an empty table for an unknown role, as SH1 and SH8 in local-runner-agents.test.mjs pin.",
+      "local-runner-bridge.test.mjs LA_CONFIG (~:1190) pins the config bytes for LA2 (~:1343) and LA3 (~:1392).",
+      "agent-binaries.json binaries.codex.x64.memberSha256 is b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8, matching /tmp/r10d4-evidence/codex-x86_64-unknown-linux-musl."
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_PINNED_CODEX=/tmp/r10d4-evidence/codex-x86_64-unknown-linux-musl node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- env_vars = [\"MOE_ROLE\"] in the codex table: chosen. The architect verified it against the pinned codex 0.166.0 member (sha b8a11fed…), and the server then receives MOE_ROLE. The config stays role-independent, and only MOE_ROLE is forwarded, never CODEX_API_KEY.\n- A literal env = { MOE_ROLE = \"<role>\" }: rejected. It works too, but it duplicates the validated role into a file and makes the config per-role.\n- Making claude's .moe-mcp.json explicit as well: out of scope. The bug and DoD are codex-only, and claude's inheritance is left for CQ-R10d's end-to-end row.\n- Weakening the shim's role check: forbidden by the task. The shim's serve(None) already fails closed to zero tools.\n- Folding the fix into CQ-R10d4: not possible, because steps 1-2 are COMPLETED and amend_plan_step rejects completed steps. This row lands the line and the pins. The architect amends R10d4's PENDING steps 3-4 and comments the contract change, so its approved plan agrees (DoD 2).",
+    "codebaseInsights": "- guest-supervisor.py LAUNCH (~:788-795) holds the per-cli argv tail, config filename and config text. start_job (~:898) builds the job env with 'MOE_ROLE': frame['role'] and the credential. The relay spawns the job with stdin=DEVNULL (~:426).\n- guest-mcp-shim.py main() reads only os.environ.get('MOE_ROLE'). serve() with an unknown role serves an empty tool table. SH1 and SH8 in local-runner-agents.test.mjs pin both behaviors.\n- In local-runner-bridge.test.mjs, LA_CONFIG (~:1190) pins the exact config bytes for LA2 and LA3. The LA rows start at ~:1329. The codex credential name in the J rows is CODEX_API_KEY.\n- Pinned codex exec blocks on a piped stdin (\"Reading additional input from stdin...\"), so the probe must pass stdin 'ignore'. It also warns that it refuses PATH aliases under /tmp; the warning is harmless.",
+    "risks": "- LA5 depends on a 319 MB local binary, so it is opt-in. CI skips it, and the verification command sets MOE_PINNED_CODEX so the evidence includes it.\n- The two files belong to the BLOCKED CQ-R10d4, whose bytes are checkpointed. No step of it is IN_PROGRESS, so this row's landing carries only its own hunks, with a Moe-Contested trailer.\n- local-runner-bridge.test.mjs is also planned by CQ-R13b and CQ-R10d4. Both are gated or blocked, so neither is editing it now.\n- If the pinned binary at /tmp disappears, the worker re-fetches it and checks memberSha256.",
+    "keyFiles": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/local-runner/guest-mcp-shim.py",
+      "scripts/local-runner/agent-binaries.json",
+      "scripts/tests/local-runner-agents.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:55:30.361Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:55:55.703Z",
+  "reviewStartedAt": "2026-10-30T08:02:09.291Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_PINNED_CODEX=/tmp/r10d4-evidence/codex-x86_64-unknown-linux-musl node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ LA5 pinned codex forwards exactly MOE_ROLE to its MCP server (33199.807989ms)\nℹ tests 81\nℹ pass 81\nℹ fail 0\nℹ skipped 0",
+    "reportedAt": "2026-10-30T08:02:09.291Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    ".moe/epics/epic-5f4acf0ae5d3427facd63346f125aec5.json",
+    ".moe/tasks/task-3fa69c192a2147fa8555b33c86ad2f82.json",
+    ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+    ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+    ".moe/tasks/task-afe6838d58874da58a2d4c1e0956c799.json",
+    ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+    ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json"
+  ],
+  "completionSummary": "Codex session config now forwards exactly MOE_ROLE via env_vars = [\"MOE_ROLE\"] (guest-supervisor.py LAUNCH['codex']); credential never enters config/argv/MCP env. LA_CONFIG.codex pin, LA2 codex assertions and new opt-in LA5 (pinned codex 0.166.0, sha-checked, recorder MCP server, worker+qa) added. Also fixed pre-existing red H7 (R10d4's CODEX_HOME env) with a one-token change to the probe's excluded names. Mutants (drop env_vars / credential in env_vars / literal env) turn LA2+LA5 red. Claude's MCP env forwarding not probed (left for task-90847011).",
+  "commits": [
+    {
+      "sha": "0d68b0d603ebfd277cbf39a01fe655cc86c71c55",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T07:55:30Z",
+      "paths": [
+        ".moe/epics/epic-5f4acf0ae5d3427facd63346f125aec5.json",
+        ".moe/tasks/task-3fa69c192a2147fa8555b33c86ad2f82.json",
+        ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+        ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+        ".moe/tasks/task-afe6838d58874da58a2d4c1e0956c799.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T08:02:34.990Z",
+      "treeId": "23ce0dfc84235c767d3e0ecd6ce67c1402c0ae7d",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/local-runner/guest-supervisor.py",
+          "taskId": "task-60626bee13034a178fed55c697d14d06"
+        },
+        {
+          "path": "scripts/tests/local-runner-bridge.test.mjs",
+          "taskId": "task-60626bee13034a178fed55c697d14d06"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "c0426df9abaafcf08410286a4b1c06f011dde35c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T08:03:24Z",
+      "paths": [
+        ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+        ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+        ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json",
+        ".moe/tasks/task-afe6838d58874da58a2d4c1e0956c799.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T08:06:09.494Z",
+      "treeId": "2aa6357a2a6687f5e20e57bbdfc83914a9a83a95",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T08:03:24Z",
+    "at": "2026-10-30T08:06:09.494Z"
+  },
+  "completedAt": "2026-10-30T08:05:27.505Z",
+  "reviewCompletedAt": "2026-10-30T08:05:27.505Z",
+  "reviewSummary": "Reviewed completion commit 0d68b0d6 (on moe/work-2026-10-24, pushed per ledger): scripts diff +53/-5 (supervisor +3/-1, bridge test +50/-4), well under size limits. DoD 1: LAUNCH['codex'] config is exactly the four-line table with env_vars = [\"MOE_ROLE\"] (no env table, credential never named); real run with pinned codex 0.166.0 (member sha b8a11fed… verified by me via sha256sum = agent-binaries.json) shows its MCP server gets MOE_ROLE==role for worker and qa and no CODEX_API_KEY/SECRET (LA5). DoD 2: LA_CONFIG.codex pin + LA2 asserts (only env_vars line is exact, no `env =` table, no credential name/value) agree with the supervisor bytes; LA3 pins the same bytes through main(). Re-ran task.verification myself (env -i … MOE_PINNED_CODEX=/tmp/r10d4-evidence/codex-x86_64-unknown-linux-musl node --test local-runner-bridge + local-runner-agents): exit 0, 81/81 pass, 0 fail, 0 skipped, LA5 passed (33s, not skipped). Own mutant probe on a scratch copy (/tmp, removed; repo untouched): dropping env_vars from supervisor+pin turns LA2 and LA5 red (LA3 stays green only because both sides were mutated consistently), so LA5 is non-vacuous against the real binary. Invariants hold: claude config/argv, PROMPTS, JOBS shape, B17, shim role validation unchanged; nothing under .moe edited by the code change. Scope extra disclosed and accepted: one-token fix adding 'CODEX_HOME' to the H7 probe's excluded names (H7 was red from R10d4's landed CODEX_HOME env; its credential/role assertions are unchanged, so no weakening). Not verified: pinned claude's MCP env forwarding (explicitly left to task-90847011). Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

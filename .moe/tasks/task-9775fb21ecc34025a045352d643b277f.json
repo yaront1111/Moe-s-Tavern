@@ -1,0 +1,278 @@
+{
+  "id": "task-9775fb21ecc34025a045352d643b277f",
+  "epicId": "epic-be924fb8",
+  "title": "moe-proxy identity probe is skipped when MOE_DAEMON_HOST holds a CR/TAB/LF or percent-encoding",
+  "description": "Follow-up from QA of task-86093c3efd8645748f460db870073392 (approved; completion 6c55aefa on moe/work-2026-10-24). Non-blocking residual of the same probe-vs-WebSocket host divergence class as that task's bracketed-IPv6 fix.\n\nFound: packages/moe-proxy/src/daemonIdentity.ts:101-103 hands getDaemonHost() to http.request as `hostname` (brackets are stripped only for a valid IPv6 literal). Meanwhile index.ts openDaemonSocket opens `ws://${getDaemonHost()}:${port}/mcp`, which ws parses with WHATWG `new URL()`. WHATWG removes ASCII TAB/LF/CR anywhere in the input and percent-decodes the host; http.request does neither.\n- So for MOE_DAEMON_HOST '127.0.0.1\\r', '127.0.0.1\\t', '127.0.0.1\\n', '[::1]\\r' or '%31%32%37.0.0.1', http.request throws ERR_INVALID_CHAR on the Host header (or fails DNS with ENOTFOUND). The probe then resolves 'unknown', which fails open, and ws connects to the same daemon.\n- QA repro: the built proxy (snapshot of 6c55aefa) against a fake daemon whose /health names another project. Each of those 5 values gave health=0, upgrades=1, exit 0.\n- Correctly refused (health=1, upgrades=0, exit 1): 127.0.0.1, [::1], [0:0:0:0:0:0:0:1], [::ffff:127.0.0.1], localhost, LOCALHOST, 127.1, 0x7f000001, '127.0.0.1.'.\n- ' 127.0.0.1' and '[127.0.0.1]' open nothing, because ws throws Invalid URL on them.\n\nExposure is low. These are not valid hostnames.\n- moe-agent.sh's WSL discovery cannot export a CR value: its Python urllib probe raises InvalidURL (\"URL can't contain control characters\"), and IFS word-splitting splits on TAB and LF.\n- moe-agent.ps1 never assigns MOE_DAEMON_HOST.\n- Only a hand-set operator value reaches this, for example captured Windows-tool output in WSL, which keeps a trailing CR. For that seat the foreign-daemon check is then silently off.\n\nSuggested fix (daemonIdentity.ts only): build the probe target from the same parse ws uses, `http.request(new URL(`http://${host}:${port}/health`), { method: 'GET', timeout: timeoutMs }, cb)`.\n- Node's urlToHttpOptions strips IPv6 brackets, so this also replaces the hand-rolled isIPv6 check.\n- Verified on Node 24: all 5 values above normalize to the hostname ws connects to.\n- '[127.0.0.1]' and ' 127.0.0.1' still throw synchronously, which the probe turns into 'unknown'. ws throws on the same input, so no socket opens.\n- The deferred daemon-side project parameter on the /mcp upgrade would close this class and the /health->/mcp TOCTOU together.\n\nAlso consider: the ::1 test rows bind unconditionally. scripts/tests/local-runner-daemon-bind.test.mjs instead skips when ::1 cannot bind. A host with IPv6 disabled therefore fails npm test where it could skip.",
+  "definitionOfDone": [
+    "With a fake daemon whose /health names another project, MOE_DAEMON_HOST values '127.0.0.1\\r', '127.0.0.1\\t', '127.0.0.1\\n' and '%31%32%37.0.0.1' each make the built proxy exit 1 with the error naming both projects, after exactly one GET /health and with zero /mcp upgrades. Proven by daemonIdentity.test.ts e2e rows.",
+    "The existing daemonIdentity.test.ts rows all still pass unchanged: IPv4 and [::1] E1-E4, the path-spelling rows, the unknown rows, and invalid bracketed IPv4 staying 'unknown'.",
+    "packages/moe-proxy/src/utils.ts and packages/moe-proxy/src/index.ts are unchanged.",
+    "`cd packages/moe-proxy && npm test` exits 0 in a Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate), with its output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the tests first (RED) in packages/moe-proxy/src/daemonIdentity.test.ts. Iterate in a Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate), because the in-tree node_modules is Windows-native. Copy this file in, then run `npm run build`, then `NO_COLOR=1 npx vitest run src/daemonIdentity.test.ts`. The build matters for two reasons: E1-E4 spawn ../dist/index.js, and this package's tsconfig includes all of src, so tsc type-checks the test file too.\n(a) Right after the imports and before any describe, add a top-level `const V6 = await new Promise<boolean>(...)`. It listens an http.createServer() on ('::1', port 0) and resolves false on 'error'. On listening, it closes the server and then resolves true. This is the same probe scripts/tests/local-runner-daemon-bind.test.mjs uses. Then add `const itV6 = V6 ? it : it.skip;` and `const HOSTS: (readonly [string, string])[] = [[HOST, HOST], ...(V6 ? [['::1', '[::1]'] as const] : [])];`. Switch only the bare/bracketed IPv6 classify block from `it.each` to `itV6.each`. A host without ::1 then reports those rows as skipped, never as failed or silently passed.\n(b) Add `const REPAIRED_HOSTS: (readonly [string, string])[]` with one [HOST, h] row for each h of '127.0.0.1\\r', '127.0.0.1\\t', '127.0.0.1\\n', '%31%32%37.0.0.1', 'x@127.0.0.1' and 'x:y@127.0.0.1', plus ['::1', '[::1]\\r'] when V6. Run E1 over `[...HOSTS, ...REPAIRED_HOSTS]`. Change E1's title suffix from `(%s)` to `(%s via %j)` so the rows can be told apart. E1's body and assertions stay byte-identical: exit 1; the message contains OTHER_PROJECT, testDir and /restart/i; healthRequests toEqual ['GET /health']; upgrades toEqual []. These rows are DoD 1 plus the governor's userinfo rows (task comment, 09:51Z).\n(c) In describe('probeDaemonIdentity'), add a strict handler. It answers healthy(served) only when req.url === '/health' and req.headers.authorization === undefined, and otherwise reply(404, '{}'). Then add these unit rows:\n- `it.each(['127.0.0.1\\r', '127.0.0.1\\t', '127.0.0.1\\n', '127.0.\\r0.1', '%31%32%37.0.0.1', 'x@127.0.0.1', 'x:y@127.0.0.1', '127.1', '0x7f000001'])` with a %j title. Each resolves { kind: 'foreign', projectPath: OTHER_PROJECT } from a strict(OTHER_PROJECT) server. 127.1 and 0x7f000001 already pass today; they are regression guards.\n- One port-in-host row. Start foreign = listen(strict(OTHER_PROJECT)) and decoy = listen(strict('/mnt/d/proj')). `probeDaemonIdentity(`x:y@${HOST}:${foreign.port}/`, decoy.port, '/mnt/d/proj')` must resolve foreign. ws dials the port spelled inside the host, so a probe that used the raw port would ask the same-project decoy instead.\nTouch no other row (DoD 2):\n- the bare '::1' rows must still classify same/foreign;\n- '[127.0.0.1]' stays unknown;\n- the path-spelling, unknown, cap, timeout and 426 rows are unchanged;\n- E1b, E2, E3 and E4 are unchanged.\nRED evidence: against the unchanged probe, exactly 15 new rows fail. They are the 7 unit spellings, the port-in-host row and the 7 E1 rows. Each E1 row fails after startProxy's 7s timer with 'Proxy did not exit', because the old probe fails open and the proxy stays connected. Name the failing tests in the step note.\nError handling in the harness: listen() already rejects bind errors. The V6 probe must resolve on 'error' and never throw.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "note": "RED proven in Linux-native snapshot /tmp/moe-proxy-9775-red.jFecr9 (HEAD archive + only the test file; npm run build passes, so tsc type-checks the test file). Against the unchanged probe: 75 rows, 15 failed / 60 passed, exactly the predicted set. 7 unit spellings ('127.0.0.1\\r', '\\t', '\\n', '127.0.\\r0.1', '%31%32%37.0.0.1', 'x@127.0.0.1', 'x:y@127.0.0.1') + the port-in-host row ('probes the port spelled inside the host, not the raw port argument') + 7 E1 rows (via '127.0.0.1\\r', '\\t', '\\n', '%31%32%37.0.0.1', 'x@127.0.0.1', 'x:y@127.0.0.1', and '::1' via '[::1]\\r'). The E1 rows each fail after ~7s ('Proxy did not exit': old probe fails open). '127.1' and '0x7f000001' pass today as regression guards. Edits: V6 top-level await bind probe + itV6 (bare/bracketed IPv6 classify block now itV6.each; skipped rather than failed where ::1 cannot bind), HOSTS typed and V6-conditional, REPAIRED_HOSTS added, strict /health handler (url==='/health' and no Authorization) + unit rows. E1's title suffix changed from '(%s)' to '(%s via %j)' - cosmetic only; E1's body/assertions are byte-identical, and E1b/E2/E3/E4, the path-spelling, unknown, cap, timeout and 426 rows are untouched. Shared checkout has ~50 peers' dirty paths (.moe/*, JetBrains kt, ...); none touched.",
+      "startedAt": "2026-10-30T10:10:52.663Z",
+      "completedAt": "2026-10-30T10:12:21.098Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Make the minimal fix (GREEN) in packages/moe-proxy/src/daemonIdentity.ts, inside probeDaemonIdentity only. Replace the hand-rolled bracket strip (the comment and the `const hostname` lines before http.request) with the parse ws itself runs on the URL that openDaemonSocket builds. That URL is index.ts:421 `ws://${getDaemonHost()}:${port}/mcp`. ws 8.22 (lib/websocket.js) derives `opts.port = parsedUrl.port || defaultPort` and sets `opts.host` to parsedUrl.hostname with the brackets sliced off.\n```ts\nconst url = new URL(`ws://${isIPv6(host) ? `[${host}]` : host}:${port}/mcp`);\nconst hostname = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;\nreq = http.request({ hostname, port: url.port || 80, path: '/health', method: 'GET', timeout: timeoutMs }, (res) => {\n```\nRules:\n(1) Copy ONLY hostname and port from the parse. Never pass the URL object to http.request, and never spread urlToHttpOptions. Doing so turns userinfo into an Authorization header and carries the URL path along ('127.0.0.1/x' becomes '/x:9876/...'). The strict unit handler answers both with 404.\n(2) Take the port from the same parse. A host like '127.0.0.1:5555/' makes ws dial 5555. `|| 80` mirrors ws's default: url.port is '' for the scheme default, and Node also maps '' and 0 to 80 (verified on 24.21.0).\n(3) Keep `import { isIPv6 } from 'net'`. A bare IPv6 literal is not URL syntax: `new URL('ws://::1:9876/mcp')` throws, and so does ws. The existing bare-'::1' rows must keep classifying, so bracket a bare literal first. Drop the old isIPv6 check on an already-bracketed host. WHATWG validates and canonicalizes it ('[0:0:0:0:0:0:0:1]' becomes '::1').\nError handling: the parse stays inside the existing try. ERR_INVALID_URL (' 127.0.0.1', '[127.0.0.1]', '::1\\r', '127.0.0.1:9877') therefore resolves 'unknown' on exactly the hosts where ws throws too and opens no socket. The timer, byte cap, done guard and req.destroy() are unchanged.\nRewrite two comments. The one above the parse says why: the probe asks the endpoint ws dials, because WHATWG strips TAB/LF/CR, percent-decodes, drops userinfo and honors a port spelled inside host. The catch comment says new URL() throws on a host ws cannot parse either.\nDo not touch index.ts or utils.ts (DoD 3). No docs change: no contract changes, and the README only lists MOE_DAEMON_HOST. Re-run the identity test file; every row passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.ts"
+      ],
+      "note": "GREEN in snapshot /tmp/moe-proxy-9775-red.jFecr9: daemonIdentity.test.ts 75/75 (was 15 failed). Fix is inside probeDaemonIdentity's existing try only: parse `ws://${isIPv6(host) ? `[${host}]` : host}:${port}/mcp` with the global WHATWG URL (the parse ws runs), copy only hostname (IPv6 brackets sliced) and `url.port || 80` into http.request, path stays '/health'. Replaced the old bracketed-host isIPv6 check; kept the `net` isIPv6 import for bracketing a bare literal. Two comments rewritten. index.ts and utils.ts untouched. Mutants, each run alone against the 'probeDaemonIdentity' describe and restored byte-identical afterwards: raw port arg -> 1 failure (port-in-host row); URL object as options -> 22 failures (the path becomes /mcp, so the strict handler 404s every row); no bare-IPv6 bracketing -> 2 failures (the bare '::1' rows); no bracket slice -> 4 failures. All killed with real failures, none a compile error (build output was clean).",
+      "startedAt": "2026-10-30T10:12:22.635Z",
+      "completedAt": "2026-10-30T10:12:55.282Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate (DoD 4). Run this exact command once, fresh, and submit its command, exit code and output tail to moe.complete_task. Expect exit 0 and 6 files / 263 tests, 75 of them in daemonIdentity.test.ts. The architect's scratch prototype of this plan at c7493fb2 gave exactly that; the baseline is 246. If proxy vitest dies with 'Cannot find native binding', follow mem:gotcha-gate-snapshot-psparse-and-proxy-rolldown and do not touch the lock.\n```bash\nset -euo pipefail\ncd /mnt/d/projexts/moes\nREV=$(git rev-parse HEAD)\nSNAP=$(mktemp -d /tmp/moe-proxy-9775-gate.XXXXXX)\ngit archive \"$REV\" | tar -x -C \"$SNAP\"\nfor f in packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts; do cp \"$f\" \"$SNAP/$f\"; done\nenv -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c \"cd '$SNAP/packages/moe-daemon' && npm ci --no-audit --no-fund && cd '$SNAP/packages/moe-proxy' && npm ci --no-audit --no-fund && npm test\" 2>&1 | tee \"$SNAP/verification.log\"\nfor f in packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts; do cmp \"$f\" \"$SNAP/$f\"; done\ngit diff --exit-code HEAD -- packages/moe-proxy/src/index.ts packages/moe-proxy/src/utils.ts\ngit diff --check HEAD -- packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts\necho \"gate ok rev=$REV snap=$SNAP\"\n```",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "note": "Exact step-3 command ran fresh in the foreground: exit 0, 6 files / 263 tests (identity 75, index 15, utils 97, input-framing 3, workerType 65, workerType integration 8). rev=1209c752fa60ef97ff1459282ff5e2cb3431e7f5, snapshot /tmp/moe-proxy-9775-gate.ozvgOz (verification.log there). Both owned files cmp-identical to the snapshot copies, index.ts/utils.ts show no diff against HEAD, git diff --check clean. Output ends 'Test Files 6 passed (6) / Tests 263 passed (263)' then 'gate ok'. Used no jj/git writes.",
+      "startedAt": "2026-10-30T10:12:56.130Z",
+      "completedAt": "2026-10-30T10:13:26.401Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff, using the adversarial-self-review skill. This is the last step.\n(1) Parity sweep, in a scratch script against the snapshot build. For each of '127.0.0.1', '[::1]', '::1', 'localhost', '127.0.0.1\\r', '[::1]\\r', '%31%32%37.0.0.1', 'x@127.0.0.1', 'x:y@127.0.0.1:5555/', '127.0.0.1/x', '127.0.0.1?x', '[127.0.0.1]' and ' 127.0.0.1', compare the {hostname, port} the probe requests with what ws derives from `ws://${h}:${port}/mcp`. They must match wherever ws parses. The probe resolves 'unknown' only where ws throws. Bare '::1' is the one intended extra: the probe classifies it, and ws throws on it.\n(2) The request never carries an Authorization header, and its path is always /health.\n(3) Concurrency: the probe is per-call and keeps no shared state. E3 still counts two GETs across a reconnect.\n(4) Hostile input: a huge or control-character host reaches only new URL(), which is linear, inside the try.\n(5) Note these accepted divergences in the step note; do not fix them:\n- A host with '#' parses, so the probe may GET host:80/health, but ws throws on the fragment and the proxy exits 1 either way.\n- A zone-scoped bare IPv6 such as 'fe80::1%eth0' now resolves unknown, because URL rejects zones. ws throws on any bare IPv6 anyway.\n- The foreign message names daemon.json's port, not a port spelled inside MOE_DAEMON_HOST. index.ts is frozen by DoD 3.\n(6) git diff touches only the two owned files, and other sessions' dirty paths stay untouched.\nIf this step changes either file, rerun step 3's command and submit that fresh output, not the earlier run.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "note": "Self-review changed no file, so the step-3 gate run (exit 0, 6 files / 263 tests) stands. (1) Parity sweep (scratch /tmp/moe-proxy-9775-scratch/parity.mjs, run against the gate snapshot's built dist; it patches http.request to capture the options of both the probe and ws 8.22, so both are compared on the same hook, with no network). 22 hosts. MATCH on {hostname,port} for 127.0.0.1, [::1], localhost, '127.0.0.1\\r', '[::1]\\r', '%31%32%37.0.0.1', 'x@127.0.0.1', 'x:y@127.0.0.1:5555/' (both dial :5555), '127.0.0.1/x' and '127.0.0.1?x' (both :80), '127.0.\\r0.1', 127.1, 0x7f000001, [0:0:0:0:0:0:0:1] (both ::1) and a 200000-char host. Both refuse (probe resolves unknown, ws throws) for '[127.0.0.1]', ' 127.0.0.1', '127.0.0.1:9877', '::1\\r' and 'fe80::1%eth0'. Intended extra: bare '::1' (the probe classifies it, ws throws). (2) Every captured probe request has path=/health and auth=none; the options object never carries userinfo. (3) The probe is per-call with no shared state; the E3 row still counts exactly two GETs across a reconnect. (4) A huge or control-character host reaches only new URL() inside the try (the 200k-char host returned immediately). (5) Accepted divergences, deliberately not fixed: a host with '#' parses so the probe may GET host:80/health, but ws throws on the fragment and the proxy exits 1 either way (observed: '127.0.0.1#x' -> probe 127.0.0.1:80, ws throws 'The URL contains a fragment identifier'); a zone-scoped bare IPv6 such as 'fe80::1%eth0' now resolves unknown because URL rejects zones, and ws throws on any bare IPv6 anyway; the foreign message names daemon.json's port, not a port spelled inside MOE_DAEMON_HOST, because index.ts is frozen by DoD 3. (6) git status for packages/moe-proxy shows only daemonIdentity.ts (+11/-5) and daemonIdentity.test.ts (+47/-3); index.ts and utils.ts are unchanged, and the ~50 peers' dirty paths are untouched. Test file is 374 lines (was 330, already over the 300 guideline; the plan keeps this in the one approved test path).",
+      "startedAt": "2026-10-30T10:13:27.401Z",
+      "completedAt": "2026-10-30T10:14:02.372Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 5,
+  "comments": [
+    {
+      "id": "comment-5e354d9232894026b2a362608cc7b6a2",
+      "author": "governor-693b7073",
+      "content": "Governor note for whoever plans this row: add the userinfo case to its scope. worker-0062feec reported it at 09:43Z in #general (msg-044a9e9c), and the 86093c3e host sweep doesn't list it. With MOE_DAEMON_HOST='x@127.0.0.1', http.request({hostname:'x@127.0.0.1'}) fails with ENOTFOUND, so the probe returns 'unknown' and fails open. Meanwhile ws://x@127.0.0.1:<port>/mcp dials 127.0.0.1. The fix this row already proposes, parsing with new URL() the way ws does, covers it, and that worker's notes from the same message apply:\n(a) u.port is '' for the scheme default, and Number('') is 0. Fall back to 80 the way ws does, or leave the port unset.\n(b) Take host and port from the same parse. '127.0.0.1/x' parses to hostname 127.0.0.1 with port '', so ws dials :80, and a probe that used the raw port would check another port.\n(c) Copy only hostname and port. Spreading urlToHttpOptions also turns the userinfo into a Basic auth header.\n(d) '[127.0.0.1]' stays 'unknown', because new URL throws on it and ws fails on it too. Keep that row.\nSuggested DoD row: 'x@127.0.0.1' (plus a userinfo+port variant) → exit 1 after exactly one GET /health and zero /mcp upgrades.",
+      "timestamp": "2026-10-30T09:51:25.656Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T09:48:28.018Z",
+  "updatedAt": "2026-10-30T10:29:42.912Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T09:54:49.441Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T09:55:06.695Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T10:28:55.454Z",
+    "wallClockMs": 2028759
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-093a65d0",
+    "qa-ba3f4f35"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T10:10:22.666Z",
+  "executionContract": {
+    "intendedBehavior": "probeDaemonIdentity asks /health at exactly the host and port ws dials for `ws://${MOE_DAEMON_HOST}:${port}/mcp`. Both come from the same WHATWG URL parse, which strips TAB/LF/CR, percent-decodes the host, drops userinfo, honors a port spelled inside the host and removes IPv6 brackets. The request is a plain GET /health with no Authorization header. A foreign daemon reached through any spelling ws accepts is therefore refused before /mcp opens. A spelling ws rejects resolves 'unknown', and ws then opens nothing. A bare IPv6 literal keeps classifying as before.",
+    "acceptanceCriteria": [
+      "E1 rows: MOE_DAEMON_HOST '127.0.0.1\\r', '127.0.0.1\\t', '127.0.0.1\\n', '%31%32%37.0.0.1', 'x@127.0.0.1' and 'x:y@127.0.0.1', plus '[::1]\\r' where ::1 binds. Each makes the built proxy exit 1 with a message naming both projects, after exactly one GET /health and with zero /mcp upgrades.",
+      "Unit rows: the same IPv4 spellings plus '127.0.\\r0.1', '127.1' and '0x7f000001' each resolve foreign against a server that answers only GET /health without an Authorization header.",
+      "A port spelled inside the host (`x:y@127.0.0.1:<foreignPort>/`), with the raw port argument pointing at a same-project decoy, resolves foreign.",
+      "Every pre-existing row keeps its assertions and passes: bare and bracketed ::1 same/foreign, '[127.0.0.1]' unknown, the path-spelling, unknown, cap, timeout and 426 rows, and E1-E4.",
+      "Where ::1 cannot bind, the ::1 rows are skipped or not registered. They never fail and never silently pass.",
+      "The exact gate command exits 0 in a Linux-native snapshot with 6 files and 263 tests."
+    ],
+    "invariants": [
+      "'unknown' still fails open for genuine unknowns: unreachable, timeout, non-JSON, oversize, unexpected status, older daemon, relative path.",
+      "probeDaemonIdentity never rejects and stays bounded by timeoutMs and MAX_HEALTH_BODY_BYTES.",
+      "The probe request never carries userinfo, an Authorization header, or the URL's path or query; the path is always /health.",
+      "packages/moe-proxy/src/index.ts and packages/moe-proxy/src/utils.ts stay byte-identical, and getDaemonHost is unchanged."
+    ],
+    "compatibility": [
+      "The DaemonIdentity type and the probeDaemonIdentity signature are unchanged.",
+      "Valid MOE_DAEMON_HOST values (127.0.0.1, [::1], bare ::1, localhost, a WSL gateway IPv4) behave exactly as before.",
+      "There is no MCP, wire, daemon or .moe state change."
+    ],
+    "approvedScope": [
+      "probeDaemonIdentity request-target derivation in packages/moe-proxy/src/daemonIdentity.ts (the URL parse, the hostname and port copy, and comments)",
+      "daemonIdentity.test.ts: the V6, itV6, HOSTS and REPAIRED_HOSTS constants, E1's row list and title, a strict /health handler, and the new unit rows"
+    ],
+    "reuse": [
+      "The global WHATWG URL, the same parser ws runs, instead of hand-sanitizing (stripping TAB/LF/CR, percent-decoding and cutting userinfo by hand would drift from WHATWG on IPv4 shorthand, IDNA and a port inside the host).",
+      "The existing test harness: listen, reply, healthy, startFakeDaemon, startProxy and the E1 assertions.",
+      "The ::1 bind probe pattern from scripts/tests/local-runner-daemon-bind.test.mjs."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-proxy/src/index.ts:396 calls probeDaemonIdentity(getDaemonHost(), info.port, projectPath). On any non-foreign result, openDaemonSocket runs `new WebSocket(`ws://${getDaemonHost()}:${port}/mcp`)` at index.ts:421, and a synchronous throw there lands in the probe .catch (writeError, then exit 1).",
+      "packages/moe-proxy/src/utils.ts:66 getDaemonHost returns process.env.MOE_DAEMON_HOST || '127.0.0.1'.",
+      "ws 8.22.0 lib/websocket.js parses with new URL(), sets opts.port = parsedUrl.port || defaultPort and opts.host = parsedUrl.hostname without brackets, and sends userinfo as opts.auth.",
+      "Verified on Node 24.21.0: new URL('ws://::1:9876/mcp') throws, and http.request maps a port of '' or 0 to 80.",
+      "packages/moe-proxy/tsconfig.json includes all of src, so `npm test`'s pretest (tsc) type-checks the test file."
+    ],
+    "checkRefs": [
+      "set -euo pipefail; cd /mnt/d/projexts/moes; REV=$(git rev-parse HEAD); SNAP=$(mktemp -d /tmp/moe-proxy-9775-gate.XXXXXX); git archive \"$REV\" | tar -x -C \"$SNAP\"; for f in packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts; do cp \"$f\" \"$SNAP/$f\"; done; env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c \"cd '$SNAP/packages/moe-daemon' && npm ci --no-audit --no-fund && cd '$SNAP/packages/moe-proxy' && npm ci --no-audit --no-fund && npm test\" 2>&1 | tee \"$SNAP/verification.log\"; for f in packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts; do cmp \"$f\" \"$SNAP/$f\"; done; git diff --exit-code HEAD -- packages/moe-proxy/src/index.ts packages/moe-proxy/src/utils.ts; git diff --check HEAD -- packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts; echo \"gate ok rev=$REV snap=$SNAP\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) The task's suggestion, http.request(new URL('http://host:port/health'), opts), was rejected. urlToHttpOptions copies userinfo into an Authorization header and carries the URL's path ('127.0.0.1/x' becomes '/x:9876/health'). In the prototype, mutant M2 (URL-object options) failed 3 rows.\n(2) Hand-sanitizing the host (strip \\t\\r\\n, decodeURIComponent, cut at '@') was rejected. It reimplements WHATWG piecemeal and misses port-inside-host, IPv4 shorthand and IDNA.\n(3) A shared URL builder in utils.ts used by index.ts was rejected: DoD 3 freezes both files.\n(4) Chosen: parse the exact ws template and copy only hostname and port.\n(5) A daemon-side project parameter on the /mcp upgrade is deferred. It would close this class and the /health->/mcp TOCTOU together, but it is a wire change.\nThe scratch prototype at c7493fb2 was measured as follows:\n- RED: 15 new rows fail on the old probe.\n- GREEN: 6 files / 263 tests.\n- Mutants: raw port fails 1 row (port-in-host), URL-object options fail 3, no bare-IPv6 bracketing fails 2 (the existing '::1' rows), no bracket slice fails 4.\n- With ::1 unbindable (simulated): 66 passed, 4 skipped.",
+    "codebaseInsights": "getDaemonHost() feeds both the probe (index.ts:396) and the ws URL (index.ts:421). Parity therefore means running the same WHATWG parse on the same template.\nVerified WHATWG results on Node 24.21.0 for `ws://<h>:9876/mcp`:\n- '127.0.0.1\\r', '\\t', '\\n' and '127.0.\\r0.1' give 127.0.0.1:9876.\n- '%31%32%37.0.0.1' gives 127.0.0.1.\n- 'x@' and 'x:y@' give 127.0.0.1 (userinfo dropped).\n- '127.1' and '0x7f000001' give 127.0.0.1.\n- '[::1]\\r' gives ::1.\n- '127.0.0.1:5555/' gives port 5555.\n- '127.0.0.1/x' and '127.0.0.1?x' give port '' (80).\n- '127.0.0.1#x' parses, but ws throws on the fragment.\n- ' 127.0.0.1', '[127.0.0.1]', bare '::1', '::1\\r' and '127.0.0.1:9877' throw ERR_INVALID_URL.\nThe old probe failed open on CR/TAB/LF (ERR_INVALID_CHAR) and on percent-encoded or userinfo hosts (ENOTFOUND).\nFor the tests: E1-E4 spawn ../dist/index.js, so build before running vitest directly. The test file is type-checked by tsc.",
+    "risks": "- Iteration speed: the 7 E1 rows each take about 7s to fail in RED (the startProxy timer), so a RED run takes about 60s.\n- Vitest colors its output even under env -i, so set NO_COLOR=1 or strip ANSI before grepping the summary. Use grep -a.\n- Proxy npm ci under env -i may skip the rolldown native binding. It did not on 2026-10-30 at c7493fb2; if it does, see mem:gotcha-gate-snapshot-psparse-and-proxy-rolldown.\n- Keep the V6 top-level await before the first describe.\n- Use typed rows `(readonly [string, string])[]`, because tsc checks the test file.\n- E1's title change to `(%s via %j)` is cosmetic. Existing rows keep identical assertions; say so in the step note so QA does not read it as a changed row.\n- Accepted divergences, documented in step 4 and not to be fixed: '#'-hosts, zone-scoped bare IPv6, and the foreign message naming daemon.json's port.\n- Shared checkout: modify and report only the two owned files. Never stage or revert peers' paths.",
+    "keyFiles": [
+      "packages/moe-proxy/src/daemonIdentity.ts",
+      "packages/moe-proxy/src/daemonIdentity.test.ts",
+      "packages/moe-proxy/src/index.ts",
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-proxy/node_modules/ws/lib/websocket.js",
+      "scripts/tests/local-runner-daemon-bind.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T10:10:22.691Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T10:10:52.663Z",
+  "reviewStartedAt": "2026-10-30T10:14:19.876Z",
+  "verification": {
+    "command": "set -euo pipefail; cd /mnt/d/projexts/moes; REV=$(git rev-parse HEAD); SNAP=$(mktemp -d /tmp/moe-proxy-9775-gate.XXXXXX); git archive \"$REV\" | tar -x -C \"$SNAP\"; for f in packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts; do cp \"$f\" \"$SNAP/$f\"; done; env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c \"cd '$SNAP/packages/moe-daemon' && npm ci --no-audit --no-fund && cd '$SNAP/packages/moe-proxy' && npm ci --no-audit --no-fund && npm test\" 2>&1 | tee \"$SNAP/verification.log\"; for f in packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts; do cmp \"$f\" \"$SNAP/$f\"; done; git diff --exit-code HEAD -- packages/moe-proxy/src/index.ts packages/moe-proxy/src/utils.ts; git diff --check HEAD -- packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts; echo \"gate ok rev=$REV snap=$SNAP\"",
+    "exitCode": 0,
+    "outputTail": " ✓ src/utils.test.ts (97 tests) 54ms\n ✓ src/input-framing.test.ts (3 tests) 511ms\n ✓ src/workerType.test.ts (65 tests) 580ms\n ✓ src/workerType.integration.test.ts (8 tests) 3370ms\n ✓ src/daemonIdentity.test.ts (75 tests) 3663ms\n ✓ src/index.test.ts (15 tests) 16168ms\n\n Test Files  6 passed (6)\n      Tests  263 passed (263)\n   Start at  12:13:08\n   Duration  16.34s (tests 98%, transform 2%, import 1%)\n\ngate ok rev=1209c752fa60ef97ff1459282ff5e2cb3431e7f5 snap=/tmp/moe-proxy-9775-gate.ozvgOz",
+    "reportedAt": "2026-10-30T10:14:19.876Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-proxy/src/daemonIdentity.test.ts",
+    "packages/moe-proxy/src/daemonIdentity.ts",
+    ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
+    ".moe/tasks/task-9775fb21ecc34025a045352d643b277f.json",
+    ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+    ".moe/tasks/task-b294377dde9e4ab6b1d422163b941115.json",
+    ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
+    ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json"
+  ],
+  "completionSummary": "The moe-proxy identity probe now asks /health at the endpoint ws dials. probeDaemonIdentity (packages/moe-proxy/src/daemonIdentity.ts, +11/-5, inside the existing try) parses `ws://${isIPv6(host) ? `[${host}]` : host}:${port}/mcp` with the global WHATWG URL, the same parse ws runs, and copies only hostname (IPv6 brackets sliced) and `url.port || 80` into http.request. The path stays /health and no userinfo or Authorization header is carried. TAB/LF/CR, percent-encoded, userinfo-prefixed, IPv4-shorthand and port-in-host spellings of MOE_DAEMON_HOST are therefore refused when they reach a foreign daemon. A host ws cannot parse (' 127.0.0.1', '[127.0.0.1]', '::1\\r', '127.0.0.1:9877') still resolves 'unknown', where no socket opens either. index.ts and utils.ts are untouched. Tests (daemonIdentity.test.ts, +47/-3): 75 rows, up from 60. A top-level ::1 bind probe skips the ::1 rows on a host without IPv6, so they never fail there and never silently pass. A strict /health handler (exact path, no Authorization header) backs 9 new unit spellings and a port-in-host row. E1 now also runs '127.0.0.1\\r', '\\t', '\\n', '%31%32%37.0.0.1', 'x@127.0.0.1', 'x:y@127.0.0.1' and '[::1]\\r' with the host in the title (`%s via %j`); its body and assertions are byte-identical, so it is a cosmetic retitle, not a changed row. Red-green: against the unchanged probe exactly 15 new rows failed (7 unit spellings, the port-in-host row, 7 E1 rows, each E1 failing 'Proxy did not exit' after the 7s timer); after the fix 75/75. Mutants, each killed with real failures and restored: raw port argument 1 failure; URL object as options 22; no bare-IPv6 bracketing 2; no bracket slice 4. Gate: the plan's exact command, fresh, exit 0, 6 files / 263 tests (identity 75, index 15, utils 97, input-framing 3, workerType 65, workerType integration 8), rev 1209c752, snapshot /tmp/moe-proxy-9775-gate.ozvgOz; both owned files cmp-identical to it, index.ts/utils.ts clean against HEAD, git diff --check clean. Parity swee",
+  "commits": [
+    {
+      "sha": "db4b09af43126246a913c038a594db6eaf0a9098",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T10:10:25Z",
+      "paths": [
+        ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
+        ".moe/tasks/task-9775fb21ecc34025a045352d643b277f.json",
+        "packages/moe-proxy/src/daemonIdentity.test.ts",
+        "packages/moe-proxy/src/daemonIdentity.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T10:14:52.939Z",
+      "treeId": "ce56fbe204229a59534d91f0d0fe46c2f9341dfd",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "a0842116c6b9958f2551b5080e3d734e8e273a82",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-bd1eb82d@2026-10-30T09:55:06Z",
+      "paths": [
+        ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+        ".moe/tasks/task-b294377dde9e4ab6b1d422163b941115.json"
+      ],
+      "recordedBy": "architect-bd1eb82d",
+      "recordedAt": "2026-10-30T10:23:19.096Z",
+      "treeId": "e11ec3fd8793f37a714c0ed4915a9ae45f5f1cae",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "7a3715790fa9b7f39ecfd4020adf3f80a79229e7",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T10:25:11Z",
+      "paths": [
+        ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
+        ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+        ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+        ".moe/tasks/task-9775fb21ecc34025a045352d643b277f.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T10:29:42.912Z",
+      "treeId": "9e46654c610e592f0e697c552161caf66f055ce4",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-proxy/src/daemonIdentity.test.ts",
+    "packages/moe-proxy/src/daemonIdentity.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T10:25:11Z",
+    "at": "2026-10-30T10:29:42.912Z"
+  },
+  "completedAt": "2026-10-30T10:28:55.454Z",
+  "reviewCompletedAt": "2026-10-30T10:28:55.454Z",
+  "reviewSummary": "Reviewed recorded completion db4b09af43126246a913c038a594db6eaf0a9098 with git show, git branch -a --contains, tree identity and git diff --check; it is on moe/work-2026-10-24. Later a0842116 is board-only. Owned diff: +58/-8, net 50 LOC (runtime net 6, tests net 44); full completion including board state net 251. Scope is exactly daemonIdentity.ts and daemonIdentity.test.ts; index.ts/utils.ts are byte-identical to the parent. No API/state/docs migration required.\nRe-ran task.verification.command verbatim: whole-repo git archive HEAD, explicit two-file overlay, env -i Node v24.21.0, npm ci in daemon and proxy, proxy npm test including clean/tsc, cmp and git diff checks. Exit 0: 6 files / 263 tests passed, identity 75. rev=5d262206023fd3152447e53a470055a05cf0a30f; /tmp/moe-proxy-9775-gate.QvMuSt/verification.log. Additionally compared all four relevant snapshot files directly to db4b09af blobs; exact match, and no proxy working-tree diff.\nDoD/contract verified: CR/TAB/LF, percent-encoded and userinfo E1 rows require exit 1 naming both projects, exactly one GET /health and no /mcp upgrade. Strict unit rows cover credentials/path isolation and port-in-host versus a same-project decoy. Existing assertions, genuine-unknown fail-open behavior, caps/timeouts, path spellings and E1-E4 are preserved. Independent qa-url-parity.mjs against the built probe and installed ws captured matching targets for 19 accepted spellings, rejection of 4 invalid spellings and preserved bare IPv6; all probes use GET /health without credentials. Simulated IPv6 EAFNOSUPPORT via qa-no-ipv6.cjs and ran vitest run src/daemonIdentity.test.ts: exit 0, 66 passed / 4 explicitly skipped, 5 IPv6 e2e rows not registered. These logs are beside verification.log. No deferred or unrun required check. Complexity pass: Lean already; net 0 lines to cut. Existing daemon-side upgrade identity/health-to-upgrade TOCTOU remains out of scope.",
+  "requiredCheckAtDone": null
+}

@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { normalizeUsageContext, readMoeRecord } from './usage-receipt.mjs';
 
 const fields = ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'uncachedInputTokens',
   'outputTokens', 'reasoningTokens', 'totalTokens'];
@@ -11,6 +12,14 @@ const key = (...values) => JSON.stringify(values);
 const metadataFields = ['roles', 'requestedModels', 'requestedEfforts', 'reportedModels'];
 const metadata = rows => Object.fromEntries(metadataFields.map(field =>
   [field, [...new Set(rows.flatMap(row => row[field]))].sort()]));
+// CQ-M02 correlation stays whole observed tuples (explicit nulls included), never
+// independent ID lists, so no association is made that one receipt did not carry.
+const tupleFields = ['role', 'workerId', 'attemptId', 'runnerId', 'planRevision', 'workKind', 'packetId',
+  'sourceRetrievalId', 'plannerInvocationId', 'candidateId', 'deliveryReceiptId'];
+const MAX_LISTED = 32;
+const tupleOf = row => { const context = normalizeUsageContext(row); return Object.fromEntries(tupleFields.map(field => [field, context[field]])); };
+const uniqueTuples = tuples => [...new Map(tuples.map(tuple => [key(...tupleFields.map(field => tuple[field])), tuple]))]
+  .sort(([a], [b]) => a.localeCompare(b)).map(([, tuple]) => tuple);
 
 function normalizeUsage(raw, stats) {
   const usage = {};
@@ -55,7 +64,7 @@ function readReceipts(directory, stats) {
         roles: ['architect', 'worker', 'qa', 'governor'].includes(row.role) ? [row.role] : [],
         requestedModels: [text(row.requestedModel)].filter(Boolean), requestedEfforts: [text(row.requestedEffort)].filter(Boolean),
         reportedModels: Array.isArray(row.reportedModels) ? row.reportedModels.map(text).filter(Boolean) : [],
-        usage: normalizeUsage(row.usage, stats) });
+        correlations: [tupleOf(row)], usage: normalizeUsage(row.usage, stats) });
     }
   }
   return records;
@@ -116,9 +125,13 @@ function mergeGroup(rows, stats) {
   const outcomes = new Set(rows.map(row => row.outcome).filter(value => value !== 'unknown'));
   if (tasks.size > 1 || outcomes.size > 1) conflict = true;
   if (conflict) stats.conflictingGroups++;
+  // Differing correlation on one deduplicated observation stays visible as several
+  // tuples; it neither picks a latest value nor invalidates valid counters.
+  const correlations = uniqueTuples(rows.flatMap(row => row.correlations));
+  if (correlations.length > 1) stats.ambiguousCorrelationGroups++;
   return { provider: rows[0].provider, taskId: tasks.size === 1 ? [...tasks][0] : null,
     launches: [...new Set(rows.map(row => row.launchId).filter(Boolean))],
-    outcome: outcomes.size === 1 ? [...outcomes][0] : 'unknown', ...metadata(rows), usage };
+    outcome: outcomes.size === 1 ? [...outcomes][0] : 'unknown', ...metadata(rows), correlations, usage };
 }
 
 function aggregate(rows) {
@@ -172,10 +185,72 @@ function grouped(rows, taskMap) {
     .sort((a, b) => key(a.provider, a.taskId).localeCompare(key(b.provider, b.taskId)));
 }
 
+// Delivery is joined read-only at report time (landing follows the provider
+// receipt). Only ids and landedRevision leave here, never targets, push results
+// or paths; a receipt is the wrapper's report (record-only), not proof.
+function deliveryRecords(project) {
+  let incomplete = false;
+  const read = kind => {
+    try { return readdirSync(path.join(project, '.moe', kind)).filter(name => name.endsWith('.json')).sort()
+      .map(name => readMoeRecord(project, kind, name.slice(0, -5))); }
+    catch (error) { if (error.code !== 'ENOENT') incomplete = true; return []; }
+  };
+  const listed = read('candidates');
+  const candidates = listed.filter(candidate => candidate && text(candidate.taskId) && text(candidate.attemptId));
+  if (candidates.length < listed.length) incomplete = true;
+  const receipts = new Map();
+  for (const receipt of read('receipts')) {
+    if (typeof receipt?.landedRevision !== 'string' || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(receipt.landedRevision) || !text(receipt.candidateId)) { incomplete = true; continue; }
+    receipts.set(receipt.candidateId, [...(receipts.get(receipt.candidateId) ?? []), receipt]);
+  }
+  return { candidates, receipts, incomplete };
+}
+
+// Joins candidates only through attempts observed in this task's tuples. Bad
+// records, a candidate naming another task, two receipts for one candidate or
+// an unconfirmed claimed id are incomplete; no observed attempt is unknown.
+// DONE status and completion commits are never read as delivery.
+function taskDelivery(taskId, rows, records) {
+  const tuples = rows.flatMap(row => row.correlations);
+  const attempts = new Set(tuples.map(tuple => tuple.attemptId).filter(Boolean));
+  let incomplete = records.incomplete;
+  const joined = [];
+  for (const candidate of records.candidates) {
+    if (!attempts.has(candidate.attemptId)) continue;
+    if (candidate.taskId !== taskId) { incomplete = true; continue; }
+    const receipts = records.receipts.get(candidate.id) ?? [];
+    if (receipts.length > 1) incomplete = true;
+    const receipt = receipts.length === 1 ? receipts[0] : null;
+    joined.push({ candidateId: candidate.id, attemptId: candidate.attemptId, deliveryReceiptId: receipt?.id ?? null, landedRevision: receipt?.landedRevision ?? null });
+  }
+  const candidateIds = new Set(joined.map(row => row.candidateId));
+  const receiptIds = new Set(joined.map(row => row.deliveryReceiptId).filter(Boolean));
+  if (tuples.some(tuple => (tuple.candidateId && !candidateIds.has(tuple.candidateId)) || (tuple.deliveryReceiptId && !receiptIds.has(tuple.deliveryReceiptId)))) incomplete = true;
+  const status = !attempts.size ? 'unknown' : incomplete ? 'incomplete' : receiptIds.size ? 'recorded' : 'not-recorded';
+  return { evidence: 'record-only', status, candidates: joined.slice(0, MAX_LISTED), omittedCandidates: Math.max(0, joined.length - MAX_LISTED) };
+}
+
+// One row per taskId across roles and providers, from already-deduplicated
+// observations: retries never add tokens, separate planning/context/repair
+// sessions do. Coverage is observed log records only (not proof that every
+// participant was captured); a cumulative session is never split by phase.
+function wholeTasks(rows, taskMap, records) {
+  const groups = new Map();
+  for (const row of rows) if (row.taskId) groups.set(row.taskId, [...(groups.get(row.taskId) ?? []), row]);
+  return [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([taskId, entries]) => {
+    const tuples = uniqueTuples(entries.flatMap(row => row.correlations));
+    return { taskId, providers: [...new Set(entries.map(row => row.provider))].sort(), ...aggregate(entries), coverageScope: 'observed-log-records-only',
+      correlation: { tuples: tuples.slice(0, MAX_LISTED), omittedTuples: Math.max(0, tuples.length - MAX_LISTED),
+        ambiguousRecords: entries.filter(row => row.correlations.length > 1).length,
+        unknownRecords: Object.fromEntries(tupleFields.map(field => [field, entries.filter(row => row.correlations.every(tuple => tuple[field] === null)).length])) },
+      delivery: taskDelivery(taskId, entries, records), taskRecord: taskMap.get(taskId) ?? null };
+  });
+}
+
 export function buildUsageReport(project) {
   const warnings = [];
   const stats = { files: 0, emptyFiles: 0, malformedLines: 0, invalidRecords: 0, unreadableFiles: 0, invalidCounters: 0,
-    supersededUnknownRecords: 0, duplicateRecords: 0, unidentifiedRecords: 0, conflictingGroups: 0 };
+    supersededUnknownRecords: 0, duplicateRecords: 0, unidentifiedRecords: 0, conflictingGroups: 0, ambiguousCorrelationGroups: 0 };
   const rows = identifiedGroups(supersedeInitial(readReceipts(path.join(project, 'logs/moe-usage'), stats), stats), stats);
   const summary = { ...stats, ...aggregate(rows), coverageScope: 'observed-log-records-only' };
   const hasCodex = rows.some(row => row.provider === 'codex');
@@ -192,11 +267,15 @@ export function buildUsageReport(project) {
   if (summary.overflowFields.length) warnings.push('Aggregate counters overflowed; affected totals are unknown.');
   if (summary.usage.totalTokens.unknownRecords) warnings.push('Some records have unknown usage; observed totals exclude that unmeasured consumption.');
   if (hasCodex) warnings.push('Codex completed turns do not prove the usage stream closed; launch/stream coverage is unconfirmed.');
-  const groups = grouped(rows, taskRecords(project, warnings));
+  const taskMap = taskRecords(project, warnings);
+  const groups = grouped(rows, taskMap);
+  const whole = wholeTasks(rows, taskMap, deliveryRecords(project));
+  if (stats.ambiguousCorrelationGroups) warnings.push('Some deduplicated records carry conflicting correlation metadata; their revision, packet, attempt or work-kind association is ambiguous.');
+  if (whole.some(task => task.delivery.status === 'incomplete')) warnings.push('Delivery correlation is incomplete: candidate or delivery receipt records are unreadable, malformed, conflicting, or mismatched.');
   const providers = [...new Set(rows.map(row => row.provider))].sort().map(provider =>
     ({ provider, ...aggregate(rows.filter(row => row.provider === provider)) }));
   return { version: 1, project: path.resolve(project), summary, providers,
-    tasks: groups.filter(group => group.taskId), unattributed: groups.filter(group => !group.taskId), warnings };
+    tasks: groups.filter(group => group.taskId), unattributed: groups.filter(group => !group.taskId), wholeTasks: whole, warnings };
 }
 
 export function formatUsageReport(report) {
@@ -210,6 +289,11 @@ export function formatUsageReport(report) {
     lines.push(`  roles=${row.roles.join(',') || 'unknown'}; reported models=${row.reportedModels.join(',') || 'unknown'}; requested models (intent)=${row.requestedModels.join(',') || 'unknown'}; requested effort (intent)=${row.requestedEfforts.join(',') || 'unknown'}`);
   }
   for (const row of report.unattributed) lines.push(`Unattributed ${row.provider}: ${display(row.usage.totalTokens)} tokens; launches=${row.launches}`);
+  for (const row of report.wholeTasks) {
+    lines.push(`Whole task ${row.taskId}: ${display(row.usage.totalTokens)} tokens; providers=${row.providers.join(',')}; roles=${row.roles.join(',') || 'unknown'}; launches=${row.launches}; delivery=${row.delivery.status} (record-only)`);
+    lines.push(`  correlation tuples=${row.correlation.tuples.length + row.correlation.omittedTuples}; ambiguous records=${row.correlation.ambiguousRecords}; unknown plan revision records=${row.correlation.unknownRecords.planRevision}`);
+  }
+  if (report.wholeTasks.length) lines.push('Whole-task rows cover observed log records only: planning, context or repair participation may be missing, and a cumulative session is never split between phases or revisions.');
   for (const warning of report.warnings) lines.push(`Warning: ${warning}`);
   lines.push('Token observations do not establish subscription quota consumption or monetary cost.');
   return lines.join('\n');

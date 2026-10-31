@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline';
 import { checkPolicy } from './prompt-cache-policy.mjs';
 import { formatUsage, renderCodexEvent } from './prompt-cache-usage.mjs';
+import { createWitnessWriter } from './prompt-cache-witness.mjs';
 import { createUsageReceiptWriter } from './usage-receipt.mjs';
 
 const [command, provider, project, ...args] = process.argv.slice(2);
@@ -13,6 +14,8 @@ try {
   } else if (command === 'claude-stream' || command === 'codex-stream') {
     const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
     const receipts = createUsageReceiptWriter(command === 'claude-stream' ? 'claude' : 'codex');
+    // Codex TOOL witnesses for the wrapper's harvest; a no-op without MOE_TOOL_WRITES_FILE.
+    const witness = command === 'codex-stream' ? createWitnessWriter() : null;
     let reported = false;
     for await (let line of lines) {
       // PS 5.1's Process.StandardInput writer prepends a UTF-8 BOM.
@@ -31,6 +34,7 @@ try {
         }
       } else {
         for (const output of renderCodexEvent(event)) if (output) console.log(output);
+        witness.event(event);
         if (event?.type === 'turn.completed') reported = true;
       }
     }

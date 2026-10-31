@@ -3,6 +3,7 @@ package com.moe.toolwindow
 import com.moe.model.MoeState
 import com.moe.model.Task
 import com.moe.model.TaskComment
+import com.moe.services.DaemonError
 import com.moe.services.MoeProjectService
 import com.moe.services.MoeStateListener
 import com.moe.util.MoeBundle
@@ -286,17 +287,31 @@ class PlanReviewDialog(
         }
     }
 
-    override fun onStatus(connected: Boolean, message: String) {}
+    /**
+     * A dropped connection ends a pending approval as not confirmed. The notice is
+     * a fixed bundle key, so the daemon's status text is deliberately not used.
+     */
+    override fun onStatus(connected: Boolean, message: String) {
+        if (connected || !approval.onConnectionLost()) return
+        SwingUtilities.invokeLater {
+            if (isDisposed) return@invokeLater
+            try {
+                applyApprovalState()
+            } catch (ex: Exception) {
+                log.warn("Failed to apply the lost connection to the plan review", ex)
+            }
+        }
+    }
 
     /**
-     * A daemon ERROR frame. Only meaningful while an approval is in flight, and
-     * even then it is failure feedback, never an approval: the machine drops back
-     * to a usable state and the dialog stays open with the daemon's own message.
+     * A daemon ERROR frame. Only an APPROVE_TASK error for this task, while an
+     * approval is in flight, reaches the machine; it is failure feedback, never an
+     * approval, and the dialog stays open with the daemon's own message.
      */
-    override fun onError(operation: String, message: String) {
-        if (!approval.onDaemonError(operation, message)) return
+    override fun onDaemonError(error: DaemonError) {
+        if (!approval.onDaemonError(error.operation, error.taskId, error.codeName)) return
         // Bounded: this is arbitrary daemon text and it lands in a header label.
-        lastErrorMessage = message.take(MAX_ERROR_CHARS)
+        lastErrorMessage = error.message.take(MAX_ERROR_CHARS)
         SwingUtilities.invokeLater {
             if (isDisposed) return@invokeLater
             try {

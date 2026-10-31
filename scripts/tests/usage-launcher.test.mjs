@@ -18,6 +18,11 @@ function between(text, from, to) {
   assert.ok(a >= 0 && b > a, `missing implementation boundary: ${from}`);
   return text.slice(a, b);
 }
+// The launcher's own Git guard, cut from its source with empty guard state (the non-Git
+// project path), so a cut launch line runs as the launcher has it and passes straight through.
+const guard = (ext, text) => ext === 'ps1'
+  ? `$script:AgentGitGuard=$null\n${between(text, 'function Invoke-MoeGuardedCommand {', 'function Remove-MoeAgentGitGuard')}\n`
+  : `AGENT_GIT_GUARD_ENV=()\n${between(text, 'agent_git_exec() (', '\n)\n')}\n)\n`;
 function run(t, ext, engine, body, options = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'moe usage launcher '));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -27,7 +32,7 @@ function run(t, ext, engine, body, options = {}) {
   const setup = ext === 'ps1' ? `\ufeff$ErrorActionPreference='Stop'\n$global:OutputEncoding=[Text.UTF8Encoding]::new($false)\n[Console]::OutputEncoding=$global:OutputEncoding\n$projectPath=$env:MOE_TEST_DIR\n$promptCacheHelper=Join-Path $env:MOE_TEST_SCRIPTS 'prompt-cache.mjs'\n$preflightTaskId='task-A'\n$WorkerId='worker-A'\n$Role='worker'\n$script:MoeAttemptId='attempt-A'\n$resolvedModel='claude-opus-5-5'\n`
     : `set -e\nPROJECT=${quote(dir.replaceAll('\\', '/'))}\nSCRIPT_DIR=${quote(scripts.replaceAll('\\', '/'))}\nPROMPT_CACHE_HELPER="$SCRIPT_DIR/prompt-cache.mjs"\nNODE_CMD=${quote(process.execPath.replaceAll('\\', '/'))}\nPYTHON_CMD=${process.platform === 'win32' ? 'python' : 'python3'}\nPREFLIGHT_TASK_ID=task-A\nWORKER_ID=worker-A\nROLE=worker\nMOE_ATTEMPT_ID=attempt-A\nRESOLVED_MODEL=claude-opus-5-5\n`;
   const script = path.join(dir, `run.${ext}`);
-  writeFileSync(script, setup + block + '\n' + body);
+  writeFileSync(script, setup + guard(ext, text) + block + '\n' + body);
   const fake = path.join(dir, 'fake-provider.mjs');
   if (options.fakeSource) writeFileSync(fake, options.fakeSource);
   if (options.blockLogs) writeFileSync(path.join(dir, 'logs'), 'occupied');
@@ -92,12 +97,12 @@ process.exitCode=23;`;
       let body;
       if (ext === 'ps1') {
         const parser = between(text, '            $parseStreamJson = {', '            # Usage receipt launch boundary.');
-        const pipeline = between(text, '            # Usage receipt launch boundary.', '\n        }\n    }\n\n    # Launch-failure classification');
+        const pipeline = between(text, '            # Usage receipt launch boundary.', '\n        }\n    }\n\n    Remove-MoeAgentGitGuard');
         body = `function Start-HeartbeatSidecar {}\nfunction Stop-HeartbeatSidecar {}\n$Command=$env:MOE_TEST_NODE\n$CommandArgs=@($env:MOE_TEST_FAKE)\n$modelArgs=@('--model',$resolvedModel)\n$iterEffort='max'\n$printArgs=@('--print')\n$cacheArgs=@()\n$accountArgs=@()\nfunction Set-MoeAccountEnv {}\nfunction Restore-MoeAccountEnv {}\n$usePrintMode=$true\n$userPromptForCli='pointer'\n${parser}\n${pipeline}\nWrite-Output "CHILD_EXIT=$script:CliExitCode"`;
       } else {
         const from = text.lastIndexOf('        LAUNCH_SKIPPED=false');
         assert.ok(from > 0);
-        const pipeline = between(text.slice(from), '        LAUNCH_SKIPPED=false', '\n    fi\n\n    stop_heartbeat_sidecar');
+        const pipeline = between(text.slice(from), '        LAUNCH_SKIPPED=false', '\n    fi\n\n    if [ -n "${AGENT_GIT_GUARD_ROOT:-}" ]');
         body = `COMMAND_BIN="$MOE_TEST_NODE"\nCOMMAND_ARGV=("$MOE_TEST_FAKE")\nMODEL_ARGS=(--model "$RESOLVED_MODEL")\nITER_EFFORT=max\nPRINT_ARGS=(--print)\nCACHE_ARGS=()\nACCOUNT_ARGS=()\napply_account_env() { :; }\nCLI_TYPE=claude\nAUTO_CLAIM=true\nPROMPT=pointer\nSTREAM_JSON_PARSER='import sys; sys.stdout.write(sys.stdin.read())'\n${pipeline}\nprintf 'CHILD_EXIT=%s' "$CLI_EXIT_CODE"`;
       }
       const r = run(t, ext, engine, body, { fakeSource });

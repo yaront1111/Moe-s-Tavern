@@ -1,0 +1,252 @@
+{
+  "id": "task-ad5be1cf18e6405bb562b172714debbc",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "Use the approved-check command limit when storing check runs",
+  "description": "Storage slice of4e8a274a. Replace checkRunStore.ts private500 command cap with existing exported state/validators.ts MAX_REQUIRED_CHECK_COMMAND_CHARS=1000, preserving exact original strings, blank/type/identity validation and same-id replay. Own exactly packages/moe-daemon/src/state/checkRunStore.ts, checkRunStore.test.ts and docs/SCHEMA.md. Boundary tests at500/501/1000/1001 plus UTF16 supplementary characters, persistence/reload and refused-write atomicity. Update SCHEMA's CheckRun command documentation to1000; leave CheckDispatch's still500 until its dependent slice. No tool schema/guest/runtime command execution. Verify full external snapshot packages/moe-daemon npm test; npm ci solely there. Parent owns tool schema and cross-language end-to-end parity. Canonical numeric value remains1000; do not narrow previously accepted definitions.",
+  "definitionOfDone": [
+    "CheckRun validation/persistence uses MAX_REQUIRED_CHECK_COMMAND_CHARS from validators, no local500 or duplicated1000 cap.",
+    "Tests accept500/501/1000 UTF16 units and reject1001 without writes, retaining exact leading/trailing whitespace, type/blank rules and replay/reload semantics.",
+    "CheckRun documentation in SCHEMA matches1000; full daemon npm test passes in an external snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Use test-driven-development for the storage boundary: extend the existing preserved/refused cases to accept 500, 501 and 1000 UTF-16 code units, reject 1001 with INVALID_INPUT and the updated 1000-limit message, accept 500 supplementary-plane emoji and reject that plus one ASCII unit. Include outer whitespace within the limit and assert command bytes remain exact. Replace the private MAX_COMMAND_CHARS=500 and its misleading complete_task comment with an import of MAX_REQUIRED_CHECK_COMMAND_CHARS from ./validators.js; use that export directly in requireCommand and its error handling. Keep blank/type checks, identity/provenance rules and write-before-map order untouched. Exercise a 1000-unit command through persistence, identical same-id replay without writes, conflicting replay refusal and fresh StateManager reload; assert over-limit rejection leaves files/maps unchanged and writeEntity uncalled. Reuse existing record/snapshot/refusal helpers and keep existing write-failure coverage.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.ts",
+        "packages/moe-daemon/src/state/checkRunStore.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.ts",
+        "packages/moe-daemon/src/state/checkRunStore.test.ts"
+      ],
+      "note": "Imported MAX_REQUIRED_CHECK_COMMAND_CHARS from ./validators.js in checkRunStore.ts (removed private 500). Tests: accept 500/501/1000, whitespace-padded 1000, 500 emoji; reject 1001 (ASCII, emoji+1, padded); 1000-unit replay/conflict/reload test; refusal atomicity test. Dirty foreign paths untouched.",
+      "startedAt": "2026-10-31T06:13:17.983Z",
+      "completedAt": "2026-10-31T06:13:44.466Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update all three command-limit statements in docs/SCHEMA.md (CheckRun, CheckDispatch and record_check_run validation prose) to the shared 1000 UTF-16-code-unit contract, verbatim/non-blank unchanged. This follows the task's explicit ownership comment: the dependent dispatch slice supplies its runtime update; parent4e8a does not edit this document. Do not change unrelated limits or claim execution/authentication from a declared CheckRun source.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "SCHEMA.md lines 1407, 1486, 2111 now say 1000 UTF-16 code units.",
+      "startedAt": "2026-10-31T06:13:45.392Z",
+      "completedAt": "2026-10-31T06:13:48.193Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY once at the end: create a full git archive snapshot outside the shared checkout, overlay only these three task-owned files from the worker's final source, and export MOE_VERIFY_SNAPSHOT as its absolute path. Install host-native daemon dependencies with npm ci only in the snapshot, retaining the lockfile. On WSL use a Linux-only Node/npm/Git PATH; never reuse Windows node_modules. Run exactly cd \"$MOE_VERIFY_SNAPSHOT/packages/moe-daemon\" && npm test. Fresh exit code and output tail are complete_task evidence. Full daemon regression is required for this shared validation contract; no live checkout npm installs/builds/tests or pattern-kill. Record source SHA, overlay and environment with the evidence. A failed gate is a failure to fix/report, not a test to weaken.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.test.ts",
+        "packages/moe-daemon/src/tools/recordCheckRun.test.ts"
+      ],
+      "note": "Snapshot /tmp/moe-ad5-* of HEAD 0d6f2cd6 + overlay of checkRunStore.ts/.test.ts, SCHEMA.md and recordCheckRun.test.ts; Linux node v24.21.0, npm ci only in snapshot. Full npm test: 215 files, 6263 passed, 20 skipped, exit 0. Scope growth: tools/recordCheckRun.test.ts pinned a 501-char refusal that this change makes valid (nobody owned that file); changed only that literal to 1001.",
+      "startedAt": "2026-10-31T06:13:48.987Z",
+      "completedAt": "2026-10-31T06:15:27.864Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review, scoped to this diff: check off-by-one and UTF-16 versus UTF-8 counting, exact whitespace preservation, no duplicate numeric cap, invalid input reaching no write, replay/failed-write atomicity, and no unrelated schema/security change. Preserve Windows/macOS/Linux case-collision and path behavior. Reuse the existing test harness, no new abstraction. If review changes source, rerun the same single gate on refreshed snapshot bytes before completion. Keep verified-local disabled and leave all foreign dirty files and .moe untouched.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.ts",
+        "packages/moe-daemon/src/state/checkRunStore.test.ts",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Self-review: .length counts UTF-16 units (emoji test covers); command is never trimmed; validation precedes writeEntity (spy test); no duplicate cap; no source change since the green gate. The tool schema description in recordCheckRun.ts still says 500 (parent 4e8a owns it).",
+      "startedAt": "2026-10-31T06:15:28.750Z",
+      "completedAt": "2026-10-31T06:15:32.330Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-4e8a274ab9954c9d9c2ac29e22a67256",
+  "dependsOn": [
+    "task-4aa5440b5d8f4eda846be5a430c34cb2"
+  ],
+  "priority": "MEDIUM",
+  "order": 6.7,
+  "comments": [
+    {
+      "id": "comment-a4b55847c8ad452c96e901551059a06b",
+      "author": "architect-21c9ed65",
+      "content": "Documentation ownership refinement: update ALL three relevant docs/SCHEMA.md command-cap occurrences (CheckRun, CheckDispatch and record_check_run prose) to the shared1000 contract in this prerequisite; the dependent dispatch slice follows immediately. Parent keeps only its three daemon tool/test files, no SCHEMA edit.",
+      "timestamp": "2026-10-31T06:02:38.033Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T06:02:37.951Z",
+  "updatedAt": "2026-10-31T06:18:14.912Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T06:04:19.662Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T06:17:54.579Z",
+    "wallClockMs": 814917
+  },
+  "contextFetchedBy": [
+    "architect-21c9ed65",
+    "worker-88af1437",
+    "qa-b29f7b3d"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T06:07:12.507Z",
+  "executionContract": {
+    "intendedBehavior": "A CheckRun accepts every nonblank command up to the existing approved-check 1000 UTF-16-unit bound and persists it verbatim; longer values fail before writes.",
+    "acceptanceCriteria": [
+      "Accept500/501/1000, reject1001 with unchanged state/files.",
+      "Supplementary characters use JS UTF-16 length; leading/trailing whitespace is retained.",
+      "Long commands survive immutable replay and reload; failure atomicity and existing validations remain.",
+      "All relevant SCHEMA command bounds say1000; external full daemon suite passes."
+    ],
+    "invariants": [
+      "No command execution or trusted-evidence minting.",
+      "No changes to unrelated caps, identities or write ordering.",
+      "No live checkout installs/builds/tests, Git writes or .moe edits."
+    ],
+    "compatibility": [
+      "Previously accepted commands remain valid; storage schema stays unchanged.",
+      "Cross-platform paths/case-collision behavior and host-native dependencies are preserved."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/state/checkRunStore.ts",
+      "packages/moe-daemon/src/state/checkRunStore.test.ts",
+      "docs/SCHEMA.md"
+    ],
+    "reuse": [
+      "Existing validators MAX_REQUIRED_CHECK_COMMAND_CHARS and CheckRun test helpers."
+    ],
+    "sourceAssumptions": [
+      "Dependent dispatch and parent tool-schema/integration tasks complete the wider contract.",
+      "SCHEMA ownership is resolved by the task comment."
+    ],
+    "checkRefs": [
+      "cd \"$MOE_VERIFY_SNAPSHOT/packages/moe-daemon\" && npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Import the existing approved-check constant (chosen); duplicating 1000 or lowering approvals to500 would preserve drift or break accepted definitions. This bounded prerequisite owns only CheckRun storage plus its docs and tests.",
+    "codebaseInsights": "checkRunStore.requireCommand currently uses private500; validators exports MAX_REQUIRED_CHECK_COMMAND_CHARS=1000. Existing tests already provide preserved/refused tables, snapshots, write failure, replay and StateManager reload. ad5 -> d88 ->4e8a serializes the complete recorder fix; task comment assigns all SCHEMA command-cap prose here.",
+    "risks": "requiredChecks omitted: live daemon cannot measure (PATH defect); re-add after restart. The dispatch runtime remains500 until dependent d88 lands; this prerequisite alone is not the end-to-end parent fix. No schema migration or native isolation certification.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/checkRunStore.ts",
+      "packages/moe-daemon/src/state/checkRunStore.test.ts",
+      "docs/SCHEMA.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T06:07:12.533Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T06:13:17.983Z",
+  "reviewStartedAt": "2026-10-31T06:15:36.438Z",
+  "verification": {
+    "command": "cd \"$MOE_VERIFY_SNAPSHOT/packages/moe-daemon\" && npm test  (snapshot of HEAD 0d6f2cd6 + overlay of the 4 changed files; Linux node v24.21.0; npm ci only in snapshot)",
+    "exitCode": 0,
+    "outputTail": "Test Files  215 passed (215)\n      Tests  6263 passed | 20 skipped (6283)\n   Duration  31.38s",
+    "reportedAt": "2026-10-31T06:15:36.438Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/checkRunStore.ts",
+    "packages/moe-daemon/src/state/checkRunStore.test.ts",
+    "docs/SCHEMA.md",
+    "packages/moe-daemon/src/tools/recordCheckRun.test.ts",
+    ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+    ".moe/tasks/task-92307adc30884fc4861348ed3c8ead4a.json",
+    ".moe/tasks/task-ad5be1cf18e6405bb562b172714debbc.json",
+    ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+    ".moe/tasks/task-3ad573a754574dfd92083b2e813c0bff.json",
+    ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+    ".moe/tasks/task-5d5175717f704c708bc5e7f76b45129f.json",
+    ".moe/tasks/task-5ee846b62b81438c9d508160235d15ac.json",
+    ".moe/tasks/task-a4a729ddaa8942679e8ae7cd57bd42f1.json"
+  ],
+  "completionSummary": "checkRunStore now uses validators' MAX_REQUIRED_CHECK_COMMAND_CHARS (1000 UTF-16 units) instead of a private 500. Boundary, emoji, whitespace, replay, reload and atomicity tests added. SCHEMA's three command-cap statements say 1000. Scope note: also changed one literal (501→1001) in tools/recordCheckRun.test.ts, a stale pin that the new limit invalidated; the tool schema description in recordCheckRun.ts still says 500 and belongs to parent 4e8a.",
+  "commits": [
+    {
+      "sha": "1e9d82e33c745f0bfa0b2d790afeee82546ce533",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-88af1437@2026-10-31T06:12:55Z",
+      "paths": [
+        ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+        ".moe/tasks/task-92307adc30884fc4861348ed3c8ead4a.json",
+        ".moe/tasks/task-ad5be1cf18e6405bb562b172714debbc.json",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/state/checkRunStore.test.ts",
+        "packages/moe-daemon/src/state/checkRunStore.ts",
+        "packages/moe-daemon/src/tools/recordCheckRun.test.ts"
+      ],
+      "recordedBy": "worker-88af1437",
+      "recordedAt": "2026-10-31T06:15:58.562Z",
+      "treeId": "8e047c4ebe8f39c1ba7ab65948d94455aefff7e9",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "949d055eb22b046f1a99c13202cde3d9298560d9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-31T06:16:20Z",
+      "paths": [
+        ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+        ".moe/tasks/task-3ad573a754574dfd92083b2e813c0bff.json",
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-4fdc7590cd054a45a379c477ffe45ac7.json",
+        ".moe/tasks/task-5d5175717f704c708bc5e7f76b45129f.json",
+        ".moe/tasks/task-5ee846b62b81438c9d508160235d15ac.json",
+        ".moe/tasks/task-a4a729ddaa8942679e8ae7cd57bd42f1.json",
+        ".moe/tasks/task-ad5be1cf18e6405bb562b172714debbc.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-31T06:18:14.912Z",
+      "treeId": "67929aad7ed22fa59cbece0470ef15e7916e183b",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-31T06:16:20Z",
+    "at": "2026-10-31T06:18:14.912Z"
+  },
+  "completedAt": "2026-10-31T06:17:54.579Z",
+  "reviewCompletedAt": "2026-10-31T06:17:54.579Z",
+  "reviewSummary": "Reviewed completion commit 1e9d82e3 (on moe/work-2026-10-24). Source diff is small: checkRunStore.ts +3/-4, its test +47, SCHEMA.md 3 lines, recordCheckRun.test.ts one literal. I re-ran the gate: git archive of 1e9d82e3 into /tmp, npm ci only there, then `cd $MOE_VERIFY_SNAPSHOT/packages/moe-daemon && npm test` (Linux node v24.21.0). Result: exit 0, 215 files, 6263 passed, 20 skipped, matching the worker's evidence. No live-checkout installs, builds or tests.\n\nDoD1: private MAX_COMMAND_CHARS=500 removed. requireCommand uses MAX_REQUIRED_CHECK_COMMAND_CHARS imported from ./validators.js (=1000, defined once). Blank/type checks and write order untouched.\n\nDoD2: tests accept 500/501/1000 units, padded 1000, and 500 emoji (1000 UTF-16 units). They reject 1001 ASCII, 500 emoji plus 1, and padded 1001, with the 'got 1001' message. A 1000-unit command survives identical replay (duplicate:true), conflicting replay (CHECK_RUN_IMMUTABLE, no write, unchanged snapshot) and a fresh StateManager reload, verbatim. Over-limit refusal spies on writeEntity (never called) and leaves files and maps unchanged. The tests would fail at a 500 or 1001 cap.\n\nDoD3: all three SCHEMA.md command-cap statements (CheckRun, CheckDispatch, record_check_run prose) say 1000 UTF-16 code units; no 500-char command claim remains. This follows the architect's comment, which overrode the description's 'leave CheckDispatch at 500'.\n\nScope note: tools/recordCheckRun.test.ts is outside the approved files; the worker changed one literal (501 to 1001) because that stale pin asserted a refusal this change makes valid. Accepted as minimal and disclosed. The tool description in recordCheckRun.ts still says 500 (parent 4e8a274a's). Not verified here: CheckDispatch runtime and the tool-layer maxLength, which belong to the dependent slices.",
+  "requiredCheckAtDone": null
+}

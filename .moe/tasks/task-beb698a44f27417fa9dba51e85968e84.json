@@ -1,0 +1,124 @@
+{
+  "id": "task-beb698a44f27417fa9dba51e85968e84",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M06a] Promotion decision record",
+  "description": "Objective: Record the CQ rollout promotion decision honestly from the frozen baseline. Report the 50% planner and 30% retrieval targets and accepted-change cost/time/quality, decide promotion or non-promotion, and record unsupported hardware. This is a SPIDR slice of [CQ-M06] (task-ced857485a1c4d75b57cc25dcc9b4d82), which keeps the docs sweep, the full multi-package regression and the whole-epic review. It depends on CQ-M05, so every workstream's final certification state is known when it runs.\n\nDeliverable:\n- docs/baselines/cq-m06/README.md: the decision record. Every figure is derived from docs/baselines/cq-m04/report.json (M04c, n=1, 20 workloads, legacy workflow).\n  - No matched pilot is run here, so every pilot figure, delta and target outcome reads 'unmeasured'.\n  - Retrieval counters are unknown in all 20 baseline rows, so the 30% retrieval target is unmeasurable against this baseline.\n  - The decision is non-promotion while assertExecutionProfileReady still refuses verified-local. The record lists each unmet gate: readiness, the VM/client/check capabilities CQ-M05 reports unsupported, the matched pilot and the retrieval baseline.\n  - It gives each platform's support status, and states that skipped real-VM tests do not certify support.\n- packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts: a guard test. It recomputes every quoted figure from report.json, pins the decision to the readiness authority, and requires the honesty statements.\n\nNot in scope:\n- Running any agent workload or a paid matched pilot. That needs a separate, explicitly approved batch that matches M04c's corpus, caps and role models, with retrieval counters in both arms.\n- Enabling any profile.\n- Changing the baseline/report scripts or the M04c archive.\n- Any other doc: CQ-M06 sweeps them.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "docs/baselines/cq-m06/README.md records non-promotion (verified-local stays disabled) and lists every unmet gate: readiness uncertified, unsupported VM/client/check capabilities, no matched pilot, unknown retrieval baseline.",
+    "It reports the 50% planner and 30% retrieval targets and accepted-change cost/time/quality. Each figure is derived from docs/baselines/cq-m04/report.json, unmeasured values read 'unmeasured' or 'unknown', and no savings are claimed.",
+    "It records each platform's support status and states that skipped real-VM tests do not certify support.",
+    "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts fails in each of these cases, each proven by a scratch-copy mutation: a quoted figure drifts from report.json; a promotion is recorded while assertExecutionProfileReady refuses verified-local; a required statement is missing; a percentage other than the two targets appears.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass.",
+    "No paid agent runs or pilot batches in this task: record the decision from existing evidence only."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development. Create packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts (~130 lines), a doc-contract guard following mem pattern-doc-contract-guard-test.\n\nFixture:\n- REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..'), copied from src/benchmarks/non-routineWorkloads.test.ts. No absolute paths.\n- readDoc(rel) throws a NAMED error when the file is missing or empty. Split lines with /\\r?\\n/ and keep 1-indexed line numbers in failure messages, e.g. `README.md:12: <line>`.\n- report = JSON.parse(docs/baselines/cq-m04/report.json); readme = docs/baselines/cq-m06/README.md.\n- fmt(x) = Number.isInteger(x) ? String(x) : x.toFixed(2), except observedTokensPerAcceptedChange, which is quoted as String(value) exactly as report.json stores it.\n\nCases. Each must fail for the named mutation:\nG1 Decision. Exactly one line matches /^Decision: (promotion|non-promotion)$/. While assertExecutionProfileReady('verified-local') (delivery/executionProfile.js) throws codeName EXECUTION_PROFILE_NOT_READY, that line must be 'Decision: non-promotion'. Mutation: write 'Decision: promotion' -> red.\nG2 Figures recomputed from report.json. The README must contain each of these as a whole token:\n- summary.workloads;\n- summary.acceptance accepted, rejected and notAssessed;\n- fmt(mean planning.plannerSessions) over the rows with a number, and that observed count;\n- the count of rows whose retrieval.sourceRetrievals is null;\n- summary.efficiency.observedTokens, and String(observedTokensPerAcceptedChange);\n- 'incomplete' when efficiency.complete is false;\n- the median latency.endToEndMs over observed rows (middle value; for an even count, Math.round of the mean of the two middle values);\n- the count of rows whose latency.firstCodeChangeMs is null;\n- every inputs.moeCommits sha and every inputs.corpusVersions value.\nMutation: change one digit of any quoted figure -> red.\nG3 Gates are tied to live authorities. A '## Gates' table has a row for 'readiness' whose status is 'unmet' while readiness refuses. For each entry of CQ-M05's activationGaps() (state/profileRollout.js; adapt to the landed name), a row names its capability and its exact reason with status 'unsupported'. Rows for 'matched pilot' and 'retrieval baseline' have status 'unmet'. Mutation: delete a gap row, or change its reason -> red.\nG4 Honesty statements present verbatim: 'Skipped real-VM tests do not certify support.', 'Claimed savings: none.' and 'Tokens are not monetary cost.'. Each target row reads 'unmeasured' in its pilot column. Mutation: delete any one -> red.\nG5 Percentages. Every token matching /\\d+(?:\\.\\d+)?%/ is '50%' or '30%' and sits on a line containing 'target' (case-insensitive). Mutation: add 'planner sessions fell 40%' -> red.\nG6 Platform support. A '## Platform support' table exists with at least one row, and every status cell is in {certified, not certified, unsupported, not run}. Mutation: a status 'supported (tests skipped)' -> red.\n\nRun `npx vitest run src/benchmarks/rolloutDecision.test.ts`: it is red with the named missing-README error.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Write docs/baselines/cq-m06/README.md: the decision record (~110 lines), from existing evidence only. No agent runs, no pilot (task rail).\n\nCompute every figure first, with a throwaway `node -e` over docs/baselines/cq-m04/report.json that uses the guard's fmt and median rules. Paste the values verbatim and never round by hand.\n\nSections:\n1. Title 'CQ rollout promotion decision', then a one-paragraph scope. It decides promotion of the strong profile (verified-local) from the CQ-M04c baseline (n=1, 20 workloads, legacy workflow, moe commit and corpus version as in report.json), and is not a savings or quality-improvement claim. Then the line 'Decision: non-promotion'.\n2. '## Gates' table (Gate | Status | Evidence):\n   - readiness: unmet. assertExecutionProfileReady refuses verified-local with EXECUTION_PROFILE_NOT_READY.\n   - One row per CQ-M05 activationGaps() entry (vm, client, check), each with its exact reason: unsupported. The evidence column cites CQ-M05's PROJECT_SETTINGS_UPDATED refused-activation record.\n   - matched pilot: unmet. Not run, because it needs a separately approved paid batch.\n   - retrieval baseline: unmet. sourceRetrievals is unknown in all baseline rows.\n3. '## Targets' table (Target | Baseline (CQ-M04c) | Pilot | Outcome):\n   - '50% fewer planner invocations (target)': baseline is the mean planner sessions per workload and its observed count; pilot 'unmeasured'; outcome 'unmeasured'. Single-run workloads never re-enter PLANNING, and recipe activation is deferred, so a pilot of today's workflow could not show planner reuse.\n   - '30% less repeated source retrieval (target)': baseline unknown in N of N rows; pilot 'unmeasured'; outcome 'unmeasurable against this baseline'.\n4. '## Accepted-change cost, time and quality (baseline only)':\n   - quality: accepted/rejected/notAssessed by the held-out assessment;\n   - cost: observed tokens and tokens per accepted change, marked incomplete, with the reasoning tokens unknown;\n   - 'Tokens are not monetary cost.';\n   - time: the median end-to-end ms over the observed rows; first-code-change unknown in N rows;\n   - 'Pilot: unmeasured.' and 'Claimed savings: none.'\n5. '## Platform support' table (Platform | Status | Evidence). Take the rows from what R13 (task-f4811a72) and I06 (task-4e412148) LANDED (their completion summaries and Serena handoffs) and from probes on this host: `uname -a`, `command -v multipass`, `java -version`. Cover at least: WSL2 Linux (this host), Linux VM provisioning, Windows host, macOS and the IDE clients. Use only the statuses certified, not certified, unsupported and not run; certified only where landed real-hardware evidence says so. Then the line 'Skipped real-VM tests do not certify support.'\n6. '## What a promotion needs': certified readiness, VM/client/check capabilities and hardware; a matched pilot on the same corpus digest, caps and role models, with retrieval counters in both arms (which means a re-run baseline); recipe activation; and quality no worse than the baseline. Each item is a separately approved task.\n7. Links to docs/baselines/cq-m04/README.md and report.md.\n\nPercent signs appear only in the two target rows. Error handling: if a figure cannot be derived (a field missing in report.json), write 'unknown' and make the guard expect it; never estimate.\nRun the guard: it turns green.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "docs/baselines/cq-m06/README.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE. Run the gate fresh: `cd packages/moe-daemon && npm test`. It must exit 0; its command, exit code and output tail are the complete_task evidence.\n\nRun it in an isolated Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate):\n- `git archive HEAD` of the WHOLE repo; docs/ is required;\n- overlay ONLY packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts and docs/baselines/cq-m06/README.md;\n- npm ci under env -i with a Linux-only PATH and NO_COLOR=1, so no MOE_* variable is set;\n- cmp both files against the snapshot before citing the run.\nAlso type-check the test file with a scratch tsconfig ({extends: ./tsconfig.json, include: [the test], exclude: []}).\n\nMutation proof for DoD4. In the snapshot copy, never in the shared tree:\n- change one digit of a quoted figure;\n- write 'Decision: promotion';\n- delete 'Skipped real-VM tests do not certify support.';\n- add a line containing '40%'.\nFor each one: run `npx vitest run src/benchmarks/rolloutDecision.test.ts`, confirm the named case turns red, then restore and cmp the bytes. Record each mutant, its red case and the restore in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "One adversarial self-review of this task's diff only (load adversarial-self-review). Read the README as a skeptical reviewer looking for an unmeasured claim:\n- Every number traces to a report.json field or a guard computation.\n- No sentence implies savings, improvement, readiness, isolation or support beyond the cited evidence.\n- Unknown counters say unknown, never 0.\n- Platform rows cite landed R13/I06 evidence or a probe run on this host; skipped tests are never evidence.\n- The pilot is described as not run, with what it would need.\n\nCheck the guard for brittleness: CRLF line endings, a README that is missing or empty, a report.json whose field is null, and an even-count median.\n\nError handling: the guard throws named errors and never passes on missing input.\n\nConfirm there are no .moe edits, no Git writes and no changes to scripts/baseline-*.mjs or docs/baselines/cq-m04.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c53999b2dd2c4ad08bacb73c50371cfa"
+  ],
+  "priority": "HIGH",
+  "order": 230.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:50:58.592Z",
+  "updatedAt": "2026-10-29T22:55:16.536Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:53:46.332Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-32ff5555"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T22:55:16.436Z",
+  "executionContract": {
+    "intendedBehavior": "docs/baselines/cq-m06/README.md records the CQ rollout decision as non-promotion, from existing evidence only:\n- the 50%/30% targets and baseline accepted-change cost/time/quality, each figure derived from docs/baselines/cq-m04/report.json, with every pilot value 'unmeasured';\n- each unmet gate;\n- each platform's support status;\n- that skipped real-VM tests certify nothing.\nA vitest guard keeps the record bound to report.json, to the readiness authority and to CQ-M05's activation gaps.",
+    "acceptanceCriteria": [
+      "Guard cases G1-G6 pass on the written README.",
+      "Each of the four DoD mutations, applied in a scratch snapshot, turns its named case red.",
+      "Fresh `cd packages/moe-daemon && npm test` exits 0."
+    ],
+    "invariants": [
+      "No agent workload, pilot batch, profile change, .moe edit or Git write.",
+      "The README claims no savings or support beyond cited evidence, and unknown values stay unknown."
+    ],
+    "sourceAssumptions": [
+      "docs/baselines/cq-m04/report.json: summary.workloads 20, acceptance 20/0/0; planning.plannerSessions 1 in each row; retrieval.sourceRetrievals null in 20 of 20; latency.firstCodeChangeMs null in 20 of 20; efficiency.observedTokens 38926322, observedTokensPerAcceptedChange 1946316.1, complete false (as of 2026-10-30).",
+      "delivery/executionProfile.ts assertExecutionProfileReady refuses verified-local unconditionally.",
+      "Assumed (CQ-M05): state/profileRollout.ts activationGaps() returns [{capability, reason}] for vm, client and check."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test",
+      "cd packages/moe-daemon && npx vitest run src/benchmarks/rolloutDecision.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. A decision script (scripts/rollout-decision.mjs) comparing baseline and pilot reports. Rejected (YAGNI): no pilot exists. A one-time decision record plus a guard test that recomputes its figures gives the same honesty guarantee at about half the code. A comparison builder belongs to the future pilot task.\n2. A hand-written README with no guard. Rejected: DoD4 requires mutation-proven failure on figure drift, a promotion while not ready, missing statements, and extra percentages.\n3. Running a matched pilot. Excluded by task rail. It also could not test either target: the baseline retrieval counters are null in 20 of 20 rows, and single-run workloads never exercise plan reuse (mem decision-cq-m06-split).\n4. Guarding the platform rows against fixed expectations. Rejected: R13 and I06 own certification. The guard pins only the vocabulary and the honesty statement, and the M06 final step re-checks consistency.",
+    "codebaseInsights": "- Benchmark tests resolve REPO_ROOT relatively: src/benchmarks/non-routineWorkloads.test.ts:44.\n- docs/baselines/cq-m04/README.md is the style precedent: plain facts, an explicit no-claims line, regeneration commands.\n- report.json is schema version 1, with top keys version, inputs, rows, summary and limitations. Rows carry planning, retrieval, latency, usage and acceptance.\n- The guard imports assertExecutionProfileReady from delivery/executionProfile.js (landed) and activationGaps from state/profileRollout.js (CQ-M05: an assumed name; adapt to what landed).",
+    "risks": "- Brittle figure formatting: use the guard's own fmt/median rules to produce the README values.\n- CRLF working copies: split on /\\r?\\n/.\n- The Linux gate needs a full archive that includes docs/.\n- CQ-M06 (final) may later edit drifted README lines; the guard must keep passing.\n- If CQ-M05's activationGaps is absent or renamed, adapt the import. If no gap source exists at all, report_blocked naming task-c53999b2. Never hard-code the gaps.",
+    "keyFiles": [
+      "docs/baselines/cq-m04/report.json",
+      "docs/baselines/cq-m04/README.md",
+      "packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts",
+      "packages/moe-daemon/src/delivery/executionProfile.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T22:55:16.536Z",
+  "approvedPlanRevision": 1
+}

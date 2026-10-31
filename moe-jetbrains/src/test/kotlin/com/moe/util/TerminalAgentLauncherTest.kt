@@ -1,13 +1,25 @@
 package com.moe.util
 
+import com.google.gson.JsonParser
 import com.moe.model.AccountCli
+import com.moe.util.RuntimeProfile.LEGACY
+import com.moe.util.RuntimeProfile.PROTECTED
 import com.moe.util.TerminalAgentLauncher.AccountsShell
+import com.moe.util.TerminalAgentLauncher.AgentCommandChoice
+import com.moe.util.TerminalAgentLauncher.AgentCommandChoice.Refused
+import com.moe.util.TerminalAgentLauncher.AgentCommandChoice.Run
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 
 class TerminalAgentLauncherTest {
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
+
     @Test
     fun `PowerShell worker Claude command stays in print mode`() {
         val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
@@ -349,6 +361,44 @@ class TerminalAgentLauncherTest {
     }
 
     @Test
+    fun `protected runtime marker renders as exactly 1 in WSL bash and PowerShell`() {
+        val env = linkedMapOf(
+            "MOE_DAEMON_PATH" to "C:\\moe\\daemon\\index.js",
+            "MOE_PROXY_PATH" to "C:\\moe\\proxy\\index.js",
+            "MOE_RUNTIME_PROTECTED" to "1"
+        )
+        val bash = TerminalAgentLauncher.buildWslBashCommandForTest(
+            basePath = "D:\\projexts\\px4swarm", role = "worker", scriptPath = "C:\\moe\\scripts\\moe-agent.sh",
+            envOverrides = env, agentCommand = "claude"
+        )
+        assertTrue(bash.contains("MOE_DAEMON_PATH='/mnt/c/moe/daemon/index.js'"))
+        assertTrue(bash.contains("MOE_RUNTIME_PROTECTED='1'"))
+        val ps = TerminalAgentLauncher.buildPowerShellCommandForTest(
+            basePath = "D:\\projexts\\px4swarm", role = "worker", scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
+            envOverrides = env, agentCommand = "claude"
+        )
+        assertTrue(ps.contains("\$env:MOE_RUNTIME_PROTECTED='1'"))
+    }
+
+    @Test
+    fun `legacy env overrides never render the protected runtime marker`() {
+        val legacy = mapOf("MOE_DAEMON_PATH" to "C:\\moe\\daemon\\index.js", "MOE_PROXY_PATH" to "C:\\moe\\proxy\\index.js")
+        val bash = TerminalAgentLauncher.buildWslBashCommandForTest(
+            basePath = "D:\\projexts\\px4swarm", role = "worker", scriptPath = "C:\\moe\\scripts\\moe-agent.sh",
+            envOverrides = legacy, agentCommand = "claude"
+        )
+        val ps = TerminalAgentLauncher.buildPowerShellCommandForTest(
+            basePath = "D:\\projexts\\px4swarm", role = "worker", scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
+            envOverrides = legacy, agentCommand = "claude"
+        )
+        assertFalse(bash.contains("MOE_RUNTIME_PROTECTED"))
+        assertFalse(ps.contains("MOE_RUNTIME_PROTECTED"))
+        TerminalAgentLauncher.ScriptSource.values().forEach {
+            assertFalse(it.name, TerminalAgentLauncher.resolveAgentEnvOverrides(it).containsKey("MOE_RUNTIME_PROTECTED"))
+        }
+    }
+
+    @Test
     fun `bashWrapPowerShell produces a bash-safe interop line`() {
         val psLine = TerminalAgentLauncher.buildPowerShellCommandForTest(
             basePath = "D:\\projexts\\px4swarm",
@@ -429,4 +479,81 @@ class TerminalAgentLauncherTest {
             command
         )
     }
+
+    @Test
+    fun `legacy agent command passes the explicit value, then the setting, then claude through unchanged`() {
+        assertEquals(Run("codex"), commandFor(LEGACY, "codex", "gemini"))
+        assertEquals(Run("gemini"), commandFor(LEGACY, null, "gemini"))
+        assertEquals(Run("claude"), commandFor(LEGACY, null, null))
+        listOf("/opt/x/claude --foo", "C:\\tools\\claude.exe", "/tmp/evil-agent", " claude ", "CLAUDE", "").forEach { value ->
+            assertEquals("explicit '$value'", Run(value), commandFor(LEGACY, value, "grok"))
+            assertEquals("setting '$value'", Run(value), commandFor(LEGACY, null, value))
+        }
+    }
+
+    @Test
+    fun `protected agent command runs exactly the known agent CLIs by name`() {
+        listOf("claude", "codex", "gemini", "grok").forEach { name ->
+            assertEquals(Run(name), commandFor(PROTECTED, name, null))
+            assertEquals(Run(name), commandFor(PROTECTED, null, name))
+            assertEquals(Run(name), commandFor(PROTECTED, " $name\t", null))
+            assertEquals(Run(name), commandFor(PROTECTED, null, "  $name\n"))
+        }
+        assertEquals(Run("claude"), commandFor(PROTECTED, null, null))
+        // The menu's explicit choice wins, so the setting is never consulted.
+        assertEquals(Run("codex"), commandFor(PROTECTED, "codex", "/tmp/evil-agent"))
+    }
+
+    @Test
+    fun `protected agent command refuses a non-standard project setting and names it`() {
+        listOf("/tmp/evil-agent", "claude --dangerously-skip-permissions", "claude.exe", "../claude", "CLAUDE", "").forEach { value ->
+            assertEquals(value, Refused(protectedRefusal(value, "from .moe/project.json settings.agentCommand")), commandFor(PROTECTED, null, value))
+        }
+    }
+
+    @Test
+    fun `protected agent command refuses a custom command even over a known setting`() {
+        listOf("/home/me/bin/my-agent --yolo", "C:\\tools\\claude.exe", "claude --flag").forEach { value ->
+            assertEquals(value, Refused(protectedRefusal(value, "custom command")), commandFor(PROTECTED, value, "claude"))
+        }
+    }
+
+    @Test
+    fun `protected refusal shows at most 200 characters of the value with control characters replaced`() {
+        val message = refusedMessage(commandFor(PROTECTED, null, "evil\u001b[2J\u0007" + "x".repeat(300)))
+
+        assertTrue(message, message.contains("'evil?[2J?" + "x".repeat(191) + "'"))
+        assertFalse(message.any { Character.isISOControl(it) })
+    }
+
+    @Test
+    fun `a verified-local project json naming a non-standard agent command is protected and refused`() {
+        val dir = temporaryFolder.newFolder()
+        val projectJson = File(dir, ".moe/project.json").also { it.parentFile.mkdirs() }
+        projectJson.writeText("""{"settings":{"executionProfile":"verified-local","agentCommand":"/tmp/evil-agent"}}""")
+        try {
+            RuntimeSelectionPolicy.store = { null } // Persist nothing outside the temp project.
+            val profile = RuntimeSelectionPolicy.profile(dir.path)
+            assertEquals(PROTECTED, profile)
+            val setting = JsonParser.parseString(projectJson.readText()).asJsonObject
+                .getAsJsonObject("settings").get("agentCommand").asString
+
+            val message = refusedMessage(commandFor(profile, null, setting))
+            assertTrue(message, message.contains("'/tmp/evil-agent'"))
+        } finally {
+            RuntimeSelectionPolicy.resetForTest()
+        }
+    }
+
+    private fun commandFor(profile: RuntimeProfile, explicit: String?, setting: String?): AgentCommandChoice =
+        TerminalAgentLauncher.agentCommandFor(profile, explicit, setting)
+
+    private fun refusedMessage(choice: AgentCommandChoice): String {
+        assertTrue("expected a refusal, got $choice", choice is Refused)
+        return (choice as Refused).message
+    }
+
+    private fun protectedRefusal(value: String, source: String): String =
+        "Protected execution profile: the agent command '$value' ($source) is not one of claude, codex, gemini, grok, " +
+            "so no agent was started. Pick an agent from the Agents menu."
 }

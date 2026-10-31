@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=60b1aae9db1e
+# moe-generated: sha=8826b404fe9c
 name: moe-epic-breakdown
 description: Use when an architect is turning an epic into a set of tasks (moe.create_task), before planning any single one. Covers where to cut the seams, how to size and order tasks, what each task's Definition of Done must carry, and the mandatory final integration-and-hardening task. Distinct from moe-planning, which plans the steps inside one task.
 when_to_use: Architect facing an epic with no tasks yet, or an epic whose remaining work needs re-slicing. Run this before moe.create_task; run moe-planning later, per task.
@@ -44,7 +44,7 @@ Target: **≤60 minutes of human-equivalent work per task** — aim for ~30 (≈
 | Files touched | 1–3 | >5 distinct files warns, >10 rejects at `moe.submit_plan` |
 | Plan steps | ≤8 | >8 warns, >12 rejects at `moe.submit_plan` |
 | DoD items | 3–7, each mechanically checkable | >7 draws a `moe.create_task` warning |
-| Net changed LOC | ≤200 | >400 is QA grounds for reject-as-oversized |
+| Net changed LOC | ≤200 | >400 is QA grounds for reject-as-oversized, unless a rail waives size-based rejection |
 | Tasks per epic | 10–30 | >40 = re-slice into sub-epics (`moe.create_task` warns past `settings.taskSizing.maxTasksPerEpic`, default 40) |
 
 The daemon enforces this downstream (thresholds tunable via `project.json` `settings.taskSizing`): `moe.submit_plan` hard-rejects oversized plans with `CONSTRAINT_VIOLATION`. An undersliced epic doesn't save work — it bounces back here for re-slicing after the architect has already burned a planning pass. **Recalibrate your count upward:** an epic that feels like 2–3 tasks is almost always 10–30 small ones. Foundational/contract tasks first, then vertical slices, ending with the integration-and-hardening task.
@@ -61,7 +61,7 @@ Secondary split/merge signals:
 
 ### SPIDR — the split procedure
 
-When any cap above is exceeded, split with **SPIDR**. Try each letter in order; take the first that yields independently-landable pieces:
+When any cap above is exceeded, split with **SPIDR** — unless a project or epic rail forbids splitting, which wins: then keep the work as one task within the daemon's `taskSizing` limits. Try each letter in order; take the first that yields independently-landable pieces:
 
 - **S**pike — carve the unknown into its own research task whose deliverable is a written decision, not code.
 - **P**ath — split by workflow path: happy path first, each error/edge path its own task.

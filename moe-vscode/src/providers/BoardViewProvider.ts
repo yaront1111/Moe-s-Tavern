@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { MoeDaemonClient, StateSnapshot } from '../services/MoeDaemonClient';
 import { EpicDetailPanel } from '../panels/EpicDetailPanel';
 import { TaskCreatePanel } from '../panels/TaskCreatePanel';
-import { PlanReviewPanel } from '../panels/PlanReviewPanel';
+import { PlanReviewPanel, showApprovalRefusal } from '../panels/PlanReviewPanel';
 import { TaskDetailPanel } from '../panels/TaskDetailPanel';
 
 // Debug output channel for tracing webview lifecycle
@@ -21,6 +21,8 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     private disposed = false;
     private pushStateTimeout: NodeJS.Timeout | undefined;
     private readonly disposables: vscode.Disposable[] = [];
+    /** Tasks whose board-sent approval has not been refused or carried out yet. */
+    private readonly pendingApprovals = new Set<string>();
 
     constructor(
         private readonly extensionUri: vscode.Uri,
@@ -30,13 +32,25 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.disposables.push(
             daemonClient.onStateChanged((state) => {
                 if (this.disposed) return;
+                this.prunePendingApprovals(state);
                 this.updateBoard(state);
+            })
+        );
+
+        // Only refusals of the board's own approvals are toasted here; the plan
+        // review and task detail panels report their own.
+        this.disposables.push(
+            daemonClient.onError((event) => {
+                if (this.disposed) return;
+                this.handleApprovalError(event);
             })
         );
 
         this.disposables.push(
             daemonClient.onConnectionChanged((status) => {
                 if (this.disposed) return;
+                // A refusal can no longer arrive for an approval sent on a dropped socket.
+                if (status !== 'connected') this.pendingApprovals.clear();
                 this.updateConnectionStatus(status);
             })
         );
@@ -54,6 +68,56 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         );
     }
 
+    /**
+     * The board's only approval route. The token is the revision the webview
+     * rendered for that card, never one read from cached state here: the
+     * newest revision is not the reviewed one. The client refuses anything that
+     * is not a revision, and that refusal arrives in handleApprovalError.
+     */
+    private approveTask(taskId: string, expectedPlanRevision: unknown): void {
+        this.pendingApprovals.add(taskId);
+        if (this.daemonClient.approveTask(taskId, expectedPlanRevision as number)) { return; }
+        if (this.pendingApprovals.delete(taskId)) {
+            // False with no APPROVE_TASK refusal for this task: nothing was sent.
+            vscode.window.showWarningMessage('Not connected to Moe daemon — task was not approved.');
+        }
+    }
+
+    /**
+     * A status move from the board. AWAITING_APPROVAL to WORKING is an approval
+     * and must go through approveTask with the rendered revision, so it is
+     * refused here. This guard only blocks; it never manufactures a token.
+     */
+    private updateTaskStatus(taskId: string, status: string): void {
+        const task = this.daemonClient.currentState?.tasks?.find(t => t.id === taskId);
+        if (task?.status === 'AWAITING_APPROVAL' && status === 'WORKING') {
+            void showApprovalRefusal(this.extensionUri, this.daemonClient, taskId, {
+                message: 'this move would approve the plan without the revision you saw. Approve it from the plan review.'
+            });
+            return;
+        }
+        this.daemonClient.updateTaskStatus(taskId, status);
+    }
+
+    private handleApprovalError(event: { operation?: string; message: string; codeName?: string; context?: { taskId?: string } }): void {
+        const taskId = event.context?.taskId;
+        if (event.operation !== 'APPROVE_TASK' || taskId === undefined) return;
+        if (!this.pendingApprovals.delete(taskId)) return;
+        // An open review for this task already reports the refusal itself.
+        if (PlanReviewPanel.isOpenFor(taskId)) return;
+        void showApprovalRefusal(this.extensionUri, this.daemonClient, taskId, event);
+    }
+
+    /** Drop every pending approval whose task is approved, moved or gone. */
+    private prunePendingApprovals(state: StateSnapshot): void {
+        for (const taskId of this.pendingApprovals) {
+            const task = state?.tasks?.find(t => t.id === taskId);
+            if (task?.status !== 'AWAITING_APPROVAL') {
+                this.pendingApprovals.delete(taskId);
+            }
+        }
+    }
+
     dispose(): void {
         this.disposed = true;
         if (this.pushStateTimeout) {
@@ -62,6 +126,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         }
         this.disposables.forEach(d => d.dispose());
         this.disposables.length = 0;
+        this.pendingApprovals.clear();
     }
 
     resolveWebviewView(
@@ -99,10 +164,10 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         webviewView.webview.onDidReceiveMessage((message) => {
             switch (message.type) {
                 case 'updateTaskStatus':
-                    this.daemonClient.updateTaskStatus(message.taskId, message.status);
+                    this.updateTaskStatus(message.taskId, message.status);
                     break;
                 case 'approveTask':
-                    this.daemonClient.approveTask(message.taskId);
+                    this.approveTask(message.taskId, message.expectedPlanRevision);
                     break;
                 case 'rejectTask':
                     this.daemonClient.rejectTask(message.taskId, message.reason);

@@ -115,7 +115,7 @@
       "completedAt": "2026-08-01T08:31:17.195Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -135,7 +135,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T19:27:28.848Z",
-  "updatedAt": "2026-08-01T08:57:13.357Z",
+  "updatedAt": "2026-10-24T15:19:02.546Z",
   "metrics": {
     "firstClaimAt": "2026-07-31T19:30:27.050Z",
     "plannedStepCount": 7,
@@ -231,5 +231,6 @@
   ],
   "completedAt": "2026-08-01T08:57:13.357Z",
   "reviewCompletedAt": "2026-08-01T08:57:13.357Z",
-  "reviewSummary": "APPROVED. Bytes pre-landed by a22af4c (worker reconciled, recorded honestly), so I verified outcomes.\n\nRe-ran in packages/moe-daemon: `npx tsc --noEmit` exit 0; `npx vitest run` = 78 files / Tests 866 passed, exit 0 (zero failures = zero new failures). Each destination ALONE: listTasks 5, getNextTask 4, createTask 3, createEpic 2, setTaskStatus 4, deleteTask 3, updateEpic 5, deleteEpic 4, searchTasks 10 — each equals its full-suite share, so temp dirs are independent.\n\nDoD1 PASS: tools.test.ts gone (a22af4c); all 9 blocks live in their named files, pass in isolation.\nDoD2 PASS: exactly one `new ToolTestHarness` per file, zero mkdtemp in the 8 new files. searchTasks.test.ts keeps ONE local setupMoeFolder (L9, untouched), TWO top-level describes (L87/L223), moved block calls h.setupMoeFolder() (L229) — the fixture collision did not happen. Zero `const { state|testDir|moePath }` destructures in src, zero vi.mock in destinations, zero unused imports.\nDoD3 PASS by identity, not count. Census of `git show a22af4c^:.../tools.test.ts` = 36 its / 86 expects across the 9 blocks. Multiset diff of it-titles AND expect-lines vs destinations, normalising only the permitted h.state/h.testDir/h.moePath re-point: 0 diffs on the 8 new files (30 its, 68 expects). searchTasks 4 its/16 expects at a22af4c^ -> 10/34 now = exactly +6/+18, 0 pre-existing lost. No assertion reworded or loosened. Corpus `git grep -hE '^\\s+(it|test)\\(' a22af4c^ -- packages/moe-daemon/src` = 853; now 836 tracked + 17 untracked (slice-3 contract test) = 853, delta 0.\nDoD4 PASS: see commands.\n\nDeviations accepted (as in slice 1): harness is class src/tools/toolTestHarness.ts, not __fixtures__/toolsHarness.ts getters — one harness, per-init() reassign kills the stale-binding trap; a22af4c deleted tools.test.ts atomically so the \"15 describes remain\" checkpoint never existed (slice 4 owns it). No slice-2 dirt in git status."
+  "reviewSummary": "APPROVED. Bytes pre-landed by a22af4c (worker reconciled, recorded honestly), so I verified outcomes.\n\nRe-ran in packages/moe-daemon: `npx tsc --noEmit` exit 0; `npx vitest run` = 78 files / Tests 866 passed, exit 0 (zero failures = zero new failures). Each destination ALONE: listTasks 5, getNextTask 4, createTask 3, createEpic 2, setTaskStatus 4, deleteTask 3, updateEpic 5, deleteEpic 4, searchTasks 10 — each equals its full-suite share, so temp dirs are independent.\n\nDoD1 PASS: tools.test.ts gone (a22af4c); all 9 blocks live in their named files, pass in isolation.\nDoD2 PASS: exactly one `new ToolTestHarness` per file, zero mkdtemp in the 8 new files. searchTasks.test.ts keeps ONE local setupMoeFolder (L9, untouched), TWO top-level describes (L87/L223), moved block calls h.setupMoeFolder() (L229) — the fixture collision did not happen. Zero `const { state|testDir|moePath }` destructures in src, zero vi.mock in destinations, zero unused imports.\nDoD3 PASS by identity, not count. Census of `git show a22af4c^:.../tools.test.ts` = 36 its / 86 expects across the 9 blocks. Multiset diff of it-titles AND expect-lines vs destinations, normalising only the permitted h.state/h.testDir/h.moePath re-point: 0 diffs on the 8 new files (30 its, 68 expects). searchTasks 4 its/16 expects at a22af4c^ -> 10/34 now = exactly +6/+18, 0 pre-existing lost. No assertion reworded or loosened. Corpus `git grep -hE '^\\s+(it|test)\\(' a22af4c^ -- packages/moe-daemon/src` = 853; now 836 tracked + 17 untracked (slice-3 contract test) = 853, delta 0.\nDoD4 PASS: see commands.\n\nDeviations accepted (as in slice 1): harness is class src/tools/toolTestHarness.ts, not __fixtures__/toolsHarness.ts getters — one harness, per-init() reassign kills the stale-binding trap; a22af4c deleted tools.test.ts atomically so the \"15 describes remain\" checkpoint never existed (slice 4 owns it). No slice-2 dirt in git status.",
+  "planRevision": 0
 }

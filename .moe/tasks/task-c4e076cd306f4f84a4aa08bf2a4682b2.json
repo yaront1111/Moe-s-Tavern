@@ -1,0 +1,172 @@
+{
+  "id": "task-c4e076cd306f4f84a4aa08bf2a4682b2",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V04c] Honest frozen gate outcome",
+  "description": "Objective: the wrappers' frozen-candidate quality gate never leaves a passing check run behind when the gate mutated its checkout. This is the host half of CQ-V04 DoD 2: \"exit 0 followed by a tree/index/HEAD mutation is not a passing trusted result\".\n\nSplit from CQ-V04 (task-a9d1a74d845b4d3d83f359bf864f8651) on 2026-10-29, at the human's choice in the architect REPL.\n\nThe defect today:\n- scripts/moe-agent.sh run_frozen_gate (about lines 4602-4636) calls record_check_run_rpc BEFORE gate_integrity, and sends no outcome. The ps1 twin does the same.\n- A gate that exits 0 but changes its checkout's tracked tree, index or HEAD is correctly refused for landing, but it still leaves an exit-0 'runner-observed' CheckRun.\n- delivery/policy.ts passedOn counts that run under every strict deliveryPolicy, by the legacy no-outcome rule.\n\nContract (scripts/moe-agent.sh and scripts/moe-agent.ps1, in string parity):\n- After the gate exits, run gate_integrity (sh) or its ps1 twin BEFORE recording.\n- Send `outcome` in the CQ-V02 vocabulary:\n  - 'passed' only for exit 0 with integrity intact;\n  - 'inconclusive' for exit 0 followed by any tracked tree, index or HEAD mutation;\n  - 'code-failure' for a nonzero exit.\n- Everything else is unchanged: the run's id, candidate, tree, command and tail; the landing refusal and rescue on failure; the [WARN] lines; and legacy deliveryPolicy behaviour.\n- moe-agent.ps1 stays UTF-8 with a BOM. Run bash scripts/tests/parity-check.sh.\n- Depends on every in-flight task that edits these files: CQ-V08 task-2720c13b (after CQ-V07), task-bdf6db6f, task-ad0dc2e7, task-c2a900aa and task-bc8410af. Build on their landed bytes and never revert peers.\n\nTests: modes in scripts/tests/postflight.sh and scripts/tests/postflight.ps1.\n- A gate that edits a tracked file, stages a change, or moves HEAD, then exits 0, records 'inconclusive' and lands nothing.\n- A clean exit-0 gate records 'passed'.\n- An exit-1 gate records 'code-failure'.\n\nOut of scope: the isolated check VM path (CQ-V04b), daemon policy (CQ-V04), and verified-local.\n\nVerification command (fresh, exit 0 required): bash scripts/tests/postflight.sh",
+  "definitionOfDone": [
+    "A qualityGate that exits 0 after mutating its checkout's tracked tree, index or HEAD records outcome 'inconclusive' and lands nothing, as today. Under a strict deliveryPolicy that run never satisfies required-check.",
+    "A clean exit-0 gate records outcome 'passed', a nonzero exit records 'code-failure', and the run is recorded only after the integrity check.",
+    "moe-agent.sh and moe-agent.ps1 behave identically (postflight.sh and postflight.ps1 modes), and bash scripts/tests/parity-check.sh passes.",
+    "Fresh verification `bash scripts/tests/postflight.sh` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red), sh side. Load test-driven-development.\n\nThe prerequisite wrapper tasks (V08b, V08, V07, ad0dc2e7, c2a900aa, bc8410af, bdf6db6f) are landed by WORKING time. Build on their bytes and never revert a peer hunk.\n\nscripts/tests/postflight-fake-proxy.js, checkReply(): when args.outcome is present, assert it is one of the six CQ-V02 values and coherent: 'passed' requires exitCode 0, and 'code-failure' requires a nonzero exitCode. This mirrors the daemon's checkRunStore rule, so the harness catches an incoherent wrapper. Both harnesses share this file, which parity-check requires.\n\nscripts/tests/postflight.sh, in the embedded frozen-gate node suite (modes list about line 125; gate script about line 205; assertions about lines 720-880). Assert exact values:\n- 'pass': checks[0].args.outcome === 'passed', with exitCode 0.\n- 'tracked-mutation' and 'hidden-mutation': exactly one check with exitCode 0 and outcome 'inconclusive'. Keep the existing rescue and no-landing assertions, and hidden-mutation's 'integrity refusal keeps the actual exit code'.\n- NEW 'index-mutation': the gate writes staged.txt and runs get('add', 'staged.txt'), then exits 0. Result: outcome 'inconclusive'; add the mode to `failed` (rescue, no landing).\n- NEW 'head-mutation': the gate runs get('-c', 'user.name=t', '-c', 'user.email=t@t.test', 'commit', '--allow-empty', '-qm', 'gate moved HEAD'), then exits 0. Result: outcome 'inconclusive', added to `failed`.\n- 'exit-tail' (exit 37) and 'race-fail' (exit 23): outcome 'code-failure'.\n- Every mode whose interrupted gate is still recorded (interrupt-int, interrupt-term and the integrity-batch path, where applicable): outcome 'infra-failure'.\n\nAlso assert, for tracked-mutation, that the record_check_run RPC carries 'inconclusive'. That is only possible if the integrity check ran BEFORE recording (DoD 2's ordering).\n\nRun `bash scripts/tests/postflight.sh`: the new assertions fail against today's wrapper, and the rest of the suite stays green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/moe-agent.sh: classify the frozen gate's run before recording it.\n\nrun_frozen_gate (about line 4602):\n- Initialize GATE_OUTCOME=\"\" beside GATE_RC.\n- After `wait`, GATE_FINISHED=true and stop_gate_child, set GATE_OUTCOME:\n  - `code-failure` when GATE_RC is nonzero;\n  - otherwise `passed` when gate_integrity succeeds;\n  - otherwise `inconclusive`. A failing or erroring integrity check fails closed to inconclusive.\n- Then GATE_RECORDED=true and record_check_run_rpc.\n- After recording, keep today's refusals, wording and order: a nonzero exit prints '[WARN] qualityGate failed (exit N); refusing branch commit.' and returns 1. A non-passed outcome prints '[WARN] qualityGate tracked tree/index/HEAD mutation; refusing branch commit.' and returns 1. Then the [OK] line and cleanup, unchanged.\n\nrecord_check_run_rpc (about line 2256): pass \"$GATE_OUTCOME\" as one more argv and add `outcome` to the JSON only when it is non-empty (defensive).\n\nfinish_gate_observation (the interrupted gate, about line 4797): set GATE_OUTCOME=infra-failure before its record_check_run_rpc. An interrupted gate was never verified, and V02 coherence allows any exit code for infra-failure.\n\nError handling: every new path is fail-closed. Nothing new can reach 'passed' without exit 0 and integrity. The landing decision is unchanged: exit code first, then integrity.\n\nRun `bash -n scripts/moe-agent.sh`, then `bash scripts/tests/postflight.sh` until the step 1 cases are green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "TESTS, ps1 side: scripts/tests/postflight.ps1, the twin of step 1's suite (modes list about line 104; gate script about line 191; assertions about lines 699-780). Add the same assertions and the same two new modes, index-mutation and head-mutation, with identical names, values and `failed` membership. Interrupt modes stay platform-gated as they are today. Keep the harness's structure and timeouts.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "scripts/moe-agent.ps1: the exact twin of step 2. Keep the file UTF-8 with a BOM (Windows PowerShell 5.1).\n\nInvoke-MoeFrozenGate (about line 4436):\n- Add Outcome=$null to the $script:MoeGate hashtable.\n- After Stop-MoeGateChild, set $gate.Outcome to:\n  - 'code-failure' when ExitCode is nonzero;\n  - 'passed' when (Test-MoeGateIntegrity $Frozen);\n  - otherwise 'inconclusive'.\n- Then Recorded and Send-MoeCheckRun.\n- Keep the throws, in the same order and wording: 'qualityGate failed (exit N)' for a nonzero exit, then 'qualityGate tracked tree/index/HEAD mutation' when Outcome is not 'passed'.\n\nSend-MoeCheckRun (about line 1696): add outcome=$Gate.Outcome to the payload only when it is set.\n\nThe finally block's interrupted path (about line 4920): set $script:MoeGate.Outcome='infra-failure' before its Send-MoeCheckRun.\n\nError handling: a throw inside Test-MoeGateIntegrity is caught and becomes 'inconclusive'; never 'passed'.\n\nRun `bash scripts/tests/parity-check.sh`, and its .ps1 sibling when pwsh is available. No new MOE_* code is introduced, so no vocabulary list changes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants on scratch copies, restored and cmp'd afterwards. Each must fail a named mode:\n   - record before integrity, with outcome 'passed' at exit 0: tracked-mutation, head-mutation, index-mutation;\n   - map nonzero to 'passed': exit-tail;\n   - drop outcome from the payload: pass;\n   - map the interrupted gate to 'passed': interrupt-int.\n2. Run the verification command fresh: `bash scripts/tests/postflight.sh`. It must exit 0; widen MOE_POSTFLIGHT_TIMEOUT_SEC on a busy box. Supply its command, exit code and output tail to complete_task.\n3. Also run and report:\n   - `bash scripts/tests/parity-check.sh`;\n   - postflight.ps1 under pwsh when available. If no native PowerShell is reachable, say so; never claim it ran;\n   - `node --test scripts/tests/postflight-safe.test.mjs`.\n4. DoD 1's policy clause, that an inconclusive run never satisfies required-check, is the daemon's landed CQ-V02 rule: delivery/policy.ts passedOn, pinned by qaApprove.test 'does not accept %s as the required check'. Cite it; no daemon change.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Check:\n- Can any path record 'passed' without exit 0 AND a fresh integrity pass? That includes a hook path (commitHooks=true), the interrupted path, a retry after a CAS rebuild, and a gate that deletes its own checkout.\n- Does gate_integrity's own index rewrite (update-index --no-assume-unchanged / --no-skip-worktree) still run exactly once per run?\n- Are the [WARN] wording and order, the rescue, the baseline and legacy deliveryPolicy behaviour byte-identical?\n- Parity: sh and ps1 send the same outcome strings, and the BOM is kept.\n- An older daemon without the outcome field: the wrapper and daemon ship together in every IDE bundle. Note it, without adding a fallback.\n- Rails: no .moe edits; agents make no Git writes (the head-mutation gate is a test fixture inside the disposable checkout); verified-local untouched.\n\nWrite the Serena memory 'task-task-c4e076cd306f4f84a4aa08bf2a4682b2-handoff', with the outcome mapping for CQ-V12.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-a9d1a74d845b4d3d83f359bf864f8651",
+  "dependsOn": [
+    "task-7f82e200c224418896667560a49fe0ab",
+    "task-2720c13bc79b438e840b14cbba4fea50",
+    "task-bdf6db6f65b04a009c88c1e49aed3848",
+    "task-ad0dc2e7557d4ceca42ce7fab3708942",
+    "task-c2a900aa5107479aa4c630f1b3837ed0",
+    "task-bc8410afe7144ddda804b60af000864d",
+    "task-0921d6d76a6b40a685077245b19ac639"
+  ],
+  "priority": "HIGH",
+  "order": 242.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T18:16:19.929Z",
+  "updatedAt": "2026-10-30T13:40:44.042Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T18:29:51.661Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T18:34:08.406Z",
+  "executionContract": {
+    "intendedBehavior": "Both wrappers classify the frozen-candidate quality gate's run BEFORE recording it, and send `outcome`:\n- 'passed' only for exit 0 with gate_integrity (or Test-MoeGateIntegrity) intact;\n- 'inconclusive' for exit 0 followed by any tracked tree, index or HEAD mutation of the gate checkout;\n- 'code-failure' for a nonzero exit;\n- 'infra-failure' for an interrupted gate that is recorded on teardown.\nLanding decisions, refusal wording, rescue refs and every other payload field are unchanged. An exit-0-but-mutated gate therefore never leaves a run that delivery/policy.ts passedOn counts.",
+    "acceptanceCriteria": [
+      "tracked-mutation, hidden-mutation, index-mutation and head-mutation each record exactly one run with exitCode 0 and outcome 'inconclusive', and land nothing (a rescue ref, as today).",
+      "pass records 'passed'; exit-tail and race-fail record 'code-failure'; recorded interrupt modes record 'infra-failure'.",
+      "The fake proxy refuses an incoherent outcome, as the daemon does.",
+      "postflight.sh, and postflight.ps1 where pwsh exists, pass with identical mode names and assertions, and parity-check passes.",
+      "A fresh `bash scripts/tests/postflight.sh` exits 0."
+    ],
+    "invariants": [
+      "No path records 'passed' without exit 0 and a successful integrity check.",
+      "Gate refusal order and [WARN] wording are unchanged: the exit code first, then integrity.",
+      "Legacy deliveryPolicy behaviour and every non-gate landing path are unchanged.",
+      "moe-agent.ps1 stays UTF-8 with a BOM, and the two wrappers stay in string parity."
+    ],
+    "compatibility": [
+      "The daemon's record_check_run already accepts and validates outcome (CQ-V02, landed b7a9bb5). Wrapper and daemon ship together in the IDE bundles.",
+      "Runs that older wrappers recorded without an outcome keep the legacy exit-code rule in passedOn."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh: run_frozen_gate, record_check_run_rpc and finish_gate_observation.",
+      "scripts/moe-agent.ps1: Invoke-MoeFrozenGate, Send-MoeCheckRun and the finally-block interrupted path.",
+      "scripts/tests/postflight.sh and scripts/tests/postflight.ps1: assertions plus the index-mutation and head-mutation modes.",
+      "scripts/tests/postflight-fake-proxy.js: an outcome coherence check in checkReply."
+    ],
+    "reuse": [
+      "gate_integrity / Test-MoeGateIntegrity (HEAD == FROZEN_COMMIT, write-tree == FROZEN_TREE, flags cleared, diff-files quiet) is the integrity measure, reused unchanged.",
+      "The CQ-V02 outcome vocabulary and coherence rule from packages/moe-daemon/src/state/checkRunStore.ts.",
+      "The existing embedded frozen-gate suite modes and the shared fake proxy."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh run_frozen_gate (about 4602-4636) calls record_check_run_rpc before gate_integrity. record_check_run_rpc (about 2256) sends no outcome. finish_gate_observation (about 4797) records an interrupted gate.",
+      "scripts/moe-agent.ps1 Invoke-MoeFrozenGate (about 4436-4470) calls Send-MoeCheckRun before Test-MoeGateIntegrity. Send-MoeCheckRun (about 1696) has no outcome. The finally block (about 4920) re-sends for an interrupted gate.",
+      "scripts/tests/postflight.sh's embedded suite has tracked-mutation and hidden-mutation modes; hidden-mutation asserts exitCode 0. postflight.ps1 mirrors the suite.",
+      "scripts/tests/postflight-fake-proxy.js checkReply validates the record_check_run args but not outcome."
+    ],
+    "checkRefs": [
+      "bash scripts/tests/postflight.sh",
+      "bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Record nothing on an integrity failure. Rejected: the run happened, and dropping it hides a mutation. Recording 'inconclusive' keeps the evidence and never counts.\n2. Record exit code -1 on a mutation. Rejected: it falsifies the observed exit code. The existing hidden-mutation assertion requires the actual code.\n3. CHOSEN: classify first, then record the CQ-V02 outcome. An interrupted gate becomes 'infra-failure', because it was never verified and V02 coherence allows any exit code there.",
+    "codebaseInsights": "- The landing decision already refuses a mutated gate. Only the evidence was dishonest: an exit-0 run with no outcome, which passedOn counts under the legacy no-outcome rule.\n- Every mode also writes the untracked scratch.txt, and integrity must keep tolerating untracked files (diff-files sees tracked files only).\n- gate_integrity rewrites the gate checkout's index flags (no-assume-unchanged / no-skip-worktree) before diff-files. It is a disposable checkout, so run it exactly once per gate.\n- parity-check.sh compares MOE_* code families and fixed strings. Outcome strings are not MOE_ codes, so no list change is needed.\n- The dependsOn chain covers every in-flight editor of these files: V08b, V08 (after V07), ad0dc2e7, c2a900aa, bc8410af and bdf6db6f.",
+    "risks": "- These are collision hotspots: build on the landed bytes of six prerequisite tasks and never revert peers.\n- The embedded node suite lives in bash and PowerShell strings, so watch quoting and escapes (\\\\n) when adding modes.\n- The head-mutation fixture commits inside the disposable gate worktree. It needs a test identity (-c user.name/email) and must not touch the shared checkout.\n- pwsh may be absent in WSL; report honestly.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/postflight-fake-proxy.js",
+      "packages/moe-daemon/src/state/checkRunStore.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T18:34:08.494Z",
+  "approvedPlanRevision": 1
+}

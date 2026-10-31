@@ -1,0 +1,279 @@
+{
+  "id": "task-6a5d5a13257b48c9940ae3b22347ff7d",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V06] Revision bound QA policy",
+  "description": "Objective: Require exact candidate/revision in strict review and extend shared delivery policy, not a parallel completion predicate.\n\nDeliverable: Revision bound QA policy. This is task V06 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test\n\nDependency aliases (wired by Moe task ids after import): V05, F12.",
+  "definitionOfDone": [
+    "Stale candidate/revision/check bindings fail closed.",
+    "QA own attempt is fenced without confusing candidate producer provenance.",
+    "Legacy omission compatibility remains explicit outside strict profile.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nPrerequisites must be DONE before WORKING: V05, and transitively V04 and V03. Adapt to V04's landed passedOn (it wires isAuthenticatedCheckRun for strict tasks). Keep every V04 rule and add only this task's revision rule.\n\nCreate packages/moe-daemon/src/delivery/reviewBinding.test.ts.\n\nStrict fixture:\n- Build it the way src/__e2e__/executionContract.e2e.test.ts (CQ-F12) drives a verified-local task through REAL tools:\n  - a worker claim (producer attempt gen1), get_context with a sessionId, steps, and complete_task, with the candidate recorded by the wrapper path the e2e uses;\n  - then a QA claim (gen2) and a QA get_context with its own sessionId.\n- Where a case needs a state the tools cannot reach (a candidate at an older revision), build it through the same stores the e2e uses, never by hand-editing .moe.\n- Assert exact codeName and context, plus NO write on every refusal: no .moe/reviews file, status still REVIEW, no task field changed.\n\nCases:\n- Q1, DoD 2 (QA's own attempt is fenced), strict qa_approve:\n  - no attemptId/generation/sessionId: STEP_ENTRY_IDENTITY_REQUIRED, naming exactly the missing keys;\n  - the PRODUCER's attempt (gen1): ATTEMPT_SUPERSEDED;\n  - QA's attempt with a sessionId whose get_context never happened: CONTEXT_RECEIPT_STALE;\n  - QA's full identity plus the current candidate: passes the binding, then refuses EXECUTION_PROFILE_NOT_READY. This proves the order and that readiness is untouched.\n  - Provenance is not confused: candidate.attemptId is still the producer gen1 id, and QA's identity is gen2.\n- Q2, DoD 1 (stale bindings fail closed), strict, with QA's identity valid:\n  - no candidateId: REVIEWED_CANDIDATE_REQUIRED;\n  - a superseded candidateId: CANDIDATE_MISMATCH;\n  - via assertReviewedCandidateCurrent directly: a candidate whose producer attempt's executionPolicySnapshot.planRevision is 1 while the task's approved revision is 2 gives CANDIDATE_REVISION_STALE, with context {candidateId, candidateRevision: 1, planRevision: 2};\n  - a candidate whose producer attempt record or snapshot is missing gives CANDIDATE_REVISION_STALE with candidateRevision null.\n- Q3, strict qa_reject: the same identity fencing as Q1 (no identity gives STEP_ENTRY_IDENTITY_REQUIRED). With QA's identity, a stale-revision candidate CAN be rejected (the task moves back to WORKING), because a reject never delivers; a superseded candidateId is still CANDIDATE_MISMATCH.\n- Q4, DoD 3 (legacy omission compatibility is explicit), for legacy and observe tasks:\n  - qa_approve with no identity and no candidateId approves with the existing NO-REVIEWED-CANDIDATE warning;\n  - qa_reject with no identity proceeds as today;\n  - the response shapes are unchanged from today's tests.\n- Q5, DoD 1 (stale check binding, the SHARED policy):\n  - vi.spyOn(executionProfile, 'assertExecutionProfileReady').mockImplementation(() => {}), the precedent in src/server/planApproval.test.ts:1095;\n  - settings: deliveryPolicy 'local-branch', qualityGate G, qualityGateScope 'everyTask';\n  - a strict task at approved revision 2 whose current candidate has a passing runner-observed run of G with planRevision 1: evaluateDeliveryEvidence.missingEvidence contains requiredCheckToken(G);\n  - the same with planRevision 2: the token is absent;\n  - a LEGACY-profile task with the revision-1 run: the token is absent, because legacy and observe behavior is unchanged;\n  - restore the spy in afterEach.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/reviewBinding.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/reviewBinding.test.ts"
+      ],
+      "note": "RED: reviewBinding.test.ts (12 tests) run in a Linux snapshot with a no-op stub reviewBinding.ts placed in the snapshot only: 7 failed | 5 passed. Q1/Q2/Q3 fail for the right reason (EXECUTION_PROFILE_NOT_READY instead of the binding codes; the stub does not throw). Q4 (legacy/observe, 4 rows) passes: today's behavior. Q5 ALREADY PASSES: V04's landed trustedPassedOn (policy.ts) already requires run.planRevision === task.approvedPlanRevision for every verified-local check, and passedOn is never reached for a verified-local task (trusted is non-null). So step 4's planned strictRevision/passedOn parameter would be unreachable dead code; Q5 pins the existing shared rule instead (plus the legacy any-revision case). Fixture: real tools to REVIEW under legacy (producer gen1 records cand-old, cand-new; QA gen2 claims and reads), then verified-local in memory as F12's e2e. Dirty peer paths untouched.",
+      "startedAt": "2026-10-30T07:41:33.039Z",
+      "completedAt": "2026-10-30T07:45:17.544Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create packages/moe-daemon/src/delivery/reviewBinding.ts. Reuse only existing pieces: assertExecutionAuthorized (util/executionAuthorization.ts), resolveReviewedCandidate (state/reviewStore.ts), getCandidate (state/candidateStore.ts), getAttempt (state/attemptStore.ts) and readExecutionPolicySnapshot (delivery/executionProfile.ts).\n\nExport `assertReviewedCandidateCurrent(state, task, candidateId, planRevision): void`:\n- producer = getAttempt(state, candidate.attemptId); candidateRevision = readExecutionPolicySnapshot(producer?.executionPolicySnapshot)?.planRevision ?? null.\n- Error handling: if candidateRevision !== planRevision, throw new MoeError(STATE_CONFLICT, ..., { candidateId, candidateRevision, planRevision }, 'CANDIDATE_REVISION_STALE').\n- A malformed snapshot is caught and fails closed the same way, with candidateRevision null.\n- It reads the PRODUCER's provenance and never compares it with the reviewer's attempt.\n\nExport `assertReviewBinding(state, task, params: { workerId?, candidateId?, attemptId?, generation?, sessionId? }, decision: 'approve' | 'reject'): { binding: ReviewedCandidateBinding; strict: StrictExecution | null }`:\n1. strict = assertExecutionAuthorized(state, task, params.workerId, { attemptId, generation, sessionId }, decision === 'approve' ? 'moe.qa_approve' : 'moe.qa_reject'). This fences QA's OWN running attempt, its approved revision and its served-context receipt. Legacy and observe return null.\n2. Not strict: return { binding: resolveReviewedCandidate(...), strict: null }. This is today's behavior exactly, the explicit legacy compatibility, warning included.\n3. Strict, in order:\n   - a missing candidateId, or a task with no candidate, is MISSING_REQUIRED 'REVIEWED_CANDIDATE_REQUIRED';\n   - binding = resolveReviewedCandidate(...), so a mismatch stays CANDIDATE_MISMATCH;\n   - only for decision 'approve', assertReviewedCandidateCurrent(state, task, binding.candidateId, strict.planRevision); a reject never delivers, so a stale candidate can be rejected;\n   - return { binding, strict }.\nThe module is read-only, and every refusal precedes the caller's first write.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/reviewBinding.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/reviewBinding.ts"
+      ],
+      "note": "delivery/reviewBinding.ts (88 lines): assertReviewedCandidateCurrent (producer attempt snapshot planRevision; missing/no-snapshot/malformed -> candidateRevision null, STATE_CONFLICT CANDIDATE_REVISION_STALE with {taskId, candidateId, candidateRevision, planRevision}) and assertReviewBinding (assertExecutionAuthorized with QA's own identity; null -> resolveReviewedCandidate unchanged; strict -> REVIEWED_CANDIDATE_REQUIRED (MISSING_REQUIRED, context {taskId, currentCandidateId}) for an omitted/null candidateId or a task with no candidate, CANDIDATE_MISMATCH via resolveReviewedCandidate, revision check for approve only). Deviation: returns the ReviewedCandidateBinding only, not {binding, strict}; no caller uses strict (YAGNI). Reuses only the named existing pieces. Focused run: 8 passed, 4 failed (the tool-level Q1/Q2/Q3 cases, which need step 3's wiring).",
+      "startedAt": "2026-10-30T07:45:42.094Z",
+      "completedAt": "2026-10-30T07:46:10.800Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wire it into the two QA tools.\n\npackages/moe-daemon/src/tools/qaApprove.ts:\n- inputSchema gains optional `attemptId` (string), `generation` (integer, minimum 1) and `sessionId` (string), each described as 'Optional under legacy/observe; required under verified-local', as complete_task's are.\n- The description gains one sentence: under verified-local, approval needs QA's own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate produced under the approved plan revision. The refusals are STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH and CANDIDATE_REVISION_STALE.\n- Replace the single `resolveReviewedCandidate(state, task.id, params.candidateId, 'qa_approve')` call with `const { binding } = assertReviewBinding(state, task, params, 'approve')` at the SAME position: after the summary guards and before the delivery evidence gate. Every refusal therefore still moves not one byte, and precedes EXECUTION_PROFILE_NOT_READY.\n- Everything else is unchanged.\n\npackages/moe-daemon/src/tools/qaReject.ts: the same three schema fields, the same description sentence (without the revision refusal), and `assertReviewBinding(state, task, params, 'reject')` at its resolveReviewedCandidate call site, before any write.\n\nThe existing qaApprove.test.ts and qaReject.test.ts must pass UNCHANGED, which proves legacy compatibility.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "note": "qaApprove.ts (+14/-4) and qaReject.ts (+15/-5): optional attemptId (string, maxLength 128), generation (integer, min 1), sessionId (string) schema fields worded as complete_task's; one description sentence each naming the verified-local refusals (reject omits CANDIDATE_REVISION_STALE); the single resolveReviewedCandidate call replaced in place by assertReviewBinding(state, task, params, 'approve'|'reject'), so it still runs after the ownership/context/summary guards and before evaluateDeliveryEvidence (NOT_READY) and every write. Linux snapshot: reviewBinding.test.ts + qaApprove.test.ts + qaReject.test.ts + executionContract.e2e.test.ts = 4 files, 182 passed; npx tsc --noEmit exit 0. qaApprove.test.ts and qaReject.test.ts are byte-unchanged.",
+      "startedAt": "2026-10-30T07:46:12.072Z",
+      "completedAt": "2026-10-30T07:47:05.970Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Shared delivery policy, packages/moe-daemon/src/delivery/policy.ts. Extend it, never add a parallel predicate.\n- Add a private `strictRevision(state, task): number | undefined`. It returns decodeStoredPlanRevision(task) when resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot) === 'verified-local', else undefined.\n- hasPassingCheck(state, taskId, command) becomes hasPassingCheck(state, task, command, revision), and passedOn gains a `revision?: number` parameter: `&& (revision === undefined || run.planRevision === revision)`.\n- checkShortfall and protectedCheckShortfall pass strictRevision(state, task).\n- Under legacy and observe the parameter is undefined, so every existing result is byte-identical, including runs that carry no planRevision.\n- Under strict, a passing run bound to another revision is stale and reports the required-check token: fail closed.\n- Update the header comment's REQUIRED CHECK paragraph with one sentence on the strict revision binding.\n- Keep V04's landed rules intact.\n\nMake Q5 pass, and keep delivery/requiredChecks.delivery.test.ts, qaApprove.test.ts and dependency-gate tests green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "note": "NO FILE CHANGED; policy.ts is intentionally untouched. The plan said to adapt to V04's landed code. V04 landed trustedPassedOn: for every verified-local task, evaluateDeliveryEvidence sets trusted = approvedCheckEnvironments(...), which is always an array and never null. So hasPassingCheck and protectedCheckShortfall always go through trustedPassedOn, which already requires task.planRevision === task.approvedPlanRevision and run.planRevision === approvedPlanRevision. passedOn is reached only when trusted === null, that is, when the task is not verified-local. The planned strictRevision(state, task) uses the same resolveTaskExecutionProfile test, so it would always be undefined at every passedOn call: unreachable dead code. The strict check-revision binding is already the one shared predicate; no parallel predicate was added. The header's STRONG paragraph already says \"at the current approved revision\", so no comment edit either. Evidence: Q5 passed before any change (step-1 red run). Mutant: deleting `run.planRevision !== revision || ` from trustedPassedOn in the snapshot fails Q5 (1 failed | 11 passed); restored and cmp-identical to the worktree. Q5's legacy leg pins the any-revision rule for passedOn (mutant 6 in step 5).",
+      "startedAt": "2026-10-30T07:47:07.259Z",
+      "completedAt": "2026-10-30T07:47:31.263Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then `cmp` afterwards. Each must fail at least one test:\n   1. Skip assertExecutionAuthorized for approve: Q1 fails.\n   2. Use the candidate's producer attempt as QA's identity: Q1 fails on provenance.\n   3. Let a strict approve omit candidateId: Q2 fails.\n   4. Skip assertReviewedCandidateCurrent: Q2 fails.\n   5. Apply the revision check to reject: Q3 fails.\n   6. Apply the strict revision rule to legacy tasks: Q5 fails on the legacy case.\n   7. Move assertReviewBinding after the delivery evidence gate: Q1 gets NOT_READY instead.\n2. The GATE runs fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate).\n   - Take `git archive HEAD` of the WHOLE repo.\n   - Overlay ONLY this task's 5 files.\n   - Run `npm ci --no-audit --no-fund` after checking that the lockfile matches the tree modulo CR.\n   - Use `env -i` with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH.\n   - Run `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`. Both must exit 0. The shared policy is touched, so this is the full suite.\n   - `cmp` the overlay against the worktree.\n3. A red run outside these files is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n4. Supply the npm test command, its exit code and the output tail to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/reviewBinding.test.ts",
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
+        "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts"
+      ],
+      "note": "MUTANTS: 8 run on snapshot copies, all KILLED by real test failures; each restored and cmp-identical.\n- M1, skip the authorization: 3 failed.\n- M2, producer identity used as QA's: 4 failed.\n- M3, strict approve may omit candidateId: 2 failed.\n- M4, skip the revision check: 1 failed.\n- M5, revision check on reject: 1 failed.\n- M6, strict revision rule applied to legacy passedOn: Q5 failed.\n- M7, binding moved after the evidence gate: 3 failed.\n- M8, an unreadable snapshot fails open: 1 failed.\n\nGATE, first run: 18 failed in 2 landed files.\n- Cause: the CQ-M01f Q rows in executionPolicyIntegration.test.ts, and lifecycle B2, expected a bare strict qa_approve to be refused EXECUTION_PROFILE_NOT_READY. The contract now puts the binding first, so they got STEP_ENTRY_IDENTITY_REQUIRED, still with no write.\n- Without my qa tool overlay, those 2 files pass 142/142.\n\nFIX (scope grown, needed by the approved precedence; neither file was dirty):\n- executionPolicyIntegration.test.ts (+11/-1): a beforeEach in the M01f Q describe spies reviewBinding.assertReviewBinding, passing through to resolveReviewedCandidate (the planApproval spy precedent). Its seeded rows have no QA attempt, and this way each row still reaches the readiness refusal it pins, including Q3 (an env flag does not lift readiness). The precedence itself is pinned in reviewBinding.test.ts.\n- executionPolicyLifecycle.test.ts B2 (+3/-1): the real MCP qa_approve now expects STEP_ENTRY_IDENTITY_REQUIRED, and its reviews [] assertion is kept.\n- reviewBinding.test.ts: a cast fixed (`as unknown as`), found by the test-file tsc.\n\nFINAL GATE: fresh snapshot of git archive HEAD 2a3701f8 plus the 7 owned paths (policy.ts is identical to HEAD); lock equal modulo CR; npm ci; env -i; node v24.21.0.\n- `cd packages/moe-daemon && npm test`: EXIT 0, 204 files, 5730 passed | 16 skipped.\n- npx tsc --noEmit: EXIT 0.\n- Scratch tsconfig (types node) over the 3 test files: EXIT 0.\n- All 7 paths are cmp-identical to the worktree.",
+      "startedAt": "2026-10-30T07:47:32.463Z",
+      "completedAt": "2026-10-30T07:52:32.660Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a QA seat trying to approve stale work:\n\n1. Bypasses:\n   - the IDE/human path with no workerId under strict (must fail closed with STEP_ENTRY_IDENTITY_REQUIRED, never bypass);\n   - a stale receipt after a plan change;\n   - an approve racing complete_task's finalizing window (the existing nonHolderFinalizingRefusal still runs first);\n   - a candidate recorded after QA's get_context (CANDIDATE_MISMATCH).\n2. Provenance: the producer gen1 is never used as or compared with QA's gen2.\n3. Compatibility:\n   - legacy and observe response shapes and warnings unchanged;\n   - the existing qa test files unchanged;\n   - dependency readiness and deliveryProjection results unchanged for non-strict tasks.\n4. Rails:\n   - verified-local stays unavailable (assertExecutionProfileReady untouched outside the test spy);\n   - no forbidden-pattern tokens;\n   - no .moe edits and no Git writes.\n\nWrite the Serena handoff memory 'task-task-6a5d5a13257b48c9940ae3b22347ff7d-handoff' for CQ-V06a (the proxy stamping follow-up) and CQ-V12 (task-b621ddc9). Cover:\n- the qa_approve and qa_reject identity params and refusal codes;\n- MCP_SERVER.md, held for V12's docs sweep;\n- R08's guest bridge must stamp attemptId, generation and sessionId for QA seats in VMs (an R-series concern).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "ADVERSARIAL SELF-REVIEW of the owned diff only (no file changed in this step). Bypasses:\n- The human/IDE path with no workerId under strict is refused STEP_ENTRY_IDENTITY_REQUIRED, missing [workerId, attemptId, generation, sessionId] (Q1).\n- A stale receipt or a plan change is caught by the shared F07/F08 fence (CONTEXT_RECEIPT_STALE, PLAN_REVISION_NOT_APPROVED).\n- nonHolderFinalizingRefusal still runs first in qa_approve; the order is unchanged.\n- A newer candidate recorded after QA's read gives CANDIDATE_MISMATCH.\n- The binding is read-only and runs under the tool mutex, so no check-then-act window exists before recordReview.\nProvenance: candidate.attemptId is used ONLY to read the producer's snapshot revision and never reaches assertExecutionAuthorized (Q1, M2).\nCompatibility:\n- Non-strict callers get resolveReviewedCandidate exactly.\n- qaApprove.test.ts, qaReject.test.ts and qaOwnership.test.ts are untouched.\n- policy.ts is untouched, so dependency readiness and deliveryProjection are unchanged.\nConsidered edges, not changed, both failing closed:\n- (a) qa_reject now decodes the profile, so a malformed snapshot or setting refuses it with INVALID_INPUT, as start_step and complete_task already do. Such a task is neither legacy nor observe.\n- (b) The producer's snapshot holds the claim-time revision, so a plan re-approved inside one running attempt reads as stale. That is fail-closed: reject and re-claim.\nRails:\n- assertExecutionProfileReady is untouched; the only readiness stub is Q5's spy in my test.\n- No eval, innerHTML or __proto__.\n- The daemonGitDocs phrase was scanned and is absent.\n- No .moe edits and no Git writes.\nMemories written: task-task-6a5d5a13257b48c9940ae3b22347ff7d-handoff (for CQ-V06a, task-a4ad3fdb proxy stamping; CQ-V12 MCP_SERVER.md sweep; the R08 guest bridge identity) and gotcha-strict-review-precedence-tests.",
+      "startedAt": "2026-10-30T07:52:33.808Z",
+      "completedAt": "2026-10-30T07:53:48.963Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Unblocked on the human's explicit, repeated instruction (\"unblock tasks\", then \"unblock\", 2026-10-27). Plan now instead of parking. Use prerequisites' landed code or approved plans where they exist. Otherwise use their task description, DoD and docs/plans/2026-10-24-ai-code-quality-and-context.md. Name every assumed interface in planningNotes. Keep dependsOn, so WORKING waits until the prerequisites are DONE. If a prerequisite's contract must be designed first, split it out (SPIDR, as with R10a) instead of report_blocked. Re-block only if any possible plan would breach a rail.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 244.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:59.341Z",
+  "updatedAt": "2026-10-30T08:05:59.722Z",
+  "dependsOn": [
+    "task-6be626cfe5744ee29deeb2bb1b59468e",
+    "task-72184c6505cc41e8b6066732011ffb70",
+    "task-43088e9b504b49a5ae59c562fcc0c784"
+  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Governor-parked under the human's \"keep governing and unblock board\" instruction (2026-10-26). This is a dependency park, not a defect. CQ-V06 builds on CQ-V05, which is parked behind V04 (not plannable: its runner R11 and channel V03 do not exist yet). It also depends on CQ-F12, which is planned and WORKING. It auto-returns to PLANNING when V05 and F12 are both DONE. To undo: set_task_status PLANNING.",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T17:50:40.418Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T08:04:11.921Z",
+    "wallClockMs": 51211503
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0",
+    "worker-093a65d0",
+    "qa-ba3f4f35"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T17:55:29.265Z",
+  "executionContract": {
+    "intendedBehavior": "Strict (verified-local) review is bound exactly to the reviewer's own attempt, the current candidate and the approved revision. Shared delivery policy binds required-check evidence to that revision.\n- qa_approve and qa_reject on a strict task require QA's own running attempt identity (attemptId, generation, and the sessionId that read get_context, with a fresh receipt at the approved revision) and the current candidateId.\n- qa_approve additionally refuses a candidate produced under another plan revision (CANDIDATE_REVISION_STALE). That revision is read from the producer attempt's snapshot, never from the reviewer's attempt.\n- Under strict, passedOn counts only runs whose planRevision equals the approved revision.\n- Legacy and observe keep today's omission behavior: no identity, and a warning when candidateId is omitted.",
+    "acceptanceCriteria": [
+      "Stale candidate, revision and check bindings fail closed under strict: CANDIDATE_MISMATCH, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_REVISION_STALE, CONTEXT_RECEIPT_STALE, PLAN_REVISION_NOT_APPROVED, and a required-check token for a run from another revision.",
+      "QA's own attempt is fenced: missing identity, the producer's superseded attempt or a stale receipt is refused, and the candidate's producer attemptId is never treated as QA's identity.",
+      "Legacy omission compatibility stays explicit outside strict: existing qa tests pass unchanged, and legacy and observe approvals without identity or candidateId behave exactly as today.",
+      "Every refusal writes nothing and precedes EXECUTION_PROFILE_NOT_READY, which still refuses strict approvals.",
+      "In a fresh Linux snapshot, `cd packages/moe-daemon && npm test` and `npx tsc --noEmit` both exit 0."
+    ],
+    "invariants": [
+      "Under legacy and observe, every existing qa_approve, qa_reject and delivery-policy result is byte-identical.",
+      "verified-local stays unavailable: assertExecutionProfileReady is unchanged and still refuses strict approvals after the binding.",
+      "Every refusal precedes the first write: no Review record, status change or chat side effect.",
+      "There is one shared passing-run predicate (passedOn); no parallel completion predicate."
+    ],
+    "compatibility": [
+      "Existing qa_approve and qa_reject callers that send no identity are unaffected outside strict. Extra params are optional in the schema.",
+      "The IDE or human approval path is unchanged outside strict, and fails closed under strict."
+    ],
+    "approvedScope": [
+      "New delivery/reviewBinding.ts (assertReviewBinding, assertReviewedCandidateCurrent) and its test.",
+      "qa_approve and qa_reject: optional attemptId, generation and sessionId params; one call to assertReviewBinding at the existing resolveReviewedCandidate site; a description sentence.",
+      "delivery/policy.ts: the strictRevision helper, and a revision parameter on passedOn and hasPassingCheck."
+    ],
+    "reuse": [
+      "assertExecutionAuthorized from packages/moe-daemon/src/util/executionAuthorization.ts, the F07/F08 fencing used by complete_task.",
+      "resolveReviewedCandidate from packages/moe-daemon/src/state/reviewStore.ts.",
+      "getAttempt from packages/moe-daemon/src/state/attemptStore.ts, and readExecutionPolicySnapshot and resolveTaskExecutionProfile from packages/moe-daemon/src/delivery/executionProfile.ts.",
+      "The shared passedOn in packages/moe-daemon/src/delivery/policy.ts."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/util/executionAuthorization.ts: assertExecutionAuthorized returns null for legacy/observe and StrictExecution {attempt, planRevision} for strict.",
+      "packages/moe-daemon/src/tools/qaApprove.ts: resolveReviewedCandidate is called after the summary guards and before evaluateDeliveryEvidence, which throws EXECUTION_PROFILE_NOT_READY for strict tasks via resolveTaskDeliveryPolicy.",
+      "packages/moe-daemon/src/state/reviewStore.ts: resolveReviewedCandidate(state, taskId, supplied, toolName) returns {candidateId?, warning?} or throws CANDIDATE_MISMATCH.",
+      "packages/moe-daemon/src/server/planApproval.test.ts spies assertExecutionProfileReady to exercise strict paths in tests."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test",
+      "cd packages/moe-daemon && npx tsc --noEmit"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. A separate strict completion predicate in qa_approve. Rejected: the description forbids a parallel predicate. The check-revision rule extends the shared passedOn, and the review binding reuses assertExecutionAuthorized plus resolveReviewedCandidate.\n2. Requiring candidate.attemptId === QA's attempt. Rejected: that confuses producer provenance with the reviewer's. F12 proved the candidate keeps producer gen1 while QA runs gen2.\n3. Running the strict binding after the delivery evidence gate. Rejected: strict tasks throw EXECUTION_PROFILE_NOT_READY there, which would make every new refusal unobservable. F12 moved complete_task's readiness check the same way.\n4. Applying the revision check to rejects. Rejected: a reject never delivers, and refusing it would strand stale work in REVIEW.\n5. Docs. MCP_SERVER.md is held for V12's sweep, and the tool descriptions carry the contract now. Proxy stamping of the QA identity is a package seam: a follow-up task, CQ-V06a.",
+    "codebaseInsights": "- util/executionAuthorization.ts assertExecutionAuthorized(state, task, workerId, {attemptId, generation, sessionId}, toolName):\n  - every profile: a malformed identity is INVALID_INPUT, and a superseded attempt is ATTEMPT_SUPERSEDED;\n  - legacy and observe return null;\n  - strict requires identity (STEP_ENTRY_IDENTITY_REQUIRED), the caller's running attempt (ATTEMPT_NOT_RUNNING), an approved revision (PLAN_REVISION_NOT_APPROVED) and a fresh receipt (CONTEXT_RECEIPT_STALE), and returns {attempt, planRevision}.\n- state/reviewStore.ts resolveReviewedCandidate: an omission gives a NO-REVIEWED-CANDIDATE warning, and a mismatch gives CANDIDATE_MISMATCH.\n- qaApprove.ts calls it after the summary guards and before evaluateDeliveryEvidence. evaluateDeliveryEvidence then calls resolveTaskDeliveryPolicy, which calls assertExecutionProfileReady, so strict tasks throw NOT_READY first. qaReject.ts calls it before its writes.\n- McpAdapter does no runtime inputSchema validation; handlers own validation.\n- policy.ts: passedOn is the one passing-run match; checkShortfall and protectedCheckShortfall call it.\n- Readiness spy precedent: src/server/planApproval.test.ts:1095.\n\nASSUMED: V04 (task-a9d1a74d) lands an authenticated-run requirement in passedOn for strict tasks. Adapt to it and keep its rule.",
+    "risks": "- The strict fixture is the costliest part; reuse the F12 e2e flow.\n- The policy edit overlaps V04's landed changes in the same function. They are serialized (V06 depends on V05, which depends on V04), but merge carefully.\n- Unbreakable rule: the existing qaApprove and qaReject tests pass UNCHANGED.\n- The IDE human-approval path under strict now fails closed. That is intended, and it is documented in the tool description.\n- MCP_SERVER.md is held for V12; leave a comment on V12 if any doc drift remains.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/util/executionAuthorization.ts",
+      "packages/moe-daemon/src/state/reviewStore.ts",
+      "packages/moe-daemon/src/__e2e__/executionContract.e2e.test.ts",
+      "packages/moe-daemon/src/server/planApproval.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T17:55:29.390Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:41:33.039Z",
+  "reviewStartedAt": "2026-10-30T07:54:07.544Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh Linux snapshot: git archive HEAD 2a3701f8 + the 6 owned changed paths (policy.ts unchanged, == HEAD), all cmp-identical to the worktree; package/lock equal modulo CR; native npm ci; env -i HOME NO_COLOR=1 PATH=<nvm v24.21.0 bin>:/usr/local/bin:/usr/bin:/bin.\n ✓ src/util/qaCommitPolicy.test.ts (8 tests) 4ms\n ✓ src/util/ids.test.ts (4 tests) 3ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n Test Files  204 passed (204)\n      Tests  5730 passed | 16 skipped (5746)\n   Duration  25.99s\nAlso: npx tsc --noEmit EXIT 0; scratch tsconfig (types node) over reviewBinding.test.ts + the 2 adapted test files EXIT 0.",
+    "reportedAt": "2026-10-30T07:54:07.544Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/reviewBinding.test.ts",
+    "packages/moe-daemon/src/delivery/reviewBinding.ts",
+    "packages/moe-daemon/src/tools/qaApprove.ts",
+    "packages/moe-daemon/src/tools/qaReject.ts",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
+    "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts",
+    ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+    ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+    ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+    ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json"
+  ],
+  "completionSummary": "CQ-V06 revision-bound QA review. Strict means verified-local. 6 paths, net about 355 non-board LOC (runtime +108, tests +247).\n- NEW delivery/reviewBinding.ts: assertReviewBinding and assertReviewedCandidateCurrent. Under strict, qa_approve and qa_reject refuse, in order:\n  1. QA's OWN identity via assertExecutionAuthorized: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE;\n  2. REVIEWED_CANDIDATE_REQUIRED;\n  3. CANDIDATE_MISMATCH;\n  4. approve only: CANDIDATE_REVISION_STALE, read from the PRODUCER attempt's snapshot; missing or malformed gives null and fails closed.\n  A reject of a stale-revision candidate is allowed. Legacy and observe call resolveReviewedCandidate exactly as before.\n- qaApprove.ts and qaReject.ts: optional attemptId, generation and sessionId params, plus one description sentence each. The binding sits at the old resolveReviewedCandidate site, so it still comes before EXECUTION_PROFILE_NOT_READY and every write. Readiness is untouched and still refuses strict approvals.\n- policy.ts is unchanged, a deviation from step 4. V04's trustedPassedOn already binds every verified-local check run to the approved revision, and passedOn is never reached for such a task, so the planned parameter would be dead code. Q5 pins the rule, and a mutant removing it fails Q5.\n- Scope grew by 2 landed tests that asserted NOT_READY for a bare strict qa_approve:\n  - executionPolicyIntegration.test.ts, the M01f Q describe: the binding is spied as a pass-through, so the rows still pin readiness;\n  - executionPolicyLifecycle.test.ts B2: now expects STEP_ENTRY_IDENTITY_REQUIRED.\n  qaApprove.test.ts and qaReject.test.ts are unchanged.\n- Evidence:\n  - 12 new tests;\n  - red first (7 failed);\n  - 8 mutants, all killed;\n  - full gate green (above).\n- Follow-ups:\n  - CQ-V06a (task-a4ad3fdb): the proxy stamps the identity onto the qa tools;\n  - V12 (task-b621ddc9): MCP_SERVER.md docs;\n  - R08: guest-bridge identi",
+  "commits": [
+    {
+      "sha": "582fc1604e98e4a71e71ca01af7f0007e8a858d2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T07:39:26Z",
+      "paths": [
+        ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+        ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+        ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+        ".moe/tasks/task-80930ce6f0b54f7996e2c7eb7c835107.json",
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
+        "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts",
+        "packages/moe-daemon/src/delivery/reviewBinding.test.ts",
+        "packages/moe-daemon/src/delivery/reviewBinding.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T07:54:37.669Z",
+      "treeId": "55b9334dfe8663ac53a65f0724f6090801b89daa",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/reviewBinding.test.ts",
+    "packages/moe-daemon/src/delivery/reviewBinding.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-ba3f4f35@2026-10-30T07:58:03Z",
+    "at": "2026-10-30T08:05:59.722Z"
+  },
+  "completedAt": "2026-10-30T08:04:11.921Z",
+  "reviewCompletedAt": "2026-10-30T08:04:11.921Z",
+  "reviewSummary": "Approved completion 582fc1604e98e4a71e71ca01af7f0007e8a858d2 (tree 55b9334d), confirmed on moe/work-2026-10-24 with git show/branch --contains. Reviewed all 6 source/test paths: +366/-11 = 355 net non-board LOC (108 runtime, 247 tests); board metadata excluded. No shared-tree edits or Git writes.\nFresh full-repo archive of that exact commit, native npm ci with unchanged package/lock hashes and clean Linux-only env: cd packages/moe-daemon && npm test EXIT 0, 205 files, 5743 passed/16 skipped; npx tsc --noEmit EXIT 0. Separate test-file tsc EXIT 0. After archive-only mutation checks and byte-identical restoration, focused review/legacy/readiness suites EXIT 0: 327 tests in 5 files, including 8 independent QA hold-outs.\nVerified both QA tools fence the reviewer's own attempt, approved revision and fresh session receipt before candidate binding/writes; candidate revision comes only from producer provenance. Missing/superseded candidates, stale revision/receipt, unapproved plan and reconciling QA attempt refuse without task/review/chat writes. Strict rejection may reject stale-revision work. Valid strict approval still hits EXECUTION_PROFILE_NOT_READY. Legacy/observe omission behavior and original qa tests remain unchanged.\nIndependently killed candidate-revision and required-check-revision mutants. Unchanged policy.ts is justified: V04's shared trustedPassedOn already enforces approved revision for all strict check paths. Existing readiness test adaptations retain their gates. Proxy identity transport and MCP docs remain assigned to V06a/V12; no VM certification claimed. Complexity: lean already.",
+  "requiredCheckAtDone": null
+}

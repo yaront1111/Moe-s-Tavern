@@ -5,7 +5,8 @@ import { missingRequired, notFound, invalidState, invalidInput } from '../util/e
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
 import { listAttempts } from '../state/attemptStore.js';
 import { nonHolderFinalizingRefusal } from '../util/claimGuards.js';
-import { recordReview, resolveReviewedCandidate } from '../state/reviewStore.js';
+import { recordReview } from '../state/reviewStore.js';
+import { assertReviewBinding } from '../delivery/reviewBinding.js';
 import {
   attestationLabel,
   completionCommitsForReview,
@@ -13,7 +14,7 @@ import {
   evaluateDeliveryEvidence,
   readDeliveryAttestations,
   requiredCheckCommand,
-  resolveDeliveryPolicy,
+  resolveTaskDeliveryPolicy,
 } from '../delivery/policy.js';
 
 /** Upper bound on the approval summary — mirrors qa_reject's reason cap. */
@@ -27,7 +28,7 @@ function commitEvidenceEntry(c: TaskCommit) {
 export function qaApproveTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.qa_approve',
-    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified. HARD candidate gate: pass candidateId (from get_context.currentCandidate) — if it is not the task\'s current candidate the approval is refused with CANDIDATE_MISMATCH so an approval can never bless bytes nobody read. Soft commit gate: when settings.autoCommit is on and no completion commit is recorded in task.commits for the current work round (anchored on the latest rejection, else the first step start, else reviewStartedAt), the approval still lands but the response carries a NO-COMPLETION-COMMIT warning (also posted to #governors) — audit task.commits with `git show <sha>` before approving. Under the default settings.deliveryPolicy (legacy) that warning is the whole commit gate. Under a strict deliveryPolicy (local-branch, remote-push, merged-pull-request, manual-artifact) approval is HARD-refused with DELIVERY_EVIDENCE_MISSING (-32003) naming each missing evidence token (completion-commit, pushed-completion-commit, merged-pull-request, manual-artifact, required-check:<qualityGate>); manual-artifact and merged-pull-request are satisfied only by the matching manualArtifact / mergedPullRequest attestation, recorded on the task as task.deliveryEvidence with verifiedDelivery false.',
+    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified. HARD candidate gate: pass candidateId (from get_context.currentCandidate) — if it is not the task\'s current candidate the approval is refused with CANDIDATE_MISMATCH so an approval can never bless bytes nobody read. Soft commit gate: when settings.autoCommit is on and no completion commit is recorded in task.commits for the current work round (anchored on the latest rejection, else the first step start, else reviewStartedAt), the approval still lands but the response carries a NO-COMPLETION-COMMIT warning (also posted to #governors) — audit task.commits with `git show <sha>` before approving. Under the default settings.deliveryPolicy (legacy) that warning is the whole commit gate. Under a strict deliveryPolicy (local-branch, remote-push, merged-pull-request, manual-artifact) approval is HARD-refused with DELIVERY_EVIDENCE_MISSING (-32003) naming each missing evidence token (completion-commit, pushed-completion-commit, merged-pull-request, manual-artifact, required-check:<qualityGate>); manual-artifact and merged-pull-request are satisfied only by the matching manualArtifact / mergedPullRequest attestation, recorded on the task as task.deliveryEvidence with verifiedDelivery false. Under verified-local, approval needs QA\'s own attemptId, generation and the sessionId that read moe.get_context, plus candidateId of the current candidate produced under the approved plan revision; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, REVIEWED_CANDIDATE_REQUIRED, CANDIDATE_MISMATCH, CANDIDATE_REVISION_STALE.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -36,7 +37,10 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         candidateId: { type: 'string', description: 'The candidate you actually reviewed (get_context.currentCandidate.id). Refused with CANDIDATE_MISMATCH if the task has moved on to a different candidate. Optional only for projects that record no candidates; omitting it on a task that has one approves with a warning.' },
         manualArtifact: { type: 'string', description: 'deliveryPolicy manual-artifact ONLY: the deliverable you checked by hand, as a path, URL or description (max 500 chars). Recorded on the task as task.deliveryEvidence with verifiedDelivery false: an attestation, never verified delivery. Refused under any other policy.' },
         mergedPullRequest: { type: 'string', description: 'deliveryPolicy merged-pull-request ONLY: the pull request you confirmed merged, as a URL or reference (max 500 chars). Recorded on the task as task.deliveryEvidence with verifiedDelivery false. Refused under any other policy.' },
-        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' },
+        attemptId: { type: 'string', maxLength: 128, description: 'The attemptId moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
+        generation: { type: 'integer', minimum: 1, description: 'The generation moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
+        sessionId: { type: 'string', description: 'The sessionId this session passed to moe.get_context. Optional under legacy/observe; required under verified-local.' }
       },
       required: ['taskId', 'summary'],
       additionalProperties: false
@@ -49,6 +53,9 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         manualArtifact?: unknown;
         mergedPullRequest?: unknown;
         workerId?: string;
+        attemptId?: unknown;
+        generation?: unknown;
+        sessionId?: unknown;
       };
 
       if (!params.taskId) {
@@ -119,22 +126,29 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       //
       // A task with no candidate at all resolves to no binding and behaves
       // exactly as it did before this gate existed: adoption is incremental.
-      const binding = resolveReviewedCandidate(state, task.id, params.candidateId, 'qa_approve');
+      // Under verified-local it also fences QA's own attempt and refuses a
+      // missing or stale-revision candidate (delivery/reviewBinding.ts), all
+      // before EXECUTION_PROFILE_NOT_READY below.
+      const binding = assertReviewBinding(state, task, params, 'approve');
 
-      // THE DELIVERY EVIDENCE GATE (settings.deliveryPolicy, delivery/policy.ts).
-      // Same position as the gates above: after the read, ownership, summary and
-      // candidate guards, before the Review write, the updateTask, the
-      // touchWorker and every chat side effect, so a refusal moves not one byte.
-      // An unrecognised policy is refused as invalid input, never read as the
-      // default. Under the default policy nothing is required, and the soft gate
-      // below stays the whole commit gate, exactly as it was before the setting.
+      // THE DELIVERY EVIDENCE GATE (delivery/policy.ts). Same position as the
+      // gates above: after the read, ownership, summary and candidate guards,
+      // before the Review write, the updateTask, the touchWorker and every chat
+      // side effect, so a refusal moves not one byte. The policy is the TASK's
+      // (resolveTaskDeliveryPolicy, the selection evaluateDeliveryEvidence uses),
+      // never the bare live setting: a stored verified-local snapshot is refused
+      // EXECUTION_PROFILE_NOT_READY even after a rollback to legacy, and a
+      // malformed snapshot or setting INVALID_INPUT, both before any attestation
+      // is read. That must happen here: CQ-M01c's store backstop refuses DONE
+      // only inside updateTask, after recordReview has persisted an 'approve'
+      // Review. An unrecognised policy is refused as invalid input, never read as
+      // the default. Under the default policy evaluation is satisfied at once, and
+      // the soft gate below stays the whole commit gate, exactly as before.
       const autoCommitOn = state.project?.settings?.autoCommit !== false;
-      const deliveryPolicy = resolveDeliveryPolicy(state.project?.settings);
+      const deliveryPolicy = resolveTaskDeliveryPolicy(state.project?.settings, task);
       const attestations = readDeliveryAttestations(params, deliveryPolicy);
-      if (deliveryPolicy !== 'legacy') {
-        const evidence = evaluateDeliveryEvidence(state, task, attestations);
-        if (!evidence.satisfied) throw deliveryEvidenceRefusal(task.id, evidence, autoCommitOn);
-      }
+      const evidence = evaluateDeliveryEvidence(state, task, attestations);
+      if (!evidence.satisfied) throw deliveryEvidenceRefusal(task.id, evidence, autoCommitOn);
 
       // Soft commit gate. A completion commit counts only when recorded at or
       // after the start of the CURRENT work round, so a stale attempt-#1 commit

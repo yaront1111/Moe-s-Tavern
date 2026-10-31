@@ -1,0 +1,237 @@
+{
+  "id": "task-6dd3ce1fbf204f0e9427fd0693118a0c",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R13a] Linux prerequisites cache directory",
+  "description": "Objective: let `node scripts/local-runner/cli.mjs prerequisites` reach exit 0 on a correctly provisioned Linux host, and pin the provider-precedence rule that QA found unguarded. Both are QA relays from CQ-R04 (task-120b6a11), posted on CQ-R13 by the governor on 2026-10-25.\n\nSplit out of CQ-R13 (task-f4811a72) by architect-e4b7eee0 on 2026-10-30. The human decided in the architect REPL that certification-gating items become CQ-R rows before R13. This row depends on CQ-R11e (task-001d8ab3), the last planned editor of scripts/tests/local-runner.test.mjs before it.\n\nWhy: hostPrerequisites passes no cacheDir. platform-linux.mjs cacheReadable returns null for an undefined cacheDir, because the snap's home plug reads only paths strictly below home with no hidden segment. So the Linux report is never ready, and the command always fails closed.\n\nDeliverable:\n- cli.mjs: `prerequisites` accepts `--cache-dir <absolute path>` beside `--executable <path>`.\n  - Each flag is optional and allowed at most once, in either order.\n  - hostPrerequisites({ executable, cacheDir }) passes it on as platform.prerequisites({ provider: { executable }, cacheDir }).\n  - A relative, empty, control-character or repeated flag is CLI_INPUT_INVALID.\n  - USAGE names the flag; `doctor` and `native-smoke` are unchanged.\n- hostPrerequisites gains a test-only second argument, { platform = platformFor(process.platform) }.\n- Tests in scripts/tests/local-runner.test.mjs:\n  - argument parsing rows;\n  - an end-to-end row: runCli with a Linux platform whose prerequisite seams (doctor, snap, kvm, cpus, memory, disk, homedir) all hold, and a cache directory strictly under home with no hidden segment, gives ready:true and exit 0. The same host without --cache-dir gives exit 2;\n  - a provisionGuest row: an explicit provider.executable is used for every provider call instead of platform.executable.\n\nOut of scope:\n- platform rule changes;\n- provisioning;\n- any verified-local or isolation claim;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "`prerequisites --cache-dir <absolute path>` passes that directory to the host platform's prerequisites, alone or with `--executable`, in either order. A relative, empty, control-character or repeated flag is CLI_INPUT_INVALID. Shown by tests.",
+    "Through runCli, a Linux host whose every prerequisite holds, with a cache directory strictly under home and no hidden segment, reports ready:true and exits 0. The same host without --cache-dir still exits 2. Shown by an end-to-end test with seamed Linux prerequisites.",
+    "provisionGuest uses an explicit provider.executable for every provider call instead of the platform's default client. Shown by a test.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development. Edit the LANDED bytes of scripts/tests/local-runner.test.mjs. CQ-R11e, this task's dependency, edits its CJ section; leave that section alone. Add the R13a rows beside the CLI rows (about line 2116) and the Linux rows (about lines 2236-2480).\n\nReuse the existing helpers: USAGE, items, linuxTransport, LINUX_ANSWERS, ROOMY, LINUX_READY, linuxItems, only, T/F/U, satisfiedOf, provisionHarness, provisionWith, provisioned, onLinux, linuxVm, SNAP and SNAP_MULTIPASS. Import hostPrerequisites from cli.mjs if the file does not already import it.\n\n1. USAGE (the test's copy) becomes exactly:\n   'Usage: cli.mjs doctor [--executable <path>] | prerequisites [--executable <path>] [--cache-dir <absolute path>] | native-smoke --work-dir <absolute path>'\n2. The CLI rejection loop gains these argv. Each must give CLI_INPUT_INVALID with that USAGE, zero doctor or prerequisites calls and exit 2:\n   - ['prerequisites', '--cache-dir'];\n   - ['prerequisites', '--cache-dir', 'relative/dir'];\n   - ['prerequisites', '--cache-dir', ''] and ['prerequisites', '--cache-dir', ' '];\n   - ['prerequisites', '--cache-dir', '/a\\nb'] and ['prerequisites', '--cache-dir', '/a\\u007f'];\n   - ['prerequisites', '--cache-dir', '/a', '--cache-dir', '/b'];\n   - ['prerequisites', '--cache-dir', '/a', '--executable'];\n   - ['prerequisites', '--executable', 'x', '--cache-dir', '/a', '--executable', 'y'];\n   - ['doctor', '--cache-dir', '/a'] (doctor is unchanged);\n   - ['native-smoke', '--work-dir', '/a', '--cache-dir', '/b'].\n3. Row 'R13a prerequisites passes --cache-dir and --executable through, alone or together, in either order' (DoD 1).\n   (a) A recording prerequisites fake given to runCli sees exactly:\n       - {cacheDir: '/home/u/moe-images'} for ['prerequisites', '--cache-dir', '/home/u/moe-images'];\n       - {executable: E, cacheDir: D} for both ['prerequisites', '--executable', E, '--cache-dir', D] and ['prerequisites', '--cache-dir', D, '--executable', E];\n       - {executable: E} for ['prerequisites', '--executable', E].\n   (b) hostPrerequisites(options, {platform: recorder}) calls recorder.prerequisites with exactly {provider: {executable}, cacheDir}, so absent values stay undefined. It returns {platform, ready, executionReady: false, providerCode, prerequisites} from the recorder's report.\n4. Row 'R13a a Linux host whose every prerequisite holds is ready only with --cache-dir' (DoD 2). It runs on every OS: ROOMY passes host: LINUX_HOST explicitly, and cacheReadable uses path.posix.\n   - The platform is {...linuxPlatform, prerequisites: options => linuxPlatform.prerequisites({...ROOMY, cacheDir: undefined, ...options, provider: {...options.provider, run: transport.run}})}. The only cache directory is therefore the one the CLI passes.\n   - runCli(args, {prerequisites: options => hostPrerequisites(options, {platform}), write}) gives:\n     - ['prerequisites', '--cache-dir', '/home/u/moe-images']: exit 0, and the report deep-equals {platform: 'linux', ready: true, executionReady: false, providerCode: 'PROVIDER_PREREQUISITES_READY', prerequisites: LINUX_READY};\n     - ['prerequisites']: exit 2, ready false, satisfiedOf equal to only(10, U);\n     - ['prerequisites', '--cache-dir', '/home/u/.cache/moe']: exit 2, satisfiedOf equal to only(10, F). This shows the value arrives verbatim.\n   - ['prerequisites', '--cache-dir', D, '--executable', '/opt/moe-test/multipass'] is still ready. Every doctor call in transport.calls (version, get) used '/opt/moe-test/multipass' and never SNAP_MULTIPASS.\n5. Row 'R13a an explicit provider.executable carries every Multipass call in provisionGuest' (DoD 3). Use { skip: process.platform === 'win32' }, like its Linux neighbours.\n   - h = provisionHarness(t), vm = linuxVm(h), custom = '/opt/moe-test/multipass'.\n   - provisionWith(h, {platform: onLinux(h), provider: {run: vm.run, executable: custom}}) deep-equals {...provisioned(), prerequisites: LINUX_READY}.\n   - [...new Set(vm.executables)].sort() deep-equals [custom, SNAP].sort(); SNAP_MULTIPASS never appears.\n   - Every argv in vm.transport.calls that is not a snap call starts with custom.\n   This row pins existing behavior, so it passes on arrival. Step 4's mutant (i) proves it can fail.\n\nRun `node --test scripts/tests/local-runner.test.mjs` (on WSL, the env -i form from step 3). Confirm red for the right reasons: the USAGE text, --cache-dir refused, and hostPrerequisites taking no cacheDir and no platform seam. Every other row stays green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "R13a rows added; red on USAGE/--cache-dir/hostPrerequisites seam. Dirty peer paths untouched.",
+      "startedAt": "2026-10-30T15:50:04.634Z",
+      "completedAt": "2026-10-30T15:50:44.655Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/local-runner/cli.mjs, from its LANDED bytes.\n\n1. Replace argumentsFor with one table-driven parser. Its behavior for doctor and native-smoke must stay identical:\n   const FLAGS = { doctor: {'--executable': 'executable'}, prerequisites: {'--executable': 'executable', '--cache-dir': 'cacheDir'}, 'native-smoke': {'--work-dir': 'workDir'} }\n   - argv must be an array, argv[0] an own key of FLAGS (use Object.hasOwn, never a plain lookup), and argv.length odd.\n   - Read (flag, value) pairs in order. Each pair is refused (null) when:\n     - the flag is not an own key of that command's table;\n     - the flag's option was already set;\n     - the value is not a string, is blank after trim, or holds a control character (/[\\x00-\\x1f\\x7f]/);\n     - the option is cacheDir or workDir and !path.isAbsolute(value).\n   - native-smoke without workDir is null.\n   - Return {command, options}, where options holds only the flags given.\n   This keeps every existing CLI row green: a bare doctor or prerequisites, --executable, native-smoke --work-dir, and each existing refusal.\n2. USAGE = 'Usage: cli.mjs doctor [--executable <path>] | prerequisites [--executable <path>] [--cache-dir <absolute path>] | native-smoke --work-dir <absolute path>'.\n3. Change the signature to:\n   export async function hostPrerequisites({ executable, cacheDir } = {}, { platform = platformFor(process.platform) } = {})\n   It calls platform.prerequisites({ provider: { executable }, cacheDir }) and keeps its result mapping and its PLATFORM_UNSUPPORTED branch. The default runs per call, so the existing unsupported-host row (which swaps process.platform) still works. The JSDoc says platform is a test seam. vm-control.mjs's prerequisites({}) call is unaffected.\n4. runCli, reportFor, smokeReport and the doctor path are unchanged. The parsed options object goes to prerequisites exactly as today.\n\nError handling: every malformed argv is CLI_INPUT_INVALID with USAGE, before any doctor or prerequisites call. A throwing prerequisites call is still PREREQUISITES_UNAVAILABLE, with no stack or path in the report. No platform rule changes: cacheReadable still decides what a usable cache directory is.\n\nThen `node --test scripts/tests/local-runner.test.mjs` must be green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/cli.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/cli.mjs"
+      ],
+      "note": "Table-driven parser + hostPrerequisites platform seam; full local-runner.test.mjs green (293/292/0/1 skip).",
+      "startedAt": "2026-10-30T15:50:45.285Z",
+      "completedAt": "2026-10-30T15:51:32.772Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh. From the repo root:\n`node --test scripts/tests/local-runner.test.mjs`\nOn WSL, run it as:\n`env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`\nwith no MOE_* variables.\n- It must exit 0. Give complete_task its command, exit code and output tail.\n- Also run `node --test scripts/tests/local-runner-vm-control.test.mjs` and report it. vm-control.mjs imports hostPrerequisites, so this confirms the signature change is compatible.\n- Record `git diff --numstat` for the two files.\n- If anything fails, edit only what the failure needs. Never touch other sessions' dirty paths.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/cli.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Verification exit 0 (293/292/0/1 skip); vm-control 12/12. numstat cli.mjs +24/-12, test +66/-3.",
+      "startedAt": "2026-10-30T15:51:33.580Z",
+      "completedAt": "2026-10-30T15:52:24.866Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a hostile argv:\n- a prototype key such as 'constructor', 'toString' or 'hasOwnProperty' as a command or a flag;\n- a flag with no value, a value that is itself a flag, repeated flags, Windows-style paths on POSIX and the reverse, a value of control characters only;\n- does any refusal path still call doctor or prerequisites?\n- does any option leak from one command's table into another's?\n- does hostPrerequisites still map every platform report through the same fields, so no extra field, path or stack reaches the output?\n\nRun mutation probes in a scratch copy: cp -r scripts/local-runner and scripts/tests into a mktemp dir, never the shared tree. Score each by exit code with --test-name-pattern. Each must be killed by the named rows:\n(i) provision.mjs sets provider.executable = platform.executable unconditionally: the R13a provisionGuest row;\n(ii) a repeated flag is accepted: the rejection rows;\n(iii) a relative --cache-dir is accepted: the rejection rows;\n(iv) hostPrerequisites drops cacheDir: the R13a Linux row (with --cache-dir, exit 2);\n(v) doctor accepts --cache-dir: the rejection rows;\n(vi) native-smoke accepts a second flag: the rejection rows;\n(vii) the parser looks up FLAGS with `in` or a plain index instead of Object.hasOwn: the rejection loop's ['Prerequisites'] row, plus a 'constructor' command row if the existing rows do not already kill it.\n\nIf a mutant survives, add a test that kills it, unless the mutant is provably equivalent; then say why in the step note. If this review changes any byte, re-run the step-3 command and give complete_task that fresh output. Report both files in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/cli.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Probes i-vii: all killed except vi, which survived because no row paired native-smoke --work-dir with --executable. I added that row; vi is now killed. Prototype keys (constructor, toString, hasOwnProperty) refused as command and flag. Refusals happen before any doctor or prerequisites call. hostPrerequisites maps only the same four fields. Full re-run after the added row exits 0, 294/293/0/1 skip.",
+      "startedAt": "2026-10-30T15:52:25.696Z",
+      "completedAt": "2026-10-30T15:53:35.988Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-f4811a729f9e436ba129a65c12d348c1",
+  "dependsOn": [
+    "task-001d8ab383ef41088e045b2e41ed0e1e"
+  ],
+  "priority": "HIGH",
+  "order": 254.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:03:04.980Z",
+  "updatedAt": "2026-10-30T15:58:30.296Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:04:10.299Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T15:58:11.154Z",
+    "wallClockMs": 35640855
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-0062feec",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:08:25.360Z",
+  "executionContract": {
+    "intendedBehavior": "`node scripts/local-runner/cli.mjs prerequisites` takes an optional `--cache-dir <absolute path>` beside the optional `--executable <path>`. Each flag may appear at most once, in either order. hostPrerequisites passes the directory to the host platform as platform.prerequisites({provider: {executable}, cacheDir}), so a correctly provisioned Linux host with a cache directory strictly under home, with no hidden segment, reports ready:true and exits 0. Without the flag it still exits 2. A malformed flag is CLI_INPUT_INVALID before any prerequisite call. doctor and native-smoke accept exactly what they did before. hostPrerequisites gains a test-only {platform} second argument. A test pins that provisionGuest sends every Multipass call to an explicit provider.executable rather than the platform's default client.",
+    "acceptanceCriteria": [
+      "Rejection rows: a relative, empty, blank, control-character, repeated or dangling --cache-dir, plus doctor or native-smoke given --cache-dir, are each CLI_INPUT_INVALID with the new USAGE, with zero prerequisite calls and exit 2.",
+      "Pass-through row: --cache-dir alone, or with --executable in either order, reaches prerequisites as exactly {cacheDir} or {executable, cacheDir}. hostPrerequisites forwards exactly {provider: {executable}, cacheDir} to the platform seam.",
+      "End-to-end Linux row: with --cache-dir /home/u/moe-images, every seamed prerequisite holds and the run exits 0 with LINUX_READY. Without the flag it exits 2 with the cache item null. With a hidden cache dir it exits 2 with the cache item false. With --executable, the doctor calls use it.",
+      "provisionGuest row: with an explicit provider.executable, every non-snap call uses it and the snap's /snap/bin/multipass is never called."
+    ],
+    "invariants": [
+      "No platform rule changes: platform-linux.mjs cacheReadable alone decides whether a cache directory is usable.",
+      "Every malformed argv is refused before any doctor or prerequisites call, with only the fixed CLI_INPUT_INVALID report.",
+      "doctor and native-smoke accept exactly the argv they accepted before.",
+      "Reports carry no stack, path or provider diagnostic beyond the existing fields. No .moe edits. No verified-local or isolation claim."
+    ],
+    "compatibility": [
+      "vm-control.mjs statusReport calls hostPrerequisites({}), which keeps working through the defaulted first argument and the default platform.",
+      "Windows and macOS platforms get cacheDir passed through and apply their own rules; the Windows module ignores it.",
+      "The CLI's JSON report shapes and exit codes are unchanged except that a ready Linux host can now reach 0."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/cli.mjs: the FLAGS table and argumentsFor, USAGE, and the hostPrerequisites signature with its platform seam.",
+      "scripts/tests/local-runner.test.mjs: the USAGE copy, the new rejection argv, and the R13a pass-through, end-to-end Linux and provisionGuest-precedence rows."
+    ],
+    "reuse": [
+      "The landed Linux seam helpers in local-runner.test.mjs: ROOMY, linuxTransport, LINUX_READY, linuxItems, only, onLinux, linuxVm, provisionHarness, provisionWith and provisioned.",
+      "platform-linux.mjs prerequisites already accepts cacheDir and its probe seams; only the CLI path was missing."
+    ],
+    "sourceAssumptions": [
+      "cli.mjs argumentsFor accepts [cmd], [cmd, '--executable', x] (doctor and prerequisites) or ['native-smoke', '--work-dir', abs]. hostPrerequisites({executable}) calls platformFor(process.platform).prerequisites({provider: {executable}}).",
+      "platform-linux.mjs cacheReadable(cacheDir, home) is null for an undefined cacheDir, false for a relative, hidden or outside-home directory, and true strictly under home. prerequisites() takes provider, cacheDir, doctor, snapExecutable, statDevice, statfs, cpus, freemem, homedir and host seams.",
+      "provision.mjs provisionGuest sets provider = {...provider, executable: provider.executable ?? platform.executable} before the prerequisites call and every provider call.",
+      "vm-control.mjs statusReport calls prerequisites({}) with prerequisites defaulting to hostPrerequisites."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner.test.mjs",
+      "node --test scripts/tests/local-runner-vm-control.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- A table-driven argv parser (FLAGS per command), chosen over a fourth special case in the old argumentsFor. It is about the same size, makes 'either order, at most once' structural, and keeps doctor and native-smoke byte-for-byte equivalent.\n- The platform seam is the second argument of hostPrerequisites, as the description asks. Keeping process.platform swapping was rejected; the existing unsupported-host row still swaps it and keeps working, because the default is evaluated per call.\n- The provisionGuest row covers Linux only: the QA relay concerned the Linux snap pin. Windows keeps its own default-client row.",
+    "codebaseInsights": "- local-runner.test.mjs already has complete Linux seams (ROOMY, with homedir /home/u and cacheDir /home/u/moe-images) plus a provisioning harness with linuxVm, which records each call's executable.\n- ROOMY passes host: LINUX_HOST and cacheReadable uses path.posix, so the end-to-end CLI row runs on every CI OS. The provisionGuest row composes POSIX host paths and skips on win32, like its neighbours.\n- USAGE appears only in cli.mjs and the test's own copy at about line 2116; no doc quotes it.\n- CQ-R13d (task-a8a3a502) adds `certify` to cli.mjs next and depends on this task.",
+    "risks": "- The test file is large and shared. CQ-R11e (dependsOn) lands its CJ rows first; edit only the CLI and Linux sections.\n- path.isAbsolute follows the host's syntax: '/home/u/...' counts as absolute on Windows too, so the rows stay portable.\n- The global forbiddenPatterns include the prototype-accessor key name: never write that literal in code or tests. Use 'constructor', 'toString' and 'hasOwnProperty' for the prototype-key probes.\n- The shared checkout carries other sessions' dirty paths. Report only the two files.",
+    "keyFiles": [
+      "scripts/local-runner/cli.mjs",
+      "scripts/local-runner/platform-linux.mjs",
+      "scripts/local-runner/provision.mjs",
+      "scripts/local-runner/vm-control.mjs",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:08:25.383Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T15:50:04.634Z",
+  "reviewStartedAt": "2026-10-30T15:53:40.292Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 294\nℹ suites 0\nℹ pass 293\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 36129.516234",
+    "reportedAt": "2026-10-30T15:53:40.292Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/cli.mjs",
+    ".moe/tasks/task-6c56fe88c60f4a8fab7d1fd5508a0f66.json",
+    ".moe/tasks/task-6dd3ce1fbf204f0e9427fd0693118a0c.json",
+    ".moe/tasks/task-7fffec67fbb44d1e9a509f214105e2bb.json"
+  ],
+  "completionSummary": "prerequisites now accepts --cache-dir <absolute path> beside --executable. The table-driven parser allows each flag at most once, in either order, and refuses relative, empty, blank, control-character, repeated or dangling values, plus --cache-dir on doctor or native-smoke, all as CLI_INPUT_INVALID before any call. hostPrerequisites({executable, cacheDir}, {platform}) forwards {provider:{executable}, cacheDir} and maps the same four report fields. USAGE names the flag. New rows: parsing and rejection, pass-through, a seamed Linux end-to-end row, and a provisionGuest precedence row. The Linux end-to-end row gives exit 0 with --cache-dir, exit 2 without it (cache item null), and exit 2 for a hidden cache dir (cache item false). Mutation probes i-vii were killed in a scratch copy; vi survived at first and I added a native-smoke --work-dir plus --executable row to kill it. Verification exit 0, 294 tests, 293 pass, 0 fail, 1 skip; vm-control test 12/12. No platform rule changes; verified-local stays unavailable and no isolation is claimed.",
+  "commits": [
+    {
+      "sha": "b68014ab5698a97dd345891ceb6c28493f896f8d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T15:49:45Z",
+      "paths": [
+        ".moe/tasks/task-6c56fe88c60f4a8fab7d1fd5508a0f66.json",
+        ".moe/tasks/task-6dd3ce1fbf204f0e9427fd0693118a0c.json",
+        "scripts/local-runner/cli.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T15:54:10.606Z",
+      "treeId": "eb81b7f96cb2ecfaf82a0798d67efe34e73df674",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "aeb9f72e5a0ce77e0b60841fd9fa56a7c7f5d900",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T15:56:34Z",
+      "paths": [
+        ".moe/tasks/task-6dd3ce1fbf204f0e9427fd0693118a0c.json",
+        ".moe/tasks/task-7fffec67fbb44d1e9a509f214105e2bb.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T15:58:30.296Z",
+      "treeId": "7fa87b9618086c1a3225e0a099a97694fc1674b0",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T15:56:34Z",
+    "at": "2026-10-30T15:58:30.296Z"
+  },
+  "completedAt": "2026-10-30T15:58:11.154Z",
+  "reviewCompletedAt": "2026-10-30T15:58:11.154Z",
+  "reviewSummary": "Reviewed completion commit b68014ab (on moe/work-2026-10-24, in task.commits): cli.mjs +24/-12, local-runner.test.mjs +66/-3, ~+75 net, under 400. The 3 deleted test lines are import/USAGE/loop-head, extended not weakened.\n\nRe-ran verification myself: `env -i HOME PATH=nvm-node-24 node --test scripts/tests/local-runner.test.mjs` exit 0, 294 tests, 293 pass, 0 fail, 1 skip. vm-control test 12/12 (hostPrerequisites({}) still works).\n\nSix mutation probes in a scratch copy (removed after; shared tree untouched), each killed by the R13a/CLI rows: hostPrerequisites drops cacheDir; repeated flag accepted; relative --cache-dir accepted; doctor accepts --cache-dir; FLAGS lookup via `in` instead of Object.hasOwn; provision.mjs forces platform.executable over an explicit provider.executable. Unmutated copy stayed green.\n\nDoD: (1) pass-through row covers --cache-dir alone or with --executable in either order; the rejection loop covers relative, empty, blank, control-char, repeated, dangling and doctor/native-smoke misuse as CLI_INPUT_INVALID with zero prerequisite calls. (2) Seamed Linux end-to-end row: exit 0 / LINUX_READY with /home/u/moe-images; without the flag exit 2 with cache item null; hidden dir exit 2 with item false; with --executable all doctor calls use it and SNAP_MULTIPASS is never called. (3) provisionGuest row: every non-snap call uses the explicit provider.executable. (4) Verification output reproduced.\n\nRails: no platform rule changes, no .moe edits, doctor/native-smoke argv unchanged, no verified-local or isolation claim. Parser is defensive (Object.hasOwn, odd-length check, refusal before any call); hostPrerequisites maps only the same four fields.",
+  "requiredCheckAtDone": null
+}

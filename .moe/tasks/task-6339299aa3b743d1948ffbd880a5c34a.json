@@ -1,0 +1,283 @@
+{
+  "id": "task-6339299aa3b743d1948ffbd880a5c34a",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V12b] Dependency projection agreement",
+  "description": "Objective: every daemon place that projects whether a prerequisite is ready must give the answer of the ONE shared predicate, and that answer must agree with QA and delivery. This is V12's DoD 2, split out of the epic-final V12 (task-b621ddc9) on 2026-10-29 by architect-e4b7eee0 for size. V12 re-runs this test unchanged.\n\nBackground, read at HEAD 2026-10-29:\n- state/dependencyUnblock.ts holds dependencyShortfall, isDependencySatisfied, unmetDependsOn and unmetBlockedOnTaskIds.\n- unmetDependsOn(state, task) feeds tools/getContext.ts:512 (task.dependsOnUnmet), tools/listTasks.ts:115, tools/searchTasks.ts:167, tools/setTaskDependencies.ts:84, state/resourceStore.ts:73 (grant eligibility) and tools/claimNextTask.ts:243.\n- reportBlocked.ts calls isDependencySatisfied directly.\n- CQ-V09 (task-af83018e) makes dependencyShortfall and isDependencySatisfied consumer-aware: (state, taskId, consumer?).\n- V09's plan passes the consumer only at claimNextTask:243 and reportBlocked:231, 488 and 495. Any site still calling without the consumer would let a strict consumer see a legacy-DONE or missing prerequisite as ready.\n\nDeliverable:\n1. A new packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts on CQ-V11's createMcpCaller (src/__acceptance__/mcpCall.ts). It has no imported handlers. It is table-driven over consumer (legacy, strict) by prerequisite state:\n   - legacy DONE;\n   - strict DONE with and without verified delivery;\n   - ARCHIVED with and without retained proof;\n   - missing id;\n   - not DONE.\n   It asserts that these all equal isDependencySatisfied(state, id, consumer): claim_next_task withholding, get_context dependsOnUnmet, the list_tasks and search_tasks dependsOnUnmet counts, set_task_dependencies dependsOnUnmet, report_blocked dependenciesSatisfied, and the auto-unblock of a BLOCKED consumer. A strict prerequisite is satisfied only after a successful qa_approve on its current candidate with complete delivery evidence.\n2. Fix every site that disagrees, so it passes the consumer through the shared predicate, never a parallel one. Each fix gets a failing-first row.\n3. CQ-V02's hand-forward (comment on V12 by worker-7d158765): state/deliveryProjection.ts checkFor adds the run's `outcome` to latestCheckRun when one is recorded, and no key when it is absent. Test it in state/deliveryProjection.test.ts. The wire change is additive, and JetBrains' Gson ignores unknown keys.\n\nError handling: an unjudgeable prerequisite stays unmet (fail closed), at every site.\n\nScope boundaries: no client UI. JetBrains DeliveryPresentation.kt still renders the reported exit code; that follow-up is outside this epic. No new activity event types; ACTIVITY_EVENT_TYPES is mirrored in moe-vscode. Legacy consumers are byte-identical. Serialize with any open task that touches the same files, since C-series tasks edit getContext.ts and claimNextTask.ts. No .moe edits.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "For every consumer (legacy, strict) x prerequisite state (legacy DONE, strict DONE with/without verified delivery, ARCHIVED with/without retained proof, missing id, not DONE), claim_next_task withholding, get_context dependsOnUnmet, list_tasks/search_tasks dependsOnUnmet, set_task_dependencies dependsOnUnmet and report_blocked dependenciesSatisfied all equal isDependencySatisfied(state, id, consumer), proven by src/__acceptance__/dependencyProjection.acceptance.test.ts through createMcpCaller.",
+    "A strict prerequisite counts as satisfied, and auto-unblocks a BLOCKED strict consumer, only after qa_approve succeeded on its current candidate with complete delivery evidence, proven in the same file.",
+    "Every non-test call of unmetDependsOn, unmetBlockedOnTaskIds, isDependencySatisfied or dependencyShortfall (including resourceStore grant eligibility) passes the consumer task; each site fixed here has a failing-first row in the same file.",
+    "latestCheckRun in the delivery projection carries the run's outcome when one is recorded and no outcome key when absent, proven by state/deliveryProjection.test.ts.",
+    "Legacy consumers keep today's answers: every pre-existing dependency, unblock, claim and projection test passes unchanged.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 4, CQ-V02's hand-forward from worker-7d158765's comment on V12: latestCheckRun carries the run's outcome.\n\nTests first, in packages/moe-daemon/src/state/deliveryProjection.test.ts, reusing the file's existing check fixture:\n- O1: a run with outcome 'timeout' at exit 0 projects latestCheckRun toStrictEqual { command, exitCode: 0, source: 'runner-observed', outcome: 'timeout' }.\n- O2: a run without an outcome (a legacy row) projects NO outcome key, toStrictEqual today's shape. Every existing latestCheckRun expectation in the file stays unchanged.\n- O3: a hand-edited outcome outside CHECK_OUTCOMES (state/checkRunStore.ts), such as 'PASSED' or 7, projects no outcome key. It is display only: gating stays in delivery/policy.ts.\n\nThen packages/moe-daemon/src/state/deliveryProjection.ts:\n- TaskDelivery['latestCheckRun'] gains `outcome?: CheckOutcome`;\n- checkFor appends `...(CHECK_OUTCOMES.includes(check.outcome as CheckOutcome) ? { outcome: check.outcome } : {})` after source.\n\nError handling: an unreadable outcome is omitted, never thrown, inside readEvidence's existing guard. The wire change is additive: JetBrains' Gson ignores unknown keys, and no client renders it in this epic (DeliveryPresentation.kt is out of scope). Hold the SCHEMA.md note for V12's docs sweep.\n\nIterate with `cd packages/moe-daemon && npx vitest run src/state/deliveryProjection.test.ts`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/deliveryProjection.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/deliveryProjection.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.test.ts"
+      ],
+      "note": "DoD 4 done. checkFor adds `outcome` to latestCheckRun only when the stored value is a CHECK_OUTCOMES member (isCheckOutcome). Otherwise there is no key, never `outcome: undefined`. TaskDelivery.latestCheckRun picks 'source' | 'outcome' as Partial.\n\nTests in deliveryProjection.test.ts:\n- O1: it.each over all 6 CHECK_OUTCOMES at exit 0, toStrictEqual with outcome. All 6 failed red before the fix.\n- O2/O3: undefined, null, 'PASSED' and 7 give exactly today's `expected` (toStrictEqual, no outcome key).\n\nExisting expectations are unchanged. Focused run in the Linux snapshot (/tmp/moe-v12b.aEcJAL): deliveryProjection plus src/server, 15 files, 462 passed. SCHEMA.md and MCP_SERVER.md notes are held for V12's docs sweep. Peer dirty paths noted and untouched (CLAUDE.md, docs/*, moe-jetbrains/*, schema.ts, moe-proxy utils.ts, moe-agent.sh, .moe/*).",
+      "startedAt": "2026-10-30T18:36:48.441Z",
+      "completedAt": "2026-10-30T18:38:46.598Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts (DoD 1, 2 and 5). Keep it to about 250 lines, using it.each and one row builder.\n\nThese prerequisites are landed by WORKING time; adapt to their landed names and codes:\n- V11's createMcpCaller and McpCallError (src/__acceptance__/mcpCall.ts);\n- V09's consumer-aware dependencyShortfall, isDependencySatisfied and describeUnmetDependency, its tokens, and its fixture conventions in state/dependencyReadiness.strict.test.ts.\nNever import a .test.ts module, because vitest would re-register its suites.\n\nTool calls: EVERY projection is read through `call` (createMcpCaller(state)), never a handler. Prerequisite and consumer rows are seeded the way V09's strict test seeds them (raw rows plus the candidate, check-run, review and receipt stores), because no tool can mint a historical state. The one exception is DoD 2's approval, which is a real call('moe.qa_approve').\n\nSettings: deliveryPolicy 'local-branch', qualityGate GATE and qualityGateScope 'everyTask'. A strict DONE prerequisite therefore owes `required-check:${GATE}`. Without a gate, a DONE row would owe nothing and the 'without verified delivery' row could not exist.\n\nEach consumer kind is built as V09 builds it:\n- strict: resolveTaskDeliveryPolicy is not 'legacy', e.g. a v2 snapshot with deliveryPolicy 'local-branch';\n- legacy: deliveryPolicy 'legacy'.\n\nThe matrix. Assert BOTH a hard-coded expected value AND equality with isDependencySatisfied(state, prerequisiteId, consumer) (the oracle), so a wrong oracle also fails:\n| prerequisite | legacy consumer | strict consumer |\n| legacy DONE | met | unmet (legacy-delivery) |\n| strict DONE with the gate run on the current candidate's tree | met | met |\n| strict DONE without it | unmet | unmet |\n| ARCHIVED with retained proof (current candidate, last review approve, receipt) | met | met |\n| ARCHIVED without a receipt | met (today: ARCHIVED is not judged) | unmet (archived-without-verified-delivery) |\n| missing id (never created) | met (today: gone satisfies) | unmet (prerequisite-missing) |\n| not DONE (WORKING) | unmet | unmet |\nIf V09's landed rules differ, follow V09's landed tests and record the difference in the step note. Never fit the table to a failing site.\n\nThe projections for each row are built fresh by the row builder. Each must agree with the expected value:\n1. get_context(consumer): task.dependsOnUnmet toStrictEqual (met ? [] : [id]);\n2. list_tasks and search_tasks: the consumer summary's dependsOnUnmet === (met ? 0 : 1);\n3. set_task_dependencies(consumer, [id]): dependsOnUnmet toStrictEqual as in 1. For the missing-id row it is the landed refusal for an unknown id: assert its exact codeName;\n4. claim_next_task:\n   - the ranked pool with statuses ['WORKING'] claims the consumer iff met;\n   - an explicit taskId claim of an unmet consumer is refused with the landed codeName, DEPENDENCY_EVIDENCE_MISSING where the shortfall is evidence;\n5. report_blocked on a second consumer of the same kind, with blockedOnTaskIds [id]: dependenciesSatisfied === met, and the status is BLOCKED iff unmet.\n\nDoD 2, auto-unblock, as its own describe. Strict and legacy BLOCKED consumers wait on these prerequisites:\n- P1: a strict REVIEW prerequisite moved to DONE by call('moe.set_task_status') WITHOUT evidence. Both consumers stay BLOCKED.\n- P2: a strict REVIEW prerequisite whose current candidate has the gate run and a recorded completion commit, then call('moe.qa_approve', { candidateId, summary }) succeeds. Both consumers return to blockedFromStatus. Before the approval, both projections said unmet.\n- P3: a legacy prerequisite moved to DONE. The legacy consumer unblocks; the strict one stays BLOCKED with legacy-delivery.\nAwait the event-driven unblock the way state/dependencyUnblock.test.ts does.\n\nError handling: a prerequisite whose evidence cannot be judged (a hand-edited unrecognised deliveryPolicy on the prerequisite) is unmet at every projection for both consumers, which is fail-closed. Add it as one more matrix row.\n\nIterate with `cd packages/moe-daemon && npx vitest run src/__acceptance__/dependencyProjection.acceptance.test.ts`.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts"
+      ],
+      "note": "New file src/__acceptance__/dependencyProjection.acceptance.test.ts, 268 lines, 13 tests, all green in the snapshot. No tool handler is imported: every projection goes through createMcpCaller. Runner-observed passes use a second caller whose adapter forwards { runner } exactly as WebSocketServer's /runner channel does. The readiness vi.mock is copied from V09, and a row pins that the real assertExecutionProfileReady still refuses.\n\nMatrix, for each of 8 rows x {legacy, strict}: a hard-coded column AND the isDependencySatisfied oracle, set_task_dependencies dependsOnUnmet, get_context dependsOnUnmet, list_tasks and search_tasks counts, report_blocked dependenciesSatisfied plus status, the auto-unblock (runDependencyUnblock) of a BLOCKED consumer, the explicit-claim refusal codeName plus V09 token text, and the ranked WORKING pool claiming exactly the met consumers.\n\nDoD 2:\n- P2: the strict binding is live (STEP_ENTRY_IDENTITY_REQUIRED without attemptId); DELIVERY_EVIDENCE_MISSING before the pass with both consumers BLOCKED; after the runner pass a real qa_approve gives DONE and both return to blockedFromStatus.\n- P1 (gate passed false/true): set_task_status DONE never releases the strict consumer (approved-review); the legacy one is released only with the pass.\n- P3: a legacy prerequisite DONE releases only the legacy consumer; strict lacks verified-local-snapshot.\n\nDIFFERENCES from the plan, following V09 rev 2's landed rules (mem decision-strict-consumer-readiness):\n1. Strict means a verified-local consumer profile, not a deliveryPolicy. Live executionProfile is unset (legacy) with deliveryPolicy 'legacy', qualityGate GATE and scope everyTask. 'local-branch' was dropped because it no longer selects strictness; verified-local checks are judged under every policy.\n2. Tokens: verified-local-snapshot replaces legacy-delivery, and delivery-receipt replaces archived-without-verified-delivery. prerequisite-missing is as planned.\n3. Not DONE uses REVIEW, so the WORKING pool holds only consumers.\n4. Missing id: set_task_dependencies refuses INVALID_INPUT (then the edge is seeded raw), and report_blocked answers ignoredBlockedOnTaskIds without recording anything. That is the pre-existing unknown-id input contract, kept byte-identical.\n5. Unjudgeable: the prerequisite snapshot has deliveryPolicy 'bogus'. Unmet everywhere for both kinds, and the claim is refused INVALID_INPUT.\n6. Strict consumers sit in epic-2, because a solo seat may not claim an epic+status another seat holds (NO_TEAM_MEMBERSHIP).",
+      "startedAt": "2026-10-30T18:38:48.696Z",
+      "completedAt": "2026-10-30T18:43:48.814Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 3: an audit plus fixes, in packages/moe-daemon/src/state/dependencyUnblock.ts.\n\n1. List every non-test call of unmetDependsOn, unmetBlockedOnTaskIds, isDependencySatisfied, dependencyShortfall and describeUnmetDependency (`grep -rn` over packages/moe-daemon/src, excluding *.test.ts). Record each site and the consumer it passes in the step note.\n   - Expected after V09: unmetDependsOn and unmetBlockedOnTaskIds forward their own task, so these callers inherit the consumer: getContext.ts, listTasks.ts, searchTasks.ts, setTaskDependencies.ts, resourceStore.ts:73 grant eligibility, util/claimEligibility.ts and claimNextTask.ts.\n   - claimNextTask.ts:243 and reportBlocked.ts pass it directly.\n2. Fix only sites that DROP the consumer, or that the step 2 matrix shows disagreeing. Each fix passes the task through the SAME shared predicate, never a parallel check. Each fixed site gets a failing-first row in dependencyProjection.acceptance.test.ts: show it red before the fix, then green.\n   - The most likely remaining site is the blocked-timeout sweep's describeUnmetDependency(state, id) at about line 330. Pass the task, so the #governors alert names the strict token.\n   - That fix is wording only. Pin it with one assertion on the alert text in state/dependencyUnblock.test.ts's existing sweep fixture, if it cannot be reached through MCP.\n3. Edit a site outside dependencyUnblock.ts only when the audit proves it is needed, and name it in modifiedFiles. Files that open peer tasks are still editing (C-series: getContext.ts, claimNextTask.ts) are refused: report them with moe.report_blocked instead of editing.\n\nError handling: every site keeps failing closed. A throw from the predicate is unmet, never satisfied. Legacy consumers keep byte-identical answers: every pre-existing dependency, unblock, claim and projection test passes unchanged (DoD 5).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts"
+      ],
+      "note": "AUDIT at HEAD 35971a84 (V09 landed). Non-test calls of the shared predicate, with the consumer each passes:\n- state/dependencyUnblock.ts:\n  - :108 unmetDependsOn and :114 unmetBlockedOnTaskIds pass `task` (their own row) to isDependencySatisfied;\n  - :98 isDependencySatisfied passes consumer through to dependencyShortfall in try/catch, so a throw is unmet;\n  - :143 carriedBlockQuestion, :221 runDependencyUnblock and :349 alertStaleBlocks all call unmetBlockedOnTaskIds(state, task);\n  - :351 calls describeUnmetDependency(state, id, task). V09 already fixed the sweep site the plan expected here.\n- tools/getContext.ts:610, listTasks.ts:115, searchTasks.ts:167, setTaskDependencies.ts:110 and :120 call unmetDependsOn with the task, or `updated` at :120.\n- state/resourceStore.ts:73 grant eligibility calls unmetDependsOn(state, task).\n- util/claimEligibility.ts:44 (ranked pool and wait_for_task) calls unmetDependsOn(state, task).\n- tools/claimNextTask.ts:253 calls unmetDependsOn plus dependencyShortfall(state, id, task); :256 calls describeUnmetDependency(state, dep.id, task).\n- tools/reportBlocked.ts:234 and :494 call isDependencySatisfied(state, id, task); :501 calls describeUnmetDependency(state, id, task).\n\nThere is no parallel readiness predicate. The status reads at dependencyUnblock.ts:352-356 and reportBlocked.ts:494 only classify ids the predicate already found unmet, for alert and hint wording.\n\nRESULT: no site drops the consumer, and the step 2 matrix shows no disagreement. Nothing was fixed, so dependencyUnblock.ts is unchanged and there are no failing-first rows to add. Step 4's mutants (consumer dropped per site) give the red evidence that the matrix catches a dropped consumer. resourceStore.ts:73 is outside DoD 1's projections; it inherits the forwarding through unmetDependsOn, which the unmetDependsOn mutant covers.",
+      "startedAt": "2026-10-30T18:43:52.262Z",
+      "completedAt": "2026-10-30T18:44:15.515Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then cmp. Each must fail a named row:\n   - unmetDependsOn ignoring its consumer: the strict get_context, list_tasks, search_tasks and set_task_dependencies rows;\n   - unmetBlockedOnTaskIds ignoring it: the strict report_blocked row and DoD 2's P3;\n   - claimNextTask's dependencyShortfall without the consumer: the strict claim rows;\n   - ARCHIVED read as satisfied for a strict consumer: the ARCHIVED-without-receipt row;\n   - checkFor dropping outcome: O1;\n   - checkFor emitting `outcome: undefined`: O2, through toStrictEqual.\n2. The GATE runs fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate):\n   - take `git archive HEAD` of the whole repo, with V09 and V11 in HEAD;\n   - overlay ONLY this task's files;\n   - run `npm ci` after checking the lockfile against the tree;\n   - use env -i with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH;\n   - `cd packages/moe-daemon && npm test` and `npx tsc --noEmit` must both exit 0. The latestCheckRun wire shape is shared, so the full suite is the scope;\n   - cmp the overlay against the worktree.\n3. Size: this task's numstat over packages/ must be at most 400 net (QA cap; tests count).\n4. A red run outside this task is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n5. Supply the npm test command, its exit code and the output tail to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts"
+      ],
+      "note": "Fresh whole-HEAD archive 5e885d02 + three owned overlays at /tmp/moe-v12b-verify.2ZpXX9, native npm ci, env -i with Node24.21.0/Linux-only PATH. npm test exit0: 213 files, 6155 passed/20 skipped (36.68s). tsc --noEmit and test-inclusive tsc.v12b config both exit0. Owned files/lock cmp byte-identical; diff --check clean; net packages +296 (<400). Six planned mutants compiled and assertion-failed: unmetDependsOn 3; unmetBlockedOnTaskIds 5 incl P3 (report_blocked calls predicate directly so this mutant is caught by auto-unblock); explicit-claim shortfall3; ARCHIVED bypass1; drop outcome6; undefined outcome22 including O2. Restored each byte-identically. Verification findings fixed only in owned acceptance test: exact 0/1 counts replace zero-ness (list/search omitted-unmet-count mutants survived old13 tests, each fails6 now); runner fixture reuses landed createMcpCaller third options parameter, authenticates temp host key, removes fake adapter/literal runner identity and settings as-never. Final file276 lines,13 cases green. Audit again confirms all predicate callers forward consumer; no dependency production edits. Other sessions' .moe, deliveryBypass.acceptance.test.ts and local-runner.test.mjs dirty bytes untouched/excluded. No Git writes.",
+      "startedAt": "2026-10-30T18:46:30.665Z",
+      "completedAt": "2026-10-30T18:50:07.321Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Read the diff as an agent trying to release a strict consumer early:\n- a projection site that answers from status alone, or that caches an answer across a prerequisite change;\n- a strict consumer released by a legacy-DONE, missing, ARCHIVED-without-proof or unjudgeable prerequisite;\n- the auto-unblock firing before qa_approve succeeded, or on set_task_status DONE alone;\n- the oracle: the hard-coded column, not only isDependencySatisfied, decides every row;\n- dispatch path: grep the acceptance file for 'Tool(' and '.handler(', and expect no hits;\n- the wire shape: latestCheckRun gains only an optional outcome, and legacy rows are byte-identical;\n- rails: no new activity event types, no client UI, no .moe edits, no Git writes, no forbidden tokens, and verified-local untouched.\n\nThen write the Serena memory 'task-task-6339299aa3b743d1948ffbd880a5c34a-handoff' for V12 (task-b621ddc9). Cover:\n- the matrix and its tokens;\n- the audited call sites;\n- any site fixed;\n- the latestCheckRun.outcome wire addition, for the SCHEMA.md and MCP_SERVER.md sweep;\n- that the JetBrains DeliveryPresentation.kt follow-up is outside this epic.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review of complete owned diff (checkpoint8f951bf4 + current delta), not peers: no further edit needed. Runtime remains pure synchronous serving projection: enum membership rejects null/number/unknown strings without coercion; absent outcome key preserved; readEvidence retains failure guard; no mutation/cache/TOCTOU boundary introduced. Hard-coded matrix independently pins shared oracle, strict legacy/missing/archived/unjudgeable withholding, and real MCP QA-before-unblock sequencing; dispatch grep has no Tool(/.handler( calls or test-module imports. Authentication now derives runner via temp key, uses real harness/registry, and restores env. All predicate sites already consumer-aware (V09), no status-only parallel readiness. No production verified-local enablement, new events, UI, direct .moe edits or Git writes. Gated bytes still cmp identical. Verification remains fresh: npm test6155 passed/20 skipped in213 files exit0, prod and owned-test tsc exit0;8 mutants killed. Source net296; handoff + gotcha-dependency-projection-counts saved. V12 owns SCHEMA/MCP_SERVER optional-outcome docs; JetBrains rendering outside epic.",
+      "startedAt": "2026-10-30T18:50:34.583Z",
+      "completedAt": "2026-10-30T18:51:29.828Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-b621ddc99fe44d50ab700b2aa51c84fc",
+  "dependsOn": [
+    "task-af83018e892149a1a18cd6a946edeba5",
+    "task-e493ed19006d4be4a96e3ca2f80a5ab4",
+    "task-6a5d5a13257b48c9940ae3b22347ff7d",
+    "task-a9d1a74d845b4d3d83f359bf864f8651",
+    "task-66e8d7d1e9ef4ba281cdb2f505d47e7d"
+  ],
+  "priority": "HIGH",
+  "order": 250.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T18:14:13.471Z",
+  "updatedAt": "2026-10-30T18:57:18.543Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T19:05:26.061Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T18:56:31.587Z",
+    "wallClockMs": 85865526
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-0062feec",
+    "worker-6e57c4f8",
+    "qa-ba3f4f35"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T19:10:15.344Z",
+  "executionContract": {
+    "intendedBehavior": "Every daemon projection of prerequisite readiness gives the shared predicate's consumer-aware answer: claim_next_task withholding, get_context, list_tasks and search_tasks dependsOnUnmet, set_task_dependencies, report_blocked dependenciesSatisfied, and the auto-unblock. A strict consumer is released only by verified delivery, which for a pending prerequisite means a successful qa_approve with complete evidence. latestCheckRun also projects the run's outcome when one is recorded.",
+    "acceptanceCriteria": [
+      "The consumer x prerequisite matrix agrees across every projection, matching both the hard-coded values and isDependencySatisfied(state, id, consumer).",
+      "Auto-unblock of a strict consumer happens only after a successful qa_approve on the prerequisite's current candidate.",
+      "Every predicate call site passes its consumer, and each fixed site has a failing-first row.",
+      "latestCheckRun.outcome is present when one is recorded and absent otherwise.",
+      "Legacy answers are unchanged, and cd packages/moe-daemon && npm test exits 0."
+    ],
+    "invariants": [
+      "ONE shared predicate, with no parallel readiness check.",
+      "Fail closed: an unjudgeable prerequisite is unmet everywhere.",
+      "Legacy consumers keep byte-identical answers."
+    ],
+    "compatibility": [
+      "latestCheckRun is additive and gains no key for rows without an outcome.",
+      "No new activity event types; ACTIVITY_EVENT_TYPES is mirrored in moe-vscode."
+    ],
+    "approvedScope": [
+      "__acceptance__/dependencyProjection.acceptance.test.ts (new)",
+      "state/dependencyUnblock.ts consumer forwarding, only where the audit proves it is dropped",
+      "state/deliveryProjection.ts checkFor outcome, and its test"
+    ],
+    "reuse": [
+      "V11's createMcpCaller",
+      "V09's consumer-aware predicate and its fixture conventions",
+      "CHECK_OUTCOMES from state/checkRunStore.ts"
+    ],
+    "sourceAssumptions": [
+      "state/dependencyUnblock.ts: unmetDependsOn and unmetBlockedOnTaskIds take the consumer task.",
+      "state/deliveryProjection.ts:57 checkFor projects command, exitCode and source.",
+      "The tools listed in the codebase insights read readiness through unmetDependsOn or isDependencySatisfied."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Importing V11's gatedApproval or V12a's strict scenario: rejected. Both live in test files, and importing one re-registers its suites. Rows are seeded through the stores, as V09's strict test seeds them. Only DoD 2's approval is a real qa_approve.\n- Using isDependencySatisfied as the sole oracle: rejected, because a wrong predicate would agree with itself. Each row also carries a hard-coded expected value.\n- Patching each projection site: unnecessary. The sites call unmetDependsOn or unmetBlockedOnTaskIds with their own task, and V09 makes those forward it as the consumer. The fix point is dependencyUnblock.ts, plus whatever the audit proves.",
+    "codebaseInsights": "Verified at HEAD:\n- dependencyShortfall today: a missing id or ARCHIVED is satisfied; not DONE is unmet; DONE is evaluateDeliveryEvidence.\n- unmetDependsOn(state, task) and unmetBlockedOnTaskIds(state, task) already receive the consumer but drop it.\n- Call sites:\n  - getContext.ts:512, listTasks.ts:115, searchTasks.ts:167, setTaskDependencies.ts:84, resourceStore.ts:73, util/claimEligibility.ts:44 and claimNextTask.ts:243, via unmetDependsOn (243 also calls dependencyShortfall directly);\n  - reportBlocked.ts:231 and 488, via isDependencySatisfied, and :495 via describeUnmetDependency;\n  - dependencyUnblock.ts:123, 201 and 328, via unmetBlockedOnTaskIds, and :330 via describeUnmetDependency without a consumer.\n- TaskDelivery is declared in state/deliveryProjection.ts:13, not schema.ts. checkFor is at line 57. CHECK_OUTCOMES is in state/checkRunStore.ts:51.\n- LANDING_JUDGED: a DONE task owes only the required check, so the matrix needs qualityGate set.\n\nAssumed, from V09's approved plan:\n- dependencyShortfall(state, id, consumer?) and isDependencySatisfied(state, id, consumer?);\n- strict = resolveTaskDeliveryPolicy(settings, consumer) is not 'legacy';\n- tokens legacy-delivery, prerequisite-missing and archived-without-verified-delivery;\n- ARCHIVED needs evaluateDeliveryEvidence, plus the current candidate's last review being approve, plus a receipt;\n- unmetDependsOn and unmetBlockedOnTaskIds forward the task;\n- describeUnmetDependency gains a consumer parameter.",
+    "risks": "- V09 may land different tokens or seeding conventions. Follow its landed tests, and record any matrix difference in the step note; never fit the table to a failing site.\n- Claim and report_blocked mutate rows, so each row needs a fresh builder, and report_blocked uses a second consumer.\n- set_task_dependencies refuses unknown ids, so the missing-id row asserts that refusal.\n- The event-driven unblock timing: await it as dependencyUnblock.test.ts does.\n- C-series tasks edit getContext.ts and claimNextTask.ts. Do not edit them unless the audit proves a dropped consumer, and then report_blocked rather than collide.\n- Keep within the 400-net cap.\n- Hold the latestCheckRun.outcome docs for V12's sweep.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/dependencyUnblock.ts",
+      "packages/moe-daemon/src/state/deliveryProjection.ts",
+      "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+      "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+      "packages/moe-daemon/src/__acceptance__/mcpCall.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T19:10:15.428Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T18:36:48.441Z",
+  "commits": [
+    {
+      "sha": "8f951bf469fd1d1b80a214ed1dc1b878821cc428",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T18:32:50Z",
+      "paths": [
+        ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+        ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+        ".moe/tasks/task-76ae5c472f6a4651a45478b1893e07dc.json",
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.ts"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T18:44:54.132Z",
+      "treeId": "c39f27034c63179704dd9f95cbb8f6132336fc71",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "77e9e47cabe0417741105352cb7a930ca4556f59",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-6e57c4f8@2026-10-30T18:45:27Z",
+      "paths": [
+        ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+        ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+        "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts"
+      ],
+      "recordedBy": "worker-6e57c4f8",
+      "recordedAt": "2026-10-30T18:52:08.763Z",
+      "treeId": "8c1fa10d8bc82f1a0a973cd11060d4eb20fdb069",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "ea739e60d0a94bb3ca686f619b64288eb956b688",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T18:52:40Z",
+      "paths": [
+        ".moe/tasks/task-4e2ab1584c3140019be709b94c71f1cc.json",
+        ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+        ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T18:57:18.542Z",
+      "treeId": "49fe99840dc41e2ebee9bbc9900640a60795b53c",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/state/deliveryProjection.ts",
+    "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+    "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts",
+    "packages/moe-daemon/src/state/dependencyUnblock.ts",
+    ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+    ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+    ".moe/tasks/task-4e2ab1584c3140019be709b94c71f1cc.json",
+    ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+    "packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T18:52:40Z",
+    "at": "2026-10-30T18:57:18.542Z"
+  },
+  "reviewStartedAt": "2026-10-30T18:51:50.335Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh whole-repo archive of 5e885d02389aadf08ce4ebae79520aff14c23703 plus only three task-owned overlays; native npm ci, env -i HOME/NO_COLOR/Linux Node24.21.0 PATH, /tmp/moe-v12b-verify.2ZpXX9/repo. Owned overlays and lockfile cmp identical afterward.\n Test Files  213 passed (213)\n      Tests  6155 passed | 20 skipped (6175)\n   Start at  20:48:36\n   Duration  36.68s (tests 93%, import 4%, transform 3%)\nExit 0. Also npx tsc --noEmit exit0 and test-inclusive npx tsc -p tsconfig.v12b-tests.json exit0.",
+    "reportedAt": "2026-10-30T18:51:50.335Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-V12b: MCP dependency projection agreement matrix (8 prerequisite states x legacy/verified-local consumers), real qa_approve/auto-unblock sequencing, and optional latestCheckRun.outcome. Outcome emitted only for CHECK_OUTCOMES members; absent/invalid rows keep exact legacy shape. Audited every readiness call, including resource eligibility and timeout alerts: V09 already forwards consumer everywhere, so no dependency production patch needed. Existing source checkpoint8f951bf4 contains initial implementation; this session hardened set/list/search count assertions and uses createMcpCaller runner options with authenticateRunner over temporary host key rather than literal identity. New acceptance file276 lines/13 tests; source net296 LOC. Six planned mutants compile and fail assertions; two extra omitted-count mutants survive old assertions then fail new ones. Full daemon gate6155 passed/20 skipped,213 files; production and owned-test typechecks pass. Adversarial review complete; gated bytes unchanged. Legacy missing-id input contract preserved (set refuses, report ignores). Strict means execution profile, not live deliveryPolicy. verified-local remains disabled; no isolation claim. Handoff and gotcha memory saved. V12 owns SCHEMA/MCP_SERVER outcome docs; JetBrains rendering out of epic. No Git writes; wrapper owns landing.",
+  "completedAt": "2026-10-30T18:56:31.587Z",
+  "reviewCompletedAt": "2026-10-30T18:56:31.587Z",
+  "reviewSummary": "Reviewed completion 77e9e47c (tree 8c1fa10d8bc82f1a0a973cd11060d4eb20fdb069) plus checkpoint 8f951bf4 via git show; both contained by moe/work-2026-10-24. Owned source +301/-5 = net296 LOC; diff --check clean. No QA shared-tree/Git writes.\nFresh whole-repo archive of completion: /tmp/moe-v12b-qa.46FJQU/repo; lockfile matched Git, native npm ci, env -i HOME/NO_COLOR/Linux-only Node24.21.0 PATH. Re-ran `cd packages/moe-daemon && npm test`: exit0, 213 files, 6155 passed/20 skipped, 37.63s. `npx tsc --noEmit` and owned-test-inclusive `npx tsc -p tsconfig.qa-owned.json`: exit0.\nDoD1/2: inspected 8-state x legacy/strict hard-coded matrix via createMcpCaller: exact projections/counts, ranked/explicit claims, blocking/auto-unblock; real QA identity/check refusals and QA-before-release sequencing. Preserves landed V09 profile semantics and missing-id refusal/ignore contracts. DoD3: independently audited all predicate calls, including resource/claim eligibility, no-op dependency updates and timeout descriptions: all pass consumer; no dependency production fix needed. DoD4: all six outcomes projected; absent/null/invalid values omit key with exact legacy shape. DoD5/6: existing tests unchanged; full suite green.\nAll six planned scratch mutants compiled and assertion-failed (3/5/3/1/6/22 failures); restored focused suites 79/79. An initially noncompiling ARCHIVED mutant was corrected for TS narrowing before counting it. Restored files cmp-identical to commit; owned working files also match. No production enablement, new events, UI or migration/config changes. SCHEMA/MCP_SERVER outcome docs handed to V12; JetBrains rendering outside epic. Complexity: lean already; net0 lines proposed.",
+  "requiredCheckAtDone": null
+}

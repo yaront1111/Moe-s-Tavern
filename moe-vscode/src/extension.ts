@@ -4,7 +4,8 @@ import * as fs from 'fs';
 import { BoardViewProvider } from './providers/BoardViewProvider';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { MetricsViewProvider } from './providers/MetricsViewProvider';
-import { MoeDaemonClient } from './services/MoeDaemonClient';
+import { ManagedVmTreeProvider } from './providers/ManagedVmTreeProvider';
+import { MoeDaemonClient, readDaemonJsonText } from './services/MoeDaemonClient';
 import { ConnectionStatusBar } from './statusbar/ConnectionStatusBar';
 import { EpicDetailPanel } from './panels/EpicDetailPanel';
 import { PlanReviewPanel } from './panels/PlanReviewPanel';
@@ -54,6 +55,15 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Managed VMs: owned-VM status with refresh, reconcile and cleanup (CQ-I05); never edits settings
+    const managedVms = new ManagedVmTreeProvider(context.extensionPath, daemonClient);
+    context.subscriptions.push(
+        managedVms,
+        vscode.window.registerTreeDataProvider('moe.managedVms', managedVms),
+        vscode.commands.registerCommand('moe.managedVms.refresh', () => managedVms.refresh()),
+        vscode.commands.registerCommand('moe.managedVms.reconcile', () => managedVms.reconcile()),
+        vscode.commands.registerCommand('moe.managedVms.cleanup', () => managedVms.cleanup())
+    );
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('moe.connect', async () => {
@@ -194,7 +204,7 @@ export function activate(context: vscode.ExtensionContext) {
                 if (workspaceFolders) {
                     const daemonJsonPath = path.join(workspaceFolders[0].uri.fsPath, '.moe', 'daemon.json');
                     if (fs.existsSync(daemonJsonPath)) {
-                        const daemonInfo = JSON.parse(fs.readFileSync(daemonJsonPath, 'utf-8'));
+                        const daemonInfo = JSON.parse(readDaemonJsonText(daemonJsonPath));
                         if (daemonInfo.pid) {
                             items.push({ label: `PID: ${daemonInfo.pid}`, description: '' });
                         }

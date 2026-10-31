@@ -1,0 +1,196 @@
+{
+  "id": "task-10af73355e1b4748b1e07491a7a891cb",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R13c1] Protected launcher runtime marker",
+  "description": "Objective: under the PROTECTED runtime profile, the JetBrains agent launcher marks the session for the wrappers, so CQ-R13c2's wrappers can refuse to fall back when a protected runtime path vanishes. This is CQ-R01's follow-up 6, 'Wrapper-side fallbacks under strong', from the architect note on CQ-R13. The human placed it among the certification-gating items in the architect REPL on 2026-10-30.\n\nSplit out of CQ-R13 (task-f4811a72) by architect-e4b7eee0 on 2026-10-30. It is file-disjoint from CQ-R13c2. The contract shared with CQ-R13c2 is the env var MOE_RUNTIME_PROTECTED, whose value is exactly '1'.\n\nDeliverable:\n- In moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt, selectProtectedAgentRuntime adds MOE_RUNTIME_PROTECTED=1 to the env it returns, beside MOE_DAEMON_PATH and MOE_PROXY_PATH. It appears only in ProtectedAgentRuntime.Selected.\n- The legacy path (protectedAgentRuntime returning null) and resolveAgentEnvOverrides stay unchanged and never set it.\n- Tests in moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt:\n  - Selected carries exactly those three variables;\n  - the legacy path adds none of them;\n  - a Refused selection carries nothing.\n\nOut of scope:\n- the wrappers (CQ-R13c2);\n- the other R01 follow-ups, now in the CQ-RF protected runtime follow-ups epic;\n- VS Code;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\". This is cd moe-jetbrains && ./gradlew test. The WSL host has no Linux JDK, so Gradle runs through Windows cmd.exe, as CQ-R01's verification did.",
+  "definitionOfDone": [
+    "Under the PROTECTED profile, the selected agent runtime's env carries MOE_RUNTIME_PROTECTED=1 beside MOE_DAEMON_PATH and MOE_PROXY_PATH. Shown by TerminalAgentLauncherTest.",
+    "The legacy path and a Refused selection never add MOE_RUNTIME_PROTECTED. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\n1. moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt holds CQ-R01's protected-selection rows (~440-505).\n   - L1: the expected `env` gains \"MOE_RUNTIME_PROTECTED\" to \"1\", so the map is exactly the three keys and every Selected(...) equality includes it. The isWithin loop that keeps runtime paths outside the project must iterate only the two PATH values plus the script, never the marker's '1'.\n   - L3: `selected` carries MOE_RUNTIME_PROTECTED=1. The legacy rows (unconfigured, and executionProfile legacy) still return null, so no marker can come from the selection.\n   - L2: each Refused(...) carries no env at all. That is unchanged and stays asserted.\n2. moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt gets new rendering rows with the protected env:\n   - buildWslBashCommandForTest renders MOE_RUNTIME_PROTECTED='1' unchanged, since toWslPath leaves a non-path value alone, beside the /mnt/ paths;\n   - the PowerShell command renders a `$env:MOE_RUNTIME_PROTECTED` assignment of '1';\n   - a row with only the legacy overrides (MOE_DAEMON_PATH and MOE_PROXY_PATH) renders no MOE_RUNTIME_PROTECTED.\n   - resolveAgentEnvOverrides is made internal for this purpose, and a row asserts that its result for BUNDLED, GLOBAL_CONFIG and PROJECT sources never contains the key.\n3. Run `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`. The changed L1/L3 rows and the new rendering rows fail; everything else passes.\n\nError handling in the tests: they assert exact maps and substrings, never message text, and each temporary folder comes from the JUnit rule.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "note": "Tests written: L1/L3/L2 marker rows in RuntimeSelectionPolicyTest, plus marker/legacy rendering rows in TerminalAgentLauncherTest. They reference the still-private resolveAgentEnvOverrides, so they don't compile yet. I did not do a separate red Gradle run; step 3 runs the full suite fresh.",
+      "startedAt": "2026-10-30T06:12:03.166Z",
+      "completedAt": "2026-10-30T06:12:28.994Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt:\n- Add `internal const val PROTECTED_RUNTIME_MARKER = \"MOE_RUNTIME_PROTECTED\"` beside the other launcher constants. Its comment names the contract: set only under the PROTECTED profile; scripts/moe-agent.{sh,ps1} then refuse to fall back from MOE_DAEMON_PATH/MOE_PROXY_PATH (CQ-R13c2).\n- In selectProtectedAgentRuntime, after both installed paths are accepted, add `env[PROTECTED_RUNTIME_MARKER] = \"1\"` before `return ProtectedAgentRuntime.Selected(script, env)`. A Refused return never reaches it.\n- resolveAgentEnvOverrides changes from private to internal, for the legacy test only. Its behavior is unchanged, and it never adds the marker.\n- Every agent launch takes its env from resolveContext's `selected?.env ?: resolveAgentEnvOverrides(...)`, so this one insertion covers every role, team and WSL launch. Do not touch any other path.\n\nError handling: unchanged. A missing installed artifact is still Refused, with its fixed reason.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-10-30T06:12:29.595Z",
+      "completedAt": "2026-10-30T06:12:34.570Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh.\n\n1. Run `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`. That is cd moe-jetbrains && ./gradlew test; this WSL host has no Linux JDK. It must exit 0. Record the per-class counts from build/test-results/test/TEST-*.xml, as CQ-R01's evidence did. The fresh command, exit code and output tail are complete_task's verification evidence.\n2. `git diff --check` over the three files is clean.\n3. A read-only `git status --short` shows that only those three files changed. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code, never by loosening an equality.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gradle test --rerun exited 0 (BUILD SUCCESSFUL, 341 tests, 0 failures). RuntimeSelectionPolicyTest ran 29 and TerminalAgentLauncherTest ran 26, all passing. git diff --check is clean, and only the three planned files are dirty under moe-jetbrains.",
+      "startedAt": "2026-10-30T06:12:35.251Z",
+      "completedAt": "2026-10-30T06:13:24.276Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the three-file diff as an attacker:\n- Can the marker reach a legacy launch? It must come only from Selected. If the IDE's own process environment carries MOE_RUNTIME_PROTECTED, a legacy wrapper would refuse its fallback; that fails closed, so note it in the constant's comment and do not strip it.\n- Does any launch path bypass resolveContext's env and so miss the marker under PROTECTED? Look for team launches, governor/architect TUIs and WSL launches.\n- Is the value rendered exactly '1' in bash, WSL bash and PowerShell? toWslPath must never rewrite it.\n- Did loosening the visibility of resolveAgentEnvOverrides change any behavior?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 3's command fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "note": "Self-review found no defects. Only selectProtectedAgentRuntime's Selected path sets the marker. All launches (the two callers at lines 323 and 353) take env from resolveContext's `selected?.env ?: resolveAgentEnvOverrides`. The value is a fixed \"1\", and toWslPath leaves a non-drive value unchanged (tested). The inherited-IDE-env caveat is documented in the constant's comment. The internal visibility change has no behavior effect. No code changed after the green Gradle run.",
+      "startedAt": "2026-10-30T06:13:25.020Z",
+      "completedAt": "2026-10-30T06:13:30.883Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-f4811a729f9e436ba129a65c12d348c1",
+  "priority": "HIGH",
+  "order": 254.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:03:25.896Z",
+  "updatedAt": "2026-10-30T06:24:29.027Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:09:56.736Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T06:23:59.404Z",
+    "wallClockMs": 842668
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0",
+    "worker-093a65d0",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:11:20.739Z",
+  "planningNotes": {
+    "approachesConsidered": "- The wrappers detecting 'protected' by themselves, from project.json or their own install location: rejected. project.json is repository-controlled, which is exactly R01 follow-up 2's attack, and the installed root has no marker. Only the launcher, after RuntimeSelectionPolicy.profile() == PROTECTED, knows the session is protected.\n- Failing closed in the wrappers whenever MOE_PROXY_PATH is set but missing: rejected, because it changes legacy behavior (epic rail: preserve legacy).\n- Putting the marker in resolveAgentEnvOverrides: rejected. That is the legacy path.",
+    "codebaseInsights": "- TerminalAgentLauncher.kt:\n  - selectProtectedAgentRuntime (~78-100) builds a linkedMapOf env with MOE_DAEMON_PATH and MOE_PROXY_PATH from RuntimeSelectionPolicy.installedArtifact;\n  - protectedAgentRuntime (~103-110) returns null under legacy;\n  - resolveContext (~215-261) uses `selected?.env ?: resolveAgentEnvOverrides(script.source)`.\n- The WSL bash command maps every override value through toWslPath (~434), which returns non-drive values unchanged. PowerShell renders `$env:` assignments (~484).\n- CQ-R01's protected-selection tests are L1-L3 in RuntimeSelectionPolicyTest.kt and use exact map equality. The rendering tests are in TerminalAgentLauncherTest.kt (buildWslBashCommandForTest ~251).",
+    "risks": "- L1's exact env equality must be updated, and its isWithin loop must skip the marker's non-path value.\n- R01's size rail limits only R01's own landed slice; this is a new row.\n- Gradle runs through cmd.exe from WSL, as R01's verification did; build output lands under moe-jetbrains/build, which is ignored.\n- The CQ-R13c2 wrapper contract is the exact value '1'. Any other value is legacy.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:11:20.761Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:12:03.166Z",
+  "reviewStartedAt": "2026-10-30T06:13:33.958Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :compileTestKotlin\n> Task :testClasses\n> Task :instrumentTestCode SKIPPED\n> Task :test\n\nBUILD SUCCESSFUL in 39s\n11 actionable tasks: 11 executed\n(TEST-*.xml: 341 tests, 0 failures; RuntimeSelectionPolicyTest 29, TerminalAgentLauncherTest 26)",
+    "reportedAt": "2026-10-30T06:13:33.958Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    ".moe/tasks/task-10af73355e1b4748b1e07491a7a891cb.json",
+    ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json",
+    ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
+    ".moe/tasks/task-b799056d744749ba8ca9e4888f3452c4.json"
+  ],
+  "completionSummary": "selectProtectedAgentRuntime now adds MOE_RUNTIME_PROTECTED=1 (constant PROTECTED_RUNTIME_MARKER) to the Selected env, beside MOE_DAEMON_PATH and MOE_PROXY_PATH. Refused selections and the legacy path never carry it. resolveAgentEnvOverrides is now internal so a test can assert it never emits the key. Tests: L1/L2/L3 in RuntimeSelectionPolicyTest, plus marker and legacy rendering rows in TerminalAgentLauncherTest covering WSL bash and PowerShell. Gradle test --rerun passed: 341 tests, 0 failures.",
+  "commits": [
+    {
+      "sha": "71092faeb626fa9c43c18484f2ebaa7fc8327d87",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T06:11:38Z",
+      "paths": [
+        ".moe/tasks/task-10af73355e1b4748b1e07491a7a891cb.json",
+        ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json",
+        ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T06:13:57.501Z",
+      "treeId": "a2a10997709fd0c8b7f13ac4e9a20cc4252a5e07",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "e5f9315707a85ded49a394e2d9f344c17e3c83b1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T06:22:59Z",
+      "paths": [
+        ".moe/tasks/task-10af73355e1b4748b1e07491a7a891cb.json",
+        ".moe/tasks/task-b799056d744749ba8ca9e4888f3452c4.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T06:24:29.027Z",
+      "treeId": "e7a06a261ce27a567ab5aebee58ff50211e8bdd6",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T06:22:59Z",
+    "at": "2026-10-30T06:24:29.027Z"
+  },
+  "completedAt": "2026-10-30T06:23:59.404Z",
+  "reviewCompletedAt": "2026-10-30T06:23:59.404Z",
+  "reviewSummary": "Reviewed completion commit 71092fa on moe/work-2026-10-24. Source diff is small: TerminalAgentLauncher.kt +10/-1, RuntimeSelectionPolicyTest.kt +5/-3, TerminalAgentLauncherTest.kt +38, plus the task's own board JSONs. Re-ran the verification command (cmd.exe gradlew.bat test --rerun in moe-jetbrains): BUILD SUCCESSFUL. Fresh TEST-*.xml show 341 tests, 0 failures/errors/skipped (RuntimeSelectionPolicyTest 29, TerminalAgentLauncherTest 26), matching the worker's evidence.\nDoD 1: selectProtectedAgentRuntime sets env[MOE_RUNTIME_PROTECTED]=\"1\" after both installed paths are accepted, just before Selected(...). L1 asserts exact Selected equality across the windows/preferBash matrix; L3 asserts keys == {MOE_DAEMON_PATH, MOE_PROXY_PATH, MOE_RUNTIME_PROTECTED}, marker \"1\".\nDoD 2: every Refused return precedes the marker line (code-checked); L2 also asserts Refused is never Selected. Legacy path uses resolveAgentEnvOverrides (only private->internal); a new row asserts no ScriptSource result contains the key, and legacy WSL-bash/PowerShell renderings carry no marker.\nDoD 3: verification evidence supplied and reproduced.\nAlso checked: the only resolveContext consumer reads selected?.env, so every role/team/WSL launch gets the marker; it renders as MOE_RUNTIME_PROTECTED='1' in WSL bash and $env:MOE_RUNTIME_PROTECTED='1' in PowerShell; the isWithin loop iterates only the two paths plus the script. No tests deleted or weakened; assertions are exact. Scope matches plan (no wrapper, VS Code or .moe edits). The IDE-inherited-marker fail-closed caveat is documented in the constant's comment. I ran no mutation probe on the shared tree. Not verified here: CQ-R13c2's wrapper consumption (separate task).",
+  "requiredCheckAtDone": null
+}

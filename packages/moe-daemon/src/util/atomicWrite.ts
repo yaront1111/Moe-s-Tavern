@@ -17,6 +17,27 @@ import path from 'path';
 const RENAME_RETRIES = 5;
 const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
+// Code points that render invisibly or reorder text: U+061C, U+200B-U+200F,
+// U+2028-U+202E, U+2060-U+206F and U+FEFF. Built from numbers so this source
+// never carries a raw one itself.
+const fileJsonFormatChars = new RegExp(
+  '[' + [[0x061c], [0x200b, 0x200f], [0x2028, 0x202e], [0x2060, 0x206f], [0xfeff]]
+    .map((range) => range.map((cp) => String.fromCharCode(cp)).join('-')).join('') + ']',
+  'g',
+);
+
+/**
+ * Rewrite hidden-format code points in serialized JSON as `\uXXXX` escapes.
+ * Tool text can carry them raw (bidi overrides, BOM); committed .moe records
+ * would then trip GitHub's hidden-Unicode / Trojan Source warnings. The escaped
+ * file parses to exactly the same value. Apply it to the string AFTER
+ * JSON.stringify (it covers keys too) and only to files, never to transport
+ * JSON or digest input.
+ */
+export function escapeJsonForFile(json: string): string {
+  return json.replace(fileJsonFormatChars, (ch) => String.fromCharCode(92) + 'u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
+}
+
 function makeTmpPath(filePath: string): string {
   return `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
 }
@@ -87,7 +108,7 @@ function renameWithRetrySync(tmp: string, filePath: string): void {
 }
 
 export function atomicWriteJson(filePath: string, obj: unknown): void {
-  atomicWriteText(filePath, JSON.stringify(obj, null, 2));
+  atomicWriteText(filePath, escapeJsonForFile(JSON.stringify(obj, null, 2)));
 }
 
 export function atomicWriteText(filePath: string, content: string): void {
@@ -149,7 +170,7 @@ async function renameWithRetryAsync(tmp: string, filePath: string): Promise<void
 }
 
 export async function atomicWriteJsonAsync(filePath: string, obj: unknown): Promise<void> {
-  await atomicWriteTextAsync(filePath, JSON.stringify(obj, null, 2));
+  await atomicWriteTextAsync(filePath, escapeJsonForFile(JSON.stringify(obj, null, 2)));
 }
 
 export async function atomicWriteTextAsync(filePath: string, content: string): Promise<void> {

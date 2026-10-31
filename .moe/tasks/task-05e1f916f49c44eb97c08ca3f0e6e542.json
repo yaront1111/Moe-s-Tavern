@@ -1,0 +1,275 @@
+{
+  "id": "task-05e1f916f49c44eb97c08ca3f0e6e542",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-account-switch never rotates an interactive seat at a hard usage limit when another plugin swallows classic.StopFailure",
+  "description": "Observed 2026-10-24: architect-26ba32c3 is an interactive TUI on acct-2 (wrapper pid 201785, started 13:57Z) holding R01. At 15:49:09Z it hit \"You've hit your session limit · resets 9:30pm\". It should have run /exit so the wrapper could relaunch it on the next account. Instead it sat idle until claude's own auto-continue at the reset, 18:30Z, about 2h41m later.\n\nThe transcript (acct-2 projects/-mnt-d-projexts-moes/8edd9b5c-….jsonl) records the engine's notice: `moe-account-switch: its classic.StopFailure hook was skipped. \"cc-plugin-sec-default\" runs first and sent the event on past it.`\n\nscripts/mods/moe-account-switch/hooks/register.ts:109-118 is the mod's only hard-limit trigger. So any plugin ordered ahead of it that does not pass StopFailure on disables limit rotation for every interactive seat (architect and governor TUIs). Headless seats are unaffected, because their wrapper detects the failed run.\n\nSuggested direction (the architect decides): do not depend solely on StopFailure. Also check `$.session.usage()` rateLimits ≥100% where the mod already runs for the main loop (turn.complete), and leave() from there. Keep the existing StopFailure path. Confirm the engine's hook ordering, and whether turn.complete fires on a rate-limit stop, with the plugin-authoring skill.",
+  "definitionOfDone": [
+    "A main-loop turn that ends at a hard usage limit (any rate-limit window at 100% or more) schedules the seat's /exit even when classic.StopFailure never reaches the mod (e.g. an earlier plugin does not pass it on).",
+    "No exit is scheduled for a subagent turn, for a session without MOE_WORKER_ID and MOE_ACCOUNT_ID, or for a turn that ends with every window below 100%; the existing StopFailure and accountSwitch paths keep working.",
+    "hooks/register.test.ts covers the skipped-StopFailure case and the three no-exit cases, and fresh `claude plugin test scripts/mods/moe-account-switch` passes with output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Fail open, as the mod does today: an error in the new check must leave the turn and the session as they were."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (load test-driven-development): extend the existing engine fixture with an explicitly configurable session.usage stub (default {startedAt:0, context:{window:200_000}, rateLimits:[]}), counters for completion/usage/StopFailure delivery, and no duplicate usage stubs that shadow overrides. Reproduce the real skip using test(name, {plugins:[{name:'swallow-stop-failure', tier:'prepend', register(on){on('classic.StopFailure', () => ({}))}}]}, body). With SEAT, a main turn.start, and a usage window at 100, fire classic.StopFailure then turn.complete({...TURN,turnId:'t1',reason:'error'}). Assert the bottom StopFailure stub was NOT reached, no exit was scheduled by the swallowed event, completion returns {text:'ok'} unchanged, and clock.advance(EXIT_DELAY_MS-1) yields commands=[], then advance(1) yields ['exit'] with one toast. Also cover turn.complete alone with NO StopFailure dispatch; mixed windows [99.9,100] and >100 on a non-five_hour window; all-below [0,99.9] and empty rateLimits. At 100%, assert no toast/exit/usage read for a subagent completion and for each environment missing worker, missing account, or both; after the subagent, an eligible main completion still exits. Add usage/env failure cases asserting the original completion result is preserved, downstream completion executes once, no pending work refusal/exit is introduced, and a later successful check still works. Verify pre-existing pending accountSwitch still exits even when the usage stub would throw (it must not be read). Cover StopFailure followed by completion, reverse order, and repeated/concurrent completion with exactly one timer/toast/exit; retain all existing accountSwitch/StopFailure tests. Use the mock clock, not real timers. The skipped-hook test must fail against the old implementation; record red proof during the TDD cycle, with the single full regression gate reserved for step 4.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/mods/moe-account-switch/hooks/register.test.ts"
+      ],
+      "modifiedFiles": [
+        "scripts/mods/moe-account-switch/hooks/register.test.ts"
+      ],
+      "note": "TDD red captured in /tmp/moe-account-switch-red.log: 16 pass/10 expected behavioral failures against untouched production code, including swallowed StopFailure (bottom hook 0, then expected usageReads 1 received 0). Retained all 9 original tests; added explicit usage fixture, completion/usage/StopFailure/timer counters, all-window, seat/subagent, fail-open, pending and concurrency tests. Test timer observation must use clock.* plus next.event; duplicate exact registrations are refused. Single test file follows existing harness/approved scope (>300 lines to retain existing coverage). Full regression reserved for step 4. Shared foreign dirt left untouched; no git writes. Initial shell cleanup rejected rm style; plugin tests safely used Python TemporaryDirectory with owned empty CLAUDE_CONFIG_DIR.",
+      "startedAt": "2026-10-24T21:25:57.444Z",
+      "completedAt": "2026-10-24T21:28:15.999Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the minimum shared hard-limit check with fail-open error handling. Add a small internal async helper taking ($, session): `if (session.pending || !(await isSeat($))) return; const { rateLimits } = await $.session.usage(); if (rateLimits.some(window => window.percentUsed >= 100)) session.pending ??= <the existing hard-limit ACCOUNT-SWITCH instruction>;`. Reuse the existing message verbatim; ??= after the await preserves a concurrently delivered daemon instruction. In turn.complete retain `const done = await next(e)`; for `e.agentId === undefined`, await this helper then call leave($, session), and return the original done. Do not gate on reason==='error': the contract is any main completion with a spent window. Keep the existing `.catch(($, e, next) => next(e))`, whose next is replay-safe, so env/usage failures occur before state mutation and preserve the completed turn. Have classic.StopFailure reuse the helper after its existing error==='rate_limit', no agent_id and no-pending guards; retain leave there and its catch. Do not call command.run inside an awaited hook, change the 10-second delay, change isSeat, add polling, or alter the held-tool/accountSwitch policy. Preserve leave's exiting guard so both event paths and concurrent completions schedule only one exit. Add a short why-comment that classic.StopFailure may be skipped by an earlier mod.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/mods/moe-account-switch/hooks/register.ts"
+      ],
+      "modifiedFiles": [
+        "scripts/mods/moe-account-switch/hooks/register.ts"
+      ],
+      "note": "Implemented shared checkHardLimit using existing isSeat/pending/leave; main completion independently checks any window >=100, StopFailure reuses it, daemon instruction preserved via ??= after await. Existing replay-safe catches, held-tool policy and 10-second timer unchanged. Fresh owned-temp-config plugin test: 26 pass / 0 fail (1.44s); full output /tmp/moe-account-switch-green.log. Runtime recommended ponytail but it is absent from available skills and /home/sysadmin/.codex/skills; followed its inline reuse-first guidance using existing primitives. No other paths edited.",
+      "startedAt": "2026-10-24T21:28:23.722Z",
+      "completedAt": "2026-10-24T21:28:39.649Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update the design record's interactive behavior, Limitations paragraph and V13 evidence wording to distinguish the existing classic.StopFailure trigger from the independent main-loop turn.complete >=100% fallback, leased-seat/subagent guards, unchanged 10-second delay, and fail-open usage-read behavior. Correct 'only rate_limit stop' without claiming a real-account end-to-end observation: the incident was user-reported, the API contract is documented/version-typed, and automated evidence is the swallowed-hook test. Explain that a hard-limit-ended turn can rotate mid-task although the normal 90% daemon switch remains at a safe boundary. Retain the prohibition on real-account tests and keep any live verification for a person. Read-only docs sweep of scripts/CLAUDE.md and the epic's relevant operational guidance for contradictions; this mod-only fix needs no launcher, MCP contract, schema, or persisted-state change.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/plans/2026-10-20-claude-account-rotation.md"
+      ],
+      "modifiedFiles": [
+        "docs/plans/2026-10-20-claude-account-rotation.md"
+      ],
+      "note": "Updated interactive behavior, limitations and V13 to distinguish StopFailure from independent any-window >=100 main-completion fallback, leased-seat/subagent guards, fail-open reads and unchanged single delayed exit. Normal 90% switch safe boundary distinguished from a hard-limit-ended turn mid-task. Explicit user-report/API-contract/mock-clock vs live evidence distinction; real-account prohibition and person-only live checks retained. Read-only sweep scripts/CLAUDE.md, daemon operational account guide, docs/CONFIGURATION.md and TROUBLESHOOTING.md found no trigger-specific contradictory instructions requiring scope growth; no launcher/MCP/schema/state edits. TDD skill already loaded; this step is prose-only, no new test invocation; full gate follows.",
+      "startedAt": "2026-10-24T21:28:39.756Z",
+      "completedAt": "2026-10-24T21:29:02.890Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "One final verification gate (regression-check and verification-before-completion): acquire Moe resource jetbrains-gradle first and release it in all outcomes. From the repository root run this exact command freshly, with the existing platform-compatible package dependencies/JDK available:\n```bash\nbash -c 'set -e; cfg=$(mktemp -d); trap \"rm -rf -- \\\"$cfg\\\"\" EXIT; export CLAUDE_CONFIG_DIR=\"$cfg\"; claude plugin test scripts/mods/moe-account-switch; node --test scripts/tests/moe-account-lease.test.mjs scripts/tests/prompt-cache-launcher.test.mjs; bash scripts/tests/parity-check.sh; bash scripts/tests/postflight.sh; (cd packages/moe-daemon && npm test); (cd packages/moe-proxy && npm test); (cd packages/moe-claude-plugin && npm test); (cd moe-jetbrains && ./gradlew --no-daemon test --rerun-tasks); npm run lint'\n```\nExpect every command to exit 0, including the complete plugin suite with its new skipped-StopFailure regression, both launcher integration harnesses, full daemon/proxy/Claude-plugin suites and fresh JetBrains tests. Save the complete output and supply this exact command, actual exitCode and useful outputTail in complete_task.verification; keep the plugin-test pass output in the step evidence even if later suites fill the tail. The only real claude invocation uses the owned temporary empty config and makes no paid model request. Do not silently skip suites, use stale evidence, or modify unrelated foreign dirt to make the gate green. Native Windows uses Git Bash for this exact command; sh/ps1 loading is unchanged and existing launcher tests cover the platform paths.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Exact step-4 command exit 0 (native Windows Git Bash, 05:20:17Z–06:47:56Z, log /tmp/moe-account-switch-05e1-gate3.log, clean copy …gate3.clean.log). Ran at the root of a hermetic snapshot of HEAD 1c9cb93 (git archive + robocopy of the 3 packages' node_modules + fresh daemon/proxy dist build + throwaway git init), not the shared checkout: a live peer (worker-3729a0d6, task-7c2872e7) was mid-edit on scripts/tests/parity-check.{sh,ps1} and a first attempt in the shared tree failed parity-check on its not-yet-created postflight-fake-proxy.js (foreign, untouched). My 3 delivered paths are byte-identical to HEAD (git diff --quiet). Results: claude plugin test 26/26 pass; node --test launcher 82/82; parity-check PASS; postflight PASS (frozen candidate 73/73, [accounts] ok, commit-scope 37); daemon 166 files, 4203 passed/18 skipped/0 failed (the prior baselineRun U1/U3 failures are fixed by task-7148c250); proxy 84/84; claude-plugin 13/13; gradlew --no-daemon test --rerun-tasks BUILD SUCCESSFUL (:test executed); npm run lint OK. Resource jetbrains-gradle acquired before and released after; snapshot removed; no held-out/owned processes remain. No source edits this session.",
+      "startedAt": "2026-10-24T21:29:12.240Z",
+      "completedAt": "2026-10-26T06:48:48.259Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final and only adversarial self-review: load adversarial-self-review and inspect the complete owned diff plus the landed Stability & Hardening epic's relevant lifecycle/integration changes, not the shared checkout's unrelated dirt. Trace a swallowed StopFailure, any exhausted window, every missing-seat guard, subagent-only ends, empty readings, env/usage exceptions, already-pending daemon signals, and racing/repeated events through to one delayed exit; ensure original completion output and one downstream invocation are preserved on errors. Confirm no account secrets/config access, no security-plugin ordering workaround, no generated types/tsconfig changes, and no MCP/persisted-state contract changes. Check docs do not misrepresent automated tests as live evidence. Fix only task-owned findings and refresh the same gate if code changes; then complete_task with fresh verification and exact modified paths for QA (no git writes; the wrapper lands the bytes).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/mods/moe-account-switch/hooks/register.ts",
+        "scripts/mods/moe-account-switch/hooks/register.test.ts",
+        "docs/plans/2026-10-20-claude-account-rotation.md"
+      ],
+      "note": "Adversarial review of the owned diff (3 paths, already landed in checkpoint e5b63b8; byte-identical to HEAD) found nothing to fix; no code changed this session, so the step-4 gate stands. Traced: swallowed StopFailure -> main turn.complete -> checkHardLimit (any window >=100) -> leave -> one toast + one 10 s timer/exit, completion result returned unchanged. Guards: pending set -> no usage read (daemon accountSwitch still exits); missing MOE_WORKER_ID/MOE_ACCOUNT_ID -> isSeat false, no read; subagent (agentId set) -> hook branch skipped; empty/[0,99.9] readings -> no exit. Failures: env/usage throw happens before any state mutation, so the replay-safe .catch(next(e)) returns the already-computed downstream result with one downstream invocation, and a later check still works (tested). Races: single-threaded, ??= after the await keeps a concurrently delivered daemon instruction, leave's exiting flag allows one toast/timer for StopFailure+completion in either order and repeated completions (tested). Theoretical, not fixed: an account with extra-usage overage may rotate at 100% when it could have continued, and a hard-limit-ended turn can rotate mid-task (both documented; same policy as the existing StopFailure trigger and daemon spent-at-100%). Confirmed: no config-dir/secret access, no security-plugin ordering workaround, no generated types/tsconfig edits (the two untracked mod tsconfig.json files are pre-existing foreign dirt, untouched), no MCP/persisted-state/launcher change. Docs state the incident is user-reported and the evidence is automated mock-clock coverage, with live end-to-end left to a person.",
+      "startedAt": "2026-10-26T06:48:50.653Z",
+      "completedAt": "2026-10-26T06:49:01.193Z"
+    }
+  ],
+  "planRevision": 11,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 14,
+  "comments": [
+    {
+      "id": "comment-124b8c0e14984e1a9d2394a9910a95bf",
+      "author": "worker-9cda703c",
+      "content": "Steps 1–3 delivered in shared tree; exact owned paths are already reported on their completed steps. Fresh plugin tests: 26 pass / 0 fail (WSL and native); TDD red 16 pass / 10 behavioral failures. Step 4 exact gate exited 1 twice: WSL passed launcher/parity/full postflight then Vitest could not start with installed Windows-only Rolldown; native Git Bash passed plugin26/26, launcher62/62, parity, frozen73/73 then failed [accounts] refused because the fake CLI compares Windows CLAUDE_CONFIG_DIR to POSIX ACCT_HOME. Deterministic cygpath probe confirms raw inequality for the same normalized folder. Filed task-5f3960df261a47b5b8b95afb7e67a4fa without a dependency on this row (its fix must land first). Full output /tmp/moe-account-switch-full-wsl.log and /tmp/moe-account-switch-full-native.log. Daemon/proxy/Claude-plugin/JetBrains/lint are NOT verified by a successful full gate; final self-review step 5 remains pending. Resource jetbrains-gradle released after each failed run. No foreign files, dependencies, real account config, launchers, MCP/state schema or generated types edited. Ponytail was subsequently found/read at docs/skills/ponytail/SKILL.md (not in installed Codex skill inventory). Blocking rather than weakening the required gate.",
+      "timestamp": "2026-10-24T22:28:57.287Z"
+    },
+    {
+      "id": "comment-de363486b0f64ba784986f579789813d",
+      "author": "worker-e8965f51",
+      "content": "Resumed step 4 (already IN_PROGRESS; start_step correctly refused restart). Blocker 5f3960df is DONE with landed completion 56023de. Fresh exact approved gate is running under native Git Bash from project root with existing Windows deps/JDK, owned empty CLAUDE_CONFIG_DIR and MOE_POSTFLIGHT_TIMEOUT_SEC=400. Plugin 26/26, launcher integration and parity passed; frozen-candidate postflight scenarios are still progressing. Resource jetbrains-gradle held for this gate, will release on exit. No code/foreign dirt/dependencies touched. Live output /tmp/moe-account-switch-05e1-final-gate.log; no full-gate success claimed yet.",
+      "timestamp": "2026-10-25T11:08:24.930Z"
+    },
+    {
+      "id": "comment-7af0aff869e34dcc914ede9f13f3f96e",
+      "author": "worker-e8965f51",
+      "content": "Gate still running, not hung: frozen candidate scenarios PASS 73/73 and [accounts] ok (the prior blocker is resolved). Remaining postflight commit-scope scenarios are progressing through P2 retry cases. Exact command unchanged; package suites/Gradle/lint remain pending after postflight. Foreground session 34301 is being polled to completion; output /tmp/moe-account-switch-05e1-final-gate.log.",
+      "timestamp": "2026-10-25T11:44:17.188Z"
+    },
+    {
+      "id": "comment-80539326894f4ccfaee4d262b7905df6",
+      "author": "worker-e8965f51",
+      "content": "Fresh exact step4 gate completed exit1 (native Git Bash, 10:47:32–11:59:37Z). Log /tmp/moe-account-switch-05e1-final-gate.log; exit receipt /tmp/moe-account-switch-05e1-final-gate.exit. Plugin26/26, launcher62/62, parity, frozen73/73, [accounts] and full postflight PASS. Daemon:162 files passed/1 failed;4106 passed/2 failed/16 skipped. Both failures are foreign baselineRun.test.ts native assumptions: U1 file-symlink EPERM(:72) and U3 POSIX assessment-timeout 5000ms(:101); terminateTree uses negative PID signals and driver checkPreconditions explicitly rejects win32. No tests skipped or code/deps/foreign dirt changed to mask these. Proxy/Claude-plugin/JetBrains/lint NOT run after set-e stopped. Resource jetbrains-gradle released. Step4 remains IN_PROGRESS and step5 adversarial self-review remains PENDING. Will park on separately filed portability bug rather than submit plugin-only evidence as full-gate success.",
+      "timestamp": "2026-10-25T12:00:51.467Z"
+    },
+    {
+      "id": "comment-109331a5ef28423d8788daf4163e6cd9",
+      "author": "worker-e8965f51",
+      "content": "New external blocker filed: task-7148c250de304ce2994059085effd0a7 (same epic; no reverse dependency). Its native U3 timeout also leaked a detached assessment tree; safely cleaned this gate's exact PID+creation-time+command fingerprint and descendants, fresh query confirms none remain. No owned source edits this session (all three delivered source paths remain clean in shared branch); foreign dirt untouched. Step4 cannot be completed with exit1, step5 has not started. Parking on the new bug rather than weakening the exact gate.",
+      "timestamp": "2026-10-25T12:02:31.068Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T17:58:46.581Z",
+  "updatedAt": "2026-10-26T06:54:50.963Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T21:19:49.038Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-26T06:53:53.857Z",
+    "wallClockMs": 120844819
+  },
+  "contextFetchedBy": [
+    "architect-473624b4",
+    "worker-9cda703c",
+    "worker-e8965f51",
+    "worker-7d158765",
+    "qa-7c627d35"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T21:24:03.980Z",
+  "planningNotes": {
+    "approachesConsidered": "Goal: a leased interactive main-loop seat exits at any reported rate-limit window >=100%, independently of classic.StopFailure delivery. Architecture: TypeScript Claude Code mod; reuse session.pending, isSeat, leave, EXIT_DELAY_MS and the existing delayed /exit, rather than polling, changing security-plugin ordering, modifying the wrappers, or creating a second rotation policy. Keep the existing daemon accountSwitch and StopFailure paths. Three edited files, five steps, approximately 45–60 minutes human-equivalent.",
+    "codebaseInsights": "Verified register.ts and all current register.test.ts tests. turn.complete currently only calls leave when pending is already set; classic.StopFailure is the only hard-limit detector. Generated installed claude-code/index.d.ts documents TurnCompleteReason including error (API failure), optional agentId, SessionRateLimit.percentUsed in percentage units (can exceed 100), TestOptions.plugins with per-plugin tier, and replay-safe next(e) in .catch (the downstream result is replayed without executing it twice). Official references: https://code.claude.com/docs/en/plugins/mods/events#the-order-mods-run-in confirms sec-default precedes user plugins; https://code.claude.com/docs/en/plugins/mods/test documents inline plugin fixtures. The built-in plugin-authoring skill is not exposed in this Codex session; a Claude worker should load it, and other workers use these installed version-specific declarations rather than guessing APIs. Task comments were fully supplied, total 0. All listed siblings are archived, but context marks this epic-final, so the final gate includes full daemon/proxy/Claude-plugin/JetBrains regression and launcher integration instead of only the narrow mod test.",
+    "risks": "Do not weaken/bypass sec-default or modify global/account configuration. No live limit-burning or real-account login/probe; the design record requires an owned temporary CLAUDE_CONFIG_DIR even for offline plugin commands. Generated .claude-plugin/types and pre-existing untracked tsconfig.json are not task edits. API-reading errors must leave pending/exiting and the downstream turn result unchanged; an already pending daemon switch must not depend on a successful usage read. Ordinary test on() stubs run BELOW the mod, so only an inline prepend plugin actually simulates swallowing StopFailure. Register stubs before the first $ call. Existing environment fixtures must be isolated from ambient seat/account values. Cross-platform: the shared TS mod serves sh and ps1 without changing either launcher; run the exact gate in Bash (Linux/WSL/macOS or Git Bash on Windows) with platform-native dependencies and JDK, never mix Windows and Linux node_modules. Acquire the shared jetbrains-gradle Moe resource before the gate and release it even on failure. Foreign dirty paths are not to be reverted/stashed or fixed incidentally.",
+    "keyFiles": [
+      "scripts/mods/moe-account-switch/hooks/register.ts",
+      "scripts/mods/moe-account-switch/hooks/register.test.ts",
+      "docs/plans/2026-10-20-claude-account-rotation.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T21:24:04.084Z",
+  "workStartedAt": "2026-10-24T21:25:57.444Z",
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "e5b63b885f602030b98431b5629bc04b30ad88db",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-9cda703c@2026-10-24T21:24:15Z",
+      "paths": [
+        ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+        ".moe/tasks/task-5f3960df261a47b5b8b95afb7e67a4fa.json",
+        ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json",
+        ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json",
+        ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json",
+        "docs/plans/2026-10-20-claude-account-rotation.md",
+        "scripts/mods/moe-account-switch/hooks/register.test.ts",
+        "scripts/mods/moe-account-switch/hooks/register.ts"
+      ],
+      "recordedBy": "worker-9cda703c",
+      "recordedAt": "2026-10-24T22:29:19.636Z",
+      "treeId": "8cc604f5a7997b99809451cde0054950fdf26a10",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "1c60b7e4e09f5c47d17ba574d19d8bcfaf4294e7",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-e8965f51@2026-10-25T10:45:41Z",
+      "paths": [
+        ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+        ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+        ".moe/tasks/task-7148c250de304ce2994059085effd0a7.json"
+      ],
+      "recordedBy": "worker-e8965f51",
+      "recordedAt": "2026-10-25T12:02:53.649Z",
+      "treeId": "db4bbf44b68d98de1985a342021bdf15190debdd",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "16cd5c752b46973ce4ee2d4d0bd29bc0b75cefed",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-26T05:16:25Z",
+      "paths": [
+        ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-cd4ed3c69c3e4b2f9245d4a4fb475732.json"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-26T06:50:20.193Z",
+      "treeId": "5ed34bc6542542f7a2ff82e7e5b32fe573649b75",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "90ab961109a0dee54f33ae81b745bf690f012fd6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T06:50:49Z",
+      "paths": [
+        ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T06:54:50.963Z",
+      "treeId": "a4718225fb19a86f79849d7ddcfd56a50c206c30",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/mods/moe-account-switch/hooks/register.test.ts",
+    "scripts/mods/moe-account-switch/hooks/register.ts",
+    "docs/plans/2026-10-20-claude-account-rotation.md",
+    ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+    ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+    ".moe/tasks/task-cd4ed3c69c3e4b2f9245d4a4fb475732.json"
+  ],
+  "unattributedPaths": [
+    "2026-10-24-ai-code-quality-and-context.md"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T06:50:49Z",
+    "at": "2026-10-26T06:54:50.963Z"
+  },
+  "reviewStartedAt": "2026-10-26T06:49:53.748Z",
+  "verification": {
+    "command": "bash -c 'set -e; export CLAUDE_CONFIG_DIR=$(mktemp -d); claude plugin test scripts/mods/moe-account-switch; node --test scripts/tests/moe-account-lease.test.mjs scripts/tests/prompt-cache-launcher.test.mjs; bash scripts/tests/parity-check.sh; bash scripts/tests/postflight.sh; (cd packages/moe-daemon && npm test); (cd packages/moe-proxy && npm test); (cd packages/moe-claude-plugin && npm test); (cd moe-jetbrains && ./gradlew --no-daemon test --rerun-tasks); npm run lint'",
+    "exitCode": 0,
+    "outputTail": "Run used the exact 518-char gate (incl. trap cleanup; the command field is capped at 500) on a snapshot of HEAD 1c9cb9339f1ec54c0779add6e54b1e2ef8a6b1bb, native Windows Git Bash, MOE_POSTFLIGHT_TIMEOUT_SEC=400. START UTC 2026-10-26T05:20:17Z\n(pass) a swallowed StopFailure still rotates at main completion [31.62ms]\nRan 26 tests across 1 file. [0.75s]  (claude plugin test: 26 pass / 0 fail)\nℹ tests 82 / ℹ pass 82 / ℹ fail 0  (node --test launcher + lease)\nPASS parity-check.sh\nPASS frozen candidate scenarios: 73\n[accounts] ok\nPASS postflight.sh\ndaemon: Test Files 166 passed (166); Tests 4203 passed | 18 skipped (4221)\nproxy: Test Files 3 passed (3); Tests 84 passed (84)\nclaude-plugin: Test Files 2 passed (2); Tests 13 passed (13)\njetbrains: BUILD SUCCESSFUL in 1m (:test executed, --rerun-tasks)\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 29 lines (max 40)\nOK: docs/roles/qa.md has 32 lines (max 40)\nEND UTC 2026-10-26T06:47:56Z rc=0",
+    "reportedAt": "2026-10-26T06:49:53.748Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "An interactive seat now rotates at a hard usage limit even when an earlier plugin swallows classic.StopFailure. A new checkHardLimit helper in scripts/mods/moe-account-switch/hooks/register.ts runs on every main-loop turn.complete. It marks the session for the delayed /exit when any $.session.usage() window is at 100% or more. It requires a leased seat (MOE_WORKER_ID and MOE_ACCOUNT_ID), skips subagent ends, and fails open: a usage or env error leaves the completed turn and session as they were. StopFailure reuses the same helper; the 10 s delay, the daemon accountSwitch path and the held-tool policy are unchanged, and leave()'s exiting guard keeps it to one toast and one exit. hooks/register.test.ts has 26 tests, including the swallowed-StopFailure case (prepended inline plugin), completion without StopFailure, mixed and over-100 windows, below-100 and empty readings, missing seat env, subagent ends, usage and env failures, a pending daemon instruction, and repeated or racing events. The TDD red run (10 behavioural failures on the old code) is in /tmp/moe-account-switch-red.log. The design record docs/plans/2026-10-20-claude-account-rotation.md now separates the user-reported incident and the automated mock-clock evidence from a live end-to-end check, which is left to a person. The three delivered paths landed in checkpoint e5b63b885 and are byte-identical to HEAD 1c9cb93. This session changed no source files. Verification: the exact 518-character step-4 gate ran on a clean snapshot of HEAD 1c9cb93 and exited 0. The `verification.command` field is capped at 500 characters, so it is submitted without the `trap ... EXIT` temp-config cleanup, which does not change what is tested. A first attempt in the shared checkout failed only on a live peer's half-finished edit to scripts/tests/parity-check.{sh,ps1}. Log: /tmp/moe-account-switch-05e1-gate3.log. The adversarial self-review found nothing to fix.",
+  "completedAt": "2026-10-26T06:53:53.857Z",
+  "reviewCompletedAt": "2026-10-26T06:53:53.857Z",
+  "reviewSummary": "APPROVED. Reviewed commits, not the dirty tree: code is in checkpoint e5b63b885 (in task.commits, ancestor of HEAD, on origin); completion commit 16cd5c7 is board JSON only. Mod dir and design doc are identical at e5b63b885 and HEAD. Diff: 3 files, +179/-17.\n\nDoD1: checkHardLimit() runs on every main-loop turn.complete before leave(); any usage window >=100 sets the existing ACCOUNT-SWITCH instruction. Engine types confirm turn.complete fires on API-error stops and .catch next() is replay-safe. The swallowed-StopFailure test (prepended plugin eats the event): bottom stub hit 0 times, completion unchanged, no exit at 10s-1ms, one exit and toast at +1.\nDoD2: tests cover subagent end, each missing seat env, windows [0,99.9] and [] (no exit), [99.9,100] and [0,101] (exit). The 9 original tests are kept and pass.\nDoD3: 26 tests; the worker's red log shows 10 failures on old code. Assertions are exact.\nFail-open rail: usage/env throw tests keep the completion result, run downstream once, and a later check still works. Racing/repeated events give one timer/toast/exit. No MCP/schema/state change.\n\nRe-ran, all rc 0: `claude plugin test scripts/mods/moe-account-switch` with empty temp CLAUDE_CONFIG_DIR (26 pass/0 fail); `node --test` lease + launcher (55 pass, 1 skipped on Linux); parity-check.sh; `npm run lint`.\nNOT re-run: postflight, daemon/proxy/claude-plugin vitest, JetBrains gradle (about 88 min). The change touches only the mod, one doc and board JSON, and nothing in those suites references the mod. I audited the worker's gate log instead (/tmp/moe-account-switch-05e1-gate3.clean.log, rc=0 on a HEAD snapshot): worker-verified, not QA-reproduced.\n\nResidual (documented): live exit/relaunch at a real limit unverified (real-account tests prohibited); a hard-limit turn can rotate mid-task, like the existing StopFailure trigger.",
+  "requiredCheckAtDone": null
+}

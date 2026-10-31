@@ -1,0 +1,215 @@
+{
+  "id": "task-f084cbe16ee446ffb2b0dee283273f7f",
+  "epicId": "epic-be924fb8",
+  "title": "fix: generated project runtime ignores include pins/ with header-guarded migration",
+  "description": "Production generator/migration surface split from task-7ee53957b90e459fb636948e5cecfa2a to keep each plan within 5 files. Objective: new and existing Moe-generated .moe/.gitignore files ignore daemon chat pins. Deliverable: add pins/ to RUNTIME_RECORD_DIRS in packages/moe-daemon/scripts/generate-init-files.ts, run generate-init-files to update tracked src/generated/initFiles.ts (never hand edit generated), and add cases in src/util/initFiles.test.ts. Existing header-guarded writeGitignore appends missing runtime dirs atomically and propagates IO failures; preserve its behavior. Fresh writeInitFiles emits pins/ exactly once; already current generated ignores minus pins gain ONLY pins (LF, CRLF/no-trailing-newline, custom lines preserved), repeat no-op, preexisting pins not duplicated, no-header custom ignore byte-identical. Test disk-write failure propagates/no destructive rewrite. Tests use temp roots, never live .moe. NOT in scope: root .gitignore, CLAUDE.md/ARCHITECTURE (parent owns those); messages/ generation, history rewriting, chat APIs. Verification from root: `(cd packages/moe-daemon && npm run generate-init-files && npm test)`. Parent depends on this and owns repo policy/docs + final combined regression. Avoid generator changes caused by unrelated live doc edits; work from authoritative task snapshot and only report own generated delta.",
+  "definitionOfDone": [
+    "Generated GITIGNORE_CONTENT and fresh writeInitFiles output contain exactly one pins/ line, proven by daemon test.",
+    "A header-bearing previously current ignore missing only pins gains only pins; LF/CRLF, repeat idempotence, existing pins and no-header custom preservation covered by tests.",
+    "Generation source is authoritative, generated tracked artifact reflects it; IO errors preserve propagation and no custom override logic changes.",
+    "The named generation plus full daemon test command exits 0 with fresh evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. TESTS FIRST (red): packages/moe-daemon/src/util/initFiles.test.ts. Load test-driven-development. Use the file's existing mkdtemp moeDir; never the live .moe.\n\nAdd a describe block 'chat pins are gitignored' beside the existing gitignore tests. Keep WAVE1_RUNTIME_DIRS and the root-.gitignore test unchanged: the repository root .gitignore gains .moe/pins/ in the parent row task-7ee53957, which lands after this one, so no test here may read the root file for pins.\n\nConstants: PINS = 'pins/'; BUNDLED_GITIGNORE_V2 = the literal file every project got before this change, '# Moe runtime files (not shared)\\ndaemon.json\\ndaemon.lock\\nworkers/\\nproposals/\\nattempts/\\ncandidates/\\nchecks/\\nreviews/\\nreceipts/\\n' (a literal, never derived from GITIGNORE_CONTENT).\n\nCases, exact values:\na. GITIGNORE_CONTENT === BUNDLED_GITIGNORE_V2 + 'pins/\\n' (pins/ last, exactly once, nothing else changed).\nb. Fresh writeInitFiles(moeDir) on an empty dir: trimmedLines(.gitignore).filter(l => l === PINS) deepEquals [PINS]. init_project (tools/initProject.ts:173) and every daemon start (index.ts:687, 1131, 1185) call writeInitFiles, so this covers new projects.\nc. it.each migration rows [label, existing bytes, expected bytes]. Each row writes the file, runs writeInitFiles, asserts the exact expected bytes, runs writeInitFiles again and asserts nothing changed (idempotence on every daemon start):\n   - previously current, LF: V2 -> V2 + 'pins/\\n' (gains only pins);\n   - previously current, CRLF, no trailing newline: V2 with \\r\\n and its last newline dropped -> that + '\\npins/\\n' (today's separator rule, unchanged);\n   - previously current plus a custom line: V2 + 'local-cache/\\n' -> that + 'pins/\\n';\n   - pins already listed: V2 + 'pins/\\n' -> unchanged;\n   - pins already listed, padded: V2 + '  pins/  \\n' -> unchanged (listed lines are trimmed);\n   - no Moe header (user-owned): 'custom-ignore\\nworkers/\\n' -> unchanged.\nd. A write failure propagates and destroys nothing: vi.spyOn(fs, 'renameSync') (the atomicWrite.test.ts pattern; restore in afterEach) so a rename whose target basename is '.gitignore' throws an Error with code 'EIO' (not retryable, so no backoff) and every other rename runs for real. it.each rows: (1) existing V2 -> writeInitFiles throws /EIO/ and .gitignore is still exactly V2; (2) no .gitignore -> throws /EIO/ and .gitignore is still absent. Both: no '.gitignore.*.tmp' file is left in moeDir (atomicWriteText cleans up).\n\nRed proof: run `npx vitest run src/util/initFiles.test.ts` in a Linux-native clone (step 3's recipe with that narrow command instead of the full suite). Case a, case b and the pins-adding rows of c fail (the generator has no pins yet). The already-listed, no-header and d rows pass today: they pin preserved behavior, which is the point.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/initFiles.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/initFiles.test.ts"
+      ],
+      "note": "Added 10 pins cases in temp roots, keeping Wave 1/root policy unchanged. RED in Linux-native history clone: npx vitest run src/util/initFiles.test.ts -> exit 1, 6 failed / 17 passed. Missing pins fails content/fresh/3 append rows; existing-V2 EIO row also correctly fails because before pins there is no append/rename (plan predicted that row passed, but it necessarily becomes exercised only with the new directory). Missing-file EIO and preservation cases pass. Shared checkout's unrelated dirty paths untouched; no shared build/prebuild.",
+      "startedAt": "2026-10-30T14:56:08.427Z",
+      "completedAt": "2026-10-30T14:56:53.154Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Generator source, then the generated artifact.\na. packages/moe-daemon/scripts/generate-init-files.ts: append 'pins/' to RUNTIME_RECORD_DIRS (inside the emitted template, about line 159) and widen its one-line comment to say the list is daemon-written runtime directories (delivery records and chat pins), local state never committed. Touch nothing else: GITIGNORE_HEADER, writeGitignore's header guard, its trim-based listing, its append and separator rules and its error propagation stay byte-identical (DoD 3). Backward-compatible with every existing .moe/.gitignore (epic rail): the migration only appends.\nb. Regenerate; never hand-edit src/generated/initFiles.ts. The generator needs git history (its shipped-body sha lists come from `git log`; without history it still exits 0 but writes truncated lists) and the shared tree's node_modules are Windows builds, so regenerate inside a Linux-native clone of HEAD and copy the result back:\n   C=$(mktemp -d /tmp/moe-f084cbe1-gen.XXXXXX) && git clone -q --shared . \"$C/repo\" && cp packages/moe-daemon/scripts/generate-init-files.ts \"$C/repo/packages/moe-daemon/scripts/\" && (cd \"$C/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\")\":/usr/local/bin:/usr/bin:/bin bash -c 'npm ci --no-audit --no-fund >/dev/null && npm run generate-init-files') && cp \"$C/repo/packages/moe-daemon/src/generated/initFiles.ts\" packages/moe-daemon/src/generated/initFiles.ts\n   The output must say 'Generated ... (8 role docs + 3 subagents, sha-stamped)'; a 'skipping' line is a failure. The clone holds committed docs only, so no peer's dirty docs/roles bytes can leak in. Never run npm run build or prebuild in the shared tree (they delete dist/ under other sessions).\nc. Inspect `git diff -- packages/moe-daemon/src/generated/initFiles.ts`. Your own delta is the one RUNTIME_RECORD_DIRS line. Any other hunk must come from committed docs/roles or docs/agents changes that were never regenerated: at planning (HEAD c5f1e8ea), task-a4ca766a's worker.md / worker.reference.md edit left exactly 6/6 such lines (two marker shas, two body lines, two shipped-body sha lists). This row now depends on a4ca766a, so you start after its docs are final. Keep those catch-up hunks (the artifact must reflect its sources) and name them separately from your own delta in complete_task; a hunk that traces to no committed source change means stop and investigate, never land it.\nError handling: the generator change adds no code path; the migration's IO errors still propagate to writeInitFiles' callers, which keep their own non-fatal handling.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/scripts/generate-init-files.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/scripts/generate-init-files.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Added pins/ to the existing runtime-dir list and updated its comment; no migration logic changed. Ran generate-init-files successfully in Linux-native git clone with history and npm ci, copied artifact back (8 role docs + 3 subagents, sha-stamped). Generated diff is exactly +2/-2, comment/list only: prerequisite already landed its doc catch-up, so no foreign/catch-up hunks. Full green regression is batched once into next planned step.",
+      "startedAt": "2026-10-30T14:56:53.180Z",
+      "completedAt": "2026-10-30T14:57:12.901Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. VERIFY ONCE. The task's named command, `(cd packages/moe-daemon && npm run generate-init-files && npm test)`, run in a Linux-native clone with git history (the shared tree's node_modules are Windows builds, and peers' dirty daemon files must not mix in), followed by a cmp proving the tracked artifact is exactly what its sources generate. From the repo root:\n\nC=$(mktemp -d /tmp/moe-f084cbe1.XXXXXX) && git clone -q --shared . \"$C/repo\" && for f in packages/moe-daemon/scripts/generate-init-files.ts packages/moe-daemon/src/generated/initFiles.ts packages/moe-daemon/src/util/initFiles.test.ts; do cp \"$f\" \"$C/repo/$f\" && cmp \"$f\" \"$C/repo/$f\" || exit 1; done && printf 'Verification clone: %s\\n' \"$C/repo\" && (cd \"$C/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$(dirname \"$(command -v node)\")\":/usr/local/bin:/usr/bin:/bin bash -c 'npm ci --no-audit --no-fund >/dev/null && npm run generate-init-files && npm test') && cmp \"$C/repo/packages/moe-daemon/src/generated/initFiles.ts\" packages/moe-daemon/src/generated/initFiles.ts && echo GENERATED-ARTIFACT-CURRENT\n\nAbout a minute (clone 3 s, npm ci plus generation 12 s, full suite about 40 s; the planning baseline at HEAD was 208 files, 5961 passed, 16 skipped). Supply the command, exit code and output tail (the Test Files and Tests lines plus GENERATED-ARTIFACT-CURRENT) to complete_task. The same command runs in Git Bash on a Windows seat. Delete the clone afterwards. A cmp failure means a source changed after your regeneration: redo step 2b, never edit the artifact by hand. This is the one regression test run; QA re-runs the same command.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/scripts/generate-init-files.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/util/initFiles.test.ts"
+      ],
+      "note": "Ran the exact approved history-clone command, npm ci under env -i, npm run generate-init-files && npm test, then cmp. Exit 0: Test Files 208 passed (208); Tests 6057 passed | 19 skipped (6076); duration 37.78s; GENERATED-ARTIFACT-CURRENT. No shared build or prebuild, no file edits in this verification step. Retaining scratch clone only until planned final-step mutants, then deleting it.",
+      "startedAt": "2026-10-30T14:57:12.926Z",
+      "completedAt": "2026-10-30T14:58:14.273Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. ADVERSARIAL SELF-REVIEW, once, last. Load adversarial-self-review; scope = this diff.\n- Mutants on scratch copies inside a clone, each must fail a named test, then restore and cmp: drop 'pins/' from RUNTIME_RECORD_DIRS (cases a, b and the pins-adding c rows); emit pins/ twice (a, b); bypass the header guard (the no-header c row); drop the trim when listing (the padded c row); swallow the atomicWriteText error in writeGitignore (d).\n- Idempotence: every daemon start reruns the migration, and a second run never appends (every c row re-runs).\n- Encoding: a CRLF file gets an LF-joined append, exactly as the Wave 1 directories did; user lines are never rewritten. That is unchanged behavior, out of scope here.\n- Concurrency: two daemons on one project can race the same append; the atomic rename leaves a complete file and the next start dedupes by the listed set. No new risk.\n- Scope: three files. Root .gitignore, CLAUDE.md and docs/ARCHITECTURE.md belong to parent task-7ee53957; no messages/ change, no chat API change, no history rewrite.\n- Size: report net LOC from `git diff --numstat` (about 70 own lines, tests included), with any catch-up initFiles.ts lines listed separately.\nWrite Serena memory 'task-task-f084cbe16ee446ffb2b0dee283273f7f-handoff' with the clone-regeneration recipe and what the parent row still owns.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/scripts/generate-init-files.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/util/initFiles.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/scripts/generate-init-files.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/util/initFiles.test.ts"
+      ],
+      "note": "Adversarial review of all three owned diffs: no findings. Scratch mutants killed: remove pins 6 failures; duplicate pins 5; bypass header 2; remove trim 1 padded-row failure; swallow migration IO 1 EIO-row failure. Restored 23/23 initFiles tests pass; cmp proves restored artifact equals delivered artifact. Prior full gate: 208 files, 6057 passed /19 skipped, exit 0. Atomic rename/cleanup, header guard, append semantics and concurrent-start behavior unchanged; exact CRLF/idempotence/custom preservation asserted. Diff +67/-5 net62 (generator2/2, generated2/2, tests63/1), no catch-up hunks. No source edits during review. All own paths listed cumulatively for attribution; peer dirt untouched. Scratch clones removed, handoff and red-proof gotcha saved in Serena. Parent owns root gitignore and policy/docs.",
+      "startedAt": "2026-10-30T14:58:14.308Z",
+      "completedAt": "2026-10-30T14:59:28.900Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's 13:00Z delegation. This is an architect's size split of the already-promoted 7ee53957 (the .moe/pins gitignore fix), covering the generator/migration surface. Planner: check for an initFiles.ts regeneration overlap with live daemon rows that edit docs/roles or docs/skills (for example a4ca766a), and ask a governor for an edge if one is needed.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-7ee53957b90e459fb636948e5cecfa2a",
+  "priority": "LOW",
+  "order": 3.9,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T14:08:01.145Z",
+  "updatedAt": "2026-10-30T15:02:24.776Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T14:11:00.776Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:12:38.047Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T15:02:01.596Z",
+    "wallClockMs": 2963549
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-55e6716a",
+    "qa-952969be"
+  ],
+  "dependsOn": [
+    "task-a4ca766a67184630842d4a6d12338cf8"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:20:38.330Z",
+  "planningNotes": {
+    "approachesConsidered": "Chosen: one entry appended to the generator's RUNTIME_RECORD_DIRS, so both the fresh GITIGNORE_CONTENT and the existing header-guarded writeGitignore migration pick up pins/ with no new logic. Regeneration happens in a `git clone --shared` of HEAD on the Linux filesystem: it has the git history the shipped-body sha lists need, Linux-native node_modules after npm ci, and only committed docs, so no peer's dirty role-doc bytes can leak into the artifact. Rejected: regenerating in the shared tree (Windows node_modules under WSL, and possible peer dirt in docs/roles); a git-archive snapshot (no history, so truncated sha lists); hand-editing initFiles.ts; adding pins/ to WAVE1_RUNTIME_DIRS in the test (that list also drives the root-.gitignore assertion, which belongs to the parent row and would go red).",
+    "codebaseInsights": "generate-init-files.ts emits writeGitignore from a template: missing file -> GITIGNORE_CONTENT; file with GITIGNORE_HEADER -> append the RUNTIME_RECORD_DIRS it lacks (trimmed-line set, '\\n' join, separator only when the file lacks a trailing newline); any other file untouched; IO errors propagate. init_project and every daemon start call writeInitFiles. atomicWriteText retries only EPERM/EBUSY/EACCES renames and cleans its temp file, so an EIO rename spy fails fast. At HEAD c5f1e8ea, initFiles.ts is stale against task-a4ca766a's committed worker.md / worker.reference.md edit (6/6 lines); a planning dry run of the clone recipe regenerated exactly those lines, and the full daemon suite passed there (208 files, 5961 tests, 16 skipped, about 40 s).",
+    "risks": "1) The generator without git history exits 0 but writes truncated shipped-body lists: always regenerate in a clone with history and read its 'Generated' line. 2) Catch-up hunks from other tasks' committed docs must be kept (the artifact reflects its sources) but reported separately; anything else is a red flag. 3) No test may assert pins in the repository root .gitignore until the parent lands it. 4) Never run npm run build/prebuild in the shared tree. 5) The renameSync spy must only fail '.gitignore' targets, or the role-doc writes fail first and the test proves the wrong path.",
+    "keyFiles": [
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "packages/moe-daemon/src/generated/initFiles.ts",
+      "packages/moe-daemon/src/util/initFiles.test.ts",
+      "packages/moe-daemon/src/util/atomicWrite.ts",
+      "packages/moe-daemon/src/util/atomicWrite.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:20:38.355Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T14:56:08.427Z",
+  "reviewStartedAt": "2026-10-30T14:59:39.552Z",
+  "verification": {
+    "command": "C=$(mktemp -d /tmp/moe-f084cbe1.XXXXXX) && git clone -q --shared . \"$C/repo\" && for f in packages/moe-daemon/scripts/generate-init-files.ts packages/moe-daemon/src/generated/initFiles.ts packages/moe-daemon/src/util/initFiles.test.ts; do cp \"$f\" \"$C/repo/$f\" && cmp \"$f\" \"$C/repo/$f\" || exit 1; done && printf 'Verification clone: %s\\n' \"$C/repo\" && (cd \"$C/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$(dirname \"$(command -v node)\")\":/usr/local/bin:/usr/bin:/bin bash -c 'npm ci --no-audit --no-fund >/dev/null && npm run generate-init-files && npm test') && cmp \"$C/repo/packages/moe-daemon/src/generated/initFiles.ts\" packages/moe-daemon/src/generated/initFiles.ts && echo GENERATED-ARTIFACT-CURRENT",
+    "exitCode": 0,
+    "outputTail": "Generated /tmp/moe-f084cbe1.c7t06S/repo/packages/moe-daemon/src/generated/initFiles.ts (8 role docs + 3 subagents, sha-stamped)\nTest Files  208 passed (208)\nTests  6057 passed | 19 skipped (6076)\nStart at  16:57:32\nDuration  37.78s (tests 91%, transform 5%, import 4%)\nGENERATED-ARTIFACT-CURRENT",
+    "reportedAt": "2026-10-30T14:59:39.552Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/initFiles.test.ts",
+    "packages/moe-daemon/scripts/generate-init-files.ts",
+    "packages/moe-daemon/src/generated/initFiles.ts",
+    ".moe/tasks/task-a4ca766a67184630842d4a6d12338cf8.json",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+    ".moe/tasks/task-f084cbe16ee446ffb2b0dee283273f7f.json",
+    ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json"
+  ],
+  "completionSummary": "Added pins/ to generator runtime directories, regenerated tracked initFiles.ts in a Linux-native git-history clone, and added 10 regression cases for bundled content, fresh creation, exact append/idempotence, CRLF, custom lines, existing/padded pins, no-header preservation, and atomic EIO preservation/cleanup. Migration logic unchanged. Exactly 3 paths, +67/-5 net62; generated diff only comment/list +2/-2, no doc catch-up hunks (prerequisite already refreshed them). RED: 6 failed/17 passed; full GREEN: 208 files, 6057 passed/19 skipped; artifact cmp matches. Five targeted mutants killed; restored narrow suite 23/23 and cmp match. Scratch clones removed. Parent task-7ee53957 retains root .gitignore, CLAUDE.md and ARCHITECTURE.md; those and other sessions' dirt untouched. Serena handoff + EIO red-proof gotcha recorded. Wrapper owns completion landing.",
+  "commits": [
+    {
+      "sha": "b5c289173bbdcb2c7e7a47c18576ca2cd2853f0f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T14:55:34Z",
+      "paths": [
+        ".moe/tasks/task-a4ca766a67184630842d4a6d12338cf8.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+        ".moe/tasks/task-f084cbe16ee446ffb2b0dee283273f7f.json",
+        "packages/moe-daemon/scripts/generate-init-files.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/util/initFiles.test.ts"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T14:59:55.356Z",
+      "treeId": "4d0b216f505bae1301e2e351975796c3ac4da1ce",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "bd69306449ae4fe61b50294a9a2d13f71d66bfcc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T15:00:29Z",
+      "paths": [
+        ".moe/tasks/task-c83d78475cf443688b571d4d508fde8e.json",
+        ".moe/tasks/task-f084cbe16ee446ffb2b0dee283273f7f.json",
+        ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T15:02:24.776Z",
+      "treeId": "255ce735a055cada533656dda8e0c74bac1b4ec2",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T15:00:29Z",
+    "at": "2026-10-30T15:02:24.776Z"
+  },
+  "completedAt": "2026-10-30T15:02:01.596Z",
+  "reviewCompletedAt": "2026-10-30T15:02:01.596Z",
+  "reviewSummary": "Reviewed recorded completion b5c28917 (on moe/work-2026-10-24, pushed, tree 4d0b216f). Non-board diff is exactly 3 paths, +67/-5 (net 62): generate-init-files.ts +2/-2 (pins/ appended to RUNTIME_RECORD_DIRS + comment only; writeGitignore header guard/trim/append/error propagation untouched), generated initFiles.ts +2/-2 (same comment/list lines, no foreign doc hunks), initFiles.test.ts +63/-1. Re-ran the task.verification command verbatim in a fresh Linux-native shared clone (copied the 3 paths with cmp, env -i, npm ci, `npm run generate-init-files && npm test`): exit 0, Test Files 208 passed (208), Tests 6057 passed | 19 skipped (6076), 38.1s; then cmp of clone-regenerated initFiles.ts vs tracked artifact -> GENERATED-ARTIFACT-CURRENT (artifact reflects the generator source, not hand-edited). DoD: (1) GITIGNORE_CONTENT === literal V2 + 'pins/\\n' and fresh writeInitFiles has exactly one pins/ line, both asserted; (2) migration rows assert exact bytes + second-run idempotence for LF, CRLF-no-trailing-newline, custom line preserved, pins already listed, padded pins, and no-header custom ignore unchanged; (3) generation source authoritative, no override logic changed, EIO rename-spy rows (existing + missing .gitignore) assert propagation, original bytes/absence preserved, no .gitignore.*.tmp left; (4) named command exit 0 with fresh evidence. Tests use mkdtemp roots, never the live .moe; assertions are exact-value (mutation-resistant); worker also reported 5 killed mutants. No tests deleted/weakened; scope matches plan (root .gitignore/CLAUDE.md/ARCHITECTURE left to parent task-7ee53957). Size well under 400 LOC. Clone removed after verification.",
+  "requiredCheckAtDone": null
+}

@@ -28,8 +28,10 @@ import {
   filterTasksForMetrics,
 } from '../util/metrics.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
-import { MoeError } from '../util/errors.js';
+import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
+import { decodeClientHello, type CapabilityAgreement } from './clientCapabilities.js';
 import { applyAccountMessage, type AccountMessageType } from './accountMessages.js';
+import { authenticateRunner, type RunnerIdentity } from './runnerChannel.js';
 
 /**
  * The ONLY error-context keys allowed to cross the /ws boundary. A MoeError's
@@ -90,6 +92,8 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   'blockedOnTaskIds',
   'blockedFromStatus',
   'blockedAt',
+  // finalize_attempt owns retries; board echoes must not restore, clear or forge them.
+  'landingRetry',
   // Dependency declarations are owned by create_task / moe.set_task_dependencies
   // — a full-task board echo carrying a stale array must not clobber a newer
   // set_task_dependencies edit.
@@ -122,10 +126,20 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   // `updates` to dodge the compare-and-swap.
   'planRevision',
   'expectedPlanRevision',
+  // Configuration identity, captured by taskStore.updateTask in the
+  // PLAN_SUBMITTED write only: a board echo must not forge, reset or wipe it.
+  'executionPolicySnapshot',
+  // The reviewed revision a checked approval stamped, written only by
+  // approveTask's PLAN_APPROVED write: a board echo must not forge, null or erase it.
+  'approvedPlanRevision',
+  // Daemon-owned plan-reuse state, written only by taskStore.updateTask (submit_plan's basis, the
+  // PLANNING-entry stamp and the daemonOwned reuse record), so a board echo must not forge or wipe it.
+  'planSourceBasis', 'planningEntry', 'planReuse',
 ]);
 
 export type PluginMessage =
   | { type: 'PING' }
+  | { type: 'CLIENT_HELLO'; payload?: unknown }
   | { type: 'GET_STATE' }
   | { type: 'GET_ACTIVITY_LOG'; payload?: { limit?: number; offset?: number; maxPayloadChars?: number } }
   | { type: 'CREATE_TASK'; payload: Record<string, unknown> }
@@ -176,9 +190,37 @@ export type PluginMessage =
   | { type: 'APPROVE_DECISION'; payload: { decisionId: string } }
   | { type: 'REJECT_DECISION'; payload: { decisionId: string } };
 
+/** The request path without its query; '' for a URL that does not parse. */
+function pathnameOf(url: string): string {
+  try {
+    return new URL(url, 'http://localhost').pathname;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Origins a WebSocket upgrade may carry. Empty: browsers attach Origin to every
+ * WebSocket upgrade and apply no CORS to it, and no Moe client is a browser (the
+ * IDE plugins, moe-proxy, the Claude plugin hook and the local runner send none).
+ * Add an origin here only for a first-party browser client; there is
+ * deliberately no setting or environment knob.
+ */
+const ALLOWED_WS_ORIGINS: readonly string[] = Object.freeze([]);
+/** ws reads Origin for a version-13 handshake and Sec-WebSocket-Origin for version 8; check both. */
+const ORIGIN_HEADERS = ['origin', 'sec-websocket-origin'] as const;
+const LOGGED_ORIGIN_MAX_CHARS = 120;
+
+/** True for an absent Origin (undefined) or an allowed one. A present 'null' or '' is refused. */
+export function isAllowedUpgradeOrigin(origin: string | undefined): boolean {
+  return origin === undefined || ALLOWED_WS_ORIGINS.includes(origin);
+}
+
 export class MoeWebSocketServer {
   private wss: WSS;
   private pluginClients = new Set<WebSocket>();
+  // Absent = legacy; null = attempted but not yet successfully negotiated.
+  private clientCapabilities = new WeakMap<WebSocket, CapabilityAgreement | null>();
   private mcpClients = new Set<WebSocket>();
   private mcpWorkerMap = new Map<WebSocket, Set<string>>();
   // Ownership of parked wait_for_task / chat_wait waiters, keyed by workerId.
@@ -201,11 +243,44 @@ export class MoeWebSocketServer {
   ) {
     // Cap incoming frame size to prevent memory exhaustion from malicious clients.
     // 2MB is generous for state snapshots and MCP tool args; activity log queries are paginated.
-    this.wss = new WSS({ server: httpServer, maxPayload: 2 * 1024 * 1024 });
+    // verifyClient runs inside ws's handleUpgrade, so every 'upgrade' routed here is checked
+    // before 'connection'. The 2-argument form is required: ws refuses the 1-argument form with 401.
+    this.wss = new WSS({
+      server: httpServer,
+      maxPayload: 2 * 1024 * 1024,
+      verifyClient: (info, done) => this.verifyUpgradeOrigin(info, done),
+    });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
     this.wss.on('error', (error) => {
       logger.error({ error }, 'WebSocket server error');
     });
+  }
+
+  /** Refuse, with a fixed 403 body that never echoes the origin, any upgrade on any path whose Origin is not allowed. */
+  private verifyUpgradeOrigin(
+    info: { req: IncomingMessage },
+    done: (verified: boolean, code?: number, message?: string) => void,
+  ): void {
+    // done(true) stays outside the check's try: it runs 'connection' synchronously.
+    if (this.upgradeOriginAllowed(info.req)) done(true);
+    else done(false, 403, 'Forbidden');
+  }
+
+  /** False, after a warn log, for a present Origin outside ALLOWED_WS_ORIGINS or any exception (fail closed). */
+  private upgradeOriginAllowed(req: IncomingMessage): boolean {
+    try {
+      const refused = ORIGIN_HEADERS.flatMap((name) => req.headersDistinct[name] ?? [])
+        .find((origin) => !isAllowedUpgradeOrigin(origin));
+      if (refused === undefined) return true;
+      logger.warn({
+        remoteAddress: req.socket?.remoteAddress,
+        path: pathnameOf(req.url || '/'),
+        origin: refused.slice(0, LOGGED_ORIGIN_MAX_CHARS),
+      }, 'Refused WebSocket upgrade: Origin not allowed');
+    } catch (error) {
+      logger.warn({ error, remoteAddress: req.socket?.remoteAddress }, 'Refused WebSocket upgrade: Origin check failed');
+    }
+    return false;
   }
 
   /**
@@ -240,6 +315,29 @@ export class MoeWebSocketServer {
     return this.state.runExclusive(fn);
   }
 
+  /** Called under the state mutex, in the same order as approval admission. */
+  private negotiateClient(ws: WebSocket, payload: unknown): void {
+    const previous = this.clientCapabilities.get(ws);
+    if (previous === undefined) this.clientCapabilities.set(ws, null);
+    const agreement = decodeClientHello(payload);
+    if (previous && JSON.stringify(previous.negotiatedCapabilities) !== JSON.stringify(agreement.negotiatedCapabilities)) {
+      throw new MoeError(MoeErrorCode.NOT_ALLOWED, 'Reconnect to change negotiated capabilities',
+        undefined, 'CLIENT_CAPABILITIES_LOCKED');
+    }
+    this.clientCapabilities.set(ws, agreement);
+    this.safeSend(ws, JSON.stringify({ type: 'SERVER_CAPABILITIES', payload: agreement }));
+  }
+
+  private assertApprovalCapabilities(ws: WebSocket, token: unknown): void {
+    const agreement = this.clientCapabilities.get(ws);
+    if (agreement === undefined) return;
+    if (!agreement?.negotiatedCapabilities.planRevisions) {
+      throw new MoeError(MoeErrorCode.NOT_ALLOWED, 'Plan approval requires negotiated planRevisions support',
+        undefined, 'UNSUPPORTED_CLIENT_CAPABILITY');
+    }
+    if (token === undefined) throw invalidInput('expectedPlanRevision', 'the reviewed revision is required after negotiation');
+  }
+
   private onConnection(ws: WebSocket, req: IncomingMessage): void {
     if (this.isClosed) {
       ws.close(1001, 'Server shutting down');
@@ -247,25 +345,18 @@ export class MoeWebSocketServer {
     }
     const url = req.url || '/';
     if (url.startsWith('/mcp')) {
-      this.mcpClients.add(ws);
-      ws.on('message', (data: WebSocket.RawData) => {
-        this.handleMcpMessage(ws, data.toString()).catch((err) => {
-          logger.error({ error: err, endpoint: 'mcp' }, 'Unhandled error in MCP message handler');
-        });
-      });
-      ws.on('close', () => {
-        this.mcpClients.delete(ws);
-        this.cleanupMcpWorkers(ws).catch((err) => {
-          logger.error({ error: err }, 'Error during MCP worker cleanup');
-        });
-      });
-      ws.on('error', (error) => {
-        logger.error({ error, endpoint: 'mcp' }, 'MCP client WebSocket error');
-        this.mcpClients.delete(ws);
-        this.cleanupMcpWorkers(ws).catch((err) => {
-          logger.error({ error: err }, 'Error during MCP worker cleanup after WS error');
-        });
-      });
+      this.attachMcpClient(ws);
+      return;
+    }
+    if (pathnameOf(url) === '/runner') {
+      // Authenticate before any handler is attached: a refused socket never reaches a tool.
+      const runner = authenticateRunner(req, this.state.projectPath);
+      if (!runner) {
+        logger.warn({ endpoint: 'runner', remoteAddress: req.socket.remoteAddress }, 'Runner channel authentication failed');
+        ws.close(1008, 'runner authentication failed');
+        return;
+      }
+      this.attachMcpClient(ws, runner);
       return;
     }
 
@@ -330,6 +421,9 @@ export class MoeWebSocketServer {
 
     try {
       switch (message.type) {
+        case 'CLIENT_HELLO':
+          await this.withMutex(async () => { this.negotiateClient(ws, message.payload); });
+          return;
         case 'PING':
           this.safeSend(ws, JSON.stringify({ type: 'PONG' }));
           return;
@@ -484,13 +578,16 @@ export class MoeWebSocketServer {
                   // SAME state.approveTask the board's APPROVE_TASK button uses so
                   // it stamps planApprovedAt and records PLAN_APPROVED — a raw
                   // updateTask would silently lose both. A board drag is a human
-                  // action, equivalent to clicking Approve. The optional
+                  // action, equivalent to clicking Approve. The required
                   // compare-and-swap token rides along so a drag of a card that
-                  // was re-planned since it was rendered is refused here too —
-                  // we are already inside withMutex, so the comparison is
-                  // serialized with the write. The rest of safeUpdates is still
+                  // was re-planned since it was rendered is refused here too,
+                  // and a drag that omits it is refused (CQ-F MODIFY_RAIL
+                  // prop-5e7763ed deleted revision-less approval) — we are
+                  // already inside withMutex, so the comparison is serialized
+                  // with the write. The rest of safeUpdates is still
                   // deliberately ignored on this route.
                   if (existing.status === 'AWAITING_APPROVAL' && newStatus === 'WORKING') {
+                    this.assertApprovalCapabilities(ws, approvalToken);
                     return this.state.approveTask(taskId, approvalToken);
                   }
                   // Reopen route (e.g. JetBrains drag DONE/REVIEW → WORKING):
@@ -609,14 +706,15 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          // Forward the optional compare-and-swap token INSIDE the mutex, so the
+          // Forward the required compare-and-swap token INSIDE the mutex, so the
           // validation + revision comparison happen under the same lock as the
-          // status re-check and the write. Omitting the key is the only legacy
-          // (unchecked) approval; an explicit null is a malformed token and
-          // surfaces INVALID_INPUT from taskStore.
-          const task = await this.withMutex(() =>
-            this.state.approveTask(message.payload.taskId, message.payload.expectedPlanRevision)
-          );
+          // status re-check and the write. An omitted key (CQ-F MODIFY_RAIL
+          // prop-5e7763ed deleted revision-less approval) and an explicit null
+          // both surface INVALID_INPUT from taskStore.
+          const task = await this.withMutex(async () => {
+            this.assertApprovalCapabilities(ws, message.payload.expectedPlanRevision);
+            return this.state.approveTask(message.payload.taskId, message.payload.expectedPlanRevision);
+          });
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: this.servedTask(task) }));
           return;
         }
@@ -1101,7 +1199,7 @@ export class MoeWebSocketServer {
         operation: message.type,
         ...(moeError && { code: moeError.code, codeName: moeError.codeName }),
         // Include IDs if available for debugging
-        ...(('payload' in message && message.payload && typeof message.payload === 'object') && {
+        ...(('payload' in message && message.payload !== null && typeof message.payload === 'object') && {
           context: {
             taskId: (message.payload as { taskId?: string }).taskId,
             epicId: (message.payload as { epicId?: string }).epicId,
@@ -1115,13 +1213,38 @@ export class MoeWebSocketServer {
     }
   }
 
-  private async handleMcpMessage(ws: WebSocket, raw: string): Promise<void> {
+  /** MCP handling shared by /mcp and an authenticated /runner, which alone passes `runner`. */
+  private attachMcpClient(ws: WebSocket, runner?: RunnerIdentity): void {
+    const endpoint = runner ? 'runner' : 'mcp';
+    this.mcpClients.add(ws);
+    ws.on('message', (data: WebSocket.RawData) => {
+      this.handleMcpMessage(ws, data.toString(), runner).catch((err) => {
+        logger.error({ error: err, endpoint }, 'Unhandled error in MCP message handler');
+      });
+    });
+    ws.on('close', () => {
+      this.mcpClients.delete(ws);
+      this.cleanupMcpWorkers(ws).catch((err) => {
+        logger.error({ error: err }, 'Error during MCP worker cleanup');
+      });
+    });
+    ws.on('error', (error) => {
+      logger.error({ error, endpoint }, 'MCP client WebSocket error');
+      this.mcpClients.delete(ws);
+      this.cleanupMcpWorkers(ws).catch((err) => {
+        logger.error({ error: err }, 'Error during MCP worker cleanup after WS error');
+      });
+    });
+  }
+
+  private async handleMcpMessage(ws: WebSocket, raw: string, runner?: RunnerIdentity): Promise<void> {
     try {
       const request = JSON.parse(raw);
       this.trackMcpWorker(ws, request);
       const response = await this.mcpAdapter.handle(request, {
         shouldContinue: () => !this.isClosed && this.mcpClients.has(ws) && ws.readyState === WebSocket.OPEN,
         onWaiterRegistered: (toolName, workerId) => this.registerMcpWaiter(ws, toolName, workerId),
+        runner,
       });
       if (response !== null) {
         this.safeSend(ws, JSON.stringify(response));

@@ -19,11 +19,21 @@
 // Stored paths are worker-typed (complete_step does no normalization), so
 // every entry is canonicalized through normalizeAffectedFile and deduped by
 // pathKey; entries that cannot be normalized (absolute, traversal) are DROPPED
-// rather than thrown — a peer's junk must never fail another task's scope.
+// rather than thrown — a peer's junk must never fail another task's scope. A
+// list field that is not an array contributes nothing: it is never spread, and
+// never iterated as characters.
 // =============================================================================
 
 import type { ImplementationStep, Task, TaskCommit } from '../types/schema.js';
 import { normalizeAffectedFile, pathKey } from './affectedFiles.js';
+
+/** A stored list field read from arbitrary JSON: the array itself, else nothing. */
+function asList(value: unknown): readonly unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** Canonicalize one stored path; null when the daemon would refuse to store it. */
 export function tolerantNormalizePath(raw: unknown): string | null {
@@ -52,9 +62,9 @@ export class PathSet {
     return normalized;
   }
 
-  addAll(raws: Iterable<unknown> | null | undefined): this {
-    if (!raws) return this;
-    for (const raw of raws) this.add(raw);
+  /** Add every entry of an array; anything that is not an array adds nothing. */
+  addAll(raws: unknown): this {
+    for (const raw of asList(raws)) this.add(raw);
     return this;
   }
 
@@ -78,25 +88,28 @@ export class PathSet {
 }
 
 function planSteps(task: Pick<Task, 'implementationPlan'>): ImplementationStep[] {
-  return Array.isArray(task.implementationPlan) ? task.implementationPlan : [];
+  return asList(task.implementationPlan).filter(isRecord) as unknown as ImplementationStep[];
 }
 
 /**
  * The changed-file set completeTask.ts persists as `filesModified`: for every
  * COMPLETED step, `modifiedFiles || affectedFiles || []`. Kept as a separate
  * function so the mirror is auditable line-for-line against completeTask.ts.
+ * It agrees with completeTask.ts on every well-formed record; the one
+ * difference is junk-only: the selected value contributes nothing when it is
+ * not an array (completeTask.ts itself is unchanged).
  */
 export function completedStepFiles(task: Pick<Task, 'implementationPlan'>): string[] {
   return planSteps(task)
     .filter((s) => s.status === 'COMPLETED')
-    .flatMap((s) => s.modifiedFiles || s.affectedFiles || []);
+    .flatMap((s) => asList(s.modifiedFiles || s.affectedFiles) as string[]);
 }
 
 /** A commit's paths minus the ones it attributed by measurement only. */
 export function nonInferredCommitPaths(commit: TaskCommit): string[] {
   const inferred = new PathSet().addAll(commit.inferredPaths);
   const out = new PathSet();
-  for (const p of commit.paths || []) {
+  for (const p of asList(commit.paths)) {
     const normalized = tolerantNormalizePath(p);
     if (normalized === null || inferred.has(normalized)) continue;
     out.add(normalized);
@@ -118,8 +131,8 @@ export function collectAssertedPaths(task: Task): string[] {
   set.addAll(task.filesModified);
   set.addAll(task.declaredFiles);
   set.addAll(task.touchedFiles);
-  for (const commit of task.commits || []) {
-    set.addAll(nonInferredCommitPaths(commit));
+  for (const commit of asList(task.commits)) {
+    if (isRecord(commit)) set.addAll(nonInferredCommitPaths(commit as unknown as TaskCommit));
   }
   return set.values();
 }
@@ -139,13 +152,13 @@ export function collectTaskPathTiers(task: Task): TaskPathTiers {
   const assertedSet = new PathSet().addAll(asserted);
   const planned = new PathSet();
   for (const step of planSteps(task)) {
-    for (const raw of [...(step.affectedFiles || []), ...(step.newFiles || []), ...(step.modifiedFiles || [])]) {
+    for (const raw of [...asList(step.affectedFiles), ...asList(step.newFiles), ...asList(step.modifiedFiles)]) {
       const normalized = tolerantNormalizePath(raw);
       if (normalized === null || assertedSet.has(normalized)) continue;
       planned.add(normalized);
     }
   }
-  for (const raw of task.inferredPaths || []) {
+  for (const raw of asList(task.inferredPaths)) {
     const normalized = tolerantNormalizePath(raw);
     if (normalized === null || assertedSet.has(normalized)) continue;
     planned.add(normalized);

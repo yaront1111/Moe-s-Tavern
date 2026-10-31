@@ -109,11 +109,11 @@ class MoeCommandSender(
         sendMessage("UPDATE_EPIC", payload)
     }
     /**
-     * Approves [taskId], optionally quoting the plan revision that was reviewed.
+     * Approves [taskId], quoting the required plan revision that was reviewed.
      *
-     * An omitted (or null) [expectedPlanRevision] keeps the legacy payload
-     * exactly: the key is absent, never a JSON null. A supplied revision —
-     * including an explicit 0 — is sent unchanged, so the caller must pass the
+     * CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25) removes
+     * token-free approvals. [expectedPlanRevision], including an explicit 0
+     * for a stamp-less task, is always sent unchanged. The caller must pass the
      * revision it actually reviewed rather than a fresher one read from state.
      *
      * @return true only when the local socket accepted the bytes. That is NOT
@@ -122,16 +122,14 @@ class MoeCommandSender(
      * @throws IllegalArgumentException when [expectedPlanRevision] is outside
      *   `0..MAX_SAFE_PLAN_REVISION`. Nothing is sent in that case.
      */
-    fun approveTask(taskId: String, expectedPlanRevision: Long? = null): Boolean {
-        require(expectedPlanRevision == null || expectedPlanRevision in 0L..MAX_SAFE_PLAN_REVISION) {
+    fun approveTask(taskId: String, expectedPlanRevision: Long): Boolean {
+        require(expectedPlanRevision in 0L..MAX_SAFE_PLAN_REVISION) {
             "expectedPlanRevision must be in 0..$MAX_SAFE_PLAN_REVISION, was $expectedPlanRevision"
         }
         if (!ensureConnected()) return false
         val payload = JsonObject().apply {
             addProperty("taskId", taskId)
-            // Only ever added when supplied: an omitted revision must keep the
-            // legacy shape, so the daemon never sees an explicit null token.
-            if (expectedPlanRevision != null) addProperty("expectedPlanRevision", expectedPlanRevision)
+            addProperty("expectedPlanRevision", expectedPlanRevision)
         }
         val delivered = dispatch("APPROVE_TASK", payload)
         if (!delivered) onDisconnected()

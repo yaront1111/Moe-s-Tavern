@@ -1,0 +1,276 @@
+{
+  "id": "task-44a9e97be68a4166822b64416cea7ab5",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R12] Safe host admission",
+  "description": "Objective: Keep target Git writes in protected wrappers and import only validated candidate bytes.\n\nDeliverable: Safe host admission. This is task R12 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/local-runner.test.mjs\n\nDependency aliases (wired by Moe task ids after import): R01, R09, V02.",
+  "definitionOfDone": [
+    "Disable executable hooks/fsmonitor/filters/helpers and sanitize inherited Git config/environment.",
+    "Candidate Moe source cannot replace active host controller.",
+    "Host never executes repository tests/package scripts/hooks during admission.",
+    "Fresh verification `node --test scripts/tests/local-runner.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Share R09b's hardened Git envelope from scripts/local-runner/source-export.mjs, without changing export's behavior.\n\n- Export gitRunner(git, root, timeoutMs, {prefix = [], env = {}, fail = () => exportError('EXPORT_GIT_FAILED')} = {}).\n  - prefix goes after GIT_PREFIX and safe.directory and before args.\n  - env merges over the sanitized env (no inherited GIT_*; GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL, GIT_NO_LAZY_FETCH and GIT_TERMINAL_PROMPT as today).\n  - fail() replaces both EXPORT_GIT_FAILED rejections.\n- Export openRepository({repoDir, git, timeoutMs}, {fail, unsupported, runner}). It holds openCommit's first half: realpath, the '/*' refusal, rev-parse --show-toplevel equality, and the no-scope `config --includes --get-regexp` refusal of partialclone, promisor, core.worktree and filter.*. It returns {root, run}. openCommit calls it and then peels as today.\n- Export's argv, env, codes and refusals stay byte-identical: local-runner-snapshot.test.mjs must pass unchanged.\n- Error handling: every failure still maps to one fixed code through fail/unsupported, and no Git output or path reaches a message.\n\nNo new test in this step. The unchanged snapshot suite is its proof; run `node --test scripts/tests/local-runner-snapshot.test.mjs` now for a green baseline after the edit.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/source-export.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/source-export.mjs"
+      ],
+      "note": "Exported gitRunner(git, root, timeoutMs, {prefix, env, fail}) and openRepository({repoDir, git, timeoutMs}, {unsupported, ...runnerOptions}) from source-export.mjs. The second argument is {unsupported} plus gitRunner's own options (prefix/env/fail), a flatter form of the plan's {fail, unsupported, runner}. openCommit now calls openRepository and then peels as before. Export argv, env, codes and refusals are unchanged: local-runner-snapshot.test.mjs passed 22/22 unchanged (env -i, node v24.21.0). Diff: +18/-10. Peers' dirty paths noted and left alone.",
+      "startedAt": "2026-10-29T17:10:06.182Z",
+      "completedAt": "2026-10-29T17:11:38.339Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "A new scripts/local-runner/admission.mjs: inputs, re-validation and base consistency, plus rows A1-A2 in scripts/tests/local-runner.test.mjs.\n\nAdd the module's static import at the top of the test file, as every other local-runner module is imported (gotcha-local-runner-tests).\n\nHeader comment. CQ-R12 host admission turns one candidate into ONE Git tree object in the host repository. The candidate is validateImport's frozen manifest, from R09's importCandidate, applied to the protected base tree (R09b's exportSourceSnapshot().tree).\n- Plumbing only. No ref is written and no working-tree or .git/index byte changes. Target branch writes stay in the wrappers' landing, so candidate Moe source cannot replace the active host controller.\n- Hooks, fsmonitor, filters and helpers are disabled, and Git config and env are sanitized.\n- Nothing from the repository (tests, package scripts, hooks, its own git binary) is ever executed.\n- executionReady stays false and verified-local stays unavailable.\n\nadmitCandidate({repoDir, baseTree, candidate, git, timeoutMs = 120_000}):\n- Input checks. Each failure throws ADMISSION_INPUT_INVALID (fixed-text MESSAGES and admissionError, in the module's idiom):\n  - repoDir: an absolute path with no control character;\n  - git: an ABSOLUTE path. A bare 'git' with cwd set to the repository lets Windows CreateProcess run a repository git.exe, the same issue as bug task-d72fe292;\n  - baseTree: 40 or 64 hex;\n  - timeoutMs: 1 to 600_000;\n  - candidate: a frozen record whose key set is exactly {entries, digest}.\n- Re-validate: validateImport(candidate.entries mapped back to {kind, path, executable, data} or {kind, path}) must give the same digest and, entry by entry, the same sha256. Otherwise throw ADMISSION_INPUT_INVALID; SNAPSHOT_* codes pass through.\n- run = gitRunner(git, root, timeoutMs, {prefix: ['-c', `core.hooksPath=${emptyHooksDir}`, '-c', 'core.splitIndex=false'], env: {GIT_INDEX_FILE: tempIndex}, fail}).\n  - The private temp dir comes from fs.mkdtemp(os.tmpdir() + '/moe-admission-'). It holds an empty hooks/ dir and the index, and is removed in a finally on every path.\n  - Open the repository through openRepository, where refusal gives ADMISSION_REPOSITORY_UNSUPPORTED.\n  - `rev-parse --show-object-format` must be sha1 or sha256, matching baseTree's length.\n  - `rev-parse --verify --quiet --end-of-options <baseTree>^{tree}` must equal baseTree, else ADMISSION_BASE_INVALID.\n- Base consistency, from `ls-tree -r -z --full-tree <baseTree>` parsed with LS_TREE-style records into path -> mode. Any violation gives ADMISSION_ENTRY_CONFLICT:\n  - a delete must name a base blob of mode 100644 or 100755 (the R09 QA note: deletes are checked against the base);\n  - a file may replace only such a blob, or add a new path;\n  - with remaining = base minus deletes, no proper '/'-prefix of a file path may be a remaining path (nothing beneath a base file, symlink or gitlink);\n  - a file path must not be a directory prefix of a remaining path.\n  update-index --index-info would otherwise replace across D/F conflicts silently.\n- Error handling: one fixed code per refusal, never a partial result; no path, byte or Git output in a message.\n\nRows (A prefix; skip only where noted):\n- A1: each input refusal, including a bare 'git', a relative repoDir, an unfrozen candidate, an extra key, a tampered sha256 or digest, a data buffer edited after validateImport, and timeoutMs 0 or 600_001. No git is spawned: a logging git wrapper logs nothing; on win32 assert that the temp dir is gone.\n- A2, a scratch repo built with the test's own git:\n  - a base containing a, d/x, l (a symlink, POSIX only) and m (a gitlink, via update-index --cacheinfo 160000);\n  - refusals for: deleting 'nope', 'd' or 'l'; a file at 'l' or 'm'; 'a/b' while a remains; a file 'd' while d/x remains;\n  - deleting a with file 'a/b' is allowed;\n  - an object-format mismatch, and baseTree being a blob or commit id, give ADMISSION_BASE_INVALID;\n  - a repo with filter.x.clean in config.worktree (via extensions.worktreeConfig) gives ADMISSION_REPOSITORY_UNSUPPORTED.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "newFiles": [
+        "scripts/local-runner/admission.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/admission.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "New scripts/local-runner/admission.mjs, covering the step-2 part: input checks, the frozen-candidate re-validation, openRepository with the admission envelope, the object-format and base-tree peel (openBase), the ls-tree base map and checkEntries. Rows A1 and A2 are appended to local-runner.test.mjs, with a section-start static import as in the X sections. Both pass (env -i, node 24).\n\nDeviations, each recorded:\n(1) The plan row \"deleting a with file a/b is allowed\" cannot occur. validateImport already refuses a delete above or below a file (SNAPSHOT_PATH_COLLISION, which is source-export's documented v1 D/F limit). A2 pins that upstream refusal instead, and checkEntries checks files against the base directly, which is stricter and simpler.\n(2) The prefix also carries -c index.sparse=false: a sparse index could hold directory entries in the private index. This is config sanitization under DoD 1, and A6 will pin it.\n(3) Sizes and kinds are compared per entry as well as sha256 and path.\n(4) An unknown object format gives ADMISSION_GIT_FAILED; a length mismatch gives ADMISSION_BASE_INVALID.\n(5) The A1 temp-dir check runs on every platform, using TMPDIR/TEMP/TMP isolation; the logging-wrapper check runs on POSIX.",
+      "startedAt": "2026-10-29T17:17:39.414Z",
+      "completedAt": "2026-10-29T17:19:32.920Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "The candidate tree in admission.mjs, plus rows A3-A4 (DoD 2).\n\n1. Blobs:\n   - write each file's data into the temp dir (blob-<n>, mode 0600);\n   - run ONE `hash-object -w --no-filters --stdin-paths` with those temp paths on stdin. --no-filters: no clean filter, autocrlf or eol conversion; the path is a temp file, never a worktree path;\n   - each printed id must equal a Node-computed object id: createHash(sha1 or sha256) of `blob <size>\\0` + data, else ADMISSION_GIT_FAILED.\n2. `read-tree <baseTree>` into the temp index (no -u or -m, so no worktree access).\n3. `update-index -z --force-remove --stdin` with the delete paths, then `update-index -z --index-info` with `<100644|100755> <id>\\t<path>\\0` records.\n4. `write-tree`; its id must be a full 40- or 64-hex id.\n5. Resolve Object.freeze({baseTree, tree, digest: candidate.digest}).\n\nThe module never runs update-ref, commit, commit-tree, checkout, reset, merge, fetch, push, gc or hook. The step-4 envelope row pins the allowed set.\n\nError handling: any Git failure or a mismatch gives ADMISSION_GIT_FAILED with fixed text. The temp dir is removed on every path, including a throw from writing a blob file.\n\nRows:\n- A3:\n  - `git ls-tree -r <tree>` equals base minus deletes plus files, with the exec bit as mode 100755;\n  - each blob's `cat-file blob` bytes equal the candidate data, including bytes that a .gitattributes `text eol=crlf` or a `filter=x` would have changed;\n  - an empty candidate gives tree === baseTree;\n  - two concurrent admissions of different candidates both succeed with their own trees.\n- A4 (DoD 2): the worktree holds 'active controller' files: scripts/moe-agent.sh and scripts/local-runner/admission.mjs, as copies. The candidate modifies both and adds a file. After admission:\n  - the worktree file bytes, the .git/index bytes, `for-each-ref` output, HEAD, and packed-refs (if any) are unchanged;\n  - the real module file under test is unchanged (sha256 before and after);\n  - no candidate file was executed: a candidate script that would write a marker if run leaves no marker;\n  - the tree contains the candidate bytes;\n  - admission.mjs imports only node: built-ins and ./ siblings, and has no dynamic import(); check it by a regex over its source.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/admission.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/admission.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Added writeTree to admission.mjs. It writes private 0600 blob copies ('wx'), runs ONE `hash-object -w --no-filters --stdin-paths`, and checks the printed ids against Node's own sha1/sha256 blob hash (else ADMISSION_GIT_FAILED). Then it runs read-tree <base> into the private index, `update-index -z --force-remove --stdin` (deletes), `update-index -z --index-info` (files) and `write-tree`; the id must be full hex of the base's length. admitCandidate resolves a frozen {baseTree, tree, digest}.\n\nTDD: A3 and A4 failed RED against the step-2 module (no tree) and pass now.\n- A3: the exact leaves and bytes, with CRLF and $Id$ content kept through `.gitattributes` `* text eol=crlf ident` and local core.autocrlf=true. Also: the exec bit gives 100755; the empty candidate equals the base; two concurrent admissions get their own trees; a sha256 repo works.\n- A4: the worktree, .git minus objects/ (index, refs, packed-refs, HEAD, logs, config) and for-each-ref are unchanged. So is the real module's sha256. No marker appears from candidate scripts (moe-agent.sh, postinstall.sh), and the tree holds the candidate bytes.\n- A4 import check: admission.mjs and its two siblings import only node: built-ins and each other, with no import( or require(.\n\nDeviation: a `.gitattributes` `filter=x` row was not added. Any filter.* config is refused (A2), and an attribute without its config is a no-op, so ident, eol and autocrlf are the live conversions --no-filters must defeat.",
+      "startedAt": "2026-10-29T17:19:33.819Z",
+      "completedAt": "2026-10-29T17:21:10.250Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Hostile-environment rows A5-A6 (DoD 1, DoD 3).\n\n- A5, a hostile repository and host, using one scratch repo:\n  - executable hooks writing a marker: post-index-change, reference-transaction, pre-commit, post-commit, post-checkout and fsmonitor-watchman, in .git/hooks AND in a dir named by a local core.hooksPath;\n  - a local core.fsmonitor naming a marker script;\n  - a package.json whose test, prepare and postinstall scripts write markers;\n  - inherited GIT_DIR, GIT_INDEX_FILE (pointing at the real index), GIT_OBJECT_DIRECTORY, GIT_CONFIG_PARAMETERS ('core.hooksPath'='<marker dir>') and GIT_CONFIG_COUNT/KEY/VALUE in process.env;\n  - a HOME and XDG_CONFIG_HOME whose .gitconfig sets core.hooksPath, core.fsmonitor and a filter.\n  Set the env inside the test and restore it in t.after. Admission succeeds into the right repository; no marker exists; and the real index, refs and worktree are unchanged.\n  A local filter.x.clean marker gives ADMISSION_REPOSITORY_UNSUPPORTED, with no marker.\n- A6, the envelope (POSIX only; skip on win32 with a reason). Pass as git a /bin/sh wrapper that appends argv and every GIT_* variable to a log, then execs the real git (the R09b hostile-wrapper technique). Every invocation must:\n  - carry --no-replace-objects, -c protocol.allow=never, -c core.fsmonitor=false, -c core.hooksPath=<an empty dir inside the temp dir> and -c core.splitIndex=false;\n  - have GIT_* exactly {GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL, GIT_NO_LAZY_FETCH, GIT_TERMINAL_PROMPT, GIT_INDEX_FILE inside the temp dir};\n  - use only the subcommands rev-parse, config, ls-tree, hash-object, read-tree, update-index and write-tree.\n  The temp dir no longer exists afterwards.\n\nError handling in the rows: a marker check reads the absence of files and never swallows an admission error.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/admission.mjs"
+      ],
+      "note": "A5 (DoD 1 and DoD 3) sets up a hostile repository and host:\n- marker hooks (post-index-change, reference-transaction, pre/post-commit, post-checkout, fsmonitor-watchman) in .git/hooks AND in a local core.hooksPath dir;\n- a local core.fsmonitor, and package.json test/prepare/postinstall scripts;\n- inherited GIT_DIR/GIT_WORK_TREE/GIT_OBJECT_DIRECTORY aimed at a decoy repo, GIT_INDEX_FILE aimed at the real index, GIT_CONFIG_PARAMETERS (hooksPath), GIT_CONFIG_COUNT/KEY/VALUE (fsmonitor) and GIT_CONFIG_GLOBAL/SYSTEM;\n- a HOME and XDG_CONFIG_HOME config with hooksPath, fsmonitor and filter.x.clean.\n\nA POSIX positive control first shows the fsmonitor and hooksPath hooks really fire outside the envelope. Admission then succeeds into the right repo (the decoy lacks the tree): no marker, and the worktree, .git minus objects/ and refs are unchanged. A local filter.x.clean gives ADMISSION_REPOSITORY_UNSUPPORTED with no marker. The marker dir has no space, because Git runs core.fsmonitor through the shell.\n\nA6 (POSIX; skipped on win32 with a reason) pins, through a /bin/sh logging wrapper:\n- the FULL prefix on every call: R09b's GIT_PREFIX, safe.directory, then core.hooksPath=<temp>/hooks, core.splitIndex=false and index.sparse=false;\n- the exact GIT_* set, with GIT_INDEX_FILE=<temp>/index;\n- the subcommand set {rev-parse, config, ls-tree, hash-object, read-tree, update-index, write-tree};\n- that the temp dir is gone.\n\nAlso trimmed admission.mjs by 2 lines (readInput now returns inside its try, as source-export does; the hooks dir is inlined). No behavior change; A1-A6 pass. Size so far: source-export +18/-10, admission 153, tests +219, so 400 changed lines.",
+      "startedAt": "2026-10-29T17:21:11.180Z",
+      "completedAt": "2026-10-29T17:23:41.505Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification. Run this once, fresh, from the repo root: `node --test scripts/tests/local-runner.test.mjs`.\n\nOn WSL, run `env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs`. Exit 0 is required, and its output tail is the complete_task verification evidence (DoD 4).\n\nAlso confirm the following. They are not evidence.\n- `node --test scripts/tests/local-runner-snapshot.test.mjs` passes unchanged, since source-export.mjs is shared.\n- No pre-existing test line was removed.\n- git diff --numstat plus wc -l of the new module totals at most 400 changed lines. Budget: source-export about +12/-6, admission about 120, tests about 230. If the honest diff exceeds 400, never cut a DoD row: comment the measured split on the task so the architect can propose a size rail.\n- No stray moe-admission-* temp dir remains.\n- LF line endings.\n\nNote peers' dirty paths and continue. Error handling for the gate itself: fix a failure's cause with a test, never by weakening or skipping a row, then re-run the whole command.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate, run fresh: `env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs` exited 0, with 217 tests: 216 pass, 1 pre-existing skip (the opt-in macOS hardware smoke).\n\nSide checks, none of which is evidence:\n- local-runner-snapshot.test.mjs: 22/22, unchanged.\n- local-runner-bundle and local-runner-bridge: 57/57.\n- No pre-existing test line was removed (0 '-' lines).\n- Size: source-export +18/-10, admission.mjs 153 (new), tests +219, which is 400 changed lines. That is exactly at the 400 bound, so no rail is needed.\n- No stray moe-admission-* or moe-marks-* dirs in /tmp.\n- LF only, git diff --check is clean, and there are no forbidden patterns.\n\nPeers' dirty paths were left untouched.",
+      "startedAt": "2026-10-29T17:23:42.481Z",
+      "completedAt": "2026-10-29T17:24:51.303Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's diff only. Load the adversarial-self-review skill first, then attack it:\n- Hostile repo config in every scope (local, worktree, include.path, includeIf), replace refs, alternates, a sha256 repo, a shallow repo, split index, an index.lock left behind.\n- Hostile env: GIT_*, HOME, a PATH holding a fake git, a Windows repo git.exe.\n- Hostile candidates: a delete outside the base; writes beneath a base symlink or gitlink; D/F swaps; a case-variant path (note it as a residual for Windows/macOS checkouts, not a refusal in v1); a tampered manifest; 10,000 files; 256 MiB.\n- Concurrency: two admissions, or an admission racing a wrapper landing on the same repo.\n\nCheck that:\n- no ref, worktree or .git/index byte ever changes;\n- the temp dir always goes;\n- every refusal is one fixed code;\n- export's behavior is unchanged;\n- verified-local, executionReady and isolation claims are untouched;\n- there is no .moe edit and no agent Git write. The admission's own object writes go to scratch repos in tests only.\n\nMutation spot-check in a scratch `git archive HEAD | tar -x` copy, scored by exit code with --test-name-pattern='^A[1-6] '. Mutants, and the row that should kill each:\n- dropping --no-filters: A3;\n- dropping core.hooksPath: A5 or A6;\n- inheriting GIT_*: A5;\n- a bare git allowed: A1;\n- no delete-in-base check: A2;\n- no ancestor or descendant conflict check: A2;\n- no blob id cross-check: A3, with a wrapper that rewrites hash-object output;\n- using the real index: A4;\n- no temp cleanup: A6.\n\nFix anything found with a test, then re-run step 5's command fresh before complete_task. Report a follow-up, without fixing it here, that source-export.mjs still accepts a bare 'git'.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/admission.mjs",
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Adversarial self-review of this task's diff only. Size: source-export +18/-10, admission.mjs 156 (new), tests +216 = 400 changed lines.\n\nReview fixes, each with a test:\n- A relative git that the cwd resolves is refused (A1).\n- A git binary planted at the repo root is refused by the realpath containment guard, before any spawn (A1).\n- On darwin, foldCase lowercases before the containment check.\n- The candidate is copied once with a spread, so a getter cannot answer differently the second time.\n- The A4 import check is now an exact list for admission.mjs, with no import( or require(.\n- The A5 fsmonitor control uses a space-free marks dir, because Git runs core.fsmonitor through the shell.\n- A5 takes its repoState snapshot again after its own filter config write.\n\nPlan-row correction: \"delete a with a file at a/b\" cannot happen, because validateImport refuses it with SNAPSHOT_PATH_COLLISION. A2 asserts that code instead, and checkEntries checks files against the base directly.\n\nMutation spot-check: run in /tmp/r12-mut, a git archive copy, scored by exit code with --test-name-pattern='^A[1-6] '.\n- KILLED:\n  - --no-filters (A3); core.hooksPath (A5, A6); splitIndex and index.sparse (A6); inherited GIT_* (A5);\n  - bare git and the in-repo guard (A1);\n  - delete-in-base, replace-non-blob, descendant and ancestor checks (A2);\n  - real index (A3-A6); temp cleanup (A1, A6);\n  - digest, per-entry, frozen, entries-frozen, key-set and revalidate checks (A1);\n  - base peel (A2); sha1-always and skipped deletes (A3); exec mode (A3, A4).\n- SURVIVED, equivalent:\n  - The blob-id cross-check: the tree uses only Node-computed ids, and write-tree refuses a missing object.\n  - The format-length check: rev-parse exits 1, giving BASE_INVALID.\n- SURVIVED, residual: fixedError catch-all. Only an injected fs fault reaches it, because every known refusal is minted fixed at its source.\n\nStress, outside the suite:\n- 10,000 files: 7.8 s, RSS 406 MiB.\n- 256 MiB: 2.0 s, RSS 917 MiB.\n- No temp dir left behind.\n\nTheoretical notes, not bugs:\n- Peak memory is about 3x candidate bytes during re-validation.\n- Sequential temp writes count against timeoutMs.\n- A concurrent `gc --prune=now` could prune the fresh unreferenced objects. The consumer's read-tree or checkout then fails closed.\n- A SIGKILL mid-run leaves the temp dir behind.\n- Case-variant paths are a v1 residual for Windows/macOS checkouts.\n- Linked worktrees and submodule checkouts are accepted, because openRepository's show-toplevel check holds.\n\nChecked:\n- No ref, worktree or .git/index byte changes (A4, A5).\n- Every refusal has one fixed code.\n- Export is unchanged (snapshot suite 22/22).\n- executionReady, verified-local and isolation are untouched.\n- No .moe edit and no agent Git write. Object writes go to scratch repos only.\n\nFollow-up filed, not fixed here: task-89e10b2a14594ab5bf14bdf35474ef0c, \"bug: source-export accepts a bare or in-repository git binary\".\n\nFresh gate:\n- `node --test scripts/tests/local-runner.test.mjs`: exit 0, 217 tests, 216 pass, 1 skip (the opt-in macOS native smoke).\n- Snapshot suite: 22/22.",
+      "startedAt": "2026-10-29T17:24:55.443Z",
+      "completedAt": "2026-10-29T17:33:56.079Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor feed rule (2026-10-29): CQ row whose only unmet prerequisite, CQ-R09 (task-0dd1cce2), has an approved plan (WORKING, 5 steps). 3b760109 (R01) and 23a5563c are already met. Plan against R09's approved plan and landed code where it exists, and otherwise against the prerequisite's description, DoD and docs/plans/2026-10-24-ai-code-quality-and-context.md. Name every assumed interface in planningNotes and keep dependsOn. If a contract must be designed first, split it out (SPIDR) rather than report_blocked. CQ-V07 (task-16bbf8ff, PLANNING) and CQ-R13 consume this row.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 120,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:20.491Z",
+  "updatedAt": "2026-10-29T18:40:39.927Z",
+  "dependsOn": [
+    "task-3b760109c42544ab892199b3d5534b77",
+    "task-0dd1cce23a6646fd80cf401dd47c7b0f",
+    "task-23a5563cea384d56abb8da1551435455"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T16:53:39.687Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-29T18:39:54.515Z",
+    "wallClockMs": 6374828
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-5ebbf433",
+    "qa-952969be"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T16:58:47.215Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected these options:\n1) Admission creates a commit or a ref. Target and branch writes belong to the wrappers' landing (commit-tree plus update-ref CAS), so admission yields a tree only. Later activation (out of scope) commits it.\n2) Duplicating R09b's Git envelope. It is shared instead, since the QA-hardened config-scope refusal was hard-won (gotcha-local-runner-tests).\n3) One hash-object --stdin per file. Up to 10,000 spawns; --stdin-paths over private temp files is one process.\n4) git fast-import. More stream code, and it is built around refs and marks.\n5) Relying on update-index's D/F handling. --index-info replaces silently, so conflicts are checked explicitly against the base listing.\n6) Allowing a bare 'git'. Windows resolves it against the repo cwd (task-d72fe292).",
+    "codebaseInsights": "- LANDED, R09 DONE:\n  - importCandidate resolves {instance, candidate: validateImport(entries), executionReady: false};\n  - validateImport gives frozen {entries: [{kind:'file', path, executable, size, sha256, data} | {kind:'delete', path}] sorted by UTF-8, digest};\n  - exportSourceSnapshot gives {version: 1, commit, tree, base, overlay, excluded};\n  - source-export.mjs's private gitRunner sanitizes the env (no GIT_*, NOSYSTEM, GLOBAL=/dev/null or NUL, NO_LAZY_FETCH, TERMINAL_PROMPT=0), with GIT_PREFIX --no-optional-locks --no-replace-objects, protocol.allow=never, core.fsmonitor=false and safe.directory=<root>;\n  - openCommit refuses partialclone, promisor, core.worktree and filter.* across every scope via no-scope `config --includes --get-regexp`.\n- local-runner.test.mjs imports every module statically at the top, so add admission.mjs's import there. Test name prefixes in use are M, T and X; A is free.\n- Git 2.43 on this box.",
+    "risks": "- Git-version portability (CI runs ubuntu, windows and macos): --show-object-format needs Git >= 2.27; core.hooksPath to an empty private dir is portable, where /dev/null and NUL are not.\n- A6's /bin/sh wrapper is POSIX-only; A1-A5 must pass on Windows.\n- Base listings of huge repos hit the runner's 64 MiB maxBuffer and fail closed (SNAPSHOT_LIMIT_EXCEEDED).\n- Case-variant collisions against the base are a documented residual, not a v1 refusal.\n- The source-export refactor must keep the snapshot suite byte-identical.\n- Size is close to 400; never cut rows (see step 5).",
+    "keyFiles": [
+      "scripts/local-runner/source-export.mjs",
+      "scripts/local-runner/source-snapshot.mjs",
+      "scripts/local-runner/snapshot-import.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/tests/local-runner-snapshot.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T16:58:47.346Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "1a055c3df9a5f6e1b5996d34f2c319d5e4dd51df",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T17:03:01Z",
+      "paths": [
+        ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
+        ".moe/tasks/task-465fb4b958934707b311fc0e7731cc7b.json",
+        ".moe/tasks/task-7d0f7f082b6349cab75c62af3c8b1da4.json"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T17:08:10.785Z",
+      "treeId": "cd511bb27adc00eaf718fd49692f1437f218636d",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "2d23c608220c4920784589bfeeab1f172f18a917",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T17:08:43Z",
+      "paths": [
+        ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
+        ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+        ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+        "scripts/local-runner/admission.mjs",
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T17:35:19.490Z",
+      "treeId": "577524d55fc262d4375b4a693d76002ccab516cc",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-e6411b76f42a43c5b679c725947336af"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "0107d5f8b2fabd9f046cfdcc38d3fd92f78fe71c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T18:29:14Z",
+      "paths": [
+        ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
+        ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T18:40:39.927Z",
+      "treeId": "644b6d6ae6e2ba82deb74bdc1164a060b5fbde03",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-e6411b76f42a43c5b679c725947336af"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/local-runner/source-export.mjs",
+    "scripts/local-runner/admission.mjs",
+    "scripts/tests/local-runner.test.mjs",
+    ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+    ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+    ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
+    ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+    ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+    ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T18:29:14Z",
+    "at": "2026-10-29T18:40:39.927Z"
+  },
+  "workStartedAt": "2026-10-29T17:10:06.182Z",
+  "reviewStartedAt": "2026-10-29T17:34:20.777Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ X7 end to end, a dirty checkout round-trips through the real supervisor and only the agent changes come back, never a refused one (869.241901ms)\n✔ A1 invalid input is refused before any temp dir or Git process: a bare git, a relative repo, a forged candidate (134.308747ms)\n✔ A2 a candidate must fit its base: a delete names a base blob, and a file never replaces, covers or sits beneath a non-blob (808.860024ms)\n✔ A3 the admitted tree is the base minus deletes plus files, byte for byte, with no autocrlf, eol or ident conversion (592.027699ms)\n✔ A4 admission changes no ref, index or worktree byte and runs no candidate file: the active controller stays in place (218.616625ms)\n✔ A5 hostile hooks, fsmonitor, package scripts, inherited GIT_* and a hostile HOME never run or redirect admission (207.298267ms)\n✔ A6 every Git call runs in the admission envelope with plumbing subcommands only, and the temp dir goes (117.460628ms)\nℹ tests 217\nℹ suites 0\nℹ pass 216\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 26051.52645\n(skip = the existing opt-in macOS native provider smoke; snapshot suite node --test scripts/tests/local-runner-snapshot.test.mjs: 22/22 pass, exit 0)",
+    "reportedAt": "2026-10-29T17:34:20.777Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-R12 safe host admission: 400 changed lines.\n\nNew scripts/local-runner/admission.mjs, exported admitCandidate({repoDir, baseTree, candidate, git, timeoutMs}):\n- Input checks:\n  - repoDir and git must be absolute, and git's realpath must lie outside the repository, both checked before any spawn.\n  - The candidate must be a frozen validateImport manifest. It is re-derived from its own bytes, and its digest and each entry's kind, path, size and sha256 must match.\n- Base checks:\n  - baseTree must peel to itself as a tree in the repo's sha1 or sha256 format.\n  - A delete must name a base blob.\n  - A file may only replace a base blob or add a path that is neither a base directory nor beneath a base symlink, gitlink or blob.\n- One tree object is written by plumbing only: hash-object -w --no-filters, checked against Node-computed blob ids, then read-tree, update-index and write-tree.\n- Git runs in R09b's envelope:\n  - no inherited GIT_*, no system or global config, no replace objects, protocol.allow=never, fsmonitor off;\n  - plus an empty private core.hooksPath, a private GIT_INDEX_FILE, and splitIndex and sparse index off.\n- A filter, partial clone or core.worktree in any config scope is refused.\n- No ref, worktree or .git/index byte changes, and no repository code runs. The temp dir is removed on every path.\n- Every refusal is one fixed ADMISSION_* or SNAPSHOT_* code.\n- executionReady, verified-local and isolation are untouched.\n\nsource-export.mjs now exports gitRunner and openRepository, refactored out of openCommit. Export behaviour is unchanged: snapshot suite 22/22.\n\nTests A1-A6 in local-runner.test.mjs cover:\n- input refusals and forged candidates;\n- base conflicts, including gitlinks, symlinks, sha256 and a worktree-scope filter;\n- exact bytes under autocrlf, eol and ident;\n- concurrency;\n- controller-copy candidates;\n- hostile hooks, fsmonitor, package scripts, GIT_* and HOME;\n- the exact argv and env envelope.\n\nMutation spot-check: every mutant was killed except",
+  "touchedFiles": [
+    "scripts/local-runner/source-export.mjs",
+    "scripts/local-runner/admission.mjs"
+  ],
+  "completedAt": "2026-10-29T18:39:54.515Z",
+  "reviewCompletedAt": "2026-10-29T18:39:54.515Z",
+  "reviewSummary": "Reviewed completion commit 2d23c608 (on moe/work-2026-10-24, pushed). Size: 400 changed lines (admission.mjs +156 new, source-export +18/-10, tests +216/-0). At the bound, not over; no test removed.\n\nGate re-run by QA: `env -i ... node --test scripts/tests/local-runner.test.mjs` exit 0, 217 tests (216 pass, 1 pre-existing macOS skip), on git-archives of 2d23c608 and HEAD 40ce315. Snapshot suite 22/22. Windows Node via cmd.exe: A1-A5 pass, A6 skipped by design.\n\nDoD:\n1. Envelope: no GIT_*, system/global config masked, protocol.allow=never, fsmonitor off, private empty hooksPath and index, split/sparse off, --no-filters. Any-scope filter, partialclone or core.worktree refused. Pinned by A5 and A6.\n2. Plumbing only, returns a tree id: no ref, worktree or .git/index change (A4). Candidate controller copies are never run or loaded; static import list.\n3. git must be absolute, realpath outside the repo; hooks and package scripts never fire (A1, A5).\n4. Evidence present and reproduced.\n\nQA mutation probes: 20/21 killed by their target rows. The survivor, the hash-object id cross-check, is defense in depth: the tree uses Node-computed ids only.\n\nNotes: macOS not run locally (CI covers it). Documented v1 residuals: case variants, SIGKILL temp leftovers, gc race. 27 stale /tmp/moe-admission-* dirs are debris from the worker's no-cleanup mutant (17:29Z); a clean run leaks none. Follow-up task-89e10b2a covers source-export's bare git.",
+  "requiredCheckAtDone": null
+}

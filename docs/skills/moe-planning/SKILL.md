@@ -24,7 +24,7 @@ Verification is a real cost. Paying it on every step of every task is how a 12-t
 - **Inside a task: the gate is at the end, not on every step.** A step is *implement the thing + write the tests for the thing it changed*. There is exactly **one** adversarial self-review step, and it is the last one. The regression run happens **once**, before `moe.complete_task`. Never emit a "verify" / "review" / "run the suite" step after each implementation step.
 - **Inside an epic: the gate is on the last task, not on every task.** Mid-epic tasks build their slice, prove that slice with focused tests, and hand off. The epic's **final** task is where the full-system check lives: full suite, cross-package integration, docs sweep, adversarial pass over the whole epic diff.
 
-So when you decompose a big epic, **end it with an explicit integration-and-hardening task** (`moe.create_task` with the highest `order`). That task owns the epic's end-to-end verification, its documentation, and its "would I be embarrassed if this shipped" pass. Everything before it stays lean and moves. Decomposing an epic is its own pass with its own skill — `moe-epic-breakdown`; this skill starts once the tasks exist and you're planning one of them.
+So when you decompose a big epic, **end it with an explicit integration-and-hardening task** (`moe.create_task` with the highest `order`), then designate it with `moe.update_epic { epicId, finalTaskId }`: `order` is a per-column sort position that board drags and new rows rewrite, so it cannot name the final task on its own. That task owns the epic's end-to-end verification, its documentation, and its "would I be embarrassed if this shipped" pass. Everything before it stays lean and moves. Decomposing an epic is its own pass with its own skill — `moe-epic-breakdown`; this skill starts once the tasks exist and you're planning one of them.
 
 "Lean" does **not** mean sloppy. Mid-epic tasks still write real tests for their own behavior, still handle errors, still get reviewed by QA. Lean means their tests are scoped to what *they* changed and their verification command is the targeted suite, not the whole system.
 
@@ -36,7 +36,7 @@ So when you decompose a big epic, **end it with an explicit integration-and-hard
 | Epic-final, or a standalone task with no epic siblings | The above, plus integration / end-to-end covering the epic's whole flow | Full regression across every affected package + adversarial review of the epic diff |
 | Any position, if the task touches shared types, schema, wire protocol, or migrations | Whatever the change needs | Full regression regardless of position — these break things outside the task's blast radius |
 
-If you can't tell where the task sits, `moe.list_tasks {epicId}` and compare `order` against the siblings. No epic siblings → treat it as epic-final.
+If you can't tell where the task sits, read `moe.get_context` → `task.isEpicFinal`. It is true for the epic's designated final task (`epic.finalTaskId`); an epic with no valid designation falls back to the highest `order` among its non-ARCHIVED tasks. No epic siblings → treat it as epic-final.
 
 ## The 8 phases
 
@@ -79,6 +79,8 @@ The worker's job ends at `moe.complete_task`. The QA agent reviews and may call 
 One step per phase is a fine starting point for non-trivial work. For larger tasks, Phase 4 (minimum implementation) usually expands into multiple steps — one per logical concern. **Only Phase 4 expands.** Phases 5 and 7 are one step each, at the end, no matter how many implementation steps precede them. Always:
 
 - Set `affectedFiles` tight per step.
+- When a Serena memory bears on a step, name it in that step's description as `mem:<name>` (for example `mem:gotcha-moe-doc-generated-artifacts`), so the worker calls read_memory on exactly that memory instead of scanning list_memories.
+- Cite only live names. A name under `_archive/` is hidden from Serena by .serena/project.yml ignored_memory_patterns, and read_memory refuses it.
 - Map every Definition-of-Done item to at least one step.
 - State non-obvious design choices in the step `description` so the worker doesn't re-derive them.
 

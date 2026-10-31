@@ -1,0 +1,184 @@
+{
+  "id": "task-4e412148225f480c8c0d5a1706a3cc76",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "[CQ-I06] Client integration and hardening",
+  "description": "Objective: Verify client/daemon reconnects, stale approvals, packaged runtime/provider assets and cross-platform UI contracts.\n\nDeliverable: Client integration and hardening. This is task I06 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd moe-jetbrains && ./gradlew test\n\nDependency aliases (wired by Moe task ids after import): I05, R13, V12, C11.",
+  "definitionOfDone": [
+    "Both clients consume identical daemon verdicts.",
+    "Packaged plugins contain all required production helper assets and no test fixtures.",
+    "Windows engines and certified host smoke are recorded honestly.",
+    "Fresh verification `cd moe-jetbrains && ./gradlew test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "CI WIRING (owed by CQ-I03a; see its hand-forward comment on this task). Edit only .github/workflows/ci.yml and report it in modifiedFiles.\n\nAppend `scripts/tests/local-runner-vm-control.test.mjs` to the END of the explicit `node --test ...` file list in the 'Test local runner prerequisite bundles' step of job build-all-platforms (ubuntu-latest, windows-latest, macos-latest). By WORKING time, CQ-R10d1, CQ-V04b1 and CQ-V04b have landed their own appended entries in that list. Read the landed line first, keep every entry and its order, and change nothing else in the workflow.\n\nWhy only this file:\n- The VC-* rows use fakes only. CQ-I03a QA saw them pass on Linux Node 18-24 and Windows Node 24.16.\n- CQ-I06b's tests need no CI line. moe-vscode `npm test` (tests/*.test.cjs) already runs in the same 3-OS matrix ('Test VS Code daemon startup', full checkout, so ../moe-jetbrains is present). ClientVerdictCorpusTest runs under 'Run plugin tests' in job build-plugin.\n- CQ-I06c's checks ride the existing local-runner-bundle entry and 'Verify packaged JetBrains onboarding'.\n\nGuard: scripts/tests/local-runner-bundle.test.mjs asserts this step with the prefix regex /run: node --test scripts\\/tests\\/local-runner\\.test\\.mjs scripts\\/tests\\/local-runner-bundle\\.test\\.mjs/. An append keeps it matching. Confirm by running that one test file.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "DOCS SWEEP for the CQ-I epic, held back for this final task. Before writing, read the landed code: CQ-I03 (ManagedVmPresentation.kt, ManagedVmPanel.kt, MoeBundle.properties) and CQ-I05 (moe-vscode/src/util/ManagedVm.ts, its tree provider, package.json contributes). Claim nothing beyond them. Report all three files.\n\n1. docs/DEVELOPMENT.md '## Plugin Bundling'. The current tree lists only moe-agent.ps1/.sh under scripts/. Replace it with what both bundles ship after CQ-I06c (JetBrains `<plugin>/`, VS Code `bundled/`):\n   - daemon/ and proxy/: dist minus *.test.* and *.spec.*, plus package.json, plus node_modules minus .bin;\n   - scripts/: moe-agent.ps1, moe-agent.sh, moe-call.sh, prompt-cache*.mjs, usage-*.mjs, analyze-usage.mjs, moe-account-lease.mjs;\n   - scripts/local-runner/: the production modules and certified-provider.json, vm-control.mjs included; tests, specs and fixtures excluded;\n   - scripts/mods/: minus *.test.ts and .claude-plugin/types;\n   - docs/roles, docs/skills, docs/agent-context.md.\n   Then name the guards:\n   - the bundlers' required-asset lists, which fail the build;\n   - the packaged checks in `node scripts/tests/onboarding.mjs <extracted bundle>`: required helpers, the packaged vm-control import closure, and no test artifacts. CI runs them on the built JetBrains zip; scripts/tests/local-runner-bundle.test.mjs runs them on real VS Code bundler output.\n2. docs/DEVELOPMENT.md: add '### Client verification record (CQ-I)', a short table of what proves each contract, where it runs, and what is NOT certified.\n   - /ws CLIENT_HELLO and approval admission: daemon vitest.\n   - Approval binding plus reconnect, and managed-VM decode: the shared corpus moe-jetbrains/src/test/resources/client-verdicts.json, run by JetBrains JUnit and VS Code node:test.\n   - Packaging: the bundle test plus the onboarding packaged checks.\n   - Windows engines:\n     - both IDEs launch seats with Windows PowerShell 5.1 (JetBrains TerminalAgentLauncher `powershell.exe`, VS Code AgentLauncher `powershell`);\n     - CI windows-latest runs the PowerShell 5.1 and 7 wrapper suites, Windows Node, and the VS Code tests;\n     - JetBrains JUnit runs on ubuntu in CI.\n   - Native provider smoke (`node scripts/local-runner/cli.mjs native-smoke --work-dir <abs>`): operator-invoked on real hardware, never in CI. Its per-platform state comes from CQ-R13's landed evidence, established or not established, never inferred.\n   - Headless only: no IntelliJ sandbox (runIde) or VS Code Extension Host interaction is certified.\n   - verified-local stays unavailable (EXECUTION_PROFILE_NOT_READY), and neither IDE offers it.\n   Keep run counts, versions and dates OUT of the doc, because they rot. They go in complete_task (step 3).\n3. User-facing docs for the Managed VMs surface:\n   - moe-vscode/README.md: add the Managed VMs view to Features and Getting started. Add its commands to Commands with the exact titles from the landed package.json. Add one Known issues line: cleanup needs Node 22+ and a loopback daemon, and otherwise preserves every VM, including in WSL agent mode (bindHost 0.0.0.0).\n   - moe-jetbrains/src/main/resources/META-INF/plugin.xml <description>: add one <li> for the Managed VMs tab. It covers provider readiness and reconcile/cleanup of Moe-owned VMs only, and never enables verified-local. Leave <change-notes> to the release.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/DEVELOPMENT.md",
+        "moe-vscode/README.md",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE. This is the epic gate and its only full regression; run every command fresh. Never run in the shared tree, never overwrite the Windows node_modules, and clear MOE_*.\n\nError handling for findings:\n- Edit only what a finding needs.\n- Fix forward only in the owning module, at most ~20 lines, and report the file.\n- Anything bigger becomes a new defect task plus report_blocked with blockedOnTaskIds.\n- Never weaken or skip a test.\n- Before calling a red result a regression, rerun it without this epic's changes.\n- Release every lease and delete every temp copy on every exit path.\n\nA. Linux snapshot: `git archive HEAD` of the whole repo, native Linux deps, Linux-only PATH (`mem:gotcha-daemon-linux-snapshot-gate`).\n  1. `cd packages/moe-daemon && npm test` plus `npx tsc --noEmit`. I01 changed the /ws protocol, so this is full regression.\n  2. `cd packages/moe-proxy && npm test`. Snapshot only: its pretest rebuilds dist.\n  3. `cd moe-vscode && npm test && npm run compile`. This covers I04, I05 and the I06b corpus rows.\n  4. The CI local-runner step's exact file list under `env -i`, now including local-runner-vm-control.test.mjs.\n  5. The packaged runtime:\n     - run `npm run build` in packages/moe-daemon and packages/moe-proxy AFTER run 1, because prebuild regenerates sources;\n     - run `node moe-vscode/scripts/bundle-assets.mjs`;\n     - run `node scripts/tests/onboarding.mjs moe-vscode/bundled` and `node scripts/tests/onboarding.mjs`, each ending with its PASS line;\n     - `find moe-vscode/bundled -path '*/node_modules' -prune -o -type f \\( -name '*.test.*' -o -name '*.spec.*' -o -iname '*testharness*' \\) -print` must print nothing.\n  6. Root `npm run lint`.\nB. Windows engines, from a Windows-side copy of the same archive, e.g. %TEMP%\\moe-i06-win (`mem:gotcha-qa-windows-launcher-tests-from-wsl`).\n  7. THE GATE (DoD 4). Hold the `jetbrains-gradle` lease and release it even on failure. Run `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <copy>\\moe-jetbrains && .\\gradlew.bat test --rerun\"`; it must exit 0. Use the build/test-results/test/TEST-*.xml timestamps and counts to show that ClientVerdictCorpusTest, PlanReviewApprovalStateTest and ManagedVmPresentationTest ran. If a POSIX JDK exists, also run the pinned `cd moe-jetbrains && ./gradlew test`. Otherwise say so, and label the evidence as the Windows equivalent.\n  8. Windows Node: `node --test scripts\\tests\\local-runner-vm-control.test.mjs scripts\\tests\\local-runner-bundle.test.mjs`, and record `node --version`.\n  9. The packaged wrapper parses on both engines. Take the bundled scripts\\moe-agent.ps1 from run 5, copied byte-identical. Run [System.Management.Automation.Language.Parser]::ParseFile on it under `powershell.exe -NoProfile` and under `pwsh.exe -NoProfile`. Each must report 0 errors. Record both $PSVersionTable.PSVersion values.\n  10. JetBrains package (DoD 2), best effort and honest. Run `.\\gradlew.bat buildPlugin` in the copy; it needs a fresh daemon/proxy dist plus node_modules. Extract the zip and run `node scripts\\tests\\onboarding.mjs <extracted>\\moe-jetbrains`; it must PASS. If that is not feasible here, state exactly why, and cite the CI step 'Verify packaged JetBrains onboarding' plus CQ-I06c's static Gradle checks. Never claim a package that was not built.\nC. Host smoke record (DoD 3).\n  - Run `node scripts/local-runner/cli.mjs prerequisites` with Linux node and with Windows node, and record the provider codes.\n  - Do NOT run native-smoke. It is operator-invoked, launches a real VM, may download ~600 MB, and this host has no Multipass. Record it as not run.\n  - Quote CQ-R13's landed per-platform certification evidence (task-f4811a72 completion and review summaries). A platform R13 did not establish is recorded as 'not certified'.\n\nSupply to complete_task: the exact gate command (labelled as the Windows equivalent), its exit code and its output tail, plus one line per numbered run with counts and engine/version.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL WHOLE-EPIC REVIEW, once, last. Load adversarial-self-review. Read the whole CQ-I diff: list the commits for I01, I02, I03a, I03, I04, I05, I06a, I06b and I06c with `git log moe/work-2026-10-24 --grep 'Moe-Task: <id>'`. Hunt for what the slices got wrong about each other.\n- Producer/consumer drift:\n  - vm-control schemas and codes against both decoders. Codes without specific text render 'unknown code <CODE>'; confirm that this is consistent;\n  - approval revision semantics;\n  - CLIENT_HELLO: the daemon supports it and no IDE sends it, by decision. Confirm that the F04b token-free refusal stays actionable in both IDEs.\n- Activation surface:\n  - grep both clients: no path sends executionProfile or deliveryPolicy in UPDATE_SETTINGS;\n  - no IDE offers verified-local, and the strong profile is always blocked.\n- Reconnect:\n  - a disconnect while an approval is pending is not confirmed in either IDE (the corpus rows);\n  - the daemon resets per-socket negotiation on reconnect (I01 tests).\n- Windows:\n  - vm-control receives project paths with spaces and drive letters as argument arrays, with no shell (JetBrains ProcessBuilder list, VS Code execFile array);\n  - note the Windows-vs-WSL ledger split.\n- Packaging: no test artifacts, and every required helper is present (runs 5 and 10).\n- Residuals: give each one an owning task id, or mark it 'unowned: human decision'. Search with moe.search_tasks first. Known so far:\n  - profile/evidence status UI (I02 note; depends on V06);\n  - the JetBrains transient re-arm after PLAN_REVISION_MISMATCH (no codeName plumbing);\n  - VS Code's JSON.parse accepting lossy literals the daemon never emits;\n  - cleanup preserving everything below Node 22 and on bindHost 0.0.0.0;\n  - the npm moe-proxy package shipping compiled tests;\n  - SettingsPanel showing 'Settings saved.' when the send failed (I04 note);\n  - five producer codes with no bundle text.\n  File new defect tasks only for real defects, outside this epic unless they break DoD 1 or 2; in that case, report_blocked on them.\n- Rails: no .moe edits, no Git writes, none of globalRails.forbiddenPatterns in the epic diff, and verified-local untouched.\nThen write the Serena memory 'task-task-4e412148225f480c8c0d5a1706a3cc76-handoff' covering the evidence for each run, the owner of each residual, and what remains uncertified.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "ADVERSARIAL WHOLE-EPIC REVIEW, once, last. Load adversarial-self-review.\n\nRead the whole CQ-I diff. Find its commits with `git log moe/work-2026-10-24 --grep 'Moe-Task: <id>'` for I01, I02, I03a, I03, I04, I05, I06a, I06d, I06b and I06c. Look for what the slices got wrong about each other.\n\n- Producer/consumer drift:\n  - vm-control schemas and codes against both decoders. A code with no specific text renders as 'unknown code <CODE>'; confirm that is consistent across both.\n  - Approval revision semantics, plus error correlation: both IDEs now act only on APPROVE_TASK errors whose context.taskId is theirs, and latch on PLAN_REVISION_MISMATCH.\n  - CLIENT_HELLO: the daemon supports it and neither IDE sends it, by decision. Confirm the F04b token-free refusal is still actionable in both IDEs.\n- Activation surface:\n  - Grep both clients: no path sends executionProfile or deliveryPolicy in UPDATE_SETTINGS.\n  - Neither IDE offers verified-local, and the strong profile is always blocked.\n- Reconnect:\n  - A disconnect while an approval is pending leaves it unconfirmed in both IDEs (corpus rows A21-A23).\n  - The daemon resets per-socket negotiation on reconnect (I01 tests).\n- Windows:\n  - vm-control receives a project path with spaces and a drive letter as argument arrays, with no shell (JetBrains ProcessBuilder list, VS Code execFile array).\n  - Note the Windows-vs-WSL ledger split.\n- Packaging: no test artifacts, and every required helper is present (runs 5 and 10).\n- Residuals: give each one an owning task id, or mark it 'unowned: human decision'. Search moe.search_tasks first. Known so far:\n  - profile/evidence status UI (I02 note, depends on V06);\n  - VS Code JSON.parse accepts lossy literals the daemon never emits;\n  - cleanup preserves everything below Node 22 and when bindHost is 0.0.0.0;\n  - the npm moe-proxy package ships compiled tests;\n  - SettingsPanel says 'Settings saved.' when the send failed (I04 note);\n  - five producer codes have no bundle text.\n  File new defect tasks only for real defects. File them outside this epic unless they break DoD 1 or 2; if they do, report_blocked on them.\n- Rails: no .moe edits, no Git writes, none of globalRails.forbiddenPatterns in the epic diff, verified-local untouched.\n\nThen write the Serena memory 'task-task-4e412148225f480c8c0d5a1706a3cc76-handoff', recording the evidence per run, the owner of each residual, and what remains uncertified.",
+          "reason": "CQ-I06d (task-6dbeb971, JetBrains approval error correlation) was split out after this plan was written. Add it to the reviewed commit set, and drop the residual it resolves: the JetBrains re-arm on PLAN_REVISION_MISMATCH / uncorrelated ERROR frames.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-29T22:56:36.334Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    }
+  ],
+  "planRevision": 2,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Unblocked on the human's explicit, repeated instruction (\"unblock tasks\", then \"unblock\", 2026-10-27). Plan now instead of parking. Use prerequisites' landed code or approved plans where they exist. Otherwise use their task description, DoD and docs/plans/2026-10-24-ai-code-quality-and-context.md. Name every assumed interface in planningNotes. Keep dependsOn, so WORKING waits until the prerequisites are DONE. If a prerequisite's contract must be designed first, split it out (SPIDR, as with R10a) instead of report_blocked. Re-block only if any possible plan would breach a rail.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 247.5,
+  "comments": [
+    {
+      "id": "comment-ef257bf0738d4981b9fc16827114000d",
+      "author": "architect-4ae016fb",
+      "content": "Hand-forward from architect-4ae016fb, 2026-10-29, for whoever plans CQ-I06.\n\n1. New producer row. CQ-I03 was split by SPIDR. CQ-I03a (task-c0b0775f) now delivers scripts/local-runner/vm-control.mjs: `<status|reconcile|cleanup> --project <abs>`, which prints one JSON line with schema moe-vm-status-v1, moe-vm-reconcile-v1 or moe-vm-cleanup-v1. I03 depends on it, and I05 (VS Code) consumes the same contract. I06 reaches it transitively through I03.\n\n2. CI wiring is owed here. .github/workflows/ci.yml's 'Test local runner prerequisite bundles' step lists its test files explicitly. I03a could not add scripts/tests/local-runner-vm-control.test.mjs to it, because CQ-V04b1 and CQ-V04b (both unlanded) hold ci.yml. Add that file to the step in I06, after both have landed.\n\n3. Things to check in the hardening pass:\n   - ownedLedgerDir must resolve the same directory for D:/x, D:\\x and /mnt/d/x;\n   - cleanup deletes only ledger-owned VMs whose owner attempt is not the task's open attempt and whose lease is free;\n   - cleanup needs Node 22+ for the global WebSocket. On older Node it preserves everything with DAEMON_UNREACHABLE;\n   - the lease race between list_resources and the delete is a documented residual.",
+      "timestamp": "2026-10-29T19:22:31.990Z"
+    },
+    {
+      "id": "comment-fdb88ba2a811451f875aca60b0d449cd",
+      "author": "governor-693b7073",
+      "content": "Governor, 18:48Z. IMPORTANT for step 5 (the packaged runtime). Run `npm run build` for packages/moe-daemon and packages/moe-proxy ONLY in an isolated clone or archive outside the repo, never in the shared checkout (D:\\projexts\\moes or /mnt/d/projexts/moes).\n- The live daemon runs from the shared checkout's packages/moe-daemon/dist, and `prebuild` deletes that dist first.\n- From WSL the build then fails on the Windows-native node_modules and leaves dist deleted. It happened once today; restored 18:45Z.\n- From Windows it would compile peers' uncommitted bytes into the dist that the next daemon restart loads.\nThe prebuild fix is task-f9789178. This comment overrides the plan text on that point.",
+      "timestamp": "2026-10-30T18:47:19.607Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:35:32.720Z",
+  "updatedAt": "2026-10-31T06:16:29.982Z",
+  "dependsOn": [
+    "task-758bb59a61bd443382e02aea44b515c9",
+    "task-f4811a729f9e436ba129a65c12d348c1",
+    "task-b621ddc99fe44d50ab700b2aa51c84fc",
+    "task-4e0264fc52e04574a9d10ef602281ca3",
+    "task-96526848b23549cf994ab82f47fad29f",
+    "task-df5384bf7fbd4b7ba3dedb43d7373ffa",
+    "task-63930ba4a46344f9af3c41cfef60ae0d",
+    "task-6f3725e6ae56471c982fc39492ca2069",
+    "task-2f16aba7f340439a86a41ae98c3173f1",
+    "task-b20f7a40efbd4f56b457888612cd52a8",
+    "task-6dbeb9712cda46488b80ce23afe35198",
+    "task-f2d3d553bd684eff997498a55c564f13",
+    "task-f18eef7acc5140cdbe6f545a7f82434d",
+    "task-fad5ef971b0941b590621aa40702ad4b",
+    "task-92307adc30884fc4861348ed3c8ead4a"
+  ],
+  "contextFetchedBy": [
+    "architect-bb003851",
+    "worker-b5749787",
+    "qa-952969be",
+    "architect-4ae016fb"
+  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Governor-parked under the human's \"keep governing and unblock board\" instruction (2026-10-26). This is a dependency park, not a defect. CQ-I06 is the client epic's final integration-and-hardening row. Three of its prerequisites are themselves epic-final rows still in BACKLOG (R13 f4811a72, V12 b621ddc9, C11 4e0264fc), and I03/I05 are blocked on missing producer contracts. No non-speculative plan is possible until they land. It auto-returns to PLANNING when every named prerequisite is DONE. To undo: set_task_status PLANNING.",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:14:14.118Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T22:39:32.857Z",
+  "executionContract": {
+    "intendedBehavior": "Close the CQ-I client epic:\n- the vm-control producer suite is wired into the 3-OS CI step;\n- the bundling, verification-record and Managed VMs docs match the landed code;\n- one fresh full regression covers the daemon, the proxy, both IDE clients, the local-runner scripts, and a packaged VS Code bundle built from fresh dists;\n- Windows-engine evidence covers the Windows JDK gradle gate, Windows Node, and the packaged wrapper parsed under PowerShell 5.1 and 7;\n- the host-smoke status is recorded without overclaiming;\n- one whole-epic adversarial review.\nNo runtime behaviour changes beyond a bounded fix-forward.",
+    "acceptanceCriteria": [
+      "CQ-I06b's shared corpus passes unchanged in both IDE clients (DoD 1).",
+      "A VS Code bundle built from fresh dists passes onboarding's packaged checks and holds no *.test.*, *.spec.* or TestHarness file outside node_modules. The JetBrains package is either proven the same way or explicitly reported as not built here (DoD 2).",
+      "The completion record and docs/DEVELOPMENT.md name only the Windows engines that actually ran. Native smoke reads 'not run' or quotes CQ-R13's landed evidence, never an inferred certification (DoD 3).",
+      "`cd moe-jetbrains && ./gradlew test` exits 0 fresh. A Windows equivalent is allowed if it is labelled as such, and its output is supplied (DoD 4)."
+    ],
+    "invariants": [
+      "verified-local stays unavailable, and no client offers or sends it.",
+      "No .moe edits and no Git-write commands by the agent; the wrappers land.",
+      "Docs claim nothing beyond the landed code and the recorded evidence.",
+      "The CI local-runner step keeps every existing entry in its order."
+    ],
+    "compatibility": [
+      "scripts/tests/local-runner-bundle.test.mjs's CI prefix regex keeps matching.",
+      "Legacy unnegotiated /ws behaviour stays exactly as the epic rails define it."
+    ],
+    "checkRefs": [
+      "cd moe-jetbrains && ./gradlew test",
+      "cd packages/moe-daemon && npm test",
+      "cd moe-vscode && npm test && npm run compile",
+      "node --test scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+      "node scripts/tests/onboarding.mjs moe-vscode/bundled"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Planning CQ-I06 as a single task came to about 13 files and well over the 400-net-LOC QA cap. It was split with SPIDR on 2026-10-30, following V12a/b and C11a. CQ-I06 stays the epic's single final task (epic.finalTaskId) and now dependsOn three mid-epic slices:\n- CQ-I06a (task-b20f7a40) fixes a real reconnect divergence. JetBrains ignored disconnects (PlanReviewDialog.onStatus is a no-op). A reconnect snapshot of WORKING at the rendered revision then reported success in JetBrains but 'not confirmed' in VS Code, and an AWAITING_APPROVAL snapshot wedged JetBrains in PENDING. JetBrains now adopts the VS Code recovery behaviour the human confirmed on 2026-09-11.\n- CQ-I06b (task-f2d3d553) covers DoD 1: one client-neutral corpus, client-verdicts.json, stored as a JetBrains test resource and read by both IDE test suites.\n- CQ-I06c (task-f18eef7a) covers DoD 2: proxy dist ships compiled *.test.js, daemon dist ships tools/toolTestHarness.js, and vm-control.mjs is not required.\nRejected:\n- A JetBrains codeName fix for PLAN_REVISION_MISMATCH. In-order delivery means the newer-revision frame already latched both clients, so it is a recorded residual.\n- Changing the proxy tsconfig, which would lose proxy test typechecking at build. Bundler filters are used instead.\n- A new docs file. DEVELOPMENT.md's Plugin Bundling section is stale anyway.\n- Running native-smoke. It is operator-invoked on real hardware, and CQ-R13 owns certification.",
+    "codebaseInsights": "Facts checked 2026-10-30:\n- Both IDEs launch Windows seats with Windows PowerShell 5.1: TerminalAgentLauncher.kt:468 uses `powershell.exe`, AgentLauncher.ts:157 uses `powershell`.\n- This box has powershell.exe 5.1, pwsh.exe 7 (WindowsApps), Windows Node v24.16.0, Windows JDK 17/21 and Linux nvm Node 24.21. WSL has no JDK. Neither Windows nor WSL has Multipass.\n- ci.yml:\n  - job build-all-platforms (ubuntu/windows/macos) has the step 'Test local runner prerequisite bundles' (line ~235), with an explicit file list that CQ-R10d1, CQ-V04b1 and CQ-V04b append to;\n  - 'Test VS Code daemon startup' runs moe-vscode `npm test` in the same matrix;\n  - job build-plugin (ubuntu) runs `./gradlew test` and onboarding against the extracted zip.\n- cli.mjs commands: `doctor|prerequisites [--executable <path>] | native-smoke --work-dir <abs>`.\n\nAssumed interfaces (each landed or approved before WORKING):\n- CQ-I06a: PlanReviewApprovalState.onConnectionLost() and CONNECTION_LOST_KEY.\n- CQ-I06b: moe-jetbrains/src/test/resources/client-verdicts.json, ClientVerdictCorpusTest.kt, moe-vscode/tests/managed-vm-verdicts.test.cjs, and a corpus section in plan-review.test.cjs.\n- CQ-I06c:\n  - onboarding packaged checks: the vm-control usage-refusal exec and the test-artifact scan;\n  - bundler required lists including vm-control.mjs;\n  - dist test filters;\n  - the daemon tsconfig excluding toolTestHarness.ts.\n- CQ-I05 (approved plan): moe-vscode/src/util/ManagedVm.ts, view moe.managedVms, and commands moe.managedVms.refresh, .reconcile and .cleanup. Use the titles as landed.\n- CQ-I03 (landed d53c62e): ManagedVmPresentation and ManagedVmPanel.\n- CQ-I03a (landed ad8097f): the vm-control.mjs CLI contract.\n- CQ-R13: per-platform native-smoke certification, as stated in its completion and review summaries.",
+    "risks": "- The JetBrains package build on Windows may be infeasible: npm installs, the requireFreshDist mtime guard, or network. Report it honestly rather than claim it.\n- The shared tree may again hold a peer's unfinished merge (`mem:gotcha-shared-checkout-unfinished-merge`). Gate in archive snapshots only (`mem:gotcha-jetbrains-gate-snapshot`).\n- I06b's VS Code tests read ../../moe-jetbrains/src/test/resources/client-verdicts.json, so an archive of moe-vscode alone fails. Archive the whole repo.\n- Proxy `npm test` deletes and rebuilds dist (pretest), so never run it in the shared tree.\n- Docs must not claim certifications or engines that did not run, and must not carry counts that will rot.\n- Each residual must name an owner, not just be listed.",
+    "keyFiles": [
+      ".github/workflows/ci.yml",
+      "docs/DEVELOPMENT.md",
+      "moe-vscode/README.md",
+      "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+      "scripts/tests/local-runner-bundle.test.mjs",
+      "scripts/tests/onboarding.mjs",
+      "scripts/local-runner/vm-control.mjs",
+      "scripts/local-runner/cli.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T22:39:32.975Z",
+  "approvedPlanRevision": 1,
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-4ae016fb@2026-10-29T22:14:13Z",
+    "at": "2026-10-29T23:32:49.050Z"
+  }
+}

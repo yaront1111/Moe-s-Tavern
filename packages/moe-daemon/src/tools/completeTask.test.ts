@@ -196,6 +196,92 @@ describe('moe.complete_task ownership + ordering enforcement', () => {
     expect(task?.filesModified).toEqual(['a.ts', 'b.ts', 'c.ts']);
   });
 
+  describe('worktree branch policy', () => {
+    const EXPECTED = 'moe/task/task-1';
+    const VERIFICATION = { command: 'npx vitest run', exitCode: 0, outputTail: 'ok' };
+    beforeEach(() => resetBranchPolicyGovernorRateLimit());
+
+    async function boot(settings: Partial<ProjectSettings> = { consolidationBranch: 'moe/work-*' }, mode: 'worktree' | 'shared' | 'legacy' = 'worktree') {
+      setupMoe(settings); writeEpic(); writeTask();
+      await state.load();
+      const attempt = await openAttempt(state, { taskId: 'task-1', workerId: 'worker-a', runnerId: 'worker-a',
+        workspace: path.join(testDir, '.worktrees', 'task-1'), ...(mode === 'legacy' ? {} : { workspaceMode: mode }) });
+      const governorsPost = vi.spyOn(state, 'postToRoleChannel').mockResolvedValue(undefined);
+      return { attempt, governorsPost };
+    }
+
+    async function complete(currentBranch?: unknown): Promise<Record<string, unknown>> {
+      return await completeTaskTool(state).handler(
+        { taskId: 'task-1', workerId: 'worker-a', verification: VERIFICATION, currentBranch }, state) as Record<string, unknown>;
+    }
+
+    async function expectRefused(currentBranch: string, expectedPattern = EXPECTED): Promise<MoeError> {
+      const beforeTask = fs.readFileSync(path.join(moePath, 'tasks', 'task-1.json'), 'utf8');
+      const attempt = listAttempts(state, 'task-1')[0];
+      const beforeAttempt = fs.readFileSync(path.join(moePath, 'attempts', `${attempt.id}.json`), 'utf8');
+      const err = await complete(currentBranch).catch((error: unknown) => error);
+      expect(err).toBeInstanceOf(MoeError);
+      const refusal = err as MoeError;
+      expect(refusal.code).toBe(MoeErrorCode.CONSTRAINT_VIOLATION);
+      expect(refusal.codeName).toBe('CONSTRAINT_VIOLATION');
+      expect(refusal.message).toContain('BRANCH-POLICY-FAIL');
+      expect(refusal.message).toContain(expectedPattern);
+      expect(refusal.context).toEqual({ currentBranch: currentBranch.trim(), expectedPattern });
+      expect(state.getTask('task-1')?.status).toBe('WORKING');
+      expect(state.getTask('task-1')?.verification).toBeUndefined();
+      expect(listAttempts(state, 'task-1')[0].phase).toBe('running');
+      expect(fs.readFileSync(path.join(moePath, 'tasks', 'task-1.json'), 'utf8')).toBe(beforeTask);
+      expect(fs.readFileSync(path.join(moePath, 'attempts', `${attempt.id}.json`), 'utf8')).toBe(beforeAttempt);
+      return refusal;
+    }
+
+    it.each([EXPECTED, `  ${EXPECTED}  `])('completes on the exact trimmed task branch %j', async (branch) => {
+      await boot();
+      Object.assign(state.project!.settings, { worktreeMode: 'invalid' });
+      const result = await complete(branch);
+      expect(result.status).toBe('REVIEW');
+      expect(result.branchPolicy).toEqual({ pattern: EXPECTED, currentBranch: EXPECTED, matched: true });
+    });
+
+    it('refuses a shared-policy match before writing anything', async () => {
+      const { attempt } = await boot();
+      const err = await expectRefused('moe/work-2026-07-31');
+      expect(err.message).toContain('moe/work-2026-07-31');
+      expect(err.message).toContain(attempt.workspace);
+      expect(err.message).toContain('worktree mode');
+      expect(err.message).not.toContain('moe/work-<YYYY-MM-DD>');
+    });
+
+    it('enforces the task branch without a consolidation policy', async () => {
+      await boot({});
+      await expectRefused('main');
+    });
+
+    it.each(['moe/task/task-2', 'moe/task/task-10', 'moe/task/*', 'Moe/task/task-1'])(
+      'refuses near miss %s', async (branch) => { await boot(); await expectRefused(branch); });
+
+    it.each([undefined, '   ', 7])('warns when the branch is unreported (%j)', async (branch) => {
+      const { governorsPost } = await boot();
+      const result = await complete(branch);
+      expect(result.status).toBe('REVIEW');
+      expect(result.branchPolicy).toEqual({ pattern: EXPECTED, matched: null, warning: expect.stringContaining('not enforced') });
+      expect(governorsPost).toHaveBeenCalledExactlyOnceWith('governors', expect.stringContaining(EXPECTED));
+    });
+
+    it('does not block on a failed governors warning', async () => {
+      const { governorsPost } = await boot();
+      governorsPost.mockRejectedValue(new Error('chat is down'));
+      expect((await complete()).status).toBe('REVIEW');
+    });
+
+    it.each(['shared', 'legacy', 'unknown'] as const)('retains the shared policy for %s attempts', async (mode) => {
+      const { attempt } = await boot(undefined, mode === 'unknown' ? 'shared' : mode);
+      const stored = state.attempts.get(attempt.id)!;
+      if (mode === 'unknown') Object.assign(stored, { workspaceMode: 'unknown' });
+      await expectRefused(EXPECTED, 'moe/work-*');
+    });
+  });
+
   describe('consolidationBranch policy', () => {
     const PATTERN = 'moe/work-*';
     const VERIFICATION = { command: 'npx vitest run', exitCode: 0, outputTail: 'ok' };

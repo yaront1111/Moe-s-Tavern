@@ -1,0 +1,210 @@
+{
+  "id": "task-95b610e3726c4e099c84eaedf098602a",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "[CQ-C11a] Context contracts docs sweep",
+  "description": "Objective: document the CQ-C epic's LANDED wire and state contracts in docs/MCP_SERVER.md and docs/SCHEMA.md, as C01, C06, C07, C08 and C09 handed forward. This is a docs-only size split of the epic-final CQ-C11 (task-4e0264fc), made by architect-4ae016fb on 2026-10-29. C11 keeps the integration tests and the whole-epic review, and its final adversarial pass covers these docs.\n\nBefore writing each entry, verify it against the landed code with grep or Read: names, fields, reason codes and limits. Document only what landed.\n\ndocs/MCP_SERVER.md:\n- moe.get_context:\n  - C01: packetManifest {version, provenance, sections, complete, limitations, budget}, and the packetBudgetChars input (1000-250000, default 100000, refused when invalid, never clamped);\n  - C06: the basePacketId and contextEpoch inputs, the `delta` response and servedContext.contextDelta {served, reason} with every refusal reason. Legacy reads that send neither field are unchanged;\n  - C07: the planReuse view.\n- moe.claim_next_task: C07's plan reuse behavior.\n- moe.submit_plan: C08's reserved internal recipe identity, and the recipeInstance it records.\nEach entry keeps the code's \"never approval, readiness or evidence\" statements.\n\ndocs/SCHEMA.md:\n- the Task fields planSourceBasis, planningEntry, planReuse (C07a) and recipeInstance (C08);\n- RecipeDefinition and the committed .moe/recipes.json file shape (C08);\n- the ContextDelta shape (C06a);\n- the packetManifest shape (C01).\n\nScope boundaries: docs only. No code, no role docs (C10 owns those), and no activation. Preserve peers' bytes in both files. Never directly edit .moe.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "docs/MCP_SERVER.md moe.get_context documents packetManifest, packetBudgetChars, and basePacketId/contextEpoch with the delta response and every refusal reason, exactly as landed (each name verified in the code).",
+    "docs/MCP_SERVER.md documents C07's plan reuse on moe.claim_next_task/moe.get_context and C08's reserved recipe identity on moe.submit_plan, exactly as landed.",
+    "docs/SCHEMA.md documents planSourceBasis, planningEntry, planReuse, recipeInstance, RecipeDefinition with the .moe/recipes.json shape, ContextDelta and packetManifest, each with its never-approval statement where the code has one.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Verify the landed contracts first; no edits in this step. For each item in the task description, grep or Read the LANDED code and record the exact names, fields, limits and reason codes in the step note:\n- tools/getContext.ts and context/contextPacket.ts (C01 packetManifest, packetBudgetChars);\n- context/contextDelta.ts and getContext.ts (C06a/C06: basePacketId, contextEpoch, the delta shape, the contextDelta reasons);\n- context/planReuse*.ts with claimNextTask.ts and getContext.ts (C07 planReuse);\n- context/recipes/recipe.ts and tools/submitPlan.ts (C08: RECIPE_ACTOR, recipeInstance, RecipeDefinition, .moe/recipes.json);\n- context/recipes/docsLiteralReplace.ts (C09 params.allowedPaths, inputs and reasons).\nDocument only what landed. Error handling: if a dependency's landed contract contradicts its plan, document the landed one and say so in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Verified: packetManifest/budget (contextPacket.ts), basePacketId/contextEpoch/DeltaRefusal reasons + receipt statuses + diff-failed (getContext.ts, contextDelta.ts), planReuseContext/awaitingPlanReuse (planReuseJob.ts), RECIPE_ACTOR/recipeInstance (submitPlan.ts, recipe.ts), schema types. No edits.",
+      "startedAt": "2026-10-30T05:04:29.677Z",
+      "completedAt": "2026-10-30T05:04:42.537Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Edit docs/MCP_SERVER.md, preserving every peer's bytes.\n\nUnder `### moe.get_context` (about line 180, next to **Served context (CQ-F06)**):\n- packetManifest: {version, provenance, sections, complete, limitations, budget}, with the mandatory sections, omission reasons and the expand/restructure requirement.\n- The packetBudgetChars input: 1000-250000, default 100000, refused when invalid.\n- The basePacketId and contextEpoch inputs, and the `delta` response {basePacketId, packetId, changed, removed}.\n- servedContext.contextDelta {served, reason}, with every refusal reason and what triggers it: restart, compaction epoch, reattach (phase-changed), session, attempt, runner.\n- That legacy reads sending neither field are unchanged.\n- The planReuse view.\n\nUnder `### moe.claim_next_task` (about line 1233): C07's plan reuse decision, and when a PLANNING row is withheld or resumed.\n\nUnder `### moe.submit_plan` (about line 306): the reserved 'moe-recipe' identity (NOT_ALLOWED for callers), and the recipeInstance it records.\n\nEach entry keeps the code's never-approval, readiness or evidence wording, and none adds a capability that did not land.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-10-30T05:05:40.987Z",
+      "completedAt": "2026-10-30T05:05:43.243Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Edit docs/SCHEMA.md, preserving peers' bytes.\n- Under `## Task`, after `### executionContract` (about line 766), add `###` sections for planSourceBasis, planningEntry, planReuse and recipeInstance. Each gives its shape, who writes it (daemon-owned, stripped from caller updates), its decoder, and its never-approval statement.\n- Add the field lines to the Task interface block near line 420.\n- Add RecipeDefinition with the committed .moe/recipes.json shape {version:1, recipes:[...]}. State that it is read only from committed bytes and protected through requiredChecks configs.\n- Add the ContextDelta and packetManifest response shapes, cross-linking MCP_SERVER.md rather than duplicating prose.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "startedAt": "2026-10-30T05:05:44.232Z",
+      "completedAt": "2026-10-30T05:05:46.468Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify once, fresh. Run the gate in an isolated Linux snapshot of HEAD, with only the two docs overlaid: native deps, MOE_* unset, Linux-only PATH (mem:gotcha-daemon-linux-snapshot-gate). The gate is `cd packages/moe-daemon && npm test`, which includes the doc-reading tests, and it must exit 0. Also run `npm run lint` at the root. Supply the npm test command, exit code and output tail to complete_task.\n\nSelf-review:\n- every documented name greps in the code;\n- no sentence implies approval, readiness or evidence;\n- no activation is described as landed (the assessPostpatch call site, epoch stamping, providers in packets);\n- the anchors and links resolve.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Gate green in Linux snapshot; lint OK. Documented names verified by grep in step 1.",
+      "startedAt": "2026-10-30T05:05:47.603Z",
+      "completedAt": "2026-10-30T05:06:27.981Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-d75f71d7664848fd859a3f877e74ba43",
+    "task-93dee42f71db4a6a8e47a8de052ad411",
+    "task-f12b03e83a1a491494a08e42c7a58504",
+    "task-f9abfd2d170246549e01fa1bcbff4238"
+  ],
+  "priority": "HIGH",
+  "order": 248,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T16:52:32.011Z",
+  "updatedAt": "2026-10-30T05:10:08.697Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T16:53:46.748Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T05:09:41.192Z",
+    "wallClockMs": 44154444
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-b5749787",
+    "qa-952969be",
+    "worker-73c29a03"
+  ],
+  "tier": "standard",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T16:54:22.146Z",
+  "planningNotes": {
+    "approachesConsidered": "This is a docs-only split of the epic-final C11, made for size. The docs stay reviewed by C11's whole-epic adversarial pass, because C11 dependsOn this task.",
+    "codebaseInsights": "Anchors:\n- MCP_SERVER.md: `### moe.get_context` at about line 180, Served context (CQ-F06) at about 292, `### moe.submit_plan` at about 306, `### moe.claim_next_task` at about 1233.\n- SCHEMA.md: `## Task` at about 395, with the field block near 420; `### executionContract` at about 766.\nHand-forward sources: C01's comment on task-4e0264fc, decision-cq-c06-context-deltas, decision-cq-c07-plan-reuse-split, C08's plan (task-f12b03e8) and C09's handoff.",
+    "risks": "- Peer collisions on MCP_SERVER.md (bc8410af, cfa0b48b): never revert peers' bytes; edit only the named sections.\n- Documenting a planned name instead of the landed one: verify by grep first (step 1).",
+    "keyFiles": [
+      "docs/MCP_SERVER.md",
+      "docs/SCHEMA.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T16:54:22.253Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T05:04:29.677Z",
+  "reviewStartedAt": "2026-10-30T05:06:34.356Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test   # Linux snapshot /tmp/moe-c11a.jpiPRb: git archive HEAD + 2 owned docs, native npm ci, env -i, node v24",
+    "exitCode": 0,
+    "outputTail": "Test Files  192 passed (192)\n Tests  5408 passed | 16 skipped (5424)\n Duration  31.19s",
+    "reportedAt": "2026-10-30T05:06:34.356Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-95b610e3726c4e099c84eaedf098602a.json",
+    ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json",
+    ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json"
+  ],
+  "completionSummary": "Docs only. MCP_SERVER.md: packetManifest/packetBudgetChars, basePacketId/contextEpoch/delta with every contextDelta reason, planReuse view, claim_next_task plan reuse, submit_plan reserved moe-recipe identity and recipeInstance. SCHEMA.md: planSourceBasis, planningEntry, planReuse, recipeInstance, RecipeDefinition + .moe/recipes.json, ContextDelta, PacketManifest. Every name was verified against the landed code; the docs state that no recipe kind or post-patch call site is activated. Gate: 192 files, 5408 passed / 16 skipped in a Linux snapshot of HEAD with the 2 docs overlaid; root lint OK.",
+  "commits": [
+    {
+      "sha": "6ead6a0ffdea98d8a67561969ddf5115c3e5a10e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T05:04:07Z",
+      "paths": [
+        ".moe/tasks/task-95b610e3726c4e099c84eaedf098602a.json",
+        ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T05:06:57.132Z",
+      "treeId": "8f9ba8a9479d744b5d99c75abbdc331bbc084975",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-d3cd966c5ef74468b03ac4ca23893d5d"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "9f2e50efd8cf2db1bc3c1003cb009c9a373453f8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T05:07:19Z",
+      "paths": [
+        ".moe/tasks/task-95b610e3726c4e099c84eaedf098602a.json",
+        ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T05:10:08.696Z",
+      "treeId": "55f4fa77ee53e695cda23dde2534f1582250a35f",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T05:07:19Z",
+    "at": "2026-10-30T05:10:08.696Z"
+  },
+  "completedAt": "2026-10-30T05:09:41.192Z",
+  "reviewCompletedAt": "2026-10-30T05:09:41.192Z",
+  "reviewSummary": "Reviewed completion commit 6ead6a0 (on moe/work-2026-10-24; clean tree for both docs). Docs-only: MCP_SERVER.md +26, SCHEMA.md +91, plus two board records. Gate re-run in a fresh Linux snapshot of HEAD (native npm ci, env -i, node v24.21.0): `cd packages/moe-daemon && npm test` exit 0, 192 files, 5408 passed / 16 skipped, matching the worker. Root `npm run lint` OK. The docs are byte-identical to HEAD.\n\nI checked each documented name and limit against the landed code:\n- packetManifest {version, provenance, sections, complete, limitations, budget}: mandatory sections, role-trim/compacted/capped reasons, expand/restructure, the 1000-250000 budget (default 100000, refused not clamped), 'no-repository-source' and 'plan-revision-unreadable' (contextPacket.ts, getContext.ts).\n- basePacketId/contextEpoch validation. All 10 refusal reasons in the doc's order, the 5 receipt statuses, diff-failed, the in-memory base store, and the clear-on-no-epoch rule (contextDelta.ts, getContext.ts:176-210).\n- planReuse: planReuseContext/planReuseView, REPLAN_FROM, the pending withhold in claimNextTask/waitForTask, resume-refused and assessment-failed (planReuse.ts, planReuseJob.ts).\n- RECIPE_ACTOR 'moe-recipe' with NOT_ALLOWED, recipeInstance keys, id regex, 32-key inputs, 1-50 recipes, allowedPaths 1-16, and the recipes.json configs append (submitPlan.ts, recipe.ts, docsLiteralReplace.ts, taskStore.ts).\n\nThe never-approval/readiness/evidence wording is kept. Nothing claims activation: no production import of docsLiteralReplace, and no assessPostpatch caller.\n\nNote, not a defect: the commit also carries 5 doc lines (get_commit_scope finalizingAttempt and Finalizing hold) that the wrapper held as contested for task-d3cd966c. Their code landed in e92eeac7 and they are accurate.",
+  "requiredCheckAtDone": null
+}

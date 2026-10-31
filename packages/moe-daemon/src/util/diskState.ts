@@ -24,6 +24,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
+import { gitExecutable } from './gitExecutable.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -38,9 +39,19 @@ export type GitRunner = (args: string[], cwd: string) => Promise<string>;
  * paths with spaces and shell metacharacters are inert on Windows, the
  * daemon's primary platform; `windowsHide` keeps a console window from
  * flashing when the daemon runs under an IDE-spawned process.
+ *
+ * It spawns the shared absolute git (gitExecutable), never a bare `git` that
+ * Windows would look up in `cwd` first. It deliberately does NOT adopt
+ * cachedPlanPaths' readOnlyGitEnv/readOnlyGitArgs: masking global/system
+ * config (core.excludesFile ignores, Git for Windows' system core.autocrlf)
+ * changes which paths `git status` lists, so the equality-only signature
+ * would flap and raise false stale alarms (invariant 1) and POSIX behaviour
+ * would change. The absolute path already closes the binary-planting vector.
+ * A resolution miss rejects here, which computeDiskStateSignature maps to
+ * `undefined`.
  */
 export const defaultGitRunner: GitRunner = async (args, cwd) => {
-  const { stdout } = await execFileAsync('git', args, {
+  const { stdout } = await execFileAsync(gitExecutable(), args, {
     cwd,
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER,

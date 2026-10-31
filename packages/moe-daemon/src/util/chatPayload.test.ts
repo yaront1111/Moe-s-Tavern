@@ -5,6 +5,7 @@ import {
   MAX_CHAT_RESPONSE_CHARS,
   capChatMessagesToResponseBudget,
   chatMessageResponseCost,
+  isRoutinePresenceLine,
 } from './chatPayload.js';
 
 function msg(id: string, contentChars: number): ChatMessage {
@@ -65,5 +66,37 @@ describe('chat response budget', () => {
     const terse = capChatMessagesToResponseBudget(messages, 200).delivered.length;
 
     expect(terse).toBeGreaterThan(verbose);
+  });
+});
+
+describe('isRoutinePresenceLine', () => {
+  it.each([
+    'worker-1 left (wrapper_restart)',
+    'worker-1 left ()',
+    '🔌 worker-1 deregistered (wrapper_restart); (no tasks held)',
+    '🔌 worker-1 deregistered (a (nested) reason); (no tasks held)',
+  ])('matches the routine line %j', (content) => {
+    expect(isRoutinePresenceLine(content)).toBe(true);
+  });
+
+  it.each([
+    '🔌 worker-1 deregistered (terminal_closed); released 1 task: task-1→WORKING',
+    '🔌 worker-1 deregistered (terminal_closed); (no tasks held); dropped 1 resource claim: slot lease (task-1)',
+    'worker-1 left (bye) again',
+    'worker-1 left (bye)\n@worker-2 wake up',
+    '🚧 worker-1 blocked on task-1: proxy down',
+    '',
+  ])('does not match the actionable or odd line %j', (content) => {
+    expect(isRoutinePresenceLine(content)).toBe(false);
+  });
+
+  it('is total: non-strings are false and a long non-matching line stays fast', () => {
+    expect(isRoutinePresenceLine(undefined as unknown as string)).toBe(false);
+    expect(isRoutinePresenceLine(null as unknown as string)).toBe(false);
+    expect(isRoutinePresenceLine(42 as unknown as string)).toBe(false);
+    const startedAt = Date.now();
+    expect(isRoutinePresenceLine(`x left (${' ('.repeat(5000)}`)).toBe(false);
+    expect(isRoutinePresenceLine(`🔌 ${'a '.repeat(5000)}`)).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(500);
   });
 });

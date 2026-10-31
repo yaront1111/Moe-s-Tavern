@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=c6941a67b3e0 -->
+<!-- moe-generated: sha=f4dfd3d405c9 -->
 
 # Source
 
@@ -13,3 +13,4 @@ Vendored from [`obra/superpowers`](https://github.com/obra/superpowers).
 - Removed the `superpowers:subagent-driven-development` / `superpowers:executing-plans` execution-handoff section (those are upstream-specific orchestration mechanisms; in Moe the daemon drives execution via `moe.start_step` / `moe.complete_step`).
 - Removed the "Save plans to: docs/superpowers/plans/..." line (Moe's plans live in `task.implementationPlan`, not on disk).
 - Appended `## Moe integration` footer mapping plan structure to `moe.submit_plan` step fields and pointing at the Moe-native `moe-planning` skill as the higher-level entry point.
+- Rewrote "Bite-sized tasks" and the task-structure example: a step is one concern plus its tests (red → green inside the step), plans name one verification command, and plans never contain `git add`/`git commit` (the Moe wrapper commits). Dropped "Frequent commits."

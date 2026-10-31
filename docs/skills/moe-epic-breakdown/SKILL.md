@@ -98,6 +98,8 @@ Skip the pair for trivial slices (config, docs, mechanical renames) — two clai
 
 Always create one, at the highest `order`, unless the epic is 1–2 tasks total. It exists because verification is concentrated, not smeared — see `moe-planning`'s "Where the gate goes". Mid-epic tasks prove their own slice with focused tests and move on; this task is where the epic actually gets gated.
 
+Designate it with `moe.update_epic { epicId, finalTaskId }` right after `moe.create_task` returns its id: `order` is a per-column sort position that board drags and new rows rewrite, so it cannot name the final task on its own. If the epic later grows past that task (a new closing task replaces it, or work is re-sliced after it), re-designate with `moe.update_epic` and the new id, so `get_context` `isEpicFinal` and the quality gate follow the real closing task.
+
 Its DoD covers what no individual slice could see:
 
 - Full regression across every package the epic touched, green, with numbers.

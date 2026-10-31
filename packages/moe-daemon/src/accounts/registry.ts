@@ -8,7 +8,10 @@
 // Each account is a Claude config directory next to the file
 // (claude-accounts/<id>) that Claude's own `claude auth login` signs in. Moe only
 // creates that directory and hands its path to claude as CLAUDE_CONFIG_DIR:
-// nothing here, or anywhere in Moe, opens a file inside it.
+// neither this module, the daemon nor the accounts CLI opens a file inside it.
+// The one exception is the wrapper helper scripts/moe-account-lease.mjs: for an
+// interactive claude seat only, it sets projects[<key>].hasTrustDialogAccepted in
+// that account's .claude.json.
 //
 // Every mutation re-reads the file, applies one change and writes it back
 // atomically (tmp + rename), so the daemons and the CLI never tear it. Two
@@ -21,6 +24,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { escapeJsonForFile } from '../util/atomicWrite.js';
 
 export const ACCOUNT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export const MAX_ACCOUNTS = 32;
@@ -67,7 +71,7 @@ export function registryFilePath(env: NodeJS.ProcessEnv = process.env): string {
   return override ? path.resolve(override) : path.join(os.homedir(), '.moe', 'claude-accounts.json');
 }
 
-/** The account's Claude config directory. Moe creates it and passes its path to claude; it never reads inside it. */
+/** The account's Claude config directory. Moe creates it and passes its path to claude; it never reads inside it (only the wrapper's scripts/moe-account-lease.mjs touches .claude.json, for an interactive seat's folder trust). */
 export function accountConfigDir(registryFile: string, id: string): string {
   return path.join(path.dirname(registryFile), 'claude-accounts', id);
 }
@@ -162,7 +166,7 @@ function sleepSync(ms: number): void {
 export function writeJsonAtomic(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+  fs.writeFileSync(tmp, escapeJsonForFile(JSON.stringify(value, null, 2)) + '\n', { mode: 0o600 });
   for (let attempt = 1; ; attempt++) {
     try {
       fs.renameSync(tmp, file);

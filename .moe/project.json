@@ -21,7 +21,11 @@
     ],
     "formatting": "",
     "testing": "vitest",
-    "customRules": []
+    "customRules": [
+      "The shared checkout D:\\projexts\\moes (/mnt/d/projexts/moes) is the live runtime: the daemon runs from packages/moe-daemon/dist, and every seat launches packages/moe-proxy/dist. Never run `npm run build`, `npm run clean`, `npm ci` or `npm install` there in any package. Never run `npm test` or `npm run test:coverage` in packages/moe-proxy there either, because its pretest rebuilds and cleans dist. Run those commands, and every npm test gate for packages/moe-daemon, moe-proxy or moe-claude-plugin, in a git archive or clone snapshot outside the repo. A plan step that says `cd packages/<pkg> && npm test` means: in that snapshot. JetBrains Gradle gates (under the jetbrains-gradle lease) and the scripts/tests launcher harnesses may still run in place, exactly as their DoD states. A snapshot run of the exact commit is also acceptable for those gates.",
+      "Never pattern-kill processes on this shared host. That means no pkill, no killall, no `kill $(pgrep …)`, no `fuser -k` and no killing by name or command-line match. Every seat's wrapper, its heartbeat and poll sleeps, the proxies and other agents' harnesses all run on the same WSL host. Kill only PIDs that your own session (or its subagent) started, by recorded PID. Put this rule in every subagent brief that may manage processes.",
+      "Write tracked files only with the main session's Edit/Write tools, or a Serena editor from a one-shot seat. Shell writes (heredocs, sed -i, python or node file writes, cp or mv into the tree) and subagent edits leave no TOOL witness. A path that another open task also declares is then HELD at landing, and your change stays uncommitted. Use shell writes only for scratch files outside the checkout."
+    ]
   },
   "settings": {
     "approvalMode": "TURBO",
@@ -38,5 +42,5 @@
     "reviewStaleTimeoutMs": 1800000
   },
   "createdAt": "2026-02-03T11:19:51.668611800Z",
-  "updatedAt": "2026-02-21T23:16:23.985Z"
+  "updatedAt": "2026-10-31T08:27:50.153Z"
 }

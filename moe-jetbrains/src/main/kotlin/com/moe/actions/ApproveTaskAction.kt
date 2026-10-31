@@ -3,6 +3,7 @@ package com.moe.actions
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.moe.services.MoeProjectService
+import com.moe.toolwindow.PlanReviewDialog
 
 class ApproveTaskAction : AnAction("Approve Current Task") {
     override fun actionPerformed(e: AnActionEvent) {
@@ -14,7 +15,7 @@ class ApproveTaskAction : AnAction("Approve Current Task") {
         val awaitingTask = state.tasks.find { it.status == "AWAITING_APPROVAL" }
 
         if (awaitingTask != null) {
-            service.approveTask(awaitingTask.id)
+            PlanReviewDialog(project, awaitingTask, service).show()
         }
     }
 

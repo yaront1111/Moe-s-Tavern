@@ -1,0 +1,179 @@
+{
+  "id": "task-2720c13bc79b438e840b14cbba4fea50",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V08] Crash reconciled local delivery",
+  "description": "Objective: Reconcile target Git identity with receipt persistence and retry reports idempotently.\n\nDeliverable: Crash reconciled local delivery. This is task V08 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs\n\nDependency aliases (wired by Moe task ids after import): V07.",
+  "definitionOfDone": [
+    "Crash after Git effect does not double-land or release dependents early.",
+    "Target movement regenerates/rechecks candidate.",
+    "Rebase trailers alone do not transfer proof to a different tree.",
+    "Fresh verification `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "scripts/moe-agent.sh: strong-profile crash reconciliation, built on the LANDED CQ-V07 (task-16bbf8ff). First read V07's landed bytes: PINNED_ATTEMPT_PROFILE, the durable intent write and its refusal path. Keep every peer's bytes; this file is a collision hotspot.\n\nDefinitions:\n- Strong in the post-flight: PINNED_ATTEMPT_PROFILE = 'verified-local'.\n- Strong in the replay: the JOURNAL's own profile = 'verified-local', meaning the landing that wrote it was strong.\n- Everything else (legacy, observe, unpinned, a journal without a profile) stays byte-for-byte today's behavior.\n\n(a) No double land (DoD1). In land_plumbing, for a strong completion, check before the CAS loop and before V07's intent write. If receipt_journal_path \"$LAND_TASK_ID\" already exists, an earlier landing of this task has an unreconciled effect: its receipt was never acknowledged, and this session's pre-flight replay could not settle it.\n- Refuse with LAND_CODE MOE_COMMIT_REFUSED_UNRECONCILED_INTENT, exactly as V07 refuses: LAND_OUTCOME='refused', moe_temp_index_drop, no update-ref, no rescue ref.\n- Leave the existing journal untouched, keep the bytes and the baseline, and print a [WARN] line naming the code and the journal path.\n- A CAS retry inside the same landing is unaffected, because the loop deletes its own failed attempt's journal.\n\n(b) No early release (DoD1). In finalize_postflight, when a strong landing's outcome is committed and either its receipt is unacknowledged (RECEIPT_JOURNAL still exists; receipt_send deletes it on an accepted or conflicting receipt) or (c) marked the proof untransferred:\n- do NOT call finalize_attempt;\n- print MOE_FINALIZE_DEFERRED_RECEIPT;\n- set MOE_FINALIZE_DONE=true.\nThe attempt stays finalizing. That holds qa_approve and every claim of the task, so nothing reaches DONE and no dependent is released, until receipt_replay sends the receipt and then finalizes, in that order. Other outcomes finalize as today.\n\n(c) Proof only on the same tree, post-flight (DoD3). In the 'Record (rebase-safe sha lookup by the Moe-Session trailer)' block, a strong landing adopts the trailer-found commit only when its ^{tree} equals FROZEN_TREE, the verified candidate tree. Otherwise:\n- keep LAND_SHA and LAND_TREE from the CAS;\n- set a local LAND_PROOF_UNTRANSFERRED=true;\n- print MOE_DELIVERY_PROOF_NOT_TRANSFERRED, saying the branch carries this landing's trailers on a different tree and the proof stays with the candidate id;\n- record the ledger row with the CAS sha as today;\n- do NOT send the receipt. The journal stays for the replay.\n\n(d) Proof only on the same tree, replay (DoD3).\n- Extend receipt_journal_fields to also emit profile and treeSha. A journal whose profile is 'verified-local' but whose treeSha is not 40 hex is malformed: keep it, with a warning.\n- In receipt_replay, for a strong journal, receipt_landed_as names the landed commit L: either targetAfter or a trailer-matched copy. Require `git rev-parse \"L^{tree}\"` == treeSha.\n- Not equal: keep the journal unchanged, print MOE_DELIVERY_PROOF_NOT_TRANSFERRED, and send no ledger row, no receipt and no finalize.\n- A git error keeps the journal, as today.\n- Equal trees proceed exactly as today. A same-tree copy, for example one rebased over a peer's empty commit, still transfers.\n\n(e) Exact delivery, the DoD3 root cause. In push_branch, a strong landing never runs the MOE_PUSH_REBASE=1 pull --rebase retry, at either site. Print one [info] line saying strong delivery is exact. The push failure is then reported as today, and the branch keeps the verified commit.\n\nDoD2 (a moved target regenerates and rechecks the candidate) is today's CAS loop: a retry re-freezes a new candidate and reruns the gate unless the rebuilt tree AND base both equal the frozen ones. Do not weaken it; step 3 pins it under strong.\n\nError handling: every new path fails closed only under strong. A refusal or deferral never moves a ref, never deletes a journal and never loses bytes. Use only the existing helpers (receipt_journal_path, receipt_journal_fields, receipt_landed_as, finalize_attempt_rpc). No new state files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh strong-only reconciliation on landed V07 bytes. (a) land_plumbing refuses a strong completion before the CAS loop when receipt_journal_path exists: MOE_COMMIT_REFUSED_UNRECONCILED_INTENT, return 4, so no ref, rescue or push; the journal is untouched; the code is added to run_landing's no-hand-commit case. (b) finalize_postflight: a strong 'landed' with the journal still on disk or LAND_PROOF_UNTRANSFERRED prints MOE_FINALIZE_DEFERRED_RECEIPT and sends no finalize_attempt. (c) The Record block adopts the trailer-found commit only when its ^{tree} equals FROZEN_TREE. Otherwise MOE_DELIVERY_PROOF_NOT_TRANSFERRED: CAS sha kept, ledger as today, journal rewritten, no receipt. (d) receipt_journal_fields emits strong plus treeSha (a strong journal without 40-hex treeSha is malformed). receipt_replay requires landed^{tree}==treeSha before any ledger, receipt or finalize; otherwise it warns and keeps the journal. (e) push_branch: a local rebase flag; strong forces 0 and prints one [info] line. LAND_PROOF_UNTRANSFERRED/RECEIPT_JOURNAL are reset in run_landing and at the loop top. bash -n OK. Deviation: the two push-guard lines were rewritten with one sed -i instead of Edit. The path already has Edit-tool writes this session, so its TOOL witness stands. Peer dirty paths are untouched.",
+      "startedAt": "2026-10-31T13:48:42.973Z",
+      "completedAt": "2026-10-31T13:51:15.642Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/moe-agent.ps1 is the exact twin of step 1, in string parity (codes, banners, env and settings names). Keep peers' bytes and the UTF-8 BOM, which Windows PowerShell 5.1 needs. Strong in the post-flight is $script:PinnedAttemptProfile = 'verified-local' (from V07); in the replay it is the journal's own profile.\n- (a) In the ps1 landing loop, before the CAS loop: if Get-MoeReceiptJournalPath for the task exists, refuse with MOE_COMMIT_REFUSED_UNRECONCILED_INTENT, using V07's refusal mechanics: no ref update, no rescue ref, journal untouched.\n- (b) Complete-MoePostflight: when strong, committed, and the journal is still present or the proof was not transferred, send no finalize_attempt and print MOE_FINALIZE_DEFERRED_RECEIPT.\n- (c) The '7.6 Record (rebase-safe sha via the session trailer)' block adopts the copy only when its tree equals the frozen tree. Otherwise print MOE_DELIVERY_PROOF_NOT_TRANSFERRED, keep the CAS sha in the ledger, and send no receipt.\n- (d) Invoke-MoeReceiptReplay and Find-MoeJournaledLanding: for a strong journal, the landed commit's tree must equal treeSha. Otherwise keep the journal, warn, and send no ledger row, receipt or finalize. A strong journal without a 40-hex treeSha is malformed and kept.\n- (e) The push twin never runs the pull --rebase retry for a strong landing.\nThen `bash scripts/tests/parity-check.sh` must pass, and its .ps1 sibling too when pwsh is available. Error handling mirrors step 1: fail closed under strong only, legacy untouched.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1 twin of step 1. (a) Before the CAS loop in Invoke-MoeLanding, a strong completion whose Get-MoeReceiptJournalPath exists refuses with MOE_COMMIT_REFUSED_UNRECONCILED_INTENT using V07's mechanics: baseline rewritten, refused record_commit, return before any update-ref, rescue or push. (b) $res.ReceiptJournal is set at the CAS success. Complete-MoePostflight defers a strong 'landed' (MOE_FINALIZE_DEFERRED_RECEIPT, no Send-MoeFinalize) while the journal exists or $res.ProofUntransferred. (c) 7.6 Record adopts the trailer-found commit only when its tree equals MoeFrozen.Tree (when $receipt is set and the profile is strong). Otherwise MOE_DELIVERY_PROOF_NOT_TRANSFERRED: the CAS sha stays in the ledger and no Send-MoeReceipt. (d) The Invoke-MoeReceiptReplay validator rejects a strong journal without a 40-hex treeSha. After Find-MoeJournaledLanding, a strong journal needs landedAs^{tree} == treeSha; otherwise it warns and keeps the journal. (e) Push-MoeBranch: under strong, $rebase is forced false and one [info] line is printed. Results: BOM kept, 0 CR, PS 5.1 ParseFile errors=0, parity-check.sh PASS. pwsh is not installed in WSL, so the pwsh sibling did not run.",
+      "startedAt": "2026-10-31T13:51:16.555Z",
+      "completedAt": "2026-10-31T13:53:39.259Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/tests/postflight.sh: add modes to the embedded frozen-candidate suite. The same JS also lives in postflight.ps1; keep both copies identical (step 4 mirrors this one).\n\nReuse:\n- V07's strong fixture: its .moe/attempts record with executionPolicySnapshot.profile 'verified-local', and the frozen gate candidate.\n- The existing receipt-* machinery: the fake daemon's receipt refusal, the receipt-held crash supervisor, the FAKE_CLAIM_MODE 'finalizing' second runs, the remote and peer setup of receipt-push-rejected, and the RPC call log.\n\nEach mode asserts exact codes, the order of calls in the log, and the Git state.\n\n1. reconcile-strong-receipt-lost (DoD1).\n   - Run 1: a strong landing succeeds, then the fake daemon refuses record_delivery_receipt. Expect MOE_FINALIZE_DEFERRED_RECEIPT, NO finalize_attempt call of any outcome, and the journal kept.\n   - Run 2 (receipt accepted, a finalizing claim): the replay sends the receipt (equal to the journal report minus ledger), THEN finalize 'landed', in that order.\n   - The branch holds exactly one Moe-Kind: completion commit for the task (no double land), and the journal is gone.\n2. reconcile-strong-unreconciled (DoD1).\n   - Seed a strong journal for the fixture task whose targetAfter is a trailer-carrying commit already on the branch. The fake daemon refuses its receipt, so the pre-flight replay keeps it.\n   - The session's completion is refused with MOE_COMMIT_REFUSED_UNRECONCILED_INTENT.\n   - The branch ref is byte-identical and the seeded journal is byte-identical (not overwritten by V07's intent write).\n   - There is no refs/moe/rescue/*, the worktree bytes and baseline are kept, and record_commit carries outcome refused with the code.\n3. reconcile-strong-target-moved (DoD2).\n   - The MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF seam commits a peer change to another file, so the CAS fails and retries.\n   - The log shows two record_candidate calls with distinct candidateIds and different trees, and two check runs, one per candidateId.\n   - The final journal and receipt name the SECOND candidate.\n   - There is exactly one completion commit, and its parent is the peer commit.\n4. reconcile-strong-rewrite (DoD3).\n   - Run 1 stops at receipt-held, so the journal remains.\n   - The harness then replaces the landed commit: a copy with the same message (trailers), parent targetBefore and a DIFFERENT tree (one byte changed), moved onto the branch with update-ref.\n   - Run 2: MOE_DELIVERY_PROOF_NOT_TRANSFERRED; no record_commit, record_delivery_receipt or finalize_attempt in its log; the journal is byte-identical.\n5. reconcile-strong-rewrite-same-tree (the DoD3 control). Same setup, but the copy keeps targetAfter's tree and sits on a peer empty commit above targetBefore. The replay sends the receipt and finalizes 'landed' with landedRevision = the copy.\n6. reconcile-strong-no-rebase (DoD3). Strong landing, MOE_PUSH_REBASE=1, and the receipt-push-rejected remote that rejects the push.\n   - No pull --rebase line; the strong [info] line is printed.\n   - The branch tip is still targetAfter, and the receipt pushResult reports the failure.\n\nLegacy stays pinned by the existing receipt-* modes, which must pass unchanged. receipt-rebase-replay still adopts its different-tree copy under legacy.\n\nError handling in the suite: every mode asserts the wrapper's exit status and prints stdout and stderr on failure. None of these modes is ever skipped silently.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "Embedded frozen-candidate suite (postflight.sh) gains six strong-profile modes: reconcile-strong-receipt-lost (refused receipt -> MOE_FINALIZE_DEFERRED_RECEIPT, no finalize, journal kept; claim-refused replay re-sends the report, finalizes landed once, one completion commit), -unreconciled (seeded strong journal the pre-flight replay cannot settle -> MOE_COMMIT_REFUSED_UNRECONCILED_INTENT before freeze: no ref move, no rescue ref, journal byte-identical, baseline kept, finalize failed), -target-moved (peer commit before CAS -> two candidates/checks, intent journal + receipt name only c2, landed on top of peer-race), -rewrite / -rewrite-same-tree (crash at the held ledger row, then branch rewritten to a trailer-carrying copy: different tree -> MOE_DELIVERY_PROOF_NOT_TRANSFERRED, nothing recorded/finalized, journal unchanged; same tree -> owed ledger row on the copy, receipt, finalize landed), -no-rebase (MOE_PUSH_REBASE=1 + rejected push: no pull --rebase, verified tree kept, receipt pushResult 'push failed: ...'). Deviation from plan: both rewrite arms crash at ledger-held (fake 'receipt-ledger-replay') rather than receipt-held so the same-tree replay exercises the owed-ledger path on the copy. Fake modes reused via FAKE_EVIDENCE_MODE mapping; fake proxy untouched. Run: MOE_FROZEN_TEST_ONLY=<6 new> bash scripts/tests/postflight.sh -> PASS 6; neighbouring 20 modes (receipt-*, intent-*, race-fail, finalize-loss*, teardown-finalizing) -> PASS 20.",
+      "startedAt": "2026-10-31T13:53:40.189Z",
+      "completedAt": "2026-10-31T14:02:11.034Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "scripts/tests/postflight.ps1: mirror step 3 in the embedded suite. The mode names, fixtures and assertions must be byte-identical to postflight.sh's copy, and they run against moe-agent.ps1. Add only the ps1-runner bits a mode needs, following the receipt-* modes' existing ps1 handling. Keep the harness's structure, timeouts and BOM. Run it under pwsh, and under Windows PowerShell 5.1 when reachable. If an engine is unavailable, say so; do not claim it ran.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "postflight.ps1's embedded frozen-candidate suite now mirrors step 3 byte-for-byte (diff of the two embedded blocks from `const root=fs.mkdtempSync` to the PASS line: IDENTICAL); UTF-8 BOM kept, LF kept, no ps1-runner extras needed (the receipt supervisor path is shared JS keyed on env.FAKE_EVIDENCE_MODE). Also fixed the now-stale 'only receipt-rebase-replay exercises it' comment in BOTH copies (postflight.sh touched again for that one comment). Engines: Windows PowerShell 5.1.26100 via powershell.exe from WSL (child=powershell): 6 new reconcile-strong-* modes PASS 6; 20 neighbouring receipt-*/intent-*/race-fail/finalize-loss*/teardown-finalizing PASS 20. pwsh 7 is NOT installed on this host (neither WSL nor on the Windows PATH reachable here), so the pwsh leg did not run.",
+      "startedAt": "2026-10-31T14:02:12.757Z",
+      "completedAt": "2026-10-31T14:08:29.785Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verify once, fresh.\n1. The DoD command, `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs`, must exit 0. Supply its command, exit code and output tail to complete_task.\n2. ALSO run, and report each result in the completion summary:\n   - `bash scripts/tests/postflight.sh`: the full suite, including the six reconcile-strong-* modes, V07's intent-* modes and every receipt-* mode. Widen MOE_POSTFLIGHT_TIMEOUT_SEC on a busy box.\n   - postflight.ps1 under pwsh, and under Windows PowerShell 5.1 through interop from the repo on D: when reachable.\n   - `bash scripts/tests/parity-check.sh`.\n3. Mutation proof, on scratch copies only (never the shared wrappers). Each mutant must turn its named mode red; restore and rerun green.\n   - drop (a): reconcile-strong-unreconciled;\n   - finalize despite the kept journal (b): reconcile-strong-receipt-lost;\n   - remove the tree comparison in (d): reconcile-strong-rewrite;\n   - remove it in (c): a direct unit run of the record block, or note why it is equivalent to (d)'s coverage;\n   - keep the rebase retry under strong (e): reconcile-strong-no-rebase;\n   - re-enable reuse of the gate result when the base differs: reconcile-strong-target-moved.\n4. Report the net diff size. Expect about 250 lines; the QA cap is 400 net.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification only, no tracked file changed in this step. 1) DoD: `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs` exit 0 (50 tests, 48 pass, 0 fail, 2 skipped = the PowerShell-parse tests, 'no PowerShell engine on linux'). 2) `MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh` rc=0, 'PASS postflight.sh', frozen-candidate 85/85. postflight.ps1 under Windows PowerShell 5.1.26100 via powershell.exe from D: rc=0, 'PASS postflight.ps1', frozen 85/85. pwsh 7 is NOT installed on this host, so that leg did not run. `bash scripts/tests/parity-check.sh` PASS. 3) Mutants on /tmp scratch copies (deleted after). sh, each red on its mode: (a) refusal dropped -> -unreconciled red (lands 'committed'); (b) deferral dropped -> -receipt-lost red (deferred 0, finals 1); (d) replay tree compare dropped -> -rewrite red (records + finalizes the other-tree copy); (e) rebase kept -> -no-rebase red; (c) proven directly: with (e) alone the record-block check fires (NOT_TRANSFERRED, no receipt, finalize deferred); with (c)+(e) the rebased other-tree copy gets a receipt and a landed finalize; (f1) base compare dropped -> V07's receipt-same-tree-race and intent-strong-cas red, but -target-moved stays green (its tree differs too), so (f2) reuse-on-any-retry -> -target-moved red. ps1 (PS 5.1): (a),(b),(d),(e) each red on the same modes. The ps1 (a) mutant failed as INTENT_UNWRITABLE, not 'committed': pre-existing V07 bug, Write-MoeIntentJournal's [IO.File]::Replace($tmp,$Path,$null) always throws in PowerShell. Filed task-f622843305224cf49ca24478b26c3351 (LOW, dependsOn this task). 4) Net diff: +274 -33 = 241 lines (moe-agent.sh +59/-10, moe-agent.ps1 +61/-5, postflight.sh +77/-9, postflight.ps1 +77/-9).",
+      "startedAt": "2026-10-31T14:08:31.416Z",
+      "completedAt": "2026-10-31T14:42:37.688Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review: one pass over this task's own diff, as the last step. Check each of these:\n- Can any strong path finalize 'landed', send a receipt, or record a ledger sha for a tree other than the verified candidate's?\n- Can a stale journal ever be overwritten or deleted by a new landing?\n- Can a deferral leave a ref moved with no journal? It must not: the journal stays.\n- What if two tasks land concurrently? Journals are per task.\n- A crash between update-ref and the receipt, between the receipt and finalize (a documented residual: the journal is gone; note it for V12), or during the replay itself?\n- Can the CLI influence strong? It cannot: the pinned, non-exported profile and the journal written by the wrapper before the effect decide it.\n- Does legacy stay byte-for-byte as today, with the receipt-* modes unchanged?\n- Repeated MOE_DELIVERY_PROOF_NOT_TRANSFERRED warnings every pre-flight are fail-closed by design. Hand the operator-facing docs to CQ-V12.\n- Are the ps1 BOM and parity intact, with no .moe edits and no Git writes outside the wrappers and temp test repos?\nReport every path in complete_step.modifiedFiles, and write the task handoff memory for V09 and V12.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Adversarial review of this task's own diff. No real defect was found, so this step changed no code; all four task paths are re-listed for attribution. Checklist:\n- A strong path cannot finalize/receipt/ledger another tree. (c) clears `found`, so the ledger keeps the CAS sha of the verified tree and no receipt is sent; (d) gates the owed ledger, the receipt and the finalize on landed^{tree}==treeSha; mutants prove both.\n- A stale journal is never overwritten or deleted by a new landing: (a) runs before the freeze loop.\n- A deferral never leaves a moved ref without a journal: it fires only while the journal exists, and on UNTRANSFERRED the journal is rewritten, not deleted.\n- Journals are per task, so concurrent tasks don't interact.\n- Crash between update-ref and the receipt: replayed (receipt-lost / rewrite arms).\n- Crash between receipt ack and finalize: the journal is gone and the attempt stays finalizing until deregister. This is a documented residual, handed to V12.\n- Crash mid-replay: the replay is idempotent and the journal is deleted only after an accepted receipt.\n- The CLI cannot influence strong: PINNED_ATTEMPT_PROFILE is never exported, and a planted journal only refuses its own landing (fail-closed).\n- Legacy behaviour is unchanged: every new branch is gated on the pinned profile; the push_branch `$rebase` local and the extra journal-field outputs are inert for legacy; all receipt-* modes pass on both engines.\n- commitHooks cannot false-trip (c): moe_commit_with_hooks refuses a tree change.\n- ps1 refusal variables ($bl, $B, $newU, $landedFlag, $blSession, $blP, $attr, $unattrRecPaths) are assigned before the new block.\n- BOMs of moe-agent.ps1 and postflight.ps1 are intact (efbbbf).\n- No .moe edits by this session; no Git writes except in temp test repos.\n- Repeated NOT_TRANSFERRED warnings are fail-closed by design; operator docs go to V12.\n- ps1 prints the strong [info] line only after a failed push (sh prints it before pushing): wording difference, parity-check passes.\nOut-of-scope bug filed: task-f622843305224cf49ca24478b26c3351. Memories written: task-task-2720c13b…-handoff (worker state, residuals for V09/V12), gotcha-ps-file-replace-null-backup, and a V08 section added to gotcha-wrapper-receipt-journal-and-replay.",
+      "startedAt": "2026-10-31T14:42:55.507Z",
+      "completedAt": "2026-10-31T14:43:32.686Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:35:01.857Z",
+  "updatedAt": "2026-10-31T14:43:46.117Z",
+  "dependsOn": [
+    "task-16bbf8ff071d485aa27ab5b92049c600",
+    "task-b319b263fada419d9d7de279682dc5f4"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T16:55:31.535Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0",
+    "worker-25da16b2"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T17:08:19.460Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Reconcile inline at landing time: rerun the replay for the stale journal, then land. Rejected. This session's pre-flight replay has already failed on that journal, and an inline retry would interleave the daemon calls of two landings. A fail-closed refusal keeps the bytes and lets the next pre-flight settle the journal first.\n2. Gate dependents on receipts inside the daemon. Out of scope: CQ-V09 owns the shared completion and dependency predicate. V08 instead keeps the finalizing hold until the receipt is recorded. That hold already blocks qa_approve and every claim of the task, so no DONE and no dependent release can happen early.\n3. Read the candidate tree from the daemon's .moe/candidates record. Rejected. The journal's treeSha is written before the effect by the protected wrapper (V07), and strong-profile writers run isolated, with no access to the host .git. Legacy keeps its current trust model.\n4. Rebuild a candidate for a rewritten copy after the fact and recheck it. Rejected: that would bless bytes nobody verified or approved. Instead fail closed with a stable code.\n5. Disable the push entirely for strong. Rejected: the remote policy is the operator's. Only the rebase is removed, because it changes the delivered tree.\n6. Change legacy replay, which adopts a copy with a different tree. Rejected: legacy policy must stay. receipt-rebase-replay pins it.",
+    "codebaseInsights": "Today's receipt journal (sh; ps1 twins in brackets):\n- Path: <gitdir>/moe/receipt/<taskId>.json [Get-MoeReceiptJournalPath ~2703]. receipt_report fields: taskId, workerId, attemptId, generation, candidateId, target, targetBefore, targetAfter, landedRevision, pushResult, ledger?.\n- receipt_send [Send-MoeReceipt ~1699] deletes the journal on an accepted or conflicting receipt and keeps it on any other failure.\n- receipt_landed_as [Find-MoeJournaledLanding ~1781] finds the landing as an ancestor of the tip, else a copy matched by the Moe-Session and Moe-Kind: completion trailers in targetBefore..tip.\n- receipt_replay [Invoke-MoeReceiptReplay ~1832] runs right after the pre-flight claim, even a refused one. It sends the ledger, then the receipt, then finalize, the last only while the phase is finalizing. It skips journals held by a live foreign session.\n\nThe gaps V08 closes (strong profile only):\n- finalize_postflight [Complete-MoePostflight ~5159] maps committed to 'landed' regardless of the receipt: the DoD1 gap.\n- The post-flight 'Record' block [~4870] adopts the last commit carrying Moe-Session: $MOE_SID, which after a pull --rebase is a copy: the DoD3 gap.\n- push_branch [~4155]: the MOE_PUSH_REBASE=1 pull --rebase retry, opt-in, at two sites.\n\nDoD2 already holds: the land_plumbing CAS loop re-freezes and reruns the gate on any tree or base difference.\n\nHarness: the frozen-candidate suite is embedded identically in postflight.sh (~line 111) and postflight.ps1 (~line 90), both with receipt-* modes.\n\nAssumed from V07's approved plan rev 1, not landed yet:\n- PINNED_ATTEMPT_PROFILE / $script:PinnedAttemptProfile, strong = 'verified-local', pinned from the attempt record and non-exported;\n- the extra journal fields treeSha, baseRevision, planRevision and profile;\n- the refusal mechanics and the MOE_COMMIT_REFUSED_INTENT_* codes;\n- the intent-strong-* harness fixture.",
+    "risks": "- Collision hotspot. Several rows hold both wrappers and both harnesses; V07 must land first, and dependsOn enforces that. Build on the landed bytes and never revert a peer's.\n- V07's names are assumed. A one-line adaptation is in scope. Anything larger: report_blocked on task-16bbf8ff (no cycle).\n- verified-local is unavailable in production. The strong branches run only under test fixtures until certification; never enable it.\n- A deferred finalize keeps the seat's next claim refused until the replay runs. That is intended, and reconcile-strong-receipt-lost pins the order.\n- A strong journal whose copy has a different tree stays until a human resolves it. Its warning repeats every pre-flight, failing closed. Hand the operator docs and the remaining residual (a crash after the receipt is acknowledged but before finalize) to CQ-V12.\n- Keep the ps1 BOM and parity.\n- postflight is slow: widen MOE_POSTFLIGHT_TIMEOUT_SEC.\n- Never report an engine that did not run.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/parity-check.sh",
+      "scripts/CLAUDE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T17:08:19.575Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T13:48:42.973Z",
+  "reviewStartedAt": "2026-10-31T14:43:46.115Z",
+  "verification": {
+    "command": "node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ bash: a first session's progress stays quiet when nothing was counted (40.091784ms)\nℹ tests 50\nℹ suites 0\nℹ pass 48\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ todo 0\nℹ duration_ms 1074.706065\n(skipped 2 = 'moe-agent.ps1 parses on PowerShell 5.1 and 7' / 'Get-RoleDoc reads the UTF-8 role doc...' -- no PowerShell engine on linux; the PS 5.1 postflight.ps1 run covers the parse)",
+    "reportedAt": "2026-10-31T14:43:46.115Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1"
+  ],
+  "completionSummary": "CQ-V08, strong (verified-local) profile only; legacy is unchanged. Both wrappers twinned:\n(a) a task's unreconciled receipt journal refuses the next completion before freeze/update-ref (MOE_COMMIT_REFUSED_UNRECONCILED_INTENT): no ref move, no rescue, the journal is never overwritten;\n(b) a landed finalize is deferred while the journal stays or the proof did not transfer (MOE_FINALIZE_DEFERRED_RECEIPT); the pre-flight replay sends the receipt, then finalizes;\n(c) Record block and (d) replay adopt a trailer copy only when its ^{tree} equals the verified tree, else MOE_DELIVERY_PROOF_NOT_TRANSFERRED (journal kept, nothing sent or finalized);\n(e) MOE_PUSH_REBASE is ignored under strong.\nDoD2: the CAS loop's tree+base re-freeze is pinned by a new arm.\nSix reconcile-strong-* arms, byte-identical in postflight.sh/.ps1.\nResults:\n- full postflight.sh PASS (frozen 85/85);\n- postflight.ps1 on PS 5.1 PASS (85/85); pwsh 7 not installed, not run;\n- parity-check PASS.\nMutants on /tmp copies, all red on their arms: sh a/b/d/e/f2, (c) via (e) vs (c)+(e), f1 red on V07's same-tree arms; ps1 a/b/d/e.\nNet diff 241.\nFiled bug task-f6228433 (ps1 File.Replace $null).\nResiduals for V09/V12:\n- deregister ends the finalizing hold on wrapper exit;\n- crash between receipt ack and finalize;\n- a different-tree or permanently refused journal needs an operator.\nDeviation: step 1 used sed -i on 2 lines (disclosed)."
+}

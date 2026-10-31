@@ -1,0 +1,278 @@
+{
+  "id": "task-6be626cfe5744ee29deeb2bb1b59468e",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V05] Bounded repair policy",
+  "description": "Objective: Repair failures inside approved scope without a new plan, with separate bounded infrastructure retry budget.\n\nDeliverable: Bounded repair policy. This is task V05 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test\n\nDependency aliases (wired by Moe task ids after import): V04.",
+  "definitionOfDone": [
+    "Default maximum3 code repairs is configurable.",
+    "Repeated unchanged failures escalate with concise diagnostics/log refs.",
+    "Each repaired candidate receives new evidence; changed requirements require replan.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nScope:\n- This task delivers the PURE bounded-repair policy: the decision and its settings.\n- Acting on a decision (routing the task, re-dispatching the check) is later activation, which the description puts out of scope. CQ-V12 (task-b621ddc9) wires it into V04's dispatch and observation flow.\n- V04 (task-a9d1a74d, a dependency) must be DONE before WORKING. If V04 landed its own repair or failure-routing seam, call this module from it only if that needs no change to its files. Otherwise note the seam for V12.\n\nCreate packages/moe-daemon/src/delivery/repairPolicy.test.ts with `describe` blocks for resolveRepairPolicy and decideRepair. Every assertion is an exact toStrictEqual on the whole decision object.\n\nFixture: build candidates [{id, treeSha}] and CheckRun-shaped runs {id, candidateId, command, exitCode, outcome?, outputTail, planRevision?, createdAt}.\n\nCases:\n- S1 settings:\n  - absent, null, or settings without repairPolicy give exactly {maxCodeRepairs: 3, maxInfraRetries: 2};\n  - {repairPolicy: {maxCodeRepairs: 5}} gives {5, 2}, and {maxInfraRetries: 0} gives {3, 0};\n  - the bounds 0 and 10 are accepted;\n  - each refusal is its own it.each row, an INVALID_INPUT naming the exact field: a non-object repairPolicy; an unknown key; -1; 11; 1.5; '3'.\n- C1 the code repair budget at the default 3:\n  - the first failing candidate gives repair attempt 1 remaining 2;\n  - the second gives attempt 2 remaining 1;\n  - the third gives attempt 3 remaining 0;\n  - the fourth gives escalate 'code-repair-budget-exhausted';\n  - with maxCodeRepairs 0, the first failure escalates.\n- C2 an unchanged candidate: the current failing candidate has the previous failing candidate's treeSha, giving escalate 'unchanged-candidate'.\n- C3 an unchanged failure: a changed tree with the same exitCode, outcome and outputTail as the previous failing run gives escalate 'unchanged-failure'. A different tail gives repair.\n- I1 the infra budget is separate: on one candidate, infra-failure then timeout give retry-infra attempts 1 and 2, then escalate 'infra-retry-budget-exhausted'. Infra runs never consume a code repair, so a later code-failure still gets repair attempt 1.\n- N1 new evidence: a new candidate with no run gives none 'awaiting-evidence', even when an older candidate passed. A pass on the current candidate gives none 'passed'.\n- N2 non-repairable: skipped or inconclusive gives escalate 'non-repairable-outcome'.\n- N3 legacy rows without an outcome: exit 0 counts as passed and nonzero as code-failure, mirroring passedOn's legacy rule.\n- R1 changed requirements:\n  - approvedPlanRevision !== planRevision gives replan 'plan-revision-unapproved';\n  - runs whose planRevision differs from the task's are ignored, so the new revision is 'awaiting-evidence' with a FRESH code budget.\n- D1 diagnostics:\n  - checkRunId, candidateId, command, outcome and exitCode are the latest failing run's;\n  - the excerpt is the last 20 lines of outputTail and at most 2000 characters;\n  - logRefs are the failing run ids for this check, newest first, at most 5;\n  - a 16 KiB tail yields a bounded excerpt.\n- D2 determinism: shuffled run order gives an identical decision. Sort by createdAt, then id, by code unit.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "note": "RED: wrote repairPolicy.test.ts (S1, C1-C3, I1, N1-N3, R1, D1, D2 plus fail-closed, surrogate and duplicate-id rows). Run in a native Linux snapshot /tmp/moe-v05-dev.e3vcxP (git archive HEAD b1b6d7d8, npm ci, lock equal to worktree): the file fails to import because ./repairPolicy.js does not exist yet (\"Test Files 1 failed, Tests no tests\"). 817 other dirty paths belong to peers and were left untouched.",
+      "startedAt": "2026-10-30T06:59:52.606Z",
+      "completedAt": "2026-10-30T07:01:45.850Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create packages/moe-daemon/src/delivery/repairPolicy.ts.\n- It is pure: no IO, no state. It imports only types from '../types/schema.js' (CheckOutcome, CheckRun) and invalidInput from '../util/errors.js'.\n- Its header comment cites the CQ doc section 'Refresh, repair, or replan': repair within approved scope, a separate bounded infra retry budget, and escalating on a repeated unchanged failure. It also notes that activation is CQ-V12's.\n\nExports:\n- `interface RepairPolicy { readonly maxCodeRepairs: number; readonly maxInfraRetries: number }`.\n- `const DEFAULT_REPAIR_POLICY: RepairPolicy = Object.freeze({ maxCodeRepairs: 3, maxInfraRetries: 2 })`.\n- `function resolveRepairPolicy(settings: { repairPolicy?: unknown } | null | undefined): RepairPolicy`.\n  - An absent or null repairPolicy gives the defaults.\n  - Error handling: otherwise repairPolicy must be a plain non-array object whose only keys are maxCodeRepairs and maxInfraRetries. Each is optional and a safe integer from 0 to 10.\n  - Each violation is invalidInput naming 'settings.repairPolicy' or 'settings.repairPolicy.<key>'. Fail closed, like resolveDeliveryPolicy in delivery/policy.ts: a malformed budget is reported, never silently defaulted.\n  - Return a new frozen object.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.ts",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "note": "GREEN for settings: repairPolicy.ts created with RepairPolicy, DEFAULT_REPAIR_POLICY (frozen 3/2) and resolveRepairPolicy (fail closed, INVALID_INPUT naming settings.repairPolicy[.key], bounds 0-10). Imports only schema types + util/errors. Also fixed the test's refusal assertion to check MoeError.context.field (message is prefixed [INVALID_INPUT]). Snapshot run -t resolveRepairPolicy: 22 passed, 33 skipped (decideRepair rows come next).",
+      "startedAt": "2026-10-30T07:01:48.026Z",
+      "completedAt": "2026-10-30T07:02:21.118Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "In repairPolicy.ts, implement decideRepair. Report the file in modifiedFiles.\n\nExport these types:\n- `RepairInput { planRevision: number; approvedPlanRevision?: number; candidates: readonly {id: string; treeSha: string}[] /* oldest first, the listCandidatesForTask order */; runs: readonly Pick<CheckRun, 'id'|'candidateId'|'command'|'exitCode'|'outcome'|'outputTail'|'planRevision'|'createdAt'>[] /* ONE required check; the caller decides which runs count */; policy: RepairPolicy }`.\n- `RepairDiagnostics { checkRunId; candidateId; command; outcome: CheckOutcome; exitCode; excerpt; logRefs: readonly string[] }`.\n- `RepairDecision`, a discriminated union on action:\n  - 'none' with reason 'passed' | 'awaiting-evidence';\n  - 'repair' and 'retry-infra', each with attempt, remaining and diagnostics;\n  - 'escalate' with reason (code-repair-budget-exhausted | infra-retry-budget-exhausted | unchanged-candidate | unchanged-failure | non-repairable-outcome) and diagnostics;\n  - 'replan' with reason 'plan-revision-unapproved'.\n\nAlgorithm, in this order:\n1. If approvedPlanRevision !== planRevision, return replan.\n2. Keep only the runs whose planRevision is absent or equals planRevision, and whose candidateId names a listed candidate. Order them by createdAt, then id, comparing by code unit.\n3. If there is no candidate, or the LAST candidate has no kept run, return none 'awaiting-evidence'. Evidence never carries over from an older candidate.\n4. Classify a candidate's latest run:\n   - an absent outcome classifies by exit code: 0 is passed, anything else code-failure;\n   - infra-failure and timeout are 'infra';\n   - skipped and inconclusive are 'other'.\n5. Classify the current candidate:\n   - passed gives none 'passed'.\n   - other gives escalate non-repairable-outcome.\n   - infra: used = (infra runs on the CURRENT candidate) - 1. used >= maxInfraRetries gives escalate infra-retry-budget-exhausted; otherwise retry-infra with attempt used+1 and remaining max-used-1.\n   - code-failure:\n     - failed = the candidates, in order, whose latest kept run classifies as code-failure;\n     - prev = the entry before current in failed;\n     - prev with the same treeSha gives escalate unchanged-candidate;\n     - prev whose run has the same exitCode, outcome and outputTail gives escalate unchanged-failure;\n     - used = failed.length - 1; used >= maxCodeRepairs gives escalate code-repair-budget-exhausted;\n     - otherwise repair, with attempt used+1 and remaining max-used-1.\n6. Diagnostics come from the current candidate's latest run:\n   - excerpt = the last 20 '\\n'-separated lines, then the last 2000 characters;\n   - logRefs = the ids of the kept failing (non-passed) runs, newest first, at most 5.\n\nThe function never throws on well-typed input, and its output is deterministic.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.ts",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "note": "GREEN: decideRepair + RepairInput/RepairRun/RepairDiagnostics/EscalationReason/RepairDecision added (repairPolicy.ts 208 lines). Snapshot /tmp/moe-v05-dev.e3vcxP: repairPolicy.test.ts 55 passed; prod `npx tsc --noEmit` exit 0; scratch tsconfig typecheck of the test file exit 0. Design choices beyond the plan, all fail-closed and tested: a recorded outcome that disagrees with its exit code (passed+nonzero, code-failure+0) or is unrecognised is 'other' -> escalate non-repairable-outcome; runs dedup by id (earliest wins) with a total-order tiebreak so duplicates stay deterministic; the excerpt trims trailing whitespace and never starts on a lone low surrogate. Test fix: the surrogate fixture needed an odd tail ('z') to land the cut mid-pair.",
+      "startedAt": "2026-10-30T07:03:03.907Z",
+      "completedAt": "2026-10-30T07:03:35.908Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Iterate with `cd packages/moe-daemon && npx vitest run src/delivery/repairPolicy.test.ts`.\n2. Mutants. Apply each to a scratch copy, restore it, then `cmp` afterwards. Each must fail at least one test:\n   1. Count infra runs as code repairs: I1 fails.\n   2. Let an older candidate's pass count: N1 fails.\n   3. Use > instead of >= on the code budget: C1 fails.\n   4. Skip the unchanged-failure check: C3 fails.\n   5. Ignore planRevision filtering: R1 fails.\n   6. Default a malformed setting instead of refusing it: S1 fails.\n3. The GATE runs fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate).\n   - Take `git archive HEAD` of the WHOLE repo.\n   - Overlay ONLY the two new files.\n   - Run `npm ci --no-audit --no-fund` after checking that the lockfile matches the tree modulo CR.\n   - Use `env -i` with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH.\n   - Run `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`. Both must exit 0.\n   - `cmp` the overlay against the worktree.\n4. A red run outside these files is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n5. Supply the npm test command, its exit code and the output tail to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.ts",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "note": "VERIFIED. (1) Size: the first draft was 208+391=599 net LOC, over QA's 400 net-LOC reject default with no waiver for V05, so I compacted to 181 runtime + 211 tests = 392 net (table-driven refusals, merged cases, trimmed comments), re-verifying everything after. (2) Mutants, run in a scratch snapshot copy (src restored from the worktree and cmp-identical): 25 mutants, all KILLED with real failures — the 6 planned (infra counted as code repair; older candidate's pass counts; > instead of >= on the code budget; skip unchanged-failure; ignore planRevision filtering; default a malformed setting) plus dedupe, surrogate guard, passed-with-nonzero-exit, logRefs order/bound, infra count across candidates, replan check, excerpt line/char bounds, unchanged-candidate, legacy no-outcome, infra and code off-by-one, unlisted candidates, sort, exit-only/tail-only unchanged-failure compare, unknown key, bounds 10 and 0. One survivor from the first draft (unlisted candidates kept) led to a strengthened N1 test. (3) GATE in fresh Linux snapshot /tmp/moe-v05-gate.AAlx2d (git archive HEAD 5aec4971 of the whole repo, only the 2 new files overlaid, package.json/lock equal to worktree modulo CR, npm ci, env -i, node v24.21.0): `cd packages/moe-daemon && npm test` EXIT 0 — 200 files passed, 5593 passed | 16 skipped; `npx tsc --noEmit` EXIT 0; the test file also typechecks under a scratch tsconfig. Overlay cmp identical before and after the run. 817 other dirty paths belong to peers/pre-existing debris and were not touched.",
+      "startedAt": "2026-10-30T07:03:38.292Z",
+      "completedAt": "2026-10-30T07:08:45.730Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Check:\n\n1. Off-by-one at every budget boundary, at 0 and at 10.\n2. An agent gaming the loop by re-submitting identical bytes; unchanged-candidate catches it.\n3. Flaky infrastructure masquerading as a code failure, or the reverse; the outcome vocabulary decides, never the exit code alone, except for legacy rows.\n4. Huge or empty outputTail.\n5. Duplicate run ids.\n6. Candidates without runs in the middle of the sequence.\n7. A replan resets the budget, through planRevision filtering.\n8. Purity: no IO and no state.\n9. Rails: no forbidden-pattern tokens, no .moe edits, no Git writes, and verified-local untouched.\n\nWrite the Serena handoff memory 'task-task-6be626cfe5744ee29deeb2bb1b59468e-handoff' for CQ-V12 (task-b621ddc9). Cover:\n- the exported names;\n- the default budgets;\n- the settings key settings.repairPolicy, held for V12's CONFIGURATION.md sweep, since bdf6db6f edits that file now;\n- that activation, meaning acting on a decision in the dispatch and observation flow, is V12's job, unless V04 exposed a seam.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.ts",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ],
+      "note": "ADVERSARIAL REVIEW done. FIXED: the id dedupe used findIndex (O(n^2)) in a function the daemon will call under its global state mutex; now a Set (40000 runs in 13 ms in a snapshot-only probe, dedupe mutant still killed). Checked and fine: budget boundaries at 0 and 10 (tests at max 0, 3, 10; infra 0); re-submitted identical bytes -> unchanged-candidate, and A/B/A/B alternation is bounded by the budget; infra vs code decided by the outcome vocabulary, exit code only for legacy rows, incoherent outcomes fail closed; huge/empty outputTail bounded (16 KiB -> 2000 chars, '' -> ''); duplicate ids collapse; no-run candidates in the middle spend nothing; replan resets the budget via planRevision filtering; no IO/state/imports beyond schema types + util/errors; no forbidden-pattern tokens (grep clean), JSON `__proto__` key is refused as an unknown key; no .moe edits, no Git writes, no existing file changed, verified-local untouched. THEORETICAL, noted in the handoff for V12: a stored row with a non-string outputTail would throw in the excerpt (rows are never re-validated); two same-millisecond runs of one candidate order by random id. Final gate on the final bytes: fresh snapshot (HEAD 917f5a3d), npm test EXIT 0 (200 files, 5593 passed | 16 skipped), tsc EXIT 0, overlay cmp identical. Net size 182+211 = 393 (<= 400). Handoff memory task-task-6be626cfe5744ee29deeb2bb1b59468e-handoff and gotcha-net-loc-cap-counts-tests written.",
+      "startedAt": "2026-10-30T07:09:15.759Z",
+      "completedAt": "2026-10-30T07:10:51.719Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Unblocked on the human's explicit, repeated instruction (\"unblock tasks\", then \"unblock\", 2026-10-27). Plan now instead of parking. Use prerequisites' landed code or approved plans where they exist. Otherwise use their task description, DoD and docs/plans/2026-10-24-ai-code-quality-and-context.md. Name every assumed interface in planningNotes. Keep dependsOn, so WORKING waits until the prerequisites are DONE. If a prerequisite's contract must be designed first, split it out (SPIDR, as with R10a) instead of report_blocked. Re-block only if any possible plan would breach a rail.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 243.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:57.787Z",
+  "updatedAt": "2026-10-30T07:33:14.142Z",
+  "dependsOn": [
+    "task-a9d1a74d845b4d3d83f359bf864f8651"
+  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Governor-parked under the human's \"keep governing and unblock board\" instruction (2026-10-26). This is a dependency park, not a defect. CQ-V05 builds on CQ-V04, which architect-4c57a52b blocked at 08:36Z as not plannable: V04's check runner (R11) and trusted-pass channel (V03) do not exist yet. Five architect sessions today reached the same \"contract inputs don't exist\" verdict on this chain, so this skips the session another claim would cost. It auto-returns to PLANNING when V04 is DONE. To undo: set_task_status PLANNING.",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T17:46:28.144Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T07:32:35.152Z",
+    "wallClockMs": 49567008
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0",
+    "worker-73c29a03",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T17:50:10.510Z",
+  "executionContract": {
+    "intendedBehavior": "A pure module, delivery/repairPolicy.ts.\n- resolveRepairPolicy reads settings.repairPolicy, defaulting to {maxCodeRepairs: 3, maxInfraRetries: 2} and refusing a malformed value with INVALID_INPUT.\n- decideRepair takes the task's plan revisions, its candidates and one required check's runs, and returns exactly one decision:\n  - none (passed, or awaiting evidence on the current candidate);\n  - repair (a code failure within budget, under the same plan);\n  - retry-infra (an infrastructure failure or timeout within its own budget);\n  - escalate, with concise diagnostics and log refs (budget exhausted, unchanged candidate, unchanged failure, or a non-repairable outcome);\n  - replan (an unapproved plan revision).",
+    "acceptanceCriteria": [
+      "The default of 3 code repairs (and 2 infra retries) is configurable through settings.repairPolicy, with exact bounds 0-10 and named INVALID_INPUT refusals.",
+      "A repeated unchanged failure, or an unchanged candidate tree, escalates immediately with diagnostics: the run id, command, outcome, exit code, a bounded excerpt, and at most 5 log refs.",
+      "Each repaired candidate needs its own new evidence; older candidates' runs never count. An unapproved plan revision gives replan, and runs from older revisions are ignored, which gives a fresh budget.",
+      "Infra retries are counted separately and never consume code repairs.",
+      "In a fresh Linux snapshot, `cd packages/moe-daemon && npm test` and `npx tsc --noEmit` both exit 0."
+    ],
+    "invariants": [
+      "Pure: no IO, no StateManager, no module state. Imports only schema types and util/errors.",
+      "Deterministic: code-unit ordering by createdAt and id, independent of input order.",
+      "No existing file changes, so qa_reject reopen caps, delivery policy and legacy behavior are untouched."
+    ],
+    "compatibility": [
+      "Absent settings.repairPolicy gives the defaults; no project.json migration.",
+      "Legacy runs without an outcome classify by exit code, as passedOn's legacy rule does."
+    ],
+    "approvedScope": [
+      "New delivery/repairPolicy.ts (RepairPolicy, DEFAULT_REPAIR_POLICY, resolveRepairPolicy, RepairInput, RepairDiagnostics, RepairDecision, decideRepair) and its test."
+    ],
+    "reuse": [
+      "The settings-resolver pattern is resolveDeliveryPolicy in packages/moe-daemon/src/delivery/policy.ts.",
+      "The CheckOutcome vocabulary is V02's, from packages/moe-daemon/src/types/schema.ts and CHECK_OUTCOMES in packages/moe-daemon/src/state/checkRunStore.ts.",
+      "The QA reopen caps in packages/moe-daemon/src/tools/qaReject.ts are a different budget (QA rejections), not reused."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/types/schema.ts: CheckOutcome = passed | code-failure | infra-failure | timeout | skipped | inconclusive; CheckRun has id, candidateId, command, exitCode, outcome?, outputTail, planRevision? and createdAt?.",
+      "packages/moe-daemon/src/delivery/policy.ts: passedOn treats an absent outcome by the legacy exit-code rule, and resolveDeliveryPolicy throws on an unrecognised setting.",
+      "packages/moe-daemon/src/state/candidateStore.ts: listCandidatesForTask's last element is the task's current candidate."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test",
+      "cd packages/moe-daemon && npx tsc --noEmit"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Reuse QA's reopen caps (task.maxReopens, MAX_REOPENS_DEFAULT 3 in qaReject.ts). Rejected: those count QA rejections and flip to PLANNING. V05 needs check-driven repair under the SAME plan, with a SEPARATE infra budget and escalation on an unchanged failure.\n2. Wire the decision now into a flow: qa_reject, get_context, or V04's not-yet-designed dispatch loop. Rejected: V04 is unplanned, and the description puts 'later activation' out of scope. The epic-final V12 (Delivery integration and hardening) owns wiring and the docs sweep.\n3. CHOSEN: a pure decision module (resolveRepairPolicy + decideRepair) over candidates and the runs the caller selects. It is fully testable now, and V04/V12 decide which runs count (authenticated only, for strict tasks).",
+    "codebaseInsights": "- CQ doc (docs/plans/2026-10-24-ai-code-quality-and-context.md), table 'Refresh, repair, or replan': repair within approved scope; retry infrastructure within a separate bounded budget; stop and escalate when the same failure repeats without new evidence; at most three local repairs by default.\n- V02's CheckOutcome vocabulary: passed, code-failure, infra-failure, timeout, skipped, inconclusive. passedOn's legacy rule: an absent outcome means exit-code semantics.\n- listCandidatesForTask returns candidates in an order whose last element is the current one.\n- resolveDeliveryPolicy in delivery/policy.ts is the fail-closed settings-resolver precedent.\n- No schema change is needed: settings are read structurally, as policy.ts requiredCheckCommand does.\n\nASSUMED interfaces: V04's consumer will pass the CheckRuns of one required check, which for strict tasks are runs passing V03b's isAuthenticatedCheckRun. It will also pass the task's candidates and its plan revisions.",
+    "risks": "- Budget semantics: N failing candidates mean N-1 repairs, so the default allows 3 repairs, and the 4th failing candidate escalates.\n- The unchanged-failure test is exact equality of exitCode, outcome and outputTail. Timestamps in a log make it fall through to the budget, which is the conservative direction.\n- docs/CONFIGURATION.md is held for V12's sweep because bdf6db6f currently edits it.\n- WORKING waits for V04 DONE.\n- Keep the module under about 200 lines.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/state/checkRunStore.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "docs/plans/2026-10-24-ai-code-quality-and-context.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T17:50:10.599Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:59:52.606Z",
+  "reviewStartedAt": "2026-10-30T07:11:07.880Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "[fresh Linux snapshot of HEAD 917f5a3d, only repairPolicy.ts + repairPolicy.test.ts overlaid and cmp-identical to the worktree; npm ci, env -i, node v24.21.0]\n ✓ src/delivery/repairPolicy.test.ts (43 tests) 11ms\n Test Files  200 passed (200)\n      Tests  5593 passed | 16 skipped (5609)\n   Start at  09:09:47\n   Duration  33.57s (tests 92%, transform 4%, import 4%)\nNPM_TEST_EXIT=0; `npx tsc --noEmit` TSC_EXIT=0",
+    "reportedAt": "2026-10-30T07:11:07.880Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/repairPolicy.test.ts",
+    "packages/moe-daemon/src/delivery/repairPolicy.ts",
+    ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+    ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
+    ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+    ".moe/tasks/task-6be626cfe5744ee29deeb2bb1b59468e.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+    ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+    ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+    ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json"
+  ],
+  "completionSummary": "CQ-V05 bounded repair policy: a pure module, two NEW files, no existing file changed (393 net LOC: 182 runtime + 211 tests).\n- delivery/repairPolicy.ts exports RepairPolicy, DEFAULT_REPAIR_POLICY (frozen 3 code repairs / 2 infra retries), resolveRepairPolicy, RepairRun, RepairInput, RepairDiagnostics, EscalationReason, RepairDecision and decideRepair. It imports only schema types and util/errors.\n- resolveRepairPolicy reads settings.repairPolicy; absent/null gives the defaults. It fails closed: non-object, array, unknown key, or anything but an integer 0-10 is INVALID_INPUT naming settings.repairPolicy[.key].\n- decideRepair returns none (passed | awaiting-evidence), repair, retry-infra, escalate (code/infra budget exhausted, unchanged-candidate, unchanged-failure, non-repairable-outcome) or replan.\n  - N failing candidates have spent N-1 repairs.\n  - Infra retries are counted separately, on the current candidate only.\n  - Only runs on the current candidate count, and runs of another plan revision are ignored, which gives a fresh budget.\n  - An unapproved plan revision gives replan.\n  - Diagnostics: run id, candidate, command, outcome, exit code, excerpt (last 20 lines, <= 2000 chars) and <= 5 newest non-passing log refs.\n  - Legacy runs without an outcome use the exit-code rule. An outcome that disagrees with its exit code, or is unrecognised, is non-repairable and fails closed.\n  - Deterministic: code-unit order by createdAt then id, with duplicate ids collapsed in linear time.\n- Evidence: 43 tests. 25 mutants (the 6 planned plus 19 more) were all killed. A fresh Linux snapshot gate ran `npm test` and `npx tsc --noEmit`, both exit 0, with the overlay cmp-identical to the worktree.\n- Deviations and notes:\n  - The first draft was 599 net LOC, over QA's 400 reject default with no waiver, so I compacted it; the mutants were re-run afterwards.\n  - Activation is not wired: V04 left no repair seam, so it is CQ-V12's job.\n  - settings.repairPolicy is undocumented and not i",
+  "commits": [
+    {
+      "sha": "ddff93bad6c9f3fa8bef06716be21475e665874f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T06:59:15Z",
+      "paths": [
+        ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+        ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
+        ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+        ".moe/tasks/task-6be626cfe5744ee29deeb2bb1b59468e.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+        ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts",
+        "packages/moe-daemon/src/delivery/repairPolicy.ts"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T07:11:36.213Z",
+      "treeId": "b78b1bd13aaec27c511eace3147f47b29799dfe6",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "102c9838af2de5a02cbd74fe511a9a622730a3e1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T07:30:33Z",
+      "paths": [
+        ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+        ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+        ".moe/tasks/task-6be626cfe5744ee29deeb2bb1b59468e.json",
+        ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T07:33:14.142Z",
+      "treeId": "622feff6a9e1fd28cd4f316c1ac6357b3fd50dcf",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/repairPolicy.test.ts",
+    "packages/moe-daemon/src/delivery/repairPolicy.ts"
+  ],
+  "unattributedPaths": [
+    "moe-jetbrains/.kotlin/sessions/kotlin-compiler-15892967191596996317.salive"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T07:30:33Z",
+    "at": "2026-10-30T07:33:14.142Z"
+  },
+  "completedAt": "2026-10-30T07:32:35.152Z",
+  "reviewCompletedAt": "2026-10-30T07:32:35.152Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit ddff93ba (on moe/work-2026-10-24; sources byte-identical at HEAD f0e2833f and in worktree). Two NEW files: repairPolicy.ts +182, repairPolicy.test.ts +211 = 393 net non-board LOC (<=400). No existing file changed.\n\nRe-ran in a fresh Linux snapshot (git archive HEAD, lock equal modulo CR, npm ci, env -i, node v24.21.0): `cd packages/moe-daemon && npm test` EXIT 0 (201 files, 5646 passed | 16 skipped; repairPolicy.test.ts 43 tests); `npx tsc --noEmit` EXIT 0; test file also typechecks (scratch tsconfig, exit 0).\n\nDoD: (1) defaults 3 repairs / 2 infra retries, configurable via settings.repairPolicy, bounds 0-10, INVALID_INPUT naming the field. (2) Unchanged tree or unchanged failure escalates at once with diagnostics: run id, candidate, command, outcome, exit code, excerpt (<=20 lines, <=2000 chars), <=5 log refs. (3) Only current-candidate runs count; other-planRevision runs ignored (fresh budget); unapproved revision gives replan; infra budget separate. (4) Verification reproduced.\n\nAdversarial read: pure, deterministic, no input mutation, duplicate ids collapsed in linear time, fail-closed on outcome/exit mismatch, legacy exit-code rule kept, no forbidden tokens. My own mutants (budget >= to >, skip unchanged-candidate, ignore planRevision, infra across candidates, logRefs 5 to 6) were each killed by real test failures; source restored and cmp-identical.\n\nNotes for CQ-V12, not blockers: activation unwired (V04 left no seam); settings.repairPolicy not yet in ProjectSettings/CONFIGURATION.md; a non-string stored outputTail would throw in the excerpt, so guard malformed rows. Wrapper landed the commit; no self-landing.",
+  "requiredCheckAtDone": null
+}

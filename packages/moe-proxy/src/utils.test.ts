@@ -17,6 +17,7 @@ import {
   exposeToolName,
   rewriteToolsListResult,
   resolveToolCallName,
+  stampExecutionIdentity,
   type DaemonInfo,
 } from './utils.js';
 
@@ -77,6 +78,89 @@ describe('utils', () => {
       });
     });
 
+    describe('size cap (64 KiB)', () => {
+      const OVERSIZE = {
+        info: null,
+        retryable: false,
+        error: 'daemon.json is larger than 64 KiB',
+      };
+
+      /** Valid daemon.json padded with trailing spaces to exactly `bytes`. */
+      function writePadded(bytes: number): string {
+        const moePath = path.join(testDir, '.moe');
+        fs.mkdirSync(moePath, { recursive: true });
+        const info: DaemonInfo = {
+          port: 3000,
+          pid: 12345,
+          startedAt: '2024-01-01T00:00:00Z',
+          projectPath: testDir,
+        };
+        const body = JSON.stringify(info);
+        const file = path.join(moePath, 'daemon.json');
+        fs.writeFileSync(file, body + ' '.repeat(bytes - Buffer.byteLength(body)));
+        expect(fs.statSync(file).size).toBe(bytes);
+        return file;
+      }
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it('parses a valid 65536-byte daemon.json', () => {
+        writePadded(65536);
+        expect(readDaemonInfo(testDir)).toEqual({
+          port: 3000,
+          pid: 12345,
+          startedAt: '2024-01-01T00:00:00Z',
+          projectPath: testDir,
+        });
+      });
+
+      it('refuses a 65537-byte daemon.json as non-retryable', () => {
+        writePadded(65537);
+        expect(readDaemonInfoResult(testDir)).toEqual(OVERSIZE);
+        expect(readDaemonInfo(testDir)).toBeNull();
+      });
+
+      it('never takes more than 65537 bytes from an 8 MiB file and closes the descriptor once', () => {
+        const file = writePadded(8 * 1024 * 1024);
+        const readFileSpy = vi.spyOn(fs, 'readFileSync');
+        const openSpy = vi.spyOn(fs, 'openSync');
+        const readSpy = vi.spyOn(fs, 'readSync');
+        const closeSpy = vi.spyOn(fs, 'closeSync');
+
+        expect(readDaemonInfoResult(testDir)).toEqual(OVERSIZE);
+
+        expect(readFileSpy.mock.calls.some((c) => String(c[0]) === file)).toBe(false);
+        const opened = openSpy.mock.calls.findIndex((c) => String(c[0]) === file);
+        expect(opened).toBeGreaterThanOrEqual(0);
+        expect(openSpy.mock.calls.filter((c) => String(c[0]) === file)).toHaveLength(1);
+        const fd = openSpy.mock.results[opened].value as number;
+        const total = readSpy.mock.calls.reduce((sum, call, i) => (
+          call[0] === fd ? sum + (readSpy.mock.results[i].value as number) : sum
+        ), 0);
+        expect(total).toBe(65537);
+        expect(closeSpy.mock.calls.filter((c) => c[0] === fd)).toHaveLength(1);
+      });
+
+      it('closes the descriptor and reports invalid details when the read throws', () => {
+        writePadded(200);
+        const openSpy = vi.spyOn(fs, 'openSync');
+        const closeSpy = vi.spyOn(fs, 'closeSync');
+        vi.spyOn(fs, 'readSync').mockImplementation(() => {
+          throw Object.assign(new Error('boom'), { code: 'EIO' });
+        });
+
+        expect(readDaemonInfoResult(testDir)).toEqual({
+          info: null,
+          retryable: false,
+          error: 'daemon.json contains invalid daemon connection details',
+        });
+        const fd = openSpy.mock.results[openSpy.mock.results.length - 1].value as number;
+        expect(closeSpy.mock.calls.filter((c) => c[0] === fd)).toHaveLength(1);
+      });
+    });
+
     it('returns null for malformed port and pid', () => {
       const moePath = path.join(testDir, '.moe');
       fs.mkdirSync(moePath);
@@ -124,6 +208,31 @@ describe('utils', () => {
   });
 
   describe('comparableProjectPath', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    // Emulates win32 off Windows: flips process.platform and swaps path.resolve for a
+    // win32 stand-in (posix resolve of an absolute /mnt path is already normalized,
+    // so flipping the platform alone would not tell resolve from posix.normalize).
+    function onWin32<T>(fn: () => T): T {
+      if (process.platform === 'win32') {
+        return fn();
+      }
+      const saved = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      const resolveSpy = vi.spyOn(path, 'resolve')
+        .mockImplementation((...parts: string[]) => path.win32.resolve('C:\\work', ...parts));
+      try {
+        return fn();
+      } finally {
+        resolveSpy.mockRestore();
+        if (saved) {
+          Object.defineProperty(process, 'platform', saved);
+        }
+      }
+    }
+
     it('maps Windows and WSL forms of the same directory to one canonical form', () => {
       expect(comparableProjectPath('D:\\projexts\\px4swarm')).toBe('d:/projexts/px4swarm');
       expect(comparableProjectPath('D:/projexts/px4swarm')).toBe('d:/projexts/px4swarm');
@@ -151,6 +260,72 @@ describe('utils', () => {
         .not.toBe(comparableProjectPath('D:\\projexts\\other'));
       expect(comparableProjectPath('/mnt/c/projexts/px4swarm'))
         .not.toBe(comparableProjectPath('D:\\projexts\\px4swarm'));
+    });
+
+    it.skipIf(process.platform === 'win32')(
+      'maps /mnt/<d> after resolving relative and non-normalized paths',
+      () => {
+        vi.spyOn(process, 'cwd').mockReturnValue('/mnt/d/x');
+        const same = ['.', '/mnt/d/x/.', '/mnt/d/x/sub/..', '/mnt/d//x', 'sub/..', '/mnt/d/x/./', '/mnt/d/x', 'D:\\x'];
+        expect(same.map((p) => [p, comparableProjectPath(p)])).toEqual(same.map((p) => [p, 'd:/x']));
+        expect(['sub', '..'].map((p) => [p, comparableProjectPath(p)]))
+          .toEqual([['sub', 'd:/x/sub'], ['..', 'd:']]);
+      },
+    );
+
+    it('on win32 posix-normalizes a raw /mnt/<d> path before mapping it', () => {
+      const rows = ['/mnt/d/x/sub/..', '/mnt/d/x/./', '/mnt/d//x', 'D:\\x'];
+      expect(onWin32(() => rows.map((p) => [p, comparableProjectPath(p)])))
+        .toEqual(rows.map((p) => [p, 'd:/x']));
+      expect(onWin32(() => comparableProjectPath('/mnt/d/x/sub/../..'))).toBe('d:');
+    });
+
+    // The cross-platform contract: every absolute row gets the same key on every OS.
+    const CONTRACT: Array<[string, string]> = [
+      ['D:\\proj', 'd:/proj'], ['d:/Proj/', 'd:/proj'], ['D:\\', 'd:'], ['D:/../proj', 'd:/proj'],
+      ['/mnt/d/proj', 'd:/proj'], ['/mnt/D/Proj/', 'd:/proj'], ['/mnt/d', 'd:'],
+      ['/mnt/dd/x', '/mnt/dd/x'], ['/MNT/d/x', '/MNT/d/x'],
+      ['/home/qa/OtherProject', '/home/qa/OtherProject'], ['/home/qa/otherproject', '/home/qa/otherproject'],
+      ['/home//u/./x/../p/', '/home/u/p'], ['///x', '/x'],
+      ['\\\\srv\\share\\proj', '//srv/share/proj'], ['//SRV/SHARE/PROJ/', '//srv/share/proj'],
+      ['//srv/share/../../b', '//srv/share/b'],
+      ['\\\\wsl.localhost\\Ubuntu\\home\\u\\proj', '/home/u/proj'], ['//wsl$/Ubuntu/home/u/proj', '/home/u/proj'],
+      ['//WSL$/Ubuntu/mnt/d/proj', 'd:/proj'], ['//wsl$/Ubuntu', '/'],
+      // toLowerCase folds the Kelvin sign to k, like Kotlin lowercase() and python lower().
+      ['D:/qa/\u212a', 'd:/qa/k'],
+    ];
+
+    it('gives every contract row its key natively and under win32', () => {
+      expect(CONTRACT.map(([p]) => [p, comparableProjectPath(p)])).toEqual(CONTRACT);
+      expect(onWin32(() => CONTRACT.map(([p]) => [p, comparableProjectPath(p)]))).toEqual(CONTRACT);
+    });
+
+    it('on win32 adds no cwd drive to a POSIX path', () => {
+      expect(onWin32(() => [comparableProjectPath('/home/u/p'), comparableProjectPath('C:\\home\\u\\p')]))
+        .toEqual(['/home/u/p', 'c:/home/u/p']);
+    });
+
+    it('reads the drive letter and the /mnt mount as ASCII only', () => {
+      expect(comparableProjectPath('\u212a:/x')).not.toBe('k:/x');
+      expect(onWin32(() => comparableProjectPath('\u212a:/x'))).not.toBe('k:/x');
+      expect([comparableProjectPath('/mnt/\u212a/x'), onWin32(() => comparableProjectPath('/mnt/\u212a/x'))])
+        .toEqual(['/mnt/\u212a/x', '/mnt/\u212a/x']);
+    });
+
+    it('discovery keeps POSIX case and folds drive case', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-proxy-case-'));
+      try {
+        const info: DaemonInfo = { port: 3000, pid: 12345, startedAt: 'x', projectPath: dir.toUpperCase() };
+        fs.mkdirSync(path.join(dir, '.moe'));
+        fs.writeFileSync(path.join(dir, '.moe', 'daemon.json'), JSON.stringify(info));
+        const posix = dir.startsWith('/');
+        const expected = posix ? { info: null, retryable: false, error: 'daemon.json belongs to a different project' }
+          : { info, retryable: false };
+        expect(readDaemonInfoResult(dir)).toEqual(expected);
+        if (posix) expect(onWin32(() => readDaemonInfoResult(dir))).toEqual(expected);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -186,7 +361,28 @@ describe('utils', () => {
 
     it('returns MOE_PROJECT_PATH if set', () => {
       process.env.MOE_PROJECT_PATH = '/custom/path';
-      expect(getProjectPath()).toBe('/custom/path');
+      expect(getProjectPath()).toBe(path.resolve('/custom/path'));
+    });
+
+    it('resolves a native alias of its own project, so discovery finds its daemon', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-proxy-alias-'));
+      const cwd = process.cwd();
+      try {
+        // A drive-less Windows alias resolves against the cwd's drive.
+        process.chdir(path.dirname(dir));
+        const alias = process.platform === 'win32' ? dir.slice(2).replace(/\\/g, '/') : `/${dir}`;
+        expect([path.relative(dir, path.resolve(alias)), comparableProjectPath(alias) === comparableProjectPath(dir)])
+          .toEqual(['', false]);
+        const info: DaemonInfo = { port: 9876, pid: 1234, startedAt: '2026-10-30T00:00:00.000Z', projectPath: dir };
+        fs.mkdirSync(path.join(dir, '.moe'));
+        fs.writeFileSync(path.join(dir, '.moe', 'daemon.json'), JSON.stringify(info));
+        process.env.MOE_PROJECT_PATH = alias;
+
+        expect([getProjectPath(), readDaemonInfoResult(getProjectPath())]).toEqual([dir, { info, retryable: false }]);
+      } finally {
+        process.chdir(cwd);
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('returns cwd if MOE_PROJECT_PATH not set', () => {
@@ -581,5 +777,274 @@ describe('injectRunnerIdentity', () => {
     expect(injectRunnerIdentity({ method: 'tools/call', params: { name: 'moe.claim_next_task' } }, STARTED, HOST)).toBe(false);
     expect(injectRunnerIdentity({ method: 'tools/call', params: { name: 'moe.claim_next_task', arguments: [1] } }, STARTED, HOST)).toBe(false);
     expect(injectRunnerIdentity({ method: 'tools/call', params: { name: 7, arguments: {} } }, STARTED, HOST)).toBe(false);
+  });
+});
+
+describe('stampExecutionIdentity', () => {
+  const SESSION = 'worker-t@2026-10-26T00:00:00Z';
+  const FULL = { MOE_SESSION_ID: SESSION, MOE_ATTEMPT_ID: 'attempt-0123', MOE_ATTEMPT_GENERATION: '7' };
+  const IDENTITY = { attemptId: 'attempt-0123', generation: 7, sessionId: SESSION };
+  const MARK = 'Qz7Marker';
+  const call = (name: string, args: unknown = { taskId: 't1', stepId: 's1' }) =>
+    ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+  const refusal = (code: number, codeName: string) => expect.objectContaining({ code, codeName });
+  const messageOf = (result: unknown) => String((result as { message?: unknown }).message);
+
+  it('is the legacy proxy when the session carries no identity, even for presented fields', () => {
+    for (const env of [{}, { MOE_SESSION_ID: '', MOE_ATTEMPT_ID: '  ', MOE_ATTEMPT_GENERATION: '' }]) {
+      for (const args of [{ taskId: 't1' }, { taskId: 't1', attemptId: 'x' }, { taskId: 't1', generation: '7' }]) {
+        for (const name of ['moe.get_context', 'moe.start_step']) {
+          const msg = call(name, { ...args });
+          expect(stampExecutionIdentity(msg, env)).toBe(false);
+          expect(msg.params.arguments).toEqual(args);
+        }
+      }
+    }
+  });
+
+  it('stamps only sessionId from a session-only env', () => {
+    for (const name of ['moe.get_context', 'moe.start_step']) {
+      const msg = call(name, { taskId: 't1' });
+      expect(stampExecutionIdentity(msg, { MOE_SESSION_ID: SESSION })).toBe(true);
+      expect(msg.params.arguments).toEqual({ taskId: 't1', sessionId: SESSION });
+    }
+  });
+
+  it('stamps all three onto start_step, with generation a number, and only sessionId onto get_context', () => {
+    const step = call('moe.start_step');
+    expect(stampExecutionIdentity(step, FULL)).toBe(true);
+    expect(step.params.arguments).toEqual({ taskId: 't1', stepId: 's1', ...IDENTITY });
+    const ctx = call('moe.get_context', { taskId: 't1' });
+    expect(stampExecutionIdentity(ctx, FULL)).toBe(true);
+    expect(ctx.params.arguments).toEqual({ taskId: 't1', sessionId: SESSION });
+  });
+
+  it('accepts presented values equal to the env and completes the rest', () => {
+    for (const presented of [IDENTITY, { attemptId: 'attempt-0123' }, { generation: 7 }, { sessionId: SESSION }]) {
+      const msg = call('moe.start_step', { taskId: 't1', stepId: 's1', ...presented });
+      expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+      expect(msg.params.arguments).toEqual({ taskId: 't1', stepId: 's1', ...IDENTITY });
+    }
+  });
+
+  it('refuses a substituted field without coercing or mutating', () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['moe.start_step', { attemptId: 'attempt-other' }], ['moe.start_step', { attemptId: null }],
+      ['moe.start_step', { generation: '7' }], ['moe.start_step', { generation: 8 }], ['moe.start_step', { generation: null }],
+      ['moe.start_step', { sessionId: `${SESSION} ` }], ['moe.get_context', { sessionId: 'worker-t@other' }],
+    ];
+    for (const [name, presented] of cases) {
+      const msg = call(name, { taskId: 't1', ...presented });
+      const result = stampExecutionIdentity(msg, FULL);
+      expect(result).toEqual(refusal(-32003, 'EXECUTION_IDENTITY_SUBSTITUTED'));
+      expect(msg.params.arguments).toEqual({ taskId: 't1', ...presented });
+      expect(messageOf(result)).not.toContain('attempt-');
+    }
+  });
+
+  it('refuses start_step on a partial attempt env, while get_context still gets sessionId', () => {
+    for (const env of [{ MOE_SESSION_ID: SESSION, MOE_ATTEMPT_ID: 'attempt-0123' }, { MOE_SESSION_ID: SESSION, MOE_ATTEMPT_GENERATION: '7', MOE_ATTEMPT_ID: ' ' }]) {
+      const step = call('moe.start_step');
+      expect(stampExecutionIdentity(step, env)).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+      expect(step.params.arguments).toEqual({ taskId: 't1', stepId: 's1' });
+      const ctx = call('moe.get_context', { taskId: 't1' });
+      expect(stampExecutionIdentity(ctx, env)).toBe(true);
+      expect(ctx.params.arguments).toEqual({ taskId: 't1', sessionId: SESSION });
+    }
+  });
+
+  it('refuses a malformed env value, adding nothing and echoing nothing', () => {
+    const cases: Array<[string, Record<string, string>, string]> = [
+      ...['0', '07', '+7', '7.0', '1e3', ' 7', '7 ', '7\n', '-1', 'abc', '9007199254740992']
+        .map((g): [string, Record<string, string>, string] => ['moe.start_step', { ...FULL, MOE_ATTEMPT_GENERATION: g }, g]),
+      ...[`a b${MARK}`, `a/b${MARK}`, `\u00e9${MARK}`, MARK + 'a'.repeat(129 - MARK.length)]
+        .map((a): [string, Record<string, string>, string] => ['moe.start_step', { ...FULL, MOE_ATTEMPT_ID: a }, a]),
+      ...[MARK + 'x'.repeat(256 - MARK.length), `${MARK}\nx`, `${MARK}\rx`, `${MARK}\u0000x`]
+        .flatMap((s): Array<[string, Record<string, string>, string]> =>
+          ['moe.start_step', 'moe.get_context'].map((name): [string, Record<string, string>, string] => [name, { ...FULL, MOE_SESSION_ID: s }, s])),
+    ];
+    for (const [name, env, bad] of cases) {
+      const msg = call(name, { taskId: 't1' });
+      const result = stampExecutionIdentity(msg, env);
+      expect(result).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+      expect(msg.params.arguments).toEqual({ taskId: 't1' });
+      expect(messageOf(result)).not.toContain(bad.trim());
+      expect(messageOf(result)).not.toContain(MARK);
+    }
+  });
+
+  it('accepts the boundary values', () => {
+    const env = { MOE_SESSION_ID: 's'.repeat(255), MOE_ATTEMPT_ID: 'a'.repeat(128), MOE_ATTEMPT_GENERATION: '9007199254740991' };
+    const msg = call('moe.start_step', {});
+    expect(stampExecutionIdentity(msg, env)).toBe(true);
+    expect(msg.params.arguments).toEqual({ attemptId: 'a'.repeat(128), generation: 9007199254740991, sessionId: 's'.repeat(255) });
+  });
+
+  it('fails closed when an argument cannot be read', () => {
+    const args = { taskId: 't1' };
+    Object.defineProperty(args, 'attemptId', { enumerable: true, get() { throw new Error('boom'); } });
+    expect(stampExecutionIdentity(call('moe.start_step', args), FULL)).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+  });
+
+  it('matches every spelling of the carried tools and nothing else', () => {
+    const aliased = call('moe_start_step');
+    expect(resolveToolCallName(aliased, new Map())).toBe(true);
+    for (const msg of [call('moe_start_step'), call('start_step'), aliased]) {
+      expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+      expect(msg.params.arguments).toEqual({ taskId: 't1', stepId: 's1', ...IDENTITY });
+    }
+    for (const name of ['moe.claim_next_task', 'moe.heartbeat', 'moe.complete_steps', 'moe.complete', 'moe.add_comment',
+      'moe.submit_plan', 'moe.report_blocked', 'moe.get_activity_log', 'moe.reattach_attempt', 'constructor', 'toString',
+      'hasOwnProperty']) {
+      const msg = call(name);
+      expect(stampExecutionIdentity(msg, FULL)).toBe(false);
+      expect(msg.params.arguments).toEqual({ taskId: 't1', stepId: 's1' });
+    }
+    const odd: unknown[] = [null, 42, 'x', { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+      { method: 'tools/call', params: null }, { method: 'tools/call', params: { name: 7, arguments: {} } },
+      call('moe.start_step', null), call('moe.start_step', []), { method: 'tools/call', params: { name: 'moe.start_step' } }];
+    for (const shape of odd) {
+      const before = JSON.stringify(shape);
+      expect(stampExecutionIdentity(shape, FULL)).toBe(false);
+      expect(JSON.stringify(shape)).toBe(before);
+    }
+  });
+
+  // CQ-F12a: the completion tools carry the same attempt + session groups as start_step.
+  describe.each([
+    ['complete_step', { taskId: 't1', stepId: 's1' }],
+    ['complete_task', { taskId: 't1' }],
+  ])('%s', (tool, base) => {
+    const msgFor = (name: string, extra: Record<string, unknown> = {}) => call(name, { ...base, ...extra });
+
+    it('stamps the full identity under every spelling, with generation a number', () => {
+      const aliased = msgFor(`moe_${tool}`);
+      expect(resolveToolCallName(aliased, new Map())).toBe(true);
+      for (const msg of [msgFor(`moe.${tool}`), msgFor(`moe_${tool}`), msgFor(tool), aliased]) {
+        expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+        expect(msg.params.arguments).toEqual({ ...base, ...IDENTITY });
+        expect(typeof (msg.params.arguments as { generation: unknown }).generation).toBe('number');
+      }
+    });
+
+    it('stamps only sessionId from a session-only env', () => {
+      const msg = msgFor(`moe.${tool}`);
+      expect(stampExecutionIdentity(msg, { MOE_SESSION_ID: SESSION })).toBe(true);
+      expect(msg.params.arguments).toEqual({ ...base, sessionId: SESSION });
+    });
+
+    it('is the legacy passthrough when the session carries no identity, even for presented fields', () => {
+      for (const env of [{}, { MOE_SESSION_ID: '', MOE_ATTEMPT_ID: '  ', MOE_ATTEMPT_GENERATION: '' }]) {
+        for (const extra of [{}, { attemptId: 'x' }, { generation: '7' }]) {
+          const msg = msgFor(`moe.${tool}`, extra);
+          expect(stampExecutionIdentity(msg, env)).toBe(false);
+          expect(msg.params.arguments).toEqual({ ...base, ...extra });
+        }
+      }
+    });
+
+    it('accepts presented values equal to the env and completes the rest', () => {
+      for (const presented of [IDENTITY, { attemptId: 'attempt-0123' }, { generation: 7 }, { sessionId: SESSION }]) {
+        const msg = msgFor(`moe.${tool}`, presented);
+        expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+        expect(msg.params.arguments).toEqual({ ...base, ...IDENTITY });
+      }
+    });
+
+    it('refuses a substituted field under every spelling without coercing, mutating or echoing', () => {
+      const cases: Array<Record<string, unknown>> = [
+        { attemptId: 'attempt-other' }, { attemptId: null }, { generation: '7' }, { generation: 8 },
+        { generation: null }, { sessionId: `${SESSION} ` },
+      ];
+      for (const presented of cases) {
+        for (const name of [`moe.${tool}`, `moe_${tool}`, tool]) {
+          const msg = msgFor(name, presented);
+          const result = stampExecutionIdentity(msg, FULL);
+          expect(result).toEqual(refusal(-32003, 'EXECUTION_IDENTITY_SUBSTITUTED'));
+          expect(msg.params.arguments).toEqual({ ...base, ...presented });
+          expect(messageOf(result)).not.toContain('attempt-');
+        }
+      }
+    });
+
+    it('refuses a partial attempt env without mutating', () => {
+      for (const env of [{ MOE_SESSION_ID: SESSION, MOE_ATTEMPT_ID: 'attempt-0123' },
+        { MOE_SESSION_ID: SESSION, MOE_ATTEMPT_GENERATION: '7', MOE_ATTEMPT_ID: ' ' }]) {
+        const msg = msgFor(`moe.${tool}`);
+        expect(stampExecutionIdentity(msg, env)).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+        expect(msg.params.arguments).toEqual(base);
+      }
+    });
+
+    it('refuses a malformed env value, adding nothing and echoing nothing', () => {
+      const cases: Array<[Record<string, string>, string]> = [
+        ...['0', '07', '1e3', '9007199254740992']
+          .map((g): [Record<string, string>, string] => [{ ...FULL, MOE_ATTEMPT_GENERATION: g }, g]),
+        [{ ...FULL, MOE_ATTEMPT_ID: `a b${MARK}` }, `a b${MARK}`],
+        [{ ...FULL, MOE_SESSION_ID: `${MARK}\nx` }, `${MARK}\nx`],
+        [{ ...FULL, MOE_SESSION_ID: MARK + 'x'.repeat(256 - MARK.length) }, MARK + 'x'.repeat(256 - MARK.length)],
+      ];
+      for (const [env, bad] of cases) {
+        const msg = msgFor(`moe.${tool}`);
+        const result = stampExecutionIdentity(msg, env);
+        expect(result).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+        expect(msg.params.arguments).toEqual(base);
+        expect(messageOf(result)).not.toContain(bad.trim());
+        expect(messageOf(result)).not.toContain(MARK);
+      }
+    });
+  });
+
+  // CQ-V06a: QA's own decisions carry the same attempt + session groups as complete_task.
+  describe('QA decision stamping', () => {
+    const base = { taskId: 't1', candidateId: 'cand-1', summary: 's' };
+    const spellings = (tool: string) => [`moe.${tool}`, `moe_${tool}`, tool];
+
+    describe.each(['qa_approve', 'qa_reject'])('%s', (tool) => {
+      it('stamps the full identity under every spelling, with generation a number', () => {
+        for (const name of spellings(tool)) {
+          const msg = call(name, { ...base });
+          expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+          expect(msg.params.arguments).toEqual({ ...base, ...IDENTITY });
+          expect(typeof (msg.params.arguments as { generation: unknown }).generation).toBe('number');
+        }
+      });
+
+      it('accepts presented values equal to the env and completes the rest', () => {
+        for (const presented of [IDENTITY, { attemptId: 'attempt-0123' }, { generation: 7 }, { sessionId: SESSION }]) {
+          const msg = call(`moe.${tool}`, { ...base, ...presented });
+          expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+          expect(msg.params.arguments).toEqual({ ...base, ...IDENTITY });
+        }
+      });
+
+      it('refuses a substituted field under every spelling without mutating', () => {
+        const cases: Array<Record<string, unknown>> = [
+          { attemptId: 'attempt-other' }, { generation: '7' }, { generation: 8 }, { sessionId: 'worker-t@other' },
+        ];
+        for (const presented of cases) {
+          for (const name of spellings(tool)) {
+            const msg = call(name, { ...base, ...presented });
+            expect(stampExecutionIdentity(msg, FULL)).toEqual(refusal(-32003, 'EXECUTION_IDENTITY_SUBSTITUTED'));
+            expect(msg.params.arguments).toEqual({ ...base, ...presented });
+          }
+        }
+      });
+
+      it('refuses a partial attempt env without mutating', () => {
+        const msg = call(`moe.${tool}`, { ...base });
+        const env = { MOE_SESSION_ID: SESSION, MOE_ATTEMPT_ID: 'attempt-0123' };
+        expect(stampExecutionIdentity(msg, env)).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+        expect(msg.params.arguments).toEqual(base);
+      });
+
+      it('is the legacy passthrough with an empty env, even for presented fields', () => {
+        for (const extra of [{}, { attemptId: 'x' }, { generation: '7' }]) {
+          const msg = call(`moe.${tool}`, { ...base, ...extra });
+          expect(stampExecutionIdentity(msg, {})).toBe(false);
+          expect(msg.params.arguments).toEqual({ ...base, ...extra });
+        }
+      });
+    });
   });
 });

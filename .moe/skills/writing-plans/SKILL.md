@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=acf74d861c0b
+# moe-generated: sha=19737a27bdca
 name: writing-plans
 description: Use when you have a spec or requirements for a multi-step task, before touching code
 ---
@@ -8,7 +8,7 @@ description: Use when you have a spec or requirements for a multi-step task, bef
 
 Write plans assuming the engineer has zero context for our codebase. Document everything they need: which files to touch, code blocks per step, exact commands with expected output, what to test.
 
-DRY. YAGNI. TDD. Frequent commits.
+DRY. YAGNI. TDD.
 
 ## Scope check
 
@@ -20,12 +20,7 @@ Before defining tasks, map files: which created, which modified, what each is re
 
 ## Bite-sized tasks
 
-Each step is one action (2-5 minutes):
-- Write the failing test
-- Run it to confirm it fails
-- Write minimal code to pass
-- Run again to confirm it passes
-- Commit
+Each step implements one concern together with the tests for what it changed. Inside the step the worker runs the red → green cycle (see `test-driven-development`); the plan names one verification command for the whole task. The agent wrapper commits — plans never contain `git add`/`git commit`.
 
 ## Plan header (every plan)
 
@@ -46,14 +41,11 @@ Each step is one action (2-5 minutes):
 - Modify: `exact/path/existing.py:123-145`
 - Test: `tests/exact/path/test.py`
 
-- [ ] Step 1: Write the failing test
+- [ ] Step 1: Write the failing test and the minimal implementation that passes it
   ```python
   def test_specific_behavior(): ...
   ```
-- [ ] Step 2: Run test, expect FAIL with "<reason>"
-- [ ] Step 3: Write minimal implementation (code block)
-- [ ] Step 4: Run test, expect PASS
-- [ ] Step 5: Commit (exact `git add` + commit message)
+  Run test before implementing: expect FAIL with "<reason>"; after: expect PASS
 ```
 
 ## No placeholders

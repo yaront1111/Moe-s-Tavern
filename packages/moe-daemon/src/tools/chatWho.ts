@@ -23,6 +23,7 @@ export function chatWhoTool(_state: StateManager): ToolDefinition {
 
       const online: Array<{
         workerId: string;
+        type: string;
         status: string;
         lastActivity: string;
         currentTaskId: string | null;
@@ -40,6 +41,7 @@ export function chatWhoTool(_state: StateManager): ToolDefinition {
             seen.set(worker.id, { source: 'cursor' });
             online.push({
               workerId: worker.id,
+              type: worker.type,
               status: worker.status,
               lastActivity: worker.lastActivityAt,
               currentTaskId: worker.currentTaskId,
@@ -50,6 +52,7 @@ export function chatWhoTool(_state: StateManager): ToolDefinition {
           // No channel filter — return all online workers
           online.push({
             workerId: worker.id,
+            type: worker.type,
             status: worker.status,
             lastActivity: worker.lastActivityAt,
             currentTaskId: worker.currentTaskId,
@@ -79,6 +82,7 @@ export function chatWhoTool(_state: StateManager): ToolDefinition {
               seen.set(workerId, { source: 'waiting' });
               online.push({
                 workerId: worker.id,
+                type: worker.type,
                 status: worker.status,
                 lastActivity: worker.lastActivityAt,
                 currentTaskId: worker.currentTaskId,

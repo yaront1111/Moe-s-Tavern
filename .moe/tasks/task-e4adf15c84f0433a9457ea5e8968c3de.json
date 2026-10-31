@@ -1,0 +1,613 @@
+{
+  "id": "task-e4adf15c84f0433a9457ea5e8968c3de",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M04c] Frozen 20-workload baseline execution",
+  "description": "Objective: run every one of the 20 frozen CQ-M03 workloads once (n=1) through the CQ-M04b driver (task-9cfaacf11e194062bc1ca5f77388ec90), then publish the baseline outcome report built by CQ-M04 (task-0ece1a3552944298af911356f149e150). Use the human-approved configuration from comment-700a6a5111ad4a57a3340a2dac0ab586 on task-0ece1a3552944298af911356f149e150:\n- today's model/effort defaults;\n- one run per workload;\n- a 60-minute wall-clock cap per workload;\n- capped runs are recorded with their partial counters;\n- missing counters stay unknown.\nThis is the execution slice split from CQ-M04 by size.\n\nDeliverable:\n- 20 outcome records, 5 per category, that pass the CQ-M04 validator;\n- their usage receipts, archived (allowlisted fields only; no prompts, tool arguments, secrets or prices);\n- the generated report as JSON plus markdown, committed under one documented results path, e.g. docs/baselines/cq-m04-<date>/.\nThe report must regenerate byte-identically from the archived inputs with the CQ-M04 CLI.\n\nOperational note: this needs a signed-in claude CLI and real paid usage, and can take up to about 20 hours of wall-clock time (20 x 60-minute cap). When promoting this BACKLOG row, a human decides when and where it runs (operator-run, or agent-run in the background with checkpoints).\n\nNOT in scope:\n- changing workloads, rubrics, the driver or report code;\n- reruns beyond n=1 (an infrastructure failure is recorded, never silently retried);\n- new-profile or verified-local runs;\n- any savings, quality-improvement or statistical-significance claim.\n\nVerification: node scripts/analyze-baseline.mjs --records <archived records dir> --project <archived usage dir> --expected <frozen manifest> --json must reproduce the committed report JSON byte-for-byte (exit 0), and node --test scripts/tests/usage-report.test.mjs must exit 0.",
+  "definitionOfDone": [
+    "Exactly 20 outcome records (every frozen workload id, 5 per category, n=1) validate with the CQ-M04 validator; capped/failed runs are present with partial counters, none dropped or silently retried.",
+    "The committed report JSON and markdown regenerate byte-identically from the archived records and receipts via `node scripts/analyze-baseline.mjs ... --json` (exit 0).",
+    "The report states reproducible inputs (corpus version and per-case digests, Moe commit, per-role model/effort, 60-minute cap) and limitations (n=1, unknown counters, platform coverage); acceptance comes only from held-out assessments, never from Moe task status or token metrics.",
+    "Archived records and receipts contain only allowlisted fields (no prompts, tool arguments, secrets or prices), checked by the CQ-M04 validator and the M02 receipt normalizer.",
+    "Fresh `node --test scripts/tests/usage-report.test.mjs` exits 0 with output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Human-gated operational run: real paid usage and up to ~20 hours wall-clock. Do not start without an explicit human go-ahead recorded on this task.",
+    "No reruns beyond n=1; record infrastructure failures, never hide them. Report observed facts only: no savings or significance claims.",
+    "No direct .moe edits in the real project; no Git writes outside wrappers; do not enable verified-local or claim isolation."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Preconditions, environment and batch setup. No paid usage happens in this step.\n\n**1. Gates.** Confirm all of the following.\n- CQ-M04b (task-9cfaacf1…), CQ-M04 (task-0ece1a35…) and CQ-M03 (task-cfa74f1b…) are DONE and landed.\n- The human go-ahead is on this task: comment-539240c5, relayed by the governor. It says agent-run, in board order, in the background with checkpoints.\n- The human configuration is comment-700a6a51 on task-0ece1a35:\n  - today's defaults (no settings.models pins; claude seats on claude-opus-5-5, with plan-routing launch hints applying);\n  - n=1;\n  - a 60-minute cap;\n  - capped runs are kept with their partial counters;\n  - missing counters stay unknown.\n- Read the landed M04b CLI (src/benchmarks/baselineRun.ts and its usage) and the M04 CLI (scripts/analyze-baseline.mjs). Use their landed flags; where they differ from this plan, follow the landed code and say so.\n\n**2. Batch dir.** Create B=/var/tmp/moe-m04c-<YYYYMMDD>. It is durable, outside the repo, and never committed. Keep it until QA approves.\n\n**3. Pinned Moe build.** Archive the commit under test into B/moe:\n```\nC=$(git -C /mnt/d/projexts/moes rev-parse HEAD)\ngit -C /mnt/d/projexts/moes archive \"$C\" packages/moe-daemon packages/moe-proxy docs scripts CLAUDE.md .gitignore package.json | tar -x -C B/moe\n```\nThen link the Linux node_modules into both packages and build both dists with tsc, exactly as the CQ-M04b gate does. The shared checkout's HEAD moves as peers land, and this archive pins it. Record C.\n\n**4. Preflight.** No real workload is consumed, because every run is n=1.\n- `claude --version` works on the Linux-only PATH.\n- The machine's Claude accounts are usable. Check this read-only with `node B/moe/packages/moe-daemon/dist/index.js accounts check`, using the same account list this seat uses (its MOE_ACCOUNTS_FILE, else the default).\n- The landed M04b focused suite passes in B/moe. It uses the fake CLI with no paid calls, so it is the environment smoke test.\n- At least 5 GB is free under /var/tmp.\n\n**5. Manifest.** Generate B/expected.json from the landed M03 corpus via tsx in B/moe: {corpusVersion, workloads: [{id, category, caseDigest: digestWorkload(w)}]} in the corpus order.\n- readExpectedManifest must accept it, with 20 ids, 5 per category.\n- Write the ids, one per line, to B/ids.txt.\n\n**6. B/batch.sh** (bash; documented later in the archive README; not committed).\n- **Single instance and env.**\n  - `flock -n` on B/batch.lock, so only one instance runs.\n  - Unset every MOE_* variable except MOE_ACCOUNTS_FILE and MOE_SERENA_PATH.\n  - Use the Linux-only PATH plus the claude binary's directory.\n- **Loop.** For each id in B/ids.txt, in order:\n  - If a record for that id already exists anywhere under B/runs, skip it. Records are the source of truth, so a workload is never rerun.\n  - If a run root for that id exists WITHOUT a record (a driver crash or reboot), stop the batch with exit 3.\n  - Otherwise run the driver from B/moe/packages/moe-daemon: `npx tsx src/benchmarks/baselineRun.ts --workload <id> --cap-minutes 60 --parent B/runs --moe-commit <C>`. Send its output to B/driver-<id>.log, and log UTC start and end plus /proc/loadavg to B/batch.log.\n- **Exit codes.**\n  - The driver exiting 1 means no run happened: stop with exit 1.\n  - A record whose run.status is failed or aborted: log it and stop with exit 2, for triage.\n  - A completed or capped record: continue.\n\n**7. Start.** Launch the batch detached with `setsid nohup bash B/batch.sh >> B/batch.log 2>&1 &`. Record its pid and C in the step note.\n\n**Error handling:** any failed precondition stops here, before a single paid run, and is reported with moe.report_blocked naming the failed check.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "QA-reopen recovery only; no paid runs repeated. Re-read all comments and QA rejection: run/content accepted, defect is unlanded archive inputs. M03/M04/M04b are DONE+landed in current epicSiblings. Existing B=/var/tmp/moe-m04c-20261024, pinned C=6eb56809b4038945cfc09f95c3b9138f107dc62f; batch log ends normal completion 2026-10-24T21:54:51Z. Retain prior execution, configuration and preflight evidence rather than repeat n=1. Scope will add .gitignore only as explicitly requested by QA. Peer/pre-existing dirty paths untouched; wrapper remains sole Git writer.",
+      "startedAt": "2026-10-24T22:06:57.378Z",
+      "completedAt": "2026-10-24T22:07:20.550Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Preconditions, environment and batch setup. No paid usage happens in this step.\n\n**1. Gates.** Confirm all of the following.\n- CQ-M04b (task-9cfaacf1…), CQ-M04 (task-0ece1a35…) and CQ-M03 (task-cfa74f1b…) are DONE and landed.\n- The human go-ahead is on this task: comment-539240c5, relayed by the governor. It says agent-run, in board order, in the background with checkpoints.\n- The human configuration is comment-700a6a51 on task-0ece1a35:\n  - today's defaults (no settings.models pins; claude seats on claude-opus-5-5, with plan-routing launch hints applying);\n  - n=1;\n  - a 60-minute cap;\n  - capped runs are kept with their partial counters;\n  - missing counters stay unknown.\n- Read the landed M04b CLI (src/benchmarks/baselineRun.ts and its usage) and the M04 CLI (scripts/analyze-baseline.mjs). Use their landed flags; where they differ from this plan, follow the landed code and say so.\n\n**2. Batch dir.** Create B=/var/tmp/moe-m04c-<YYYYMMDD>. It is durable, outside the repo, and never committed. Keep it until QA approves.\n\n**3. Pinned Moe build.** Archive the commit under test into B/moe:\n```\nC=$(git -C /mnt/d/projexts/moes rev-parse HEAD)\ngit -C /mnt/d/projexts/moes archive \"$C\" packages/moe-daemon packages/moe-proxy docs scripts CLAUDE.md .gitignore package.json | tar -x -C B/moe\n```\nThen link the Linux node_modules into both packages and build both dists with tsc, exactly as the CQ-M04b gate does. The shared checkout's HEAD moves as peers land, and this archive pins it. Record C.\n\n**4. Preflight.** No real workload is consumed, because every run is n=1.\n- `claude --version` works on the Linux-only PATH.\n- The human explicitly selected the shared rotating account pool (comment-a3a791e7; timestamp corrected by comment-f057895e). Export `MOE_ACCOUNTS_FILE=/mnt/c/Users/Yaron/.moe/claude-accounts.json` for this preflight. Read that registry without changing it and require at least one listed account. For listed accounts, run only `claude auth status --json` under that account's config directory, with token/provider override variables removed as the wrapper does; require exit 0 under at least one account. Reuse the pinned build's read-only `readRegistry`/`accountConfigDir` and `accountEnv`/`runClaude` helpers if convenient; inspect only exit status and authMethod, and discard stdout/stderr without printing or archiving authentication data. Never run `accounts check` (it calls recordSignIn), login/logout, or any registry-writing helper in this probe. Missing/empty/invalid registry, a missing CLI, or no successful account probe fails this precondition before paid usage; preserve the live registry and do not inspect account-directory contents.\n- The landed M04b focused suite passes in B/moe. It uses the fake CLI with no paid calls, so it is the environment smoke test.\n- At least 5 GB is free under /var/tmp.\n\n**5. Manifest.** Generate B/expected.json from the landed M03 corpus via tsx in B/moe: {corpusVersion, workloads: [{id, category, caseDigest: digestWorkload(w)}]} in the corpus order.\n- readExpectedManifest must accept it, with 20 ids, 5 per category.\n- Write the ids, one per line, to B/ids.txt.\n\n**6. B/batch.sh** (bash; documented later in the archive README; not committed).\n- **Single instance and env.**\n  - `flock -n` on B/batch.lock, so only one instance runs.\n  - Unset every MOE_* variable except MOE_ACCOUNTS_FILE and MOE_SERENA_PATH.\n  - Explicitly export `MOE_ACCOUNTS_FILE=/mnt/c/Users/Yaron/.moe/claude-accounts.json` here too; do not rely on an inherited value or the default HOME, because the driver uses a run-local HOME. This is the human-approved shared pool; quota contention with live seats is accepted.\n  - Use the Linux-only PATH plus the claude binary's directory.\n- **Loop.** For each id in B/ids.txt, in order:\n  - If a record for that id already exists anywhere under B/runs, skip it. Records are the source of truth, so a workload is never rerun.\n  - If a run root for that id exists WITHOUT a record (a driver crash or reboot), stop the batch with exit 3.\n  - Otherwise run the driver from B/moe/packages/moe-daemon: `npx tsx src/benchmarks/baselineRun.ts --workload <id> --cap-minutes 60 --parent B/runs --moe-commit <C>`. Send its output to B/driver-<id>.log, and log UTC start and end plus /proc/loadavg to B/batch.log.\n- **Exit codes.**\n  - The driver exiting 1 means no run happened: stop with exit 1.\n  - A record whose run.status is failed or aborted: log it and stop with exit 2, for triage.\n  - A completed or capped record: continue.\n\n**7. Start.** Launch the batch detached with `setsid nohup bash B/batch.sh >> B/batch.log 2>&1 &`. Record its pid and C in the step note.\n\n**Error handling:** any failed precondition stops here, before a single paid run, and is reported with moe.report_blocked naming the failed check.",
+          "reason": "Human-approved shared rotating pool (comment-a3a791e7, timestamp correction comment-f057895e) resolves the account block. Pin MOE_ACCOUNTS_FILE in preflight and batch.sh; replace registry-writing accounts check with read-only listed-account auth status. All other step instructions remain byte-unchanged.",
+          "amendedBy": "architect-bb003851",
+          "amendedAt": "2026-10-24T17:49:37.769Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Checkpoint 1: wait until the first 5 ids in B/ids.txt have records.\n\n**Waiting**\n- Wait in bounded slices. Each check is one Bash call that sleeps at most 9 minutes, then prints only the record count, the batch pid's liveness and the last B/batch.log line. Never dump logs into context.\n- About every 3 hours without a checkpoint, post a one-line moe.add_comment progress note, so the governor sees the long-running seat is alive.\n- If this session ends, the next session resumes here: the detached batch keeps running and the flock blocks a duplicate.\n\n**Triage when the batch stops before the checkpoint**\n- **exit 2** (a failed or aborted record):\n  - Read that record's failureReason and the bounded tail of its seat logs.\n  - A workload-specific agent failure: leave the record (it is never rerun) and restart the batch.\n  - An infrastructure-wide cause (a signed-out account, the daemon cannot start, the disk is full): stop and call moe.report_blocked with the facts, before more paid runs are burned.\n- **exit 1** (no run happened): fix the environment cause, note it for the README, and restart the batch. This is not a rerun, because nothing ran.\n- **exit 3** (a run root with no record): call moe.report_blocked. The DoD needs 20 records, so a human decides whether that one workload may run once; a silent rerun is forbidden.\n\n**Completion.** Call complete_step with a note listing each of the 5 ids with its run.status and assessment pass/fail/not-run. Report no token or cost conclusions.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "QA-reopen recovery from existing driver outputs, freshly validated against archive; no reruns:\nmaintenance-truncation-helper-reuse: completed; assessment=pass\nmaintenance-branch-policy-message: completed; assessment=pass\nmaintenance-usage-unknown-format: completed; assessment=pass\nmaintenance-affected-file-caller: completed; assessment=pass\nmaintenance-cached-ref-caller: completed; assessment=pass",
+      "startedAt": "2026-10-24T22:07:30.452Z",
+      "completedAt": "2026-10-24T22:08:02.190Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Checkpoint 2: wait until ids 6-10 in B/ids.txt have records.\n\nUse exactly step 2's procedure:\n- bounded at most 9-minute waits with one-line status checks;\n- a progress comment about every 3 hours;\n- the same exit 1, 2 and 3 triage rules, with no rerun of any workload that has a record;\n- moe.report_blocked for infrastructure-wide causes.\n\nCall complete_step with a note listing each of the 5 ids with its run.status and assessment result.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "QA-reopen recovery from existing driver outputs, freshly validated against archive; no reruns:\ndefect-stale-positive-readiness-helper: completed; assessment=pass\ndefect-stale-negative-integer-option: completed; assessment=pass\ndefect-changed-caller-chat-budget: completed; assessment=pass\ndefect-changed-requirements-delivery-policy: completed; assessment=pass\ndefect-recipe-mismatch-platform: completed; assessment=pass",
+      "startedAt": "2026-10-24T22:08:02.271Z",
+      "completedAt": "2026-10-24T22:08:02.353Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Checkpoint 3: wait until ids 11-15 in B/ids.txt have records.\n\nUse exactly step 2's procedure:\n- bounded at most 9-minute waits with one-line status checks;\n- a progress comment about every 3 hours;\n- the same exit 1, 2 and 3 triage rules, with no rerun of any workload that has a record;\n- moe.report_blocked for infrastructure-wide causes.\n\nCall complete_step with a note listing each of the 5 ids with its run.status and assessment result.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "QA-reopen recovery from existing driver outputs, freshly validated against archive; no reruns:\nrefactor-usage-counter-normalization: completed; assessment=pass\nrefactor-chat-budget-consolidation: completed; assessment=pass\nrefactor-shared-path-normalization: completed; assessment=pass\nrefactor-detached-snapshot-returns: completed; assessment=pass\nrefactor-utf8-bounded-tail: completed; assessment=pass",
+      "startedAt": "2026-10-24T22:08:02.431Z",
+      "completedAt": "2026-10-24T22:08:02.512Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Checkpoint 4: wait until ids 16-20 have records and B/batch.log ends with the batch's normal completion.\n\nUse exactly step 2's procedure:\n- bounded at most 9-minute waits with one-line status checks;\n- a progress comment about every 3 hours;\n- the same exit 1, 2 and 3 triage rules, with no rerun of any workload that has a record;\n- moe.report_blocked for infrastructure-wide causes.\n\nThen confirm these checks:\n- Exactly 20 record files exist under B/runs, one per manifest id.\n- Every record passes M04's readBaselineRecord.\n- No daemon, wrapper or claude process from the batch is still alive. Check by the pids and process groups the driver logs; never by name-wide kills that could hit the live fleet.\n\nCall complete_step with the full 20-row status table.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "QA-reopen checkpoint recovery. Fresh validation: exactly 20 unique original driver records, readBaselineRecord accepts each, archive record bytes match originals. Batch log ends 'batch complete'; batch pid 2132274 plus all 20 processes.json daemon/seat pids and their process groups have no /proc survivors. No paid workload restarted. Full status table:\nmaintenance-truncation-helper-reuse: completed; assessment=pass\nmaintenance-branch-policy-message: completed; assessment=pass\nmaintenance-usage-unknown-format: completed; assessment=pass\nmaintenance-affected-file-caller: completed; assessment=pass\nmaintenance-cached-ref-caller: completed; assessment=pass\ndefect-stale-positive-readiness-helper: completed; assessment=pass\ndefect-stale-negative-integer-option: completed; assessment=pass\ndefect-changed-caller-chat-budget: completed; assessment=pass\ndefect-changed-requirements-delivery-policy: completed; assessment=pass\ndefect-recipe-mismatch-platform: completed; assessment=pass\nrefactor-usage-counter-normalization: completed; assessment=pass\nrefactor-chat-budget-consolidation: completed; assessment=pass\nrefactor-shared-path-normalization: completed; assessment=pass\nrefactor-detached-snapshot-returns: completed; assessment=pass\nrefactor-utf8-bounded-tail: completed; assessment=pass\nnon-routine-cached-lookup-fingerprint: completed; assessment=pass\nnon-routine-stale-negative-export-index: completed; assessment=pass\nnon-routine-chat-pagination-remainder: completed; assessment=pass\nnon-routine-monotonic-attempt-generation: completed; assessment=pass\nnon-routine-cross-role-usage-rollup: completed; assessment=pass",
+      "startedAt": "2026-10-24T22:08:02.601Z",
+      "completedAt": "2026-10-24T22:08:02.681Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Archive the inputs, generate the report and add the regression checks. All archive files are new and LF.\n\n**1. Copy into docs/baselines/cq-m04/**\n- **records/<id>.json:** the 20 records, byte-identical to what the driver wrote.\n- **usage/<id>/logs/moe-usage/*.jsonl:** each run's receipts, from <runRoot>/usage/<id>/logs/moe-usage.\n  - Project every row onto the receipt writer's own key set: version, timestamp, provider, the normalizeUsageContext keys, sessionId, eventId, reportedModels, scope, turnIndex, coverage, outcome and usage.\n  - Normally nothing is dropped. Count anything that is, and say so in the README.\n  - Never copy seat logs, wrapper output, prompts or project trees.\n- **expected.json:** B/expected.json.\n\n**2. Report.** Generate with the landed M04 CLI:\n- report.json from `node scripts/analyze-baseline.mjs --records docs/baselines/cq-m04/records --project docs/baselines/cq-m04/usage --expected docs/baselines/cq-m04/expected.json --json > docs/baselines/cq-m04/report.json`;\n- report.md from the same command without --json.\n\n**3. README.md** in that directory. It states:\n- the human configuration (comment ids);\n- the Moe commit C and the corpus version;\n- the UTC run window;\n- the platform: WSL2 Linux, node version and claude version;\n- that seats shared the machine and its Claude accounts with the live fleet (contention; account waits count toward the cap);\n- the batch commands, from batch.sh;\n- every incident: pre-run refusals, failed or aborted records, and any human-approved exception;\n- the file layout;\n- the exact regeneration command;\n- these fixed statements: acceptance comes from held-out assessments only; Moe status is record-only; tokens are not cost; n=1, so there is no variability estimate; and no savings, quality-improvement or significance claim is made.\n\n**4. Tests.** Append a separate 'CQ-M04c archived baseline' section to scripts/tests/usage-report.test.mjs.\n- The file is CRLF in both the index and the working tree: append without reformatting, and keep every existing byte.\n- The section checks:\n  - readExpectedManifest accepts expected.json, and records/ holds exactly its 20 ids, with no other files.\n  - Each record passes readBaselineRecord. There are 5 per category, all with repetition 1 of 1, and wallClockCapMs is 3600000.\n  - Every usage file is a *.jsonl under usage/<manifest id>/logs/moe-usage, and every line parses.\n  - Each row's top-level keys are a subset of the writer's key set. Each context value equals normalizeUsageContext(row) for that key. The usage keys are a subset of the normalized usage fields.\n  - Running the CLI with --json reproduces report.json byte-for-byte, and running it without --json reproduces report.md, both with exit 0.\n\nRun `node --test scripts/tests/usage-report.test.mjs` until it is green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "newFiles": [
+        "docs/baselines/cq-m04/README.md",
+        "docs/baselines/cq-m04/expected.json",
+        "docs/baselines/cq-m04/report.json",
+        "docs/baselines/cq-m04/report.md"
+      ],
+      "modifiedFiles": [
+        ".gitignore",
+        "docs/baselines/cq-m04/README.md",
+        "docs/baselines/cq-m04/records/maintenance-truncation-helper-reuse.json",
+        "docs/baselines/cq-m04/records/maintenance-branch-policy-message.json",
+        "docs/baselines/cq-m04/records/maintenance-usage-unknown-format.json",
+        "docs/baselines/cq-m04/records/maintenance-affected-file-caller.json",
+        "docs/baselines/cq-m04/records/maintenance-cached-ref-caller.json",
+        "docs/baselines/cq-m04/records/defect-stale-positive-readiness-helper.json",
+        "docs/baselines/cq-m04/records/defect-stale-negative-integer-option.json",
+        "docs/baselines/cq-m04/records/defect-changed-caller-chat-budget.json",
+        "docs/baselines/cq-m04/records/defect-changed-requirements-delivery-policy.json",
+        "docs/baselines/cq-m04/records/defect-recipe-mismatch-platform.json",
+        "docs/baselines/cq-m04/records/refactor-usage-counter-normalization.json",
+        "docs/baselines/cq-m04/records/refactor-chat-budget-consolidation.json",
+        "docs/baselines/cq-m04/records/refactor-shared-path-normalization.json",
+        "docs/baselines/cq-m04/records/refactor-detached-snapshot-returns.json",
+        "docs/baselines/cq-m04/records/refactor-utf8-bounded-tail.json",
+        "docs/baselines/cq-m04/records/non-routine-cached-lookup-fingerprint.json",
+        "docs/baselines/cq-m04/records/non-routine-stale-negative-export-index.json",
+        "docs/baselines/cq-m04/records/non-routine-chat-pagination-remainder.json",
+        "docs/baselines/cq-m04/records/non-routine-monotonic-attempt-generation.json",
+        "docs/baselines/cq-m04/records/non-routine-cross-role-usage-rollup.json",
+        "docs/baselines/cq-m04/usage/maintenance-truncation-helper-reuse/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/maintenance-branch-policy-message/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/maintenance-usage-unknown-format/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/maintenance-affected-file-caller/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/maintenance-cached-ref-caller/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/defect-stale-positive-readiness-helper/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/defect-stale-negative-integer-option/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/defect-changed-caller-chat-budget/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/defect-changed-requirements-delivery-policy/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/defect-recipe-mismatch-platform/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/refactor-usage-counter-normalization/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/refactor-chat-budget-consolidation/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/refactor-shared-path-normalization/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/refactor-detached-snapshot-returns/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/refactor-utf8-bounded-tail/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/non-routine-cached-lookup-fingerprint/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/non-routine-stale-negative-export-index/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/non-routine-chat-pagination-remainder/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/non-routine-monotonic-attempt-generation/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/non-routine-cross-role-usage-rollup/logs/moe-usage/observed.jsonl"
+      ],
+      "note": "QA delivery-only repair. Preserved all existing run inputs/reports/tests; no workload rerun. Added exactly one .gitignore negation !docs/baselines/cq-m04/usage/*/logs/ and one README Layout line. Declared .gitignore, README and all 40 previously omitted record/receipt files via moe.declare_files; modifiedFiles includes all 42 for wrapper attribution. Original 3b69dcc no-overlay snapshot reproduces failure (exit 1). Ignore regression probe red before change, green afterward: 20 receipts committable; four unrelated/raw-log examples remain ignored; git check-ignore -v prints nothing. Fresh Linux-only PATH node --test scripts/tests/usage-report.test.mjs: exit 0, 34 pass/0 fail/0 skip, log /tmp/moe-m04c-repair-tests.log. Four driver/report files remain byte-identical to execution pin 6eb56809; existing test is unchanged CRLF; archive contains 44 LF files. Need wrapper checkpoint before step 7: QA specifically requires committed-byte-only verification and Git writes are wrapper-only, so ending this session at the completed archive step (WORKING), not claiming complete. Next fresh session must check all 44 archive files in the actual landed checkpoint, run step-7 commands from root and clean git archive of that SHA without overlays, then step-8 self-review and complete_task. Other dirty paths untouched.",
+      "startedAt": "2026-10-24T22:08:02.768Z",
+      "completedAt": "2026-10-24T22:09:37.909Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "The one verification gate. Use the Linux-only PATH (PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin), and run each check from the repository root.\n\n**1. Regeneration:**\n```\nnode scripts/analyze-baseline.mjs --records docs/baselines/cq-m04/records --project docs/baselines/cq-m04/usage --expected docs/baselines/cq-m04/expected.json --json | cmp - docs/baselines/cq-m04/report.json\n```\nThe CLI and cmp must both exit 0.\n\n**2. The DoD command, fresh:** `node --test scripts/tests/usage-report.test.mjs`. It must exit 0; record the pass, fail and skip counts.\n\n**3. Snapshot check.** Peers share the tree, so repeat both commands in a fresh snapshot:\n```\nD=$(mktemp -d /tmp/moe-m04c-test.XXXXXX)\ngit -C /mnt/d/projexts/moes archive HEAD scripts docs package.json | tar -x -C \"$D\"\n```\nOverlay docs/baselines/cq-m04 and the test file's working-tree bytes, then run both commands from $D. Report both results.\n\n**4. Byte checks.**\n- scripts/baseline-report.mjs, analyze-baseline.mjs, usage-report.mjs and the driver are byte-unchanged.\n- The test file keeps CRLF, and only the appended section is new.\n\nKeep the commands and their output tails for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "QA repair committed as wrapper checkpoint 476e92c9350aa08828012e1e42479ff7c4d19c74 on moe/work-2026-10-24. Verified git ls-tree contains all 44 archive files, including 20 records and 20 receipts (100 rows); every archive byte plus .gitignore/test matches working tree. Receipt check-ignore --no-index -v returns empty/1; four unrelated/raw-log probes stay ignored. Linux-only PATH fresh root regeneration pipeline exits 0/0; node --test scripts/tests/usage-report.test.mjs exits 0: 34 pass, 0 fail, 0 skip. Repeated from git archive of that exact committed SHA into empty /tmp/moe-m04c-committed.xnI2tG, NO overlays per QA correction: regeneration exits 0/0; 34 pass/0 fail/0 skip, exit 0 (includes JSON and markdown byte equality). Logs /tmp/moe-m04c-{root,committed}-verify.log. Driver and three report scripts equal original execution pin; test retains exact original CRLF prefix, archive LF. No project files modified this verification step; no workloads rerun.",
+      "startedAt": "2026-10-24T22:11:50.741Z",
+      "completedAt": "2026-10-24T22:12:49.143Z"
+    },
+    {
+      "stepId": "step-8",
+      "description": "Exactly one adversarial self-review. Load adversarial-self-review. Review the archive, the README and the appended test section.\n\n**Challenge**\n- Could any archived byte carry a prompt, tool argument, secret, env value, absolute home path or price? Grep the archive for 'prompt', 'sk-', 'token=', 'password' and '/home/'. Explain every hit, or remove its cause and regenerate.\n- Was any workload run more than once, or a failed, capped or aborted run dropped or hidden?\n- Does the report or README claim savings, quality or significance, or derive acceptance from Moe status or tokens?\n- Is every unknown counter still null or 'unknown', never 0?\n- Are the README's commit, dates, versions and incident list consistent with the records?\n- Does the regeneration depend on the machine, its timezone or ordering? It must not.\n- Is error handling sound, and did any batch process outlive the run?\n\n**Confirm**\n- No .moe edits.\n- No Git writes outside the wrappers.\n- No change to the workloads, rubrics, driver or report code.\n- No verified-local and no isolation claims.\n- No substring from the project's global forbiddenPatterns in the new test code.\n\nFix findings and re-test. If any byte changed after step 7, rerun the step-7 commands fresh and use that output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/usage-report.test.mjs",
+        "docs/baselines/cq-m04/README.md",
+        "docs/baselines/cq-m04/expected.json",
+        "docs/baselines/cq-m04/report.json",
+        "docs/baselines/cq-m04/report.md"
+      ],
+      "note": "Adversarial review completed once for this repair: scoped committed diff, README, tests, all archive files and original batch evidence checked. No new findings/edits. All 20 original run roots, starts and records are unique; records match original bytes and all 100 parsed receipt rows match originals (nothing dropped). All held-out criteria pass; null retrieval/first-change/repair counters retained. Scan hits fully classified: 146 sk- occurrences are within task- identifiers; one prompt hit is README's exclusion disclaimer; no token=, password or /home/ hits. README provenance matches record versions/pin and batch UTC window (record end 21:54:48.521Z, batch completion 21:54:51Z). Batch flock and no-rerun guards reviewed; original batch/daemon/seat PIDs and process groups absent. Error handling/parser/unknown-counter regressions pass; read-only archive tests add no shared mutations. JSON+markdown identical under UTC and Pacific/Honolulu; stable sorting inspected. No unsupported savings/quality/isolation claims; no forbidden patterns in appended tests. No project source, .moe, Git, driver/report/workload/rubric edits by this session. Final fresh committed-only regeneration and node --test: exit 0, 34 pass/0 fail/0 skip (1711.67638 ms). Verification used exact checkpoint 476e92c, no overlays. A supplemental rg lookup was unavailable in Linux-only PATH; repeated with grep successfully (not a verification failure).",
+      "startedAt": "2026-10-24T22:12:53.416Z",
+      "completedAt": "2026-10-24T22:14:23.788Z"
+    }
+  ],
+  "planRevision": 35,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "The archive is not fully committed, so the committed tree cannot regenerate the report. Completion commit 3b69dcc carries README.md, expected.json, report.json, report.md and the test file, but NOT docs/baselines/cq-m04/records/ or usage/, the inputs the report and README regeneration command need.\n\nEvidence (re-run by me):\n1. Working tree: verification passes (cmp exit 0; node --test 34 pass/0 fail), so the worker's check looked green.\n2. Clean `git archive 3b69dcc scripts docs package.json`, NO overlay: CLI exits 1 (\"--records: is not a readable directory\"); node --test is 31 pass / 3 FAIL (the three new CQ-M04c tests).\n3. Cause A: all 20 records/*.json are untracked (`??`), listed in task.unattributedPaths because never declared.\n4. Cause B: all 20 usage/<id>/logs/moe-usage/observed.jsonl are gitignored by `.gitignore:35: logs/`, so a plain landing can never carry them.\n5. Step-7's 'fresh snapshot' overlaid the working-tree docs/baselines onto the archive, hiding both gaps.\n\nVerified fine (do not redo): 20 records, 5/category, all completed; 100 receipt rows; README facts; no prompt/secret/price/absolute-path hits; driver/report code unchanged.\n\nFix (no workload rerun):\n1. Add a minimal .gitignore negation AFTER the `logs/` line, e.g. `!docs/baselines/**/logs/`. Confirm `git check-ignore -v` is empty for the usage files and other logs/ stay ignored.\n2. moe.declare_files for .gitignore, the 20 records and the 20 observed.jsonl so the next exit commits them. No stage-all; leave peer dirty paths alone.\n3. After the follow-up completion commit lands, verify COMMITTED bytes only: `git archive <new-sha> scripts docs package.json | tar -x -C <empty tmp>`, NO overlay. There run the analyze-baseline --json | cmp command, then `node --test scripts/tests/usage-report.test.mjs`. Both must exit 0 (34 pass, 0 fail); supply that output to complete_task.\n4. Add one README Layout line about the .gitignore negation.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-0ece1a3552944298af911356f149e150",
+  "dependsOn": [
+    "task-9cfaacf11e194062bc1ca5f77388ec90"
+  ],
+  "priority": "HIGH",
+  "order": 224.5,
+  "comments": [
+    {
+      "id": "comment-539240c524f64e38aece342d4f31431c",
+      "author": "governor-187cc44e",
+      "content": "Human go-ahead, 2026-10-24 (relayed by governor-187cc44e). The human moved this row into PLANNING at 13:52Z. Asked when and how the paid run should happen, the human answered \"do what u think by order\", handing the decision to the governor.\n\nDecision under that delegation: agent-run, in board order. Once M04b, M04 and M03 have landed, the worker that claims this task runs all 20 workloads in the background with checkpoints. It uses the human-approved configuration in comment-700a6a51 on task-0ece1a35: today's model and effort defaults, n=1, a 60-minute wall-clock cap per workload, and capped runs recorded with their partial counters. No reruns beyond n=1.",
+      "timestamp": "2026-10-24T13:54:01.336Z"
+    },
+    {
+      "id": "comment-a3a791e7133f42d7bae40ac19fd41ebb",
+      "author": "governor-187cc44e",
+      "content": "Human billing decision, 2026-10-24T16:57Z (relayed by governor-187cc44e) on the 16:54Z step-1 block. The baseline batch bills to the SHARED account pool, rotating: MOE_ACCOUNTS_FILE=/mnt/c/Users/Yaron/.moe/claude-accounts.json (acct-1…acct-6, the same list the live fleet rotates through, switching at 90%). The human accepted that the ~20h batch competes with live seats for that quota. Every other part of comment-539240c5 still stands: agent-run, board order, background with checkpoints, n=1, 60-min cap. Step 1 needs an architect amendment before it can resume:\n(1) set MOE_ACCOUNTS_FILE explicitly for the preflight and in B/batch.sh, which already keeps that variable;\n(2) replace the sign-in-writing `accounts check` with a read-only probe: the file lists at least one account, and `claude auth status --json` exits 0 under at least one listed account's config dir. That probe uses the exit code and authMethod only, as the wrapper does, and never writes to the registry.",
+      "timestamp": "2026-10-24T17:47:35.671Z"
+    },
+    {
+      "id": "comment-f057895eaa4b409492ae94b9df01fff4",
+      "author": "governor-187cc44e",
+      "content": "Timestamp correction to comment-a3a791e7: the governor asked at about 16:56Z, and the human gave the shared-rotating-pool answer at about 17:47Z, not 16:57Z. The content of the decision is unchanged.",
+      "timestamp": "2026-10-24T17:47:57.631Z"
+    },
+    {
+      "id": "comment-d6ce73770ba04e199562b70a3efe2f77",
+      "author": "worker-07cd2c56",
+      "content": "Progress 18:50Z: batch (pid 2132274, commit 6eb5680, shared account pool) is running. 5/20 records, all completed, no stops. Workload 6 in progress. Checkpoint 1 done.",
+      "timestamp": "2026-10-24T18:47:33.646Z"
+    },
+    {
+      "id": "comment-07fe9d84dd744ba6a273648bdfd91f0a",
+      "author": "worker-07cd2c56",
+      "content": "Progress 20:42Z: 15/20 records, all completed, no stops. Batch pid 2132274 alive; workload 16 (non-routine) running. Checkpoint 3 done.",
+      "timestamp": "2026-10-24T20:45:39.761Z"
+    },
+    {
+      "id": "comment-f6f75b8be3934537b49b766b84a6a6ee",
+      "author": "worker-e8965f51",
+      "content": "QA repair staged for wrapper attribution, not Git staging: narrow .gitignore exception + README line; all 40 omitted records/receipt files explicitly declared. Fresh test 34 pass/0 fail/0 skip; ignore probe red→green with unrelated logs still ignored. No workload reruns. Steps 1–6 recovered/completed. Ending WORKING session now so wrapper can checkpoint; step 7 deliberately pending for required committed-only (NO overlay) verification in next session, then self-review + complete_task. This avoids claiming the yet-uncreated commit was tested.",
+      "timestamp": "2026-10-24T22:09:37.990Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T13:13:52.451Z",
+  "updatedAt": "2026-10-24T22:18:26.098Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T14:39:53.512Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 16,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-24T22:17:53.357Z",
+    "wallClockMs": 27479845
+  },
+  "contextFetchedBy": [
+    "worker-e8965f51",
+    "qa-b0c1741e"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
+  ],
+  "failedDodItems": [
+    {
+      "item": "The committed report JSON and markdown regenerate byte-identically from the archived records and receipts via `node scripts/analyze-baseline.mjs ... --json` (exit 0).",
+      "rejectedAt": "2026-10-24T22:05:58.087Z",
+      "rejectedBy": "qa-b0c1741e"
+    },
+    {
+      "item": "Exactly 20 outcome records (every frozen workload id, 5 per category, n=1) validate with the CQ-M04 validator; capped/failed runs are present with partial counters, none dropped or silently retried.",
+      "rejectedAt": "2026-10-24T22:05:58.087Z",
+      "rejectedBy": "qa-b0c1741e"
+    },
+    {
+      "item": "Archived records and receipts contain only allowlisted fields (no prompts, tool arguments, secrets or prices), checked by the CQ-M04 validator and the M02 receipt normalizer.",
+      "rejectedAt": "2026-10-24T22:05:58.087Z",
+      "rejectedBy": "qa-b0c1741e"
+    },
+    {
+      "item": "Fresh `node --test scripts/tests/usage-report.test.mjs` exits 0 with output supplied to complete_task.",
+      "rejectedAt": "2026-10-24T22:05:58.087Z",
+      "rejectedBy": "qa-b0c1741e"
+    }
+  ],
+  "planSubmittedAt": "2026-10-24T14:45:54.329Z",
+  "planningNotes": {
+    "approachesConsidered": "**Chosen: a resumable, single-instance background batch.**\n- It runs outside the repo under /var/tmp, against a pinned git-archive build of the commit under test, sequentially in manifest order, with n=1.\n- The worker's session waits through four checkpoint steps of 5 records each.\n- Step boundaries re-arm MOE_RESUME_MAX_ATTEMPTS, give the account-switch mod a safe point, and leave a visible progress trail. The stale-worker sweep preserves a seat that owns active work.\n\n**Rejected.**\n- **Running the driver from the dirty shared checkout.** Its HEAD moves with peers, so the dist would not match the recorded commit.\n- **A real-workload smoke run.** It would consume that workload's only run. The fake-CLI M04b suite is the environment smoke test instead.\n- **Retrying failed runs.** That is forbidden. Only a run that never started (driver exit 1) may be started again, and the README discloses it.\n- **Committing seat logs.** They can hold prompts and tool text.\n- **A date-stamped results path.** The task said 'e.g.'; a stable docs/baselines/cq-m04/ path keeps the tests and docs fixed, and the dates go in the README.\n- **Heavier routing.** The task is mostly long bounded waiting, so it uses standard/high on Sonnet to keep about 20 hours of polling cheap.",
+    "codebaseInsights": "**The run.**\n- The governor relayed the human go-ahead (comment-539240c5): agent-run, in board order, in the background with checkpoints.\n- The configuration is comment-700a6a51 on task-0ece1a35.\n- The M04b driver (planned) is `npx tsx packages/moe-daemon/src/benchmarks/baselineRun.ts --workload <id> --cap-minutes 60 --parent <dir> --moe-commit <sha>`. It exits 0 once a record is written and 1 when no run happened.\n- It writes <runRoot>/records/<id>.json and <runRoot>/usage/<id>/logs/moe-usage.\n- analyze-baseline (M04) reads --records, --project (<id>/logs/moe-usage), --expected and --json.\n\n**Receipts.** scripts/usage-receipt.mjs writes rows of exactly:\n- version, timestamp and provider;\n- the normalizeUsageContext keys (taskId, workerId, role, attemptId, launchId, requestedModel, requestedEffort, launchMode, planRevision, packetId, sourceRetrievalId, plannerInvocationId, runnerId, candidateId, deliveryReceiptId, workKind);\n- sessionId, eventId, reportedModels and scope;\n- turnIndex (codex only);\n- coverage, outcome and usage.\n\n**Long-running seats.**\n- The stale-worker sweep keeps a seat that owns active work (state/sweeps.ts), so a long poll is safe.\n- moe.heartbeat is wrapper-only, and its sidecar stops after MOE_HEARTBEAT_MAX_DURATION_SEC (2 h). Progress comments are what show the governor the seat is alive.\n- MOE_RESUME_MAX_ATTEMPTS is 5, and a completed step re-arms it.\n\n**Machine and test files.**\n- Claude accounts here live on the Windows side, under /mnt/c/Users/<user>/.moe/claude-accounts.\n- scripts/tests/usage-report.test.mjs is CRLF.",
+    "risks": "**Real paid usage of about 20 hours.**\n- The account pool is shared with the live fleet. Limit waits count toward the 60-minute cap, so expect some capped runs, and disclose this.\n- Contention on the shared WSL machine also affects wall-clock time.\n\n**An infrastructure failure inside a run produces a 'failed' record that cannot be rerun.**\n- The batch stops on the first failed or aborted record for triage, and anything infrastructure-wide goes to moe.report_blocked before more runs burn.\n- A driver crash with no record (exit 3) needs a human decision, because the DoD requires 20 records.\n\n**Unlanded dependencies.** M04b, M04 and M03 were unlanded at planning time. Use their landed flags and names.\n\n**Process cleanup.** Never kill processes by name (the live fleet runs claude, node and daemons). Use only the pids and process groups the batch and driver record.\n\n**Keep the batch dir until QA approves.**\n\n**Never write into the real project's .moe.** The driver uses throwaway projects only.",
+    "keyFiles": [
+      "scripts/baseline-report.mjs",
+      "scripts/analyze-baseline.mjs",
+      "scripts/usage-receipt.mjs",
+      "scripts/tests/usage-report.test.mjs",
+      "packages/moe-daemon/src/benchmarks/baselineRun.ts",
+      "packages/moe-daemon/src/benchmarks/workloadSnapshot.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T14:45:54.427Z",
+  "workStartedAt": "2026-10-24T16:53:19.308Z",
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "66f5bf219e8f1f9c920287fc825595c97c4d9f0f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-e8965f51@2026-10-24T16:52:38Z",
+      "paths": [
+        ".moe/tasks/task-0ece1a3552944298af911356f149e150.json",
+        ".moe/tasks/task-9cfaacf11e194062bc1ca5f77388ec90.json",
+        ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json"
+      ],
+      "recordedBy": "worker-e8965f51",
+      "recordedAt": "2026-10-24T16:55:09.257Z",
+      "treeId": "fd53ddf4aea2a9bdf2c786e6fc451100ed7b184a",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "3b69dccecf57124ccfa74e7ca9bd9ac5a02eca03",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-24T17:49:59Z",
+      "paths": [
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json",
+        ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json",
+        "docs/baselines/cq-m04/README.md",
+        "docs/baselines/cq-m04/expected.json",
+        "docs/baselines/cq-m04/report.json",
+        "docs/baselines/cq-m04/report.md",
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-24T22:01:09.201Z",
+      "treeId": "4b2146090aefb87864015b6b4b31c0750bb5cdc8",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "ea9837fe23cabf8468bbeadf9fce6f835ee69a3f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T22:04:08Z",
+      "paths": [
+        ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T22:06:35.895Z",
+      "treeId": "7f25dcd114300d217f8d35892472d12b48552a9b",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "476e92c9350aa08828012e1e42479ff7c4d19c74",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-e8965f51@2026-10-24T22:05:56Z",
+      "paths": [
+        ".gitignore",
+        ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json",
+        "docs/baselines/cq-m04/README.md",
+        "docs/baselines/cq-m04/records/defect-changed-caller-chat-budget.json",
+        "docs/baselines/cq-m04/records/defect-changed-requirements-delivery-policy.json",
+        "docs/baselines/cq-m04/records/defect-recipe-mismatch-platform.json",
+        "docs/baselines/cq-m04/records/defect-stale-negative-integer-option.json",
+        "docs/baselines/cq-m04/records/defect-stale-positive-readiness-helper.json",
+        "docs/baselines/cq-m04/records/maintenance-affected-file-caller.json",
+        "docs/baselines/cq-m04/records/maintenance-branch-policy-message.json",
+        "docs/baselines/cq-m04/records/maintenance-cached-ref-caller.json",
+        "docs/baselines/cq-m04/records/maintenance-truncation-helper-reuse.json",
+        "docs/baselines/cq-m04/records/maintenance-usage-unknown-format.json",
+        "docs/baselines/cq-m04/records/non-routine-cached-lookup-fingerprint.json",
+        "docs/baselines/cq-m04/records/non-routine-chat-pagination-remainder.json",
+        "docs/baselines/cq-m04/records/non-routine-cross-role-usage-rollup.json",
+        "docs/baselines/cq-m04/records/non-routine-monotonic-attempt-generation.json",
+        "docs/baselines/cq-m04/records/non-routine-stale-negative-export-index.json",
+        "docs/baselines/cq-m04/records/refactor-chat-budget-consolidation.json",
+        "docs/baselines/cq-m04/records/refactor-detached-snapshot-returns.json",
+        "docs/baselines/cq-m04/records/refactor-shared-path-normalization.json",
+        "docs/baselines/cq-m04/records/refactor-usage-counter-normalization.json",
+        "docs/baselines/cq-m04/records/refactor-utf8-bounded-tail.json",
+        "docs/baselines/cq-m04/usage/defect-changed-caller-chat-budget/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/defect-changed-requirements-delivery-policy/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/defect-recipe-mismatch-platform/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/defect-stale-negative-integer-option/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/defect-stale-positive-readiness-helper/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/maintenance-affected-file-caller/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/maintenance-branch-policy-message/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/maintenance-cached-ref-caller/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/maintenance-truncation-helper-reuse/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/maintenance-usage-unknown-format/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/non-routine-cached-lookup-fingerprint/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/non-routine-chat-pagination-remainder/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/non-routine-cross-role-usage-rollup/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/non-routine-monotonic-attempt-generation/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/non-routine-stale-negative-export-index/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/refactor-chat-budget-consolidation/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/refactor-detached-snapshot-returns/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/refactor-shared-path-normalization/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/refactor-usage-counter-normalization/logs/moe-usage/observed.jsonl",
+        "docs/baselines/cq-m04/usage/refactor-utf8-bounded-tail/logs/moe-usage/observed.jsonl"
+      ],
+      "recordedBy": "worker-e8965f51",
+      "recordedAt": "2026-10-24T22:10:07.991Z",
+      "treeId": "4f962ffabd4074b5a3c5dd51cbd1fe2d64c2e5ce",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "400928ae0d72fb476a354bf1a7a024b377efb48e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e8965f51@2026-10-24T22:10:43Z",
+      "paths": [
+        ".moe/tasks/task-bf86954dc6bc43279d96d77cf0ebff88.json",
+        ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json"
+      ],
+      "recordedBy": "worker-e8965f51",
+      "recordedAt": "2026-10-24T22:15:25.816Z",
+      "treeId": "25957d1ba69dbfe48647e97915efd395302f56ba",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "47769e14ac1ee5050a03545716837b9530753d16",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T22:15:42Z",
+      "paths": [
+        ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T22:18:26.098Z",
+      "treeId": "4fdbc96362ba7191c320c22cf8611f8e133a16db",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".gitignore",
+    "docs/baselines/cq-m04/README.md",
+    "docs/baselines/cq-m04/records/maintenance-truncation-helper-reuse.json",
+    "docs/baselines/cq-m04/records/maintenance-branch-policy-message.json",
+    "docs/baselines/cq-m04/records/maintenance-usage-unknown-format.json",
+    "docs/baselines/cq-m04/records/maintenance-affected-file-caller.json",
+    "docs/baselines/cq-m04/records/maintenance-cached-ref-caller.json",
+    "docs/baselines/cq-m04/records/defect-stale-positive-readiness-helper.json",
+    "docs/baselines/cq-m04/records/defect-stale-negative-integer-option.json",
+    "docs/baselines/cq-m04/records/defect-changed-caller-chat-budget.json",
+    "docs/baselines/cq-m04/records/defect-changed-requirements-delivery-policy.json",
+    "docs/baselines/cq-m04/records/defect-recipe-mismatch-platform.json",
+    "docs/baselines/cq-m04/records/refactor-usage-counter-normalization.json",
+    "docs/baselines/cq-m04/records/refactor-chat-budget-consolidation.json",
+    "docs/baselines/cq-m04/records/refactor-shared-path-normalization.json",
+    "docs/baselines/cq-m04/records/refactor-detached-snapshot-returns.json",
+    "docs/baselines/cq-m04/records/refactor-utf8-bounded-tail.json",
+    "docs/baselines/cq-m04/records/non-routine-cached-lookup-fingerprint.json",
+    "docs/baselines/cq-m04/records/non-routine-stale-negative-export-index.json",
+    "docs/baselines/cq-m04/records/non-routine-chat-pagination-remainder.json",
+    "docs/baselines/cq-m04/records/non-routine-monotonic-attempt-generation.json",
+    "docs/baselines/cq-m04/records/non-routine-cross-role-usage-rollup.json",
+    "docs/baselines/cq-m04/usage/maintenance-truncation-helper-reuse/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/maintenance-branch-policy-message/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/maintenance-usage-unknown-format/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/maintenance-affected-file-caller/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/maintenance-cached-ref-caller/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/defect-stale-positive-readiness-helper/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/defect-stale-negative-integer-option/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/defect-changed-caller-chat-budget/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/defect-changed-requirements-delivery-policy/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/defect-recipe-mismatch-platform/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/refactor-usage-counter-normalization/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/refactor-chat-budget-consolidation/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/refactor-shared-path-normalization/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/refactor-detached-snapshot-returns/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/refactor-utf8-bounded-tail/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/non-routine-cached-lookup-fingerprint/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/non-routine-stale-negative-export-index/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/non-routine-chat-pagination-remainder/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/non-routine-monotonic-attempt-generation/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/non-routine-cross-role-usage-rollup/logs/moe-usage/observed.jsonl",
+    "scripts/tests/usage-report.test.mjs",
+    "docs/baselines/cq-m04/expected.json",
+    "docs/baselines/cq-m04/report.json",
+    "docs/baselines/cq-m04/report.md",
+    ".moe/tasks/task-bf86954dc6bc43279d96d77cf0ebff88.json",
+    ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T22:15:42Z",
+    "at": "2026-10-24T22:18:26.098Z"
+  },
+  "priorBlockedReason": "Step-1 account precondition failed before paid usage: MOE_ACCOUNTS_FILE is unset and default /home/sysadmin/.moe/claude-accounts.json does not exist. Pinned build accounts check prints 'No Claude accounts' yet exits 0; that is not a usable-account pass. No workload started, no records, no batch process; no repo edits. Additionally accounts check is not generally read-only: cli.ts check() calls recordSignIn, so it must not silently probe/update the Windows live-fleet registry under the plan's read-only requirement. B=/var/tmp/moe-m04c-20261024 preserves pinned commit 6eb56809b4038945cfc09f95c3b9138f107dc62f, successful daemon/proxy tsc builds and accounts-check.log. Dependencies DONE+landed; human authorization confirmed. Claude version works; disk sufficient. Fake-CLI suite and remaining gates not run after this failed precondition.",
+  "blockedOnTaskIds": null,
+  "reviewStartedAt": "2026-10-24T22:15:00.526Z",
+  "verification": {
+    "command": "set -euo pipefail; export PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd /tmp/moe-m04c-committed.xnI2tG; node scripts/analyze-baseline.mjs --records docs/baselines/cq-m04/records --project docs/baselines/cq-m04/usage --expected docs/baselines/cq-m04/expected.json --json | cmp - docs/baselines/cq-m04/report.json; node --test scripts/tests/usage-report.test.mjs",
+    "exitCode": 0,
+    "outputTail": "28ms)\n✔ conflicting correlation stays visibly ambiguous without splitting or inventing counters (38.226765ms)\n✔ delivery correlation joins only the matching candidate and attempt as record-only evidence (84.305169ms)\n✔ malformed, conflicting or unreadable delivery records leave delivery incomplete with generic warnings (83.38113ms)\n✔ legacy receipts without correlation report unknown values, not zero, and keep usage intact (32.837567ms)\n✔ each isolated delivery-record defect is incomplete, never a recorded delivery (109.132123ms)\n✔ baseline record contract returns a detached deep-frozen copy and keeps unknown counters null (1.556643ms)\n✔ baseline record contract rejects every malformed field, naming its path without echoing content (3.491187ms)\n✔ acceptance comes only from the held-out assessment, never from Moe status, QA approval or tokens (11.177998ms)\n✔ capped, failed, aborted and missing runs stay visible while duplicates and digest mismatches are refused (4.91644ms)\n✔ usage joins each workload project by usageTaskId and never turns unknown usage into zero (7.621208ms)\n✔ report lists reproducible inputs and every variability and coverage limitation (2.801722ms)\n✔ baseline report is deterministic and follows manifest order, else workload id order (2.685694ms)\n✔ analyze-baseline CLI prints the report read-only and fails closed with bounded file-and-field errors (468.936601ms)\n✔ an overflowed workload total stays unknown in the baseline summary instead of being skipped (1.530929ms)\n✔ CQ-M04c archived baseline: expected manifest and records cover exactly the 20 frozen ids (0.962073ms)\n✔ CQ-M04c archived baseline: usage receipts hold only allowlisted fields (2.1081ms)\n✔ CQ-M04c archived baseline: the CLI reproduces report.json and report.md byte-for-byte (99.223101ms)\nℹ tests 34\nℹ suites 0\nℹ pass 34\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1711.67638\n",
+    "reportedAt": "2026-10-24T22:15:00.526Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "QA delivery repair verified against committed checkpoint 476e92c9350aa08828012e1e42479ff7c4d19c74. All 44 archive files are now committed: 20 records, 20 usage JSONL files (100 receipt rows), expected manifest, JSON/markdown reports and README. Narrow .gitignore receipt exception and README Layout note landed; unrelated/raw logs remain ignored. All omitted files were explicitly declared in step 6. Fresh root and clean git-archive verification (NO overlay) both pass: byte-identical JSON regeneration; node --test scripts/tests/usage-report.test.mjs 34 pass, 0 fail, 0 skip, including markdown equality. Final post-review committed-snapshot run exit 0, 34/34. Snapshot /tmp/moe-m04c-committed.xnI2tG. Exactly 20 unique original roots/starts/records, n=1, all completed with passing held-out assessments; archived records and receipt data match originals. No workload reruns. Unknown counters preserved; UTC/Honolulu outputs identical. Scoped adversarial review found no further changes needed. Driver/report/workload/rubric code unchanged; original test prefix remains CRLF. No secrets, unsupported claims, .moe hand edits or manual Git writes. Prior batch evidence retained at /var/tmp/moe-m04c-20261024 until QA approval; no batch process survivors. Handoff and archive gotcha memories updated.",
+  "reviewCompletedAt": "2026-10-24T22:17:53.357Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "The committed report JSON and markdown regenerate byte-identically from the archived records and receipts via `node scripts/analyze-baseline.mjs ... --json` (exit 0).",
+      "Exactly 20 outcome records (every frozen workload id, 5 per category, n=1) validate with the CQ-M04 validator; capped/failed runs are present with partial counters, none dropped or silently retried.",
+      "Archived records and receipts contain only allowlisted fields (no prompts, tool arguments, secrets or prices), checked by the CQ-M04 validator and the M02 receipt normalizer.",
+      "Fresh `node --test scripts/tests/usage-report.test.mjs` exits 0 with output supplied to complete_task."
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "description": "docs/baselines/cq-m04/records/ (20 files) are untracked and absent from completion commit 3b69dcc; they are in task.unattributedPaths because never declared. Run moe.declare_files for all 20 so the next exit commits them.",
+        "file": "docs/baselines/cq-m04/records"
+      },
+      {
+        "type": "missing_feature",
+        "description": "usage/*/logs/moe-usage/observed.jsonl (20 files, 100 rows) are ignored by the `logs/` rule at .gitignore:35 and can never be committed. Add a narrow negation after that line (e.g. `!docs/baselines/**/logs/`), verify with git check-ignore, declare .gitignore, and land the 20 files.",
+        "file": ".gitignore",
+        "line": 35
+      },
+      {
+        "type": "test_failure",
+        "description": "In a clean git-archive of 3b69dcc (no overlay), `node --test scripts/tests/usage-report.test.mjs` gives 31 pass / 3 fail (the three new CQ-M04c tests) and the CLI exits 1 with '--records: is not a readable directory'. Re-verify against committed bytes only after the fix lands.",
+        "file": "scripts/tests/usage-report.test.mjs"
+      },
+      {
+        "type": "other",
+        "description": "README 'Layout' should note the .gitignore negation that makes the receipt files committable (one short line).",
+        "file": "docs/baselines/cq-m04/README.md"
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "The archive is not fully committed, so the committed tree cannot regenerate the report. Completion commit 3b69dcc carries README.md, expected.json, report.json, report.md and the test file, but NOT docs/baselines/cq-m04/records/ or usage/, the inputs the report and README regeneration command need.\n\nEvidence (re-run by me):\n1. Working tree: verification passes (cmp exit 0; node --test 34 pass/0 fail), so the worker's check looked green.\n2. Clean `git archive 3b69dcc scripts docs package.json`, NO overlay: CLI exits 1 (\"--records: is not a readable directory\"); node --test is 31 pass / 3 FAIL (the three new CQ-M04c tests).\n3. Cause A: all 20 records/*.json are untracked (`??`), listed in task.unattributedPaths because never declared.\n4. Cause B: all 20 usage/<id>/logs/moe-usage/observed.jsonl are gitignored by `.gitignore:35: logs/`, so a plain landing can never carry them.\n5. Step-7's 'fresh snapshot' overlaid the working-tree docs/baselines onto the archive, hiding both gaps.\n\nVerified fine (do not redo): 20 records, 5/category, all completed; 100 receipt rows; README facts; no prompt/secret/price/absolute-path hits; driver/report code unchanged.\n\nFix (no workload rerun):\n1. Add a minimal .gitignore negation AFTER the `logs/` line, e.g. `!docs/baselines/**/logs/`. Confirm `git check-ignore -v` is empty for the usage files and other logs/ stay ignored.\n2. moe.declare_files for .gitignore, the 20 records and the 20 observed.jsonl so the next exit commits them. No stage-all; leave peer dirty paths alone.\n3. After the follow-up completion commit lands, verify COMMITTED bytes only: `git archive <new-sha> scripts docs package.json | tar -x -C <empty tmp>`, NO overlay. There run the analyze-baseline --json | cmp command, then `node --test scripts/tests/usage-report.test.mjs`. Both must exit 0 (34 pass, 0 fail); supply that output to complete_task.\n4. Add one README Layout line about the .gitignore negation.",
+      "rejectedAt": "2026-10-24T22:05:58.087Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "The committed report JSON and markdown regenerate byte-identically from the archived records and receipts via `node scripts/analyze-baseline.mjs ... --json` (exit 0).",
+        "Exactly 20 outcome records (every frozen workload id, 5 per category, n=1) validate with the CQ-M04 validator; capped/failed runs are present with partial counters, none dropped or silently retried.",
+        "Archived records and receipts contain only allowlisted fields (no prompts, tool arguments, secrets or prices), checked by the CQ-M04 validator and the M02 receipt normalizer.",
+        "Fresh `node --test scripts/tests/usage-report.test.mjs` exits 0 with output supplied to complete_task."
+      ],
+      "issues": [
+        {
+          "type": "missing_feature",
+          "description": "docs/baselines/cq-m04/records/ (20 files) are untracked and absent from completion commit 3b69dcc; they are in task.unattributedPaths because never declared. Run moe.declare_files for all 20 so the next exit commits them.",
+          "file": "docs/baselines/cq-m04/records"
+        },
+        {
+          "type": "missing_feature",
+          "description": "usage/*/logs/moe-usage/observed.jsonl (20 files, 100 rows) are ignored by the `logs/` rule at .gitignore:35 and can never be committed. Add a narrow negation after that line (e.g. `!docs/baselines/**/logs/`), verify with git check-ignore, declare .gitignore, and land the 20 files.",
+          "file": ".gitignore",
+          "line": 35
+        },
+        {
+          "type": "test_failure",
+          "description": "In a clean git-archive of 3b69dcc (no overlay), `node --test scripts/tests/usage-report.test.mjs` gives 31 pass / 3 fail (the three new CQ-M04c tests) and the CLI exits 1 with '--records: is not a readable directory'. Re-verify against committed bytes only after the fix lands.",
+          "file": "scripts/tests/usage-report.test.mjs"
+        },
+        {
+          "type": "other",
+          "description": "README 'Layout' should note the .gitignore negation that makes the receipt files committable (one short line).",
+          "file": "docs/baselines/cq-m04/README.md"
+        }
+      ]
+    }
+  ],
+  "declaredFiles": [
+    ".gitignore",
+    "docs/baselines/cq-m04/README.md",
+    "docs/baselines/cq-m04/records/maintenance-truncation-helper-reuse.json",
+    "docs/baselines/cq-m04/records/maintenance-branch-policy-message.json",
+    "docs/baselines/cq-m04/records/maintenance-usage-unknown-format.json",
+    "docs/baselines/cq-m04/records/maintenance-affected-file-caller.json",
+    "docs/baselines/cq-m04/records/maintenance-cached-ref-caller.json",
+    "docs/baselines/cq-m04/records/defect-stale-positive-readiness-helper.json",
+    "docs/baselines/cq-m04/records/defect-stale-negative-integer-option.json",
+    "docs/baselines/cq-m04/records/defect-changed-caller-chat-budget.json",
+    "docs/baselines/cq-m04/records/defect-changed-requirements-delivery-policy.json",
+    "docs/baselines/cq-m04/records/defect-recipe-mismatch-platform.json",
+    "docs/baselines/cq-m04/records/refactor-usage-counter-normalization.json",
+    "docs/baselines/cq-m04/records/refactor-chat-budget-consolidation.json",
+    "docs/baselines/cq-m04/records/refactor-shared-path-normalization.json",
+    "docs/baselines/cq-m04/records/refactor-detached-snapshot-returns.json",
+    "docs/baselines/cq-m04/records/refactor-utf8-bounded-tail.json",
+    "docs/baselines/cq-m04/records/non-routine-cached-lookup-fingerprint.json",
+    "docs/baselines/cq-m04/records/non-routine-stale-negative-export-index.json",
+    "docs/baselines/cq-m04/records/non-routine-chat-pagination-remainder.json",
+    "docs/baselines/cq-m04/records/non-routine-monotonic-attempt-generation.json",
+    "docs/baselines/cq-m04/records/non-routine-cross-role-usage-rollup.json",
+    "docs/baselines/cq-m04/usage/maintenance-truncation-helper-reuse/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/maintenance-branch-policy-message/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/maintenance-usage-unknown-format/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/maintenance-affected-file-caller/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/maintenance-cached-ref-caller/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/defect-stale-positive-readiness-helper/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/defect-stale-negative-integer-option/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/defect-changed-caller-chat-budget/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/defect-changed-requirements-delivery-policy/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/defect-recipe-mismatch-platform/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/refactor-usage-counter-normalization/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/refactor-chat-budget-consolidation/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/refactor-shared-path-normalization/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/refactor-detached-snapshot-returns/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/refactor-utf8-bounded-tail/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/non-routine-cached-lookup-fingerprint/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/non-routine-stale-negative-export-index/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/non-routine-chat-pagination-remainder/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/non-routine-monotonic-attempt-generation/logs/moe-usage/observed.jsonl",
+    "docs/baselines/cq-m04/usage/non-routine-cross-role-usage-rollup/logs/moe-usage/observed.jsonl"
+  ],
+  "completedAt": "2026-10-24T22:17:53.357Z",
+  "reviewSummary": "Re-review after qa_reject #1. Repair landed in wrapper checkpoint 476e92c (.gitignore negation, README Layout line, 20 records, 20 receipts) plus completion 400928a, both on moe/work-2026-10-24. git ls-tree 400928a docs/baselines/cq-m04 = 44 files; HEAD identical for these paths.\n\nMy own run on committed bytes only, no overlay: git archive 400928a scripts docs package.json into empty /tmp/qa-m04c-r2.wSa9hA. analyze-baseline --json | cmp report.json -> 0/0; without --json | cmp report.md -> 0/0; TZ=Pacific/Honolulu -> 0/0; node --test scripts/tests/usage-report.test.mjs -> 34 pass/0 fail/0 skip, exit 0. The 3 CQ-M04c tests that failed on 3b69dcc now pass.\n\n.gitignore: one line `!docs/baselines/cq-m04/usage/*/logs/` after logs/. check-ignore --no-index: receipt not ignored. Still ignored: logs/x.txt, packages/moe-daemon/logs/a.jsonl, docs/baselines/other/usage/a/logs/b.jsonl, cq-m04 usage run.log, docs/logs/a.txt.\n\nSize: 3b69dcc..400928a = 42 files, +2009/-0, all archive data the prior rejection required, plus 1 README line. Not rejected on size; code change is 1 .gitignore line. Driver and the three report scripts are byte-unchanged vs pin 6eb5680. Archive secret scan: no hits.\n\nDoD: all 5 met. 20 records (5/category, n=1) validate; JSON and md regenerate byte-identically; README inputs/limits unchanged since the round-1 check; allowlist test passes; fresh test 34/0. Rails respected: no reruns, wrapper-only Git, no .moe edits, no isolation claims.",
+  "requiredCheckAtDone": null
+}

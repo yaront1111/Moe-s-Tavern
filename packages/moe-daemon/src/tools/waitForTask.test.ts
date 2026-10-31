@@ -208,7 +208,8 @@ describe('wait_for_task eligibility mirrors claim_next_task (hot-loop regression
   it('does NOT offer a task withheld by the solo-worker epic+status rule — and says WHY, exactly as claim_next_task does', async () => {
     // Live worker A holds task-1 (WORKING) in the epic; teamless worker B waits
     // on WORKING. claim_next_task would skip task-2 and answer NO_TEAM_MEMBERSHIP
-    // with a join_team nextAction. wait must not wake B into that claim (spin),
+    // with an END_SESSION handoff (worker-b is a worker seat, and its tools/list
+    // hides join_team). wait must not wake B into that claim (spin),
     // but it must not park B on a timer either: a bare hasNext:false reads as
     // "nothing to do" and left a real seat idle through three governor pings
     // on 2026-09-05 while the row sat claimable for everyone on a team.
@@ -226,10 +227,10 @@ describe('wait_for_task eligibility mirrors claim_next_task (hot-loop regression
 
     expect(result.hasNext).toBe(false);
     expect(result.task).toBeUndefined();
-    // The remedy, not a timeout: same code and nextAction claim_next_task emits.
+    // The remedy, not a timeout: same code and handoff claim_next_task emits.
     expect(result.code).toBe('NO_TEAM_MEMBERSHIP');
-    expect((result.nextAction as { tool: string }).tool).toBe('moe.join_team');
-    expect((result.nextAction as { args: { workerId: string } }).args.workerId).toBe('worker-b');
+    expect(result.nextAction).toBeUndefined();
+    expect(result.sessionHandoff).toMatchObject({ action: 'END_SESSION', workerId: 'worker-b' });
     expect(result.timedOut).toBeUndefined();
   });
 

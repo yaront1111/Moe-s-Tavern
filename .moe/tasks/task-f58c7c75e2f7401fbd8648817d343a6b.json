@@ -1,0 +1,29 @@
+{
+  "id": "task-f58c7c75e2f7401fbd8648817d343a6b",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "test: wt-control-seats can't tell the control-seat route from the shared landing path (ps1 mutant survives)",
+  "description": "QA (qa-b29f7b3d) approved WT-07 (task-b319b263) with one non-blocking gap, recorded in its reviewSummary as \"ps1: 3/4 killed. Survivor, non-blocking: control seat routed to the shared path. With no baseline that path also lands nothing here.\"\n\nThe gap is in the wt-control-seats case (WT7D) of scripts/tests/postflight-worktree.cjs. The case still passes when moe-agent.ps1 sends an architect or QA control seat down the shared landing path instead of Invoke-MoeControlSeatPostflight. With no pre-flight baseline, the shared path also lands nothing, so every assertion holds on both routes:\n- one nothing/checkpoint/MOE_COMMIT_NOTHING_TO_COMMIT row;\n- for-each-ref unchanged;\n- HEAD stays on moe/control;\n- the control write is kept;\n- no baseline is written.\nA regression in the control-seat route would therefore go unnoticed.\n\nQA's suggested fix: give the case an ASSERTED path (declare_files) or a TOOL-witnessed path that the shared path would commit.\n\nWhen this row is promoted, slot it into the wrapper-lane dependsOn chain (pinned #general msg-6c3c0ede).",
+  "definitionOfDone": [
+    "wt-control-seats gives the architect and QA control seats at least one path the shared landing path would commit (an ASSERTED path via declare_files, or a TOOL-witnessed edit). It asserts that path is on no ref after the seat exits, and that exactly one MOE_COMMIT_NOTHING_TO_COMMIT row was recorded.",
+    "The completion summary carries mutation evidence: routing the control seat to the shared landing path makes wt-control-seats fail under both engines (moe-agent.ps1 via powershell, moe-agent.sh via bash).",
+    "node scripts/tests/postflight-safe.mjs bash and node scripts/tests/postflight-safe.mjs powershell (Windows PowerShell 5.1) both report failureClass NONE, and parity-check PASSes.",
+    "Test-only: moe-agent.sh/.ps1 change only if the hardened case exposes a real defect, and the summary names that defect."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 31,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T14:35:31.686Z",
+  "updatedAt": "2026-10-31T14:35:31.686Z"
+}

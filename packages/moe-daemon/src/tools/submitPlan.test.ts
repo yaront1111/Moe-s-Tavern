@@ -1377,7 +1377,7 @@ describe('planRevision', () => {
     expect(reloaded.getTask('task-1')?.planRevision).toBe(1);
   });
 
-  it('never resets on reopen and advances once when reopen clears step evidence', async () => {
+  it('preserves approval revision while execution and reopen clear step evidence', async () => {
     await boot();
     await submit();
     await h.state.updateTask('task-1', { status: 'WORKING' });
@@ -1388,12 +1388,12 @@ describe('planRevision', () => {
       modifiedFiles: ['file.ts'],
     }));
     await h.state.updateTask('task-1', { implementationPlan: executed, stepsCompleted: ['step-1'] });
-    expect(h.state.getTask('task-1')?.planRevision).toBe(2);
+    expect(h.state.getTask('task-1')?.planRevision).toBe(1);
     await h.state.updateTask('task-1', { status: 'REVIEW' });
 
     const reopened = await h.state.reopenTask('task-1', 'needs rework');
 
-    expect(reopened.planRevision).toBe(3);
+    expect(reopened.planRevision).toBe(1);
     expect(reopened.implementationPlan[0].status).toBe('PENDING');
   });
 
@@ -1656,5 +1656,55 @@ describe('planRevision', () => {
 
     expect(results.map((task) => task.planRevision).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([2, 3]);
     expect(h.state.getTask('task-1')?.planRevision).toBe(3);
+  });
+});
+
+// ---- rail refusal as it crosses the MCP wire ----
+import { McpAdapter, type JsonRpcResponse } from '../server/McpAdapter.js';
+
+describe('rail refusal on the MCP wire', () => {
+  const h = new ToolTestHarness();
+  const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  beforeEach(async () => {
+    h.init();
+    h.setupMoeFolder({
+      globalRails: {
+        techStack: [], forbiddenPatterns: ['rm -rf'], requiredPatterns: ['error handling'],
+        formatting: '', testing: '', customRules: []
+      }
+    });
+    h.createEpic();
+    h.createTask({ status: 'PLANNING' });
+    await h.state.load();
+  });
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  it.each([
+    ['forbidden in a step', { steps: [{ description: 'error handling, then rm -rf build' }] }, 'Forbidden pattern: rm -rf'],
+    ['required missing', { steps: [{ description: 'Step 1' }] }, 'Required pattern missing: error handling'],
+    ['forbidden only in contract', { steps: [{ description: 'error handling' }], executionContract: { invariants: ['rm -rf build'] } }, 'Forbidden pattern: rm -rf'],
+  ])('%s', async (_name, args, violation) => {
+    const file = path.join(h.moePath, 'tasks', 'task-1.json');
+    const before = fs.readFileSync(file, 'utf8');
+    const prefix = `[CONSTRAINT_VIOLATION] Rail violation: ${JSON.stringify(violation)}. Default action: `;
+
+    const response = await new McpAdapter(h.state).handle({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'moe.submit_plan', arguments: { taskId: 'task-1', ...args } }
+    }) as JsonRpcResponse;
+
+    expect(response.result).toBeUndefined();
+    expect(response.id).toBe(1);
+    expect(response.error).toStrictEqual({
+      code: -32003,
+      message: expect.stringMatching(new RegExp('^' + escapeRe(prefix))),
+      data: { tool: 'moe.submit_plan', codeName: 'CONSTRAINT_VIOLATION' }
+    });
+    expect(response.error?.message).toContain('moe.propose_rail');
+    expect(response.error?.message).toContain('taskId: "task-1"');
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    expect(h.state.getTask('task-1')?.status).toBe('PLANNING');
+    expect(h.state.getTask('task-1')?.implementationPlan).toEqual([]);
   });
 });

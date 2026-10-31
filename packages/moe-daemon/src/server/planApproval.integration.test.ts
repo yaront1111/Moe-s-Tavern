@@ -338,8 +338,8 @@ describe('plan-approval freshness across sockets, writers and restarts', () => {
 
   function approveFrame(taskId: string, token?: unknown): Record<string, unknown> {
     const payload: Record<string, unknown> = { taskId };
-    // Omission is the ONLY legacy opt-out, so `undefined` must leave the key out
-    // entirely — while an explicit null still travels, and is malformed.
+    // `undefined` leaves the key out entirely — an omission, refused since CQ-F04b —
+    // while an explicit null still travels, and is malformed.
     if (token !== undefined) payload.expectedPlanRevision = token;
     return { type: 'APPROVE_TASK', payload };
   }
@@ -689,15 +689,23 @@ describe('plan-approval freshness across sockets, writers and restarts', () => {
       await expectApproved(reviewer);
     });
 
-    it('still approves a legacy stamp-less row when the client omits the token entirely', async () => {
+    // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
+    it('refuses an omitted token on a legacy stamp-less row, which an explicit 0 then approves', async () => {
       setupMoeFolder();
       createEpic();
       writeTask({}, { omitPlanRevision: true });
       await start();
       expect(revisionOf()).toBeUndefined();
       const reviewer = await connectPlugin();
+      const bytesBefore = taskBytes();
 
       reviewer.send(approveFrame('task-1'));
+      const refused = await reviewer.nextOfType('ERROR');
+      expect(refused).toMatchObject({ code: INVALID_INPUT_CODE, codeName: 'INVALID_INPUT', operation: 'APPROVE_TASK' });
+      expect(taskBytes()).toBe(bytesBefore);
+      await expectNoApprovalEvent();
+
+      reviewer.send(approveFrame('task-1', 0));
       await expectApproved(reviewer);
     });
 

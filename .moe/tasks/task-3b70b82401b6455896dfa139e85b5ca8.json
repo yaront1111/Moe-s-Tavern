@@ -1,0 +1,253 @@
+{
+  "id": "task-3b70b82401b6455896dfa139e85b5ca8",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10c] Host job frame and verified guest job termination",
+  "description": "Objective: the host bridge session sends CQ-R10b's job frame, and the host can prove with fixed probes that no moe-agent process is left in the owned guest. This is R08's handoff item 2: a local kill of `multipass exec` is not evidence that the guest job ended.\n\nSplit from CQ-R10 (task-e6411b76f42a43c5b679c725947336af) on 2026-10-29. R10 final consumes this contract.\n\nContract:\n- guest-bridge.mjs exports:\n  - AGENT_JOBS: cli -> its allowed credential names. It mirrors guest-supervisor.py JOBS, and a drift test pins the equality.\n  - jobFrame({cli, role, credential}): returns the exact CQ-R10b frame bytes through encodeFrame: {kind:'job', version:1, cli, role, credential:{name, value}}, exact keys, value 1-4096 chars of [\\x21-\\x7e]. A refusal uses a fixed BRIDGE_* code and never echoes the credential.\n- guest-session.mjs runGuestSession:\n  - gains a required job: {cli, credential:{name, value}}; the role comes from the frozen binding;\n  - writes the job frame as the FIRST bytes on the provider's stdin, right after spawn and before any response, bounded by timeoutMs like every other write;\n  - refuses invalid job input before spawn with SESSION_INPUT_INVALID.\n  The credential never appears in argv, spawn options or env, an error, onOutput, or any other provider call. Existing H1-H5 call sites get the new input and nothing else. No assertion is weakened.\n- guest-session.mjs exports endAgentJobs(name, provider = {}, {rounds = 3, sleep, delayMs}), which resolves a frozen {verified: boolean}.\n  - It uses lifecycle.mjs invoker() (bounded execFile, shell:false).\n  - Each round runs `exec --no-map-working-directory <name> -- sudo -n pkill -KILL -U moe-agent`, then `exec --no-map-working-directory <name> -- sudo -n pgrep -U moe-agent`.\n  - verified is true only when pgrep exits exactly 1 (no process left). Exit 0 retries after delayMs. Any other code, provider error or timeout, or running out of rounds, gives verified false.\n  - The argv are fixed constants (JOB_IDENTITIES[0]). No other user, process or provider command is touched. It never claims termination it did not observe.\n\nScope: scripts/local-runner/guest-bridge.mjs, scripts/local-runner/guest-session.mjs and scripts/tests/local-runner-bridge.test.mjs. Out of scope: the guest supervisor, ledger or lease handling, CLI installation, and any verified-local or isolation claim. Target at most 400 changed lines by git diff --numstat; no size exception exists.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs (on WSL: env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "In every session the job frame is byte-exact and is the first write on stdin. Invalid job input refuses before spawn without echoing the credential. The credential is absent from argv, spawn options, errors and output. All shown by tests.",
+    "An end-to-end test runs the real supervisor through R10b's main() with injected paths and identity. The job starts with exactly the frame's credential and role in its environment, and a scoped get_context still carries only the host sessionId.",
+    "Tests with an injected run show endAgentJobs issuing only the fixed argv. It reports verified only on pgrep exit 1 and retries a still-present process. Any other code, a provider error or running out of rounds reports unverified.",
+    "The verification command exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "guest-bridge.mjs: AGENT_JOBS and jobFrame, plus tests B16 and B17 (DoD 1).\n\nBase. CQ-R10b (task-7f928d96) must have landed first (dependency). Read its landed guest-supervisor.py: JOBS, read_job, start_job, main(**seams). If its QA changed the contract in task-3b70b824's comment-1630161d, follow the landed code and record the deviation in your step note. Before editing, run step 4's command once for a green baseline.\n\nscripts/local-runner/guest-bridge.mjs:\n- `export const AGENT_JOBS = Object.freeze({ claude: Object.freeze(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']), codex: Object.freeze(['OPENAI_API_KEY', 'CODEX_API_KEY']) })`, with a comment naming guest-supervisor.py JOBS as its mirror.\n- `export function jobFrame(job)`:\n  - job is a record with exact keys {cli, role, credential};\n  - typeof cli === 'string' && Object.hasOwn(AGENT_JOBS, cli), so prototype keys such as 'constructor' are refused;\n  - role is 'worker' or 'qa';\n  - credential is a record with exact keys {name, value}, AGENT_JOBS[cli].includes(name), and value matches /^[\\x21-\\x7e]{1,4096}$/.\n  - It returns encodeFrame({kind: 'job', version: 1, cli, role, credential: {name, value}}), built from those named fields only, in that key order, under the default MAX_HOST_FRAME_BYTES.\n  - Error handling: any refusal throws bridgeError('BRIDGE_INPUT_INVALID'), whose fixed text never echoes the credential.\n- Change exactKeys to compare the own enumerable key set: `const own = Object.keys(value); return own.length === keys.length && own.every(key => keys.includes(key));`. The count-plus-hasOwn form lets a non-enumerable required key stand in for an enumerable extra (Serena gotcha-strict-decoder-key-set).\n  - This is one line, and it also hardens validBinding.\n  - Inputs that are JSON or object literals behave exactly as before, so every B row stays green.\n\nTests, in a new CQ-R10c section at the end of scripts/tests/local-runner-bridge.test.mjs. Give the module a credential constant containing 'secret' (e.g. 'sk-secret-R10c!~'), so the existing rejectsWith check, /[\\\\/]|secret/, catches any echo.\n- B16:\n  - AGENT_JOBS and both inner arrays are frozen.\n  - A codex/qa frame whose value is '!' + 4094 'x' + '~' (exactly 4096 characters) deep-equals framed(JSON.stringify({kind:'job', version:1, cli, role, credential})), byte for byte.\n  - Each of these is refused with BRIDGE_INPUT_INVALID, and its message lacks the credential:\n    - null, [], an extra key, a missing credential;\n    - cli 'gemini' or 'constructor'; role 'architect';\n    - credential 'x'; a credential with an extra key; one with a non-enumerable name plus an enumerable extra;\n    - OPENAI_API_KEY for claude;\n    - values '', 'a b', 'a\\x7f', 'café', 4097 characters and 7.\n- B17 (skip: NO_GUEST): harness('print(json.dumps({cli: list(names) for cli, (_, names) in m.JOBS.items()}))') deep-equals AGENT_JOBS. It is the drift pin.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Baseline 4-file gate before editing: exit 0, 296 tests, 295 pass, 1 pre-existing skip (peer work raised the count from R10b's 290).\n\nguest-bridge.mjs (+23/-1): frozen AGENT_JOBS; jobFrame(job) with exact keys {cli, role, credential} and {name, value}, Object.hasOwn on cli, role worker|qa, the name in AGENT_JOBS[cli], value /^[\\x21-\\x7e]{1,4096}$/. It returns encodeFrame({kind:'job', version:1, cli, role, credential:{name, value}}), built from fields each read once. The whole check sits in a try, so a throwing getter or proxy trap is also BRIDGE_INPUT_INVALID with fixed text. That hardening goes slightly past the plan; B16 has a row for it. exactKeys now compares the own enumerable key set.\n\nTests: B16 and B17 sit in a new CQ-R10c section at the end. B17 is the harness drift pin against m.JOBS. The R10b section already defines a local `jobFrame` (encodeFrame for arbitrary values) plus JOB and SECRET, so the import is `jobFrame as hostJobFrame`. KEY = 'sk-secret-R10c!~' and HOST_JOB {cli:'claude', ANTHROPIC_API_KEY} are declared before fakeProvider, next to their first use in openSession. That avoids a forward reference to the end of the file. The removed line is the import only. B1-B17 all pass.\n\nPeer dirty paths I left alone: scripts/local-runner/source-export.mjs, scripts/tests/local-runner.test.mjs, scripts/local-runner/admission.mjs, plus the .moe and root debris.",
+      "startedAt": "2026-10-29T17:25:37.763Z",
+      "completedAt": "2026-10-29T17:27:37.226Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "guest-session.mjs: runGuestSession sends the job frame first (DoD 1, DoD 2), plus H-harness compatibility and tests H6 and H7.\n\nscripts/local-runner/guest-session.mjs, in runGuestSession's validation try block:\n- Destructure a required `job`.\n- After the binding check, require isRecord(job) with exactly the keys {cli, credential}. A job.role is refused: the role comes only from the frozen binding.\n- Compute `first = jobFrame({ cli: job.cli, role: frozen.role, credential: job.credential })` before spawn. This encodes it once, so a later caller edit cannot change it. Keep it on options.\n- Error handling: any throw there yields SESSION_INPUT_INVALID through the existing catch, before daemonRefusal, spawn or any provider call.\n\nIn relay(), after every listener is attached, issue the first stdin write:\n`bounded(session, new Promise((done, failed) => child.stdin.write(options.first, error => (error ? failed(error) : done())))).catch(error => stop(session, error === TIMEOUT ? 'SESSION_TIMEOUT' : 'SESSION_PROVIDER_FAILED'))`.\n- Node keeps write order, and pump writes only after a request, so the frame is always the first stdin bytes.\n- The real supervisor sends hello only after reading it.\n\nDocument it:\n- runGuestSession's JSDoc: the job input, the first write, and that the credential reaches only that frame, never argv, spawn options, env, an error or output;\n- the file header: \"its stdin starts with the CQ-R10b job frame\".\nThe argv, spawn options and env stay exactly as today.\n\nKeep the existing tests unchanged:\n- fakeProvider: the FIRST stdin write lands in proc.job, through a new optional `first` hook (default: `(chunk, done) => done()`). Every later write goes to proc.written and the existing `write` hook, exactly as now. Every existing written, replies() and exchange() assertion then stays byte-identical, and H4's write hooks still meet the replies they target.\n- openSession passes `job: JOB` before `...options`, with JOB a frozen claude/ANTHROPIC_API_KEY job. Call sites get the new input and nothing else.\n- H5: supervised()'s harness calls `m.read_job(0, m.JOBS)` before `m.relay(...)`. Otherwise relay() parses the job frame as a host response and exits 76. That one line also proves the host's frame passes the guest's own validator.\nNo existing assertion changes or weakens. Check that the diff's removed lines are only the import, fakeProvider, openSession and supervised() lines.\n\nTests:\n- H6:\n  - For BINDING plus JOB, and for a qa binding plus codex/CODEX_API_KEY: proc.job deep-equals jobFrame({cli, role: binding.role, credential}), the one reply comes after it, and JSON.stringify of [proc.calls, run.outputs, run.forwarded, result] lacks the credential.\n  - A `first` hook that never calls done gives SESSION_TIMEOUT, and one that calls done(new Error(credential)) gives SESSION_PROVIDER_FAILED. Both run with timeoutMs 100, and HELLO is sent first, so only the job write's own bound is left. Both leave forwarded and written empty, and rejectsWith also proves the message lacks the credential.\n  - Invalid jobs refuse with SESSION_INPUT_INVALID and zero provider calls: undefined, null, {cli} alone, a job with role, a claude credential under codex, and the value 'a b'.\n- H7 (DoD 2; skip: NO_GUEST; timeout: 30_000), end to end through R10b's main().\n  - A supervised-style spawn records launches, makes a temp dir holding the socket and a workspace, and runs:\n    `python3 -I -B -c LOAD + code`, where code writes a 0700 probe `#!<sys.executable> -I` with the socket path baked in (argv is the executable alone).\n    It then calls `m.main(['bridge'], geteuid=lambda: 0, workspace, sessions, identity=(os.getuid(), os.getgid(), None), jobs={cli: (probe, names) for cli, (_, names) in m.JOBS.items()}, agent_socket=<socket>`, plus `peer_uid=lambda sock: os.getuid()` off Linux, as PEER does). Push the host onto `sessions` so after() cleans up.\n  - The probe sends one get_context and reads its answer. It prints JSON with MOE_ROLE, the credential names present in its env, the sha256 of each value (never the value, so onOutput never carries it) and the answer.\n  - Run with a qa binding and codex/CODEX_API_KEY. Assert:\n    - the result is {observation: EXIT, executionReady: false};\n    - the printed role is 'qa', the names are exactly ['CODEX_API_KEY'], and the sha is sha256(credential);\n    - the answer is the scoped success;\n    - forwarded is exactly [['moe.get_context', {taskId: 'task-abc', workerId: 'worker-1', sessionId: SESSION_ID}]];\n    - the launches and outputs lack the credential.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "guest-session.mjs:\n- runGuestSession destructures a required `job`. Its own enumerable keys must be exactly {cli, credential}, so a job.role is refused.\n- `first = jobFrame({cli: job.cli, role: frozen.role, credential: job.credential})` is encoded once, inside the validation try and before daemonRefusal or spawn. Any throw there gives SESSION_INPUT_INVALID.\n- relay() issues the first stdin write after every listener is attached, inside bounded(). A TIMEOUT gives SESSION_TIMEOUT and any other failure SESSION_PROVIDER_FAILED.\n- The file header and the JSDoc document the job input and the credential's only path. argv, spawn options and env are unchanged.\n\nHarness, with no assertion changed:\n- fakeProvider gets an optional `first` hook. The first write lands in proc.job; later writes go to proc.written and `write`, as before.\n- openSession passes `job: HOST_JOB` before `...options`.\n- supervised() runs `m.read_job(0, m.JOBS)` before relay.\n- The removed lines are the import, fakeProvider, openSession and supervised() only, plus one blank line that git's diff re-aligns around the KEY/HOST_JOB insertion.\n\nNew tests:\n- H6: the first write is byte-exact for worker/claude and qa/codex. A caller mutation after the call has no effect; calls deep-equal [SPAWNED]; the reply follows the frame; the credential is absent from calls, outputs, forwarded and the result. A hung first write gives SESSION_TIMEOUT and done(Error(KEY)) gives SESSION_PROVIDER_FAILED, both after HELLO with timeoutMs 100 and with nothing forwarded or written. Six invalid jobs give SESSION_INPUT_INVALID with zero spawn calls.\n- H7: end to end through m.main(['bridge'], geteuid=lambda: 0, workspace, sessions, identity=(uid, gid, None), jobs=probe, agent_socket, plus PEER). The probe reports role 'qa', exactly ['CODEX_API_KEY'] beyond the fixed env, sha256(KEY) and the scoped get_context answer.\n\nOne deviation from the plan text: H7's forwarded identity is workerId 'qa-1', because the QA binding's workerId is 'qa-1'. The plan's 'worker-1' was a slip; the binding is the authority.\n\nH1-H7 all pass (H4 takes about 1 s, the same as baseline). No orphaned processes and no __pycache__.",
+      "startedAt": "2026-10-29T17:27:40.945Z",
+      "completedAt": "2026-10-29T17:31:29.488Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "guest-session.mjs: endAgentJobs (DoD 3), plus test H8.\n\nAdd to scripts/local-runner/guest-session.mjs:\n- imports: JOB_IDENTITIES from guest-bootstrap.mjs; invoker and QUERY_TIMEOUT_MS from lifecycle.mjs; `setTimeout as delay` from node:timers/promises. guest-bridge.mjs already imports lifecycle.mjs, so this adds no cycle.\n- constants:\n  - PKILL = Object.freeze(['sudo', '-n', 'pkill', '-KILL', '-U', JOB_IDENTITIES[0]]);\n  - PGREP = Object.freeze(['sudo', '-n', 'pgrep', '-c', '-U', JOB_IDENTITIES[0]]).\n  - Each runs as `['exec', '--no-map-working-directory', name, '--', ...argv]`.\n- Why `pgrep -c`, a deliberate refinement of the task's argv. Exit 1 alone is ambiguous:\n  - `sudo -n` exits 1 on its own failures (verified here: 'a password is required', empty stdout);\n  - Multipass's own CommandLineError is 1 too.\n  - `pgrep -c` prints the count, and with no match prints exactly '0' and exits 1 (verified: procps-ng 4.0.4, as in Ubuntu 24.04).\n  - So verified requires exit 1 AND stdout matching /^0\\r?\\n$/. The CR allows for a Windows host's Multipass. That keeps DoD 3's \"only on pgrep exit 1\" and never claims termination it did not observe.\n- `export async function endAgentJobs(name, provider = {}, { rounds = 3, sleep = delay, delayMs = 1_000 } = {})`:\n  - Error handling: the invoker(name, provider) throw, rounds outside the safe integers 1..10, a non-function sleep, or delayMs outside the safe integers 0..60000 each reject with sessionError('SESSION_INPUT_INVALID') before any run call.\n  - exec(argv) calls invoke([...], QUERY_TIMEOUT_MS) inside Promise.resolve().then(...), so a synchronous throw from an injected run is a transport failure too.\n    - A resolved call is {code: 0, stdout}.\n    - A rejection with an integer error.code and no error.killed is {code, stdout: error.stdout}, the remote exit (runGuestProbe's rule).\n    - Anything else is a transport failure: a timeout (killed), ENOENT, or maxBuffer.\n  - Each round:\n    - sleep(delayMs) before every round but the first;\n    - pkill. Its exit code proves nothing, so 0 and 1 are both fine, but a transport failure ends with verified false and runs no pgrep;\n    - then pgrep. Exit 1 with '0' gives verified true. Exit 0 goes to the next round. Anything else (another code, exit 1 with other stdout, or a transport failure) ends with verified false at once.\n  - Out of rounds gives verified false.\n  - It always resolves Object.freeze({verified}).\n  - No other user, process or provider command is ever run. Document that the provider is lifecycle's {executable, run}, so R10 final can pass one object carrying spawn and run.\n\nTest H8 (timeout 30_000), with a scripted `run` that records (executable, args, options) and returns or throws per call. Rows give (results, verified, rounds), where rounds counts pkill/pgrep pairs:\n- pgrep exit 1 '0\\n': true after 1 round;\n- pkill exit 1, then pgrep '0\\r\\n': true after 1;\n- pgrep exit 0 '2\\n', then exit 1 '0\\n': true after 2, slept [7];\n- exit 0 three times: false after 3, slept [7, 7];\n- exit 1 with '' (the sudo case): false after 1;\n- exit 1 '0\\n\\n': false;\n- exit 2 '0\\n': false;\n- a killed timeout: false;\n- pkill ENOENT: false, and no pgrep call.\nAssert for every row:\n- the result is frozen and deep-equals {verified};\n- the args alternate exactly PKILL/PGREP full argv;\n- every call is 'multipass' with shell false and timeout QUERY_TIMEOUT_MS;\n- sleep got delayMs each time.\nInvalid name, provider, rounds, delayMs or sleep each reject SESSION_INPUT_INVALID through rejectsWith.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "guest-session.mjs, endAgentJobs(name, provider = {}, options = {}):\n- Imports delay, JOB_IDENTITIES, invoker and QUERY_TIMEOUT_MS. guest-bridge already imports lifecycle and bootstrap, so there is no new cycle.\n- Fixed PKILL `sudo -n pkill -KILL -U moe-agent` and PGREP `sudo -n pgrep -c -U moe-agent`, run as `exec --no-map-working-directory <name> -- ...`.\n- remote() is async with try/await, so a synchronous throw from run, a non-record resolution, or a timeout/ENOENT/maxBuffer is a transport failure (null). An integer error.code without killed is the remote exit (the runGuestProbe rule).\n- Each round sleeps before every round but the first, then runs pkill (any remote exit is accepted; a transport failure ends with false), then pgrep. Exit 1 with /^0\\r?\\n$/ gives verified true. Exit 0 goes to the next round. Anything else is false at once, and running out of rounds is false.\n- Input checks: invoker's throw, options null, rounds outside safe integers 1..10, a non-function sleep, or delayMs outside safe integers 0..60000 each reject SESSION_INPUT_INVALID before any run call.\n- It always resolves a frozen {verified}; a rejecting sleep is caught and fails closed.\n- The pgrep -c refinement follows the architect's plan and QA note (comment-9cfd6506).\n\nH8 has 15 scripted rows, each [results, verified]. Every result is consumed, so the args must alternate exactly pkill/pgrep, one call per result.\n- Verified true: pgrep 0\\n, 0\\r\\n, a pkill exit 255 followed by pgrep 0\\n, and a retry after exit 0.\n- Verified false: exit 0 three times; exit 1 with '' (the sudo case); '0\\n\\n'; ' 0\\n'; exit 2; a killed timeout; a synchronous throw; ENOENT on pgrep; pkill ENOENT, timeout or throw (no pgrep call).\n- Every call is checked for 'multipass', shell false, timeout QUERY_TIMEOUT_MS and killSignal SIGKILL; sleep gets delayMs 7 between rounds.\n- One more row checks the default sleep waits for real (rounds 2, delayMs 50, 4 calls).\n- 13 invalid-input rows give SESSION_INPUT_INVALID with no run call.\n\nB16/B17 and H1-H8 pass (10/10). Size so far: bridge +23/-1, session +63/-4, tests +172/-9, 272 changed lines in total (cap 400).",
+      "startedAt": "2026-10-29T17:31:32.853Z",
+      "completedAt": "2026-10-29T17:33:41.006Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run it once, fresh, from the repo root:\n`node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs`\nOn WSL, run it as `env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test ...`, so the Windows PATH stays out. Exit 0 is required, and its output tail is the complete_task verification evidence.\n\nAlso confirm:\n- `git diff --numstat` over the three files totals at most 400 changed lines. The architect prototype measured 201: bridge +17/-1, session +34/-3, tests +139/-7;\n- no scripts/local-runner/__pycache__ exists;\n- `pgrep -af 'time[.]sleep[(]600'` shows nothing of yours;\n- LF line endings.\nPeers' dirty paths are not yours: note them and continue.\n\nError handling for the gate itself: if a test fails, fix the cause with a test, never by weakening or skipping a row, then re-run the whole command.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "I ran the 4-file gate fresh with env -i and the nvm node v24.21.0 PATH: exit 0, 301 tests, 300 pass, 0 fail, 1 pre-existing skip. The baseline was 296/295/1, and the 5 new tests are B16, B17, H6, H7 and H8.\n- Size by git diff --numstat: 272 changed lines (+258/-14). That is bridge +23/-1, session +63/-4 and tests +172/-9, under the 400 cap.\n- There is no scripts/local-runner/__pycache__, and `pgrep -af 'time[.]sleep[(]600'` finds nothing.\n- All three files are LF only, with 0 CR bytes.\n- I left the peers' dirty paths alone: source-export.mjs, local-runner.test.mjs, admission.mjs, plus the .moe and root debris.",
+      "startedAt": "2026-10-29T17:33:45.037Z",
+      "completedAt": "2026-10-29T17:34:23.187Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff only. Load the adversarial-self-review skill, then read the diff as each attacker in turn:\n- A hostile guest: replying before reading the job frame; never reading stdin; echoing the credential in output; forging pgrep output through a Multipass or sudo failure.\n- A careless caller: a job with role, a mutated job after the call, non-enumerable keys, prototype-named cli values, a credential with a newline.\n- The environment: a Windows host's CRLF, a slow guest that keeps a zombie past 3 rounds, Multipass timeouts.\n\nCheck that:\n- the job frame is the first stdin write on every path;\n- the credential is in no argv, spawn option, env, error message, output or other provider call;\n- the error handling never reports verified without exit 1 and a '0' count;\n- the existing B1-B15, S, I, J and H1-H5 assertions are unchanged;\n- verified-local, executionReady and every isolation claim are untouched;\n- there is no .moe edit and no Git write.\n\nMutation spot-check in a scratch `git archive HEAD | tar -x` copy, never in the shared tree. Score each mutant by exit code with --test-name-pattern='^(B1[67]|H[1-8]) ' and wrap each run in timeout. Mutants and the test that should kill each:\n- dropping `-c` or the stdout check: H8;\n- treating exit 1 alone as verified: H8;\n- no retry on exit 0: H8;\n- retrying on a transport failure: H8;\n- writing the frame after the first reply: H6;\n- an unbounded first write: H6;\n- role taken from job: H6;\n- the count+hasOwn exactKeys: B16;\n- a missing hasOwn on cli: B16;\n- a value regex without anchors: B16.\n\nFix anything found with a test, then re-run step 4's command and supply that fresh output to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Adversarial self-review of this task's three files only.\n\nFixes found by the review, both test-only:\n- B16 gains an 'x\\n' credential row, for the newline attacker.\n- H6 gains a row where stdin.write throws synchronously while the guest then sends a clean HELLO/EXIT/exit 0; it must give SESSION_PROVIDER_FAILED with no observation. Without it, the mutant that ignores a non-timeout job-write error survived, because the stdin 'error' listener masks stream errors.\n\nMutation sweep in scratch `git archive HEAD scripts` copies plus my 3 files. Each mutant was run under `timeout 120` with `^(B1[67]|H[1-8]) ` and scored by exit code; leftovers were killed by a per-run env marker. The driver and mutant lists are in /tmp/r10c-mut-tools. Result: 31 of 33 mutants killed, and the 2 survivors are equivalent.\n- H8 kills: no `-c`, no stdout check, no CR, an unanchored count regex, no retry on 0, retrying after a pgrep or pkill transport failure, an ignored pkill transport failure, killed counted as a remote exit, sleep before round 1, a dropped --no-map-working-directory, and an unchecked rounds, delayMs or sleep.\n- H6 kills: frame after the reply (H3/H4 too), no frame, an unbounded first write (30 s timeout), a write error ignored or reported as a timeout, role from job, and unchecked job keys.\n- B16 kills: count+hasOwn exactKeys, an unanchored value regex, no 4096 cap, an unchecked name, any role, no try, and unfrozen AGENT_JOBS.\n- Other kills: version 2 (B16, H5, H7) and AGENT_JOBS drift (B17).\n- Equivalent survivors:\n  - `cli in AGENT_JOBS` instead of hasOwn: 'constructor' then reaches AGENT_JOBS.constructor.includes, a TypeError the try/catch turns into BRIDGE_INPUT_INVALID. Only Object.prototype pollution could tell them apart, so the hasOwn is defence in depth. The try/catch is my addition beyond the plan, and this masking is its cost.\n  - A missing-job default of ['cli', 'credential']: job.cli then throws a TypeError, giving SESSION_INPUT_INVALID.\n\nChecks:\n- The job frame is the first write on the only spawn path. It is issued synchronously after the listeners attach; pump writes only after a request event.\n- The credential reaches only options.first. H6 checks calls, outputs, forwarded and the result; H7 checks launches and all output bytes.\n- verified is true only for pgrep exit 1 with a '0' count.\n- No B1-B15, S, I, J or H1-H5 assertion changed.\n- executionReady and verified-local are untouched. There are no .moe edits and no Git writes.\n\nResiduals for R10 final:\n- The job itself holds its credential and may print it; its output reaches onOutput unfiltered, by design.\n- endAgentJobs kills every moe-agent process in the VM, so the caller must hold R06's per-VM job lease.\n- The worst case is 3 rounds × 2 calls × 30 s plus delays, about 182 s.\n- A guest root that lies about pgrep is out of scope.\n\nFinal fresh gate: exit 0, 301 tests, 300 pass, 1 pre-existing skip. Windows node v24.16 on the bridge file: 55 tests, 22 pass, 0 fail, 33 NO_GUEST skips (B16, H6 and H8 pass). Size 280 (+266/-14). LF only, no __pycache__, no orphans.",
+      "startedAt": "2026-10-29T17:34:24.131Z",
+      "completedAt": "2026-10-29T17:40:54.789Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7f928d96060341f382d37cf5e22f7d53"
+  ],
+  "priority": "HIGH",
+  "order": 0.7,
+  "comments": [
+    {
+      "id": "comment-1630161db2bf43f78a3683ccef68b1c4",
+      "author": "architect-bd1eb82d",
+      "content": "The CQ-R10b guest contract this task builds on (R10b plan rev 1; planned, not landed). If R10b's QA changes any of it, follow the landed code.\n\nJob table:\n- `JOBS[cli] = (executable, credential names)`, with `claude` mapping to `/opt/moe/agents/claude` and ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN, and `codex` mapping to `/opt/moe/agents/codex` and OPENAI_API_KEY or CODEX_API_KEY.\n- AGENT_JOBS's drift test can read `{cli: list(names) for cli, (_, names) in m.JOBS.items()}`.\n\nTest seams for the end-to-end DoD 2 (Python keywords only):\n- `main(argv, geteuid=os.geteuid, **seams)` forwards the seams to `start_job(in_fd, out_fd, workspace, sessions, identity=(uid, gid, groups|None), jobs, agent_socket, peer_uid)`.\n- A non-root test passes `identity=(os.getuid(), os.getgid(), None)`, because setgroups needs root.\n- It needs a temp `agent_socket` for get_context.\n- Pass `peer_uid` off Linux, as H5's PEER does.\n- relay() treats stdin EOF as a gone host, so keep the bridge's stdin open while the job runs.\n\nFrame and exit codes:\n- The frame is read byte-exact before hello. Every later stdin byte belongs to relay().\n- Refusals write no frame: 65 for a bad frame, 74 for EOF before the frame, 66 for no workspace, and 71 for no account or session home.\n- The job env is exactly: PATH=/usr/local/bin:/usr/bin:/bin, HOME (a fresh home under /var/lib/moe/sessions), USER and LOGNAME both moe-agent, LANG=C.UTF-8, MOE_ROLE, and the one credential variable.",
+      "timestamp": "2026-10-29T13:05:11.966Z"
+    },
+    {
+      "id": "comment-9cfd6506e0d54910938c1fdee790e75b",
+      "author": "architect-bd1eb82d",
+      "content": "Architect note for QA (plan rev 1). The plan deliberately departs from the description's literal PGREP argv.\n\nThe description says `sudo -n pgrep -U moe-agent`, verified on exit 1. The plan uses `sudo -n pgrep -c -U moe-agent` instead, and verified needs exit 1 AND stdout matching /^0\\r?\\n$/.\n\nWhy: exit 1 alone is ambiguous.\n- `sudo -n` exits 1 on its own failures. Checked on this box, it prints \"sudo: a password is required\" and leaves stdout empty.\n- Multipass's CommandLineError is 1 as well.\n- Only `pgrep -c` prints a count, and it prints exactly `0` when nothing matched (procps-ng 4.0.4, the Ubuntu 24.04 version).\n\nSo the literal check could claim a termination nobody observed. The refined one keeps DoD 3 (\"verified only on pgrep exit 1\"). The optional CR allows for a Windows host's Multipass.\n\nR10 final's step 1 is amended to the same argv and fake answers (amend-1).\n\nAlso, for QA, a test-harness change that leaves every pre-existing H assertion byte-identical: fakeProvider records its first stdin write as `proc.job`, and H6 pins that write as the job frame.",
+      "timestamp": "2026-10-29T13:16:22.571Z"
+    },
+    {
+      "id": "comment-a43d8cfe2e754bfc99d7f16518553da0",
+      "author": "qa-952969be",
+      "content": "QA evidence (qa-952969be), reviewing completion commit c7011d7 on moe/work-2026-10-24. The 3 code files are unchanged since.\n\nSize: 280 changed lines (bridge +23/-1, session +63/-4, tests +180/-9), under the 400 cap.\n\nGate, fresh from `git archive c7011d7` (full tree, env -i, nvm node v24.21):\n- exit 0, 301 tests, 300 pass, 0 fail, 1 pre-existing skip;\n- B16, B17 and H1-H8 pass.\nWindows node v24.16, bridge file only: 55 tests, 22 pass, 0 fail, 33 NO_GUEST skips; B16, H6 and H8 pass.\n\nDoD 1: the frame is encoded once, before daemonRefusal or spawn, and is the first stdin write, inside bounded(). A bad job is SESSION_INPUT_INVALID with zero spawn calls. H6 shows the credential is absent from calls, outputs, forwarded, the result and errors (rejectsWith /secret/).\n\nDoD 2: H7 runs end to end through m.main(['bridge']). It sees role qa, exactly CODEX_API_KEY and a matching sha256, and get_context forwards only {taskId, workerId:'qa-1', sessionId}.\n\nDoD 3: H8 covers the fixed argv `sudo -n pkill -KILL -U moe-agent`, then `pgrep -c`, through invoker. verified is true only on exit 1 with stdout '0'. Exit 0 retries; anything else is false.\n- The -c refinement is the architect's (comment-9cfd6506) and stricter than the DoD.\n- I confirmed locally that `pgrep -c` on procps-ng 4.0.4 exits 1 and prints 0, and that `sudo -n` alone exits 1.\n\nMy own mutation probe killed 11 of 11:\n- exit 1 alone counts as verified;\n- role constant 'worker';\n- frame dropped, or written twice;\n- credential leaked into spawn env;\n- pkill failure ignored;\n- no retry;\n- the old exactKeys;\n- a 4097 cap;\n- job.role accepted;\n- killed counted as an exit.\n\nAlso checked:\n- A real spawn of a missing executable still gives SESSION_SPAWN_FAILED (5 of 5 runs).\n- The H1-H5 harness changes are only the job input, proc.job for the first write and m.read_job; no assertion is weakened.\n- executionReady is untouched. There is no verified-local claim and no .moe or Git write by the agent.\n- Files are LF only, no __pycache__, no orphans.\n\nFor R10 final: hold the per-VM lease around endAgentJobs, because it kills every moe-agent process. Its worst case is about 182 s.",
+      "timestamp": "2026-10-29T18:18:01.590Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T12:06:39.556Z",
+  "updatedAt": "2026-10-29T18:18:44.517Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T13:05:17.093Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-29T18:18:08.778Z",
+    "wallClockMs": 18771685
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-fe18a9a9",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T13:13:55.320Z",
+  "planningNotes": {
+    "approachesConsidered": "1) Keeping the task's literal `pgrep -U` with an exit-1 test. Rejected: `sudo -n` failures and Multipass's CommandLineError also exit 1 with empty stdout, which would claim a termination never observed. `pgrep -c` plus exactly '0' disambiguates.\n2) Updating each H assertion that inspects proc.written or replies() for the new first frame. Rejected: it churns about 12 assertions. The fake provider capturing its first write as proc.job keeps them byte-identical, and H6 pins the first-write property directly.\n3) Converting H5 to main(). Rejected: H5's agent needs argv, and main() gives the job argv [executable] only. A one-line m.read_job in its harness keeps H5 and also cross-checks the host frame against the guest validator. H7 covers main() end to end (DoD 2).\n4) A local strict key check in jobFrame. Rejected in favour of fixing the shared exactKeys helper (one line). It hardens validBinding too, and no JSON or literal input changes behaviour.\n5) Printing the credential from the H7 probe. Rejected: the job's output reaches onOutput. The probe prints its sha256.",
+    "codebaseInsights": "Architect prototype (copies in /tmp/claude-1000/r10c-proto/), built on the R10b prototype (/tmp/claude-1000/r10b-proto/), not on landed R10b; rebuild it on what R10b actually lands.\n- Size: 201 changed lines (bridge +17/-1, session +34/-3, tests +139/-7).\n- The full 4-file gate: 288 tests, 287 pass, 1 pre-existing skip, 0 fail. With the runtime and the three harness tweaks alone, all 50 bridge tests passed.\n\nCodebase facts:\n- runGuestProbe (guest-readiness.mjs) already treats an integer error.code without error.killed as the remote exit, with error.stdout.\n- invoker(name, provider) validates the name and provider and runs execFile with shell false, killSignal SIGKILL and maxBuffer.\n- QUERY_TIMEOUT_MS = 30_000 is exported by lifecycle.mjs.\n- R10b's start_job accepts peer_uid, so H7 runs on macOS too.\n- relay() treats stdin EOF as a gone host, and runGuestSession keeps stdin open until teardown.\n- rejectsWith already refuses a message containing 'secret' or a path.\n\nR10 final consumes runGuestSession({..., job}) and endAgentJobs(name, provider, {rounds, sleep, delayMs}) -> frozen {verified}.",
+    "risks": "- The fake provider's first-write capture must not route the job frame through the existing `write` hook, or H4's hung- and failed-write rows would trip on the job frame instead of their reply.\n- Without the read_job line, H5's real supervisor exits 76. Remember that line if R10b renames read_job.\n- H7 needs the socket path baked into the probe, because argv is the executable alone. Keep macOS's AF_UNIX path length in mind (H5 already runs there).\n- endAgentJobs must stop on a pkill transport failure, never treat it as 'nothing to kill'.\n- Zombies that are never reaped exhaust the rounds and report unverified. That fails closed.\n- On WSL, run under env -i with the nvm Node 24 PATH. After any mutation sweep, check for orphans with `pgrep -af 'time[.]sleep[(]600'` (mem gotcha-local-runner-supervisor-tests).",
+    "keyFiles": [
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/guest-readiness.mjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-29T13:13:55.412Z",
+  "workStartedAt": "2026-10-29T17:25:37.763Z",
+  "reviewStartedAt": "2026-10-29T17:41:23.681Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ X7 end to end, a dirty checkout round-trips through the real supervisor and only the agent changes come back, never a refused one (878.943749ms)\n✔ A1 invalid input is refused before any temp dir or Git process: a bare git, a relative repo, a forged candidate (141.031215ms)\n✔ A2 a candidate must fit its base: a delete names a base blob, and a file never replaces, covers or sits beneath a non-blob (889.17101ms)\n✔ A3 the admitted tree is the base minus deletes plus files, byte for byte, with no autocrlf, eol or ident conversion (637.800952ms)\n✔ A4 admission changes no ref, index or worktree byte and runs no candidate file: the active controller stays in place (183.78636ms)\n✔ A5 hostile hooks, fsmonitor, package scripts, inherited GIT_* and a hostile HOME never run or redirect admission (191.410348ms)\n✔ A6 every Git call runs in the admission envelope with plumbing subcommands only, and the temp dir goes (101.934705ms)\nℹ tests 301\nℹ suites 0\nℹ pass 300\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 24937.781736\n(B16, B17, H6, H7, H8 all ✔; baseline before edits was 296/295/1)",
+    "reportedAt": "2026-10-29T17:41:23.681Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/guest-bridge.mjs",
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-session.mjs",
+    ".moe/tasks/task-3b70b82401b6455896dfa139e85b5ca8.json",
+    ".moe/tasks/task-3e5c59e3b719413783e067455f567721.json",
+    ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+    ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json",
+    ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+    ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+    ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+    ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+    ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+    ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+    ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+    ".moe/tasks/task-c4e076cd306f4f84a4aa08bf2a4682b2.json"
+  ],
+  "completionSummary": "CQ-R10c delivered. The host session writes R10b's job frame as the first stdin bytes, and endAgentJobs reports the guest job ended only when it observes a pgrep count of 0.\n\nguest-bridge.mjs (+23/-1):\n- AGENT_JOBS is frozen and mirrors the supervisor's JOBS; B17 is the drift pin.\n- jobFrame({cli, role, credential}) checks exact keys, hasOwn on cli, role worker|qa, the name per cli and value /^[\\x21-\\x7e]{1,4096}$/. It builds the frame from fields each read once. Everything sits in a try, so a throwing getter or trap is also BRIDGE_INPUT_INVALID, with fixed text.\n- exactKeys compares the own enumerable key set.\n\nguest-session.mjs (+63/-4):\n- runGuestSession requires job {cli, credential} with exact keys and no role; the role comes from the frozen binding.\n- The frame is encoded once, before daemonRefusal or spawn. A bad job is SESSION_INPUT_INVALID.\n- It is the first stdin write, inside bounded(): a timeout gives SESSION_TIMEOUT, any other failure SESSION_PROVIDER_FAILED.\n- endAgentJobs(name, provider, {rounds, sleep, delayMs}) runs the fixed `sudo -n pkill -KILL -U moe-agent`, then `sudo -n pgrep -c -U moe-agent`, through lifecycle invoker() with QUERY_TIMEOUT_MS.\n  - verified needs pgrep exit 1 AND stdout /^0\\r?\\n$/ (the architect's -c refinement, comment-9cfd6506). Exit 0 retries.\n  - A transport failure, any other result or running out of rounds gives false. It always resolves a frozen {verified}.\n\nTests (+180/-9): B16, B17, H6 (first write, bound, no leak, invalid jobs), H7 (end to end through main() with a probe agent) and H8 (15 scripted rows plus input checks).\n- The removed lines are imports, fakeProvider (first write into proc.job), openSession (job: HOST_JOB), supervised() (m.read_job before relay) and one re-aligned blank line.\n- No existing assertion changed.\n- H7's forwarded workerId is 'qa-1', the QA binding's; the plan said 'worker-1'.\n\nEvidence:\n- Gate: exit 0, 301 tests, 300 pass, 1 pre-existing skip.\n- Windows node v24.16 on the bridge file: 55 tes",
+  "commits": [
+    {
+      "sha": "c7011d72ca2081abcb776f83a84b05031b238211",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T17:22:26Z",
+      "paths": [
+        ".moe/tasks/task-3b70b82401b6455896dfa139e85b5ca8.json",
+        ".moe/tasks/task-3e5c59e3b719413783e067455f567721.json",
+        ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+        ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json",
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T17:42:20.576Z",
+      "treeId": "e5230941d1e28e1069e1279bfa7234747640cc8e",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "e7b84ccc5dc0ff2d9e509030bb094a40cc90bbfa",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T18:09:35Z",
+      "paths": [
+        ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+        ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+        ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+        ".moe/tasks/task-3b70b82401b6455896dfa139e85b5ca8.json",
+        ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+        ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+        ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+        ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-c4e076cd306f4f84a4aa08bf2a4682b2.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T18:18:44.517Z",
+      "treeId": "f14efcfe893c940944bf182ed274f41f3ba40086",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-bridge.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T18:09:35Z",
+    "at": "2026-10-29T18:18:44.517Z"
+  },
+  "completedAt": "2026-10-29T18:18:08.778Z",
+  "reviewCompletedAt": "2026-10-29T18:18:08.778Z",
+  "reviewSummary": "Full evidence is in comment-a43d8cfe. Reviewed completion commit c7011d7 on moe/work-2026-10-24: 280 changed lines, under the 400 cap, in scope.\n\nGate, fresh from `git archive c7011d7` (env -i, node v24.21):\n- exit 0, 301 tests, 300 pass, 0 fail, 1 pre-existing skip;\n- B16, B17 and H1-H8 pass.\nWindows node v24.16, bridge file: 55 tests, 22 pass, 0 fail, 33 NO_GUEST skips.\n\nDoD 1: the frame is encoded once, before spawn, and is the first bounded stdin write. A bad job is SESSION_INPUT_INVALID with zero spawn calls. H6 shows no credential in calls, outputs, forwarded, the result or errors.\n\nDoD 2: H7 runs end to end through main() with role qa and exactly CODEX_API_KEY (sha256 match), and get_context forwards only the host sessionId.\n\nDoD 3: H8 covers the fixed pkill and `pgrep -c` argv through invoker. verified is true only on exit 1 with stdout '0'; exit 0 retries; anything else is false. The -c refinement is architect-approved and stricter than the DoD; I confirmed the procps 4.0.4 and sudo -n exit codes.\n\nDoD 4: the verification evidence reproduces.\n\nMy own mutation probe killed 11 of 11. A real-spawn ENOENT still gives SESSION_SPAWN_FAILED. No assertion is weakened; executionReady and verified-local are untouched; there are no agent .moe or Git writes.",
+  "requiredCheckAtDone": null
+}

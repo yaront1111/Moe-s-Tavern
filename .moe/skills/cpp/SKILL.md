@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=014ad5bd2e4f
+# moe-generated: sha=654c4fe488de
 name: cpp
 description: Use when writing, reviewing, or debugging modern C++ (C++11 and beyond) — .cpp/.cc/.cxx/.h/.hpp files, CMake builds, smart pointers, RAII, move semantics, templates, STL, or concurrency.
 domain: programming-languages
@@ -47,6 +47,8 @@ metadata:
 ## Overview
 
 Modern C++ (C++11 and beyond) patterns including RAII, smart pointers, templates, and STL.
+
+A modern-CMake project template ships with this skill at `templates/CMakeLists.txt` (usage in `templates/README.md`); start new C++ projects from it.
 
 ---
 
@@ -639,5 +641,3 @@ void variant_usage() {
 ## Related Skills
 
 - [[system-design]] - Systems programming
-- [[performance-optimization]] - Low-level optimization
-- [[desktop-apps]] - Native applications

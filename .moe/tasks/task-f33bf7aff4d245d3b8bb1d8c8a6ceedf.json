@@ -1,0 +1,298 @@
+{
+  "id": "task-f33bf7aff4d245d3b8bb1d8c8a6ceedf",
+  "epicId": "epic-be924fb8",
+  "title": "bug: doctor and moe-proxy project-path checks disagree with the daemon lifecycle's own-path rule",
+  "description": "doctor.ts:176 path.resolve()s the projectPath that /health reports and compares the two case-sensitively. A daemon spawned with d:\\x (VS Code lowercases the drive) therefore false-fails `doctor --project D:\\x` with 'port reused by another daemon', and /mnt/<d> versus drive spellings fail the same way. moe-proxy (utils.ts readDaemonInfoResult, daemonIdentity.ts classify) compares its own MOE_PROJECT_PATH unresolved, so a native alias (//x on Linux, /x on Windows) refuses its own daemon. That refusal is a non-destructive exit, and launchers and the cwd always pass canonical paths. The fix is to compare isSameProjectPath(recorded or reported value as written, path.resolve(own)), the rule task-25ba449a applies in index.ts.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "MOE-PROXY OWN-PATH RULE: tests first (RED), then the fix (GREEN). Load test-driven-development.\n\nPrerequisites. dependsOn gates the claim: 724e31fa and 3def0804 (proxy utils.ts lane), 48f0b3aa (WT-16, doctor.ts) and 4ca62c89 (index.ts lane tail).\n- Confirm each landed: `git log moe/work-2026-10-24 --grep 'Moe-Task: <id>'`.\n- Confirm packages/moe-proxy/src/utils.ts getProjectPath still returns `process.env.MOE_PROJECT_PATH || process.cwd()` unresolved.\n- Confirm it is still the only source of the proxy's own path: index.ts main → connect → readDaemonInfoResult and probeDaemonIdentity.\n- If a landed row changed either, stop and call moe.request_replan.\n\nDesign: fix it at the single source.\n- getProjectPath resolves natively. That is the daemon lifecycle's own-path rule (canonicalProjectPath).\n- readDaemonInfoResult, classify and comparableProjectPath stay unchanged: they compare both arguments by the contract, and the recorded or served value stays compared as written.\n- Do NOT resolve inside readDaemonInfoResult or classify. Their existing rows pass non-native own paths on purpose: own '\\\\\\\\srv\\\\share\\\\proj' and '\\\\\\\\wsl.localhost\\\\...' on Linux, and own '/mnt/d/proj' on native Windows. A native resolve there would break those rows.\n\nRED, in packages/moe-proxy/src/utils.test.ts describe('getProjectPath'):\n- Change 'returns MOE_PROJECT_PATH if set' to expect path.resolve('/custom/path'). That is identical on POSIX and C:\\\\custom\\\\path on native Windows.\n- Add 'resolves a native alias of its own project, so discovery finds its daemon':\n  - mkdtemp a dir, then chdir to path.dirname(dir). Restore the cwd and rm the dir in finally.\n  - alias = win32 ? dir.slice(2).replace(/\\\\/g, '/') : `/${dir}`.\n  - Precondition: expect([path.relative(dir, path.resolve(alias)), comparableProjectPath(alias) === comparableProjectPath(dir)]).toEqual(['', false]).\n  - Write .moe/daemon.json with projectPath: dir, and set MOE_PROJECT_PATH = alias.\n  - expect([getProjectPath(), readDaemonInfoResult(getProjectPath())]).toEqual([dir, { info, retryable: false }]).\n\nRED, in packages/moe-proxy/src/daemonIdentity.test.ts describe('moe-proxy bridges only to a daemon serving its own project'):\n- startProxy gains an optional `spell = (dir: string) => dir`, used for MOE_PROJECT_PATH.\n- startProxy spawns with cwd: path.dirname(testDir). The drive-less Windows alias needs it; it is harmless for E1–E4.\n- Add E5 'opens /mcp when MOE_PROJECT_PATH is a native alias of its project (//x on POSIX, /x on Windows)', in E2's shape:\n  - a fake daemon serving testDir, and startProxy(port, HOST, alias);\n  - waitFor the upgrade; expect upgrades ['/mcp'] and healthRequests ['GET /health'];\n  - end stdin; the proxy exits 0.\n\nOn HEAD, the alias row and E5 must fail by assertion: getProjectPath returns the alias, and the proxy exits 1 with 'daemon.json belongs to a different project'. Record that RED in the step note.\n\nGREEN, in packages/moe-proxy/src/utils.ts:\n- getProjectPath becomes `return path.resolve(process.env.MOE_PROJECT_PATH || process.cwd());`.\n- Add a two-line why comment: our own path names a directory on this host; the daemon applies the same rule (canonicalProjectPath); recorded and served paths stay compared as written.\n- No other proxy change. Error handling is unchanged: a genuinely foreign daemon.json still exits 1 as non-retryable, and a foreign /health still exits 1.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/utils.test.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts",
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-proxy/src/utils.test.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ],
+      "note": "Prereqs: 724e31fa (e92e3616) and 4ca62c89 (ffbf20ba) landed. Per governor comment 20:31Z the lane was swapped, so 3def0804 and 48f0b3aa now depend on this row; I built on the current utils.ts/doctor.ts. getProjectPath was still unresolved and was the only own-path source (index.ts main → connect → readDaemonInfoResult + probeDaemonIdentity).\nRED (Linux snapshot /tmp/moe-f33b-dev.11jTnh, HEAD 920f9cca + test overlays, env -i, node 24.21.0): the alias row failed by assertion (got '//tmp/moe-proxy-alias-*' and {error:'daemon.json belongs to a different project'}). E5 failed: the proxy never opened /mcp. A manual HEAD dist run with MOE_PROJECT_PATH=//<dir> exited 1 with that same error.\nGREEN: getProjectPath = path.resolve(MOE_PROJECT_PATH || cwd), plus a 2-line why comment. Full proxy `npm test` in the snapshot (its pretest build tsc-checks the tests): 7 files, 314 passed. The '/custom/path' row now expects path.resolve. E5 uses a forward-slash alias (/x) on win32, because a backslash \\x already resolves under the contract on HEAD. startProxy gains a spell param, and its cwd is dirname(testDir).\nShared dirty peer paths (board JSON, moe-jetbrains RuntimeSelectionPolicy*.kt, .moe/decisions/) left untouched.",
+      "startedAt": "2026-10-30T20:33:33.032Z",
+      "completedAt": "2026-10-30T20:38:52.954Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DOCTOR USES THE LIFECYCLE'S RULE: tests first (RED), then the fix (GREEN).\n\nRED, in packages/moe-daemon/src/commands/doctor.test.ts describe('runDoctor — daemon health reachability'). Reuse startHealthServer, writeDaemonJson and line.\n- D1 'passes when /health reports this project in a spelling only the shared path contract equates':\n  - reported = win32 ? testDir with its drive letter's case flipped (VS Code lowercases the drive) : `//wsl$/Ubuntu${testDir}`;\n  - reach contains '[OK]' and exitCode is 0.\n- D2, it.skipIf(win32), 'still fails when /health reports the POSIX path in another case':\n  - reported = testDir.toUpperCase();\n  - reach contains '[FAIL]' and exitCode is 1.\n- D3 'passes for a native alias of --project':\n  - chdir to path.dirname(testDir), restored in finally;\n  - alias = win32 ? testDir.slice(2) : `/${testDir}`;\n  - /health reports testDir; runDoctor(alias) gives '[OK]' and exitCode 0.\n\nOn HEAD, D1 fails on both OSes: path.resolve folds neither the drive case nor the WSL share. D2 and D3 pass on HEAD; they are guards. D2 kills over-folding, and D3 kills a fix that stops resolving our own path. The existing 'different project' and 'different pid' rows must stay FAIL.\n\nGREEN, without a commands → index.ts import cycle. index.ts statically imports runDoctor, and no daemon source module imports index.ts.\n- New packages/moe-daemon/src/util/projectPath.ts:\n  - MOVE verbatim from index.ts: canonicalProjectPath, WINDOWS_FORM, WSL_SHARE, MNT_DRIVE, comparableProjectPath (with its doc comment), posixKey, collapse and isSameProjectPath.\n  - Move them as they stand at HEAD after the lane rows. eea78d1d may have changed canonicalProjectPath: move what is there and change no logic.\n  - Export canonicalProjectPath, comparableProjectPath and isSameProjectPath.\n  - Add one doc line: index.ts re-exports them, and scripts/tests/daemon-json-cap.test.mjs reads comparableProjectPath from dist/index.js.\n- packages/moe-daemon/src/index.ts:\n  - Delete the moved definitions and import the three names from './util/projectPath.js'.\n  - The export list keeps canonicalProjectPath, comparableProjectPath and isSameProjectPath, now as a re-export. index.test.ts, healthHost.test.ts and the contract table test keep importing them from index.\n  - No other index.ts change.\n- packages/moe-daemon/src/commands/doctor.ts probeDaemonReachability:\n  - projectMatches = typeof body.projectPath === 'string' && isSameProjectPath(body.projectPath, canonicalProjectPath(expectedProjectPath)), imported from '../util/projectPath.js'.\n  - Add a one-line comment: this is validateDaemonInfoForProject's rule in index.ts; only our own --project is resolved, and the reported path is compared as written.\n  - Messages and the pid and status error handling stay as they are.\n\nGREEN means D1–D3 and every existing doctor row pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/util/projectPath.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/util/projectPath.ts"
+      ],
+      "note": "RED (same Linux snapshot, HEAD source + the new doctor.test.ts): D1 failed by assertion. The reach line was \"[FAIL] ... reports a different project (//wsl$/Ubuntu/tmp/moe-doctor-*) — port reused by another daemon\". The D2 and D3 guards passed on HEAD, as planned. 1 failed | 8 passed.\nGREEN:\n- New util/projectPath.ts: canonicalProjectPath, the three regexes, comparableProjectPath with its doc comment, posixKey, collapse and isSameProjectPath, moved verbatim. A scripted diff against HEAD's index.ts block, ignoring the `export` keyword, is identical. It has one header comment and imports only 'path'.\n- index.ts: block deleted, plus one import line. The existing export list re-exports the 3 names, and nothing else changed.\n- doctor.ts: isSameProjectPath(body.projectPath, canonicalProjectPath(expectedProjectPath)), with a one-line comment. Messages, pid and status handling unchanged.\nDeviation from plan text: D3's win32 alias is the forward-slash `/x` (dir.slice(2) with \\ → /). A backslash `\\x` already resolves under the contract, so with it D3 would not guard own-path resolution on Windows. Same reasoning as E5.\nNote: since eea78d1d, validateDaemonInfoForProject uses namesOwnProject, which adds a realpath fallback. Doctor applies only the isSameProjectPath half, per the plan and the executionContract, so the comment says \"as the daemon lifecycle does\" and does not claim an identical rule.\nSnapshot: tsc --noEmit OK. doctor, index, healthHost and bindHosts tests: 4 files, 138 passed | 1 skipped (existing Windows-only skip).",
+      "startedAt": "2026-10-30T20:38:56.011Z",
+      "completedAt": "2026-10-30T20:43:06.504Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY, once, after steps 1 and 2.\n\nUse isolated snapshots ONLY (mem:gotcha-daemon-linux-snapshot-gate, mem:gotcha-linux-vitest-reuse-native-node-modules). Never build the shared checkout's dist.\n- `git archive HEAD` of the WHOLE repo.\n- Overlay ONLY the 7 owned paths, and cmp each against the worktree.\n- Use platform-native, lock-matching node_modules for BOTH packages: the proxy's workerType.integration.test.ts imports daemon source.\n- Run under env -i (MOE_* unset) with NO_COLOR=1.\n\nLinux: from the snapshot root run exactly `(cd packages/moe-proxy && npm test) && (cd packages/moe-daemon && npm run build && npm test) && node --test scripts/tests/daemon-json-cap.test.mjs`.\n- Its command, exitCode and outputTail are the complete_task verification.\n- The cap test proves that dist/index.js still exports comparableProjectPath with every contract key after the move.\n\nNative Windows: run the same three legs in a Windows-side snapshot with Windows-native dependencies.\n- Report the counts and logs in the completion summary.\n- The win32 branches of the new rows (drive-case flip, drive-less alias) must run there, not skip.\n- Existing skips and todos stay as they are; add none.\n\nisEpicFinal only reflects this row's order in a rolling epic. The scope stays this task's diff.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-proxy/src/utils.test.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-proxy/src/utils.test.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "packages/moe-daemon/src/util/projectPath.ts"
+      ],
+      "note": "LINUX GATE, the exact command, exit 0:\n- Fresh whole-repo git archive of HEAD 04a3e180, at /tmp/moe-f33b-final.Y61K7V. The 7 owned overlays were cmp-verified. Native node_modules from /tmp/moe-25ba-gate.LqR4pK: both locks md5-match HEAD, and .bin/vitest is a symlink. Run under env -i with NO_COLOR=1 on Node 24.21.0. Script: /tmp/moe-f33b-scripts/gate-linux.sh. Log: /tmp/moe-f33b-gate-linux.log.\n- Proxy: 7 files, 314 passed.\n- Daemon: build OK; 214 files, 6248 passed | 14 skipped.\n- daemon-json-cap: 63 tests, 16 pass, 0 fail, 46 skipped (PowerShell rows, unavailable on Linux), 1 todo (task-3def0804's WSL-share launcher row). 'path contract: moe-proxy and moe-daemon give every row its contract key' passes against dist/index.js after the move.\n- doctor.test.ts also type-checks under a scratch tsconfig.\n\nNATIVE WINDOWS: snapshot D:\\moe-f33b-win.zfmLya, a git archive of 04a3e180 with the 7 overlays cmp'd and a Windows npm ci; node 24.16.0; MOE_* cleared.\n- Proxy npm test: 7 files, 311 passed | 3 skipped (existing skips). The verbose run shows the alias row and E5 passing on win32.\n- Daemon build OK. npm test: 214 files, 1 failed | 212 passed | 1 skipped; tests 1 failed | 6212 passed | 48 skipped.\n- The single failure is PRE-EXISTING and unrelated: delivery/acceptance.test.ts 'lands once, crashes before the receipt…' fails with MOE_AGENT_GIT_GUARD_FAILED in moe-agent.ps1. It reproduced identically with HEAD's own daemon bytes. Diagnosed: the guard's powershell.exe Get-Acl child inherits pwsh 7's PSModulePath. Filed as task-44b817f973374dffb578308278050497 (BACKLOG, MEDIUM).\n- Targeted verbose run (doctor, index, healthHost, bindHosts): 119 passed | 20 skipped. D1 (drive-case flip) and D3 (drive-less /x alias) ran and passed; D2 skips on win32 by design.\n- Windows daemon-json-cap: 63 tests, 57 pass, 0 fail, 3 skipped, 3 todo (all 3 are task-3def0804's).",
+      "startedAt": "2026-10-30T20:43:09.792Z",
+      "completedAt": "2026-10-30T21:00:01.885Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review.\n\nCheck:\n- Own vs recorded: only our own path is resolved (proxy getProjectPath, doctor canonicalProjectPath(own)). daemon.json and /health values are compared as written. Resolving the served side would read a WSL daemon's /home/u/p as C:\\\\home\\\\u\\\\p.\n- WSL agent mode is unchanged: an own /mnt/<d> path is a no-op under path.resolve, and a Windows proxy with a \\\\\\\\wsl.localhost own path keeps its share key.\n- A genuinely different project still refuses: the proxy exits 1 and doctor reports FAIL. POSIX case is still significant.\n- The move is behavior-neutral: diff the moved block against HEAD's index.ts. Only the export keywords and the new doc line may differ, and the cap table passes.\n- No import cycle: doctor.ts imports util/projectPath.ts only, and no daemon source module imports index.ts.\n- Diff: only the 7 owned files, about 150 net lines or fewer, under the 400 cap. No docs, generated files or dependency changes. Comments avoid the daemonGitDocs phrases.\n\nOut of scope; do not fix here. If you confirm one, file it as a LOW row:\n- scripts/local-runner/guest-session.mjs canonicalProjectPath also compares its own projectPath unresolved. Its comment still names the twin in index.ts, which keeps re-exporting it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "note": "Adversarial self-review of the 7 owned files: +134/-49, 85 net. No docs, generated files or dependency changes. No defects found; nothing changed.\n- Own vs recorded: only the proxy's own path (getProjectPath) and doctor's own --project (canonicalProjectPath) are resolved. readDaemonInfoResult, classify and comparableProjectPath are untouched, so served and recorded values are still compared as written.\n- WSL mode: an own /mnt/<d> path is a no-op under POSIX path.resolve, and a win32 UNC \\\\wsl.localhost own path keeps its share key.\n- Native-Windows /mnt own path: it now resolves to <drive>:\\mnt\\... Not a regression: the proxy's daemon.json read (path.join) already resolved it natively, so that path never found a file before either.\n- Empty or relative MOE_PROJECT_PATH: '' still falls back to cwd. A relative path is resolved against cwd, matching how the fs read already treated it.\n- A different project still refuses: E1 (all hosts) and doctor's different-project/pid rows FAIL. D2 keeps POSIX case significant.\n- The move is verbatim (scripted diff, export keywords only), the cap table passes, and there is no cycle: projectPath.ts imports only 'path', and no daemon source module imports src/index.ts. The full daemon suite passed, including daemonGitDocs.\n- Concurrency and IO: pure functions, no new IO, and no error-path change.\nResidual (not fixed, by contract): since eea78d1d the lifecycle's namesOwnProject also realpaths a native recorded path. Doctor applies only isSameProjectPath, so a daemon started via a symlinked --project still reports FAIL in doctor. The executionContract invariant forbids resolving reported paths.\nOut-of-scope candidate confirmed and filed as LOW task-1f7409c5bcc1499ab886f656bd78c894 (local runner own-path; stale twin pointer). Also filed earlier: task-44b817f973374dffb578308278050497 (pwsh 7 Git guard PSModulePath; pre-existing Windows failure).\nWhile counting lines I briefly added an intent-to-add index entry for projectPath.ts. I removed it at once with `git reset -- <that path>`; the shared index has no cached entries.",
+      "startedAt": "2026-10-30T21:00:05.302Z",
+      "completedAt": "2026-10-30T21:02:07.087Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's 13:00Z delegation. This is a worker-filed LOW bug: doctor and moe-proxy project-path checks disagree with the daemon's own-path rule. Planner: it touches packages/moe-proxy/src/utils.ts, which is in 724e31fa's and 3def0804's lane, and daemon doctor.ts. Ask a governor for a slot. The DoD is generic (\"Task completed as described\"), so make the plan's verification specific.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 308.6,
+  "comments": [
+    {
+      "id": "comment-69e7a96073f4455ab8dad5cc61502ac1",
+      "author": "governor-693b7073",
+      "content": "Governor, 20:35Z: LANE SWAP, so idle coders can start (human: \"release the dependencies first\"). 3def0804 (the proxy utils.ts lane) and WT-16 48f0b3aa (doctor.ts) now come AFTER this row; both now dependsOn f33bf7af. Step 1's \"Confirm each landed\" applies only to 724e31fa and 4ca62c89. Skip it for 3def0804 and 48f0b3aa, which have not landed, and build on the current utils.ts and doctor.ts. The global rail still applies: proxy and daemon tests run in a snapshot outside the repo.",
+      "timestamp": "2026-10-30T20:31:19.757Z"
+    },
+    {
+      "id": "comment-d7af6ee06efd415494a8ae91500c7202",
+      "author": "worker-25da16b2",
+      "content": "Typo in my completionSummary: \"E5, an e2e test where a //x (POSIX) or /x (win32) alias opens /mnt\" should read \"opens /mcp\". The E5 test asserts upgrades ['/mcp'].",
+      "timestamp": "2026-10-30T21:03:53.743Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T14:29:51.358Z",
+  "updatedAt": "2026-10-31T05:39:01.820Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T14:38:56.099Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:45:44.666Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T21:27:34.228Z",
+    "wallClockMs": 24109562
+  },
+  "contextFetchedBy": [
+    "architect-6fc3dd5c",
+    "worker-25da16b2",
+    "qa-b29f7b3d",
+    "architect-b58e1112"
+  ],
+  "dependsOn": [
+    "task-724e31fadd3e4f5cb137abe9e4147f11",
+    "task-4ca62c89674c466181fc306175d25d2c"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T15:01:39.311Z",
+  "executionContract": {
+    "intendedBehavior": "moe-proxy and `moe-daemon doctor` judge project identity by the daemon lifecycle's own-path rule: isSameProjectPath(the recorded or reported value as written, path.resolve(our own path)). A proxy whose MOE_PROJECT_PATH is a native alias of its project (//x on POSIX, /x on the current Windows drive) finds and bridges to its own daemon. doctor passes a healthy daemon whose /health reports this project under a spelling the shared contract equates: drive-letter case, /mnt/<d> versus drive, or a WSL share. A genuinely different project is still refused or failed.",
+    "acceptanceCriteria": [
+      "A proxy with MOE_PROJECT_PATH set to a native alias reads its daemon.json and opens /mcp: E5, plus the getProjectPath alias row.",
+      "getProjectPath returns path.resolve(MOE_PROJECT_PATH || cwd).",
+      "doctor reports [OK] when /health names this project as a drive-case flip (Windows) or as //wsl$/<distro><path> (POSIX): D1.",
+      "doctor reports [FAIL] when /health names the POSIX path in another case (D2), and still for a different project or pid.",
+      "doctor reports [OK] for runDoctor(<native alias of the project>): D3.",
+      "dist/index.js still exports comparableProjectPath, with every key in scripts/tests/daemon-json-cap.test.mjs unchanged."
+    ],
+    "invariants": [
+      "Only the caller's own path is resolved natively. Recorded daemon.json and reported /health paths are never resolved.",
+      "comparableProjectPath and isSameProjectPath logic are unchanged. The move is verbatim.",
+      "No daemon source module imports src/index.ts."
+    ],
+    "compatibility": [
+      "MCP tools, daemon.json and the /health shape are unchanged.",
+      "readDaemonInfoResult and probeDaemonIdentity keep their signatures and contract semantics.",
+      "index.ts keeps exporting canonicalProjectPath, comparableProjectPath and isSameProjectPath."
+    ],
+    "approvedScope": [
+      "moe-proxy getProjectPath",
+      "daemon util/projectPath.ts (moved contract)",
+      "index.ts import and re-export of the contract",
+      "doctor probeDaemonReachability projectMatches"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-proxy/src/index.ts main(): projectPath = getProjectPath(), then connect(projectPath), which calls readDaemonInfoResult(projectPath) and probeDaemonIdentity(host, port, projectPath).",
+      "packages/moe-daemon/src/commands/doctor.ts probeDaemonReachability: `path.resolve(body.projectPath) === path.resolve(expectedProjectPath)` is doctor's only project comparison.",
+      "packages/moe-daemon/src/index.ts imports runDoctor statically. canonicalProjectPath = path.resolve. validateDaemonInfoForProject compares isSameProjectPath(info.projectPath, canonicalProjectPath(own)).",
+      "daemon.json and /health carry the daemon's raw --project (startDaemon info.projectPath)."
+    ],
+    "checkRefs": [
+      "(cd packages/moe-proxy && npm test) && (cd packages/moe-daemon && npm run build && npm test) && node --test scripts/tests/daemon-json-cap.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": [
+      "Resolve the own path inside readDaemonInfoResult and classify. Rejected: existing contract rows pass non-native own paths (own '\\\\srv\\share\\proj' and '\\\\wsl.localhost\\...' on Linux, own '/mnt/d/proj' on native Windows), and a native resolve there would break them. The fix belongs at getProjectPath, the one source.",
+      "doctor imports isSameProjectPath from '../index.js'. Rejected: index.ts statically imports runDoctor, so this creates a commands ↔ entry cycle, and no daemon module imports index.ts today.",
+      "A third copy of the contract inside doctor.ts. Rejected: it would drift from the two checked twins.",
+      "Split into a proxy row and a doctor row. Rejected: the DoD 'Task completed as described' covers both halves, so a half-row loops at QA (mem: qa-split-request-routing)."
+    ],
+    "codebaseInsights": "daemon.json and /health both carry the daemon's raw --project. Since task-25ba449a, the lifecycle resolves only its own path (canonicalProjectPath) and compares recorded and reported paths as written. The proxy's only own-path source is getProjectPath. doctor's only project check is probeDaemonReachability. scripts/tests/daemon-json-cap.test.mjs imports comparableProjectPath from both dists and checks them against one table. The proxy runs vitest 5 (forks pool), so process.chdir works, as it already does in the daemon's index.test.ts.",
+    "risks": "- Lane: 724e31fa and 3def0804 make comment-only edits to proxy utils.ts. WT-16 (48f0b3aa) rewrites parts of doctor.ts and doctor.test.ts. 4ca62c89 is the index.ts lane tail. Rebase on whatever landed; move the contract exactly as it stands then.\n- The Windows aliases need the cwd on testDir's drive. Restore the cwd in finally.\n- macOS tmpdir (/var/folders) is fine, because path.resolve is lexical.\n- CI runs vitest on Ubuntu only, so the native Windows leg is the only proof of the win32 branches.",
+    "keyFiles": [
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-proxy/src/daemonIdentity.test.ts",
+      "packages/moe-daemon/src/commands/doctor.ts",
+      "packages/moe-daemon/src/index.ts",
+      "scripts/tests/daemon-json-cap.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T15:01:39.341Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T20:33:33.032Z",
+  "reviewStartedAt": "2026-10-30T21:03:48.754Z",
+  "verification": {
+    "command": "(cd packages/moe-proxy && npm test) && (cd packages/moe-daemon && npm run build && npm test) && node --test scripts/tests/daemon-json-cap.test.mjs",
+    "exitCode": 0,
+    "outputTail": "Run from the root of an isolated whole-repo git archive of HEAD 04a3e180 (/tmp/moe-f33b-final.Y61K7V). The 7 owned overlays were cmp-verified; native Linux node_modules lock-matched HEAD; env -i NO_COLOR=1; Node 24.21.0. Wrapper: /tmp/moe-f33b-scripts/gate-linux.sh.\n[moe-proxy] Test Files  7 passed (7) | Tests  314 passed (314)\n[moe-daemon] build OK; Test Files  214 passed (214) | Tests  6248 passed | 14 skipped (6262)\n[daemon-json-cap] ✔ path contract: moe-proxy and moe-daemon give every row its contract key\nℹ tests 63 | pass 16 | fail 0 | skipped 46 (PowerShell rows, unavailable on Linux) | todo 1 (task-3def0804 WSL-share launcher row)\nGATE EXIT 0 rev=04a3e180c6327c1eb9c130f11ceb33250f728be3",
+    "reportedAt": "2026-10-30T21:03:48.754Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-proxy/src/utils.test.ts",
+    "packages/moe-proxy/src/daemonIdentity.test.ts",
+    "packages/moe-daemon/src/commands/doctor.test.ts",
+    "packages/moe-daemon/src/commands/doctor.ts",
+    "packages/moe-daemon/src/index.ts",
+    "packages/moe-daemon/src/util/projectPath.ts",
+    ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+    ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json"
+  ],
+  "completionSummary": "moe-proxy and doctor now judge project identity the way the daemon lifecycle does: they resolve only their own path and compare the reported or recorded path as written. 7 files, +134/-49, 85 net. No docs, dependency or API change.\n- proxy utils.ts: getProjectPath = path.resolve(MOE_PROJECT_PATH || cwd). This is the single source of the proxy's own path. readDaemonInfoResult, classify and comparableProjectPath are untouched.\n- daemon: new util/projectPath.ts holds the contract, moved verbatim from index.ts (a scripted diff differs only in the export keywords). index.ts imports it and re-exports it via its existing export list. No cycle: the module imports only 'path'.\n- doctor.ts: isSameProjectPath(body.projectPath, canonicalProjectPath(expected)).\nTests:\n- proxy: the getProjectPath alias row, and E5, an e2e test where a //x (POSIX) or /x (win32) alias opens /mnt.\n- doctor: D1, a drive-case flip (win32) or //wsl$/Ubuntu share (POSIX), reports OK. D2: POSIX uppercase still FAILs. D3: runDoctor(alias) reports OK.\n- RED on HEAD: the alias row, E5 and D1 failed by assertion. D2 and D3 are guards.\n- On win32 the aliases use forward slashes, because a backslash \\x already resolves under the contract.\nLinux gate: exact command, fresh whole-repo archive of 04a3e180 with cmp'd overlays and lock-matching native deps. HEAD has since changed only board files.\nNative Windows:\n- proxy: 311 passed, 3 skipped.\n- daemon: 6212 passed, with 1 PRE-EXISTING failure. delivery/acceptance.test.ts fails identically on HEAD bytes: the pwsh7 Git guard hits a PSModulePath problem. Filed as task-44b817f9.\n- The new win32 rows ran and passed (D2 skips by design).\n- cap test: 0 fail.\nResidual, left by contract: doctor lacks namesOwnProject's realpath fallback, so a symlinked --project still FAILs.\nFiled LOW task-1f7409c5: the local runner has the same own-path class of issue.",
+  "commits": [
+    {
+      "sha": "bdb6a2e6ea05a2262e01aa29b21d6a24b7b54987",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-30T20:31:11Z",
+      "paths": [
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/util/projectPath.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts",
+        "packages/moe-proxy/src/utils.test.ts",
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-30T21:04:15.840Z",
+      "treeId": "26bbd832f0eac795b6a4d348978a218651def80e",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "48f8a2e47946e4bd6d4758c90bdda063ac13bd82",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-30T21:17:45Z",
+      "paths": [
+        ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+        ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-30T21:27:51.650Z",
+      "treeId": "aed079ffe2a85d55f37676318ebbc2b87340759e",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-proxy/src/utils.test.ts",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-daemon/src/commands/doctor.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-30T21:17:45Z",
+    "at": "2026-10-30T21:27:51.650Z"
+  },
+  "completedAt": "2026-10-30T21:27:34.228Z",
+  "reviewCompletedAt": "2026-10-30T21:27:34.228Z",
+  "reviewSummary": "Approved completion bdb6a2e6 (pushed to moe/work-2026-10-24). 7 files, +134/-49, 85 net; scope is exactly the plan's files.\n\nGATE: the exact checkRefs command, run in a git archive of bdb6a2e6. Lock-matched native deps, env -i, Node 24.21. Exit 0.\n- proxy: 314 passed.\n- daemon: build OK; 214 files, 6248 passed / 14 skipped.\n- daemon-json-cap: 0 fail, 1 todo (3def0804's). The contract-key row passes against dist/index.js.\n\nNATIVE WINDOWS (my own archive, npm ci):\n- proxy utils and daemonIdentity: 182 passed. The alias row and E5 ran on win32.\n- doctor: 8 passed, D2 skipped by design. D1 (drive-case flip) and D3 (/x alias) passed.\n\nACCEPTANCE CRITERIA: all met.\n- E5 and the alias row pass.\n- getProjectPath = path.resolve(...).\n- D1 and D3 pass.\n- D2 and the different-project and different-pid rows still FAIL.\n- The cap keys are unchanged.\n\nINVARIANTS:\n- The moved block is byte-identical apart from the export keywords (scripted diff).\n- projectPath.ts imports only 'path', and no daemon module imports src/index.ts.\n- index.ts still exports all 3 names.\n- Only the caller's own path is resolved.\n\nMUTATIONS, all killed:\n- revert doctor → D1 fails;\n- drop canonicalProjectPath(own) → D3 fails;\n- case-fold → D2 fails;\n- revert getProjectPath → the alias row and E5 fail.\n\nNo weakened tests. Ponytail found nothing to cut.\n\nResidual, by contract: doctor has no realpath fallback, so a symlinked --project still FAILs.",
+  "requiredCheckAtDone": null
+}

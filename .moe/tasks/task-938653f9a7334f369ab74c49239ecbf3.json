@@ -1,0 +1,189 @@
+{
+  "id": "task-938653f9a7334f369ab74c49239ecbf3",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the Claude Code plugin hook reads .moe/daemon.json with no size cap",
+  "description": "Objective: bound packages/moe-claude-plugin/src/daemonClient.ts readDaemonJson. The PostToolUse hook runs it on every moe.* tool call, and it reads the whole .moe/daemon.json with fs.readFileSync. This is a sibling of task-4f1e37f30ee548298b26e17c0b6ea84e (the JetBrains reader, 64 KiB cap). daemon.json is repository content, so a huge or never-ending file stalls every tool call.\n\nDeliverable:\n- A bounded read of at most 65537 bytes, with the descriptor closed on every path.\n- A larger file returns null, like an unreadable one, so the hook stays fail-open: it takes the existing DAEMON_NOT_FOUND path and never throws into Claude Code.\n- Valid files behave as today.\n\nNot in scope: the walk-up project discovery, the hook's event forwarding, and the other clients, which have their own sibling tasks.\n\nVerification: cd packages/moe-claude-plugin && npm test. On WSL its node_modules is a Windows install, so run vitest from a snapshot with a native npm ci. Never run npm run build in the shared checkout: the hook shim imports dist.",
+  "definitionOfDone": [
+    "readDaemonJson accepts a valid 65536-byte daemon.json (JSON padded with spaces) and returns null for a 65537-byte one, proven by new tests/daemonClient.test.ts cases.",
+    "The read never takes more than 65537 bytes and closes its descriptor on every path, proven by a test.",
+    "An oversize daemon.json leaves the hook fail-open: no throw, and the existing not-found handling runs, proven by a test.",
+    "Fresh cd packages/moe-claude-plugin && npm test exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first (load test-driven-development).\n\nThe cap contract is shared with the daemon row task-91ef7886, the proxy row task-685d8a8e and JetBrains task-4f1e37f3:\n- 64 KiB is 65536 bytes;\n- read at most 65537 bytes through one descriptor;\n- a larger file counts as unreadable.\n\nThe tests pin 65536 and 65537 as literals. Build each fixture as JSON.stringify(info) padded with trailing spaces to an exact byte length (assert Buffer.byteLength equals it). JSON allows trailing whitespace.\n\nSAFETY: do NOT add a /dev/zero case, or any other never-ending device. Today's fs.readFileSync of one never reaches EOF and grows memory until the process dies; a synchronous read cannot be stopped by the vitest timeout. The daemon row's RED run was killed with SIGTERM that way (mem:gotcha-dev-zero-red-run-runaway). Case (2)'s exact read total proves the bound without one.\n\nNEVER run npm run build, npm run clean, npm ci or npm install in the shared checkout's packages/moe-claude-plugin: the hook shim hooks/post-tool-use.mjs loads its dist, and its node_modules is shared. All runs happen in the step 3 snapshot.\n\npackages/moe-claude-plugin/tests/daemonClient.test.ts: add describe('daemon.json size cap'). Each case uses its own mkdtemp project, removed in afterEach together with vi.restoreAllMocks().\n\n(1) Boundary.\n- A valid 65536-byte daemon.json: findDaemonInfo({ projectPath }) toEqual({ port, pid, startedAt, projectPath, host: '127.0.0.1' }).\n- The 65537-byte version throws a DaemonError whose code is 'DAEMON_NOT_FOUND'. Capture it with try/catch and assert instanceof and code.\n\n(2) Bounded read. Spy, pass-through, on fs.readFileSync, fs.openSync, fs.readSync and fs.closeSync. daemonClient.ts and the test both use the default import of node:fs, so the spies see its calls; this was verified in a snapshot. Write an 8 MiB daemon.json: valid JSON padded with spaces. Assert:\n- DAEMON_NOT_FOUND is thrown;\n- readFileSync is never called with that daemon.json path;\n- openSync opened that path exactly once;\n- the readSync return values for the descriptor openSync returned sum to EXACTLY 65537. Not \"at most\": a size pre-check that never reads gives 0, and an unbounded read gives more;\n- closeSync received that descriptor exactly once.\n\n(3) Error path. Mock fs.readSync to throw an Error whose code is 'EIO', for a valid small daemon.json. Assert:\n- DAEMON_NOT_FOUND is thrown, so no other error escapes;\n- closeSync still received the descriptor openSync returned.\n\npackages/moe-claude-plugin/tests/postToolUse.test.ts, inside describe('runPostToolUseHook'). Its beforeEach already clears MOE_PROJECT_PATH and starts the WebSocket server.\n\n(4) Fail-open. A project whose daemon.json is 65537 bytes of valid JSON pointing at the live test server's port, with projectPath = the project. Set MOE_WORKER_ID = 'worker-test' and spy process.stderr.write with mockImplementation(() => true). Then run runPostToolUseHook({ tool_name: 'mcp__moe__moe_list_tasks', session_id: 's5', cwd: project }). Assert:\n- the call resolves, with no throw, to exactly { forwarded: false, reason: 'send-failed' };\n- after a 100 ms wait, received has length 0;\n- the captured stderr contains 'Moe daemon not running for project', which is the existing DAEMON_NOT_FOUND handling.\nRestore MOE_WORKER_ID and the spy in finally, like the sibling cases.\n\nIn the snapshot, the 65537 case of (1), (2), (3) and (4) fail on today's code (today's readFileSync parses the file and (4) forwards), while the 65536 case and the existing 13 tests pass. Record that in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+        "packages/moe-claude-plugin/tests/postToolUse.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+        "packages/moe-claude-plugin/tests/postToolUse.test.ts"
+      ],
+      "note": "RED in snapshot /tmp (npm ci there; shared checkout untouched): 4 failed (65537 boundary, bounded-read, EIO close, fail-open hook), 14 passed (65536 case + 13 existing). Other dirty paths belong to other sessions; not touched.",
+      "startedAt": "2026-10-27T14:19:56.981Z",
+      "completedAt": "2026-10-27T14:21:00.121Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN in packages/moe-claude-plugin/src/daemonClient.ts, next to readDaemonJson (~:101).\n\n- Add const MAX_DAEMON_JSON_BYTES = 64 * 1024, with a one-line comment: daemon.json is repository content and the PostToolUse hook reads it on every moe.* tool call, so it is capped like the daemon, proxy and JetBrains readers.\n- Add a private readDaemonJsonText(file: string): string | null:\n  - const fd = fs.openSync(file, 'r') and one Buffer.alloc(MAX_DAEMON_JSON_BYTES + 1);\n  - loop fs.readSync(fd, buf, total, buf.length - total, null) until it returns 0 or the buffer is full. A device or pipe can return short reads;\n  - fs.closeSync(fd) in finally;\n  - return null when total > MAX_DAEMON_JSON_BYTES, else buf.toString('utf8', 0, total).\n  - Call fs.* through the existing default import, never named imports, which the test spies would not see.\n- In readDaemonJson, inside the existing try, replace raw = fs.readFileSync(file, 'utf-8') with the helper. On null, return null.\n\nError handling stays as today: the existing catch turns any open or read error into null. So an oversize or unreadable file takes the same path as a missing or malformed one: the walk continues, findDaemonInfo throws DAEMON_NOT_FOUND, and runPostToolUseHook's catch logs it and returns send-failed. Nothing throws into Claude Code.\n\nUnchanged: findDaemonInfo and its walk-up, readRecentProject (~/.moe/projects.json is user-home state, not repository content, and out of scope), callTool, postEvent, sendOnce, src/postToolUse.ts, hooks/post-tool-use.mjs and the README.\n\nRe-run step 1's tests in the snapshot: green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-claude-plugin/src/daemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-claude-plugin/src/daemonClient.ts"
+      ],
+      "note": "GREEN: bounded readDaemonJsonText (MAX+1 read loop, close in finally); 18/18 in snapshot.",
+      "startedAt": "2026-10-27T14:21:01.049Z",
+      "completedAt": "2026-10-27T14:21:17.169Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run once: (cd packages/moe-claude-plugin && npx tsc --noEmit && npm test), from an isolated snapshot, never the shared checkout. The hook shim loads that checkout's dist, and on WSL its node_modules is shared with Windows.\n\n1. ROOT=$(git rev-parse --show-toplevel); SNAP=$(mktemp -d /tmp/moe-9386-gate.XXXXXX).\n2. git -C \"$ROOT\" archive HEAD packages/moe-claude-plugin | tar -x -C \"$SNAP\".\n3. Check that package.json and package-lock.json equal HEAD.\n4. Overlay exactly the three owned files and cmp each against the working copy.\n5. (cd \"$SNAP/packages/moe-claude-plugin\" && npm ci --no-audit --no-fund) with the Linux node/npm. At HEAD this took 2 s, and the 13 existing tests passed with tsc --noEmit clean; it writes no dist.\n6. From $SNAP, run the command above.\n\nRequire exit 0 and zero failed tests: the 13 existing tests plus the new ones.\n\ncomplete_task gets { command: '(cd packages/moe-claude-plugin && npx tsc --noEmit && npm test)', exitCode, outputTail }, plus the tested root and base commit.\n\nIf npm ci cannot reach the registry, report_blocked with the error; never fall back to an in-place run. Error handling: on a failure, fix the cause, re-overlay and re-run; never weaken an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate in snapshot /tmp/moe-9386-gate.* (HEAD c006918, package files identical, 3 files overlaid + cmp'd): tsc --noEmit clean, npm test exit 0, 18/18.",
+      "startedAt": "2026-10-27T14:21:18.085Z",
+      "completedAt": "2026-10-27T14:21:20.789Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (load adversarial-self-review) of the three-file diff. Check:\n- the off-by-one at the cap: 65536 parses, 65537 is refused;\n- short reads are looped;\n- the descriptor is closed on every path, including a throwing readSync;\n- no whole-file read of daemon.json remains (grep readFileSync in src: only readRecentProject's projects.json read may remain);\n- the stderr line carries no file content;\n- every new test restores its spies and env vars and removes its temp dir, even on failure;\n- valid daemon.json files resolve exactly as before (the 13 existing tests are untouched).\n\nResiduals, noted only and pre-existing:\n- like a malformed file today, an oversize daemon.json in the pinned project lets the walk-up continue to an ancestor's daemon.json (walk-up discovery is out of scope);\n- opening a FIFO blocks, but git cannot commit FIFOs.\n\nIf the review changes bytes, re-run the step 3 gate fresh. Report all three paths in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-claude-plugin/src/daemonClient.ts",
+        "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+        "packages/moe-claude-plugin/tests/postToolUse.test.ts"
+      ],
+      "note": "Review: cap off-by-one pinned by tests; short reads looped; fd closed in finally (openSync failure has no fd, caught → null); only readRecentProject's projects.json readFileSync remains in src; stderr line carries only the project path; spies restored (restoreAllMocks/mockRestore), temp dirs removed. No bytes changed after gate. Residuals as planned (walk-up continues past oversize file; FIFO).",
+      "startedAt": "2026-10-27T14:21:21.645Z",
+      "completedAt": "2026-10-27T14:21:25.638Z"
+    }
+  ],
+  "planRevision": 9,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human asked the architect seat to promote and plan the daemon.json size-cap follow-ups (2026-10-27).",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 236.3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T13:43:20.391Z",
+  "updatedAt": "2026-10-27T15:52:04.286Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-27T14:12:28.796Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-27T15:51:30.845Z",
+    "wallClockMs": 5942049
+  },
+  "contextFetchedBy": [
+    "architect-2c9d5121",
+    "worker-3729a0d6",
+    "qa-6fa5d758"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-27T14:18:34.543Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) An fs.statSync size pre-check: rejected. A symlink to a device reports size 0. The read itself must be bounded, and test (2)'s exact read total catches a stat-only mutant. (2) A /dev/zero test: rejected. Against today's unbounded read it never ends and eats memory; it killed the daemon row's RED vitest worker. (3) Exporting readDaemonJson for direct tests: rejected. findDaemonInfo already exposes it, so the public surface stays as it is. (4) A distinct 'too large' error code for the hook: rejected. The task wants an oversize file to take the existing DAEMON_NOT_FOUND fail-open path, and the hook never surfaces the code anyway.",
+    "codebaseInsights": "- daemonClient.ts:101 readDaemonJson is the plugin's only daemon.json reader. It does existsSync, then readFileSync in a try that returns null, then JSON.parse and shape checks.\n- findDaemonInfo walks up to 12 ancestors and throws DaemonError('DAEMON_NOT_FOUND').\n- postToolUse.ts runPostToolUseHook catches any postEvent error, writes '[moe-claude-plugin] PostToolUse hook failed: <message>' to stderr, and returns { forwarded: false, reason: 'send-failed' }.\n- npm test is plain vitest run (no pretest build). Tests import ../src/*.js directly.\n- tsconfig excludes tests.\n- In a scratch snapshot, vi.spyOn(fs, 'readFileSync') on the node:fs default import was verified to intercept daemonClient's calls.",
+    "risks": "- Do not build, clean or install in the shared checkout: the hook shim imports dist, and node_modules is shared with Windows.\n- No /dev/zero test: runaway memory against the unfixed code.\n- The cap is a cross-package contract: do not change 64 KiB here.\n- The walk-up past an oversize file is pre-existing behavior, the same as for a malformed file, and out of scope.",
+    "keyFiles": [
+      "packages/moe-claude-plugin/src/daemonClient.ts",
+      "packages/moe-claude-plugin/src/postToolUse.ts",
+      "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+      "packages/moe-claude-plugin/tests/postToolUse.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-27T14:18:34.641Z",
+  "workStartedAt": "2026-10-27T14:19:56.981Z",
+  "reviewStartedAt": "2026-10-27T14:21:30.075Z",
+  "verification": {
+    "command": "(cd packages/moe-claude-plugin && npx tsc --noEmit && npm test)",
+    "exitCode": 0,
+    "outputTail": "run in snapshot of HEAD c006918 + 3 overlaid files: tsc --noEmit clean; Test Files 2 passed (2); Tests 18 passed (18) (13 existing + 5 new)",
+    "reportedAt": "2026-10-27T14:21:30.075Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+    "packages/moe-claude-plugin/tests/postToolUse.test.ts",
+    "packages/moe-claude-plugin/src/daemonClient.ts",
+    ".moe/tasks/task-938653f9a7334f369ab74c49239ecbf3.json",
+    ".moe/tasks/task-91ef788685924de0a5c1dd0184486d5b.json"
+  ],
+  "completionSummary": "readDaemonJson in packages/moe-claude-plugin/src/daemonClient.ts now reads daemon.json through one descriptor, at most 65537 bytes (short reads looped, closeSync in finally); >65536 bytes returns null so the hook takes the existing DAEMON_NOT_FOUND / send-failed fail-open path. New tests: 65536 accepted, 65537 refused, exact 65537-byte read total + single close on an 8 MiB file (no /dev/zero), fd closed when readSync throws EIO, and hook fail-open with stderr 'Moe daemon not running for project'. Tested root: isolated snapshot /tmp/moe-9386-gate.* of HEAD c006918 with the three owned files overlaid; npm ci there, shared checkout never built.",
+  "commits": [
+    {
+      "sha": "0f0e389fd77020cf20f2c93d56e536b23c0bff3d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-27T14:18:42Z",
+      "paths": [
+        ".moe/tasks/task-938653f9a7334f369ab74c49239ecbf3.json",
+        "packages/moe-claude-plugin/src/daemonClient.ts",
+        "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+        "packages/moe-claude-plugin/tests/postToolUse.test.ts"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-27T14:22:16.322Z",
+      "treeId": "c21af5e4bf2f5c247ca8e8b754b7089fe869c0bc",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "ef973f02c589cbc08742ac5163b7a2edd45fb33e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-6fa5d758@2026-10-27T15:49:53Z",
+      "paths": [
+        ".moe/tasks/task-91ef788685924de0a5c1dd0184486d5b.json",
+        ".moe/tasks/task-938653f9a7334f369ab74c49239ecbf3.json"
+      ],
+      "recordedBy": "qa-6fa5d758",
+      "recordedAt": "2026-10-27T15:52:04.286Z",
+      "treeId": "075b0008b1ab3a4c7d2c16716c9b02de0b70e5f2",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-claude-plugin/tests/daemonClient.test.ts",
+    "packages/moe-claude-plugin/tests/postToolUse.test.ts",
+    "packages/moe-claude-plugin/src/daemonClient.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-6fa5d758@2026-10-27T15:49:53Z",
+    "at": "2026-10-27T15:52:04.286Z"
+  },
+  "completedAt": "2026-10-27T15:51:30.845Z",
+  "reviewCompletedAt": "2026-10-27T15:51:30.845Z",
+  "reviewSummary": "APPROVED. Reviewed completion 0f0e389f (tree c21af5e4, on moe/work-2026-10-24, pushed). Non-board diff +150/-4 over 3 files, under the 400 LOC cap.\n\nRe-ran verification in a git-archive snapshot of HEAD ba1b052 (contains 0f0e389; owned files cmp-identical), npm ci under env -i, shared checkout never built: `(npx tsc --noEmit && npm test)` -> tsc clean, 2 files / 18 of 18 tests passed, EXIT 0.\n\nMutation check: reverting only src/daemonClient.ts to 0f0e389^ turned exactly 4 new tests RED (65537 refusal, bounded read, fd close on EIO, hook fail-open); the 65536 test and the 13 existing tests stayed green. No /dev/zero fixture used.\n\nDoD:\n1. 65536 accepted / 65537 refused: pinned by literal-size padded-JSON fixtures. Pass.\n2. At most 65537 bytes, fd closed on every path: MAX+1 buffer, looped readSync on one fd, closeSync in finally. Tests assert 0 readFileSync on daemon.json, one openSync, readSync total exactly 65537 on an 8 MiB file, one closeSync, and a close after a throwing readSync (EIO). Pass.\n3. Oversize stays fail-open: hook resolves {forwarded:false, reason:'send-failed'}, server receives 0 messages, stderr has 'Moe daemon not running for project'. Pass.\n4. Fresh npm test exits 0. Pass.\n\nAdversarial: cap off-by-one correct; short reads looped; openSync failure caught as null; stderr carries only the project path; spies/env/temp dirs restored. Only remaining readFileSync in src is readRecentProject's ~/.moe/projects.json (user-home, out of scope). Known pre-existing residuals: walk-up continues past an oversize file, FIFO open would block (git cannot commit one).\n\nSnapshot removed. Dirty shared-tree paths belong to other sessions; none under packages/moe-claude-plugin, none touched.",
+  "requiredCheckAtDone": null
+}
