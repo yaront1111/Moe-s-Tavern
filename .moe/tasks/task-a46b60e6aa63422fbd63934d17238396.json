@@ -21,37 +21,59 @@
     {
       "stepId": "step-1",
       "description": "Bridge test: re-derive the failing set on the post-97341ad5 bytes, then convert every job pid the host uses to procfs's global pid, and move S12/S16's signals to the harness.\n(a) Preconditions. task-97341ad5 has landed, and 5ee846b6 before it: `git log moe/work-2026-10-24 --grep 'Moe-Task: task-97341ad5'` finds it. Both test files are clean in the shared checkout: `git status --short scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs` prints nothing. If either file holds a peer's uncommitted bytes, coordinate in chat before editing, because this task's landing would carry them.\n(b) Baseline. Build a fresh full snapshot outside the repo: `export MOE_VERIFY_SNAPSHOT=$(mktemp -d)/snap && mkdir -p \"$MOE_VERIFY_SNAPSHOT\" && git archive HEAD | tar -x -C \"$MOE_VERIFY_SNAPSHOT\"`. Run step 3's command there unchanged. Record in the step note:\n- the HEAD sha;\n- both TAP summaries, with every # SKIP name;\n- the rows that fail under unshare -r;\n- `grep -cE '^\\s*test\\(' <file>` for each file.\nThese are the baselines for DoD 1's allowed skips and DoD 5's counts.\n(c) Audit both files for job-side pid sources: `grep -nE 'os\\.getpid|os\\.getppid|os\\.getsid|os\\.fork|\\$\\$|\\$PPID|\\$!|sys\\.argv\\[1\\]\\), signal'`.\n- Convert every value that reaches the host: one the host passes to alive(), running(), procState() or sessionMembers(), reads under /proc, or kills in a finally or after().\n- Leave unchanged a job signalling itself (S2, S14) and STALLED's pthread_kill.\n- List every converted site in the step note, including the rows 97341ad5 added (its S11 rewrite, and its quiet-output host-EOF and malformed-data cases).\n(d) Port the prototype hunks from Serena memory `task-task-a46b60e6aa63422fbd63934d17238396-prototype` by hand with the Edit tool. Never use git apply, sed or a heredoc into the tree; that is a rail.\n- Add GLOBAL_PIDS after `const WRITE`. On Linux: gpid() returns readlink('/proc/self'); gsid() returns field [3] after comm in /proc/self/stat; gfork() is a fork whose child sends its gpid() to the parent through a pipe. Elsewhere: os.getpid, os.getsid(0) and os.fork.\n- Use it in S6, AGENT_CHILD (I1-I7, H5 and the sessions after() hook), GROUP_JOB (S9, S10), S11, S15's `started`, S17's job and every audited 97341ad5 row.\n- J4's PROBE sets `me = int(os.readlink('/proc/self'))` and walks up through its existing parent().\n(e) S11.\n- If 97341ad5 made 'dead before the observation' unconditional, as its plan says, keep that single assertion and only make its pids global. The step note then states that DoD 4 holds: the one assertion is both the root and the non-root outcome, and both runs exercise it.\n- If S11 still asserts survival for non-root, add the prototype's `process.getuid() === 0` branch: right at the observation, with no sleep, running(grandchild) is false.\n(f) S12 and S16. Add SIGNAL_ON_START before S12.\n- The job only writes one start byte.\n- A harness thread reads relay()'s frames from out_fd's pipe. After hello and that byte, plus `settle` seconds, it calls `os.kill(os.getpid(), sig)`. At EOF it sends nothing. The caller closes w, then joins the thread.\n- S12's last call keeps [75, true, true, true, true].\n- S16 keeps both rows and both assertions: open output (settle 0, job sleeps 1 s) and quiet output (settle 0.3, job sleeps 1.3 s). The 1.3 s keeps the undrained-wakeup spin window at 1 s.\n- Keep 97341ad5's titles and comments; change only the mechanism.\n(g) Limits. Add or remove no test() row, remove or loosen no assertion, add no skip. Wrap new comments at 120 columns. `grep -cP '[^\\x00-\\x7f]'` stays unchanged.\n(h) Focused check. Copy this file into the snapshot, then run step 3's two commands with `--test-name-pattern='^(S6|S9|S1[0-7]|I[1-7]|H5|J4) '`, plus the names of any converted 97341ad5 rows.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-bridge.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Baseline HEAD b4732b39 (97341ad5 landed as c96c587b/b4732b39; both test files clean). Snapshot /tmp/a46b-4iDG/snap. test( counts: bridge 66, check 67. TAP: 143 tests each mode. Plain: 141 pass, 0 fail, skips LA5, K9. unshare -r: 131 pass, 10 fail (S6, I1, H5, S10, S12, S16, J4, K3, KI1, KI2), skips S8, LA5. S11 x6 already passes under root: 97341ad5 made death-before-observation unconditional and LINGER/QUIET_JOB already use gpid/gfork, so DoD 4 holds with the one unconditional S11 assertion (both runs exercise it); no root branch added. No new skip from 97341ad5. Audit + conversions: GLOBAL_PIDS gains gsid (Linux /proc/self/stat [3]; fallback os.getsid(0)); S6 job (gfork/gpid); AGENT_CHILD (I1-I7, H5, sessions after()); GROUP_JOB (S9 x3, S10: gfork/gpid/gsid); S15 started; S17 job; J4 PROBE me=readlink('/proc/self') walking parent(). SIGNAL_ON_START added before S12; S12's last call and both S16 rows now signal from a harness thread after the job's '+' frame (S16 quiet: settle 0.3, sleep 1.3). Unchanged on purpose: S2/S14/LINGER/QUIET_HOST self-signals. Focused check (^(S6|S9|S1x|S20|I1-7|H5|J4)): 32/32 pass under unshare -r and plain. Pre-existing dirty peer paths (.moe/tasks/*, scripts/moe-agent.{ps1,sh}, .moe/decisions/) untouched.",
+      "startedAt": "2026-10-31T15:42:03.466Z",
+      "completedAt": "2026-10-31T15:46:35.815Z"
     },
     {
       "stepId": "step-2",
       "description": "Check test: the same procfs pid source.\n(a) K3's PROBE. Replace `job = os.getppid()` with `job = int(open('/proc/self/stat').read().rsplit(')', 1)[1].split()[1])`, procfs's ppid field, which is global. Extend the comment above it as in the prototype.\n(b) FAKE_NODE.\n- Add `read -r pid rest < /proc/self/stat` right after the shebang.\n- `$pid` replaces both `$$`: the logged pid that KI2 probes, and the `/proc/$pid/status` behind KI1's NoNewPrivs column.\n- Why `read`: a builtin's redirect is opened by the shell itself, so /proc/self is the install process. `$(readlink /proc/self)` would name a subshell.\n- Add the prototype's comment line.\n(c) Convert any other job-reported pid that the step-1 audit found in this file. None is expected.\n(d) Focused check. Copy this file into the snapshot, then run step 3's two commands with `--test-name-pattern='^(K3|KI[12]) '`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "K3 PROBE: job = /proc/self/stat ppid field (global), comment extended. FAKE_NODE: `read -r pid rest < /proc/self/stat`; $pid replaces both $$ (logged pid for KI2, /proc/$pid/status for KI1 NoNewPrivs). No other job-reported pid in this file (audit). Focused ^(K3|KI[12]) : 3/3 pass under unshare -r and plain.",
+      "startedAt": "2026-10-31T15:46:36.713Z",
+      "completedAt": "2026-10-31T15:47:42.019Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY once, on the final bytes.\n- Refresh $MOE_VERIFY_SNAPSHOT from `git archive HEAD`, because HEAD may have moved. Copy only the two edited test files over it.\n- Run exactly:\n`cd \"$MOE_VERIFY_SNAPSHOT\" && T='scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs' && E=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" && { unshare -r $E node --test --test-reporter=tap $T > ../a46b-root.tap 2>&1; R=$?; $E node --test --test-reporter=tap $T > ../a46b-user.tap 2>&1; U=$?; grep -HE '^# (tests|pass|fail|skipped)|# SKIP|^not ok' ../a46b-root.tap ../a46b-user.tap; echo \"ROOT_EXIT=$R USER_EXIT=$U\"; [ \"$R$U\" = 00 ]; }`\n- Its exit code and output tail are the complete_task evidence: both summary blocks, every # SKIP line, and ROOT_EXIT/USER_EXIT.\n- Expected under unshare -r: `# fail 0`, with only S8 and LA5 skipped, plus any skip that step 1's baseline note names.\n- Expected in the plain run: `# fail 0`. LA5 and K9 skip there.\n- In both modes, `# tests` equals step 1's baseline.\n- Also record `git diff --name-only`, and `sha256sum scripts/local-runner/guest-supervisor.py` beside `git show HEAD:scripts/local-runner/guest-supervisor.py | sha256sum`.\n- Run tests only in the snapshot. Never run an npm install or build in the checkout.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verify on HEAD ca2532d5 (test files and scripts/local-runner/ unchanged vs b4732b39) + the 2 overlays, snapshot /tmp/a46b-v-*/snap, Node 24.21.0 env -i. unshare -r: 143 tests, 141 pass, 0 fail, skips S8, LA5. Plain: 143/141/0, skips LA5, K9. ROOT_EXIT=0 USER_EXIT=0, gate exit 0. test( counts unchanged: bridge 66, check 67. guest-supervisor.py sha256 3a19f3bf... equals HEAD's. Own diff: bridge +53/-22, check +7/-4; non-ASCII line counts unchanged (7, 1). git diff --name-only also lists peer/pre-existing dirt (.moe/tasks/*, scripts/moe-agent.{ps1,sh}) not touched by this task.",
+      "startedAt": "2026-10-31T15:47:43.012Z",
+      "completedAt": "2026-10-31T15:49:38.787Z"
     },
     {
       "stepId": "step-4",
       "description": "Final adversarial self-review of this task's diff. Load adversarial-self-review.\n- Scope: `git diff --name-only` lists only the two test files, plus this task's board JSON. guest-supervisor.py's sha256 equals HEAD's. scripts/tests/local-runner.test.mjs and ci.yml are untouched.\n- Strength: every removed assert line has a replacement that is as strong or stronger. `^\\s*test\\(` counts and TAP totals match step 1.\n- Non-vacuity, on scratch copies only:\n  - The 'kill instead of killpg' supervisor mutant from the prototype memory must fail S6, S9 x3, I1, I3 and H5 under unshare -r. With the old tests, S9 x3 and I3 passed vacuously.\n  - The 'no drain' mutant must fail both S16 rows, in both modes, on the CPU column.\n  - If 97341ad5's rows were converted, a mutant of their completion kill must fail them under unshare -r.\n  - Tag each run with a unique env var. Then kill only the pids recorded from /proc/<pid>/environ. Never pkill, killall or pattern-kill; that is a rail.\n- Error handling in the new helpers:\n  - If gfork's child dies before it writes, int(b'') raises. That is a loud failure, never a vacuous pass.\n  - At EOF, SIGNAL_ON_START sends nothing and the thread ends, so a failed relay() start never hangs the join.\n  - S12's out pipe exists both before and after call()'s fd snapshot.\n  - macOS takes the os.getpid, os.fork and os.getsid fallback, and Windows still skips.\n- If anything changes, re-run step 3's command on refreshed snapshot bytes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-bridge.test.mjs",
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Scope: own diff is only the 2 test files (+53/-22, +7/-4); supervisor sha 3a19f3bf... = HEAD; local-runner.test.mjs and ci.yml untouched. Strength: no assert line removed or changed; the only replaced lines are pid sources and signal senders; test( counts 66/67 and TAP 143/143 match baseline. Mutants on scratch snapshot copies only (/tmp/a46b-v-*/m1, m2): (1) kill-not-killpg in run_bridge's finally, unshare -r: S6, I1, I3, H5, S9 x3 FAIL (7/7 as required; S10 and I2/I4-I7 pass, as expected: they don't depend on that kill). (2) no-drain (os.read(wake_r) -> pass): both S16 rows fail on the CPU column (calls still [SIGUSR1]) in both modes; S12 passes. (3) n/a: 97341ad5's rows (LINGER/S11, QUIET_JOB/S18) already used gpid/gfork, so none were converted. Leftovers from m1 (16 pids) found by /proc/<pid>/environ marker MOE_A46B_MARK=m1run and killed by recorded pid; 0 remain; m2 left none. Error handling: gfork child death -> int(b'') ValueError, loud failure; SIGNAL_ON_START sends nothing at EOF and closes r, so join never hangs on a failed start (a malformed frame raises in the thread, then relay waits on the job and spawnSync's SIGKILL timeout fails the row loudly); S12's r/w exist before and after call()'s /dev/fd snapshot; macOS uses the os.getpid/os.getsid(0)/os.fork fallback, Windows still skips NO_GUEST. Nothing changed after step 3, so its verification stands.",
+      "startedAt": "2026-10-31T15:49:39.687Z",
+      "completedAt": "2026-10-31T15:52:22.454Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -81,21 +103,28 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T12:03:24.222Z",
-  "updatedAt": "2026-10-31T14:12:16.799Z",
+  "updatedAt": "2026-10-31T15:52:34.688Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T12:03:49.710Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-66fd8127"
+    "architect-66fd8127",
+    "worker-c0a1ac70"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T12:36:54.855Z",
   "executionContract": {
@@ -181,10 +210,8 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-97341ad5be744d19ac869972299a2714.json",
-    ".moe/tasks/task-a46b60e6aa63422fbd63934d17238396.json",
-    ".moe/tasks/task-d4810c9c0b0244598e275cc5cbe40ed7.json",
-    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/tests/local-runner-check.test.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -192,5 +219,15 @@
     "kind": "checkpoint",
     "sessionId": "architect-66fd8127@2026-10-31T12:03:52Z",
     "at": "2026-10-31T12:38:09.671Z"
-  }
+  },
+  "workStartedAt": "2026-10-31T15:42:03.466Z",
+  "reviewStartedAt": "2026-10-31T15:52:34.686Z",
+  "verification": {
+    "command": "cd \"$MOE_VERIFY_SNAPSHOT\" && T='scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs' && E=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" && { unshare -r $E node --test --test-reporter=tap $T > ../a46b-root.tap 2>&1; R=$?; $E node --test --test-reporter=tap $T > ../a46b-user.tap 2>&1; U=$?; grep -HE '^# (tests|pass|fail|skipped)|# SKIP|^not ok' ../a46b-root.tap ../a46b-user.tap; echo \"ROOT_EXIT=$R USER_EXIT=$U\"; [ \"$R$U\" = 00 ]; }",
+    "exitCode": 0,
+    "outputTail": "../a46b-user.tap:ok 69 - LA5 pinned codex forwards exactly MOE_ROLE to its MCP server # SKIP set MOE_PINNED_CODEX to the pinned codex member to run this row\n../a46b-user.tap:ok 98 - K9 under the real mounts a root check job cannot write, chmod, rename, replace or unlink a protected file, nor rename its directory # SKIP needs root for a mount namespace; CQ-R13 certifies it on real guests\n../a46b-user.tap:# tests 143\n../a46b-user.tap:# pass 141\n../a46b-user.tap:# fail 0\n../a46b-user.tap:# skipped 2\n../a46b-root.tap:ok 23 - S8 bridge mode refuses a non-root euid without writing a frame # SKIP the euid refusal needs a non-root test user\n../a46b-root.tap:ok 69 - LA5 pinned codex forwards exactly MOE_ROLE to its MCP server # SKIP set MOE_PINNED_CODEX to the pinned codex member to run this row\n../a46b-root.tap:# tests 143\n../a46b-root.tap:# pass 141\n../a46b-root.tap:# fail 0\n../a46b-root.tap:# skipped 2\nROOT_EXIT=0 USER_EXIT=0\n(snapshot = git archive HEAD ca2532d5 + the 2 edited test files; Node 24.21.0; supervisor sha256 3a19f3bf... unchanged vs HEAD)",
+    "reportedAt": "2026-10-31T15:52:34.686Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Test-only fix, so the bridge and check tests work under a root runner (GUARD's PID namespace). Diff: scripts/tests/local-runner-bridge.test.mjs +53/-22 and local-runner-check.test.mjs +7/-4. guest-supervisor.py sha256 3a19f3bf... is unchanged.\nBridge:\n- GLOBAL_PIDS gains gsid() (/proc/self/stat field [3]; os.getsid(0) off Linux).\n- S6, AGENT_CHILD (I1-I7, H5, sessions after()), GROUP_JOB (S9 x3, S10), S15's `started` and S17's job report pids from gpid/gfork/gsid.\n- J4's PROBE walks up from readlink('/proc/self').\n- The new SIGNAL_ON_START harness thread sends the S12 SIGTERM and both S16 SIGUSR1s once the job's '+' frame arrives, never from the job. Assertions are unchanged.\n- S11: 97341ad5 already made 'dead before the observation' unconditional, and LINGER/QUIET_JOB already used global pids. So a single assertion serves root and non-root (DoD 4), and both runs exercise it.\nCheck:\n- K3's PROBE takes the job pid from the /proc/self/stat ppid field.\n- FAKE_NODE does `read -r pid rest < /proc/self/stat` and uses $pid for the logged pid and /proc/$pid/status.\nBaseline (HEAD b4732b39): unshare -r had 10 failures (S6 I1 H5 S10 S12 S16 J4 K3 KI1 KI2).\nAfter (HEAD ca2532d5 + overlays): unshare -r and plain both give 143 tests, 141 pass, 0 fail. Skips: S8+LA5 as root, LA5+K9 as the plain user. test( counts are unchanged at 66/67.\nMutants (scratch copies):\n- kill-not-killpg is killed by S6, I1, I3, H5 and S9 x3 under unshare -r.\n- no-drain is killed by both S16 rows on the CPU column, in both modes.\n- Leftovers were cleaned by environ marker and recorded pid only."
 }

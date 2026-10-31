@@ -248,12 +248,14 @@ const RELAY = "r, w = os.pipe()\nsys.exit(m.relay(['python3', '-I', '-c', *sys.a
 const relay = (child, ...args) => harness(RELAY, child, ...args);
 const b64 = bytes => Buffer.from(bytes).toString('base64');
 const WRITE = 'import base64, os, sys\nos.write(1, base64.b64decode(sys.argv[1]))\nos.write(2, base64.b64decode(sys.argv[2]))\n';
-// A root runner's GUARD unshares a PID namespace, in which a job's os.getpid() and fork() give namespace-local numbers.
-// The job keeps the guest's procfs (it has no mount namespace), and procfs gives the global ones, so every pid the host
-// checks or signals is read there. Off Linux there is no procfs and no PID namespace.
-const GLOBAL_PIDS = process.platform !== 'linux' ? 'import os\ngpid, gfork = os.getpid, os.fork\n' : `import os
+// A root runner's GUARD unshares a PID namespace, in which a job's os.getpid(), os.getsid() and fork() give
+// namespace-local numbers. The job keeps the guest's procfs (it has no mount namespace), and procfs gives the global
+// ones, so every pid the host checks or signals is read there. Off Linux there is no procfs and no PID namespace.
+const GLOBAL_PIDS = process.platform !== 'linux' ? 'import os\ngpid, gsid, gfork = os.getpid, lambda: os.getsid(0), os.fork\n' : `import os
 def gpid():
     return int(os.readlink('/proc/self'))
+def gsid():  # /proc/self/stat after the comm field: [0] state, [1] ppid, [2] pgrp, [3] session
+    return int(open('/proc/self/stat').read().rsplit(')', 1)[1].split()[3])
 def gfork():  # the child hands its parent its global pid
     r, w = os.pipe()
     pid = os.fork()
@@ -369,13 +371,13 @@ test('S5 a child that cannot start gives EX_OSERR after hello alone, and a dead 
 });
 
 test('S6 a host that vanishes mid-stream gets EX_IOERR and the whole child process group is killed', { skip: NO_GUEST, timeout: 30_000 }, async () => {
-  const child = `import os, signal, time
+  const child = `${GLOBAL_PIDS}import signal, time
 signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-grandchild = os.fork()
+grandchild = gfork()
 if grandchild == 0:
     time.sleep(60)
     os._exit(0)
-os.write(1, b'%d %d\\n' % (os.getpid(), grandchild))
+os.write(1, b'%d %d\\n' % (gpid(), grandchild))
 while True:
     try:
         os.write(1, bytes(65536))
@@ -441,7 +443,7 @@ test('S8 bridge mode refuses a non-root euid without writing a frame',
 // CQ-R08c: Node is the host on the supervisor's stdio and every agent on its socket. Linux checks the real
 // SO_PEERCRED; macOS has none, so there the peer uid is injected.
 const PEER = process.platform === 'linux' ? '' : ', peer_uid=lambda sock: os.getuid()';
-const AGENT_CHILD = 'import os, time\nos.write(1, b"%d" % os.getpid())\ntime.sleep(600)\n';
+const AGENT_CHILD = `${GLOBAL_PIDS}import time\nos.write(1, b"%d" % gpid())\ntime.sleep(600)\n`;
 async function until(check, label) {
   for (const end = Date.now() + 10_000; !check(); await sleep(10)) assert.ok(Date.now() < end, `timed out: ${label}`);
 }
@@ -1115,13 +1117,13 @@ test('H5 end to end, the real supervisor and agent get scoped answers, forged by
 
 // CQ-R10a: SIGTERM, SIGHUP and SIGINT take relay()'s teardown; the guard empties the session of a SIGKILLed supervisor.
 const EX_TERMINATED = 75;
-const GROUP_JOB = `import os, signal, time
-grandchild = os.fork()
+const GROUP_JOB = `${GLOBAL_PIDS}import signal, time
+grandchild = gfork()
 if grandchild == 0:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     time.sleep(600)
     os._exit(0)
-os.write(1, b'%d %d %d' % (os.getpid(), grandchild, os.getsid(0)))
+os.write(1, b'%d %d %d' % (gpid(), grandchild, gsid()))
 time.sleep(600)
 `;
 // Linux /proc/<pid>/stat after the comm field: [0] state, [3] session id.
@@ -1255,9 +1257,31 @@ for (const [how, ending, observation] of ENDINGS) {
   }
 }
 
+// S12 and S16 signal the harness from the harness: a root runner's job, inside GUARD's PID namespace, cannot see it.
+// The thread reads relay()'s frames from out_fd's pipe; once the job's start byte has arrived, and `settle` seconds
+// more, it signals this process, by then waiting in relay(). At EOF it sends nothing, so a failed start never hangs.
+const SIGNAL_ON_START = `import threading, time
+def signal_on_start(number, settle=0):
+    r, w = os.pipe()
+    def fire():
+        seen, frames, data = bytearray(), [], b'+'
+        while len(frames) < 2 and data:  # hello, then the job's start byte
+            data = os.read(r, 65536)
+            frames.extend(m.take_frames(seen, data, m.MAX_GUEST_FRAME_BYTES))
+        if data:
+            time.sleep(settle)
+            os.kill(os.getpid(), number)
+        while data:
+            data = os.read(r, 65536)
+        os.close(r)
+    thread = threading.Thread(target=fire)
+    thread.start()
+    return w, thread
+`;
+
 test('S12 on every exit path relay() restores SIGTERM, SIGHUP, SIGINT and the wakeup fd, leaks no fd and leaves SIGCHLD at SIG_DFL; its guard is stdlib-only', { skip: NO_GUEST, timeout: 30_000 }, () => {
   // killSignal: this harness keeps a no-op SIGTERM handler, so a default SIGTERM timeout kill would not end it.
-  const run = spawnSync('python3', ['-I', '-B', '-c', `${LOAD}import ast, signal
+  const run = spawnSync('python3', ['-I', '-B', '-c', `${LOAD}${SIGNAL_ON_START}import ast, signal
 roots = {alias.name.split('.')[0] for node in ast.walk(ast.parse(m.GUARD)) if isinstance(node, ast.Import) for alias in node.names}
 assert 'subprocess' in roots and roots <= set(sys.stdlib_module_names), roots
 mark = lambda number, frame: None
@@ -1290,7 +1314,10 @@ r, w = host()
 os.close(w)
 call(sleeper, in_fd=r)
 call(sleeper, in_fd=host(bytes([0, 0, 0, 1]) + b'x')[0])
-call(['python3', '-I', '-c', 'import os, signal, sys, time; os.kill(int(sys.argv[1]), signal.SIGTERM); time.sleep(30)', str(os.getpid())])
+w, thread = signal_on_start(signal.SIGTERM)
+call(['python3', '-I', '-c', 'import os, time; os.write(1, b"+"); time.sleep(30)'], out_fd=w)
+os.close(w)
+thread.join()
 print(json.dumps(results))
 `, SUPERVISOR], { timeout: 30_000, killSignal: 'SIGKILL' });
   assert.equal(run.status, 0, String(run.error ?? run.stderr));
@@ -1335,7 +1362,7 @@ print(json.dumps([code, [frame['kind'] for frame in frames], int(base64.b64decod
 `;
 
 test('S15 a termination signal that interrupts no syscall still ends a blocked wait with 75, whether or not the job has closed its output', { skip: NO_GUEST, timeout: 30_000 }, async () => {
-  const started = 'import os, time\nos.write(1, b"%d" % os.getpid())\n';
+  const started = `${GLOBAL_PIDS}import time\nos.write(1, b"%d" % gpid())\n`;
   const closed = 'null = os.open(os.devnull, os.O_RDWR)\nos.dup2(null, 1)\nos.dup2(null, 2)\n'; // pump waits on the start pipe
   for (const job of [`${started}time.sleep(600)\n`, `${started}${closed}time.sleep(600)\n`]) {
     // SIGKILL: a timeout's SIGTERM would itself wake the hung wait and let the run pass.
@@ -1353,17 +1380,20 @@ test('S15 a termination signal that interrupts no syscall still ends a blocked w
 });
 
 test('S16 a signal relay() does not handle still reaches the caller handler and never makes its wait spin, whether or not the job has closed its output', { skip: NO_GUEST, timeout: 30_000 }, () => {
-  const run = harness(`import resource, signal
+  const run = harness(`${SIGNAL_ON_START}import resource, signal
 calls = []
 signal.signal(signal.SIGUSR1, lambda number, frame: calls.append(number))
 cpu = lambda: sum(resource.getrusage(resource.RUSAGE_SELF)[:2])
-send = 'import os, signal, sys, time\\nos.kill(int(sys.argv[1]), signal.SIGUSR1)\\ntime.sleep(1)'
-quiet = 'import os, time\\nnull = os.open(os.devnull, os.O_RDWR)\\nos.dup2(null, 1)\\nos.dup2(null, 2)\\ntime.sleep(0.3)\\n'  # the output closes first
+start = 'import os, time\\nos.write(1, b"+")\\n'
+quiet = 'null = os.open(os.devnull, os.O_RDWR)\\nos.dup2(null, 1)\\nos.dup2(null, 2)\\n'  # the output closes before the signal
 results = []
-for job in (send, quiet + send):
+for job, settle in ((start + 'time.sleep(1)', 0), (start + quiet + 'time.sleep(1.3)', 0.3)):
     before, calls[:] = cpu(), []
-    code = m.relay(['python3', '-I', '-c', job, str(os.getpid())], out_fd=os.open(os.devnull, os.O_WRONLY), in_fd=os.pipe()[0])
-    results.append([code, list(calls), cpu() - before < 0.5])  # an undrained wakeup byte would spin for the job's whole second
+    w, thread = signal_on_start(signal.SIGUSR1, settle)
+    code = m.relay(['python3', '-I', '-c', job], out_fd=w, in_fd=os.pipe()[0])
+    os.close(w)
+    thread.join()
+    results.append([code, list(calls), cpu() - before < 0.5])  # an undrained wakeup byte would spin for the job's last second
 print(json.dumps(results))
 `);
   assert.equal(run.status, 0, String(run.stderr));
@@ -1374,7 +1404,7 @@ print(json.dumps(results))
 // and its connection stays queued until the bridge closes; S9's agent can race into the same queue between its connect
 // and the signal.
 test('S17 a connection the listener still queues when relay() ends reads EOF, never a reset', { skip: NO_GUEST, timeout: 30_000 }, async () => {
-  const host = await guarded('import os, time\nos.write(1, b"%d" % os.getpid())\nnull = os.open(os.devnull, os.O_RDWR)\nos.dup2(null, 1)\nos.dup2(null, 2)\ntime.sleep(600)\n');
+  const host = await guarded(`${GLOBAL_PIDS}import time\nos.write(1, b"%d" % gpid())\nnull = os.open(os.devnull, os.O_RDWR)\nos.dup2(null, 1)\nos.dup2(null, 2)\ntime.sleep(600)\n`);
   try {
     host.proc.kill('SIGSTOP'); // the supervisor this test started
     await until(() => process.platform !== 'linux' || procState(host.proc.pid)?.[0] === 'T', 'supervisor stopped');
@@ -1624,11 +1654,12 @@ def parent(pid):
     return int(open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[1])
 def cmdline(pid):
     return open('/proc/%d/cmdline' % pid, 'rb').read().decode('latin1')
+me = int(os.readlink('/proc/self'))  # global: under a root runner os.getpid() and os.getppid() are namespace-local
 environ = open('/proc/self/environ', 'rb').read().decode().split('\\0')
 status = open('/proc/self/status').read().splitlines()
 print(json.dumps({'env': dict(entry.split('=', 1) for entry in environ if entry), 'cwd': os.getcwd(), 'umask': os.umask(0),
                   'nnp': [line for line in status if line.startswith('NoNewPrivs:')],
-                  'cmdlines': [cmdline(pid) for pid in (os.getpid(), os.getppid(), parent(os.getppid()), parent(parent(os.getppid())))]}))
+                  'cmdlines': [cmdline(pid) for pid in (me, parent(me), parent(parent(me)), parent(parent(parent(me))))]}))
 `;
 const HELD = groups => `data = b''.join(iter(lambda: os.read(0, 65536), b''))
 r, w = os.pipe()

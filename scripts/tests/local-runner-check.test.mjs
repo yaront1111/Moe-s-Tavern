@@ -528,9 +528,10 @@ os.open = swapping
   });
 
 // The probe reports on the job. dash forks the last command of sh -c and exports PWD to it, so the job is the probe's
-// parent: its /proc environ is the environment it was started with.
+// parent: its /proc environ is the environment it was started with. Its pid is procfs's ppid field (global): under a
+// root runner os.getppid() is a pid in GUARD's PID namespace.
 const PROBE = `import json, os
-job = os.getppid()
+job = int(open('/proc/self/stat').read().rsplit(')', 1)[1].split()[1])
 def read(name):
     return open('/proc/%d/%s' % (job, name), 'rb').read().decode()
 print(json.dumps({'cmdline': read('cmdline').split('\\0')[:-1], 'cwd': os.readlink('/proc/%d/cwd' % job),
@@ -845,9 +846,11 @@ test('K8 a real check job that removes its protected file is observed exiting 0,
 // CQ-R11e5: the check mode's offline dependency install phase. The fake toolchain's node, a /bin/sh script, logs one line
 // per install: pid, cwd, umask, open-file limit, NoNewPrivs, PATH, HOME and argv. It then hangs if its cwd holds `hang`,
 // else exits with the status in `status` (default 0). The real GUARD runs it as the test user (groups None, netns False);
-// relay() stays CHECK_RECORD's recorder, and `logged` hands it the installs logged by then.
+// relay() stays CHECK_RECORD's recorder, and `logged` hands it the installs logged by then. The pid is the global one
+// from procfs: the read builtin opens /proc/self/stat in the shell itself, whereas $$ is namespace-local as root.
 const FAKE_NODE = `#!/bin/sh
-echo "$$|$PWD|$(umask)|$(ulimit -n)|$(grep -c '^NoNewPrivs:.1' /proc/$$/status)|$PATH|$HOME|$*" >> BASE/install.log
+read -r pid rest < /proc/self/stat
+echo "$pid|$PWD|$(umask)|$(ulimit -n)|$(grep -c '^NoNewPrivs:.1' /proc/$pid/status)|$PATH|$HOME|$*" >> BASE/install.log
 [ -e hang ] && exec sleep 30
 [ -e status ] && read s < status && exit $s
 exit 0
