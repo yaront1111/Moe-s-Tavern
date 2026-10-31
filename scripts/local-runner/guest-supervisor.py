@@ -421,6 +421,11 @@ def pump(child, out_fd, bridge, wait):
                 write_frame(out_fd, {'kind': 'output', 'stream': streams[key.fd], 'data': data})
 
 
+# killpg errors that mean no member of the job group is left to kill: ESRCH, and on darwin, where only the tests run this
+# file, EPERM for a group of zombies (Linux signals one as a no-op).
+GROUP_GONE = (ProcessLookupError, PermissionError) if sys.platform == 'darwin' else ProcessLookupError
+
+
 def reap(child):
     status = os.waitpid(child.pid, 0)[1]
     child.returncode = os.waitstatus_to_exitcode(status)  # so subprocess never reaps again
@@ -496,7 +501,7 @@ def run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, terminati
             # Kill the whole session group while the unreaped guard (its leader) still pins its id, then reap it.
             try:
                 os.killpg(child.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except GROUP_GONE:
                 pass
             reap(child)
         child.stdout.close()
@@ -1193,7 +1198,7 @@ def run_install(argv, env, spawn, timeout):
         if child is not None:
             try:
                 os.killpg(child.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except GROUP_GONE:
                 pass
             reap(child)
         os.close(life_end)
