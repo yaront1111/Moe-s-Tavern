@@ -85,7 +85,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T06:17:56.507Z",
-  "updatedAt": "2026-10-31T11:57:44.406Z",
+  "updatedAt": "2026-10-31T11:58:29.733Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T06:29:58.639Z",
     "plannedStepCount": 4,
@@ -183,7 +183,8 @@
     "scripts/local-runner/guest-supervisor.py",
     "scripts/tests/local-runner-bridge.test.mjs",
     ".moe/tasks/task-a4a729ddaa8942679e8ae7cd57bd42f1.json",
-    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json"
   ],
   "completionSummary": "As root, GUARD now unshares a PID namespace before its single fork. That fork is the namespace's init: it starts the job, reaps orphans until the job's own wait status arrives, sends '+' and then the raw status up a private close-on-exec pipe, and exits. The kernel then kills every setsid, setpgid or double-forked descendant before GUARD can reap init.\n- GUARD writes '+' only after init's '+', and exits mirroring the job's exit or signal only once init is reaped and it has been released, so completion EOF follows teardown.\n- The watch thread is replaced by a selectors loop, because the kernel refuses threads after unshare. Life EOF kills init (only while unreaped), reaps it, then killpgs.\n- Root that cannot unshare never starts the job (no '+', exit 1). A bad status or a killed init makes GUARD killpg itself; nothing is mirrored.\n- relay, run_bridge, pump, run_install, framing and main are unchanged.\n\nFiles (335 changed lines, cap 400):\n- guest-supervisor.py +59/-23;\n- J4 +4/-3, now pinning job -> init -> GUARD -> supervisor;\n- new local-runner-guard.test.mjs, G1-G9.\nThe prototype's header comment is re-wrapped to 120 columns.\n\nEvidence:\n- RED on HEAD: 8/9 fail, each on the missing feature.\n- Gate (command above): exit 0 on HEAD 586f119c and 65f78435. guard 9/9 with 0 skipped; runner 635 tests, 632 pass, 0 fail, 3 env-gated skips; daemon 6341 passed. That is QA's 42e9990c baseline plus 9.\n- Mutants: 7/7 killed, including the plan's 4 (plain killpg, life unregistered after stand-down, init waitpid(job), no exited check), plus a passing control. M08 (dropping `os._exit(128-code)`) survives as an equivalent and the line is kept.\n- Probes: group TERM gives -15; inherited SIGCHLD SIG_IGN gives -9 (fail closed); 32/33 give -32/-33.\n\nBehavior change: a SIG33 job death is now observed as 'SIG33', not exit 161, because GUARD has no thread.\n\nSecurity: no host, name or UID kill, no /proc scan, no bypass, no credential in argv, and no native or verified-local claim.\n\nFor CQ-R13",
   "commits": [
@@ -211,6 +212,23 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "f46d3723df1e0c18560889b9e4ec1ed6f5cc6d48",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-4398294e@2026-10-31T11:31:41Z",
+      "paths": [
+        ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+        ".moe/tasks/task-a4a729ddaa8942679e8ae7cd57bd42f1.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "qa-4398294e",
+      "recordedAt": "2026-10-31T11:58:29.733Z",
+      "treeId": "4a2de03370f4e13a299be9e30d0985132985ab71",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -221,9 +239,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-88af1437@2026-10-31T10:58:21Z",
-    "at": "2026-10-31T11:31:12.825Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-4398294e@2026-10-31T11:31:41Z",
+    "at": "2026-10-31T11:58:29.733Z"
   },
   "completedAt": "2026-10-31T11:57:44.406Z",
   "reviewCompletedAt": "2026-10-31T11:57:44.406Z",

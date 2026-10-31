@@ -35,8 +35,10 @@ const isRecord = value => value !== null && typeof value === 'object'
 const refusal = (id, code) => encodeFrame({ kind: 'response', id, ok: false, error: { code } });
 
 /**
- * Resolves {observation, executionReady: false} only after a clean stdout EOF, provider close code 0, exactly one
- * exit observation and no owed reply; a nonzero job exit inside that observation is data, not a session failure.
+ * Resolves {observation, executionReady: false} only after a clean stdout EOF, provider close code 0 and exactly one
+ * exit observation; a nonzero job exit inside that observation is data, not a session failure. That finish abandons
+ * every request the guest still owes: an in-flight forward sees its signal abort, a queued one is never forwarded and
+ * no reply is written after it. An aborted forward may already have acted upstream; nothing reports that undone.
  * Anything else rejects with a fixed SESSION_* code and never yields an observation. forward(tool, args, {signal}) is
  * the trusted daemon transport returning an MCP tool result; onOutput(stream, Buffer) and onObservation(frame) are
  * synchronous. provider: {executable = 'multipass', spawn = child_process.spawn}. timeoutMs (1-60000) bounds hello,
@@ -164,9 +166,10 @@ function relay(child, options) {
     session.onAbort = () => stop(session, 'SESSION_ABORTED');
     options.signal?.addEventListener('abort', session.onAbort, { once: true });
     child.on('error', () => stop(session, 'SESSION_SPAWN_FAILED'));
+    // Exit 0 after a clean EOF and the observation is the finish; a request still owed then was abandoned, not failed.
     child.on('close', code => {
       if (code !== 0) stop(session, 'SESSION_PROVIDER_FAILED');
-      else if (!session.ended || !session.observation || session.pending.length > 0) stop(session, 'SESSION_PROTOCOL_VIOLATION');
+      else if (!session.ended || !session.observation) stop(session, 'SESSION_PROTOCOL_VIOLATION');
       settle(session);
     });
     child.stdin.on('error', () => stop(session, 'SESSION_PROVIDER_FAILED'));
@@ -211,13 +214,15 @@ function receive(session, chunk) {
 }
 
 // Serves owed requests one at a time, in order; a request leaves the queue only once its one reply is written.
+// Teardown ends dispatch: once it began, nothing queued is forwarded and no reply is written.
 async function pump(session) {
-  while (session.pending.length > 0) {
+  while (session.pending.length > 0 && !session.closing) {
     try {
       const bytes = await reply(session, session.pending[0]);
       if (session.closing) return;
       await bounded(session, new Promise((done, failed) => session.child.stdin.write(bytes, error => (error ? failed(error) : done()))));
     } catch (error) {
+      if (session.closing) return; // a deadline or reply write that teardown cut short is no failure of its own
       return stop(session, error === TIMEOUT ? 'SESSION_TIMEOUT' : 'SESSION_PROVIDER_FAILED');
     }
     session.pending.shift();

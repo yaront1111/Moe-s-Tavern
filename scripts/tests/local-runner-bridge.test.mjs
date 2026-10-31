@@ -653,7 +653,7 @@ function openSession(provider, { answer = tool => ({ content: [{ type: 'text', t
   const run = { outputs: [], observations: [], forwarded: [], signals: [] };
   run.promise = runGuestSession({
     name: NAME, binding: BINDING, job: HOST_JOB, sessionId: SESSION_ID, daemonInfoPath: DAEMON, provider: { spawn: provider.spawn }, timeoutMs: 1_000,
-    forward: (tool, args, { signal }) => { run.forwarded.push([tool, args]); run.signals.push(signal); return answer(tool, args); },
+    forward: (tool, args, { signal }) => { run.forwarded.push([tool, args]); run.signals.push(signal); return answer(tool, args, { signal }); },
     onOutput: (stream, data) => run.outputs.push([stream, data]), onObservation: frame => run.observations.push(frame), ...options,
   });
   return run;
@@ -849,14 +849,16 @@ test('H4 replies, bounds and failures each answer once or end the session with a
     proc.send(HELLO, EXIT);
     proc.exit(0);
   });
-  // An answer still owed when the job ends leaves the session unclean, so no observation is delivered.
-  const unanswered = await ends('SESSION_PROTOCOL_VIOLATION', { answer: () => new Promise(() => {}) }, async (proc, ended) => {
-    proc.send(HELLO, REQUEST);
-    await until(() => ended.forwarded.length === 1, 'forwarded');
-    proc.send(EXIT);
-    proc.exit(0);
-  });
-  assert.deepEqual([unanswered.ended.observations, unanswered.proc.written], [[], []]);
+  // An answer still owed when the job ends is abandoned: its forward is aborted, nothing is written after the job frame
+  // and the observation is delivered once. H9 covers the races.
+  const unanswered = fakeProvider();
+  const owing = openSession(unanswered, { answer: () => new Promise(() => {}) });
+  unanswered.send(HELLO, REQUEST);
+  await until(() => owing.forwarded.length === 1, 'forwarded');
+  unanswered.send(EXIT);
+  unanswered.exit(0);
+  assert.deepEqual(await owing.promise, { observation: EXIT, executionReady: false });
+  assert.deepEqual([owing.observations, unanswered.written, owing.forwarded.length, owing.signals[0].aborted], [[EXIT], [], 1, true]);
   // The daemon's bind is checked again before every forward.
   const moved = await ends('SESSION_DAEMON_NOT_LOOPBACK', { daemonInfoPath: daemonFile('rebind.json') }, async proc => {
     proc.send(HELLO, REQUEST);
@@ -894,6 +896,124 @@ test('H4 replies, bounds and failures each answer once or end the session with a
   long.send(EXIT);
   long.exit(0);
   assert.deepEqual(await longRun.promise, { observation: EXIT, executionReady: false });
+});
+
+// A clean finish (hello, one observation, clean EOF, exit 0) means the guest ended its job, so the requests it still
+// owes are abandoned, never drained. Every race is driven by explicit promise control, never by sleep ordering.
+test('H9 a clean finish abandons pending requests: in-flight forwards are aborted, queued ones are never forwarded, and nothing is written late', { timeout: 30_000 }, async () => {
+  const hang = () => new Promise(() => {});
+  // Sends hello and one request per id, then waits until `forwards` of them reached forward.
+  const owe = async ({ ids = [1], forwards = 1, fake, answer = hang, signal = new AbortController().signal, ...options } = {}) => {
+    const proc = fakeProvider(fake);
+    const write = proc.stdin.write.bind(proc.stdin);
+    proc.late = 0; // stdin writes attempted once teardown destroyed it
+    proc.stdin.write = (...args) => { proc.late += proc.stdin.destroyed ? 1 : 0; return write(...args); };
+    const run = openSession(proc, { answer, signal, ...options });
+    proc.send(HELLO, ...ids.map(id => ({ ...REQUEST, id })));
+    await until(() => run.forwarded.length === forwards, `${forwards} forwarded`);
+    return { proc, run, signal };
+  };
+  const finish = ({ proc }) => { proc.send(EXIT); proc.exit(0); };
+  // One observation, no kill and no late write; every forward signal is aborted and the caller listener is removed.
+  const succeeds = async ({ proc, run, signal }, written = 0) => {
+    assert.deepEqual(await run.promise, { observation: EXIT, executionReady: false });
+    assert.deepEqual([run.observations, proc.written.length, proc.late, proc.kills, run.signals.map(item => item.aborted),
+      getEventListeners(signal, 'abort').length], [[EXIT], written, 0, [], run.signals.map(() => true), 0]);
+  };
+  // An active forward and one queued behind it: only the first was ever forwarded.
+  const queued = await owe({ ids: [1, 2] });
+  finish(queued);
+  await succeeds(queued);
+  await sleep(20);
+  assert.deepEqual([queued.run.forwarded.length, queued.proc.written, queued.run.observations.length], [1, [], 1]);
+  // A forward that resolves or rejects after the finish writes nothing and delivers no second observation.
+  for (const late of [resolve => resolve({ content: [] }), (resolve, reject) => reject(new Error('secret'))]) {
+    let release;
+    const settling = await owe({ answer: () => new Promise((resolve, reject) => { release = () => late(resolve, reject); }) });
+    finish(settling);
+    await succeeds(settling);
+    release();
+    await sleep(20);
+    assert.deepEqual([settling.proc.written, settling.proc.late, settling.run.observations.length], [[], 0, 1]);
+  }
+  // A forward that rejects as soon as its signal aborts gets no refusal frame.
+  const aware = await owe({ answer: (tool, args, { signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('secret')), { once: true });
+  }) });
+  finish(aware);
+  await succeeds(aware);
+  await sleep(20);
+  assert.deepEqual([aware.proc.written, aware.proc.late], [[], 0]);
+  // A forward still hanging timeoutMs after the finish: no live timer acts on the settled session.
+  const past = await owe({ timeoutMs: 500 });
+  finish(past);
+  await succeeds(past);
+  await sleep(550);
+  assert.deepEqual([past.proc.written, past.proc.late, past.proc.kills], [[], 0, []]);
+  // An answer that settles just before the EOF is written once; the one still owed is abandoned.
+  let calls = 0;
+  const half = await owe({ ids: [1, 2], forwards: 2, answer: () => (calls++ === 0 ? { content: [] } : hang()) });
+  finish(half);
+  await succeeds(half, 1);
+  assert.deepEqual(half.proc.replies(), [{ kind: 'response', id: 1, ok: true, result: { content: [] } }]);
+  // A reply write still in flight at the clean EOF: teardown failing it is no session failure, and its late success
+  // dispatches nothing more.
+  for (const failed of [true, false]) {
+    let held;
+    const inflight = await owe({ ids: [1, 2], fake: { hung: true, write: (chunk, done) => { held = done; } }, answer: () => ({ content: [] }) });
+    await until(() => inflight.proc.written.length === 1, 'reply in flight');
+    inflight.proc.send(EXIT);
+    inflight.proc.stdout.end();
+    await until(() => inflight.proc.stdin.destroyed, 'clean EOF');
+    if (failed) held(new Error('secret'));
+    await sleep(20);
+    inflight.proc.emit('close', 0, null);
+    await succeeds(inflight, 1);
+    if (!failed) held();
+    await sleep(20);
+    assert.deepEqual([inflight.run.forwarded.length, inflight.proc.written.length, inflight.proc.late], [1, 1, 0]);
+  }
+  // Real failures, each with an answer still owed, keep their code and deliver no observation.
+  const fails = async (code, owed, end) => {
+    await end(owed);
+    await rejectsWith(owed.run.promise, code, code);
+    assert.deepEqual([owed.run.observations, owed.proc.written, owed.proc.late, getEventListeners(owed.signal, 'abort').length], [[], [], 0, 0]);
+  };
+  for (const [code, frames, exitCode = 0] of [['SESSION_PROTOCOL_VIOLATION', []], ['SESSION_PROTOCOL_VIOLATION', [EXIT, header(9)]],
+    ['SESSION_PROVIDER_FAILED', [EXIT], 1], ['SESSION_PROTOCOL_VIOLATION', [EXIT, OUTPUT]]]) {
+    await fails(code, await owe(), ({ proc }) => { proc.send(...frames); proc.exit(exitCode); });
+  }
+  // A provider that exits 0 before its stdout reached a clean EOF gives no clean finish, even after the observation.
+  await fails('SESSION_PROTOCOL_VIOLATION', await owe({ fake: { hung: true } }), async ({ proc, run }) => {
+    proc.send(OUTPUT, EXIT); // one chunk, so the observation is parsed with the output
+    await until(() => run.outputs.length === 1, 'observation parsed');
+    proc.emit('close', 0, null);
+  });
+  // A forward that timed out before the EOF stays a timeout, even though the provider then exits 0.
+  await fails('SESSION_TIMEOUT', await owe({ timeoutMs: 100, fake: { hung: true } }), async ({ proc }) => {
+    await until(() => proc.stdin.destroyed, 'timed out');
+    proc.send(EXIT);
+    proc.exit(0);
+  });
+  // A caller abort after the observation and the clean EOF, but before the provider exits, is still an abort.
+  const caller = new AbortController();
+  await fails('SESSION_ABORTED', await owe({ fake: { hung: true }, signal: caller.signal }), async ({ proc }) => {
+    proc.send(EXIT);
+    proc.stdout.end();
+    await until(() => proc.stdin.destroyed, 'clean EOF');
+    caller.abort();
+    proc.emit('close', 0, null);
+  });
+  // A job frame whose write fails, even once the guest ended cleanly, fails closed.
+  let job;
+  await fails('SESSION_PROVIDER_FAILED', await owe({ fake: { hung: true, first: (chunk, done) => { job = done; } } }), async ({ proc }) => {
+    proc.send(EXIT);
+    proc.stdout.end();
+    await until(() => proc.stdin.destroyed, 'clean EOF');
+    job(new Error(KEY));
+    await sleep(20);
+    proc.emit('close', 0, null);
+  });
 });
 
 // CQ-R08 end to end. The injected spawn swaps only the Multipass launch for the real supervisor relay on the host's
