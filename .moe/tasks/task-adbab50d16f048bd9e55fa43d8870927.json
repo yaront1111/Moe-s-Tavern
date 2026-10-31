@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -107,11 +107,17 @@
       "author": "governor-4764040b",
       "content": "Governor note for the reopen-1 fix (09:35Z). QA's reject is TESTS ONLY, and its rows are spelled out exactly. Two things to know before you start:\n1. This row's DoD has ONE item (\"Task completed as described\"). A second reject on it moves the row to PLANNING automatically, and that costs the CQ-R13 chain (a80f46db → 42e9990c → …) a re-plan cycle. Before complete_task, show that QA's named mutants are all killed by named rows: X1, X27, X28 and M1-M18, from the scripts in /tmp/moe-qa-adbab-mut.nUuYQk. Then refresh task.verification as QA asked.\n2. Other open rows also declare scripts/tests/local-runner-check.test.mjs (a80f46db, and 42e9990c downstream). Edit it only with this session's Edit tool (GLOBAL rule 2), not a shell write and not a subagent, so the landing has a TOOL witness and the file isn't held as CONTESTED_UNTOUCHED. dependency-cache.mjs stays untouched, per QA.",
       "timestamp": "2026-10-31T09:33:55.230Z"
+    },
+    {
+      "id": "comment-d9eea38c796645dc942173bee29a16de",
+      "author": "qa-b29f7b3d",
+      "content": "QA round-2 evidence (qa-b29f7b3d): APPROVE.\n\nReviewed: completion commit 8af7b332 (tree 7733b018 = recorded treeId; parent 181d1ca8; on moe/work-2026-10-24). It changes only scripts/tests/local-runner-check.test.mjs (+55/-7, sha256 489ad914; worktree, commit and task.verification agree). dependency-cache.mjs is unchanged since 9257b233 (21f0cd0c), and guest-supervisor.py is b82e4369, so supervisorSha256 is unchanged.\n\nGATE (my re-run):\n- Snapshot: a fresh full `git archive 8af7b332` at /tmp/moe-qa-adbab-r2.nH5PDg/snap, with no overlays.\n- Toolchain: extracted fresh from the tarball whose sha256 48cc0e21e048790e equals toolchain.json x64. node v24.22.2, npm 11.19.1, npa 13.0.2.\n- Command: under `env -i HOME PATH=<tc>/bin:/usr/local/bin:/usr/bin:/bin`, `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs`.\n- Result: exit 0. 412 tests: 410 pass, 0 fail, 2 skipped (K9 needs root; the macOS native smoke). 82.7 s.\n- Every DA1-DA12, DC1-DC5, KI1-KI8 and CY1-CY4 row executed and passed.\n\nMUTATION SWEEP:\n- Driver: my own, /tmp/moe-qa-adbab-r2.nH5PDg/tools/mut.py. It runs the ^DA rows and checks that each mutant module still imports.\n- Baseline: 12/12 green; the original bytes were restored (21f0cd0c).\n- Result: 52/52 killed, 0 survivors, 0 invalid.\n- The mutants this reject named:\n  - X1 (every->some): killed by DA6, DA7 and DA12.\n  - X27 (no spec check for inBundle entries): killed by DA6 and DA12.\n  - X28 (no spec check for platform-skipped entries): killed by DA6 and DA12.\n  - M1-M18, X2-X12 and X29: all still killed.\n- 19 new mutants, all killed:\n  - Spec check skipped on one skip branch only: nested-bundled X30 (DA6, DA12), root-bundled X31 (DA6), cpu-skipped X32 (DA6), os-skipped X33 (DA6, DA12), every optional entry X34, root only X44, moved after both skips X45.\n  - Weaker value and map checks: first value only X35, last value only X36, null map treated as absent X37, outer every->some X38, String-coerced spec X39, keys checked instead of values X40, a dependency map dropped X41/X42/X43/X48.\n  - Stricter checks that should fail admitted controls: empty map refused X46 (DA7), multi-key map refused X47 (DA5, DA7, DA12).\n\nREJECT ISSUES:\n1. Mixed maps in both key orders at every placement x map: DA6. Closed.\n2. Empty, multi-key and all-REGISTRY maps admitted deep-equal to want at every placement x map: DA7. Closed.\n3. Bundled placements, nested and root-bundled: DA6 via PLACES. Closed.\n4. os-skipped and cpu-skipped optional placements: DA6. Closed.\n5. DA12 runs all three routes through buildDependencyCache: SOURCE_UNSUPPORTED, server.calls [], no cacheDir. Each honest twin fetches 2/2/1. Closed. These are exactly the shapes my round-1 real-npm probes installed candidate bytes from.\n\nSCOPE:\n- Size: against the pre-task base 9257b233^, the task changes 243 lines (dependency-cache.mjs +41/-8, test file +194/-0), under 400.\n- No pre-existing row was edited or removed. Round 2's 7 deletions are all this task's own DA6/DA7 lines.\n- Added lines are ASCII-only, with no forbidden patterns.\n- No edits to local-runner.test.mjs, docs or the supervisor. Dirty peer paths were left untouched.",
+      "timestamp": "2026-10-31T10:04:40.876Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T07:23:27.386Z",
-  "updatedAt": "2026-10-31T09:54:55.646Z",
+  "updatedAt": "2026-10-31T10:04:49.190Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T07:26:31.027Z",
@@ -123,7 +129,9 @@
     "plannedDistinctFileCount": 2,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-31T10:04:49.190Z",
+    "wallClockMs": 9477663
   },
   "contextFetchedBy": [
     "worker-25da16b2",
@@ -216,7 +224,10 @@
   },
   "filesModified": [
     "scripts/tests/local-runner-check.test.mjs",
-    "scripts/local-runner/dependency-cache.mjs"
+    "scripts/local-runner/dependency-cache.mjs",
+    ".moe/tasks/task-0e1499123bf34c428f0eccd34c8ad87b.json",
+    ".moe/tasks/task-adbab50d16f048bd9e55fa43d8870927.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
   ],
   "completionSummary": "Round 2 (QA reject #1), tests only. Modified: scripts/tests/local-runner-check.test.mjs (+55/-7, sha256 489ad914). scripts/local-runner/dependency-cache.mjs is unchanged (21f0cd0c, as landed in 9257b233), and supervisorSha256 is unchanged (b82e4369).\n\nQA issues fixed:\n1-4. A new PLACES/placed() helper puts one dependency map on the root, node_modules/a, a nested bundled e, a root-bundled e, an os-skipped optional o and a cpu-skipped optional p, each beside registry entries a and b.\n   - DA6 refuses every placement x map x bad value. Each bad value (every NON_REGISTRY spec, 5, true, null, ['1.0.0'], {}) is tried alone and beside '1.0.0' in both key orders, and malformed maps are refused too.\n   - DA7 admits every placement x map, deep-equal to want, with no map, {}, {a:'^1.0.0',b:'latest',c:'npm:x@1.0.0'}, and a map of all REGISTRY specs.\n5. New row DA12 runs QA's three routes through buildDependencyCache:\n   - The routes: a mixed root map, a bundled e with deps f:file:, and an os-skipped optional o with deps f:file:.\n   - Each rejects with DEPENDENCY_SOURCE_UNSUPPORTED, with server.calls [] and no cacheDir created.\n   - The honest twin of each builds a tree from 2, 2 and 1 tarballs.\n\nProof:\n- RED: on the old test file (cf5fdff2), X1, X27 and X28 survive every DA row.\n- On the final file, 33/33 mutants are killed. M1-M18 are still killed, as are QA's X1-X12 and X27-X29. X1 is killed by DA6, DA7 and DA12; X27 and X28 by DA6 and DA12. Four extra mutants (outer some, falsy map as absent, first-only, last-only) are killed by DA6.\n- Real npm 11.19.1 probe: under each mutant, offline npm ci installs the stub into node_modules/f. The current admission refuses each route, and the honest twins install registry bytes.\n- Repository lockfiles still admit 214/0/43/76/46.\n- Driver, probe and outputs: /tmp/moe-adbab-r2-tools/.\n\nGate: a fresh full archive of HEAD 181d1ca8 plus the two overlays, run with pinned node v24.22.2, npm 11.19.1 and npa 13.0.2 under env -i. Exit 0: 412 tests",
   "commits": [
@@ -249,6 +260,30 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "8af7b332fc13bdb42a03c4796ba6a09e55c94132",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T09:33:23Z",
+      "paths": [
+        ".moe/tasks/task-0e1499123bf34c428f0eccd34c8ad87b.json",
+        ".moe/tasks/task-adbab50d16f048bd9e55fa43d8870927.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T09:55:14.291Z",
+      "treeId": "7733b018c2a4dd2ecf072592787df2559a60ea28",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner-check.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -259,10 +294,10 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "completion",
-    "sessionId": "worker-25da16b2@2026-10-31T08:19:00Z",
-    "at": "2026-10-31T09:05:06.604Z"
+    "sessionId": "worker-25da16b2@2026-10-31T09:33:23Z",
+    "at": "2026-10-31T09:55:14.291Z"
   },
-  "reviewCompletedAt": "2026-10-31T09:33:18.613Z",
+  "reviewCompletedAt": "2026-10-31T10:04:49.190Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Task completed as described"
@@ -341,5 +376,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-31T10:04:49.190Z",
+  "reviewSummary": "APPROVED after reject #1 (tests only); full evidence in comment-d9eea38c.\n\nCommits: completion 8af7b332 (tree 7733b018 matches the record; on moe/work-2026-10-24) plus round-1 9257b233. Round 2 changes only scripts/tests/local-runner-check.test.mjs (+55/-7, sha256 489ad914, the same as task.verification). Runtime dependency-cache.mjs is unchanged (21f0cd0c), and guest-supervisor.py is unchanged (b82e4369), so supervisorSha256 is unchanged.\n\nGate, my re-run:\n- Fresh full git archive of 8af7b332.\n- Freshly extracted pinned toolchain: tarball sha256 48cc0e21 = toolchain.json x64; node v24.22.2, npm 11.19.1, npa 13.0.2; env -i.\n- `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner.test.mjs`: exit 0, 412 tests, 410 pass, 0 fail, 2 skips (K9, macOS smoke).\n- DA1-DA12, DC1-DC5, KI1-KI8 and CY1-CY4 all ran and passed.\n\nMutation sweep (my own driver, ^DA rows): 52 of 52 killed.\n- The rejection's X1 is killed by DA6/DA7/DA12; X27 and X28 by DA6/DA12.\n- M1-M18, X2-X12 and X29 are still killed.\n- 19 new mutants are killed too: each skip branch singly, first-only and last-only values, null map treated as absent, outer some, String coercion, keys instead of values, each dropped map, and stricter empty or multi-key refusals.\n\nThe DoD item \"Task completed as described\" is met. All 5 reject issues are closed:\n- Mixed maps in both key orders.\n- Empty and multi-key admitted controls.\n- Bundled and os/cpu-skipped placements at every map.\n- DA12 runs the three real-npm routes through buildDependencyCache: refused, with no fetch and no cacheDir, while their honest twins fetch 2/2/1.\n\nSize: 243 changed lines over the whole task (+235/-8), under 400. No pre-existing row was edited. Added lines are ASCII-only with no forbidden patterns. There are no edits to docs, local-runner.test.mjs or the supervisor.\n\nComplexity pass: PLACES/placed() is lean. No findings.",
+  "requiredCheckAtDone": null
 }
