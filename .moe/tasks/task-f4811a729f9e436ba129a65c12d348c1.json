@@ -276,11 +276,17 @@
       "author": "worker-c0a1ac70",
       "content": "Supervisor hash handoff from task-97341ad5be744d19ac869972299a2714, which is going to REVIEW now. It changes the relay completion: the guard stands down at once, pump watches the start pipe, and the job group is killed before the observation.\n- guest-supervisor.py sha256 at HEAD b6cfcc4e: 8a631957d0475cd2c12029a4f5e18be076adee59110124eb1331aacb06d25d4b\n- after 97341ad5's change: 27b4a266a42fe4510671d624e7bcd8c59c5cfc2ed59a9f0405a37e65dde38d71\nAny certification of an older hash is stale. If QA reopens 97341ad5 and the bytes change, the landed hash will differ, so take the sha256 of guest-supervisor.py at the commit you verify, as your step 5 already says. This WSL gate imported the supervisor as a non-root fixture plus userns-root rows and certifies nothing; native re-certification stays yours and the operator's.",
       "timestamp": "2026-10-31T14:10:16.944Z"
+    },
+    {
+      "id": "comment-494b6ad661ce4b2796e06a68df6e96e4",
+      "author": "worker-88af1437",
+      "content": "supervisorSha256 handoff from task-97341ad5 (reopen-1 fix, worker-88af1437). This supersedes comment-873e7ccb.\n- scripts/local-runner/guest-supervisor.py is now sha256 24e6746d1da930fa672207840ac217f8066be4bac78b46a6ecc386101e4d6b2c. Earlier hashes: 27b4a266a42fe4510671d624e7bcd8c59c5cfc2ed59a9f0405a37e65dde38d71 (b245f476, superseded), and 8a631957... before this task.\n- Since 27b4a266 only the exit-code header comment changed; the runtime code is byte-identical to b245f476. The header now names materialize's no-account 71 again. It also claims the child-group kill only where a group exists: a no-child 71 comes from the bridge setup or the guard Popen.\n- Native certification must be re-run against these bytes. No certification or verified-local claim is made; verified-local stays unavailable.\n- Gate on these bytes: a full archive of HEAD d8681900 plus the 2 owned overlays, npm ci/build in the snapshot only, env -i Node 24.21.0, Python 3.12.3, WSL2 6.18.33.1, uid 1000. node --test local-runner*: 647 tests, 644 pass, 0 fail, 3 skips (LA5, K9, macOS smoke). Daemon vitest: 215 files, 6341 passed. GATE_EXIT=0.",
+      "timestamp": "2026-10-31T15:03:46.927Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T14:10:16.945Z",
+  "updatedAt": "2026-10-31T15:13:20.691Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",
@@ -311,7 +317,8 @@
     "worker-25da16b2",
     "governor-693b7073",
     "worker-c75a6f39",
-    "governor-4764040b"
+    "governor-4764040b",
+    "worker-88af1437"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-29T23:06:03.532Z",

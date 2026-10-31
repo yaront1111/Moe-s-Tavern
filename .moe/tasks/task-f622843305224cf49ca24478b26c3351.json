@@ -7,9 +7,41 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD red: write the twin regression test first, then wire it into CI. Create scripts/tests/intent-journal.test.mjs modeled on scripts/tests/push-failure-message.test.mjs. Reuse its `slice(source, start, end)` helper, which asserts both markers are found, and its engine matrix: win32 runs bash 'C:/Program Files/Git/bin/bash.exe', 'powershell.exe' and 'pwsh.exe'; other platforms run '/bin/bash' and 'pwsh', skipping pwsh when `spawnSync(pwsh, ['-NoProfile','-Command','exit 0']).status !== 0`.\n\nSlice the REAL writers out of the wrapper sources, never a copy: ps1 from 'function Write-MoeIntentJournal(' up to 'function Get-MoeBaselineLandedFlag('; sh from 'intent_journal_write() {' up to 'receipt_send() {'.\n\nFor every engine run three cases. Each case gets its own mkdtemp dir, removed by t.after(() => rmSync(dir, {recursive:true, force:true})) so cleanup runs even on failure. The journal lives at <dir>/gitdir/moe/receipt/task-fixture.json.\n(a) overwrite: the receipt dir exists and the journal holds '{\"stale\":true}';\n(b) create: neither the journal nor moe/receipt exists;\n(c) directory: an existing empty directory sits at the journal path.\n\nBash script: `PYTHON_CMD=<'python' on win32, else 'python3'>`, then the sh slice, then `if intent_journal_write \"$JOURNAL_PATH\" \"$JOURNAL_REPORT\"; then echo RESULT=ok; else echo RESULT=fail; fi`. JOURNAL_REPORT is a fixed compact JSON string with no '/' characters, which keeps MSYS2 argument path conversion out of Git Bash.\n\nPowerShell script: write it with a '\\ufeff' prefix and run it with -NoProfile -NonInteractive -File. Body: `$ErrorActionPreference='Stop'`, then the ps1 slice, then an [ordered] report {taskId, attemptId, generation (an int), ledger=[ordered]@{sessionId; role; status}} and `$ok = Write-MoeIntentJournal $env:JOURNAL_PATH $r; 'RESULT=' + [string]$ok`. Matching an exact 'RESULT=True' or 'RESULT=False' line also catches a leaked pipeline value.\n\nPass both values by env, using JOURNAL_PATH and JOURNAL_REPORT, never MOE_* names. Forward-slash the path for bash, as the template does.\n\nAssertions, mutation-resistant, with error handling for a missing engine or a timeout: assert.ifError(result.error), then status 0, with stdout+stderr in each message.\n- (a) and (b): the success line. The file does not start with a UTF-8 BOM. The sh bytes equal JOURNAL_REPORT exactly; for PowerShell, JSON.parse of the file deep-equals the report object. readdirSync(receipt dir) deep-equals ['task-fixture.json']: no *.tmp.* and no backup.\n- (c): the failure line. The journal path is still an empty directory, and the receipt dir lists only it.\n\nCI: append scripts/tests/intent-journal.test.mjs to the node --test list of the 'Test agent runtime discovery' step in .github/workflows/ci.yml, beside push-failure-message.test.mjs. That step runs on ubuntu, windows and macOS.\n\nWrite both files with the Write/Edit tools only. ci.yml is declared by other open rows, and a shell write leaves no witness, so the path would be held at landing.\n\nRed evidence: from WSL, run `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/intent-journal.test.mjs` against the UNFIXED wrapper. Exactly the powershell and pwsh overwrite cases must fail (RESULT=False). Every bash case and every create/directory case must pass. Put the failing case names in the step note. If any other case fails, fix the test, not the wrapper.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "newFiles": [
+        "scripts/tests/intent-journal.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix scripts/moe-agent.ps1 Write-MoeIntentJournal by changing ONLY `[IO.File]::Replace($tmp, $Path, $null)` to `[IO.File]::Replace($tmp, $Path, [NullString]::Value)`.\n\nWhy: PowerShell passes $null to a .NET string parameter as \"\", and File.Replace rejects that. Verified 2026-10-31: PS 5.1.26100 says 'The path is not of a legal form' and pwsh 7.6.9 says 'The path is empty'. [NullString]::Value overwrites on both and leaves no tmp file. So every overwrite of an existing strong journal returned $false, and the landing refused with MOE_COMMIT_REFUSED_INTENT_UNWRITABLE, while sh's os.replace overwrites.\n\nKeep File.Replace, the atomic replace that CQ-V07 chose. Do NOT switch to Move-Item -Force: the function's own comment says it deletes first. Do NOT use File.Move's 3-argument overload either: it does not exist in PS 5.1's .NET Framework.\n\nAdd one line to the function's comment explaining why [NullString]::Value is needed, citing task-f6228433.\n\nChange nothing else: not the error handling (the catch removes the tmp and returns $false), not the call site in Invoke-MoeLanding, not scripts/moe-agent.sh.\n\nEdit with the Edit tool only. Many open rows declare this file, and a shell write leaves no TOOL witness, so the path would be held at landing. Keep the UTF-8 BOM and LF line endings.\n\nTDD green: re-run the step-1 node.exe command; every case passes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Regression gate. Run it once, fresh, from the repo root in WSL:\n`node --test scripts/tests/intent-journal.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/intent-journal.test.mjs && bash scripts/tests/parity-check.sh`\n\nWhat each part covers:\n- Linux node covers bash. pwsh is not on PATH inside WSL, so its cases skip there.\n- Windows node covers Git Bash, PowerShell 5.1 and pwsh 7. It must show every case passing with 0 skipped; this is the run that proves the fix.\n- parity-check confirms the ps1 BOM and the twin strings.\n\nThis is the complete_task verification evidence: the command, exitCode 0, and an outputTail that holds both node test summaries and 'PASS parity-check.sh'.\n\nOn a native Windows host, the equivalent is `node --test scripts/tests/intent-journal.test.mjs` followed by the parity check. No npm build or npm test is needed, and per the rails none may run in the shared checkout.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's own diff: scripts/moe-agent.ps1, .github/workflows/ci.yml and the new test. Check each point, then record the findings in the final step note.\n(1) The ps1 diff is exactly one argument plus one comment line. The BOM is intact and no other bytes changed.\n(2) Write-MoeIntentJournal is still called only under verified-local, so legacy landings never reach it. CQ-V08's pre-freeze MOE_COMMIT_REFUSED_UNRECONCILED_INTENT refusal still runs before any write, so a stale unreconciled journal still refuses the landing rather than being overwritten. The overwrite that is reachable today is a CAS retry after the failed-CAS `Remove-Item ... -ErrorAction SilentlyContinue` silently failed, for example on a Windows sharing violation. Overwriting there is correct, because that journal is this landing's own intent and its ref never moved; sh already does the same.\n(3) The test slices the real functions and fails if a marker moves. Cleanup runs in t.after even on failure, the test never writes inside the repo, and the PowerShell cases really ran (0 skipped in the node.exe run).\n(4) Concurrency: tmp names carry $PID / os.getpid(), so two writers never share a tmp file.\n(5) Null, empty and huge inputs: an empty path still returns $false / 1 before any write (unchanged).",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,10 +58,85 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T14:18:10.500Z",
-  "updatedAt": "2026-10-31T15:03:15.203Z",
+  "updatedAt": "2026-10-31T15:14:57.668Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T15:03:15.203Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T15:05:14.015Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-8419009e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T15:14:57.647Z",
+  "executionContract": {
+    "intendedBehavior": "Under the strong (verified-local) profile, the PowerShell wrapper's Write-MoeIntentJournal overwrites an existing intent journal atomically, as sh intent_journal_write already does: it returns $true, the journal holds the new report (UTF-8, no BOM), and no tmp or backup file is left. Today every overwrite throws because $null binds as \"\" for File.Replace's backup parameter, and the landing refuses with MOE_COMMIT_REFUSED_INTENT_UNWRITABLE. Creating a fresh journal and failing closed are unchanged.",
+    "acceptanceCriteria": [
+      "With a journal already on disk, Write-MoeIntentJournal returns exactly $true on PowerShell 5.1 and pwsh 7. The file holds the new report (JSON-equal, no BOM), and the receipt directory lists only that file. sh intent_journal_write behaves the same.",
+      "With no journal and no moe/receipt directory, both twins create the journal; same assertions.",
+      "With a directory at the journal path, both twins fail closed (ps $false, sh non-zero), leave the directory untouched and leave no tmp file.",
+      "scripts/tests/intent-journal.test.mjs fails on the unfixed wrapper (only the PowerShell overwrite cases), passes after the fix, and runs in CI's 'Test agent runtime discovery' step."
+    ],
+    "invariants": [
+      "Write-MoeIntentJournal keeps its CQ-V07 contract: a WriteThrough tmp file with Flush($true), then the atomic File.Replace or File.Move. It returns $false on any failure, with the tmp removed. No Move-Item -Force and no delete-then-move.",
+      "CQ-V08's pre-freeze MOE_COMMIT_REFUSED_UNRECONCILED_INTENT refusal and every refusal code, banner and parity string are unchanged.",
+      "scripts/moe-agent.sh is not modified. Legacy-profile landings never call Write-MoeIntentJournal.",
+      "scripts/moe-agent.ps1 stays UTF-8 with a BOM and LF line endings."
+    ],
+    "compatibility": [
+      "Must work on Windows PowerShell 5.1 (.NET Framework, which has no 3-argument File.Move) and pwsh 7 on Windows, Linux and macOS. [NullString] exists since PowerShell 3."
+    ],
+    "approvedScope": [
+      "Write-MoeIntentJournal: the File.Replace backup argument and its comment.",
+      "New scripts/tests/intent-journal.test.mjs: twin tests that slice Write-MoeIntentJournal and intent_journal_write.",
+      "One file added to the node --test list of the ci.yml 'Test agent runtime discovery' step."
+    ],
+    "reuse": [
+      "The slice helper and engine matrix pattern from scripts/tests/push-failure-message.test.mjs.",
+      "The existing File.Replace design of Write-MoeIntentJournal, which is kept, not replaced."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1 Write-MoeIntentJournal: `if ([IO.File]::Exists($Path)) { [IO.File]::Replace($tmp, $Path, $null) } else { [IO.File]::Move($tmp, $Path) }`. With $null this throws on PS 5.1.26100 and pwsh 7.6.9; with [NullString]::Value it succeeds on both (probed 2026-10-31).",
+      "scripts/moe-agent.ps1 Invoke-MoeLanding: `if (-not (Write-MoeIntentJournal $journal $receipt))` produces MOE_COMMIT_REFUSED_INTENT_UNWRITABLE. A failed CAS runs `Remove-Item -LiteralPath $journal -Force -ErrorAction SilentlyContinue` before the retry.",
+      "scripts/moe-agent.sh intent_journal_write overwrites through python os.replace and returns 1 on any failure.",
+      "Slice markers exist once each: 'function Write-MoeIntentJournal(', 'function Get-MoeBaselineLandedFlag(', 'intent_journal_write() {', 'receipt_send() {'."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/intent-journal.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/intent-journal.test.mjs && bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: [NullString]::Value, the documented PowerShell way to pass a real null to a .NET string parameter. It exists since PS 3, and on 2026-10-31 it was verified to overwrite on PS 5.1.26100 and pwsh 7.6.9.\nRejected:\n(1) Move-Item -Force, which Write-MoeReceiptJournal uses and the gotcha note suggests. It deletes then moves, which breaks CQ-V07's atomic-replace design.\n(2) [IO.File]::Move($tmp,$Path,$true). That overload is .NET Core 3+ only and is missing on PS 5.1, the engine native Windows seats use.\n(3) A postflight harness arm that plants a journal through MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF to reach Replace end-to-end. It needs byte-identical edits to both the postflight.sh and postflight.ps1 frozen suites plus a long harness run, all for a one-argument fix. The function-level twin test pins the defect directly on every engine.\n(4) Putting the cases into push-failure-message.test.mjs to avoid touching ci.yml, which other rows also declare. Rejected because that file covers a different topic; the CI wiring is one token.",
+    "codebaseInsights": "- scripts/moe-agent.ps1 Write-MoeIntentJournal (~L3221) is the strong-profile intent writer. Its only caller is the verified-local branch of Invoke-MoeLanding's CAS loop (~L5496). Its twin is sh intent_journal_write (~L5837), whose python os.replace overwrites.\n- Since CQ-V08, a journal already on disk at landing start refuses the completion before the freeze. That is why the overwrite branch is masked; it stays reachable on a CAS retry when the failed-CAS Remove-Item (~L5535, SilentlyContinue) did not delete the attempt's journal.\n- scripts/tests/push-failure-message.test.mjs is the template: it slices the real functions and runs them on bash/powershell/pwsh.\n- From WSL, '/mnt/c/Program Files/nodejs/node.exe' --test runs the same file on Git Bash, PS 5.1 and pwsh 7; on 2026-10-31 push-failure-message passed 8/8 that way. Linux node in WSL has no pwsh on PATH.\n- task-f58c7c75's checkRefs use the same node.exe path convention.",
+    "risks": "- Contested paths: scripts/moe-agent.ps1 is declared by about 20 open wrapper-lane rows, and ci.yml by four. Write them only with Edit/Write, or a Serena editor on a one-shot seat; a shell write leaves no TOOL witness and the path is held at landing.\n- moe-agent.ps1 must keep its UTF-8 BOM; parity-check enforces it.\n- Inside WSL, Linux `node --test` skips every PowerShell case. Only the node.exe run proves the fix, so its output must show the powershell and pwsh cases passing with 0 skipped.\n- Git Bash with Windows python: pass C:/... paths with forward slashes, never /c/..., and keep '/' out of the report JSON so MSYS2 path conversion does not touch the arguments.\n- Never run npm build, clean, ci or install, or npm test, in the shared checkout (global rail); this task needs none of them.\n- Out of scope: other File.Replace callers (there are none), and the CQ-V12 operator docs for stuck journals.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/push-failure-message.test.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "c9b771ea74af9dfc0a50678e6370ed56a74400df",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T15:14:57.668Z",
+  "approvedPlanRevision": 1
 }
