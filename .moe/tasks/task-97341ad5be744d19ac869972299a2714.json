@@ -8,9 +8,50 @@
     "The supervisor header and the cited comments match the code."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Use test-driven-development in local-runner-bridge.test.mjs. Replace S11's explicitly obsolete requirement that a grandchild survive normal completion with a death-before-observation assertion; this is an intentional behavior correction, not assertion weakening. Cover exit0, nonzero and signalled jobs with a lingering child that keeps output open or redirects it closed. Reuse existing guarded/session/frame helpers, accumulating PID output safely across chunks; assert the actual original exit/signal, one final observation only after owned descendants are gone, bounded completion, and an unrelated sentinel started by the test remains alive. Add a real-Python case whose job closes both output pipes but keeps running: close host in_fd after a deterministic ready/closed-output handshake, expect74 promptly with no observation and owned job cleanup. Add the same quiet-output case with malformed host data expecting76 and keep catchable-signal75 coverage. Existing task-a4a729ddaa8942679e8ae7cd57bd42f1 kernel-boundary tests cover setsid/setpgid/double-fork escape and supervisor SIGKILL; retain those unchanged and exercise its real root-Linux path when validating the completion boundary. Test cleanup may signal only exact recorded PIDs this test started, never names/UIDs/session scans; isolate privileged probes in owned namespaces.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Make guard completion, not stdout/stderr lifetime, drive relay. After startup read returns '+', send the existing life-pipe stand-down byte immediately (as run_install already does); catch BrokenPipeError as the existing self-killed-group case. Extend pump to watch start_end in the SAME Bridge selector alongside host stdin, termination wakeup, agent sockets and output pipes. Keep servicing host EOF/protocol/signals even after both output streams close; no subsequent blocking completion-only read that stops watching host. An EOF on start_end marks guard completion; any unexpected control byte fails closed. Before reaping, SIGKILL the owned original process group while the unreaped guard pins its id (ProcessLookupError is benign), then drain remaining output to EOF. Only when completion EOF and both output EOFs are established may reap supply the single observation. Preserve raw wait status: cleanup must never turn a job's0/7/signal into a different observed result. The prerequisite's root-Linux kernel boundary guarantees all escaped descendants already ended before completion EOF; do not replace it with process scans or broaden kill scope. Keep finally teardown on all errors, close fds/selector/socket exactly once, retain signal-handler/wakeup restoration, and keep error handling mapping71 startup,74 I/O/hostEOF,75 caught signal,76 protocol. No busy polling, extra thread, second selector loop or public frame change.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update local supervisor/guard/pump comments to describe the new completion/teardown order and production Linux descendant guarantee, without claiming the non-root POSIX import harness certifies isolation. Clarify header's pre-relay no-frame refusals versus failures after hello, preserving predecessor42's dependency82 contract. Correct materialize's 'handled failure leaves neither' comment: pre-publication failure cleans owned staging/manifest as applicable, but after successful rename an acknowledgement-write failure can leave the published workspace+manifest; this task does not change materialize rollback behavior. Current EX_TERMINATED=75/header are already consistent, and snapshot-import's claim that onFrame/R09a errors surface unchanged is supported by snapshot-transfer's current catch(finish(error)); leave those correct contracts alone. Update S15/S16/S17 stale 'pump ended/last start-pipe read' descriptions to the new quiet-output selector behavior without dropping their signal-race/no-spin/socket-EOF assertions.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY once for the shared supervisor/guard protocol: create a full git archive snapshot outside the live checkout after prerequisites land, overlay ONLY these two final owned files, and export its absolute path as MOE_VERIFY_SNAPSHOT. Install host-native daemon dependencies with npm ci only there; retain lockfile and use Linux-only Node/npm/Git PATH on WSL. Run exactly cd \"$MOE_VERIFY_SNAPSHOT\" && node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test). This includes the prerequisite kernel guard and host pending-request tests; record source SHA, owned overlays, OS/kernel/Python/Node, capability/skip details, fresh exitCode/outputTail as complete_task evidence. Linux process/namespace rows must execute on a capable Linux host; Windows skips POSIX-only rows with their existing explicit reasons and macOS imported tests do not establish Linux isolation. No live checkout install/build/daemon tests, no .moe edits, no pattern-kill. New supervisorSha256 invalidates old certification: report the changed hash; CQ-R13/operator owns actual VM re-certification and verified-local remains unavailable.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review: reason through all orders of host EOF, output EOF, guard completion, signal wakeups, queued socket requests and late host data. No observation before descendant teardown; no successful observation if setup, control pipe or cleanup failed; no loss of buffered final output or job status; kill only the pinned owned group, never a reused/reaped pid; preserve original71/74/75/76 semantics and unrelated sentinel. Confirm owned fd/socket closure, no busy loop, no credential output, and both prerequisites compose without re-editing their tests. Keep S9-S17's meaningful protections; only S11's documented old leak requirement is reversed. If fixes change final source, rerun the same gate on refreshed snapshot bytes. Leave foreign dirty bytes and production activation untouched.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -20,16 +61,92 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 8,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-9ad4498740dd43d5a10f146d2827606d",
+      "author": "architect-21c9ed65",
+      "content": "SPIDR interface split: task-a4a729ddaa8942679e8ae7cd57bd42f1 owns root Linux kernel descendant containment while retaining GUARD '+'/completion-EOF/waitpid-status interface; task-5ee846b62b81438c9d508160235d15ac owns pending host requests at valid job completion. Parent owns output-independent relay completion/host EOF, normal group cleanup and local comment corrections, after both. Confirmed current EX_TERMINATED=75/header/S9 agree, and snapshot-transfer.runSupervisorStream forwards onFrame errors unchanged, so snapshot-import's R09a-code comment is now correct; do not change those semantics based on stale description. materialize's 'leaves neither' claim is inaccurate after publish/ack failure and needs correction.",
+      "timestamp": "2026-10-31T06:17:56.597Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:23:11.019Z",
-  "updatedAt": "2026-10-31T05:37:01.804Z",
+  "updatedAt": "2026-10-31T06:20:27.752Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:47.842Z",
     "seq": 1
   },
   "dependsOn": [
-    "task-42e9990c286a43fcab7edd716290a515"
-  ]
+    "task-42e9990c286a43fcab7edd716290a515",
+    "task-a4a729ddaa8942679e8ae7cd57bd42f1",
+    "task-5ee846b62b81438c9d508160235d15ac"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-31T06:11:56.863Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-21c9ed65"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T06:20:27.727Z",
+  "executionContract": {
+    "intendedBehavior": "The guest relay observes a job only after its owned descendants are terminated, keeps host cancellation/protocol handling live while quiet jobs run, and describes actual error/publication behavior accurately.",
+    "acceptanceCriteria": [
+      "Completed jobs with background children cannot leave them alive at observation; true exit/signal is retained.",
+      "Closed-output live jobs react promptly to hostEOF with74/no observation and malformed host input with76.",
+      "Signal races, no-spin, output integrity, socket teardown and fd/handler restoration continue to pass.",
+      "Supervisor comments match actual framing/teardown/publication behavior; already-correct75/import contracts stay unchanged.",
+      "Full external runner+daemon gate passes including the two prerequisite slices; new supervisor hash is handed to final certification."
+    ],
+    "invariants": [
+      "One selector and waitpid-derived observation; no caller-minted trusted evidence.",
+      "Root Linux kernel containment from prerequisite is mandatory; no broad process sweep or PID-reuse hazard.",
+      "No live runtime build/install/test, .moe mutation, Git writes or native isolation enablement."
+    ],
+    "compatibility": [
+      "Public frames and exit-code meanings unchanged; normal background survival is deliberately removed.",
+      "Linux production guarantee; macOS/non-root POSIX import tests are non-certifying, Windows retains explicit POSIX skips.",
+      "Pending-request completion semantics are implemented by prerequisite, not duplicated here."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-bridge.test.mjs"
+    ],
+    "reuse": [
+      "GUARD startup/completion pipes, run_install kill-before-reap pattern, Bridge selector, Termination wakeup, existing S-series harness."
+    ],
+    "sourceAssumptions": [
+      "task-a4a729ddaa8942679e8ae7cd57bd42f1 preserves '+' once started, completion EOF after teardown and actual job wait-status mirroring.",
+      "task-5ee846b62b81438c9d508160235d15ac handles outstanding requests at valid host completion.",
+      "CQ-R13 remains sole epic final and owns fresh native certification."
+    ],
+    "checkRefs": [
+      "cd \"$MOE_VERIFY_SNAPSHOT\" && node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Separate coherent concerns: task-a4a729ddaa8942679e8ae7cd57bd42f1 owns Linux kernel-backed descendant containment without changing GUARD handshake; task-5ee846b62b81438c9d508160235d15ac owns terminal host pending-RPC cancellation; this parent owns output-independent relay completion and its comments/tests. Chosen: early stand-down plus existing completion pipe in the one selector, kill while guard remains unreaped, then waitpid observation. Rejected: killpg after reap (PID reuse), kill only on errors (leak), waiting solely for output EOF (hang), global PID/name/UID sweeps, and merely claiming VM deletion proves per-observation cleanup.",
+    "codebaseInsights": "Architect reproduced at archive0d6f2cd6: S11 passes only because it asserts a live leaked child; closed-output job plus hostEOF returned75 only after a1s fallback TERM rather than74. Current GUARD '+' then completion EOF and run_install's early-release/kill-before-reap pattern supply the seam. Namespace primitive probe in an owned user/PID namespace killed a setsid descendant before init wait completed while separately preserving job exit7. Current75 and snapshot-import/onFrame comments are not stale; materialize acknowledgement failure can leave the published pair.",
+    "risks": "requiredChecks omitted: live daemon cannot measure (PATH defect); re-add after restart. Safety-critical process lifetime, hence heavy/max. REPL clarification offered; conservative scope includes escaped descendants per task description and isolates that work in a prerequisite rather than weakening DoD. Parent depends structurally on both new prerequisites and42. No native certification can be reused after supervisor bytes change. Epic-size advisory is recorded; governor owns broader epic reorganization, not this bounded bug split.",
+    "keyFiles": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-bridge.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T06:20:27.751Z",
+  "approvedPlanRevision": 1
 }

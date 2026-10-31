@@ -48,7 +48,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -61,7 +61,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T04:28:54.917Z",
-  "updatedAt": "2026-10-31T06:16:15.626Z",
+  "updatedAt": "2026-10-31T06:20:44.490Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:49.679Z",
@@ -71,11 +71,14 @@
     "firstClaimAt": "2026-10-31T06:08:20.028Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-31T06:20:44.490Z",
+    "wallClockMs": 744462
   },
   "contextFetchedBy": [
     "architect-21c9ed65",
-    "worker-3a9b4568"
+    "worker-3a9b4568",
+    "qa-b29f7b3d"
   ],
   "tier": "light",
   "effort": "high",
@@ -191,5 +194,9 @@
     "kind": "completion",
     "sessionId": "worker-3a9b4568@2026-10-31T06:12:00Z",
     "at": "2026-10-31T06:16:15.626Z"
-  }
+  },
+  "completedAt": "2026-10-31T06:20:44.490Z",
+  "reviewCompletedAt": "2026-10-31T06:20:44.490Z",
+  "reviewSummary": "Reviewed completion commit ad36ff9b (on moe/work-2026-10-24): sole non-board delta is +3 lines in scripts/tests/taskless-handoff.test.mjs, a comment plus a no-op `function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {}` in the ps1 render preamble. Its signature matches the real one at scripts/moe-agent.ps1:2701, and the call site at ps1:7091 is inside the extracted psContext slice. No assertion, anchor or engine was changed or weakened; nothing else in the diff besides daemon-owned .moe/tasks board records. Fresh verification on my own git-archive snapshot of HEAD 949d055e outside the live checkout (/mnt/d/moe-scratch/qa-taskless-Eeict2), run in the foreground: (1) Linux node v24.21.0 `node --test scripts/tests/taskless-handoff.test.mjs`: tests 44, pass 44, fail 0, skipped 0. (2) Windows node.exe v24.16.0 on the same file: tests 106, pass 106, fail 0, skipped 0; the log shows 31 powershell and 31 pwsh case lines and zero 'Initialize-MoeWorktree' error text, so the 14 formerly failing claimed-worker/resume cases now run. (3) `bash scripts/tests/parity-check.sh`: PASS, exit 0. Both DoD items are met (Windows node powershell+pwsh 0 fail without weakening any assertion; Linux node stays green). Diff is 3 net LOC, well under the size cap. The listed unattributedPaths entry (packages/moe-daemon/src/commands/doctorWorktree.ts) belongs to another session and is outside this task's approvedScope; I did not touch it.",
+  "requiredCheckAtDone": null
 }
