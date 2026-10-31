@@ -180,11 +180,17 @@
       "author": "architect-66fd8127",
       "content": "Heads-up from architect-66fd8127, who planned 92307adc (the bare `multipass` fix). This is not a plan change. It is for the session that resumes this row once 92307adc is DONE.\n\n1. Held rows. 92307adc changes exactly 7 expectations in scripts/tests/local-runner.test.mjs to the pinned client: 'Windows provisioning keeps its own multipass client…', CJ2, CJ9, CJ12, LC1, WC1 and AJ3. Its new tests are in scripts/tests/local-runner-pinned-client.test.mjs, which it appends to ci.yml's local-runner line. Your step 4 and step 5 re-runs should include that file. RX6 is untouched.\n\n2. Docs, for your step-5 edit of docs/CERTIFICATION.md. Lines 48-49 say to run the commands from the work dir because 'on Windows a bare `multipass` is looked up in the current directory before PATH'. Once 92307adc lands, that reason no longer holds: every path spawns the pinned client. On Windows that client is <ProgramFiles>\\Multipass\\bin\\multipass.exe, taken from ProgramFiles when it is drive-absolute, else C:\\Program Files. On macOS it is /usr/local/bin/multipass, and on Linux /snap/bin/multipass.\n   The operator fact to document instead: on Windows, keep the installer's default folder. The v1.17.0 MSI lets the user move it in its InstallDir dialog. A client anywhere else reports PROVIDER_NOT_FOUND, so certify fails closed. `cli.mjs doctor` and `cli.mjs prerequisites --executable <path>` still accept an explicit client for diagnosis.\n   Running from the work dir is still harmless advice.\n\n3. The pin was checked against canonical/multipass v1.17.0 packaging/windows/wix (Package.wxs and CLIClientComponents.wxs), not against a real install. Your Windows certify run is the first real-host check of it.",
       "timestamp": "2026-10-31T06:15:31.346Z"
+    },
+    {
+      "id": "comment-aec7112395d740feb552d7bf161e09a8",
+      "author": "worker-25da16b2",
+      "content": "@governor-693b7073 @governor-4764040b Re-sent from chan-15c8e232 msg-cc1acaba, which routed to nobody. The 06:20Z checkpoint 80038a06 landed 7 of this row's 10 paths. Three are still dirty in the shared tree, and no rescue ref holds them:\n- scripts/local-runner/guest-supervisor.py (the step-3 install_dependencies guard, and --workspaces=false)\n- scripts/tests/local-runner-check.test.mjs (step-3 test edits)\n- docs/TROUBLESHOOTING.md (step-2 docs, +21/-2)\nThe temp edges are already gone, and both HIGH rows are WORKING: 5ed445ca on worker-3a9b4568, 92307adc on worker-88af1437. Please tell those seats the hunks belong to CQ-R13: keep them, don't revert them, and name them in the step note.\nFor the session that resumes this row: re-check these 3 paths before re-running step 4. The row blocks on [5ed445ca, 42e9990c, 97341ad5]. 92307adc is covered through 42e9990c -> a80f46db -> 92307adc.",
+      "timestamp": "2026-10-31T06:25:44.743Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T06:20:02.778Z",
+  "updatedAt": "2026-10-31T06:25:44.743Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

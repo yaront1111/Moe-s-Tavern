@@ -4222,10 +4222,10 @@ function Get-MoeHeldList($Attr) {
         $out += " MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
     } elseif ($held.Count -gt 0) {
         $out += " MOE_CONTESTED_HELD remedy:"
-        if ($untouched) { $out += " verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived." }
-        if ($editing) { $out += " the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude session of this task re-edit the path, or let the peer's own landing carry the bytes." }
-        # Same sentence as recordCommit.ts HELD_REMEDY_WITNESS.
-        $out += " Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
+        if ($untouched) { $out += " verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude or codex exec session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived." }
+        if ($editing) { $out += " the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude or codex exec session of this task re-edit the path, or let the peer's own landing carry the bytes." }
+        # Twin: recordCommit.ts HELD_REMEDY_WITNESS (task-7cc959e9 brings it to this sentence).
+        $out += " Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
         $out += " declare_files, unblocking or a shell touch alone does not release a hold."
     }
     return $out
@@ -7525,6 +7525,18 @@ $mentionsJson
                     $psi = [System.Diagnostics.ProcessStartInfo]::new('node', "`"$promptCacheHelper`" codex-stream")
                     $psi.UseShellExecute = $false
                     $psi.RedirectStandardInput = $true
+                    # The helper alone gets the TOOL-witness env (prompt-cache-witness.mjs):
+                    # $psi's dictionary reaches that child, never codex or its MCP servers.
+                    # No `else` here: the launcher test cuts this block at the first one.
+                    $script:CodexToolWritesFile = $null
+                    $psi.EnvironmentVariables.Remove('MOE_TOOL_WRITES_FILE')
+                    if ($null -ne $moeGit) {
+                        $script:CodexToolWritesFile = Join-Path ([IO.Path]::GetTempPath()) ('moe-codex-tool-writes-' + [guid]::NewGuid().ToString('N') + '.txt')
+                        $psi.EnvironmentVariables['MOE_TOOL_WRITES_FILE'] = $script:CodexToolWritesFile
+                        $psi.EnvironmentVariables['MOE_GIT_TOP'] = $moeGit.Top
+                        $psi.EnvironmentVariables['MOE_GIT_REL'] = $moeGit.Rel
+                        $psi.EnvironmentVariables['MOE_SERENA_PROJECT_ROOT'] = $serenaProject
+                    }
                     $cacheStream = [System.Diagnostics.Process]::Start($psi)
                 } -Process {
                     $cacheBytes = [System.Text.Encoding]::UTF8.GetBytes("$_`n")
@@ -7533,6 +7545,24 @@ $mentionsJson
                 } -End {
                     $cacheStream.StandardInput.Close()
                     $cacheStream.WaitForExit()
+                    # Merge the helper's TOP-relative witnesses into the TOOL tier, as
+                    # Complete-MoeToolWrite does; an unreadable file merges nothing.
+                    if ($script:CodexToolWritesFile) {
+                        try {
+                            $codexWitnessed = @()
+                            if (Test-Path -LiteralPath $script:CodexToolWritesFile) {
+                                $codexWitnessed = [IO.File]::ReadAllLines($script:CodexToolWritesFile, [Text.Encoding]::UTF8)
+                            }
+                            foreach ($line in $codexWitnessed) {
+                                $p = ConvertTo-MoeNormalPath $line
+                                if ($p) { $script:MoeToolWritten[(Get-MoePathKey $p)] = $p }
+                            }
+                        } catch {
+                            Write-Host "  [WARN] codex exec tool witnesses not read: $($_.Exception.Message)" -ForegroundColor Yellow
+                        } finally {
+                            Remove-Item -LiteralPath $script:CodexToolWritesFile -Force -ErrorAction SilentlyContinue
+                        }
+                    }
                 }
             } else {
                 # Interactive TUI mode: codex -c <seat overrides> -C <project> "<prompt>"
@@ -7543,7 +7573,7 @@ $mentionsJson
             }
         } finally {
             Stop-HeartbeatSidecar
-            foreach ($cacheFile in @($script:CodexSeatInstructionsFile, $script:CodexSessionContextFile)) {
+            foreach ($cacheFile in @($script:CodexSeatInstructionsFile, $script:CodexSessionContextFile, $script:CodexToolWritesFile)) {
                 if ($cacheFile) { Remove-Item -LiteralPath $cacheFile -Force -ErrorAction SilentlyContinue }
             }
         }

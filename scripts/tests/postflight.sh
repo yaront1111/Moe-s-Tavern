@@ -4528,7 +4528,7 @@ EOF
   #   AG4  idle peer, contested=skip   -> the witnessed path is held too, strict remedy only
   # Twin: postflight.ps1.
   echo "[scenario AG] a declared, pre-flight-dirty contested path stays held and the session-ended line names the working remedy"
-  scope_ag_untouched="MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived. Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none. declare_files, unblocking or a shell touch alone does not release a hold."
+  scope_ag_untouched="MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude or codex exec session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived. Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none. declare_files, unblocking or a shell touch alone does not release a hold."
   scope_ag_strict="MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
   scope_ag_declared=('held é.txt' z1.txt z2.txt z3.txt z4.txt z5.txt)
   scope_ag_peers='held é.txt:task-peer,z1.txt:task-peer,z2.txt:task-peer,z3.txt:task-peer,z4.txt:task-peer,z5.txt:task-peer,tool-written.txt:task-peer'
@@ -4918,9 +4918,9 @@ try {
   #        PENDING-only path lands naming both contributors, a declared
   #        pre-flight-dirty path is held UNTOUCHED
   echo "[scenario AK] a contesting peer mid-step holds a witnessed path, and every contesting task is named"
-  scope_ak_untouched="verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived."
-  scope_ak_edit="the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude session of this task re-edit the path, or let the peer's own landing carry the bytes."
-  scope_ak_witness="Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
+  scope_ak_untouched="verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude or codex exec session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived."
+  scope_ak_edit="the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude or codex exec session of this task re-edit the path, or let the peer's own landing carry the bytes."
+  scope_ak_witness="Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
   scope_ak_never="declare_files, unblocking or a shell touch alone does not release a hold."
   # Same checker as postflight.ps1's scope-ak-check.cjs: the last ledger row's
   # contested skips and whole contested list, the held= tail of the
@@ -5054,14 +5054,114 @@ try {
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AL] ok"
 
+  # Scenario AM -- a codex exec seat's --json stream feeds the TOOL tier
+  # (task-7db14e2d; twin: scenario AM in postflight.ps1). A fake CLI literally
+  # named codex rewrites sub/held.txt in every row, then prints one
+  # item.completed event shaped like prompt-cache-witness.test.mjs's captures.
+  # sub/held.txt is own, dirty at pre-flight and declared by a LIVE peer, so
+  # only a witness releases it. The Serena root is sub/, so AM3 also proves
+  # MOE_SERENA_PROJECT_ROOT reaches the helper.
+  #   AM1  completed file_change of held.txt      -> lands, trailer, touchedPaths [sub/held.txt]
+  #   AM2  failed file_change                     -> held UNTOUCHED, touchedPaths []
+  #   AM3  completed Serena replace_content 'OK'  -> lands, as AM1
+  #   AM4  failed Serena replace_content          -> held, as AM2
+  #   AM5  completed file_change outside the repo -> held, as AM2, plus the helper's WARN
+  echo "[scenario AM] a codex exec seat's completed file_change or Serena edit witnesses its path; a failed or outside one does not"
+  mkdir -p "$TMP_DIR/codex-witness"
+  cat > "$TMP_DIR/codex-witness/codex" <<'EOF'
+#!/usr/bin/env bash
+abs_root="$MOE_PROJECT_PATH"
+if command -v cygpath >/dev/null 2>&1; then abs_root="$(cygpath -m "$MOE_PROJECT_PATH")"; fi
+abs_json="$(printf '%s' "$abs_root" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+echo codex > "$MOE_PROJECT_PATH/sub/held.txt"
+printf '%s\n' "${FAKE_CODEX_STREAM//@ROOT@/"$abs_json"}"
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":48023,"cached_input_tokens":38912,"cache_write_input_tokens":0,"output_tokens":132,"reasoning_output_tokens":0}}'
+exit 0
+EOF
+  chmod +x "$TMP_DIR/codex-witness/codex"
+  scope_am_outside="$TMP_DIR/am-outside.txt"
+  if command -v cygpath >/dev/null 2>&1; then scope_am_outside="$(cygpath -m "$scope_am_outside")"; fi
+  scope_am_change='{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"%s","kind":"update"}],"status":"%s"}}'
+  scope_am_serena='{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"serena","tool":"replace_content","arguments":{"relative_path":"held.txt","needle":"pre","repl":"codex","mode":"literal"},'
+  scope_am_check='
+const [f,touched,skipped]=process.argv.slice(1),assert=require("assert");
+const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse),r=rows[rows.length-1];
+try {
+  assert.deepStrictEqual(r.touchedPaths||[],JSON.parse(touched),"touchedPaths");
+  assert.deepStrictEqual((r.skipped||[]).filter(s=>String(s.code).startsWith("MOE_ATTR_CONTESTED")),JSON.parse(skipped),"skipped");
+} catch (e) { console.error(e.message+"\nrow: "+JSON.stringify(r)); process.exit(1); }'
+  for scope_am_run in 1 2 3 4 5; do
+    SCOPE_AM_DIR="$TMP_DIR/scope-am$scope_am_run"
+    scope_am_out="$TMP_DIR/scope-am$scope_am_run.out"
+    case "$scope_am_run" in
+      1) scope_am_stream="$(printf "$scope_am_change" '@ROOT@/sub/held.txt' completed)" ;;
+      2) scope_am_stream="$(printf "$scope_am_change" '@ROOT@/sub/held.txt' failed)" ;;
+      3) scope_am_stream="$scope_am_serena"'"result":{"content":[{"type":"text","text":"OK"}],"structured_content":{"result":"OK"}},"error":null,"status":"completed"}}' ;;
+      4) scope_am_stream="$scope_am_serena"'"result":{"content":[{"type":"text","text":"Error executing tool replace_content: ValueError: No matches of the needle were found [trimmed]"}],"structured_content":null},"error":null,"status":"failed"}}' ;;
+      5) scope_am_stream="$(printf "$scope_am_change" "$(printf '%s' "$scope_am_outside" | sed 's/\\/\\\\/g; s/"/\\"/g')" completed)" ;;
+    esac
+    make_scope_project "$SCOPE_AM_DIR" '["owned-a.txt","sub/held.txt"]'
+    mkdir -p "$SCOPE_AM_DIR/sub"
+    echo owned-a > "$SCOPE_AM_DIR/owned-a.txt"
+    echo pre > "$SCOPE_AM_DIR/sub/held.txt"
+    set +e
+    MOE_DISABLE_ARGV_PROBE=1 MOE_SERENA_PROJECT="$SCOPE_AM_DIR/sub" FAKE_CODEX_STREAM="$scope_am_stream" \
+      FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED='sub/held.txt:task-peer' FAKE_SCOPE_PEER_ACTIVE=1 \
+      run_scope_wrapper "$SCOPE_AM_DIR" "$scope_am_out" "$TMP_DIR/codex-witness/codex" worker worker-scope-am --codex-exec
+    scope_am_rc=$?
+    set -e
+    [ "$scope_am_rc" -eq 0 ] || scope_fail "AM$scope_am_run" "wrapper exited with $scope_am_rc" "$scope_am_out"
+    scope_am_files="$(committed_paths "$SCOPE_AM_DIR")"
+    scope_am_trailers="$(git -C "$SCOPE_AM_DIR" log -1 --format=%B | grep '^Moe-Contested:' || true)"
+    scope_am_line="$(scope_af_ended "$SCOPE_AM_DIR")"
+    if [ "$scope_am_run" = 1 ] || [ "$scope_am_run" = 3 ]; then
+      [ "$scope_am_files" = "owned-a.txt sub/held.txt " ] \
+        || scope_fail "AM$scope_am_run" "a witnessed contested path must land; got [$scope_am_files]" "$scope_am_out"
+      [ "$(git -C "$SCOPE_AM_DIR" rev-parse HEAD:sub/held.txt)" = "$(git -C "$SCOPE_AM_DIR" hash-object sub/held.txt)" ] \
+        || scope_fail "AM$scope_am_run" "the codex session's bytes of sub/held.txt must land" "$scope_am_out"
+      [ "$scope_am_trailers" = 'Moe-Contested: sub/held.txt (task-peer)' ] \
+        || scope_fail "AM$scope_am_run" "expected one Moe-Contested trailer for sub/held.txt; got [$scope_am_trailers]" "$scope_am_out"
+      if grep -Fq '[skip] sub/held.txt' "$scope_am_out"; then
+        scope_fail "AM$scope_am_run" "sub/held.txt must not be skipped" "$scope_am_out"
+      fi
+      "$NODE_FOR_TEST" -e "$scope_am_check" "$SCOPE_AM_DIR/.moe/record_commit.jsonl" '["sub/held.txt"]' '[]' \
+        || scope_fail "AM$scope_am_run" "record_commit touchedPaths must be exactly the witnessed path" "$scope_am_out"
+      case "$scope_am_line" in
+        ''|*' held='*|*'MOE_CONTESTED_HELD'*) scope_fail "AM$scope_am_run" "nothing was held, so no held= suffix or remedy; got [$scope_am_line]" "$scope_am_out" ;;
+      esac
+    else
+      [ "$scope_am_files" = "owned-a.txt " ] \
+        || scope_fail "AM$scope_am_run" "an unwitnessed contested path must stay out; got [$scope_am_files]" "$scope_am_out"
+      grep -Fq '[skip] sub/held.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)' "$scope_am_out" \
+        || scope_fail "AM$scope_am_run" "expected '[skip] sub/held.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'" "$scope_am_out"
+      git -C "$SCOPE_AM_DIR" status --porcelain -uall | grep -qx '?? sub/held.txt' \
+        || scope_fail "AM$scope_am_run" "sub/held.txt must stay untracked" "$scope_am_out"
+      [ -z "$scope_am_trailers" ] \
+        || scope_fail "AM$scope_am_run" "a held path gets no Moe-Contested trailer; got [$scope_am_trailers]" "$scope_am_out"
+      "$NODE_FOR_TEST" -e "$scope_am_check" "$SCOPE_AM_DIR/.moe/record_commit.jsonl" '[]' \
+        '[{"path":"sub/held.txt","code":"MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)"}]' \
+        || scope_fail "AM$scope_am_run" "record_commit must carry no touchedPaths and the UNTOUCHED skip" "$scope_am_out"
+      if [ "$scope_am_run" = 5 ]; then
+        grep -Fq "[WARN] tool write outside the repo not harvested: $scope_am_outside" "$scope_am_out" \
+          || scope_fail AM5 "expected the helper's WARN naming $scope_am_outside" "$scope_am_out"
+      fi
+      case "$scope_am_line" in
+        *" held=sub/held.txt(task-peer) $scope_ag_untouched\"}") : ;;
+        *) scope_fail "AM$scope_am_run" "the session-ended line must end with held=sub/held.txt(task-peer) and the untouched remedy; got [$scope_am_line]" "$scope_am_out" ;;
+      esac
+    fi
+  done
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AM] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  scope_expected_runs=44
-  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=43
+  scope_expected_runs=45
+  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=44
   if [ "$SCOPE_SCENARIOS_RUN" -ne "$scope_expected_runs" ]; then
-    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL); ran $SCOPE_SCENARIOS_RUN" >&2
+    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL, AM); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

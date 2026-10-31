@@ -4647,10 +4647,10 @@ attr_held_list() {
         out="$out MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
     elif [ "$n" -gt 0 ]; then
         out="$out MOE_CONTESTED_HELD remedy:"
-        [ -z "$untouched" ] || out="$out verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived."
-        [ -z "$editing" ] || out="$out the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude session of this task re-edit the path, or let the peer's own landing carry the bytes."
-        # Same sentence as recordCommit.ts HELD_REMEDY_WITNESS.
-        out="$out Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
+        [ -z "$untouched" ] || out="$out verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude or codex exec session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived."
+        [ -z "$editing" ] || out="$out the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude or codex exec session of this task re-edit the path, or let the peer's own landing carry the bytes."
+        # Twin: recordCommit.ts HELD_REMEDY_WITNESS (task-7cc959e9 brings it to this sentence).
+        out="$out Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
         out="$out declare_files, unblocking or a shell touch alone does not release a hold."
     fi
     printf '%s' "$out"
@@ -8313,11 +8313,12 @@ $PROMPT_BODY"
             # Per-seat overrides on argv (PS twin parity): codex does not
             # forward the wrapper's environment to MCP servers, and the shared
             # .codex/config.toml cannot carry per-seat values without sibling
-            # seats clobbering them.
+            # seats clobbering them. The helper alone gets the TOOL-witness env
+            # the Claude stream parser gets (prompt-cache-witness.mjs).
             agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
                 -c "$CODEX_MOE_OVERRIDE" \
-                "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "${CLI_ROOT:-$PROJECT}" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
+                "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "${CLI_ROOT:-$PROJECT}" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
 
             CLI_EXIT_CODE=${PIPESTATUS[0]}
 
@@ -8673,8 +8674,9 @@ $PROMPT_BODY"
         #   replace_in_files: exactly the files its applied summary lists (a
         #     dry run or a failed guard lists none).
         # Absolute paths outside the repo are dropped
-        # with a WARN. Codex/gemini/grok have no such stream: their TOOL set is
-        # empty (documented).
+        # with a WARN. Gemini, grok and the codex TUI have no such stream: their
+        # TOOL set is empty (documented). codex exec's --json stream is
+        # harvested on the codex branch by prompt-cache-witness.mjs.
         STREAM_JSON_PARSER=$(cat <<'PYEOF'
 import json, os, re, sys
 tool_json = ''

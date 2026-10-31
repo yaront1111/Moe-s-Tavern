@@ -3752,7 +3752,7 @@ if (mode === 'link') fs.symlinkSync('crlf-copy.txt', f, 'file');
                 # only: a redirected child's console encoding is the OEM code
                 # page. The ledger and the chat line are UTF-8 JSON.
                 Write-Host '[scenario AG] a declared, pre-flight-dirty contested path stays held and the session-ended line names the working remedy'
-                $agUntouched = "MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived. Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none. declare_files, unblocking or a shell touch alone does not release a hold."
+                $agUntouched = "MOE_CONTESTED_HELD remedy: verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude or codex exec session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived. Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none. declare_files, unblocking or a shell touch alone does not release a hold."
                 $agStrict = "MOE_CONTESTED_HELD remedy: attribution.contested=skip holds these paths whatever this session edits; only resolving, completing or archiving the peer task releases them. declare_files, unblocking or a shell touch alone does not release a hold."
                 $agDeclared = @("held $([char]0xE9).txt", 'z1.txt', 'z2.txt', 'z3.txt', 'z4.txt', 'z5.txt')
                 $agUtf8 = New-Object System.Text.UTF8Encoding($false)
@@ -4186,9 +4186,9 @@ try {
                 #        as EDITING, a PENDING-only path lands naming both
                 #        contributors, a declared pre-flight-dirty path is held UNTOUCHED
                 Write-Host '[scenario AK] a contesting peer mid-step holds a witnessed path, and every contesting task is named'
-                $akUntouched = "verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived."
-                $akEdit = "the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude session of this task re-edit the path, or let the peer's own landing carry the bytes."
-                $akWitness = "Only a one-shot (claude -p) Claude session's Edit/Write or Serena editing call leaves a TOOL witness; a Codex, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
+                $akUntouched = "verify the bytes are this task's and coordinate any live peer; a held path then lands once a one-shot Claude or codex exec session of this task edits it, once a later session of this task that found it clean at pre-flight edits it while every contesting peer stays idle, or once the stale peer task is completed or archived."
+                $akEdit = "the named peer was mid-step on each MOE_ATTR_CONTESTED_EDITING path with a live session, so this session's edit did not release it (the file can carry that peer's unfinished hunks); coordinate that peer and let its step finish, then have a one-shot Claude or codex exec session of this task re-edit the path, or let the peer's own landing carry the bytes."
+                $akWitness = "Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none."
                 $akNever = 'declare_files, unblocking or a shell touch alone does not release a hold.'
                 $akUtf8 = New-Object System.Text.UTF8Encoding($false)
                 # postflight.sh's scope_ak_check, reading its expectations from
@@ -4338,13 +4338,96 @@ try {
                 $scopeScenariosRun++
                 Write-Host '[scenario AL] ok'
 
+                # Scenario AM -- a codex exec seat's --json stream feeds the
+                # TOOL tier (task-7db14e2d; twin: postflight.sh, same runs and
+                # strings). A codex.cmd front in its own directory rewrites
+                # sub\held.txt in every run, then prints one item.completed
+                # event shaped like prompt-cache-witness.test.mjs's captures.
+                # sub/held.txt is own, dirty at pre-flight and declared by a
+                # LIVE peer, so only a witness releases it. The Serena root is
+                # sub\, so AM3 also proves MOE_SERENA_PROJECT_ROOT reaches the
+                # helper. A worker defaults to codex exec.
+                #   AM1  completed file_change of held.txt      -> lands, trailer, touchedPaths [sub/held.txt]
+                #   AM2  failed file_change                     -> held UNTOUCHED, touchedPaths []
+                #   AM3  completed Serena replace_content 'OK'  -> lands, as AM1
+                #   AM4  failed Serena replace_content          -> held, as AM2
+                #   AM5  completed file_change outside the repo -> held, as AM2, plus the helper's WARN
+                Write-Host "[scenario AM] a codex exec seat's completed file_change or Serena edit witnesses its path; a failed or outside one does not"
+                $amBin = Join-Path $tempRoot 'codex-witness'
+                New-Item -ItemType Directory -Force -Path $amBin | Out-Null
+                Set-Content -Path (Join-Path $amBin 'codex-impl.ps1') -Encoding ASCII -Value @'
+[IO.File]::WriteAllText((Join-Path $env:MOE_PROJECT_PATH 'sub\held.txt'), "codex`n")
+$env:FAKE_CODEX_STREAM.Replace('@ROOT@', ($env:MOE_PROJECT_PATH -replace '\\', '/'))
+'{"type":"turn.completed","usage":{"input_tokens":48023,"cached_input_tokens":38912,"cache_write_input_tokens":0,"output_tokens":132,"reasoning_output_tokens":0}}'
+exit 0
+'@
+                $amCmd = Join-Path $amBin 'codex.cmd'
+                Set-Content -Path $amCmd -Encoding ASCII -Value ("@echo off`r`n" +
+                    "powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0codex-impl.ps1`" %*`r`n" +
+                    "exit /b %ERRORLEVEL%`r`n")
+                $amOutside = ($tempRoot -replace '\\', '/') + '/am-outside.txt'
+                function Get-AmChange([string]$p, [string]$s) { '{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"' + $p + '","kind":"update"}],"status":"' + $s + '"}}' }
+                $amSerena = '{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"serena","tool":"replace_content","arguments":{"relative_path":"held.txt","needle":"pre","repl":"codex","mode":"literal"},'
+                $amRuns = @(
+                    @{ Name = 'AM1'; Lands = $true; Stream = (Get-AmChange '@ROOT@/sub/held.txt' 'completed') },
+                    @{ Name = 'AM2'; Lands = $false; Stream = (Get-AmChange '@ROOT@/sub/held.txt' 'failed') },
+                    @{ Name = 'AM3'; Lands = $true; Stream = ($amSerena + '"result":{"content":[{"type":"text","text":"OK"}],"structured_content":{"result":"OK"}},"error":null,"status":"completed"}}') },
+                    @{ Name = 'AM4'; Lands = $false; Stream = ($amSerena + '"result":{"content":[{"type":"text","text":"Error executing tool replace_content: ValueError: No matches of the needle were found [trimmed]"}],"structured_content":null},"error":null,"status":"failed"}}') },
+                    @{ Name = 'AM5'; Lands = $false; Stream = (Get-AmChange $amOutside 'completed') }
+                )
+                foreach ($am in $amRuns) {
+                    $amName = $am.Name
+                    $amDir = Join-Path $tempRoot "scope-$($amName.ToLower())"
+                    $amOut = Join-Path $tempRoot "scope-$($amName.ToLower()).out"
+                    New-ScopeProject $amDir @('owned-a.txt', 'sub/held.txt')
+                    New-Item -ItemType Directory -Force -Path (Join-Path $amDir 'sub') | Out-Null
+                    [IO.File]::WriteAllText((Join-Path $amDir 'owned-a.txt'), "owned-a`n")
+                    [IO.File]::WriteAllText((Join-Path $amDir 'sub\held.txt'), "pre`n")
+                    $amEnv = @{ FAKE_SCOPE_PEERS_ACTIVE = '1'; FAKE_SCOPE_PEER_DECLARED = 'sub/held.txt:task-peer'; FAKE_SCOPE_PEER_ACTIVE = '1'
+                        MOE_SERENA_PROJECT = (Join-Path $amDir 'sub'); MOE_DISABLE_ARGV_PROBE = '1'; FAKE_CODEX_STREAM = $am.Stream }
+                    foreach ($v in $amEnv.Keys) { Set-Item -Path "Env:$v" -Value $amEnv[$v] }
+                    try {
+                        Assert-ScopeRun $amName (Invoke-GateWrapper $amDir $amOut -Command $amCmd -WorkerId 'worker-scope-am') $amOut
+                    } finally {
+                        foreach ($v in $amEnv.Keys) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $amText = Get-Content -Raw -Path $amOut
+                    $amPaths = Get-CommittedPaths $amDir
+                    $amTrailers = (@(& git -C $amDir log -1 --format=%B 2>$null) | Where-Object { $_ -like 'Moe-Contested:*' }) -join '|'
+                    $amRow = Get-Content -Encoding UTF8 -Path (Join-Path $amDir '.moe\record_commit.jsonl') | Where-Object { $_ } | Select-Object -Last 1 | ConvertFrom-Json
+                    $amTouched = (@($amRow.touchedPaths) | Where-Object { $_ }) -join '|'
+                    $amSkips = (@($amRow.skipped) | Where-Object { $_ -and ([string]$_.code).StartsWith('MOE_ATTR_CONTESTED') } | ForEach-Object { "$($_.path)=$($_.code)" }) -join '|'
+                    $amLine = [string](Get-Content -Encoding UTF8 -Path (Join-Path $amDir '.moe\messages\chan-general.jsonl') |
+                        Where-Object { $_ -like '*worker session ended: task=task-postflight*' } | Select-Object -Last 1 | ConvertFrom-Json).content
+                    if ($am.Lands) {
+                        if ($amPaths -ne 'owned-a.txt sub/held.txt') { Write-Host $amText; throw "SCENARIO $amName FAILED: a witnessed contested path must land; got [$amPaths]" }
+                        if ((& git -C $amDir rev-parse HEAD:sub/held.txt 2>$null) -ne (& git -C $amDir hash-object sub/held.txt 2>$null)) { Write-Host $amText; throw "SCENARIO $amName FAILED: the codex session's bytes of sub/held.txt must land" }
+                        if ($amTrailers -ne 'Moe-Contested: sub/held.txt (task-peer)') { Write-Host $amText; throw "SCENARIO $amName FAILED: expected one Moe-Contested trailer for sub/held.txt; got [$amTrailers]" }
+                        if ($amText.Contains('[skip] sub/held.txt')) { Write-Host $amText; throw "SCENARIO $amName FAILED: sub/held.txt must not be skipped" }
+                        if ($amTouched -ne 'sub/held.txt' -or $amSkips) { Write-Host $amText; throw "SCENARIO $amName FAILED: record_commit touchedPaths must be exactly the witnessed path; got [$amTouched], skipped [$amSkips]" }
+                        if (-not $amLine -or $amLine -like '* held=*' -or $amLine -like '*MOE_CONTESTED_HELD*') { Write-Host $amText; throw "SCENARIO $amName FAILED: nothing was held, so no held= suffix or remedy; got [$amLine]" }
+                        continue
+                    }
+                    if ($amPaths -ne 'owned-a.txt') { Write-Host $amText; throw "SCENARIO $amName FAILED: an unwitnessed contested path must stay out; got [$amPaths]" }
+                    if (-not $amText.Contains('[skip] sub/held.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)')) { Write-Host $amText; throw "SCENARIO $amName FAILED: expected '[skip] sub/held.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'" }
+                    if (@(& git -C $amDir status --porcelain -uall 2>$null) -notcontains '?? sub/held.txt') { Write-Host $amText; throw "SCENARIO $amName FAILED: sub/held.txt must stay untracked" }
+                    if ($amTrailers) { Write-Host $amText; throw "SCENARIO $amName FAILED: a held path gets no Moe-Contested trailer; got [$amTrailers]" }
+                    if ($amTouched -or $amSkips -ne 'sub/held.txt=MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)') { Write-Host $amText; throw "SCENARIO $amName FAILED: record_commit must carry no touchedPaths and the UNTOUCHED skip; got [$amTouched], skipped [$amSkips]" }
+                    if ($amName -eq 'AM5' -and -not $amText.Contains("[WARN] tool write outside the repo not harvested: $amOutside")) { Write-Host $amText; throw "SCENARIO AM5 FAILED: expected the helper's WARN naming $amOutside" }
+                    if (-not $amLine.EndsWith(" held=sub/held.txt(task-peer) $agUntouched", [System.StringComparison]::Ordinal)) {
+                        Write-Host $amText; throw "SCENARIO $amName FAILED: the session-ended line must end with held=sub/held.txt(task-peer) and the untouched remedy; got [$amLine]"
+                    }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AM] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                $scopeExpectedRuns = 43
-                if ($symlinksOk) { $scopeExpectedRuns = 44 }
+                $scopeExpectedRuns = 44
+                if ($symlinksOk) { $scopeExpectedRuns = 45 }
                 if ($scopeScenariosRun -ne $scopeExpectedRuns) {
-                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL); ran $scopeScenariosRun"
+                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ, AK, AL, AM); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)
