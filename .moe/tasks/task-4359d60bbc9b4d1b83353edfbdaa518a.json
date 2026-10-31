@@ -18,36 +18,60 @@
     {
       "stepId": "step-1",
       "description": "Seam D1 (R×M×V): verified-local is refused on every path, with no host fallback.\n\nInventory first. Both prerequisites are DONE before this row can be claimed. Read the LANDED names and list them in the step note:\n- CQ-M06b1 (task-c34f9700) created packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts: its harness, the MOE_* env stubs, bytes() over .moe/{tasks,attempts,candidates,checks,reviews,receipts}, refused(call, codeName), git()/commit() and the seam-B passing-control setup. Also note the mutants its completion summary lists.\n- CQ-M05 (task-c53999b2): state/profileRollout.ts behind h.state.updateSettings; the PROJECT_SETTINGS_UPDATED payload; the strict readiness expression in tools/completeTask.ts; the S2 row-a seed in state/profileRollout.test.ts.\nIf the file or a named M05 surface is missing, report_blocked on its owner (c34f9700 or c53999b2; neither depends on this row). Never stub it.\n\nExtend the file in place with describe('seam D: isolation (R×M×V×I)').\n\nRules for every case:\n- Strict state exists only through raw on-disk seeding then load (the operator hand edit F12 and M05 use), or F12's in-memory flip h.state.project!.settings.executionProfile = 'verified-local'.\n- Copy, never import across test files: seed(), editSettings(), NOT_READY and STRICT_V2/LEGACY_V2 from delivery/executionPolicyLifecycle.test.ts; M05's S2 row-a seeding; toReview() and strict() from delivery/reviewBinding.test.ts.\n- No readiness spy and no test-only certification.\n- Every refusal does an exact toEqual of {code, codeName, context} against NOT_READY, the shape of assertExecutionProfileReady in delivery/executionProfile.ts, with bytes() unchanged.\n\nCases:\n- D1a, settings (M×I). Table over ['legacy','observe'], each set through h.state.updateSettings. Then updateSettings({executionProfile:'verified-local'}) must be refused, with project.json bytes unchanged. Exactly one new PROJECT_SETTINGS_UPDATED record appears, equal to {setting:'executionProfile', from:<p>, to:'verified-local', transition:'activate', outcome:'refused', codeName:'EXECUTION_PROFILE_NOT_READY', unsupportedCapabilities:[vm, client, check with M05's landed reasons]}. Use the landed key names, but keep the assertion exact.\n- D1b, claim (R×M). Settings are legacy. Seed a WORKING unassigned row S with a stored verified-local snapshot, and a legacy control row L.\n  - An explicit claim_next_task {taskId:S, ...RUNNER} by seat W is refused, and h.state.getWorker(W) stays undefined (no registration).\n  - An implicit WORKING claim by W returns L, never S.\n  - S's record stays byte-unchanged, and get_context S still reports effectiveProfile 'verified-local'.\n- D1c, completion after an audited rollback (M×V, CQ-M05's attempt-level readiness). Use M05's S2 row-a seed: settings executionProfile 'verified-local' (the hand edit), a WORKING row T held by W with every step done, and W's open attempt whose OWN snapshot is verified-local and carries eligible step evidence plus a served-context session.\n  - updateSettings({executionProfile:'legacy'}) applies, and its rollback record carries retainedStrictAttempts 1 and that attempt's id.\n  - complete_task with the attempt's identity is refused; T stays WORKING, and the attempt keeps its verified-local snapshot.\n  - Legacy control: the same seed with a legacy attempt snapshot completes to REVIEW (F12's compatibility outcome).\n- D1d, delivery (V×M×F). Use reviewBinding.test.ts's toReview(): real tools under legacy, QA attempt gen2, context read.\n  - Apply strict() (the in-memory flip). qa_approve with QA's full identity and the current candidate gets past V06's binding and is refused NOT_READY; no review is written.\n  - updateSettings({executionProfile:'legacy'}) records the rollback with retainedStrictTasks 0 and retainedStrictAttempts 0, since strictness was live-only.\n  - The same approval then reaches DONE: the compatibility outcome.\n\nAfter D1, every stored strict record (S, T's attempt) still carries profile 'verified-local'.\n\nError handling in the fixtures: a failed seed or setup throws a named error, and refused() checks the codeName first, so no case passes vacuously.\n\nRun the file in the step-3 Linux snapshot.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
+      ],
+      "note": "Seam D1 added to the landed M06b1 file (HEAD 96f7bdd4).\n\nInventory of landed names:\n- M06b1 harness: createMcpCaller call/runnerCall, bytes() over the 6 DIRS, refused(), strictInMemory(), claim/serve/steps/candidate/land/observe/approveQa, RUNNER.\n- M05: state/profileRollout.ts updateProjectSettings behind h.state.updateSettings. PROJECT_SETTINGS_UPDATED payload is {setting, from, to, transition, outcome, codeName, unsupportedCapabilities} for a refused activate, and the retention keys for a rollback. GAPS are vm-provisioning-uncertified, client-contract-unsupported and check-runner-uncertified. completeTask:224 reads `strict ? 'verified-local' : resolveTaskExecutionProfile(...)`.\n\nExtraction: seam B's toReview moved to module scope as toReview(profile, files, kind). B's call sites now pass `profile`; no B assertion changed.\n\nDeviation: /mcp does not carry a MoeError's context. McpAdapter errorResponse data is {tool, codeName}. So the MCP refusals (D1b/c/d) assert the exact wire form {code -32003, codeName, message}. The full {code, codeName, context} NOT_READY shape is asserted on the direct updateSettings MoeError (D1a).\n\nCases:\n- D1a ×2 (legacy, observe): one new refused-activate record with vm/client/check gaps; project.json unchanged.\n- D1b: explicit claim refused; getWorker null; implicit claim returns task-L (LOW), never task-S (CRITICAL); S bytes unchanged; get_context effectiveProfile verified-local.\n- D1c ×2: rollback record has retainedStrictAttempts 1 and the attempt id. complete_task is refused; the task stays WORKING and the attempt keeps STRICT_V2. The legacy control goes to REVIEW.\n- D1d: refused NOT_READY with no reviews dir; rollback record has 0/0; the same approval reaches DONE.\n\nResult in the Linux snapshot /tmp/moe-m06b-d.Ei6Q4P (fresh npm ci, node 24.21.0, env -i): file 46/46 passed.\n\nDirty peer paths left alone: .moe/tasks x6, docs/roles, docs/skills, initFiles.ts, qaCommitPolicy.test.ts, scripts/*.",
+      "startedAt": "2026-10-31T17:07:50.906Z",
+      "completedAt": "2026-10-31T17:11:57.817Z"
     },
     {
       "stepId": "step-2",
       "description": "Seam D2 (R×V×I): nothing records isolation, readiness or verifiedLocal from a legacy or observe runner, check or client. Extend the same file.\n\nD2a. Table over ['legacy','observe']:\n- Run the seam-B passing control: an authenticated runner observation, then qa_approve to DONE. Reuse CQ-M06b1's landed setup. If it is inline, extracting it into an in-file helper is allowed, but seam B's assertions must not change.\n- Then walk every JSON file under .moe/{tasks,attempts,candidates,checks,reviews,receipts}, plus project.json. Collect [file, keyPath] for every key matching /verifiedlocal|isolat|readiness|^ready$|certif/i whose value is truthy, and for every `profile` or `executionProfile` value equal to 'verified-local'. Expect the list toEqual [].\n- Guard against a vacuous pass: expect at least one file in each of tasks, attempts, candidates, checks and reviews.\n- get_context on that task must report effectiveProfile equal to the table's profile.\n- No allowlist. If a landed record legitimately carries a matching key, stop and raise it in the step note; do not exempt it.\n\nD2b. decodeClientHello({protocolVersion:1, capabilities:{verifiedLocal:true, runnerStatus:true, modelReceipts:true}}) from server/clientCapabilities.ts:\n- Both negotiatedCapabilities and capabilities report verifiedLocal, runnerStatus and modelReceipts exactly false.\n- Together with D1a's client gap, this pins that a client's claim cannot unlock activation (I×M).\n\nThese tests read only: no fixture ever makes verified-local ready. Run the file again in the snapshot.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
+      ],
+      "note": "Seam D2 added to the same file.\n- D2a, run under legacy and under observe. It runs the seam-B passing control: the module-level toReview(profile), then an authenticated observe, then qa_approve to DONE.\n  - It walks project.json plus every file under .moe/{tasks,attempts,candidates,checks,reviews,receipts} (the bytes() set), parsing each as JSON.\n  - trustClaims() flags a truthy key matching /verifiedlocal|isolat|readiness|^ready$|certif/i, or a profile/executionProfile equal to 'verified-local'. The result must equal []. There is no allowlist, and no landed record matched.\n  - Non-vacuity has two parts: tasks, attempts, candidates, checks and reviews must each hold at least one file, and an inline self-check proves the detector catches a nested truthy key and a strict profile.\n  - get_context effectiveProfile equals the profile under test.\n- D2b: decodeClientHello with all three set true. negotiatedCapabilities and capabilities both report verifiedLocal, runnerStatus and modelReceipts as false.\n- Snapshot run of the file: 49/49 passed (40 A-C, 6 D1, 3 D2).",
+      "startedAt": "2026-10-31T17:12:00.637Z",
+      "completedAt": "2026-10-31T17:13:01.677Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY ONCE, in a Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate). Per the global rail, never run npm in the shared checkout.\n\nSnapshot setup:\n- `git archive HEAD` of the WHOLE repo.\n- Overlay ONLY workstreamComposition.e2e.test.ts, plus any declared fix-forward file.\n- npm ci, or reuse a verified native install whose .bin/vitest is a symlink, under env -i with a Linux-only PATH and NO_COLOR=1, so no MOE_* variable is set.\n- cmp the overlay against the worktree before citing any run.\n\nRuns:\n- `cd packages/moe-daemon && npx vitest run src/__e2e__/workstreamComposition.e2e.test.ts`: every case in seams A to D passes.\n- `cd packages/moe-daemon && npm test`: must exit 0. This command, its exit code and its output tail are the complete_task evidence. Compare pass and skip counts with the HEAD baseline. A new failure is a regression to fix or report, never an assertion to weaken.\n- Type-check the test file with a scratch tsconfig inside the snapshot: extends ./tsconfig.json, noEmit, types ['node'], include only the e2e file.\n\nMutants, on a scratch copy of production code. Count a kill only when the Tests line shows real failures; a compile error is not a kill.\n- Revert CQ-M05's completeTask readiness to the task-level resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot) expression: D1c must go red.\n- Drop `if (admission) throw admission;` in tools/claimNextTask.ts: D1b must go red.\n- Set SERVER_CAPABILITIES.verifiedLocal to true in server/clientCapabilities.ts: D2b must go red.\n- Re-run every mutant listed in CQ-M06b1's completion summary against the extended file: each must still turn its seam A-C case red.\nRestore the bytes after each mutant and cmp them.\n\nRecord each mutant and its red case in the step note. The completion summary must name CQ-M06b1 (task-c34f9700) as the slice that delivered seams A-C, and this row as seam D plus the whole-file gate.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
+      ],
+      "note": "Gate (run once), in Linux-native snapshots.\n- Setup: `git archive` of the whole repo, overlay of only the e2e file (cmp OK), fresh `npm ci` (.bin/vitest is a symlink), env -i, node v24.21.0, NO_COLOR=1.\n- Snapshot 1 at 96f7bdd4 (/tmp/moe-m06b-d.Ei6Q4P):\n  - file: 49/49\n  - npm test: EXIT 0, 218 files, 6429 passed | 20 skipped\n  - scratch tsc over the file: 0; project tsc --noEmit: 0\n- HEAD then moved to 0733a436, when peer WT-18b landed generated/* and qaCommitPolicy.test.ts. Snapshot 2 at 0733a436 (/tmp/moe-m06b-d2.*):\n  - file: 49/49\n  - `cd packages/moe-daemon && npm test`: EXIT 0, 218 files, 6430 passed | 20 skipped\n  - HEAD baseline with the original file: 6421 | 20, so exactly +9 with no regressions\n  - scratch tsc: 0\n\nMutants, applied to production in snapshot 1 only. Each is an exact single-occurrence replacement, restored from `git show`. Every kill below is real failures on the Tests line:\n- Seam D:\n  - M1, completeTask reverted to task-level resolveTaskExecutionProfile: D1c (verified-local attempt) red, 1 failed.\n  - M2, claimNextTask `if (admission) throw admission;` replaced by `void admission;`: D1b red, 1 failed.\n  - M3, SERVER_CAPABILITIES.verifiedLocal true: D2b plus D1a legacy and observe red (the client gap disappears), 3 failed.\n- M06b1's A-C mutants, all still red against the extended file:\n  - A1 exec revision: A1. A2 review stale: A2/A3. A2b dispatch revision pin: A2/A3. A3 approval-not-current: A3.\n  - B2 outcome ignored: 8 B2 red. B2b exit and outcome ignored: 10 B2 red. B3 marker optional: B3b ×2. B3a runner channel: B3a ×2. B4/B5 drift filtered: 4 red.\n  - C4 RECIPE_ACTOR: C4 ×2. C5b both CAS sites: C5 ×2.\n  - C5a, which survives by design, was not re-run.\n\nRestore check: `diff -rq` of snapshot-1 src against a fresh archive of 96f7bdd4 plus the overlay shows them identical. Scripts: /tmp/moe-m06b-d.scripts/mutants.py and /tmp/moe-m06b-d.run.sh.",
+      "startedAt": "2026-10-31T17:13:04.040Z",
+      "completedAt": "2026-10-31T17:22:34.577Z"
     },
     {
       "stepId": "step-4",
       "description": "One adversarial self-review of this task's diff (load adversarial-self-review). Check each point:\n- Each D case crosses at least two workstreams instead of re-testing CQ-M05 alone; M05's own profileRollout and rolloutControls tests stay M05's.\n- No readiness spy and no test-only certification; verified-local is never ready.\n- Strict state comes only from raw seeding or F12's in-memory flip, scoped to its own test.\n- Every refusal asserts the exact NOT_READY shape and unchanged bytes.\n- The legacy controls keep their compatibility outcomes.\n- The D2 walk cannot pass vacuously and has no allowlist.\n- Seam A-C assertions are byte-unchanged; at most, B's setup was extracted into a helper.\n- Each case gets a fresh harness, so nothing leaks between cases.\n- No real .moe edits, no Git writes and no peer bytes touched; temp repos keep GIT_* masked.\n- Error handling: fixture failures throw named errors.\n- Any fix-forward is at most ~30 lines in its owning module, declared and regression-tested. Anything larger is report_blocked on the owner.\n- No source comment matches util/daemonGitDocs.test.ts's pattern.\n\nList any fix-forward, with its owning task, in the step note.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
+      ],
+      "note": "Adversarial self-review of `git diff -- workstreamComposition.e2e.test.ts` (+187/-18). No fix-forward, and no production bytes touched.\n- Crossings:\n  - D1a, M×I: M05's gate records I01's client gap.\n  - D1b, R×M: M01e admission over M01c's stored snapshot, with the runner identity presented.\n  - D1c, M×V×F: M05 rollback × attempt-level readiness × step evidence and served context.\n  - D1d, V×M×F: V06 binding × readiness × rollback.\n  - D2a, R×V: runner check × delivery records.\n  - D2b, I×M.\n  M05's own G3/S1/S2 tests stay in place, untouched.\n- No spy and no certification: the only strict sources are raw editSettings/createTask plus load, or strictInMemory(). The M1-M3 mutant kills show readiness is reached for real.\n- Every refusal goes through refused(), which checks the codeName first, then that bytes() over the 6 dirs is unchanged:\n  - D1a also matches {code, codeName, context} exactly against NOT_READY, and checks that project.json is unchanged.\n  - The MCP refusals match the exact wire form {code, codeName, message}. McpAdapter drops context from the wire (data is {tool, codeName}), so it cannot be compared there.\n- Legacy controls:\n  - D1b: the legacy row is claimable.\n  - D1c: a legacy attempt goes to REVIEW after the rollback.\n  - D1d: the live-only strict row goes to DONE after the rollback.\n- D2: has the non-vacuity guard and the detector self-check; there is no allowlist.\n- Seams A-C: only B's toReview moved to module scope, and its call sites now pass `profile`. No assertion changed, and every A-C mutant is still red.\n- A fresh harness per test (h.init()) means the in-memory flip cannot leak. MOE_* is stubbed and GIT_* is masked in git().\n- There are no real .moe edits and no Git writes; the dirty .moe/tasks files are daemon-written. No comment matches the daemonGitDocs pattern, and the full gate passed.\n- Theoretical, not acted on:\n  - NOT_READY_WIRE pins the message text, so a production rewording turns D red. That is intended exactness.\n  - The file is 538 lines, over the 300-line guideline, because the DoD names one file for all four seams.",
+      "startedAt": "2026-10-31T17:22:37.282Z",
+      "completedAt": "2026-10-31T17:23:13.052Z"
     }
   ],
   "planRevision": 3,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -71,22 +95,29 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:51:08.708Z",
-  "updatedAt": "2026-10-31T16:41:14.555Z",
+  "updatedAt": "2026-10-31T17:24:07.917Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:55:25.253Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-32ff5555",
-    "architect-8419009e"
+    "architect-8419009e",
+    "worker-3a9b4568"
   ],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T15:22:33.740Z",
   "executionContract": {
@@ -199,5 +230,18 @@
     "version": 1,
     "commit": "e8df388279399db7b5a677d05bab9399a60043ad",
     "planRevision": 3
-  }
+  },
+  "workStartedAt": "2026-10-31T17:07:50.906Z",
+  "reviewStartedAt": "2026-10-31T17:24:07.915Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Linux-native git archive of HEAD 0733a436 + overlay of src/__e2e__/workstreamComposition.e2e.test.ts (cmp OK), npm ci, env -i, node v24.21.0, NO_COLOR=1:\n     ✓ bounds a stopped TERM-resistant owned helper without killing a peer 2308ms\n     ✓ retains ownership and refuses a duplicate when even KILL cannot finish the helper 8264ms\n Test Files  218 passed (218)\n      Tests  6430 passed | 20 skipped (6450)\n   Start at  19:20:15\n   Duration  38.43s (tests 94%, import 3%, transform 2%)\nEXIT 0\n(HEAD baseline with the original file: 6421 passed | 20 skipped; the file alone: 49/49 passed)",
+    "reportedAt": "2026-10-31T17:24:07.915Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
+  ],
+  "completionSummary": "CQ-M06b: seam D plus the whole-file gate. Seams A-C came from CQ-M06b1 (task-c34f9700, e3659d58). Tests only, one file: src/__e2e__/workstreamComposition.e2e.test.ts (+187/-18). B's toReview moved to module scope as toReview(profile, ...); no A-C assertion changed.\n\nSeam D (9 tests), on real tools and stores. No spy and no certification. Strict state comes only from a raw seed plus load, or from strictInMemory.\n- D1a, legacy and observe: activation is refused with exact {code, codeName, context} NOT_READY. project.json is unchanged, with one new refused-activate record naming vm, client and check.\n- D1b: an explicit claim of a stored-strict row is refused, and no worker is registered. The implicit claim returns the legacy row, never the higher-priority strict one. S's bytes are unchanged.\n- D1c: after an audited rollback (retainedStrictAttempts 1), complete_task on the strict attempt is refused. The task stays WORKING and the attempt stays verified-local. The legacy control goes to REVIEW.\n- D1d: an approval that passes V06's binding is refused NOT_READY. After the rollback (0/0) the same approval reaches DONE.\n- D2a: after the B control, under legacy and observe, no truthy isolation, readiness, verifiedLocal or certification key and no verified-local profile appears in any record. It has a non-vacuity guard and no allowlist.\n- D2b: the hello negotiates all three capabilities false.\n\nEvery refusal is checked with refused(): exact codeName, and bytes unchanged over tasks, attempts, candidates, checks, reviews and receipts. Deviation: McpAdapter puts only {tool, codeName} on the wire, so the MCP refusals assert the exact {code, codeName, message}.\n\nGate: Linux archive of HEAD 0733a436, npm ci, env -i, node 24.21.0.\n- npm test: EXIT 0, 218 files, 6430 passed | 20 skipped. The HEAD baseline is 6421 | 20, so +9 with no regressions.\n- Scratch tsc: 0.\n\nMutants, each a real failure:\n- completeTask reverted to task-level: D1c.\n- Admission throw dropped: D1b.\n- verifiedLocal "
 }
