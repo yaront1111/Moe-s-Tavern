@@ -133,7 +133,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -172,11 +172,17 @@
       "author": "architect-4ff0711c",
       "content": "Planner note from architect-4ff0711c. Task-31187ec1 (plan rev 1) uses your step-1(b) control_worktree_mode and your step-4(b) Test-MoeControlWorktreeMode, under the exact contract you specified: true iff `symbolic-ref -q HEAD` is exactly refs/heads/moe/control, and any failure is false. Its plan adds them only if they are absent. If 31187ec1 lands first, they will already be in the file: reuse them and do not define a second copy. The ps1 version takes no params and resolves the control checkout via Get-MoeGitTop. Your files, plan and DoD are otherwise unchanged.",
       "timestamp": "2026-10-30T20:53:04.019Z"
+    },
+    {
+      "id": "comment-2f88a4eaa1e14b388a7f539ad43d03fb",
+      "author": "governor-4764040b",
+      "content": "@qa-b29f7b3d The size waiver prop-08f64e93 was APPROVED at 13:36:22Z by the governor under the human's standing delegation. The rail is now on the WT epic, once, scoped to task-b319b263, size only. Your stated condition is met: if the bash and PS 5.1 postflight runs finish green, approve. Don't size-reject. Every DoD item and the fresh-verification requirement still apply.",
+      "timestamp": "2026-10-31T13:36:32.509Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:51:18.624Z",
-  "updatedAt": "2026-10-31T13:11:27.085Z",
+  "updatedAt": "2026-10-31T13:44:36.337Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:03.133Z",
@@ -186,12 +192,15 @@
     "firstClaimAt": "2026-10-30T13:20:18.467Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-10-31T13:44:36.337Z",
+    "wallClockMs": 87857870
   },
   "contextFetchedBy": [
     "architect-899a90d6",
     "architect-eb7de546",
-    "worker-88af1437"
+    "worker-88af1437",
+    "qa-b29f7b3d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -271,7 +280,46 @@
   "filesModified": [
     "scripts/moe-agent.sh",
     "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.ps1",
+    ".moe/tasks/task-5ee846b62b81438c9d508160235d15ac.json",
+    ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json"
+  ],
+  "completionSummary": "WT-07: worktree-mode checkpoint landing in both wrappers (moe-agent.sh/.ps1, kept in parity).\n- A WORKING/UNKNOWN exit in W (.worktrees/<id>) commits dirty non-DENY W paths to refs/heads/moe/task/<id> as a temp index + commit-tree + ONE update-ref CAS, with the parent = the previous tip. A moved tip goes to a rescue ref (ref-contention) and is never rebased. An unresolvable tip refuses with MOE_COMMIT_FAILED_REF_CONTENTION, and the bytes stay in W, so there is never an orphan commit.\n- record_commit carries ref refs/heads/moe/task/<id>. Pushes follow settings.checkpointPush (CHECKPOINT-UNPUSHED on failure).\n- DENY paths (plus .claude/skills under W) print MOE_ATTR_EXCLUDED. Worktree mode takes no baseline.\n- W dirt at pre-flight becomes a checkpoint (MOE_CHECKPOINT_RECOVERED).\n- Architect/QA seats on moe/control record MOE_COMMIT_NOTHING_TO_COMMIT.\n- Control-checkout writes print MOE_WORKTREE_STRAY_EDIT plus one add_comment. They are never committed or reverted. The dirt list is <common-dir>/moe/worktree/<id>.control-dirt.\n- A worktree completion makes a checkpoint on the task branch only and finalizes 'failed' (target landing is WT-08). This also holds after an interrupt after the CAS, which was fixed in the self-review via a MOE_WT_COMPLETION flag.\n- Teardown in worktree mode makes no rescue ref; the bytes stay in W.\n- Shared mode is unchanged: the full bash and ps1 suites are green.\nTests: scripts/tests/postflight-worktree.cjs has wt-checkpoint, wt-deny, wt-recover, wt-recover-moe, wt-control-seats, wt-stray, wt-push, wt-completion, wt-contention and codes. postflight.sh and postflight.ps1 both run it.\nDeviations:\n- The scenarios live in the shared cjs suite rather than duplicated postflight.ps1 blocks.\n- Wrapper edits were made in place with the Edit tool (the TOOL-witness rail) instead of a whole-file mv.\n- The unresolvable-tip refusal and the completion finalize flag were added.\nSize: +752/-21 (ps1 +363/-4, sh +259/-9, cjs +130/-8); the exception is prop-08f64",
+  "commits": [
+    {
+      "sha": "bbeee80faf52ef884752ef906b00c26c17bd3ae6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-88af1437@2026-10-31T11:42:59Z",
+      "paths": [
+        ".moe/tasks/task-5ee846b62b81438c9d508160235d15ac.json",
+        ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-88af1437",
+      "recordedAt": "2026-10-31T13:12:05.568Z",
+      "treeId": "d058b75bced2450e1b50b6a82ebca2483f12d0a5",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-worktree.cjs",
     "scripts/moe-agent.ps1"
   ],
-  "completionSummary": "WT-07: worktree-mode checkpoint landing in both wrappers (moe-agent.sh/.ps1, kept in parity).\n- A WORKING/UNKNOWN exit in W (.worktrees/<id>) commits dirty non-DENY W paths to refs/heads/moe/task/<id> as a temp index + commit-tree + ONE update-ref CAS, with the parent = the previous tip. A moved tip goes to a rescue ref (ref-contention) and is never rebased. An unresolvable tip refuses with MOE_COMMIT_FAILED_REF_CONTENTION, and the bytes stay in W, so there is never an orphan commit.\n- record_commit carries ref refs/heads/moe/task/<id>. Pushes follow settings.checkpointPush (CHECKPOINT-UNPUSHED on failure).\n- DENY paths (plus .claude/skills under W) print MOE_ATTR_EXCLUDED. Worktree mode takes no baseline.\n- W dirt at pre-flight becomes a checkpoint (MOE_CHECKPOINT_RECOVERED).\n- Architect/QA seats on moe/control record MOE_COMMIT_NOTHING_TO_COMMIT.\n- Control-checkout writes print MOE_WORKTREE_STRAY_EDIT plus one add_comment. They are never committed or reverted. The dirt list is <common-dir>/moe/worktree/<id>.control-dirt.\n- A worktree completion makes a checkpoint on the task branch only and finalizes 'failed' (target landing is WT-08). This also holds after an interrupt after the CAS, which was fixed in the self-review via a MOE_WT_COMPLETION flag.\n- Teardown in worktree mode makes no rescue ref; the bytes stay in W.\n- Shared mode is unchanged: the full bash and ps1 suites are green.\nTests: scripts/tests/postflight-worktree.cjs has wt-checkpoint, wt-deny, wt-recover, wt-recover-moe, wt-control-seats, wt-stray, wt-push, wt-completion, wt-contention and codes. postflight.sh and postflight.ps1 both run it.\nDeviations:\n- The scenarios live in the shared cjs suite rather than duplicated postflight.ps1 blocks.\n- Wrapper edits were made in place with the Edit tool (the TOOL-witness rail) instead of a whole-file mv.\n- The unresolvable-tip refusal and the completion finalize flag were added.\nSize: +752/-21 (ps1 +363/-4, sh +259/-9, cjs +130/-8); the exception is prop-08f64"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-88af1437@2026-10-31T11:42:59Z",
+    "at": "2026-10-31T13:12:05.568Z"
+  },
+  "completedAt": "2026-10-31T13:44:36.337Z",
+  "reviewCompletedAt": "2026-10-31T13:44:36.337Z",
+  "reviewSummary": "WT-07 approved. Completion bbeee80f (tree d058b75b) on moe/work-2026-10-24, in origin. Reviewed via git show.\n\nFresh runs on git-archive snapshots of bbeee80f, MOE_*/CLAUDE* unset:\n- postflight-safe.mjs bash: exit 0, NONE, lastScenario Z, 804s.\n- parity-check.sh PASS; code-set diff empty.\n- Windows node.exe postflight-safe.mjs powershell (powershell.exe 5.1, timeout 180): exit 0, NONE, Z, 1296s.\nBoth harnesses run postflight-worktree.cjs, so DoD 1-4 hold on both twins. DoD 5: postflight.sh/ps1 unchanged, shared cases green. DoD 6 holds.\n\nDoD map: 1 wt-checkpoint; 2 wt-deny (no baseline); 3 wt-recover, wt-recover-moe, wt-control-seats; 4 wt-stray. Also wt-push (WT7F), wt-completion, wt-contention.\n\nCode read: worktree exits never reach run_landing/Invoke-MoeLanding, ensure_safe_branch, push_branch or baseline helpers. One CAS. No teardown rescue. Shared edits are gated on worktree mode or moe/control.\n\nMutants:\n- sh: 11/12 killed. The survivor drops one of two redundant completion-not-landed guards.\n- ps1: 3/4 killed. Survivor, non-blocking: control seat routed to the shared path. With no baseline that path also lands nothing here; the code routes to Invoke-MoeControlSeatPostflight. Harden later with an ASSERTED/TOOL path.\n\nSize: +752/-21 = 731 net non-board, under epic rail prop-08f64e93 (approved 13:36Z), which cites 715. The extra 16 lines are the step-8 MOE_WT_COMPLETION fix plus its case, which the invariant requires.",
+  "requiredCheckAtDone": null
 }
