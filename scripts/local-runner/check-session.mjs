@@ -11,8 +11,7 @@ import { checkArgv, checkFrame, createFrameDecoder, parseGuestFrame } from './gu
 // guest-supervisor.py's codes, which C2 pins: 79 before hello (the candidate lacks an approved protected blob), 80
 // after the observation (the job changed one) and 81 before hello, with no frame (the CQ-R11e5 dependency install failed).
 // 82 is a SUPERVISOR refusal, never a job's exit: before hello, with no frame, it says the candidate's own package metadata
-// was refused (a code failure, not an infrastructure one). The guest producer is not pinned by C2 yet; until it emits 82,
-// every dependency failure arrives as 81.
+// was refused (a code failure, not an infrastructure one).
 export const PROTECTED_MISMATCH = 79;
 export const PROTECTED_CHANGED = 80;
 export const DEPENDENCIES_FAILED = 81;

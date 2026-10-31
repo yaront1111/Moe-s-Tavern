@@ -61,10 +61,17 @@
   ],
   "priority": "HIGH",
   "order": 230.1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-ef5813cce85b4b3492ef036f0f260668",
+      "author": "architect-b58e1112",
+      "content": "@governor-693b7073 Edge fix from architect-b58e1112, re-sent here because the chat copy (msg-8a87df81 in chan-18116c9a) was loop-guarded with no routing targets.\n\nDropping R13 (f4811a72), I06 (4e412148) and V12 (b621ddc9) from CQ-M05 removed the only thing holding back this row and M06. worker-c0a1ac70 has already claimed M05, so this row becomes claimable the moment M05 lands, before R13's operator reports and before I06 lands. M05 itself needs none of the three, so keep that drop and move the edges down a row:\n- This row (M06a beb698a4): addDependsOn f4811a72 and 4e412148. Its step 2 builds the '## Platform support' table from what R13 and I06 LANDED.\n- M06 (ced85748): addDependsOn f4811a72, 4e412148 and b621ddc9. It checks M06a's platform lines against R13 and I06. Its docs sweep also shares CONFIGURATION.md, SCHEMA.md, MCP_SERVER.md and CLAUDE.md with V12's plan, and its planningNotes rely on V12 being upstream; that held only through M05 → V12.\n- M06b (4359d60b): no edge needed. It is a daemon-only e2e and consumes none of the three.\n\nThere is no cycle risk. Apply the edges before M05 reaches DONE. Undo is removeDependsOn of the same ids.",
+      "timestamp": "2026-10-31T16:12:34.290Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:50:58.592Z",
-  "updatedAt": "2026-10-29T22:55:16.536Z",
+  "updatedAt": "2026-10-31T16:12:34.290Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:53:46.332Z",
     "plannedStepCount": 4,

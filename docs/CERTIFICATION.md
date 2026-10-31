@@ -35,7 +35,9 @@ Each failure is one fixed code; no path, guest byte or credential reaches the re
 ## How to run it
 
 1. Install Multipass 1.17.0 with the driver `scripts/local-runner/certified-provider.json` names: Windows x64 `hcs`,
-   Linux x64 `qemu` (the snap), macOS x64 or arm64 `qemu`.
+   Linux x64 `qemu` (the snap), macOS x64 or arm64 `qemu`. Keep the installer's default location: Moe runs only the
+   pinned client (`%ProgramFiles%\Multipass\bin\multipass.exe`, `/snap/bin/multipass`, `/usr/local/bin/multipass`),
+   never a `multipass` found on `PATH`, and reports `PROVIDER_NOT_FOUND` when it is missing.
 2. Run `node scripts/local-runner/cli.mjs prerequisites --cache-dir <work-dir>/images`. Certify caches the image in
    `<work-dir>/images`. The command exits 0 only when every item is satisfied, and each unmet item names its `action`.
    On Linux the strictly confined snap reads only paths under your home directory with no hidden segment, so the
@@ -45,8 +47,7 @@ Each failure is one fixed code; no path, guest byte or credential reaches the re
    `CERTIFY_INPUT_INVALID` or `CERTIFY_UNSUPPORTED_HOST` before any check, `CERTIFY_REPORT_WRITE_FAILED` when the report
    file cannot be created, else `CERTIFY_UNAVAILABLE`. A usage error prints `CLI_INPUT_INVALID` with the usage line.
 
-The exact commands, with Node 24 (the version CI tests). `<repo>` is a checkout of the commit under test. Run them from
-the work dir, never from `<repo>`: on Windows a bare `multipass` is looked up in the current directory before `PATH`.
+The exact commands, with Node 24 (the version CI tests). `<repo>` is a checkout of the commit under test.
 
 ```bash
 # Linux x64, macOS x64 or arm64

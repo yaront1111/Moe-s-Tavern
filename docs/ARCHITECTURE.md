@@ -307,13 +307,18 @@ and `verified-local` stays refused until certification and the client gates pass
   streams the workspace's changes back, `verify` compares the workspace with its manifest, and `agents`, `toolchain` and
   `dependencies` install pinned bytes. Exit codes: 0 done, 64 usage, 65 malformed input, 66 no workspace, 71 the job
   could not start, 73 already exists, 74 I/O failure or host EOF, 75 signal, 76 protocol violation, 77 not root. `check`
-  adds 79 (a protected path lacks its approved blob), 80 (the job changed one) and 81 (the dependency install failed).
+  adds 79 (a protected path lacks its approved blob), 80 (the job changed one), 81 (the dependency install failed) and
+  82 (the candidate's own package files were refused). In the guest a guard starts each job as its locked identity with
+  no new privileges and in a fresh PID namespace (a check job also in its own loopback-only network namespace, under
+  its rlimits), so no descendant, `setsid` or not, outlives the job.
 - **Check lifecycle** (`check-lifecycle.mjs`, `check-session.mjs`, `check-dispatch.mjs`). Each run gets a fresh VM:
   provisioning and readiness; the pinned Node toolchain and an offline dependency tree, built on the host from the
   approved definition's lockfiles (`toolchain-cache.mjs`, `dependency-cache.mjs`); a copy-only materialization; an
-  `npm ci --offline --ignore-scripts --workspaces=false` in the guest, refused (81) in a lockfile directory without a
-  `package.json` or with an `npm-shrinkwrap.json` or `.npmrc`; the check once, as `moe-check`; `verify` of a passed run's
-  workspace; then the VM deleted on every path. The outcome is `passed`, `code-failure`, `infra-failure`, `timeout`,
+  `npm ci --offline --ignore-scripts --workspaces=false` in the guest, refused before any install when a lockfile
+  directory's own `package.json` is missing or linked, differs from the lockfile's root entry or sets overrides, bundling
+  or workspaces, or sits beside an `npm-shrinkwrap.json` or `.npmrc` (82, a `code-failure`; a lockfile, cache or install
+  fault is 81, an `infra-failure`); the check once, as `moe-check`; `verify` of a passed run's workspace; then the VM
+  deleted on every path. The outcome is `passed`, `code-failure`, `infra-failure`, `timeout`,
   `skipped` or `inconclusive`, and it reaches the daemon only over the authenticated `/runner` channel.
 - **Environment identity and evidence freshness** (`check-evidence.mjs`). `checkEnvironment` hashes the declared
   `CHECK_BOUNDARIES` with the observed image, supervisor, VM size, toolchain and dependency tree, so changing any of
