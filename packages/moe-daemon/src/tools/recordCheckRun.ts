@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { CheckOutcome, CheckRunSource } from '../types/schema.js';
 import { MAX_CHECK_LOG_BYTES, recordCheckRun, validateCheckRunParams } from '../state/checkRunStore.js';
+import { MAX_REQUIRED_CHECK_COMMAND_CHARS } from '../state/validators.js';
 
 // =============================================================================
 // moe.record_check_run — a check result reported against one candidate's tree
@@ -67,7 +68,8 @@ export function recordCheckRunTool(_state: StateManager): ToolDefinition {
         },
         command: {
           type: 'string',
-          description: 'The command that was run, recorded verbatim: never trimmed, and never run by the daemon. Non-blank, at most 500 characters.',
+          maxLength: MAX_REQUIRED_CHECK_COMMAND_CHARS,
+          description: `The command that was run, recorded verbatim: never trimmed, and never run by the daemon. Non-blank, at most ${MAX_REQUIRED_CHECK_COMMAND_CHARS} UTF-16 code units.`,
         },
         exitCode: {
           type: 'integer',

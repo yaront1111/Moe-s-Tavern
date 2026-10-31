@@ -2,6 +2,7 @@ import type { ToolCallContext, ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { getCheckDispatch, recordCheckDispatch, type RecordCheckDispatchParams } from '../state/checkObservationStore.js';
 import { assertCheckDispatchApproved } from '../delivery/policy.js';
+import { MAX_REQUIRED_CHECK_COMMAND_CHARS } from '../state/validators.js';
 import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
 
 // =============================================================================
@@ -66,7 +67,11 @@ export function recordCheckDispatchTool(_state: StateManager): ToolDefinition {
         taskId: { type: 'string', description: 'The task whose check is dispatched.' },
         candidateId: { type: 'string', description: 'The task\'s current Candidate. Its tree is pinned from the candidate, never passed.' },
         planRevision: { type: 'integer', minimum: 1, description: 'The task\'s current approved plan revision.' },
-        command: { type: 'string', description: 'The command the runner will run, recorded verbatim: non-blank, at most 500 characters.' },
+        command: {
+          type: 'string',
+          maxLength: MAX_REQUIRED_CHECK_COMMAND_CHARS,
+          description: `The command the runner will run, recorded verbatim: non-blank, at most ${MAX_REQUIRED_CHECK_COMMAND_CHARS} UTF-16 code units.`,
+        },
         checkId: { type: 'string', description: 'Optional protected check id (1-64 letters, digits, ., _ or -, starting alphanumeric).' },
         environment: {
           type: 'string',
