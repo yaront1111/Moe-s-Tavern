@@ -127,8 +127,10 @@ class MoeSettingsDialog(
                     agentCommand = (agentCommandCombo.selectedItem as? String)?.trim()?.ifEmpty { "claude" } ?: "claude",
                     enableAgentTeams = enableAgentTeamsCheckbox.isSelected
                 )
-                service.updateSettings(settings)
-                close(OK_EXIT_CODE)
+                when (val decision = saveDecision(settings, service::updateSettings)) {
+                    SaveDecision.Close -> close(OK_EXIT_CODE)
+                    is SaveDecision.StayOpen -> setErrorText(MoeBundle.message(decision.warningKey))
+                }
             }
         }
         return arrayOf(saveAction, cancelAction)
@@ -143,7 +145,23 @@ class MoeSettingsDialog(
     /** One rendered line of the effective landing/gate policy. */
     data class PolicyRow(val label: String, val value: String, val detail: String = "")
 
+    /** What Save does next. [StayOpen] keeps the dialog and the user's edits; it carries a MoeBundle key. */
+    sealed interface SaveDecision {
+        data object Close : SaveDecision
+        data class StayOpen(val warningKey: String) : SaveDecision
+    }
+
     companion object {
+        /** MoeBundle key shown when UPDATE_SETTINGS was not handed to the socket. */
+        const val NOT_CONNECTED_KEY = "moe.settings.notConnected"
+
+        /**
+         * Sends [settings] exactly once. Closes only when the message was handed to the
+         * socket; otherwise stays open. Pure (no [MoeBundle] lookup) for headless tests.
+         */
+        fun saveDecision(settings: ProjectSettings, send: (ProjectSettings) -> Boolean): SaveDecision =
+            if (send(settings)) SaveDecision.Close else SaveDecision.StayOpen(NOT_CONNECTED_KEY)
+
         private const val ON = "On"
         private const val OFF = "Off"
 

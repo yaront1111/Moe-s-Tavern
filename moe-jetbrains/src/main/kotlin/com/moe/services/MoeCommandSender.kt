@@ -10,10 +10,11 @@ import com.moe.model.ProjectSettings
  * Builds the daemon command envelopes.
  *
  * [send] reports whether the local transport accepted the bytes; it never
- * reports daemon acceptance. Only [approveTask] reads that result or lets a
- * transport failure escape — every other command keeps the historical
- * best-effort behaviour of [sendMessage], because they are also driven from
- * connection and background callbacks that must not start throwing.
+ * reports daemon acceptance. Only [approveTask] and [updateSettings] report
+ * that result (and fire [onDisconnected] when it is false), and only
+ * [approveTask] lets a transport failure escape — every other command keeps
+ * the historical best-effort behaviour of [sendMessage], because they are also
+ * driven from connection and background callbacks that must not start throwing.
  */
 class MoeCommandSender(
     private val connectedCheck: () -> Boolean,
@@ -71,15 +72,23 @@ class MoeCommandSender(
         val payload = JsonObject().apply { addProperty("epicId", epicId) }
         sendMessage("DELETE_EPIC", payload)
     }
-    fun updateSettings(settings: ProjectSettings) {
-        if (!ensureConnected()) return
+    /**
+     * @return true only when the local socket accepted the UPDATE_SETTINGS bytes
+     *   (never daemon acceptance). false means nothing reached the socket (not
+     *   connected, refused or a throwing transport) and [onDisconnected] has
+     *   fired exactly once. A throwing transport is reported, never rethrown.
+     */
+    fun updateSettings(settings: ProjectSettings): Boolean {
+        if (!ensureConnected()) return false
         val payload = JsonObject().apply {
             addProperty("approvalMode", settings.approvalMode)
             addProperty("speedModeDelayMs", settings.speedModeDelayMs)
             addProperty("agentCommand", settings.agentCommand)
             addProperty("enableAgentTeams", settings.enableAgentTeams)
         }
-        sendMessage("UPDATE_SETTINGS", payload)
+        val delivered = sendMessage("UPDATE_SETTINGS", payload)
+        if (!delivered) onDisconnected()
+        return delivered
     }
     fun updateEpicStatus(epicId: String, status: String, order: Double) {
         if (!ensureConnected()) return
@@ -298,12 +307,14 @@ class MoeCommandSender(
         return send(type, message.toString())
     }
 
-    fun sendMessage(type: String, payload: JsonObject) {
-        try {
+    /** Best-effort send: never throws. Returns whether the transport accepted the bytes; background callers ignore it. */
+    fun sendMessage(type: String, payload: JsonObject): Boolean {
+        return try {
             dispatch(type, payload)
         } catch (ex: Exception) {
             log.debug("Failed to send message '$type': ${ex.message}")
             // Connection likely dropped; let reconnect handle it.
+            false
         }
     }
 

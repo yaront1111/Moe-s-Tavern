@@ -7,8 +7,11 @@ import com.moe.toolwindow.MoeSettingsDialog.PolicyRow
 import com.moe.util.MoeJson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
+import java.util.Properties
 
 /**
  * Guards the effective landing + gate policy the settings dialog advertises. The dialog used to
@@ -158,5 +161,59 @@ class MoeSettingsDialogTest {
         assertEquals("Skipped (plumbing commits)", value(state.project.settings, "Commit hooks"))
         assertEquals("moe/work-<YYYY-MM-DD> (shared, default)", value(state.project.settings, "Landing branch"))
         assertEquals("Warn past 8 steps / 5 files, reject past 12 / 10", value(state.project.settings, "Plan size limits"))
+    }
+
+    @Test
+    fun `a save handed to the socket closes after exactly one send`() {
+        val settings = ProjectSettings(approvalMode = "SPEED")
+        var calls = 0
+        var seen: ProjectSettings? = null
+
+        val decision = MoeSettingsDialog.saveDecision(settings) { calls++; seen = it; true }
+
+        assertEquals(MoeSettingsDialog.SaveDecision.Close, decision)
+        assertEquals(1, calls)
+        assertSame(settings, seen)
+    }
+
+    @Test
+    fun `a disconnected or refused save stays open with the not-connected warning`() {
+        val settings = ProjectSettings(agentCommand = "codex")
+        var calls = 0
+        var seen: ProjectSettings? = null
+
+        val decision = MoeSettingsDialog.saveDecision(settings) { calls++; seen = it; false }
+
+        assertEquals(MoeSettingsDialog.SaveDecision.StayOpen("moe.settings.notConnected"), decision)
+        assertEquals("no retry", 1, calls)
+        assertSame(settings, seen)
+
+        val bundle = Properties()
+        val stream = checkNotNull(javaClass.getResourceAsStream("/messages/MoeBundle.properties")) {
+            "MoeBundle.properties is not on the test classpath"
+        }
+        stream.use { bundle.load(it) }
+        val text = bundle.getProperty(MoeSettingsDialog.NOT_CONNECTED_KEY)
+        assertFalse("warning text is missing or blank", text.isNullOrBlank())
+        assertTrue(text.contains("not saved"))
+    }
+
+    @Test
+    fun `the save action closes only on the Close decision`() {
+        val relative = "src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt"
+        val file = listOf(File(relative), File("moe-jetbrains/$relative")).firstOrNull { it.isFile }
+            ?: throw AssertionError("MoeSettingsDialog.kt not found from ${File(".").absoluteFile}")
+        val source = file.readText()
+        val start = source.indexOf("override fun createActions()")
+        val endAnchor = "return arrayOf(saveAction, cancelAction)"
+        val end = source.indexOf(endAnchor)
+        assertTrue("createActions anchor missing", start >= 0)
+        assertTrue("createActions end anchor missing", end > start)
+        val slice = source.substring(start, end)
+
+        assertTrue(slice.contains("saveDecision("))
+        assertTrue(slice.contains("is SaveDecision.StayOpen ->"))
+        assertTrue(Regex("SaveDecision\\.Close\\s*->\\s*close\\(OK_EXIT_CODE\\)").containsMatchIn(slice))
+        assertEquals("close( must be reachable from one branch only", 1, Regex("close\\(").findAll(slice).count())
     }
 }
