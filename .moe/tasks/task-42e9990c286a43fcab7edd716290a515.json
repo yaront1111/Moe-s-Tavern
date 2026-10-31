@@ -84,7 +84,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -112,11 +112,17 @@
       "author": "architect-21c9ed65",
       "content": "Human REPL confirmation: 'Use fixed safe diagnostics.' Use fixed candidate dependency messages, not raw npm output/secrets, as already planned.",
       "timestamp": "2026-10-31T06:08:45.337Z"
+    },
+    {
+      "id": "comment-5b1c1ecfff5f43fa9e1578907ca53190",
+      "author": "qa-b29f7b3d",
+      "content": "QA evidence (qa-b29f7b3d, 2026-10-31). I reviewed completion commit 586f119c (on moe/work-2026-10-24; the live tree is byte-equal to it for the 3 owned files).\n\nDiff: guest-supervisor.py +58/-18, local-runner-check.test.mjs +140/-32, repairPolicy.test.ts +74/-0. That is 322 changed and 272 net code lines, plus board json. repairPolicy.ts, check-session.mjs and local-runner.test.mjs are untouched. No non-ASCII was added and there is no __pycache__.\n\nGate: I ran a fresh `git archive 586f119c` snapshot outside the repo. The pinned toolchain tarball matched toolchain.json (sha256 48cc0e21…aaf75, size 32039312): node v24.22.2, npm 11.19.1, python 3.12.3, run under env -i. In the daemon package, npm ci and npm run build both exited 0. From the snapshot root, `node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)` gave:\n- runner: 626 tests, 623 pass, 0 fail, 3 skipped. KI1-KI9, KI8 with real npm, C2, C7 and C9 all executed and none were skipped.\n- daemon: 215 files, 6341 passed and 20 skipped. repairPolicy.test.ts on its own: 46/46, with H1-H3 green.\n\nQA mutation sweep: my own driver ran `^(KI[1-9]|C[29]) ` on scratch supervisor copies. Each mutant ran in its own session, was ast-checked first and was scored by exit code. The no-op control passed, and 13/13 mutants were killed:\n- check_job's 82 changed to 81\n- every OSError treated as candidate\n- ENOENT treated as infra\n- ELOOP treated as infra\n- raise at once instead of the all-dir pass\n- a bad lock root treated as candidate\n- growth while read as ValueError\n- the class subclassing ValueError\n- RecursionError dropped\n- .npmrc/shrinkwrap treated as infra\n- the post-loop raise dropped\n- a metadata mismatch treated as infra\n- the locked-is-None guard dropped\nNo leftover processes (checked by env marker).\n\nDoD 1: 82 happens before hello, with no frame, no npm and no job. The host returns the fixed ASCII CANDIDATE_REFUSAL of 512 bytes or less (C9 and H1 assert that hostile stderr and the token never reach it), and decideRepair repairs rather than retrying infra (H1, H3).\nDoD 2: no toolchain, npm exit 3, timeout, EIO, a missing lockfile, a malformed list and an uncached tree (KI8) all stay 81, which is infra-failure. H2 shows retry-infra within its own budget, then escalation.\n\nResidual, out of scope: check-session.mjs:13-15 has a stale comment saying the producer is not pinned. It is routed to CQ-R13 along with the 81/82 docs sweep. The new supervisor sha needs fresh native certification under CQ-R13. Nothing here claims verified-local.",
+      "timestamp": "2026-10-31T10:58:10.205Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:22:54.584Z",
-  "updatedAt": "2026-10-31T10:49:56.805Z",
+  "updatedAt": "2026-10-31T10:58:16.411Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:41.542Z",
@@ -130,11 +136,14 @@
     "firstClaimAt": "2026-10-31T05:49:45.656Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-31T10:58:16.411Z",
+    "wallClockMs": 18510755
   },
   "contextFetchedBy": [
     "architect-21c9ed65",
-    "worker-25da16b2"
+    "worker-25da16b2",
+    "qa-b29f7b3d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -211,7 +220,58 @@
   "filesModified": [
     "scripts/tests/local-runner-check.test.mjs",
     "scripts/local-runner/guest-supervisor.py",
+    "packages/moe-daemon/src/delivery/repairPolicy.test.ts",
+    ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+    ".moe/tasks/task-42e9990c286a43fcab7edd716290a515.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "completionSummary": "A candidate-caused dependency refusal now exits 82 (DEPENDENCIES_CANDIDATE_INVALID) instead of 81. The host maps it to code-failure with a fixed ASCII diagnostic, so decideRepair repairs instead of retrying as infra.\n\nSupervisor (sha256 d149aa19…f18a):\n- Gives 82 for the candidate's package.json when it is missing, symlinked, not regular, oversized, not strict JSON, too deep, mismatched with the lockfile root, or carries overrides, bundling or workspaces; also for a planted npm-shrinkwrap.json or .npmrc.\n- Keeps 81 for lockfile faults, any other OSError (EACCES, EIO, a file resized while read), a malformed list, a missing toolchain, and npm failure or timeout.\n- Checks every directory first, and an 81 cause in any directory outranks an 82.\n- Exits 82 before hello: no frame, no npm, no job. Only after the 79/65/71 checks.\n\nTests:\n- local-runner-check: cause-specific KI3/KI5/KI7, KI8 with real npm, new KI9 (precedence and injected errnos), C2 pinning \"79 80 81 82\", and new C9. C9 runs 12 rows through the real supervisor main() and the real runCheckSession. Hostile stderr (an npm token, CR/LF/ANSI, 0xff bytes) never reaches outputTail.\n- repairPolicy.test.ts: new H1-H3 feed real runCheckSession results into the unchanged decideRepair: 82 → repair, 81 → bounded retry-infra then escalate, a repeated 82 → unchanged-failure.\n\nUnchanged: repairPolicy.ts, check-session.mjs and local-runner.test.mjs.\n\nMutation: 20/20 supervisor mutants killed, plus a passing control. Host mutants (82→infra, 81→code) were killed by H1-H3.\n\nNotified CQ-R13 (task-f4811a72): the new supervisor sha needs fresh operator native certification; check-session.mjs:13-15 has a stale comment; the 81/82 docs sweep is theirs. No native-certification or verified-local claim is made.",
+  "commits": [
+    {
+      "sha": "586f119cce45db1c52127c1c7aa1daaf2c4354e1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T10:23:39Z",
+      "paths": [
+        ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+        ".moe/tasks/task-42e9990c286a43fcab7edd716290a515.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T10:50:15.800Z",
+      "treeId": "ac0c9fe102f2f0b6b23aaa70103696961c1cdc1e",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/local-runner/guest-supervisor.py",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "scripts/tests/local-runner-check.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
     "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
   ],
-  "completionSummary": "A candidate-caused dependency refusal now exits 82 (DEPENDENCIES_CANDIDATE_INVALID) instead of 81. The host maps it to code-failure with a fixed ASCII diagnostic, so decideRepair repairs instead of retrying as infra.\n\nSupervisor (sha256 d149aa19…f18a):\n- Gives 82 for the candidate's package.json when it is missing, symlinked, not regular, oversized, not strict JSON, too deep, mismatched with the lockfile root, or carries overrides, bundling or workspaces; also for a planted npm-shrinkwrap.json or .npmrc.\n- Keeps 81 for lockfile faults, any other OSError (EACCES, EIO, a file resized while read), a malformed list, a missing toolchain, and npm failure or timeout.\n- Checks every directory first, and an 81 cause in any directory outranks an 82.\n- Exits 82 before hello: no frame, no npm, no job. Only after the 79/65/71 checks.\n\nTests:\n- local-runner-check: cause-specific KI3/KI5/KI7, KI8 with real npm, new KI9 (precedence and injected errnos), C2 pinning \"79 80 81 82\", and new C9. C9 runs 12 rows through the real supervisor main() and the real runCheckSession. Hostile stderr (an npm token, CR/LF/ANSI, 0xff bytes) never reaches outputTail.\n- repairPolicy.test.ts: new H1-H3 feed real runCheckSession results into the unchanged decideRepair: 82 → repair, 81 → bounded retry-infra then escalate, a repeated 82 → unchanged-failure.\n\nUnchanged: repairPolicy.ts, check-session.mjs and local-runner.test.mjs.\n\nMutation: 20/20 supervisor mutants killed, plus a passing control. Host mutants (82→infra, 81→code) were killed by H1-H3.\n\nNotified CQ-R13 (task-f4811a72): the new supervisor sha needs fresh operator native certification; check-session.mjs:13-15 has a stale comment; the 81/82 docs sweep is theirs. No native-certification or verified-local claim is made."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-25da16b2@2026-10-31T10:23:39Z",
+    "at": "2026-10-31T10:50:15.800Z"
+  },
+  "completedAt": "2026-10-31T10:58:16.411Z",
+  "reviewCompletedAt": "2026-10-31T10:58:16.411Z",
+  "reviewSummary": "APPROVED. Full evidence is in comment-5b1c1ecfff5f43fa9e1578907ca53190.\n\nReviewed: completion commit 586f119c on moe/work-2026-10-24. Diff: 322 changed lines, 272 net code (supervisor +58/-18, check test +140/-32, repairPolicy.test.ts +74). repairPolicy.ts, check-session.mjs and local-runner.test.mjs are unchanged.\n\nRe-ran the exact gate in a fresh git archive 586f119c snapshot outside the repo: pinned node v24.22.2 / npm 11.19.1 (tarball sha256 checked against toolchain.json), python 3.12.3, env -i, daemon npm ci and build. Results:\n- runner: 626 tests, 623 pass, 0 fail, 3 skipped. KI1-KI9, KI8 with real npm, C2, C7 and C9 all executed.\n- daemon: 215 files, 6341 passed, 20 skipped. H1-H3 green.\n\nQA mutation sweep on the supervisor: control passes, 13/13 mutants killed.\n\nDoD 1 met: a candidate refusal exits 82 before hello, with no frame, npm or job. It reaches the host as code-failure with the fixed ASCII text of 512 bytes or less; no hostile stderr or token leaks through. decideRepair repairs it and never runs retry-infra.\n\nDoD 2 met: toolchain, cache, npm exit, timeout, EIO, lockfile and list faults stay 81 (infra-failure). The infra retry budget is used, then the task escalates.\n\nFollow-ups for CQ-R13: the stale check-session.mjs:13-15 comment and a fresh native certification for the new supervisor sha.",
+  "requiredCheckAtDone": null
 }
