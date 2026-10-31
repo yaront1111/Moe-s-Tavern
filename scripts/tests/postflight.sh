@@ -7,6 +7,8 @@ POSTFLIGHT_TIMEOUT_SEC=60
 case "${MOE_POSTFLIGHT_TIMEOUT_SEC:-}" in ''|*[!0-9]*) : ;; *) POSTFLIGHT_TIMEOUT_SEC="$MOE_POSTFLIGHT_TIMEOUT_SEC" ;; esac
 # Claude account rotation stays off unless the [accounts] scenario turns it on.
 export MOE_ACCOUNT_ROTATION=off
+# A protected launch's marker never reaches the legacy rows; [protected runtime] sets it per row.
+unset MOE_RUNTIME_PROTECTED
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WRAPPER="$ROOT_DIR/scripts/moe-agent.sh"
@@ -5211,5 +5213,100 @@ grep -q '\[ERROR\].* MOE_WORKTREE_CREATE_FAILED: git ls-tree failed' "$TMP_DIR/w
   || wtr_fail budget-probe "not exactly one report_blocked naming CREATE_FAILED"
 [ ! -s "$CLI_ARGS_FILE" ] && [ ! -e "$WTR_W" ] || wtr_fail budget-probe "the CLI ran, or W was made"
 echo "[worktree reuse] ok"
+
+# --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the JetBrains
+# launcher sets beside MOE_PROXY_PATH and MOE_DAEMON_PATH) runs exactly those
+# files or refuses before any MCP config, daemon, proxy or CLI. It never falls
+# back to PATH, the wrapper's own root or the global install; any other marker
+# value stays legacy (CQ-R13c2). Every fixture and decoy appends one line to
+# $PR/marks. Twin: postflight.ps1. ---
+echo "[protected runtime] a protected launch runs the exact runtime paths or refuses"
+PR="$TMP_DIR/protected"
+PRJ="$PR/project"
+mkdir -p "$PRJ/.moe/messages" "$PR/bin" "$PR/home/.moe" "$PR/dir.js"
+printf '{"id":"proj-protected","name":"postflight-protected","settings":{"autoCommit":false}}\n' > "$PRJ/.moe/project.json"
+: > "$PRJ/.moe/messages/chan-general.jsonl"
+PR_MARK="require('fs').appendFileSync(require('path').join(__dirname,'marks'),"
+printf '%s\n' "require('fs').appendFileSync(require('path').join(__dirname,'..','marks'),'relative-proxy\\n');" > "$PRJ/rel-proxy.js"
+{ printf '%s\n' "${PR_MARK}'protected-proxy\\n');"; cat "$FAKE_PROXY"; } > "$PR/marked-proxy.js"
+{ printf '%s\n' "${PR_MARK}'vanish-proxy\\n');require('fs').unlinkSync(__filename);"; cat "$FAKE_PROXY"; } > "$PR/vanish-proxy.js"
+# process.ppid is the wrapper, which outlives the start poll that probes this pid.
+printf '%s\n' "${PR_MARK}'protected-daemon '+process.argv.slice(2).join(' ')+'\\n');" \
+  "const p=process.argv[process.argv.indexOf('--project')+1];" \
+  "require('fs').writeFileSync(require('path').join(p,'.moe','daemon.json'),JSON.stringify({port:9876,pid:process.ppid,startedAt:new Date().toISOString(),projectPath:p}));" \
+  > "$PR/fake-daemon.js"
+printf '#!/usr/bin/env bash\necho decoy-proxy >> %q\nexec %q %q "$@"\n' "$PR/marks" "$NODE_FOR_TEST" "$FAKE_PROXY" > "$PR/bin/moe-proxy"
+printf '#!/usr/bin/env bash\necho decoy-daemon >> %q\nexit 1\n' "$PR/marks" > "$PR/bin/moe-daemon"
+chmod +x "$PR/bin/moe-proxy" "$PR/bin/moe-daemon"
+for pr_pkg in moe-daemon moe-proxy; do
+  mkdir -p "$PR/install/packages/$pr_pkg/dist"
+  printf '%s\n' "require('fs').appendFileSync(require('path').join(__dirname,'..','..','..','..','marks'),'decoy-install-$pr_pkg\\n');process.exit(1);" \
+    > "$PR/install/packages/$pr_pkg/dist/index.js"
+done
+printf '{"installPath":"%s"}\n' "$PR/install" > "$PR/home/.moe/config.json"
+# pr_run ROW MARKER PROXY DAEMON LIVE [wrapper args...] -- MARKER '-' leaves it
+# unset. LIVE 'live' writes a running daemon's daemon.json, as in a real protected
+# launch: the exit-time deregister (moe-call.sh, its own fallback chain) needs it.
+pr_run() {
+  local row="$1" marker="$2" proxy="$3" daemon="$4" live="$5"; shift 5
+  rm -rf "$PR/marks" "$PRJ/.mcp.json" "$PRJ/.moe/daemon.json" "$PR/home/.config"
+  [ "$live" != live ] || printf '{"port":9876,"projectPath":"%s"}\n' "$PRJ" > "$PRJ/.moe/daemon.json"
+  set +e
+  (
+    cd "$PRJ" || exit 97
+    if [ "$marker" = - ]; then unset MOE_RUNTIME_PROTECTED; else export MOE_RUNTIME_PROTECTED="$marker"; fi
+    PATH="$PR/bin:$TMP_DIR:$PATH" HOME="$PR/home" MOE_PROXY_PATH="$proxy" MOE_DAEMON_PATH="$daemon" \
+      FAKE_CLAIM_MODE=idle MOE_TASKLESS_WAIT_SEC=5 MOE_DISABLE_HEARTBEAT=1 timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
+      "$WRAPPER" --project "$PRJ" --worker-id worker-protected --role worker --command /bin/true --no-loop "$@"
+  ) >"$PR/$row.out" 2>&1
+  pr_code=$?
+  set -e
+}
+pr_fail() { cat "$PR/$1.out" >&2 || true; echo "PROTECTED RUNTIME FAILED ($1): $2" >&2; exit 1; }
+# pr_refused ROW VAR VALUE... -- exit 1 with one refusal line naming VAR, no
+# value printed, nothing run and no MCP config written.
+pr_refused() {
+  local row="$1" var="$2" v; shift 2
+  [ "$pr_code" -eq 1 ] || pr_fail "$row" "exit $pr_code, expected 1"
+  [ "$(grep -c MOE_RUNTIME_PROTECTED_PATH_MISSING "$PR/$row.out")" -eq 1 ] \
+    && grep -Fq "MOE_RUNTIME_PROTECTED_PATH_MISSING: $var must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start." "$PR/$row.out" \
+    || pr_fail "$row" "not exactly one refusal line naming $var"
+  for v in "$@"; do [ -z "$v" ] || ! grep -Fq -- "$v" "$PR/$row.out" || pr_fail "$row" "the output prints $v"; done
+  [ ! -e "$PR/marks" ] || pr_fail "$row" "something ran: $(tr '\n' ' ' < "$PR/marks")"
+  [ ! -e "$PRJ/.mcp.json" ] && [ ! -e "$PR/home/.config/claude/mcp_servers.json" ] || pr_fail "$row" "an MCP config was written"
+}
+# pr_ran ROW LINE... -- exit 0, no refusal, and each LINE is in the marks file.
+pr_ran() {
+  local row="$1" want; shift
+  [ "$pr_code" -eq 0 ] || pr_fail "$row" "exit $pr_code, expected 0"
+  ! grep -q MOE_RUNTIME_PROTECTED_PATH_MISSING "$PR/$row.out" || pr_fail "$row" "refused"
+  for want in "$@"; do grep -Fxq -- "$want" "$PR/marks" 2>/dev/null || pr_fail "$row" "marks lack '$want'"; done
+}
+pr_mcp() { "$NODE_FOR_TEST" -e 'process.stdout.write(JSON.stringify(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).mcpServers.moe[process.argv[2]]))' "$PRJ/.mcp.json" "$1" 2>/dev/null || true; }
+pr_run P1 1 "$PR/missing/proxy.js" "$PR/fake-daemon.js" live
+pr_refused P1 MOE_PROXY_PATH "$PR/missing/proxy.js" "$PR/fake-daemon.js"
+pr_run P2 1 "$PR/marked-proxy.js" "$PR/missing/daemon.js" live
+pr_refused P2 MOE_DAEMON_PATH "$PR/marked-proxy.js" "$PR/missing/daemon.js"
+pr_run P3 1 rel-proxy.js "$PR/fake-daemon.js" live
+pr_refused P3 MOE_PROXY_PATH rel-proxy.js "$PR/fake-daemon.js"
+pr_run P4 1 "$PR/marked-proxy.js" "$PR/dir.js" live
+pr_refused P4 MOE_DAEMON_PATH "$PR/marked-proxy.js" "$PR/dir.js"
+pr_run P5 1 '' "$PR/fake-daemon.js" live
+pr_refused P5 MOE_PROXY_PATH "$PR/fake-daemon.js"
+pr_run P6 1 "$PR/marked-proxy.js" "$PR/fake-daemon.js" none
+pr_ran P6 "protected-daemon start --project $PRJ" protected-proxy
+! grep -q decoy "$PR/marks" || pr_fail P6 "a decoy ran: $(tr '\n' ' ' < "$PR/marks")"
+[ "$(pr_mcp args)" = "$("$NODE_FOR_TEST" -e 'process.stdout.write(JSON.stringify([process.argv[1]]))' "$PR/marked-proxy.js")" ] \
+  || pr_fail P6 ".mcp.json moe args are $(pr_mcp args), not the protected proxy"
+pr_run P7 - "$PR/missing/proxy.js" "$PR/fake-daemon.js" none --no-start-daemon
+pr_ran P7 decoy-proxy
+[ "$(pr_mcp command)" = '"moe-proxy"' ] || pr_fail P7 ".mcp.json moe command is $(pr_mcp command), not today's PATH moe-proxy"
+pr_run P8 01 "$PR/marked-proxy.js" "$PR/missing/daemon.js" none --no-start-daemon
+pr_ran P8 protected-proxy
+# P9: the protected proxy deletes itself on its first call, after the gate. No
+# later RPC, including the exit-time deregister, may fall back to another proxy.
+pr_run P9 1 "$PR/vanish-proxy.js" "$PR/fake-daemon.js" live --no-start-daemon
+[ ! -e "$PR/vanish-proxy.js" ] && [ "$(sort -u "$PR/marks" 2>/dev/null)" = vanish-proxy ] || pr_fail P9 "marks are '$(tr '\n' ' ' < "$PR/marks")', not the vanished proxy alone"
+echo "[protected runtime] ok"
 
 echo "PASS postflight.sh"

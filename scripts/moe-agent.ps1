@@ -402,6 +402,25 @@ $env:MOE_WORKER_ID = $WorkerId
 # credential or host-key prompt: the wrapper is unattended for its lifetime.
 $env:GIT_TERMINAL_PROMPT = '0'
 
+# CQ-R13c2: the JetBrains launcher sets MOE_RUNTIME_PROTECTED=1 beside both paths.
+# Only exactly '1' protects: run exactly those files or refuse, never a fallback.
+$script:MoeRuntimeProtected = ($env:MOE_RUNTIME_PROTECTED -ceq '1')
+# Protected runtime gate, before the exit handler, any MCP config, daemon, proxy
+# RPC or CLI. The refusal names the variable, never its value; byte-identical in
+# moe-agent.sh. Not Write-Error: under EAP Stop it throws instead of exiting 1.
+function Stop-MoeProtectedRuntime([string]$Name) {
+    [Console]::Error.WriteLine("[ERROR] MOE_RUNTIME_PROTECTED_PATH_MISSING: $Name must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start.")
+    exit 1
+}
+if ($script:MoeRuntimeProtected) {
+    foreach ($moeProtectedName in @('MOE_PROXY_PATH', 'MOE_DAEMON_PATH')) {
+        $moeProtectedPath = "$([Environment]::GetEnvironmentVariable($moeProtectedName))".Trim('"')
+        $moeProtectedAbsolute = $moeProtectedPath -match '^[A-Za-z]:[\\/]' -or $moeProtectedPath -match '^[\\/]{2}[^\\/]' -or
+            ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows -and $moeProtectedPath.StartsWith('/', [StringComparison]::Ordinal))
+        if (-not ($moeProtectedAbsolute -and (Test-Path -LiteralPath $moeProtectedPath -PathType Leaf))) { Stop-MoeProtectedRuntime $moeProtectedName }
+    }
+}
+
 # Graceful deregister, fired from multiple exit paths. The top-level `finally`
 # below covers normal exits, but it is SKIPPED on a console-window close
 # (CTRL_CLOSE_EVENT) and some Ctrl+C edge cases — leaving the worker holding its
@@ -459,10 +478,12 @@ try { [Console]::TreatControlCAsInput = $false } catch {}
 $proxyScript = $env:MOE_PROXY_PATH
 if ($proxyScript) { $proxyScript = $proxyScript.Trim('"') }
 if (-not $proxyScript) {
+    if ($script:MoeRuntimeProtected) { Stop-MoeProtectedRuntime 'MOE_PROXY_PATH' }
     $root = Resolve-Path (Join-Path $PSScriptRoot "..")
     $proxyScript = Join-Path $root "packages\\moe-proxy\\dist\\index.js"
 }
 if (-not (Test-Path $proxyScript)) {
+    if ($script:MoeRuntimeProtected) { Stop-MoeProtectedRuntime 'MOE_PROXY_PATH' }
     # Fall back to global install config
     $globalInstall = Get-MoeInstallPath
     if ($globalInstall) {
@@ -690,10 +711,12 @@ if (-not $NoStartDaemon) {
         $daemonScript = $env:MOE_DAEMON_PATH
         if ($daemonScript) { $daemonScript = $daemonScript.Trim('"') }
         if (-not $daemonScript) {
+            if ($script:MoeRuntimeProtected) { Stop-MoeProtectedRuntime 'MOE_DAEMON_PATH' }
             $root = Resolve-Path (Join-Path $PSScriptRoot "..")
             $daemonScript = Join-Path $root "packages\\moe-daemon\\dist\\index.js"
         }
         if (-not (Test-Path $daemonScript)) {
+            if ($script:MoeRuntimeProtected) { Stop-MoeProtectedRuntime 'MOE_DAEMON_PATH' }
             # Fall back to global install config
             $globalInstall = Get-MoeInstallPath
             if ($globalInstall) {

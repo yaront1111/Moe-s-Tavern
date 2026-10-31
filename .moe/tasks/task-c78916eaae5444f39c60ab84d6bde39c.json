@@ -1,0 +1,30 @@
+{
+  "id": "task-c78916eaae5444f39c60ab84d6bde39c",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: moe-call.sh falls back past a vanished MOE_PROXY_PATH under MOE_RUNTIME_PROTECTED=1",
+  "description": "scripts/moe-call.sh resolves its proxy at lines 144-166: MOE_PROXY_PATH if -f, else the repo proxy, else the global install. It ignores MOE_RUNTIME_PROTECTED. CQ-R13c2 guards the two moe-agent.sh calls (the EXIT-trap and hot-reload deregister) with `moe_call_allowed` ([ -f \"$PROXY_PATH_OVERRIDE\" ]). If the file vanishes between that check and moe-call.sh:145, the deregister runs a non-protected proxy. Fix in moe-call.sh: when MOE_RUNTIME_PROTECTED is exactly 1, use only MOE_PROXY_PATH, and fail without falling back.",
+  "definitionOfDone": [
+    "With MOE_RUNTIME_PROTECTED=1 and MOE_PROXY_PATH missing or not a file, moe-call.sh exits non-zero and runs no repo or global proxy. Shown by a harness test with decoys.",
+    "Without the marker, or with any other value, moe-call.sh's resolution order is unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-6f5cf10f78184c38a46e6973cadda817"
+  ],
+  "priority": "LOW",
+  "order": 312.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T01:35:38.722Z",
+  "updatedAt": "2026-10-31T01:35:38.722Z"
+}

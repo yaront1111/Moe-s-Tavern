@@ -18,6 +18,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 PROXY_PATH_OVERRIDE="${MOE_PROXY_PATH:-}"
 DAEMON_PATH_OVERRIDE="${MOE_DAEMON_PATH:-}"
+# CQ-R13c2: the JetBrains launcher sets MOE_RUNTIME_PROTECTED=1 beside both paths.
+# Only exactly '1' protects: run exactly those files or refuse, never a fallback.
+if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then RUNTIME_PROTECTED=1; else RUNTIME_PROTECTED=0; fi
+# moe-call.sh resolves its own proxy and falls back past a missing MOE_PROXY_PATH,
+# so a protected seat calls it only while that exact file exists.
+moe_call_allowed() { [ "$RUNTIME_PROTECTED" != 1 ] || [ -f "$PROXY_PATH_OVERRIDE" ]; }
 
 # GUI terminals may not source the profile installed by the dependency helper.
 # Add its agent CLIs without changing the caller's existing command priority.
@@ -155,7 +161,7 @@ cleanup_temp() {
     # task stays assigned until daemon restart, deregister, or an explicit
     # release. WORKER_ID/PROJECT are set later in the script but read here at
     # exit time.
-    if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ]; then
+    if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ] && moe_call_allowed; then
         # Via bash, not direct exec: bundled copies can lose the exec bit
         # (e.g. a bundler writeFile), which would silently skip deregister.
         bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
@@ -705,6 +711,23 @@ if [ -z "$WORKER_ID" ]; then
 fi
 export MOE_WORKER_ID="$WORKER_ID"
 
+# Protected runtime gate, before any MCP config, daemon, proxy RPC or CLI. The
+# refusal names the variable, never its value; byte-identical in moe-agent.ps1.
+refuse_unprotected_runtime() { # $1 = the variable name
+    printf '%b[ERROR]%b %s\n' "$RED" "$NC" "MOE_RUNTIME_PROTECTED_PATH_MISSING: $1 must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start." >&2
+    # Nothing has registered yet, so the EXIT trap must deregister nothing.
+    WORKER_ID=""
+    exit 1
+}
+require_protected_runtime_file() { # $1 = the variable name, $2 = its value
+    case "$2" in /*|[A-Za-z]:[\\/]*) [ -f "$2" ] && return 0 ;; esac
+    refuse_unprotected_runtime "$1"
+}
+if [ "$RUNTIME_PROTECTED" = 1 ]; then
+    require_protected_runtime_file MOE_PROXY_PATH "$PROXY_PATH_OVERRIDE"
+    require_protected_runtime_file MOE_DAEMON_PATH "$DAEMON_PATH_OVERRIDE"
+fi
+
 # Ensure MCP config for Claude Code
 ensure_mcp_config() {
     local config_dir="$HOME/.config/claude"
@@ -716,6 +739,8 @@ ensure_mcp_config() {
     if [ -n "$PROXY_PATH_OVERRIDE" ] && [ -f "$PROXY_PATH_OVERRIDE" ]; then
         PROXY_CMD="$NODE_CMD"
         PROXY_ARGS="$PROXY_PATH_OVERRIDE"
+    elif [ "$RUNTIME_PROTECTED" = 1 ]; then
+        refuse_unprotected_runtime MOE_PROXY_PATH
     elif command -v moe-proxy &> /dev/null; then
         PROXY_CMD="moe-proxy"
     else
@@ -1636,6 +1661,8 @@ if [ "$NO_START_DAEMON" = false ]; then
         if [ -n "$DAEMON_PATH_OVERRIDE" ] && [ -f "$DAEMON_PATH_OVERRIDE" ]; then
             DAEMON_CMD="$NODE_CMD"
             DAEMON_ARGS=("$DAEMON_PATH_OVERRIDE")
+        elif [ "$RUNTIME_PROTECTED" = 1 ]; then
+            refuse_unprotected_runtime MOE_DAEMON_PATH
         elif command -v moe-daemon &> /dev/null; then
             DAEMON_CMD="moe-daemon"
         else
@@ -6871,7 +6898,7 @@ while [ "$LOOP_RUNNING" = true ]; do
                     echo "[WARN] MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle." >&2
                     continue
                 fi
-                if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ]; then
+                if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ] && moe_call_allowed; then
                     bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
                         "{\"workerId\":\"$WORKER_ID\",\"reason\":\"wrapper_restart\"}" \
                         --project "$PROJECT" >/dev/null 2>&1 || true

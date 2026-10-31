@@ -2,6 +2,8 @@
 $ErrorActionPreference = 'Stop'
 # Claude account rotation stays off unless the [accounts] scenario turns it on.
 $env:MOE_ACCOUNT_ROTATION = 'off'
+# A protected launch's marker never reaches the legacy rows; [protected runtime] sets it per row.
+Remove-Item Env:MOE_RUNTIME_PROTECTED -ErrorAction SilentlyContinue
 
 $root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $wrapper = Join-Path $root 'scripts\moe-agent.ps1'
@@ -4728,6 +4730,106 @@ try {
     if ($blocks.Count -ne 1 -or -not $blocks[0].Contains('"reason":"MOE_WORKTREE_CREATE_FAILED: git ls-tree failed')) { Stop-Wtr 'budget-probe' 'not exactly one report_blocked naming CREATE_FAILED' $run }
     if ((Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) -or (Test-Path -LiteralPath $wtrW)) { Stop-Wtr 'budget-probe' 'the CLI ran, or W was made' $run }
     Write-Host '[worktree reuse] ok'
+
+    # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the
+    # JetBrains launcher sets beside MOE_PROXY_PATH and MOE_DAEMON_PATH) runs
+    # exactly those files or refuses before any MCP config, daemon, proxy or
+    # CLI. It never falls back to its own root or the global install; any other
+    # marker value stays legacy (CQ-R13c2). Every fixture and decoy appends one
+    # line to $prMarks. PowerShell cannot hold an empty variable, so P5 is unset.
+    # Twin: the [protected runtime] case in postflight.sh. ---
+    Write-Host '[protected runtime] a protected launch runs the exact runtime paths or refuses'
+    $prRoot = Join-Path $tempRoot 'protected'
+    $prProject = Join-Path $prRoot 'project'
+    $prHome = Join-Path $prRoot 'home'
+    $prMarks = Join-Path $prRoot 'marks'
+    $prMarkedProxy = Join-Path $prRoot 'marked-proxy.js'
+    $prDaemon = Join-Path $prRoot 'fake-daemon.js'
+    $prDir = Join-Path $prRoot 'dir.js'
+    $prNoProxy = Join-Path $prRoot 'missing\proxy.js'
+    $prNoDaemon = Join-Path $prRoot 'missing\daemon.js'
+    foreach ($d in @((Join-Path $prProject '.moe\messages'), (Join-Path $prHome '.moe'), $prDir)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+    [IO.File]::WriteAllText((Join-Path $prProject '.moe\project.json'), '{"id":"proj-protected","name":"postflight-protected","settings":{"autoCommit":false}}')
+    [IO.File]::WriteAllText((Join-Path $prProject '.moe\messages\chan-general.jsonl'), '')
+    [IO.File]::WriteAllText((Join-Path $prProject 'rel-proxy.js'), "require('fs').appendFileSync(require('path').join(__dirname,'..','marks'),'relative-proxy\n');`n")
+    $prMark = "require('fs').appendFileSync(require('path').join(__dirname,'marks'),"
+    $proxyBody = [IO.File]::ReadAllText($fakeProxy)
+    [IO.File]::WriteAllText($prMarkedProxy, "$prMark'protected-proxy\n');`n" + $proxyBody)
+    $prVanishProxy = Join-Path $prRoot 'vanish-proxy.js'
+    [IO.File]::WriteAllText($prVanishProxy, "$prMark'vanish-proxy\n');require('fs').unlinkSync(__filename);`n" + $proxyBody)
+    # process.ppid is the wrapper, which outlives the start poll that probes this pid.
+    [IO.File]::WriteAllText($prDaemon, ("$prMark'protected-daemon '+process.argv.slice(2).join(' ')+'\n');`n" +
+        "const p=process.argv[process.argv.indexOf('--project')+1];`n" +
+        "require('fs').writeFileSync(require('path').join(p,'.moe','daemon.json'),JSON.stringify({port:9876,pid:process.ppid,startedAt:new Date().toISOString(),projectPath:p}));`n"))
+    # The decoy global install: its proxy records, then serves, so legacy P7 runs.
+    $prDecoy = "require('fs').appendFileSync(require('path').join(__dirname,'..','..','..','..','marks'),"
+    foreach ($pkg in @('moe-daemon', 'moe-proxy')) {
+        $prDist = Join-Path $prRoot "install\packages\$pkg\dist"
+        New-Item -ItemType Directory -Force -Path $prDist | Out-Null
+        $prBody = if ($pkg -eq 'moe-proxy') { "$prDecoy'decoy-proxy\n');`n" + $proxyBody } else { "$prDecoy'decoy-install-moe-daemon\n');process.exit(1);`n" }
+        [IO.File]::WriteAllText((Join-Path $prDist 'index.js'), $prBody)
+    }
+    [IO.File]::WriteAllText((Join-Path $prHome '.moe\config.json'), ('{"installPath":' + (ConvertTo-Json (Join-Path $prRoot 'install')) + '}'))
+    $prSaved = @{}
+    foreach ($n in @('MOE_RUNTIME_PROTECTED', 'MOE_PROXY_PATH', 'MOE_DAEMON_PATH', 'USERPROFILE', 'TEMP', 'TMP', 'FAKE_CLAIM_MODE', 'MOE_TASKLESS_WAIT_SEC', 'MOE_DISABLE_HEARTBEAT')) { $prSaved[$n] = [Environment]::GetEnvironmentVariable($n) }
+    # Invoke-PrRow ROW MARKER PROXY DAEMON LIVE [EXTRA] -- MARKER '-' leaves it
+    # unset. LIVE 'live' writes a running daemon's daemon.json, as in a real
+    # protected launch.
+    function Invoke-PrRow([string]$Row, [string]$Marker, [string]$Proxy, [string]$Daemon, [string]$Live, [string[]]$Extra = @()) {
+        Remove-Item -LiteralPath $prMarks, (Join-Path $prProject '.moe\daemon.json') -Force -ErrorAction SilentlyContinue
+        if ($Live -eq 'live') { [IO.File]::WriteAllText((Join-Path $prProject '.moe\daemon.json'), ('{"port":9876,"projectPath":' + (ConvertTo-Json $prProject) + '}')) }
+        $tmp = Join-Path $prRoot "tmp-$Row"
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        $env:MOE_RUNTIME_PROTECTED = if ($Marker -eq '-') { $null } else { $Marker }
+        $env:MOE_PROXY_PATH = $Proxy; $env:MOE_DAEMON_PATH = $Daemon
+        $env:USERPROFILE = $prHome; $env:TEMP = $tmp; $env:TMP = $tmp
+        $env:FAKE_CLAIM_MODE = 'idle'; $env:MOE_TASKLESS_WAIT_SEC = '5'; $env:MOE_DISABLE_HEARTBEAT = '1'
+        $out = Join-Path $prRoot "$Row.out"
+        $code = Invoke-WrapperProcess (@('-Project', $prProject, '-WorkerId', 'worker-protected', '-Role', 'worker', '-Command', $trueCmd, '-NoLoop') + $Extra) $out
+        [pscustomobject]@{ Row = $Row; Code = $code; Tmp = $tmp; Text = [string](Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue) }
+    }
+    function Stop-Pr($R, [string]$Why) { Write-Host $R.Text; throw "PROTECTED RUNTIME FAILED ($($R.Row)): $Why" }
+    function Get-PrMarks { if (Test-Path -LiteralPath $prMarks) { @([IO.File]::ReadAllLines($prMarks)) } else { @() } }
+    # Exit 1 with one refusal line naming VAR, no value printed, nothing run
+    # and no MCP temp config written.
+    function Assert-PrRefused($R, [string]$Var, [string[]]$Values) {
+        if ($R.Code -ne 1) { Stop-Pr $R "exit $($R.Code), expected 1" }
+        $sentence = "MOE_RUNTIME_PROTECTED_PATH_MISSING: $Var must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start."
+        $lines = @($R.Text -split "`r?`n" | Where-Object { $_.Contains('MOE_RUNTIME_PROTECTED_PATH_MISSING') })
+        if ($lines.Count -ne 1 -or -not $lines[0].Contains($sentence)) { Stop-Pr $R "not exactly one refusal line naming $Var" }
+        foreach ($v in $Values) { if ($R.Text.IndexOf($v, [StringComparison]::OrdinalIgnoreCase) -ge 0) { Stop-Pr $R "the output prints $v" } }
+        if (Test-Path -LiteralPath $prMarks) { Stop-Pr $R ('something ran: ' + ((Get-PrMarks) -join ' ')) }
+        if (@(Get-ChildItem -LiteralPath $R.Tmp -Filter 'moe-mcp-config-*').Count -ne 0) { Stop-Pr $R 'an MCP config was written' }
+    }
+    # Exit 0, no refusal, and each wanted line is in the marks file.
+    function Assert-PrRan($R, [string[]]$Want) {
+        if ($R.Code -ne 0) { Stop-Pr $R "exit $($R.Code), expected 0" }
+        if ($R.Text.Contains('MOE_RUNTIME_PROTECTED_PATH_MISSING')) { Stop-Pr $R 'refused' }
+        $marks = Get-PrMarks
+        foreach ($w in $Want) { if ($marks -notcontains $w) { Stop-Pr $R "marks lack '$w'" } }
+    }
+    try {
+        Assert-PrRefused (Invoke-PrRow 'P1' '1' $prNoProxy $prDaemon 'live') 'MOE_PROXY_PATH' @($prNoProxy, $prDaemon)
+        Assert-PrRefused (Invoke-PrRow 'P2' '1' $prMarkedProxy $prNoDaemon 'live') 'MOE_DAEMON_PATH' @($prMarkedProxy, $prNoDaemon)
+        # Start-Process starts the wrapper in the current location, where rel-proxy.js exists.
+        Push-Location -LiteralPath $prProject
+        try { $r = Invoke-PrRow 'P3' '1' 'rel-proxy.js' $prDaemon 'live' } finally { Pop-Location }
+        Assert-PrRefused $r 'MOE_PROXY_PATH' @('rel-proxy.js', $prDaemon)
+        Assert-PrRefused (Invoke-PrRow 'P4' '1' $prMarkedProxy $prDir 'live') 'MOE_DAEMON_PATH' @($prMarkedProxy, $prDir)
+        Assert-PrRefused (Invoke-PrRow 'P5' '1' '' $prDaemon 'live') 'MOE_PROXY_PATH' @($prDaemon)
+        $r = Invoke-PrRow 'P6' '1' $prMarkedProxy $prDaemon 'none'
+        Assert-PrRan $r @("protected-daemon start --project $prProject", 'protected-proxy')
+        if (@(Get-PrMarks | Where-Object { $_.StartsWith('decoy') }).Count -ne 0) { Stop-Pr $r ('a decoy ran: ' + ((Get-PrMarks) -join ' ')) }
+        Assert-PrRan (Invoke-PrRow 'P7' '-' $prNoProxy $prDaemon 'none' @('-NoStartDaemon')) @('decoy-proxy')
+        Assert-PrRan (Invoke-PrRow 'P8' '01' $prMarkedProxy $prNoDaemon 'none' @('-NoStartDaemon')) @('protected-proxy')
+        # P9: the protected proxy deletes itself on its first call, after the gate.
+        # No later RPC, including the exit-time deregister, may fall back.
+        $r = Invoke-PrRow 'P9' '1' $prVanishProxy $prDaemon 'live' @('-NoStartDaemon')
+        if ((Test-Path -LiteralPath $prVanishProxy) -or (@(Get-PrMarks | Sort-Object -Unique) -join ' ') -cne 'vanish-proxy') { Stop-Pr $r ("marks are '" + ((Get-PrMarks) -join ' ') + "', not the vanished proxy alone") }
+    } finally {
+        foreach ($n in $prSaved.Keys) { [Environment]::SetEnvironmentVariable($n, $prSaved[$n]) }
+    }
+    Write-Host '[protected runtime] ok'
 
     Write-Host 'PASS postflight.ps1'
 } catch {
