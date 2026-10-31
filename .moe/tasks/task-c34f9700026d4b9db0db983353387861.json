@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,16 +99,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T15:14:12.337Z",
-  "updatedAt": "2026-10-31T15:40:50.768Z",
+  "updatedAt": "2026-10-31T15:47:19.660Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T15:14:48.905Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-31T15:47:19.660Z",
+    "wallClockMs": 1950755
   },
   "contextFetchedBy": [
     "architect-66fd8127",
-    "worker-25da16b2"
+    "worker-25da16b2",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -188,7 +191,42 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts",
+    ".moe/tasks/task-c34f9700026d4b9db0db983353387861.json",
+    ".moe/tasks/task-fa7fece51d0045edb7871beef40e0d93.json"
+  ],
+  "completionSummary": "Tests only: new packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts (369 lines, one file per the DoD; CQ-M06b adds seam D). Calls go through the real MCP registry (/mcp, plus a runner channel authenticated from a temp key); stores and the Git repo are real. No readiness spy and no test certification, and verified-local is never made ready (strict = F12's in-memory hand edit, after updateSettings refuses). Each refusal asserts the exact codeName and byte-identical .moe/{tasks,attempts,candidates,checks,reviews,receipts}.\nSeams:\n- A (stale revision): A1 PLAN_REVISION_NOT_APPROVED on start_step and complete_task. A2/A3: CHECK_DISPATCH_REVISION_MISMATCH at rev 1 and 2; request_replan gives PLANNING r3 with planReuse undefined; CANDIDATE_REVISION_STALE; EXECUTION_PROFILE_NOT_READY. A3 recipe: binding null, planReuse replan [approval-not-current]. Legacy control approves.\n- B (check, over legacy and observe): control, B1, B2×5 outcomes, B3a, B3b, B4 config drift, B5 recipes.json drift.\n- C (recipe, CONTROL, over legacy and observe): 4 exact fallbacks with bytes unchanged, C3 AWAITING_APPROVAL, C4 NOT_ALLOWED, C5 PLAN_REVISION_MISMATCH then approve(2).\nDeviations:\n- B3: under legacy/observe a self-labelled runner-observed run counts (passedOn; MCP_SERVER.md record_check_dispatch Limit). B3a proves RUNNER_CHANNEL_REQUIRED; B3b proves the run is never authenticated and keeps the compatibility approval.\n- A2: the rev-2 missingEvidence token is unreachable without a spy, so A2 asserts the real refusals.\nMutants (snapshot only, restored):\n- A1 exec revision check: A1 red.\n- A2 review stale check and A2b dispatch revision pin: A2/A3 red.\n- A3 approval-not-current guard: A3 red.\n- B2 outcome ignored: 8 red. B2b exit and outcome ignored: 10 red.\n- B3 auth marker: B3b red. B3a runner channel: B3a red.\n- B4/B5 drift filter: 4 red.\n- C4 RECIPE_ACTOR guard: C4 red.\n- C5a approveTask CAS alone: survives (updateTask re-checks). C5b both CAS sites: C5 red.\nHandoff: Serena t",
+  "commits": [
+    {
+      "sha": "e3659d58ceb85e4c60af56a3ac89d1809154a5f2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T15:17:32Z",
+      "paths": [
+        ".moe/tasks/task-c34f9700026d4b9db0db983353387861.json",
+        ".moe/tasks/task-fa7fece51d0045edb7871beef40e0d93.json",
+        "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T15:41:13.073Z",
+      "treeId": "14b8e65cd58475d5ea064ff336c08613ac77a4ad",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts"
   ],
-  "completionSummary": "Tests only: new packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts (369 lines, one file per the DoD; CQ-M06b adds seam D). Calls go through the real MCP registry (/mcp, plus a runner channel authenticated from a temp key); stores and the Git repo are real. No readiness spy and no test certification, and verified-local is never made ready (strict = F12's in-memory hand edit, after updateSettings refuses). Each refusal asserts the exact codeName and byte-identical .moe/{tasks,attempts,candidates,checks,reviews,receipts}.\nSeams:\n- A (stale revision): A1 PLAN_REVISION_NOT_APPROVED on start_step and complete_task. A2/A3: CHECK_DISPATCH_REVISION_MISMATCH at rev 1 and 2; request_replan gives PLANNING r3 with planReuse undefined; CANDIDATE_REVISION_STALE; EXECUTION_PROFILE_NOT_READY. A3 recipe: binding null, planReuse replan [approval-not-current]. Legacy control approves.\n- B (check, over legacy and observe): control, B1, B2×5 outcomes, B3a, B3b, B4 config drift, B5 recipes.json drift.\n- C (recipe, CONTROL, over legacy and observe): 4 exact fallbacks with bytes unchanged, C3 AWAITING_APPROVAL, C4 NOT_ALLOWED, C5 PLAN_REVISION_MISMATCH then approve(2).\nDeviations:\n- B3: under legacy/observe a self-labelled runner-observed run counts (passedOn; MCP_SERVER.md record_check_dispatch Limit). B3a proves RUNNER_CHANNEL_REQUIRED; B3b proves the run is never authenticated and keeps the compatibility approval.\n- A2: the rev-2 missingEvidence token is unreachable without a spy, so A2 asserts the real refusals.\nMutants (snapshot only, restored):\n- A1 exec revision check: A1 red.\n- A2 review stale check and A2b dispatch revision pin: A2/A3 red.\n- A3 approval-not-current guard: A3 red.\n- B2 outcome ignored: 8 red. B2b exit and outcome ignored: 10 red.\n- B3 auth marker: B3b red. B3a runner channel: B3a red.\n- B4/B5 drift filter: 4 red.\n- C4 RECIPE_ACTOR guard: C4 red.\n- C5a approveTask CAS alone: survives (updateTask re-checks). C5b both CAS sites: C5 red.\nHandoff: Serena t"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-25da16b2@2026-10-31T15:17:32Z",
+    "at": "2026-10-31T15:41:13.073Z"
+  },
+  "completedAt": "2026-10-31T15:47:19.660Z",
+  "reviewCompletedAt": "2026-10-31T15:47:19.660Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit e3659d58 (on moe/work-2026-10-24). Diff: one new test file, src/__e2e__/workstreamComposition.e2e.test.ts (+369 LOC, tests only, no production edits), plus wrapper-staged board JSON.\n\nGate re-run by QA in a Linux-native git-archive snapshot of e3659d58 (node v24.21.0, env -i). `cd packages/moe-daemon && npm test` exit 0: 216 files, 6381 passed | 20 skipped. This matches task.verification; the file has 40 tests.\n\nDoD:\n1. Seams A, B and C only, no D and no CQ-M05 import, via createMcpCaller with exact codeNames.\n2. refused() checks the codeName and unchanged bytes() over the 6 evidence dirs. Writes are awaited, so this is sound.\n3. B and C run over legacy and observe, with the snapshot profile asserted. No spy or mock (stubEnv only). Strict is only F12's in-memory edit, made after updateSettings refuses.\n4. The legacy controls reach DONE.\n5. QA re-ran 7 mutants itself, sources restored and diff-identical; every kill is real test failures:\n   - A1 executionAuthorization: A1 red.\n   - A2 reviewBinding: A2 red.\n   - B2 outcome ignored: 8 red.\n   - B3 auth marker: B3b ×2 red.\n   - B4/B5 drift: 4 red.\n   - C4 RECIPE_ACTOR: 2 red.\n   - C5 both CAS sites: 2 red.\n6. Verified above.\n\nTwo deviations accepted after checking the source:\n- B3: passedOn counts runner-observed under legacy/observe, which is the wrapper's own record_check_run path (MCP_SERVER.md:983 Limit).\n- A2: the stale-revision filter exists only in verified-local's trustedPassedOn, which a test cannot reach without a forbidden readiness spy. A2 asserts the real refusals instead.\n\nComplexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
