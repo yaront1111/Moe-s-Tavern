@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -147,3 +147,124 @@ test('malformed request arguments fail before forwarding', t => {
   assert.equal(result.bytes.length, 0);
   assert.match(result.stderr, /failed to build JSON-RPC request/);
 });
+
+// CQ-R13c2 follow-up: with MOE_RUNTIME_PROTECTED exactly '1' the helper runs only
+// MOE_PROXY_PATH. Every proxy it could resolve is a decoy that logs its label.
+const decoy = label => `import('node:fs').then(({ appendFileSync }) => {
+  appendFileSync(process.env.MOE_CALL_RAN_LOG, '${label}\\n');
+  let input = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => { input += chunk; });
+  process.stdin.on('end', () => {
+    const { params } = JSON.parse(input);
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { ran: '${label}', tool: params.name } }) + '\\n');
+  });
+});
+`;
+
+function runtimeLayout(t) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'moe protected runtime '));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const put = (relative, text) => {
+    const file = path.join(dir, ...relative.split('/'));
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, text);
+    return file;
+  };
+  const proxies = {
+    named: put('named/proxy.mjs', decoy('named')),
+    repo: put('install/packages/moe-proxy/dist/index.js', decoy('repo')),
+    global: put('global/packages/moe-proxy/dist/index.js', decoy('global')),
+    plugin: put('home/Library/Application Support/JetBrains/IDE/moe-jetbrains/proxy/index.js', decoy('plugin')),
+    inherited: put('inherited/proxy.mjs', decoy('inherited')),
+  };
+  put('home/.moe/config.json', JSON.stringify({ installPath: nativePath(path.join(dir, 'global')) }));
+  put('scratch project/.moe/daemon.json', '{}\n');
+  return { dir, proxies, helper: put('install/scripts/moe-call.sh', readFileSync(helper)) };
+}
+
+function callHelper(layout, { marker, proxyPath, cwd, tool = 'get_context', args = '{}' } = {}) {
+  const log = path.join(layout.dir, 'ran.log');
+  rmSync(log, { force: true });
+  // A seat's own env must not decide the row: set or drop every input explicitly.
+  const env = { ...process.env, HOME: nativePath(path.join(layout.dir, 'home')),
+    MOE_CALL_RAN_LOG: nativePath(log), PROXY_PATH: nativePath(layout.proxies.inherited) };
+  delete env.MOE_RUNTIME_PROTECTED;
+  delete env.MOE_PROXY_PATH;
+  if (marker !== undefined) env.MOE_RUNTIME_PROTECTED = marker;
+  if (proxyPath !== undefined) env.MOE_PROXY_PATH = proxyPath;
+  const result = spawnSync(bash, [shellPath(layout.helper), tool, args,
+    '--project', shellPath(path.join(layout.dir, 'scratch project'))], { cwd, env, timeout: 20_000 });
+  assert.ifError(result.error);
+  return { status: result.status, stdout: result.stdout.toString('utf8'), stderr: result.stderr.toString('utf8'),
+    ran: existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [] };
+}
+
+const refusal = /^Error: MOE_RUNTIME_PROTECTED_PATH_MISSING: MOE_PROXY_PATH must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start\.$/m;
+
+for (const [label, pick] of [
+  ['unset', () => ({})],
+  ['empty', () => ({ proxyPath: '' })],
+  ['a directory holding index.js', ({ proxies }) => ({ proxyPath: nativePath(path.dirname(proxies.repo)) })],
+  ['relative', ({ proxies }) => ({ proxyPath: 'proxy.mjs', cwd: path.dirname(proxies.named) })],
+  // The deregister moe-agent.sh runs after moe_call_allowed passed, and the agent's
+  // own MOE_FALLBACK_CLI call, both after the named proxy vanished.
+  ['vanished before the deregister', ({ proxies }) => ({ vanish: true, proxyPath: nativePath(proxies.named),
+    tool: 'deregister_worker', args: '{"workerId":"worker-protected","reason":"terminal_closed"}' })],
+  ['vanished before an agent fallback CLI call', ({ proxies }) => ({ vanish: true, proxyPath: nativePath(proxies.named),
+    tool: 'get_context', args: '{"taskId":"task-protected"}' })],
+]) {
+  test(`protected runtime refuses MOE_PROXY_PATH ${label} and runs no other proxy`, t => {
+    const layout = runtimeLayout(t);
+    const { vanish, ...call } = pick(layout);
+    if (vanish) rmSync(layout.proxies.named);
+    const result = callHelper(layout, { marker: '1', ...call });
+    assert.equal(result.status, 1, result.stderr);
+    assert.deepEqual(result.ran, []);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, refusal);
+    if (call.proxyPath) assert.equal(result.stderr.includes(call.proxyPath), false, 'the refusal never prints the path');
+  });
+}
+
+test('protected runtime runs exactly an existing absolute MOE_PROXY_PATH', t => {
+  const layout = runtimeLayout(t);
+  const result = callHelper(layout, { marker: '1', proxyPath: nativePath(layout.proxies.named) });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.ran, ['named']);
+  assert.deepEqual(JSON.parse(result.stdout), { ran: 'named', tool: 'moe.get_context' });
+});
+
+test('without the marker the fallback order is unchanged', t => {
+  const layout = runtimeLayout(t);
+  // Windows-native python cannot open the POSIX $HOME path the helper hands it,
+  // so the global-install step is unreachable there (pre-existing behaviour).
+  for (const label of windows ? ['named', 'repo', 'plugin'] : ['named', 'repo', 'global', 'plugin']) {
+    const result = callHelper(layout, { proxyPath: nativePath(layout.proxies.named) });
+    assert.equal(result.status, 0, `${label}: ${result.stderr}`);
+    assert.deepEqual(result.ran, [label]);
+    assert.deepEqual(JSON.parse(result.stdout), { ran: label, tool: 'moe.get_context' });
+    rmSync(layout.proxies[label]);
+  }
+  const none = callHelper(layout, { proxyPath: nativePath(layout.proxies.named) });
+  assert.equal(none.status, 1);
+  assert.deepEqual(none.ran, []);
+  assert.match(none.stderr, /moe-proxy not found\. Set MOE_PROXY_PATH or install Moe\./);
+});
+
+test('without the marker a relative MOE_PROXY_PATH still resolves from the caller directory', t => {
+  const layout = runtimeLayout(t);
+  const result = callHelper(layout, { proxyPath: 'proxy.mjs', cwd: path.dirname(layout.proxies.named) });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.ran, ['named']);
+});
+
+for (const marker of ['', '0', '01', 'true', ' 1', '1 ']) {
+  test(`MOE_RUNTIME_PROTECTED=${JSON.stringify(marker)} keeps the legacy fallback`, t => {
+    const layout = runtimeLayout(t);
+    rmSync(layout.proxies.named);
+    const result = callHelper(layout, { marker, proxyPath: nativePath(layout.proxies.named) });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.ran, ['repo']);
+  });
+}
