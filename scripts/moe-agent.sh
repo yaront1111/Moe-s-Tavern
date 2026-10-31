@@ -2329,9 +2329,13 @@ PY
 # Exported for the CLI's moe-proxy, which stamps the pair onto
 # start_step/complete_step/complete_task (CQ-F09, F12a). The
 # pair moves together: only an identity verified against the store is kept.
+# The same verified record pins its execution profile and plan revision (CQ-V07)
+# in PINNED_ATTEMPT_PROFILE / PINNED_ATTEMPT_PLAN_REVISION: never exported, so no
+# CLI can set or read them, and reset with the pair. Twin: Set-MoeAttemptIdentity.
 pin_attempt_identity() {
     export MOE_ATTEMPT_ID="" MOE_ATTEMPT_GENERATION=""
-    local pinned tokens attempt_id generation
+    unset PINNED_ATTEMPT_PROFILE PINNED_ATTEMPT_PLAN_REVISION
+    local pinned tokens attempt_id generation record policy
     tokens=$($PYTHON_CMD -c '
 import json,re,sys
 c=json.load(sys.stdin); a=c.get("attemptId"); g=c.get("generation")
@@ -2345,8 +2349,19 @@ print(a+" "+str(g))
         tokens=$($PYTHON_CMD -c 'import json,sys;a=json.load(sys.stdin);print(a["id"]+" "+str(a["generation"]))' <<< "$pinned") || return 1
     fi
     read -r attempt_id generation <<< "$tokens"
-    moe_attempt_read "$attempt_id" "$generation" >/dev/null || return 1
+    record=$(moe_attempt_read "$attempt_id" "$generation") || return 1
     MOE_ATTEMPT_ID="$attempt_id"; MOE_ATTEMPT_GENERATION="$generation"
+    # A missing or malformed snapshot pins nothing: that attempt lands as legacy.
+    policy=$($PYTHON_CMD -c '
+import json,re,sys
+s=json.load(sys.stdin).get("executionPolicySnapshot")
+s=s if isinstance(s,dict) else {}
+p=s.get("profile"); r=s.get("planRevision")
+print(p if isinstance(p,str) and re.fullmatch(r"[a-z][a-z-]{0,31}",p) else "-", r if type(r)==int and 0<r<=9007199254740991 else "-")
+' <<< "$record" 2>/dev/null) || policy="- -"
+    read -r PINNED_ATTEMPT_PROFILE PINNED_ATTEMPT_PLAN_REVISION <<< "$policy"
+    [ "$PINNED_ATTEMPT_PROFILE" != - ] || PINNED_ATTEMPT_PROFILE=""
+    [ "$PINNED_ATTEMPT_PLAN_REVISION" != - ] || PINNED_ATTEMPT_PLAN_REVISION=""
 }
 
 moe_evidence_rpc() {
@@ -5267,7 +5282,33 @@ land_plumbing() {
             unset MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF
             (cd "$MOE_TOP" && bash -c "$hook") >/dev/null 2>&1 || true
         fi
-        if [ "$LAND_KIND" = completion ] && [ -n "${QUALITY_GATE:-}" ]; then
+        if [ "$LAND_KIND" = completion ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ]; then
+            # CQ-V07: under the strong profile this journal IS the landing's
+            # intent, mandatory and on disk before the ref can move. No frozen
+            # candidate of this very tree, or a journal that did not reach the
+            # disk, refuses the completion: no update-ref, no rescue ref and no
+            # push, so no ref moves at all; the bytes and baseline stay for the
+            # next session. The expected-old CAS below is unchanged.
+            RECEIPT_BEFORE="${old:-$MOE_ZERO_OID}"; RECEIPT_LANDED="$new"
+            RECEIPT_JOURNAL="$(receipt_journal_path "$LAND_TASK_ID")"
+            local pending="push result unknown: the landing stopped before its push finished" intent="" refusal=""
+            if no_git_remote; then pending=""; fi
+            if [ -z "${FROZEN_CANDIDATE_ID:-}" ] || [ -z "${FROZEN_TREE:-}" ] || [ "$tree" != "$FROZEN_TREE" ] \
+                || [ -z "${PINNED_ATTEMPT_PLAN_REVISION:-}" ] || [ -z "$MOE_ATTEMPT_ID" ]; then
+                refusal="MOE_COMMIT_REFUSED_INTENT_INCOMPLETE"
+                LAND_MESSAGE="no frozen candidate of this tree, or no pinned attempt and plan revision, to journal"
+            elif ! intent=$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$pending" 1) \
+                || ! intent_journal_write "$RECEIPT_JOURNAL" "$intent"; then
+                refusal="MOE_COMMIT_REFUSED_INTENT_UNWRITABLE"
+                LAND_MESSAGE="the intent journal ${RECEIPT_JOURNAL:-<none>} could not be made durable"
+            fi
+            if [ -n "$refusal" ]; then
+                moe_temp_index_drop
+                LAND_OUTCOME="refused"; LAND_CODE="$refusal"; RECEIPT_LANDED=""
+                echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $LAND_MESSAGE; the strong profile moves no ref without it (no update-ref, no rescue ref, no push). The bytes and baseline stay for the next session."
+                return 4
+            fi
+        elif [ "$LAND_KIND" = completion ] && [ -n "${QUALITY_GATE:-}" ]; then
             # The receipt report is journaled BEFORE the ref can move. targetBefore
             # is the CAS base: the candidate's baseRevision, git's zero id if unborn.
             RECEIPT_BEFORE="${old:-$MOE_ZERO_OID}"; RECEIPT_LANDED="$new"
@@ -5707,16 +5748,19 @@ receipt_journal_path() {
 # JSON line from the landing's globals ('' PUSH_RESULT = null). A non-empty
 # LEDGER adds `ledger`, the committed ledger row this landing owes until
 # moe.record_commit acknowledges it (the sessionId record_commit_rpc sends).
+# Under the strong profile the report is also the landing's intent (CQ-V07):
+# treeSha, baseRevision (= targetBefore), planRevision and profile.
 receipt_report() {
     $PYTHON_CMD -c '
 import json,sys
-t,w,a,g,c,target,before,landed,push,owed,sid,role,status=sys.argv[1:]
+t,w,a,g,c,target,before,landed,push,owed,sid,role,status,prof,rev,tree=sys.argv[1:]
 d=dict(taskId=t,workerId=w,attemptId=a,generation=int(g),candidateId=c,target=target,
     targetBefore=before,targetAfter=landed,landedRevision=landed,pushResult=push or None)
 if owed: d["ledger"]=dict(sessionId=sid,role=role,status=status)
+if prof=="verified-local": d.update(treeSha=tree,baseRevision=before,planRevision=int(rev),profile=prof)
 print(json.dumps(d))
 ' "$LAND_TASK_ID" "$WORKER_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$FROZEN_CANDIDATE_ID" "refs/heads/$LAND_BRANCH" "$1" "$2" "$3" \
-        "${4:-}" "${MOE_SID:-$WORKER_ID@unknown}" "$ROLE" "${LAND_STATUS:-}"
+        "${4:-}" "${MOE_SID:-$WORKER_ID@unknown}" "$ROLE" "${LAND_STATUS:-}" "${PINNED_ATTEMPT_PROFILE:-}" "${PINNED_ATTEMPT_PLAN_REVISION:-}" "${FROZEN_TREE:-}"
 }
 
 # receipt_journal_write PATH REPORT -- atomic (.tmp + rename) and best-effort: an
@@ -5730,6 +5774,36 @@ receipt_journal_write() {
     rm -f "$1.tmp.$$" 2>/dev/null || true
     echo -e "${YELLOW}[WARN]${NC} receipt journal not written ($1); a crash before the receipt would leave this landing without one."
     return 0
+}
+
+# intent_journal_write PATH REPORT -- the strong profile's durable journal
+# (CQ-V07): write a tmp file, flush and fsync it, rename it over PATH, then fsync
+# the directory. Windows cannot open a directory to fsync it and relies on the
+# NTFS rename. A crash before the rename leaves only a *.tmp.* file, which
+# nothing reads. Returns 1 on any failure, with neither the tmp file nor PATH
+# left behind: the caller then moves no ref, so no journal may describe the
+# landing. Twin: Write-MoeIntentJournal.
+intent_journal_write() {
+    [ -n "$1" ] && [ -n "$2" ] || return 1
+    $PYTHON_CMD - "$1" "$2" <<'PY' 2>/dev/null
+import os,sys
+path,report=sys.argv[1:]
+d=os.path.dirname(path); tmp=path+'.tmp.'+str(os.getpid()); replaced=False
+try:
+    os.makedirs(d,exist_ok=True)
+    with open(tmp,'w',encoding='utf-8',newline='') as f:
+        f.write(report); f.flush(); os.fsync(f.fileno())
+    os.replace(tmp,path); replaced=True
+    if os.name!='nt':
+        fd=os.open(d,os.O_RDONLY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+except Exception:
+    for p in [tmp]+([path] if replaced else []):
+        try: os.unlink(p)
+        except OSError: pass
+    sys.exit(1)
+PY
 }
 
 # receipt_send REPORT JOURNAL -- the delivery receipt, the landing's last daemon
@@ -6076,7 +6150,10 @@ run_landing() {
             echo -e "${GREEN}[OK]${NC} Committed $LAND_KIND for task $LAND_TASK_ID on $LAND_BRANCH: $LAND_SHA ($LAND_N_PATHS paths, $LAND_N_INFERRED inferred, $n_skipped skipped, ${ATTR_N_UNATTRIBUTED:-0} unattributed)"
             ;;
         refused)
+            # An intent refusal already said why; committing by hand would bypass the intent.
+            case "$LAND_CODE" in MOE_COMMIT_REFUSED_INTENT_INCOMPLETE|MOE_COMMIT_REFUSED_INTENT_UNWRITABLE) ;; *)
             echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- refusing to auto-commit; there is no whole-tree fallback. Commit the task's own paths by hand: git commit -- <path> [<path>...]"
+            ;; esac
             ;;
         nothing)
             echo -e "${BLUE}[info]${NC} $LAND_CODE: task $LAND_TASK_ID -- nothing landed; candidate bytes, if any, remain deferred."
@@ -6150,7 +6227,7 @@ run_landing() {
         record_commit_rpc "nothing" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "" "" "" "${LAND_DROPPED_FILE:-}" || true
         baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" "$bl_flag" "$bl_session" "$work/BL.tsv" "$ATTR_DIR/own"
     elif [ "$LAND_OUTCOME" = "refused" ]; then
-        record_commit_rpc "refused" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "" "" "" "" || true
+        record_commit_rpc "refused" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "${LAND_MESSAGE:-}" "" "" "" || true
         baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" "$bl_flag" "$bl_session" "$work/BL.tsv" "$ATTR_DIR/own"
     else
         record_commit_rpc "failed" "$LAND_KIND" "" "$LAND_BRANCH" "${LAND_CODE:-MOE_COMMIT_FAILED}" "${LAND_MESSAGE:-}" "" "" "$LAND_DROPPED_FILE" || true
@@ -7083,6 +7160,9 @@ while [ "$LOOP_RUNNING" = true ]; do
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
     # Exported blank: no CLI inherits a previous task's attempt (sh hot reload keeps env).
     export MOE_ATTEMPT_ID="" MOE_ATTEMPT_GENERATION=""
+    # Unset, not blanked: a same-named variable inherited from the environment
+    # stays exported through a plain assignment; unset drops it (CQ-V07).
+    unset PINNED_ATTEMPT_PROFILE PINNED_ATTEMPT_PLAN_REVISION
     MOE_RUNNER_ID=$($PYTHON_CMD -c 'import uuid;print("runner-"+uuid.uuid4().hex)')
     PREFLIGHT_TASK_ID=""
     PREFLIGHT_HELD_TASK_ID=""

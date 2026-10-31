@@ -14,36 +14,55 @@
     {
       "stepId": "step-1",
       "description": "RED tests first: create scripts/tests/local-runner-guard.test.mjs with rows G1-G9. A validated reference copy is in Serena memory task-task-a4a729ddaa8942679e8ae7cd57bd42f1-prototype: 246 lines, RED 8/9 on HEAD, GREEN 9/9 with step 2. Reuse it instead of re-deriving it. Write files with your CLI's file tool. Keep RED copies in a mktemp dir, never in scripts/tests.\n\nDesign (binding):\n- One Python HARNESS runs as `python3 -I -B -c HARNESS SUPERVISOR <config json> JOB DESC`. -B keeps __pycache__ out of scripts/local-runner, which both IDE bundlers ship. It loads the supervisor with importlib; the programs are String.raw templates.\n- Root rows: the harness unshares CLONE_NEWUSER and maps 0 to its uid/gid (setgroups deny). GUARD then has euid 0 and CAP_SYS_ADMIN in a namespace the test owns, so the PID namespace is real kernel behaviour. 'nocap' first drops CAP_SYS_ADMIN from the bounding set (prctl 24, 21).\n- Each process reports 'tag global-pid starttime' to a file (readlink /proc/self, /proc/self/stat field 22).\n- A pid is alive while /proc/<pid>/stat keeps that start time. Zombies count as alive, because a fixed GUARD reaps init only once the namespace is empty.\n- Cleanup kills only recorded pids that are still alive, plus the sentinel through its Popen. GLOBAL rule: no pkill, killall or name kill. Descendants sleep at most 60 s.\n- JOB: four descendants:\n  - 'open': start_new_session, and it keeps the output pipes;\n  - 'group': process_group=0;\n  - 'double' and 'reaped': double-forked orphans; 'reaped' exits at once.\n  It waits for all 5 reports, then for the go byte (EOF under run_install/relay), then exits int(argv[1]) or kills itself with SIGTERM/SIGKILL.\n- via 'guard': start GUARD as run_bridge does ([python,-I,-B,-c,m.GUARD,life,start,'{}',*argv], start_new_session, pass_fds, stdout/stderr PIPE, stdin = go pipe).\n  - After '+', record that init reaped 'reaped' while the job ran. init is the first entry of /proc/<guard>/task/<guard>/children.\n  - Also record the job's /proc fd list, and readlink of fds 1/2 for GUARD and init.\n  - Acts:\n    - 'go': the go byte;\n    - 'life': close life_end;\n    - 'standdown-life': the stand-down byte, then close life_end;\n    - 'initkill': SIGKILL init.\n  - While life_end is open, drain both output pipes to EOF, then stand down (as relay does).\n  - Then read start EOF and snapshot liveness at once, before any other wait. That ordering is what kills a plain-killpg mutant.\n  - Last, take GUARD's returncode.\n- via 'install': m.run_install(argv, None, {}, 30). via 'relay': m.relay(argv, out_fd=<dir>/frames, in_fd=os.pipe()[0]). Liveness is checked right after return. Node decodes the frames with createFrameDecoder and parseGuestFrame (../local-runner/guest-bridge.mjs).\n- Every row asserts a live sentinel: DESC's own program, same uid, own session, outside GUARD.\n- error handling: each harness asserts status 0, with its stderr in the message.\n- Skips: off Linux. Root rows also skip, with the probe's last stderr line, when a python3 probe fails (userns map, unshare CLONE_NEWPID, fork, child getpid()==1). Causes include Python older than 3.12 and disabled user namespaces. G7 skips under a real-root runner.\n\nRows (exact deepEqual tuples):\n- G1, how 0 and 7:\n  - ['+', code, NSpid levels 2, namespace pid '2'];\n  - orphan_reaped, output EOF, start EOF, alive [], sentinel;\n  - job fds [0,1,2];\n  - GUARD and init fds 1/2 all '/dev/null'.\n- G2: TERM gives -15 and KILL gives -9, never an exit code; alive [].\n- G3, life and standdown-life: -9, start EOF, alive [] at that EOF.\n- G4, initkill: -9, never 0; alive [].\n- G5: nocap, and a patch renaming os.unshare(os.CLONE_NEWPID) to a missing attribute. Both give plus '', code 1, no job report, alive [].\n- G6: one patch per run, each giving -9 and alive []:\n  - no status write;\n  - status b'7x';\n  - status b'123456789';\n  - init os._exit(3) after a valid status.\n  Assert each needle occurs exactly once in m.GUARD.\n- G7, non-root (drain 1): ['+', 7, NSpid levels 1, start EOF, sentinel]. 'open' is still alive: uncontained, certifies nothing.\n- G8, run_install as root: 0 gives True, 3 gives False; levels 2; alive [] on return.\n- G9, relay as root, how 7: returns 0 within 20 s; alive []; frame kinds hello, output, observation. The last frame is {kind:'observation', type:'exit', code:7, signal:null}.\n\nRED proof: run the file against HEAD's supervisor in a scratch copy. Expect G7 to pass and the other 8 to fail: G6 on its missing needles, and G9 after about 60 s. Record the tails.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/local-runner-guard.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-guard.test.mjs"
+      ],
+      "note": "RED. Created scripts/tests/local-runner-guard.test.mjs (G1-G9, 246 lines, ASCII only) with the Write tool, from the architect's validated prototype (Serena task-...-prototype). Symbols checked: createFrameDecoder/parseGuestFrame exports in guest-bridge.mjs; relay(argv, out_fd, in_fd) and run_install(argv, env, spawn, timeout) in guest-supervisor.py. The GUARD section at HEAD 586f119c is byte-identical to the plan base c11348b4.\n\nRED proof: a scratch copy (git archive HEAD scripts/local-runner + the new file; supervisor cmp-equal to HEAD), env -i with Node 24.21.0 and python 3.12.3. Result: 9 tests, 1 pass (G7, by design), 8 fail, 0 skipped, 102 s. Each failure comes from the missing feature:\n- G1: NSpid levels 1 instead of 2.\n- G2: no output EOF; double/group/open alive.\n- G3: group/open alive at start EOF.\n- G4: double/group/open alive.\n- G5: the job ran ('+', 0) with no namespace.\n- G6: needle `os.write(told, b'%d' % reaped[1])` missing.\n- G8: levels 1; 3 descendants alive.\n- G9: about 60 s, so secs<20 is false and the sentinel's 60 s sleep expired.\nNo leftover processes. Scratch removed. Pre-existing dirty paths (not mine, untouched): .moe/tasks x3, scripts/moe-agent.{ps1,sh}, scripts/tests/postflight.{ps1,sh}, .moe/decisions/.",
+      "startedAt": "2026-10-31T11:00:03.542Z",
+      "completedAt": "2026-10-31T11:04:46.184Z"
     },
     {
       "stepId": "step-2",
       "description": "GREEN. Rewrite GUARD and the header comment above it in scripts/local-runner/guest-supervisor.py, and update J4 in scripts/tests/local-runner-bridge.test.mjs. The reference text is in task-task-a4a729ddaa8942679e8ae7cd57bd42f1-prototype (supervisor +57/-22, J4 +4/-3). The rules below are binding.\n\nGUARD keeps argv `life start spawnjson *argv`, stays stdlib-only and starts NO thread. After unshare(CLONE_NEWPID) the kernel refuses CLONE_THREAD (\"can't start new thread\"), so the watch thread becomes a selectors loop.\n1. First line: `import json, os, resource, signal, selectors, subprocess, sys`. J4 pins the prefix 'import json, os, resource, signal'; S12 needs stdlib plus subprocess.\n2. Keep the no-op TERM/HUP/INT handlers. The setup block (spawn JSON, PR_SET_NO_NEW_PRIVS, netns + lo, rlimits) stays byte-identical and in place: fork inherits it, so only the Popen moves. In the netns comment, 'This thread forks' becomes 'Init forks'.\n3. In the same try:\n   - `if os.geteuid() == 0: os.unshare(os.CLONE_NEWPID)`;\n   - `report, told = os.pipe()` (close-on-exec);\n   - `init = os.fork()`;\n   - `if init == 0: job = subprocess.Popen(sys.argv[4:], **spawn)`.\n   The existing `except Exception: os._exit(1)` then covers unshare, pipe, fork and init's Popen. None of them writes '+'.\n4. Init:\n   - write b'+' to told, then dup2 /dev/null onto 1/2;\n   - loop os.waitpid(-1, 0) until the job's pid (as pid 1 it reaps adopted orphans);\n   - write b'%d' % status to told, then os._exit(0). The kernel kills and reaps the rest of the namespace before init can be reaped.\n5. GUARD: os.close(told). One selectors loop over life and report runs until init is reaped and released:\n   - life data: released = True, and life stays registered.\n   - life EOF: if init is unreaped, os.kill(init, SIGKILL) then os.waitpid(init, 0) (it returns only once the namespace is empty); then os.killpg(0, SIGKILL). This order makes G3 deterministic before and after stand-down.\n   - report data (keep at most 8 bytes): if the first chunk starts with '+', write '+' to start and dup2 /dev/null onto 1/2.\n   - report EOF or overflow: unregister, then exited = os.waitpid(init, 0)[1]. If no '+' arrived, os._exit(1).\n   After the loop, require exited == 0, data[1:] ASCII digits and len(data) <= 6. Then code = os.waitstatus_to_exitcode(int(data[1:])). `except BaseException: os.killpg(0, SIGKILL)`: never mirror an incomplete status, never orphan a started job.\n6. The mirror tail stays as it is, INCLUDING the final `os._exit(128 - code)`. A signal that cannot end the process (glibc 33) must never fall through to a Python exit 0.\n7. The header comment covers: root owns a PID namespace and its init; root that cannot unshare never starts the job; a non-root import fixture is uncontained and certifies nothing; life EOF kills init, then the group; stand-down lets GUARD exit once init has. Lines stay at or under 120 chars.\n\nDo not touch relay, run_bridge, pump, run_install, framing or main. No env var, flag or seam may skip the namespace for root. No /proc scan, name kill or UID kill.\n\nJ4:\n- PROBE's cmdlines add parent(parent(os.getppid())).\n- Assert that cmdlines[1] and [2] contain '\\0-c\\0import json, os, resource, signal' (init, a fork of GUARD; then GUARD).\n- Assert that cmdlines[3] contains `\\0${SUPERVISOR}\\0`.\n- The SECRET filter keeps covering all four.\nChange nothing else in that file; 97341ad5 and 5ee846b6 edit it after you.\n\nDelivery: guest-supervisor.py is ASSERTED by CQ-R13 (f4811a72, BLOCKED). It lands only if it was clean at your pre-flight with every contesting task idle, or through a Claude Edit/Write witness. Edit with your CLI's file tool, never sed, python or a redirect. If either file was dirty at your pre-flight and your seat has no Claude Edit/Write, report_blocked naming that delivery hold before editing.\n\nG1-G9 and the whole bridge file then pass. error handling: the fail-closed exits are unchanged (no '+' still means EX_OSERR in relay and False in run_install).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/guest-supervisor.py",
         "scripts/tests/local-runner-bridge.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "GREEN. Edited with the Claude Edit tool (landing witness). Both files were clean at pre-flight.\n\nguest-supervisor.py (+59/-23):\n- GUARD is now the prototype's design, line for line. First line: `import json, os, resource, signal, selectors, subprocess, sys`. No threading.\n- As root, unshare(CLONE_NEWPID), then pipe(report, told) and one fork. Init Popens the job, writes '+', nulls fds 1/2, loops waitpid(-1) until the job's pid, writes the raw status and _exit(0).\n- GUARD runs one selectors loop over life and report. Life EOF: kill+waitpid init (only if unreaped), then killpg(0). Life stays watched after stand-down. The status is validated (exited==0, digits, <=6 bytes), otherwise killpg. The mirror tail is unchanged, including `os._exit(128 - code)`.\n- The setup block is byte-identical except 'This thread forks' -> 'Init forks'.\n- One deviation from the prototype bytes: its header comment had a ~150-char line, against rule 7's 120 cap. I re-wrapped the same words into 10 lines, all <=120, which costs one extra line. No added line is over 120, and all are ASCII. relay, run_bridge, pump, run_install, framing and main are untouched.\n\nJ4 (+4/-3):\n- PROBE adds parent(parent(getppid())).\n- cmdlines[1..2] must hold '\\0-c\\0import json, os, resource, signal' (init, then GUARD), and cmdlines[3] the supervisor. The SECRET filter covers all 4.\n- The comment says \"GUARD's init\" rather than the prototype's \"namespace init\", because J4 runs non-root with no namespace.\n- The \\0 escapes are intact (0 NUL bytes, 0 new non-ASCII).\n\nResults (scratch `git archive HEAD scripts` + 3 overlaid files, cmp-verified; env -i, Node 24.21.0, python 3.12.3):\n- guard file 9/9 pass, 0 skipped, 2.7 s;\n- bridge file 64 tests, 63 pass, 0 fail, 1 skip (LA5, which needs MOE_PINNED_CODEX; pre-existing).\n- J4 pins the tree: old J4 + new GUARD fails ('the grandparent is the supervisor'), and new J4 + old GUARD fails ('init, then the guard').\n- GUARD parses; the G5/G6 needles each occur exactly once; S12's import roots are all stdlib, subprocess included. No __pycache__.",
+      "startedAt": "2026-10-31T11:04:49.938Z",
+      "completedAt": "2026-10-31T11:12:17.883Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification. This is the one command; its fresh output is the complete_task evidence:\ncd \"$MOE_VERIFY_SNAPSHOT\" && node --test --test-reporter=tap scripts/tests/local-runner-guard.test.mjs > \"$MOE_VERIFY_SNAPSHOT.guard.tap\" && grep -x '# pass 9' \"$MOE_VERIFY_SNAPSHOT.guard.tap\" && grep -x '# skipped 0' \"$MOE_VERIFY_SNAPSHOT.guard.tap\" && node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)\n\nSetup (GLOBAL rule: no npm install/ci/build/test in the shared checkout):\n1. S=$(mktemp -d /tmp/moe-a4a7-gate.XXXXXX); git -C <repo> archive HEAD | tar -x -C \"$S\". Use the full tree: the local-runner tests read ci.yml, gradle, the vscode bundler and daemon src.\n2. Copy exactly your 3 files over it and cmp each against the working tree.\n3. In \"$S/packages/moe-daemon\": npm ci && npm run build. C4-C9 and TY1 need the built dist. A lock-matching native Linux node_modules may be reused with cp -al.\n4. Run it under env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_VERIFY_SNAPSHOT=\"$S\" bash -c '<command>'.\n   - Node 24 is required: /usr/local/bin/node is v20, and H4 needs Promise.withResolvers.\n   - The Linux-only PATH keeps the Windows directories out.\n   - python3 must be 3.12 or newer.\nThe host must allow unprivileged user namespaces; this WSL host does. A skipped G row is a gate failure, never a pass, hence the '# pass 9' and '# skipped 0' greps.\n\nArchitect baseline at HEAD c11348b4, daemon unbuilt:\n- pure HEAD: 602 tests, 591 pass;\n- HEAD + this change: 611 tests, 600 pass;\n- the same failures in both: TY1, C4-C9, KI1, DC4. KI1 and DC4 are HEAD-red while 5ed445ca is unlanded, and it lands before you.\nOn any failure, rerun the failing names on a pristine full archive with no overlay. Report HEAD-red results apart from yours, with both outputs.\nKill only pids your session started, by recorded pid (GLOBAL rule). Remove \"$S\" and the .guard.tap file afterwards.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification, run fresh and exactly as the plan names it.\n\nSnapshot S=/tmp/moe-a4a7-gate.OiTXos: a full `git archive HEAD` (586f119c) with my 3 files overlaid and cmp-verified. Its supervisor sha256 is 8a631957d0475cd2c12029a4f5e18be076adee59110124eb1331aacb06d25d4b.\n- Daemon prepared in the snapshot only: `npm ci --prefer-offline` (74 packages, lock sha 3257552d...) and `npm run build` (tsc 7.0.2; 194 dist js).\n- Run under env -i HOME PATH=nvm v24.21.0:/usr/local/bin:/usr/bin:/bin MOE_VERIFY_SNAPSHOT=$S, executing the exact plan command saved in /tmp/claude-a4a7-gate.sh.\n\nGATE_EXIT=0:\n- guard TAP: `# pass 9`, `# skipped 0` (both greps matched).\n- `node --test scripts/tests/local-runner*.test.mjs`: tests 635, pass 632, fail 0, cancelled 0, skipped 3, 80 s. The 3 skips are environment-gated and pre-existing: LA5 needs MOE_PINNED_CODEX, K9 needs real root for a mount namespace, and the macOS native smoke.\n- daemon `npm test`: Test Files 215 passed (215); Tests 6341 passed | 20 skipped (6361); 37.7 s.\n\nBaseline: QA's 42e9990c gate at this same HEAD gave runner 626/623/0 fail/3 skipped and daemon 6341/20. Mine is exactly +9 (G1-G9), with no regressions. TY1, C4-C9, KI1 and DC4 all pass now (daemon built, 5ed445ca landed), so I needed no HEAD-red split.\n\nNo leftover processes (marker scan of /proc environ found none). The snapshot is kept only for step 4's mutation sweep and is removed at the end of step 4.",
+      "startedAt": "2026-10-31T11:12:20.137Z",
+      "completedAt": "2026-10-31T11:18:49.688Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of your own diff, once, at the end; then complete_task with the step-3 evidence.\n\nSize: git diff --numstat over the 3 files must total 400 changed lines or fewer (the prototype has 332). If it is over, file the epic size rail yourself.\n\nContract:\n- '+' only after the job started.\n- start EOF only after GUARD exits.\n- GUARD exits only once init is reaped (namespace empty) and released, mirroring the job's exit or signal.\n- No status is mirrored after a killed or failed init.\n- Root whose unshare fails never starts the job.\n- No threading anywhere in GUARD; the first line keeps the J4 prefix.\n\nRaces and edges:\n- supervisor death before '+', between '+' and the status, after the status, and after stand-down;\n- a group TERM during waitpid or select (handlers plus the PEP 475 retry);\n- a job that SIGKILLs its own group (GUARD dies by SIGKILL; relay's EPIPE catch is unchanged);\n- SIGCHLD SIG_IGN inherited: init's waitpid raises, no status is sent, and GUARD SIGKILLs (fail closed);\n- report EOF and life EOF in one select batch;\n- life EOF after init was reaped: never kill a reaped pid.\n\nSecurity:\n- no host-wide, name or UID kill, and no /proc scan-to-kill;\n- no credential in any argv (J4's SECRET filter covers 4 ancestors);\n- no env or CLI bypass;\n- no verified-local or native-certification claim. CQ-R13 re-certifies against the new supervisorSha256.\n\nNote, don't fix: the job still sees the guest's procfs (no mount namespace), so ps and pgrep inside it list outside pids. Native certification should exercise the real CLIs.\n\nMutation check: in a scratch copy, run the prototype memory's mutants against your bytes and record the kills:\n- plain killpg on life EOF (G3);\n- life unregistered after stand-down (G3);\n- init waitpid(job) (G1);\n- no exited check (G6).\n\nCI wiring of the new file belongs to CQ-R13; the architect asked for it on f4811a72. Do not edit .github/workflows/ci.yml (dirty, peer-owned). This is a test-and-review step: no new runtime code.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of `git diff` over my 3 paths only. No code changes in this step.\n\nSIZE: +309/-26 = 335 changed lines (cap 400): supervisor +59/-23, J4 +4/-3, guard test +246. That is the prototype's 332 plus 3 from re-wrapping the comment.\n\nCONTRACT (by reading and by G-rows):\n- '+' is written only after init's '+', which init sends only after Popen returns (exec succeeded). It is written exactly once (`not data` guard).\n- start EOF only after GUARD exits. Init also holds `start`, so EOF also waits for init's exit, which means the namespace is empty.\n- The loop ends only once init is reaped and released. A killed or failed init (exited != 0, non-digits, >6 bytes, no status) makes GUARD killpg, so it is never mirrored (G4, G6).\n- Root whose unshare fails exits 1 with no '+' (G5).\n- No threading. The first line keeps J4's prefix.\n\nEDGES:\n- Supervisor death before '+' or between '+' and status: life EOF with exited None kills and reaps init, then killpg.\n- After status but before reap: kill hits an unreaped zombie, harmlessly.\n- After stand-down: life stays registered (G3).\n- life EOF after init is reaped: guarded by `exited is None`, so a reaped pid is never killed.\n- report EOF and life EOF in one batch: either order ends in killpg.\n- Probes on root userns and non-root:\n  - group TERM during select/waitpid: -15 mirrored;\n  - inherited SIGCHLD SIG_IGN with a job exit of 7: GUARD -9, fail closed;\n  - jobs dying by 32/33/15: -32/-33/-15.\n- Finding: HEAD's threaded GUARD turned SIG33 into exit 161, because glibc's SIGSETXID handler arrives with the first thread. Now relay reports `signal:'SIG33'` (probe through real relay(): exit 0, frames hello + observation SIG33). It is more faithful, and no test pins 161 (S14 asserts 32 only). So `os._exit(128 - code)` is unreachable for 32/33 on glibc 2.39: mutant M08 (dropping it) survives G and S14 and is equivalent on this host. The line is kept per rule 6.\n- A job's killpg(0, SIGKILL) kills GUARD (S13 path unchanged), but not init, which the kernel protects from inside the namespace. Init then reports and exits, so teardown still completes.\n\nSECURITY:\n- The only kill targets are init's pid (GUARD's own unreaped child) and pgrp 0.\n- No /proc scan, name or UID kill.\n- The geteuid() gate has no env, flag or seam.\n- No credential in argv: init's cmdline is GUARD's, and J4's SECRET filter covers 4 ancestors.\n- No verified-local or native claim. CQ-R13 must re-certify against supervisor sha256 8a631957d0475cd2c12029a4f5e18be076adee59110124eb1331aacb06d25d4b.\n\nNOTE (don't fix): the job still sees the guest procfs (no mount namespace), so ps and pgrep inside it list outside pids. The real CLIs need R13's native run.\n\nMUTATION (scratch copies, scored by exit code; each mutant's GUARD ast-parses):\n- control passes 9/9.\n- Plan mutants killed: M01 plain killpg (G3), M02 life unregistered after stand-down (G3), M03 init waitpid(job) (G1), M04 no exited check (G6).\n- Prototype extras killed: M05 init keeps output (G1), M06 GUARD keeps stderr (G1), M07 told kept open (G1).\n\nHEAD moved to 65f78435 mid-task (peer landed moe-agent.{sh,ps1} and postflight, which daemon tests read), so I re-ran the exact gate on a fresh full snapshot: GATE_EXIT=0 with identical numbers. Both snapshots, scratch and tap files are removed, and no leftover processes remain. ci.yml is untouched; CI wiring of the new file belongs to CQ-R13.",
+      "startedAt": "2026-10-31T11:18:54.001Z",
+      "completedAt": "2026-10-31T11:29:30.908Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -56,23 +75,40 @@
   ],
   "priority": "MEDIUM",
   "order": 7.8,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-6ba7fb4a9ce141c9b2d9815203d03d04",
+      "author": "qa-4398294e",
+      "content": "QA evidence (qa-4398294e), completion commit b0734674 on moe/work-2026-10-24 (git branch --contains confirms).\n\nDIFF (git show, not the dirty tree): 5 paths, 3 code + 2 board. Code +309/-26 = 335 changed lines (cap 400): supervisor +59/-23, J4 +4/-3, guard test +246. Only the GUARD string, its header comment and J4 changed. relay, run_bridge, pump, run_install, framing and main are byte-identical. Supervisor sha256 is 8a631957d0475cd2c12029a4f5e18be076adee59110124eb1331aacb06d25d4b, matching the worker.\n\nGATE: the exact task.verification command, run on a fresh full `git archive b0734674` snapshot. npm ci and build ran in the snapshot only, under env -i with Node 24.21.0 and python 3.12.3. GATE_EXIT=0.\n- guard TAP: # pass 9, # skipped 0;\n- runner: 635 tests, 632 pass, 0 fail, 3 skipped (LA5, K9, macOS smoke; all env-gated);\n- daemon: 215 files, 6341 passed, 20 skipped.\nStability: the guard file passed 6/6 runs, 3 in parallel x 2.\n\nOWN MUTATION PROBES (scratch copies, each GUARD ast-parsed, scored by exit code):\n- init writes '+' before Popen: killed by J4 (groups row).\n- GUARD writes '+' at fork, before init's: killed by J4.\n- unshare failure swallowed: killed by G5.\n- life EOF kills init without waitpid: killed by G3 3/3 (group and open alive at start EOF).\n- no waitpid(init) before mirroring: killed by G6 3/3, and G8 1/3.\n- control: green.\n- One survivor: dropping the stand-down wait (`while exited is None`). It is equivalent under root, because the namespace is empty once init is reaped. Only the uncontained non-root fixture loses its post-exit life watch, which no test pinned before this change either.\n\nSTATIC:\n- GUARD has no threading, env or /proc access.\n- Its only kill targets are init (its own unreaped child), process group 0 and itself.\n- Added supervisor lines are at most 120 chars and ASCII. There are no NUL bytes in J4 and no __pycache__.\n- The host validator accepts 'SIG33' (^SIG[A-Z0-9]{1,15}$).\n- Every production relay and run_install job runs under a non-root identity, so a job can never signal the root GUARD or init.\n\nROOT-RUNNER FINDING (not a supervisor defect; routed to CQ-R13 f4811a72, see the comment there). Under `unshare -r`, 11 existing bridge and check tests fail on b0734674 but pass on 65f78435: S6 S10 S11 S12 S16 I1 H5 J4 K3 KI1 KI2. They carry namespace-local pids out of the job, and S11 changes by design. CI and this gate run non-root and are unaffected.",
+      "timestamp": "2026-10-31T11:57:15.165Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T06:17:56.507Z",
-  "updatedAt": "2026-10-31T07:25:26.245Z",
+  "updatedAt": "2026-10-31T11:57:44.406Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T06:29:58.639Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T11:57:44.406Z",
+    "wallClockMs": 19665767
   },
   "contextFetchedBy": [
-    "architect-b58e1112"
+    "architect-b58e1112",
+    "worker-88af1437",
+    "qa-4398294e"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T07:25:26.221Z",
   "executionContract": {
@@ -132,5 +168,65 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-31T07:25:26.245Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T11:00:03.542Z",
+  "reviewStartedAt": "2026-10-31T11:30:50.221Z",
+  "verification": {
+    "command": "cd \"$MOE_VERIFY_SNAPSHOT\" && node --test --test-reporter=tap scripts/tests/local-runner-guard.test.mjs > \"$MOE_VERIFY_SNAPSHOT.guard.tap\" && grep -x '# pass 9' \"$MOE_VERIFY_SNAPSHOT.guard.tap\" && grep -x '# skipped 0' \"$MOE_VERIFY_SNAPSHOT.guard.tap\" && node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)",
+    "exitCode": 0,
+    "outputTail": "Run under env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin MOE_VERIFY_SNAPSHOT=/tmp/moe-a4a7-gate.EZj0lX (full git archive of HEAD 65f78435 + the 3 task files cmp-verified; packages/moe-daemon npm ci + npm run build in the snapshot; python3 3.12.3):\n# pass 9\n# skipped 0\n...\nℹ tests 635\nℹ suites 4\nℹ pass 632\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 78651.654709\n...\n Test Files  215 passed (215)\n      Tests  6341 passed | 20 skipped (6361)\n   Start at  13:28:10\n   Duration  37.17s (tests 93%, transform 4%, import 3%)\n\nGATE_EXIT=0\n(Identical result on the earlier snapshot of HEAD 586f119c: guard 9/9 skipped 0; runner 635/632/0 fail/3 skipped; daemon 6341 passed | 20 skipped.)",
+    "reportedAt": "2026-10-31T11:30:50.221Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-guard.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/tests/local-runner-bridge.test.mjs",
+    ".moe/tasks/task-a4a729ddaa8942679e8ae7cd57bd42f1.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "completionSummary": "As root, GUARD now unshares a PID namespace before its single fork. That fork is the namespace's init: it starts the job, reaps orphans until the job's own wait status arrives, sends '+' and then the raw status up a private close-on-exec pipe, and exits. The kernel then kills every setsid, setpgid or double-forked descendant before GUARD can reap init.\n- GUARD writes '+' only after init's '+', and exits mirroring the job's exit or signal only once init is reaped and it has been released, so completion EOF follows teardown.\n- The watch thread is replaced by a selectors loop, because the kernel refuses threads after unshare. Life EOF kills init (only while unreaped), reaps it, then killpgs.\n- Root that cannot unshare never starts the job (no '+', exit 1). A bad status or a killed init makes GUARD killpg itself; nothing is mirrored.\n- relay, run_bridge, pump, run_install, framing and main are unchanged.\n\nFiles (335 changed lines, cap 400):\n- guest-supervisor.py +59/-23;\n- J4 +4/-3, now pinning job -> init -> GUARD -> supervisor;\n- new local-runner-guard.test.mjs, G1-G9.\nThe prototype's header comment is re-wrapped to 120 columns.\n\nEvidence:\n- RED on HEAD: 8/9 fail, each on the missing feature.\n- Gate (command above): exit 0 on HEAD 586f119c and 65f78435. guard 9/9 with 0 skipped; runner 635 tests, 632 pass, 0 fail, 3 env-gated skips; daemon 6341 passed. That is QA's 42e9990c baseline plus 9.\n- Mutants: 7/7 killed, including the plan's 4 (plain killpg, life unregistered after stand-down, init waitpid(job), no exited check), plus a passing control. M08 (dropping `os._exit(128-code)`) survives as an equivalent and the line is kept.\n- Probes: group TERM gives -15; inherited SIGCHLD SIG_IGN gives -9 (fail closed); 32/33 give -32/-33.\n\nBehavior change: a SIG33 job death is now observed as 'SIG33', not exit 161, because GUARD has no thread.\n\nSecurity: no host, name or UID kill, no /proc scan, no bypass, no credential in argv, and no native or verified-local claim.\n\nFor CQ-R13",
+  "commits": [
+    {
+      "sha": "b07346746631727051b257eb2cd69a73ceecd8c4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-88af1437@2026-10-31T10:58:21Z",
+      "paths": [
+        ".moe/tasks/task-a4a729ddaa8942679e8ae7cd57bd42f1.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-guard.test.mjs"
+      ],
+      "recordedBy": "worker-88af1437",
+      "recordedAt": "2026-10-31T11:31:12.825Z",
+      "treeId": "ba832955868561095d708e26b15c6b052a8ec2a7",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/local-runner/guest-supervisor.py",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-guard.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/tests/local-runner-bridge.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-88af1437@2026-10-31T10:58:21Z",
+    "at": "2026-10-31T11:31:12.825Z"
+  },
+  "completedAt": "2026-10-31T11:57:44.406Z",
+  "reviewCompletedAt": "2026-10-31T11:57:44.406Z",
+  "reviewSummary": "APPROVED. Full evidence: comment-6ba7fb4a9ce141c9b2d9815203d03d04.\n\n- Completion commit b0734674 on moe/work-2026-10-24, reviewed via git show. 335 changed lines (cap 400), only GUARD, its header comment and J4. relay, run_bridge, pump, run_install, framing and main are byte-identical. Supervisor sha256 8a631957d047..., for CQ-R13 to re-certify.\n- Exact task.verification re-run on a fresh full archive (env -i, Node 24.21.0, py 3.12.3): GATE_EXIT=0. Guard # pass 9 / # skipped 0; runner 635/632/0 fail/3 env-gated skips; daemon 6341 passed, 20 skipped. Guard file also green 6/6 under parallel load.\n- DoD 1: unshare is gated only on the real euid, with no env or CLI seam. EPERM or a missing API exits 1 with no '+' (G5); my swallowed-unshare mutant dies on G5.\n- DoD 2: exits 0/7, TERM/KILL, supervisor death before or after stand-down, a killed init, run_install and relay all leave no descendant alive at completion EOF and mirror the job's code or signal (G1-G4, G8, G9). My mutants died: life EOF without waitpid (G3), no reap before mirroring (G6).\n- DoD 3: J4 pins job -> init -> GUARD -> supervisor, and kills my two '+'-before-job mutants. Full runner and daemon regression is green.\n- DoD 4: kill targets are only init (GUARD's own unreaped child), process group 0 and GUARD itself. No /proc scan, no name or UID kill, SECRET filter over 4 ancestors, sentinel alive in every G row, no verified-local claim.\n- Non-blocking: dropping the stand-down wait is equivalent under root; only the non-root fixture loses an unpinned post-exit watch.\n- Routed to CQ-R13 and the architect (comment-666e86e050d04f0db34ae8f12962ef38): under a root runner, 11 pre-existing bridge/check tests fail, because they carry namespace-local pids out of the job (S11 changes by design). CI and this gate run non-root. The fix is outside this task's scope.",
+  "requiredCheckAtDone": null
 }

@@ -1302,7 +1302,7 @@ environ = open('/proc/self/environ', 'rb').read().decode().split('\\0')
 status = open('/proc/self/status').read().splitlines()
 print(json.dumps({'env': dict(entry.split('=', 1) for entry in environ if entry), 'cwd': os.getcwd(), 'umask': os.umask(0),
                   'nnp': [line for line in status if line.startswith('NoNewPrivs:')],
-                  'cmdlines': [cmdline(pid) for pid in (os.getpid(), os.getppid(), parent(os.getppid()))]}))
+                  'cmdlines': [cmdline(pid) for pid in (os.getpid(), os.getppid(), parent(os.getppid()), parent(parent(os.getppid())))]}))
 `;
 const HELD = groups => `data = b''.join(iter(lambda: os.read(0, 65536), b''))
 r, w = os.pipe()
@@ -1331,8 +1331,9 @@ test('J4 the job gets exactly the allowlisted environment and its one credential
     assert.deepEqual(probe.env, { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: join(dir, 'kept', 'sessions', homes[0]), USER: 'moe-agent',
       LOGNAME: 'moe-agent', LANG: 'C.UTF-8', MOE_ROLE: 'qa', CODEX_API_KEY: SECRET, CODEX_HOME: join(dir, 'kept', 'sessions', homes[0], '.codex') });
     assert.deepEqual([probe.cwd, probe.umask, probe.nnp], [realpathSync(join(dir, 'kept', 'ws')), 0o077, ['NoNewPrivs:\t1']]);
-    assert.ok(probe.cmdlines[1].includes('\0-c\0import json, os, resource, signal'), 'the parent is the guard');
-    assert.ok(probe.cmdlines[2].includes(`\0${SUPERVISOR}\0`), 'the grandparent is the supervisor');
+    // The parent is GUARD's init, a fork of GUARD and so the same cmdline, and the grandparent is GUARD.
+    assert.ok(probe.cmdlines.slice(1, 3).every(line => line.includes('\0-c\0import json, os, resource, signal')), 'init, then the guard');
+    assert.ok(probe.cmdlines[3].includes(`\0${SUPERVISOR}\0`), 'the great-grandparent is the supervisor');
     assert.deepEqual(probe.cmdlines.filter(line => line.includes(SECRET)), []);
     if (process.getuid() !== 0) { // setgroups needs root: a guard that applies extra_groups [] cannot start the job
       const groups = held('dropped', '[]', jobFrame(JOB));

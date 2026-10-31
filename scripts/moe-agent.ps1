@@ -1723,21 +1723,32 @@ function Read-MoeAttempt([string]$TaskId, [string]$AttemptId = '', $Generation =
 # Exported for the CLI's moe-proxy, which stamps the pair onto
 # start_step/complete_step/complete_task (CQ-F09, F12a). The
 # pair moves together: only an identity verified against the store is kept.
+# The same verified record pins its execution profile and plan revision (CQ-V07)
+# in $script:PinnedAttemptProfile / $script:PinnedAttemptPlanRevision: script
+# variables, never env, so no CLI can set or read them, and reset with the pair.
 # Twin: pin_attempt_identity.
 function Set-MoeAttemptIdentity($Claim, [string]$TaskId) {
     $script:MoeAttemptId = ''; $script:MoeAttemptGeneration = $null
+    $script:PinnedAttemptProfile = ''; $script:PinnedAttemptPlanRevision = $null
     Remove-Item Env:MOE_ATTEMPT_ID, Env:MOE_ATTEMPT_GENERATION -ErrorAction SilentlyContinue
     $id = Get-MoeProp $Claim 'attemptId'; $g = Get-MoeProp $Claim 'generation'
     if ($null -eq $id -and $null -eq $g -and (Get-MoeProp $Claim 'alreadyAssigned')) {
         $a = Read-MoeAttempt $TaskId
         if ($a) { $id = $a.id; $g = $a.generation }
     }
-    if ($id -isnot [string] -or $id -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or -not (Test-MoeGeneration $g) -or -not (Read-MoeAttempt $TaskId $id $g)) {
+    $record = $null
+    if ($id -is [string] -and $id -cmatch '^[A-Za-z0-9_-]{1,128}$' -and (Test-MoeGeneration $g)) { $record = Read-MoeAttempt $TaskId $id $g }
+    if (-not $record) {
         Write-Host '[WARN] Missing/stale attempt identity; candidate completion will fail closed.' -ForegroundColor Yellow
         return
     }
     $script:MoeAttemptId = $id; $script:MoeAttemptGeneration = $g
     $env:MOE_ATTEMPT_ID = $id; $env:MOE_ATTEMPT_GENERATION = [string]$g
+    # A missing or malformed snapshot pins nothing: that attempt lands as legacy.
+    $snapshot = Get-MoeProp $record 'executionPolicySnapshot'
+    $pinProfile = Get-MoeProp $snapshot 'profile'; $revision = Get-MoeProp $snapshot 'planRevision'
+    if ($pinProfile -is [string] -and $pinProfile -cmatch '\A[a-z][a-z-]{0,31}\z') { $script:PinnedAttemptProfile = $pinProfile }
+    if (Test-MoeGeneration $revision) { $script:PinnedAttemptPlanRevision = $revision }
 }
 # A daemon restart parked this seat's attempt in `reconciling`: present its id
 # and generation with THIS process's identity so it runs again instead of being
@@ -3184,6 +3195,28 @@ function Write-MoeReceiptJournal([string]$Path, $Report) {
     } catch {
         Remove-Item -LiteralPath "$Path.tmp.$PID" -Force -ErrorAction SilentlyContinue
         Write-Host "[WARN] receipt journal not written ($Path): $_; a crash before the receipt would leave this landing without one." -ForegroundColor Yellow
+    }
+}
+# The strong profile's durable journal (CQ-V07): a WriteThrough tmp file flushed
+# to disk, then an atomic rename over $Path (File.Replace when it exists: Move-Item
+# -Force deletes first). .NET cannot fsync a directory; the rename's durability
+# rests on the file system (NTFS journals it). A crash before the rename leaves
+# only a *.tmp.* file, which nothing reads. $false on any failure, with the tmp
+# file removed and $Path untouched: the caller then moves no ref.
+# Twin: intent_journal_write.
+function Write-MoeIntentJournal([string]$Path, $Report) {
+    if (-not $Path) { return $false }
+    $tmp = "$Path.tmp.$PID"
+    try {
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $Path))
+        $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes(($Report | ConvertTo-Json -Depth 5 -Compress))
+        $fs = New-Object IO.FileStream($tmp, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough)
+        try { $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
+        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($tmp, $Path, $null) } else { [IO.File]::Move($tmp, $Path) }
+        return $true
+    } catch {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        return $false
     }
 }
 
@@ -5405,7 +5438,43 @@ function Invoke-MoeLanding {
                 try { & $env:ComSpec /d /s /c $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF 2>&1 | Out-Null } catch {} finally { Pop-Location }
             }
             $oldArg = if ($old) { $old } else { '0000000000000000000000000000000000000000' }
-            if ($Kind -eq 'completion' -and $gate) {
+            if ($Kind -eq 'completion' -and $script:PinnedAttemptProfile -ceq 'verified-local') {
+                # CQ-V07: under the strong profile this journal IS the landing's
+                # intent, mandatory and on disk before the ref can move. No frozen
+                # candidate of this very tree, or a journal that did not reach the
+                # disk, refuses the completion: no update-ref, no rescue ref and no
+                # push, so no ref moves at all; the bytes and baseline stay for the
+                # next session. The expected-old CAS below is unchanged. Twin: land_plumbing.
+                $journal = Get-MoeReceiptJournalPath $Git.GitDir $TaskId
+                $pending = if (Test-MoeNoRemote $Git.Top) { $null } else { 'push result unknown: the landing stopped before its push finished' }
+                $refusal = ''; $why = ''; $f = $script:MoeFrozen
+                if (-not $f -or -not $f.CandidateId -or -not $f.Tree -or $f.Tree -cne $built.Tree -or
+                    -not $script:PinnedAttemptPlanRevision -or -not $script:MoeAttemptId) {
+                    $refusal = 'MOE_COMMIT_REFUSED_INTENT_INCOMPLETE'
+                    $why = 'no frozen candidate of this tree, or no pinned attempt and plan revision, to journal'
+                } else {
+                    $receipt = [ordered]@{ taskId=$TaskId; workerId=$WorkerId; attemptId=$script:MoeAttemptId; generation=$script:MoeAttemptGeneration
+                        candidateId=$f.CandidateId; target="refs/heads/$branch"; targetBefore=$oldArg; targetAfter=$new
+                        landedRevision=$new; pushResult=$pending; ledger=[ordered]@{ sessionId=$Sid; role=$Role; status=$Status }
+                        treeSha=$f.Tree; baseRevision=$oldArg; planRevision=$script:PinnedAttemptPlanRevision; profile=$script:PinnedAttemptProfile }
+                    if (-not (Write-MoeIntentJournal $journal $receipt)) {
+                        $refusal = 'MOE_COMMIT_REFUSED_INTENT_UNWRITABLE'
+                        $why = "the intent journal $(if ($journal) { $journal } else { '<none>' }) could not be made durable"
+                    }
+                }
+                if ($refusal) {
+                    $receipt = $null
+                    Write-Host "[WARN] ${refusal}: task $TaskId -- $why; the strong profile moves no ref without it (no update-ref, no rescue ref, no push). The bytes and baseline stay for the next session." -ForegroundColor Yellow
+                    $res.Outcome = 'refused'; $res.Code = $refusal
+                    if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU $landedFlag $blSession $blP (Get-MoeCarryRows $attr.Own @()) | Out-Null }
+                    Send-MoeRecordCommit (@{
+                        taskId = $TaskId; outcome = 'refused'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId
+                        sessionId = $Sid; cliExitCode = $CliExit; code = $refusal; message = $why; ref = $branch
+                        unattributedPaths = $unattrRecPaths
+                    } + (Get-MoeRecordHeldFields $attr @() $Git.Rel)) | Out-Null
+                    return $res
+                }
+            } elseif ($Kind -eq 'completion' -and $gate) {
                 # The receipt report is journaled BEFORE the ref can move. targetBefore
                 # is the CAS base: the candidate's baseRevision, git's zero id if unborn.
                 # `ledger` is the committed ledger row this landing owes until
@@ -6574,7 +6643,8 @@ do {
     $script:MoeEvidenceUnavailable=''; $script:MoeAttemptReadError=''
     # The env pair too: no CLI inherits a previous task's attempt (the ps1 hot-reload supervisor keeps env).
     $script:MoeAttemptId = ""; $script:MoeAttemptGeneration = $null; Remove-Item Env:MOE_ATTEMPT_ID, Env:MOE_ATTEMPT_GENERATION -ErrorAction SilentlyContinue
-    $script:MoeRunnerId = "runner-" + [guid]::NewGuid().ToString("N")
+    $script:PinnedAttemptProfile = ''; $script:PinnedAttemptPlanRevision = $null
+    $script:MoeRunnerId ="runner-" + [guid]::NewGuid().ToString("N")
     $preflightTaskId = ""
     $script:MoeWtMode = 'shared'; $script:MoeWtPath = ''; $script:MoeWtBranch = ''; $script:MoeWtTarget = ''
     $script:cliRoot = "$projectPath"; Remove-Item Env:MOE_WORKTREE_PATH, Env:MOE_TASK_BRANCH, Env:MOE_LAND_TARGET -ErrorAction SilentlyContinue
