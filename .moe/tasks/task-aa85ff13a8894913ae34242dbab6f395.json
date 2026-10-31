@@ -16,27 +16,42 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development. Read the LANDED bytes of CQ-R13c2 (task-6f5cf10f) first: its RUNTIME_PROTECTED flag and MOE_RUNTIME_PROTECTED_PATH_MISSING gate sit in the same wrappers, and this row builds on them. Anchor on names, not line numbers. Live seats hot-reload moe-agent.sh, so never leave it unparseable on disk (mem:gotcha-editing-wrapper-while-harness-runs).\n\nNew scripts/tests/protected-agent-command.test.mjs (node:test). It spawns `bash scripts/moe-agent.sh --role worker --command <c> --no-loop` with streamed stdout/stderr. Use the exact flag names from the wrapper's arg parser.\n\nEnvironment per row:\n- a temp HOME;\n- a temp project with .moe/;\n- MOE_RUNTIME_PROTECTED=1, so R13c2's gate passes;\n- MOE_PROXY_PATH and MOE_DAEMON_PATH pointing at inert stub .js files that exit 0;\n- MOE_DISABLE_HEARTBEAT=1;\n- PATH built from fixture dirs plus /usr/bin:/bin.\n\nEnd of a row:\n- a refused row waits for exit;\n- an accepted row waits for the new line `[INFO] MOE_PROTECTED_AGENT_CLI: <name> -> <absolute path>`, then kills the process group;\n- every row has a 20 s cap.\nEach fixture CLI is a stub that writes a 'ran' marker file, so a row can prove a binary was NOT run.\n\nRows:\n- R1 refused: '/tmp/x/claude', 'claude --flag', 'claude.exe', 'CLAUDE' and ''. Each gives exit 1. stderr has exactly one line `[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '<c>' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start.` No stub ran, and no .mcp.json or HOME MCP config was written.\n- R2: a value of 300 chars with a control char is shown truncated to 200 chars, with the control char replaced.\n- A1 accepted: 'codex' with a trusted fixture dir holding codex. The INFO line names that absolute path.\n- T1: PATH ':<trusted-without-claude>', with a project-local ./claude reachable only through the empty entry. Gives exit 1 with `[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: claude was not found on an absolute PATH entry outside the project; refusing to start.`, and the local stub did not run.\n- T2: '.' and a relative entry behave like T1.\n- T3: PATH '<project>/bin:<trusted>', with claude in both. The INFO line names the trusted one.\n- L1 legacy, no marker: '/tmp/x/claude' and 'claude --flag' print no MOE_PROTECTED_* line within the cap. Kill the process afterwards.\n- PowerShell rows mirroring R1, A1 and T3 run the ps1 wrapper under `pwsh` when it is on PATH (-Command, and -CommandArgs must be empty); otherwise skip with a reason.\n\nError handling in the harness: every spawned process group is killed in a finally block, and every temp dir is removed.\n\nRun the file and confirm the protected rows fail.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/protected-agent-command.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "New scripts/tests/protected-agent-command.test.mjs (node:test). It runs the REAL launcher per row in a temp project with an inert runtime stub (MOE_PROXY_PATH/MOE_DAEMON_PATH log to rpc.log), CLI stubs logging to ran.log, a temp HOME/TMPDIR and a filtered env (MOE_*/CLAUDE*/FAKE_* dropped). Rows: R1 x5 (path, 'claude --flag', 'claude.exe', 'CLAUDE', ''), plus ps1-only -CommandArgs; R2 (ESC/BEL/newline replaced with '?', cut to 200); A1 codex; T1/T2 (empty, '.', relative entry -> NOT_FOUND, local stub not run); T3 (in-project entry spelled directly, through a symlink/junction, and with '..'); L1 legacy for marker unset and '01'. Refusal rows assert exit 1, exactly one MOE_PROTECTED_ line on stderr, no CLI ran, no runtime call, no MCP config. Accepted rows stop the process group at the INFO line. ps1 rows run on Windows node (powershell.exe + pwsh.exe) or Linux pwsh; skipped here (no Linux pwsh). sh rows skip on win32.\nRED on HEAD (bash): 11 protected rows fail (missing MOE_PROTECTED_* lines), L1 x2 pass; 14 ps1 rows skipped.\nFound for steps 2/3: R13c2's [protected runtime] P rows in postflight.sh/.ps1 launch with --command /bin/true ($trueCmd) under the marker, which this row's gate must refuse. Steps 2/3 switch those rows to a stub 'claude' on a trusted PATH dir (necessary scope growth, noted there).\nPre-existing dirty paths not mine: .moe/tasks/*.json (board), .moe/decisions/.",
+      "startedAt": "2026-10-31T19:01:17.626Z",
+      "completedAt": "2026-10-31T19:14:10.434Z"
     },
     {
       "stepId": "step-2",
       "description": "scripts/moe-agent.sh. Under RUNTIME_PROTECTED=1 only (R13c2's flag, which is set when MOE_RUNTIME_PROTECTED is exactly '1'):\n\n1. Right after the command is parsed and the CLI type detected (CMD_FIRST and CMD_BASE, ~:416-440), and BEFORE any MCP config write or daemon RPC, add a helper protected_agent_command_gate. It accepts COMMAND only when the raw value is exactly one of claude, codex, gemini, grok (case-sensitive) and parse_command_into_argv produced no extra argv. Otherwise:\n   - print the R1 line to stderr (`printf '%s\\n'` with the sanitized value: tr -d control chars, then cut to 200 chars);\n   - exit 1.\n   Write it as an if/else: the file runs under set -e (mem:gotcha-moe-agent-sh-set-e-unguarded-assignments).\n2. A helper protected_resolve_cli NAME:\n   - Walk PATH split on ':'. Skip an empty entry, '.', any entry not starting with '/', and any entry whose `cd \"$entry\" && pwd -P` equals the project's real path or lies under it with a '/' boundary.\n   - Return the first `$dir/$NAME` that is a regular executable file. On MSYS/MINGW (uname -s), also try `.exe` and `.cmd`.\n   - Do a manual scan, not `command -v`: bash's hash table and aliases must not answer.\n   - On success, set COMMAND_BIN to that absolute path and print the A1 INFO line. On failure, print the T1 CLI_NOT_FOUND line and exit 1.\n   - Call it right after the gate.\n3. COMMAND_BIN is re-parsed later (~:546 and ~:679 call parse_command_into_argv again after PYTHON_CMD resolves). Under the marker, re-apply the resolved absolute path after every such re-parse, so no later site ever sees the bare name. Any later name substitution (`gemini` -> `agy`, ~:7831) under the marker must also go through protected_resolve_cli, or be skipped. Compare on CMD_BASE, not COMMAND_BIN.\n\nError handling:\n- every refusal is one stderr line and exit 1, with no partial state: nothing written, no RPC;\n- a `cd` into an unreadable PATH entry fails quietly and that entry is skipped;\n- the gate and the resolver never run without the marker.\n\nWithout the marker, every byte of behavior is unchanged. Run `bash -n scripts/moe-agent.sh` before every save of a final version.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "moe-agent.sh (marker-only, legacy bytes unchanged):\n- refuse_protected_agent + allowlist gate right BEFORE CLI-type detection (earliest point; ahead of the prompt-cache check, which reads COMMAND_ARGV and project settings and could otherwise answer first). `case \"$COMMAND\" in claude|codex|gemini|grok)`; otherwise one plain stderr line, value shown as `${COMMAND//[[:cntrl:]]/?}` cut with `${:0:200}`, WORKER_ID cleared (EXIT trap deregisters nothing), exit 1.\n- protected_resolve_cli right after R13c2's path gate (needs PROJECT): `IFS=: read -r -a` of PATH (no globbing), skips non-'/' entries (empty, '.', relative), `cd -- && pwd -P` (unreadable entry skipped), ancestor walk with `-ef` against the project's `pwd -P` (catches symlinks, '..' and case-insensitive spellings), first regular executable `$real/$name` (MSYS/MINGW/CYGWIN also .exe/.cmd). Sets COMMAND_BIN absolute + COMMAND_ARGV=(), prints `[INFO] MOE_PROTECTED_AGENT_CLI: <name> -> <abs>`, else CLI_NOT_FOUND refusal. Empty project real path fails closed.\n- No re-apply needed: both later parse_command_into_argv calls (~:594, ~:727) run before the resolver; nothing re-parses after it. gemini->agy compares COMMAND_BIN = \"gemini\", which is never true for an absolute path, so it is skipped under the marker. Account signin-state and codex/grok checks use COMMAND_BIN. bash 3.2 constructs only.\nScope growth (necessary): scripts/tests/postflight.sh R13c2 P rows launched `--command /bin/true` under the marker; this row refuses that (verified: old harness + new wrapper fails P1 with COMMAND_REFUSED). Now `--command claude` with a `$PR/bin/claude` exit-0 stub ($PR/bin is first on PATH, outside the project). Trimmed harness (prologue + [protected runtime]) on a snapshot: `[protected runtime] ok`, rc=0.\nTest fixes: a JS default turned `marker: undefined` into '1' (now null = unset); MOE_NODE_COMMAND is a fixture symlink because the wrapper prepends node's dir to PATH (nvm dir holds a real codex).\nGREEN: node --test protected-agent-command.test.mjs: 27 tests, 13 pass, 0 fail, 14 skipped (ps1, no Linux pwsh). bash -n OK.\nFiled task-64809b19 (MEDIUM, BACKLOG): find_node/find_python still use PATH lookup under the marker (project-local ./node via a cwd PATH entry).",
+      "startedAt": "2026-10-31T19:14:11.394Z",
+      "completedAt": "2026-10-31T19:19:21.389Z"
     },
     {
       "stepId": "step-3",
       "description": "scripts/moe-agent.ps1 is the twin, keeping parity with step 2. It stays UTF-8 with BOM (scripts/CLAUDE.md).\n\nRight after `$resolvedCommand = Resolve-CommandParts ...` (~:795-797), and before any MCP config write or daemon RPC, act only when R13c2's protected flag is set:\n1. Gate. Accept only when `$Command` is exactly one of claude, codex, gemini, grok (-ceq, case-sensitive) and `$CommandArgs` is empty. Otherwise:\n   - write the R1 line through [Console]::Error.WriteLine, byte-identical to sh, with the same sanitizing (control chars replaced, then truncated to 200);\n   - exit 1, the way R13c2's gate exits (the supervisor at the top re-exits with 1).\n2. Resolve.\n   - Split $env:PATH on [IO.Path]::PathSeparator.\n   - Skip empty entries and entries that are not fully qualified: a drive root with a separator, UNC, or a leading '/' on non-Windows pwsh.\n   - Skip entries inside the project: compare [IO.Path]::GetFullPath on both sides with a separator boundary, case-insensitively on Windows.\n   - For the first entry holding `<name>` with a PATHEXT extension (Windows) or the bare name (elsewhere) as a leaf file, set `$Command` to that absolute path and print the INFO line. Otherwise print the CLI_NOT_FOUND line and exit 1.\n   - Do NOT use Get-Command: it consults aliases, functions and the module path.\n3. Every later use of the CLI reads `$Command`, so they all get the absolute path. `$cmdBase` detection still works through GetFileNameWithoutExtension. A later gemini->agy style substitution under the flag goes through the same resolver, or is skipped.\n\nError handling:\n- GetFullPath or Test-Path exceptions on a malformed PATH entry are caught, and that entry is skipped;\n- a refusal writes one line and exits 1 before any write or RPC;\n- nothing runs without the flag.\n\nWithout the flag, behavior is unchanged. Run `bash scripts/tests/parity-check.sh`. If it pins wrapper strings, add the four new message codes the way it pins R13c2's codes.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-10-31T19:19:22.156Z"
     },
     {
       "stepId": "step-4",
@@ -56,7 +71,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-4bc1a1b5",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -95,17 +110,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T08:07:24.823Z",
-  "updatedAt": "2026-10-31T18:23:33.796Z",
+  "updatedAt": "2026-10-31T19:53:27.805Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T08:08:34.580Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 2
   },
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T08:11:31.436Z",
   "executionContract": {
@@ -158,5 +177,64 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T08:11:31.467Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "contextFetchedBy": [
+    "worker-632cd3f0",
+    "architect-8419009e",
+    "worker-4bc1a1b5"
+  ],
+  "workStartedAt": "2026-10-31T19:01:17.626Z",
+  "commits": [
+    {
+      "sha": "4bb740ca1ee8ecacb8c69cc7b733a8d3ed1d4a71",
+      "ref": "refs/moe/rescue/task-aa85ff13a8894913ae34242dbab6f395/20261031T193300Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-632cd3f0@2026-10-31T19:00:45Z",
+      "paths": [
+        ".moe/tasks/task-64809b196c4042f18c7665e1e8a14b18.json",
+        ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+        ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+        ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-632cd3f0",
+      "recordedAt": "2026-10-31T19:32:56.134Z",
+      "status": "UNKNOWN",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-aa85ff13a8894913ae34242dbab6f395 ref=refs/moe/rescue/task-aa85ff13a8894913ae34242dbab6f395/20261031T193300Z sha=4bb740ca1ee8ecacb8c69cc7b733a8d3ed1d4a71 reason=teardown"
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-64809b196c4042f18c7665e1e8a14b18.json",
+    ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+    ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+    ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/protected-agent-command.test.mjs"
+  ],
+  "touchedFiles": [
+    "scripts/tests/protected-agent-command.test.mjs",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "rescue",
+    "code": "teardown",
+    "sessionId": "worker-632cd3f0@2026-10-31T19:00:45Z",
+    "at": "2026-10-31T19:32:56.134Z"
+  }
 }

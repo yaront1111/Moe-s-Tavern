@@ -4997,8 +4997,13 @@ exit 0
         [IO.File]::WriteAllText((Join-Path $prDist 'index.js'), $prBody)
     }
     [IO.File]::WriteAllText((Join-Path $prHome '.moe\config.json'), ('{"installPath":' + (ConvertTo-Json (Join-Path $prRoot 'install')) + '}'))
+    # A protected launch runs only a known CLI by name, from PATH outside the project.
+    $prBin = Join-Path $prRoot 'bin'
+    New-Item -ItemType Directory -Force -Path $prBin | Out-Null
+    Set-Content -Path (Join-Path $prBin 'claude.cmd') -Encoding ASCII -Value "@echo off`r`nexit /b 0`r`n"
     $prSaved = @{}
-    foreach ($n in @('MOE_RUNTIME_PROTECTED', 'MOE_PROXY_PATH', 'MOE_DAEMON_PATH', 'USERPROFILE', 'TEMP', 'TMP', 'FAKE_CLAIM_MODE', 'MOE_TASKLESS_WAIT_SEC', 'MOE_DISABLE_HEARTBEAT')) { $prSaved[$n] = [Environment]::GetEnvironmentVariable($n) }
+    foreach ($n in @('MOE_RUNTIME_PROTECTED', 'MOE_PROXY_PATH', 'MOE_DAEMON_PATH', 'USERPROFILE', 'TEMP', 'TMP', 'FAKE_CLAIM_MODE', 'MOE_TASKLESS_WAIT_SEC', 'MOE_DISABLE_HEARTBEAT', 'PATH')) { $prSaved[$n] = [Environment]::GetEnvironmentVariable($n) }
+    $env:PATH = $prBin + [IO.Path]::PathSeparator + $env:PATH
     # Invoke-PrRow ROW MARKER PROXY DAEMON LIVE [EXTRA] -- MARKER '-' leaves it
     # unset. LIVE 'live' writes a running daemon's daemon.json, as in a real
     # protected launch.
@@ -5012,7 +5017,7 @@ exit 0
         $env:USERPROFILE = $prHome; $env:TEMP = $tmp; $env:TMP = $tmp
         $env:FAKE_CLAIM_MODE = 'idle'; $env:MOE_TASKLESS_WAIT_SEC = '5'; $env:MOE_DISABLE_HEARTBEAT = '1'
         $out = Join-Path $prRoot "$Row.out"
-        $code = Invoke-WrapperProcess (@('-Project', $prProject, '-WorkerId', 'worker-protected', '-Role', 'worker', '-Command', $trueCmd, '-NoLoop') + $Extra) $out
+        $code = Invoke-WrapperProcess (@('-Project', $prProject, '-WorkerId', 'worker-protected', '-Role', 'worker', '-Command', 'claude', '-NoLoop') + $Extra) $out
         [pscustomobject]@{ Row = $Row; Code = $code; Tmp = $tmp; Text = [string](Get-Content -Raw -LiteralPath $out -ErrorAction SilentlyContinue) }
     }
     function Stop-Pr($R, [string]$Why) { Write-Host $R.Text; throw "PROTECTED RUNTIME FAILED ($($R.Row)): $Why" }

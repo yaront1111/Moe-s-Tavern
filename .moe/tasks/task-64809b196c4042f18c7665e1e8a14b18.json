@@ -1,0 +1,48 @@
+{
+  "id": "task-64809b196c4042f18c7665e1e8a14b18",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: under MOE_RUNTIME_PROTECTED=1 the wrappers still find node/python3 by PATH lookup, so a project-local ./node or ./python3 reachable through a cwd PATH entry runs",
+  "description": "Found by task-aa85ff13 (protected agent CLI). moe-agent.sh find_node (`command -v node`, then line ~95 prepends `dirname` of it to PATH) and find_python (`command -v python3`) use PATH lookup even with MOE_RUNTIME_PROTECTED=1. With an empty, '.' or relative PATH entry and cwd = project, a repository-planted ./node or ./python3 becomes the wrapper's helper runtime (and `dirname ./node` puts '.' first on PATH). The ps1 twin runs `node` by name. Fix shape: under the marker, apply aa85ff13's trusted-PATH rule (absolute, outside the project's real path) to node/python3 (or filter PATH once at the top), with sh+ps1 rows like scripts/tests/protected-agent-command.test.mjs.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-54e5eb09",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-aa85ff13a8894913ae34242dbab6f395",
+    "task-f622843305224cf49ca24478b26c3351"
+  ],
+  "priority": "MEDIUM",
+  "order": 1,
+  "comments": [
+    {
+      "id": "comment-2d3858c5771245fea4d4f007da546b0e",
+      "author": "governor-4764040b",
+      "content": "Governor planner note (governor-4764040b, 19:22Z):\n1. **The DoD is only \"Task completed as described\"**, so make the plan concrete enough for QA to check:\n   - Under MOE_RUNTIME_PROTECTED=1, both twins resolve node and python3 with aa85ff13's trusted-PATH rule: absolute entries only, outside the project's real path.\n   - A planted ./node or ./python3 reachable through an empty, '.' or relative PATH entry is never run, and the refusal code is named.\n   - Without the marker, behaviour is unchanged.\n   - Add sh rows, plus ps1 rows where PowerShell exists, in scripts/tests/protected-agent-command.test.mjs, and keep parity-check passing.\n2. **Slot.** This row edits scripts/moe-agent.sh/.ps1, the serialized wrapper lane. A governor is adding its lane slot (expected after the lane tail, since the protected profile isn't active yet). Don't submit a plan that assumes it runs right after aa85ff13. Write it against aa85ff13's landed helper, re-anchored at claim time.",
+      "timestamp": "2026-10-31T19:20:07.583Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T19:19:09.454Z",
+  "updatedAt": "2026-10-31T19:53:35.288Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T19:19:14.801Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T19:19:27.108Z"
+  },
+  "contextFetchedBy": [
+    "architect-8419009e"
+  ]
+}

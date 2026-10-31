@@ -442,6 +442,26 @@ parse_command_first_token() {
     printf '%s\n' "$COMMAND_BIN"
 }
 
+# Protected agent command: under MOE_RUNTIME_PROTECTED=1 the command can come
+# from repository content (settings.agentCommand), so only claude, codex, gemini
+# or grok runs, by bare name, resolved by protected_resolve_cli below. Lines are
+# byte-identical in moe-agent.ps1. Nothing has registered yet, so a refusal
+# clears WORKER_ID: the EXIT trap must deregister nothing.
+refuse_protected_agent() { # $1 = the line
+    printf '%s\n' "$1" >&2
+    WORKER_ID=""
+    exit 1
+}
+if [ "$RUNTIME_PROTECTED" = 1 ]; then
+    case "$COMMAND" in
+        claude|codex|gemini|grok) ;;
+        *)
+            PROTECTED_SHOWN="${COMMAND//[[:cntrl:]]/?}"
+            refuse_protected_agent "[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '${PROTECTED_SHOWN:0:200}' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start."
+            ;;
+    esac
+fi
+
 CLI_TYPE="claude"
 CMD_FIRST=$(parse_command_first_token "$COMMAND")
 CMD_BASE=$(basename "$CMD_FIRST")
@@ -745,9 +765,40 @@ require_protected_runtime_file() { # $1 = the variable name, $2 = its value
     case "$2" in /*|[A-Za-z]:[\\/]*) [ -f "$2" ] && return 0 ;; esac
     refuse_unprotected_runtime "$1"
 }
+# A protected CLI runs only from an absolute PATH entry outside the project:
+# never an empty, '.' or relative entry (the cwd), nor one whose real path is
+# the project or under it (-ef compares inodes, so links and case cannot hide
+# it). A manual scan: bash's hash table, aliases and functions never answer.
+protected_resolve_cli() { # $1 = the CLI name; sets COMMAND_BIN to its absolute path
+    local entries entry real up ext exts="" project_real
+    project_real=$(cd -- "$PROJECT" 2>/dev/null && pwd -P) || project_real=""
+    case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) exts=".exe .cmd" ;; esac
+    IFS=: read -r -a entries <<< "$PATH"
+    for entry in "${entries[@]}"; do
+        [ -n "$project_real" ] || break
+        case "$entry" in /*) ;; *) continue ;; esac
+        real=$(cd -- "$entry" 2>/dev/null && pwd -P) || continue
+        up="$real"
+        while :; do
+            [ "$up" -ef "$project_real" ] && continue 2
+            [ "$up" != / ] || break
+            up="${up%/*}"; [ -n "$up" ] || up=/
+        done
+        for ext in "" $exts; do
+            if [ -f "$real/$1$ext" ] && [ -x "$real/$1$ext" ]; then
+                COMMAND_BIN="$real/$1$ext"
+                COMMAND_ARGV=()
+                printf '%s\n' "[INFO] MOE_PROTECTED_AGENT_CLI: $1 -> $COMMAND_BIN"
+                return 0
+            fi
+        done
+    done
+    refuse_protected_agent "[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: $1 was not found on an absolute PATH entry outside the project; refusing to start."
+}
 if [ "$RUNTIME_PROTECTED" = 1 ]; then
     require_protected_runtime_file MOE_PROXY_PATH "$PROXY_PATH_OVERRIDE"
     require_protected_runtime_file MOE_DAEMON_PATH "$DAEMON_PATH_OVERRIDE"
+    protected_resolve_cli "$COMMAND"
 fi
 
 # Ensure MCP config for Claude Code

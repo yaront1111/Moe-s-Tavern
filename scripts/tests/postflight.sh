@@ -5482,7 +5482,9 @@ printf '%s\n' "${PR_MARK}'protected-daemon '+process.argv.slice(2).join(' ')+'\\
   > "$PR/fake-daemon.js"
 printf '#!/usr/bin/env bash\necho decoy-proxy >> %q\nexec %q %q "$@"\n' "$PR/marks" "$NODE_FOR_TEST" "$FAKE_PROXY" > "$PR/bin/moe-proxy"
 printf '#!/usr/bin/env bash\necho decoy-daemon >> %q\nexit 1\n' "$PR/marks" > "$PR/bin/moe-daemon"
-chmod +x "$PR/bin/moe-proxy" "$PR/bin/moe-daemon"
+# A protected launch runs only a known CLI by name, from PATH outside the project.
+printf '#!/bin/sh\nexit 0\n' > "$PR/bin/claude"
+chmod +x "$PR/bin/moe-proxy" "$PR/bin/moe-daemon" "$PR/bin/claude"
 for pr_pkg in moe-daemon moe-proxy; do
   mkdir -p "$PR/install/packages/$pr_pkg/dist"
   printf '%s\n' "require('fs').appendFileSync(require('path').join(__dirname,'..','..','..','..','marks'),'decoy-install-$pr_pkg\\n');process.exit(1);" \
@@ -5502,7 +5504,7 @@ pr_run() {
     if [ "$marker" = - ]; then unset MOE_RUNTIME_PROTECTED; else export MOE_RUNTIME_PROTECTED="$marker"; fi
     PATH="$PR/bin:$TMP_DIR:$PATH" HOME="$PR/home" MOE_PROXY_PATH="$proxy" MOE_DAEMON_PATH="$daemon" \
       FAKE_CLAIM_MODE=idle MOE_TASKLESS_WAIT_SEC=5 MOE_DISABLE_HEARTBEAT=1 timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
-      "$WRAPPER" --project "$PRJ" --worker-id worker-protected --role worker --command /bin/true --no-loop "$@"
+      "$WRAPPER" --project "$PRJ" --worker-id worker-protected --role worker --command claude --no-loop "$@"
   ) >"$PR/$row.out" 2>&1
   pr_code=$?
   set -e

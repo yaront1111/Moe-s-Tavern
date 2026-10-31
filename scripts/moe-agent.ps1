@@ -405,6 +405,16 @@ $env:GIT_TERMINAL_PROMPT = '0'
 # CQ-R13c2: the JetBrains launcher sets MOE_RUNTIME_PROTECTED=1 beside both paths.
 # Only exactly '1' protects: run exactly those files or refuse, never a fallback.
 $script:MoeRuntimeProtected = ($env:MOE_RUNTIME_PROTECTED -ceq '1')
+# Protected agent command: under MOE_RUNTIME_PROTECTED=1 the command can come
+# from repository content (settings.agentCommand), so only claude, codex, gemini
+# or grok runs, by bare name and with no -CommandArgs, resolved by
+# Resolve-MoeProtectedCli below. Lines are byte-identical in moe-agent.sh.
+function Stop-MoeProtectedAgent([string]$Line) { [Console]::Error.WriteLine($Line); exit 1 }
+if ($script:MoeRuntimeProtected -and ($CommandArgs.Count -ne 0 -or $Command -cnotin @('claude', 'codex', 'gemini', 'grok'))) {
+    $moeShown = ((@($Command) + @($CommandArgs)) -join ' ') -replace '\p{Cc}', '?'
+    if ($moeShown.Length -gt 200) { $moeShown = $moeShown.Substring(0, 200) }
+    Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '$moeShown' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start."
+}
 # Protected runtime gate, before the exit handler, any MCP config, daemon, proxy
 # RPC or CLI. The refusal names the variable, never its value; byte-identical in
 # moe-agent.sh. Not Write-Error: under EAP Stop it throws instead of exiting 1.
@@ -419,6 +429,68 @@ if ($script:MoeRuntimeProtected) {
             ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows -and $moeProtectedPath.StartsWith('/', [StringComparison]::Ordinal))
         if (-not ($moeProtectedAbsolute -and (Test-Path -LiteralPath $moeProtectedPath -PathType Leaf))) { Stop-MoeProtectedRuntime $moeProtectedName }
     }
+}
+# The full path with every symlink/junction component followed (GetFullPath
+# alone keeps them), so a link into the project cannot pass for an outside dir.
+function Get-MoeRealPath([string]$Path) {
+    $full = [IO.Path]::GetFullPath($Path)
+    for ($hop = 0; $hop -lt 40; $hop++) {
+        $root = [IO.Path]::GetPathRoot($full)
+        $parts = @($full.Substring($root.Length).Split([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) | Where-Object { $_ })
+        $dir = $root
+        $relinked = $false
+        for ($i = 0; $i -lt $parts.Count; $i++) {
+            $here = [IO.Path]::Combine($dir, $parts[$i])
+            $item = Get-Item -LiteralPath $here -Force -ErrorAction Stop
+            $target = @($item.Target | Where-Object { $_ }) | Select-Object -First 1
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $target) {
+                $rest = if ($i + 1 -lt $parts.Count) { @($parts[($i + 1)..($parts.Count - 1)]) } else { @() }
+                $full = [IO.Path]::GetFullPath([IO.Path]::Combine(@($dir, "$target") + $rest))
+                $relinked = $true
+                break
+            }
+            $dir = $here
+        }
+        if (-not $relinked) { return $full }
+    }
+    throw "symlink loop at $Path"
+}
+# A protected CLI name resolves only from an absolute PATH entry outside the
+# project's real path (empty, '.', relative and in-project entries skipped) by
+# this manual scan, never Get-Command. Windows tries .ps1 first, then PATHEXT,
+# PowerShell's own order. ponytail: 8.3 short-name aliases of the project and a
+# file-level link inside a trusted dir are not followed; resolve them if needed.
+function Resolve-MoeProtectedCli([string]$Name) {
+    $onWindows = $PSVersionTable.PSEdition -ne 'Core' -or $IsWindows
+    $cmp = if ($onWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $exts = if ($onWindows) { @('.ps1') + @("$env:PATHEXT".Split(';') | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() }) } else { @('') }
+    $sep = [IO.Path]::DirectorySeparatorChar
+    try { $project = (Get-MoeRealPath $projectPath.ProviderPath).TrimEnd('\', '/') } catch { $project = $null }
+    foreach ($entry in "$env:PATH".Split([IO.Path]::PathSeparator)) {
+        if (-not $project) { break }
+        $entry = $entry.Trim('"')
+        $absolute = if ($onWindows) { $entry -match '^[A-Za-z]:[\\/]' -or $entry -match '^[\\/]{2}[^\\/]' } else { $entry.StartsWith('/', [StringComparison]::Ordinal) }
+        if (-not $absolute) { continue }
+        try {
+            $realFull = Get-MoeRealPath $entry
+            $real = $realFull.TrimEnd('\', '/')
+            if ($real.Equals($project, $cmp) -or "$real$sep".StartsWith("$project$sep", $cmp)) { continue }
+            foreach ($ext in $exts) {
+                # The untrimmed path: a root entry trimmed to 'C:' or '' would join drive- or cwd-relative.
+                $file = [IO.Path]::Combine($realFull, "$Name$ext")
+                if (Test-Path -LiteralPath $file -PathType Leaf) {
+                    Write-Host "[INFO] MOE_PROTECTED_AGENT_CLI: $Name -> $file"
+                    return $file
+                }
+            }
+        } catch { continue }
+    }
+    Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: $Name was not found on an absolute PATH entry outside the project; refusing to start."
+}
+$script:MoeProtectedCli = $null
+if ($script:MoeRuntimeProtected) {
+    $Command = Resolve-MoeProtectedCli $Command
+    $script:MoeProtectedCli = $Command
 }
 
 # Graceful deregister, fired from multiple exit paths. The top-level `finally`
@@ -909,6 +981,8 @@ if ($enableAgentTeams) {
 $resolvedCommand = Resolve-CommandParts -Cmd $Command -CmdArgs $CommandArgs
 $Command = $resolvedCommand.Command
 $CommandArgs = $resolvedCommand.CommandArgs
+# A protected CLI path is never re-split (a space in it is not an argument).
+if ($script:MoeProtectedCli) { $Command = $script:MoeProtectedCli; $CommandArgs = @() }
 
 # Detect CLI type from command name
 $cliType = "claude"
@@ -9010,6 +9084,9 @@ $mentionsJson
                 $script:AccountRelaunch = $true
             } else {
                 $moeProbeWords = @($Command) + @($CommandArgs | Where-Object { $null -ne $_ })
+                # A protected CLI probes extensionless, so the helper resolves PATHEXT in the
+                # trusted dir only: a .ps1 handed to cmd would open by its file association.
+                if ($script:MoeProtectedCli) { $moeProbeWords = @([IO.Path]::Combine([IO.Path]::GetDirectoryName($Command), [IO.Path]::GetFileNameWithoutExtension($Command))) }
                 $moeSignIn = Invoke-MoeAccountHelper -HelperArgs (@('signin-state', $script:AccountLeasedDir) + $moeProbeWords)
                 if (($moeSignIn -ceq 'signed_out' -or $moeSignIn -ceq 'other') -and
                     $null -ne (Invoke-MoeRpc -Tool 'report_account_usage' -Args @{ workerId = $WorkerId; accountId = $script:AccountLeasedId; signIn = $moeSignIn })) {
