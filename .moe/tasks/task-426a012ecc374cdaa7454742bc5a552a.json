@@ -111,11 +111,17 @@
       "author": "governor-4764040b",
       "content": "Governor landing note (governor-4764040b, 17:59Z), for @worker-c0a1ac70 and I06f's QA.\n\nAt 17:56Z I declared I06f's fix-forward paths on this row: MoeBundle.properties:373, moe-vscode/src/util/ManagedVm.ts and moe-vscode/tests/managed-vm.test.cjs.\n\nMoeBundle.properties is co-edited with the live row task-8df7a049 (worker-632cd3f0, JetBrains settings dialog), whose step 2 added `moe.settings.notConnected` to the same file.\n- This row has no editing-tool record on that file, and 8df7a049 does.\n- Under the skip-untouched policy, this row's landing therefore lands ManagedVm.ts and managed-vm.test.cjs and holds MoeBundle.properties as MOE_ATTR_CONTESTED_UNTOUCHED(task-8df7a049). That hold is expected.\n- 8df7a049's own landing then commits the whole file, including this row's :373 hunk, with a `Moe-Contested: …MoeBundle.properties (task-426a012e)` trailer.\n\nWorker: don't fight the hold. Don't rewrite the file to manufacture a witness, and don't shell-edit it.\n\nQA:\n- Until 8df7a049's completion commit lands, a HEAD snapshot has VS Code's new PROVIDER_NOT_FOUND text and the new word-for-word parity test, but JetBrains' old :373 text. So the parity test in managed-vm.test.cjs fails there.\n- Check task-8df7a049's commits first. Run the parity check at or after its completion commit, and judge the :373 hunk by content at HEAD.\n- Don't reject this row because that hunk landed under 8df7a049's commit.",
       "timestamp": "2026-10-31T17:59:10.900Z"
+    },
+    {
+      "id": "comment-1ff557d9fee649a1aee3ff898cb84425",
+      "author": "governor-4764040b",
+      "content": "Correction to my comment-1935511e (governor-4764040b, 18:01Z): its landing forecast is stale.\n\ntask-8df7a049's wip 83692c69 (17:57:43Z) had already committed MoeBundle.properties with both hunks, including this row's :373 PROVIDER_NOT_FOUND text, under `Moe-Contested: …MoeBundle.properties (task-426a012e…)`. So:\n- No hold is expected on this row's landing. It now carries only moe-vscode/src/util/ManagedVm.ts and moe-vscode/tests/managed-vm.test.cjs.\n- QA can run the parity test at any HEAD from 83692c69 on.\n\ngovernor-693b7073's comment-6cbfe699 is the accurate note.",
+      "timestamp": "2026-10-31T18:01:21.871Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T16:23:47.028Z",
-  "updatedAt": "2026-10-31T18:00:01.061Z",
+  "updatedAt": "2026-10-31T18:01:21.871Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T16:23:51.378Z",
     "plannedStepCount": 4,
@@ -241,6 +247,22 @@
       "treeId": "6d5224c8a1233bf7250d189e458c53e4555c0872",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "7f64fccb94001a4dadac344e66ad4192f713fe84",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T17:03:33Z",
+      "paths": [
+        "moe-vscode/src/util/ManagedVm.ts",
+        "moe-vscode/tests/managed-vm.test.cjs"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T18:01:16.965Z",
+      "treeId": "4debdc3ca1d923c337afd75bedae9b60537891d5",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -251,9 +273,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-b58e1112@2026-10-31T16:23:54Z",
-    "at": "2026-10-31T16:40:25.508Z"
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-31T17:03:33Z",
+    "at": "2026-10-31T18:01:16.965Z"
   },
   "workStartedAt": "2026-10-31T17:04:59.537Z",
   "declaredFiles": [
@@ -269,5 +291,10 @@
     "reportedAt": "2026-10-31T18:00:01.059Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-I client epic gate and whole-epic review at SHA 96f7bdd4. That SHA holds every CQ-I commit plus I06e 3d6f8cb3 and 344a0acb a0ba55f7. Host certification is pending CQ-R13; no per-platform result is claimed.\n\nLinux snapshot (node 24.21, env -i):\n- daemon 6420 passed / 20 skipped, tsc 0; proxy 314; claude-plugin 18;\n- vscode 348: 344 pass, 0 fail. All 50 corpus rows pass (A01-A27, V01-V23; sha256 0537c9f2…);\n- CI local-runner line (12 files): 645 pass / 0 fail, run after the daemon build;\n- onboarding PASS on moe-vscode/bundled and on the source; artifact find empty; lint OK;\n- prerequisites: exit 2, PROVIDER_NOT_FOUND.\n\nWindows (node 24.16, no MOE_*):\n- gradle gate (the Windows equivalent, under the lease): 28 suites, 512/0, ClientVerdictCorpusTest 3/0;\n- buildPlugin zip: onboarding PASS, no client-verdicts.json or *Test.class in the jars;\n- W1: 115/0 across Git Bash, 5.1 and 7 legs;\n- PowerShell 5.1.26100.9711: guards 48/0 and 9/0, postflight-safe NONE;\n- pwsh 7.6.9: guards 48/0 and 9/0, postflight-safe NONE, parity PASS;\n- local-runner 496/0, 148 skips;\n- packaged moe-agent.ps1 byte-identical in both bundles; ParseFile reports 0 errors under both engines.\n\nFix-forward, 3 files:\n- PROVIDER_NOT_FOUND now has identical PATH-accurate text in MoeBundle.properties and ManagedVm.ts.\n- managed-vm.test.cjs gets the V1 expectation plus a new guard: every JetBrains moe.managedVm.code.* text equals VS Code's.\n- TDD red/green, with the guard proven by drift. A4 re-ran at 349/0 and the gate at 512/0.\n- The MoeBundle line already landed inside peer checkpoint 83692c69 (task-8df7a049), marked Moe-Contested to this row.\n\nRows filed: 01020adf (code texts), f2048cbf (SettingsPanel, now DONE), 5c8c22d7 (proxy dist tests), d4c4a758 (VS Code vm env).\nUnowned, human decision: the profile/evidence UI, JSON.parse lossy literals (fail-closed), headless only, and VS Code latestCheckRun.\nAll other items are verified with file:line in the step-4 note and the handoff memory."
+  "completionSummary": "CQ-I client epic gate and whole-epic review at SHA 96f7bdd4. That SHA holds every CQ-I commit plus I06e 3d6f8cb3 and 344a0acb a0ba55f7. Host certification is pending CQ-R13; no per-platform result is claimed.\n\nLinux snapshot (node 24.21, env -i):\n- daemon 6420 passed / 20 skipped, tsc 0; proxy 314; claude-plugin 18;\n- vscode 348: 344 pass, 0 fail. All 50 corpus rows pass (A01-A27, V01-V23; sha256 0537c9f2…);\n- CI local-runner line (12 files): 645 pass / 0 fail, run after the daemon build;\n- onboarding PASS on moe-vscode/bundled and on the source; artifact find empty; lint OK;\n- prerequisites: exit 2, PROVIDER_NOT_FOUND.\n\nWindows (node 24.16, no MOE_*):\n- gradle gate (the Windows equivalent, under the lease): 28 suites, 512/0, ClientVerdictCorpusTest 3/0;\n- buildPlugin zip: onboarding PASS, no client-verdicts.json or *Test.class in the jars;\n- W1: 115/0 across Git Bash, 5.1 and 7 legs;\n- PowerShell 5.1.26100.9711: guards 48/0 and 9/0, postflight-safe NONE;\n- pwsh 7.6.9: guards 48/0 and 9/0, postflight-safe NONE, parity PASS;\n- local-runner 496/0, 148 skips;\n- packaged moe-agent.ps1 byte-identical in both bundles; ParseFile reports 0 errors under both engines.\n\nFix-forward, 3 files:\n- PROVIDER_NOT_FOUND now has identical PATH-accurate text in MoeBundle.properties and ManagedVm.ts.\n- managed-vm.test.cjs gets the V1 expectation plus a new guard: every JetBrains moe.managedVm.code.* text equals VS Code's.\n- TDD red/green, with the guard proven by drift. A4 re-ran at 349/0 and the gate at 512/0.\n- The MoeBundle line already landed inside peer checkpoint 83692c69 (task-8df7a049), marked Moe-Contested to this row.\n\nRows filed: 01020adf (code texts), f2048cbf (SettingsPanel, now DONE), 5c8c22d7 (proxy dist tests), d4c4a758 (VS Code vm env).\nUnowned, human decision: the profile/evidence UI, JSON.parse lossy literals (fail-closed), headless only, and VS Code latestCheckRun.\nAll other items are verified with file:line in the step-4 note and the handoff memory.",
+  "touchedFiles": [
+    "moe-vscode/tests/managed-vm.test.cjs",
+    "moe-vscode/src/util/ManagedVm.ts",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+  ]
 }

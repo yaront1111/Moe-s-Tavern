@@ -9,14 +9,71 @@
     "cd packages/moe-proxy && npm test passes in a snapshot (never in the shared checkout)."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED). Create packages/moe-proxy/src/distContents.test.ts, the guard for DoD 2. Import only node:fs and vitest, in the same style as buildScriptOrder.test.ts.\n\nHeader comment, 3-4 lines:\n- npm publishes dist (package.json files ['dist']) and both IDE bundles copy it, so compiled tests never belong there.\n- The build emits through tsconfig.build.json, which leaves src/**/*.test.ts out, then type-checks the tests with `tsc --noEmit` over tsconfig.json.\n- npm test's pretest rebuilds dist before vitest starts, so the scan reads a fresh build.\n\nBody: `const read = (name: string) => JSON.parse(fs.readFileSync(new URL(`../${name}`, import.meta.url), 'utf8'));` and describe('dist ships no compiled tests') with two tests.\n\n(a) 'holds the entry point and no *.test.* or *.spec.* file':\n- `const files = fs.readdirSync(new URL('../dist/', import.meta.url), { recursive: true, encoding: 'utf8' });`\n- `expect(files).toContain('index.js')`, so an empty dist cannot pass vacuously. A missing dist throws ENOENT, which is a loud failure.\n- `expect(files.filter((name) => /\\.(?:test|spec)\\./.test(name))).toEqual([])`. Its diff names every leaked file, whether .js, .d.ts or .d.ts.map.\n\n(b) 'still type-checks the tests: build runs tsc --noEmit over a tsconfig that includes them':\n- `expect(read('package.json').scripts.build.split('&&').map((step: string) => step.trim())).toContain('tsc --noEmit')`\n- `expect(read('tsconfig.json')).toMatchObject({ include: ['src'] })`\n- `expect(read('tsconfig.json').exclude).toBeUndefined()`. tsconfig.build.json's exclude replaces the base exclude rather than merging with it, so tsconfig.json must keep none.\n\nRED evidence: take a snapshot of HEAD plus only this file (recipe in step 3). `npm test` there must fail both tests: (a) lists 21 leaked names, and (b) fails because build is plain `tsc`. Put the counts in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-proxy/src/distContents.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/distContents.test.ts"
+      ],
+      "note": "RED in snapshot (HEAD + test only): 2 failed, 314 passed; (a) listed the 21 leaked test artifacts, (b) 'tsc' lacks 'tsc --noEmit'. Dirty peer paths (.moe tasks, moe-vscode ManagedVm) untouched.",
+      "startedAt": "2026-10-31T18:00:23.315Z",
+      "completedAt": "2026-10-31T18:01:23.247Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Minimum fix (GREEN).\n\n(1) Create packages/moe-proxy/tsconfig.build.json with exactly this content, 2-space indent and a trailing newline:\n{\n  \"extends\": \"./tsconfig.json\",\n  \"exclude\": [\"src/**/*.test.ts\"]\n}\nIt inherits include ['src'], rootDir, outDir and every compiler option, and it uses the daemon's exclude pattern (packages/moe-daemon/tsconfig.json).\n\n(2) In packages/moe-proxy/package.json, change only `\"build\": \"tsc\"` to `\"build\": \"tsc -p tsconfig.build.json && tsc --noEmit\"`. Use the Edit tool: one line, keeping the 2-space JSON and LF line endings.\n\nEmit runs FIRST on purpose; this is the error handling for a type error. prebuild has already removed dist, and tsc still emits on errors (noEmitOnError is off). So a production or test type error still fails the build, but never leaves the live proxy dist empty. That loss is the task-a10a7f78 incident buildScriptOrder.test.ts guards against, and the test accepts this script. The second pass type-checks everything tsconfig.json includes, so the tests keep the type coverage the old single `tsc` gave them.\n\nDo NOT edit:\n- tsconfig.json. It stays the IDE/type-check project that includes the tests.\n- prebuild, clean, pretest, pretest:coverage or prepublishOnly. They all route through `npm run build`, as do CI, release, the installers and doctor.ps1.\n- The IDE bundle excludes in moe-jetbrains/build.gradle.kts and moe-vscode/scripts/bundle-assets.mjs. They are defense in depth: a stale dist, like the shared checkout's, still holds the 21 artifacts until a human rebuilds it.\n\nIn the step-3 snapshot, prove type coverage once:\n1. Back up the snapshot's src/utils.test.ts.\n2. Append `export const typeCoverageProbe: number = 'x';` to it.\n3. `npm run build` must exit non-zero with TS2322, while `ls dist` still shows the 9 production files.\n4. Restore the file and cmp it against the shared checkout's copy.\nRecord the result in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/package.json"
+      ],
+      "newFiles": [
+        "packages/moe-proxy/tsconfig.build.json"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/package.json",
+        "packages/moe-proxy/tsconfig.build.json"
+      ],
+      "note": "Created tsconfig.build.json; build script changed. Type-coverage probe in snapshot: build exit 1 with TS2322 in src/utils.test.ts, dist kept 9 production files; file restored and cmp-identical.",
+      "startedAt": "2026-10-31T18:01:24.072Z",
+      "completedAt": "2026-10-31T18:01:32.674Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification: run it once, in a snapshot, never in the shared checkout. The shared packages/moe-proxy/dist is the live proxy, and pretest cleans and rebuilds it.\n\nRecipe (WSL bash, or Git Bash on a Windows seat):\n1. `SNAP=$(mktemp -d /tmp/moe-proxy-dist.XXXXXX); mkdir $SNAP/repo; git archive HEAD | tar -x -C $SNAP/repo`. Archive the whole repo: buildScriptOrder.test.ts reads ../../moe-claude-plugin/package.json, and workerType.integration.test.ts imports ../../moe-daemon/src.\n2. Copy ONLY the three owned files over it: packages/moe-proxy/package.json, packages/moe-proxy/tsconfig.build.json and packages/moe-proxy/src/distContents.test.ts. Never copy `git diff --name-only`, which brings peers' bytes along.\n3. Run `npm ci --no-audit --no-fund` in BOTH packages/moe-daemon and packages/moe-proxy. These are native Linux installs, a few seconds each; the shared node_modules are Windows-native. Run everything under `env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin NO_COLOR=1`.\n4. From $SNAP/repo, under the same env -i, run exactly:\ncd packages/moe-proxy && npm test && npm pack --dry-run --json | node -e 'const p=Object.values(JSON.parse(require(\"fs\").readFileSync(0,\"utf8\")))[0].files.map(f=>f.path),t=p.filter(f=>/\\.(test|spec)\\./.test(f));if(!p.includes(\"dist/index.js\")||t.length){console.error(\"packed test files:\",t);process.exit(1)}console.log(p.length+\" packed, 0 test files\")'\n\nExpected, as prototyped at 5310ee11: Test Files 8 passed, Tests 316 passed (314 existing plus 2 new), then `11 packed, 0 test files`, exit 0. That covers all three DoD items. cmp the three owned files against the snapshot before citing the run, then submit the command, exitCode and outputTail as the complete_task verification.\n\nError handling for a red run:\n- Read the first failure.\n- `Cannot find package 'pino'` in workerType.integration.test.ts means the snapshot's daemon npm ci is missing. That is the environment, not the change: install and rerun.\n- For any other failure, fix the owned file in the checkout with Edit, re-copy it, and rerun the whole command.\n- Never build, test, install or delete anything in the shared packages/moe-proxy.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Snapshot gate (3 owned files cmp-identical): 8 files, 316 tests passed, '11 packed, 0 test files', exit 0; find dist -name '*.test.*' = 0.",
+      "startedAt": "2026-10-31T18:01:33.585Z",
+      "completedAt": "2026-10-31T18:02:23.393Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's 3-file diff (load adversarial-self-review). Check:\n1. tsconfig.build.json's exclude replaces the base exclude instead of merging with it. That is fine while tsconfig.json has none, which test (b) pins.\n2. A production type error still fails the build with dist populated (emit runs first). A test type error fails the second pass.\n3. Windows: `&&` works in cmd.exe, npm's default script shell. readdirSync's recursive option needs Node >=18.17/20.1. CI runs 24 and dist is flat, so an older Node still scans the top level.\n4. Concurrency: the guard only reads dist, no proxy test writes it, and vitest starts after pretest finishes.\n5. `npm pack --json` has a different shape per npm version: npm 12 returns an object keyed by package name, older versions an array. The gate's Object.values(...)[0] handles both.\n6. A later src/foo.spec.ts: vitest runs only *.test.ts, and test (a) flags any *.spec.* that reaches dist, prompting the exclude to grow.\n7. `git status --short packages/moe-proxy` shows exactly the 3 owned paths.\n\nReport all three paths in complete_step.modifiedFiles. Run no git add or commit; the wrapper lands.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-proxy/package.json",
+        "packages/moe-proxy/tsconfig.build.json",
+        "packages/moe-proxy/src/distContents.test.ts"
+      ],
+      "note": "Self-review: git status shows exactly the 3 owned paths, no CRLF; emit-first order verified by probe (type error fails build, dist keeps 9 files); tsconfig.json untouched and its no-exclude pinned by test (b); pack check handles npm 12 object shape.",
+      "startedAt": "2026-10-31T18:02:24.349Z",
+      "completedAt": "2026-10-31T18:02:28.550Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote under the human's standing delegation. It's an off-lane LOW follow-up from the I06f review: no deps, and its files are disjoint from every open row. It gives idle architects and coders work.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "LOW",
@@ -24,5 +81,114 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T17:35:21.867Z",
-  "updatedAt": "2026-10-31T17:35:21.867Z"
+  "updatedAt": "2026-10-31T18:02:37.159Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T17:42:17.457Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T17:42:37.657Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-66fd8127",
+    "worker-25da16b2"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T17:59:41.761Z",
+  "executionContract": {
+    "intendedBehavior": "A fresh `npm run build` in packages/moe-proxy emits only production outputs: dist/{index,utils,daemonIdentity}.{js,d.ts,d.ts.map}, byte-identical to before. It still type-checks every src/**/*.test.ts, so `npm pack --dry-run` lists no test file. A proxy vitest guard fails if any *.test.* or *.spec.* file reaches dist again, or if the build stops type-checking the tests.",
+    "acceptanceCriteria": [
+      "In a snapshot, after `npm run build`, `find dist -name '*.test.*'` prints nothing, and the 9 production outputs equal a pre-fix build's bytes.",
+      "`npm pack --dry-run --json` lists dist/index.js and no path matching /\\.(test|spec)\\./.",
+      "src/distContents.test.ts fails when build emits tests (e.g. build = `tsc && tsc --noEmit`), when build drops `tsc --noEmit`, and when tsconfig.json gains an exclude. It passes on the fix. All three mutants were prototyped and killed.",
+      "A type error in a test file still fails `npm run build`, and dist keeps its 9 production files.",
+      "`cd packages/moe-proxy && npm test` passes in a snapshot, never in the shared checkout."
+    ],
+    "invariants": [
+      "tsconfig.json stays byte-identical. It remains the IDE and type-check project that includes the tests.",
+      "A type error never leaves dist empty: emit runs before the type-check pass.",
+      "Never build, test, install or delete in the shared checkout's packages/moe-proxy (live runtime)."
+    ],
+    "compatibility": [
+      "Every build entry point keeps calling `npm run build` unchanged: ci.yml, release.yml, install-all.{sh,ps1}, install-mac.sh, build-installer.{sh,ps1}, doctor.ps1, and the prepublishOnly, pretest and pretest:coverage scripts.",
+      "Production dist bytes, the bin/main/types/exports fields and the `files` allowlist are unchanged.",
+      "buildScriptOrder.test.ts invariants hold: tsc --version runs before any dist removal, and every emit runs after the last removal.",
+      "The *.test.* excludes in moe-jetbrains/build.gradle.kts and moe-vscode/scripts/bundle-assets.mjs stay as they are."
+    ],
+    "approvedScope": [
+      "packages/moe-proxy/package.json scripts.build only: `tsc` becomes `tsc -p tsconfig.build.json && tsc --noEmit`.",
+      "New packages/moe-proxy/tsconfig.build.json: extends ./tsconfig.json, exclude [\"src/**/*.test.ts\"].",
+      "New vitest guard packages/moe-proxy/src/distContents.test.ts: a dist scan, plus assertions on the build script and the type-check project."
+    ],
+    "reuse": [
+      "The exclude pattern src/**/*.test.ts already used by packages/moe-daemon/tsconfig.json.",
+      "The new URL('../package.json', import.meta.url) read pattern from buildScriptOrder.test.ts.",
+      "No new dependency: node:fs readdirSync with recursive."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-proxy/package.json: files ['dist','README.md','LICENSE']; build 'tsc'; prebuild 'tsc --version && npm run clean'; pretest, pretest:coverage and prepublishOnly are each 'npm run build'.",
+      "packages/moe-proxy/tsconfig.json: include ['src'], no exclude, declaration and declarationMap set. Its 7 src/*.test.ts files emit 21 dist artifacts.",
+      "packages/moe-proxy/vitest.config.ts includes src/**/*.test.ts regardless of tsconfig.",
+      "workerType.integration.test.ts imports ../../moe-daemon/src (it needs the daemon's node_modules) and spawns ../dist/index.js.",
+      "TypeScript is 7.0.2 (tsgo). extends, exclude, -p and --noEmit behaved as expected in a 5310ee11 scratch prototype."
+    ],
+    "checkRefs": [
+      "cd packages/moe-proxy && npm test && npm pack --dry-run --json | node -e 'const p=Object.values(JSON.parse(require(\"fs\").readFileSync(0,\"utf8\")))[0].files.map(f=>f.path),t=p.filter(f=>/\\.(test|spec)\\./.test(f));if(!p.includes(\"dist/index.js\")||t.length){console.error(\"packed test files:\",t);process.exit(1)}console.log(p.length+\" packed, 0 test files\")'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Exclude the tests in tsconfig.json itself, as the daemon does. Rejected: it drops the tests' type checking (the daemon's tests have had none since CQ-I06c), and IDEs would treat test files as an inferred project. The task says to keep type coverage. (2) Type-check first (`tsc --noEmit && tsc -p tsconfig.build.json`). Rejected: prebuild has already deleted dist, so a test type error would leave the live proxy dist empty (the task-a10a7f78 class). (3) files ['dist','!dist/**/*.test.*']. Rejected: it fixes the tarball, but dist still emits the tests, and DoD 1 requires none. (4) vitest typecheck mode. Rejected: its semantics are version-specific with TS 7 (tsgo) and it is heavier. (5) Running npm pack inside vitest. Rejected: it spawns npm (Windows .cmd quirks) and is slower. Since the files allowlist is dist, the dist scan gives the same signal, and the gate command checks the pack listing.",
+    "codebaseInsights": "Every proxy build entry point runs `npm run build`: ci.yml (3 jobs), release.yml (2), install-all.{sh,ps1}, install-mac.sh, build-installer.{sh,ps1}, doctor.ps1, prepublishOnly, pretest and pretest:coverage. Nothing runs a bare tsc in packages/moe-proxy, so the build script is the single choke point. The 21 artifacts are 7 test sources × (.js, .d.ts, .d.ts.map). buildScriptOrder.test.ts treats every non-probe `tsc ...` step as an emit and requires it after the last dist removal; the new script satisfies that. The claude plugin already excludes its tests. Prototype at HEAD 5310ee11 in a scratch archive: 0 test artifacts, the 9 production outputs byte-identical, the gate green (8 files, 316 tests, `11 packed, 0 test files`), RED before the fix (the pack check listed all 21). Three guard mutants were killed, each by the intended test.",
+    "risks": "- The shared checkout's packages/moe-proxy/dist keeps its 21 stale test artifacts until a human rebuilds it. The new guard fails there by design without a rebuild. Do not delete those files or build there (live runtime rail).\n- npm 12's `npm pack --dry-run --json` returns an object keyed by package name, while older npm returns an array. The gate's Object.values(...)[0] handles both.\n- The snapshot also needs a native npm ci in packages/moe-daemon. Otherwise workerType.integration.test.ts fails at import (pino) and its 8 tests show as skipped.\n- tsconfig.build.json's exclude replaces the base exclude, so tsconfig.json must keep none. Test (b) pins that.\n- The IDE bundle comments ('moe-proxy's tsconfig compiles src/*.test.ts') become historical, but their excludes stay needed. Both files are outside this task, so leave them.",
+    "keyFiles": [
+      "packages/moe-proxy/package.json",
+      "packages/moe-proxy/tsconfig.json",
+      "packages/moe-proxy/vitest.config.ts",
+      "packages/moe-proxy/src/buildScriptOrder.test.ts",
+      "packages/moe-proxy/src/workerType.integration.test.ts",
+      "packages/moe-daemon/tsconfig.json"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "83692c690c4b91c1aebc3320d35f748f663f88e1",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T17:59:41.782Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T18:00:23.315Z",
+  "reviewStartedAt": "2026-10-31T18:02:37.157Z",
+  "verification": {
+    "command": "cd packages/moe-proxy && npm test && npm pack --dry-run --json | node -e 'const p=Object.values(JSON.parse(require(\"fs\").readFileSync(0,\"utf8\")))[0].files.map(f=>f.path),t=p.filter(f=>/\\.(test|spec)\\./.test(f));if(!p.includes(\"dist/index.js\")||t.length){console.error(\"packed test files:\",t);process.exit(1)}console.log(p.length+\" packed, 0 test files\")'  (run in a git-archive snapshot of HEAD + the 3 owned files, env -i, node v24.21.0)",
+    "exitCode": 0,
+    "outputTail": "Test Files  8 passed (8)\n      Tests  316 passed (316)\n   Duration  42.89s (tests 99%)\n\n11 packed, 0 test files",
+    "reportedAt": "2026-10-31T18:02:37.157Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-proxy/src/distContents.test.ts",
+    "packages/moe-proxy/package.json",
+    "packages/moe-proxy/tsconfig.build.json"
+  ],
+  "completionSummary": "moe-proxy build now emits through new tsconfig.build.json (excludes src/**/*.test.ts), then type-checks everything with `tsc --noEmit`: build = `tsc -p tsconfig.build.json && tsc --noEmit`. New guard src/distContents.test.ts fails if any *.test.*/*.spec.* reaches dist, or if the build drops `tsc --noEmit`, or tsconfig.json gains an exclude. Snapshot gate: 8 files / 316 tests pass, `11 packed, 0 test files`. RED before fix was 2 failed (21 leaked artifacts). A type error in a test file still fails the build (TS2322) with dist's 9 production files kept. tsconfig.json unchanged. The shared checkout's dist keeps its stale test artifacts until a human rebuilds it."
 }
