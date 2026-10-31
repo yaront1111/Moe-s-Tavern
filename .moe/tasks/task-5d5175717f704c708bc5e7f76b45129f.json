@@ -1,0 +1,27 @@
+{
+  "id": "task-5d5175717f704c708bc5e7f76b45129f",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: taskless-handoff.test.mjs ps1 slice runs WT-04's unstubbed Initialize-MoeWorktree, so 14 claimed-worker tests fail under Windows node",
+  "description": "Repro on a pure HEAD snapshot (8e20bf9e): `git archive HEAD scripts docs | tar -x -C $H && cd $H && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/taskless-handoff.test.mjs` gives 106 tests, 92 pass, 14 fail. All 14 are the claimed-worker/resume cases, 7 on powershell and 7 on pwsh. Each fails with \"Initialize-MoeWorktree : The term 'Initialize-MoeWorktree' is not recognized\". WT-04 (5657d186) put `if ($AutoClaim -and $preflightOk -and $preflightTaskId -and $Role -eq 'worker') { Initialize-MoeWorktree ... }` inside the psContext slice (`    $dynamicContext = \"\"` → `    # -------- Pre-flight baseline`), and the test's ps1 preamble never stubs it. Likely fix: stub it in the preamble, as the sh side already passes. Found by WT-05 (task-c4cccb84) during its step-5 verification.",
+  "definitionOfDone": [
+    "Windows node: `node --test scripts/tests/taskless-handoff.test.mjs` passes on powershell and pwsh (0 fail) without weakening any assertion",
+    "Linux node run of the same file stays green"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 31,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T04:28:54.917Z",
+  "updatedAt": "2026-10-31T04:28:54.917Z"
+}

@@ -993,9 +993,11 @@ $claudeInteractive = ($cliType -eq "claude") -and $Interactive
 $grokInteractive = ($cliType -eq "grok") -and $Interactive -and (-not $GrokExec)
 
 # For codex: write project-scoped .codex/config.toml instead of global registration
-if ($cliType -eq "codex") {
+# (-Root: the control or the task worktree; MOE_PROJECT_PATH stays the control)
+function Write-MoeCodexConfig {
+    param([string]$Root, [string]$SerenaProject)
     Write-Host "Writing project-scoped Codex MCP config..."
-    $codexConfigDir = Join-Path $projectPath ".codex"
+    $codexConfigDir = Join-Path $Root ".codex"
     $codexConfigFile = Join-Path $codexConfigDir "config.toml"
     try {
         if (-not (Test-Path $codexConfigDir)) {
@@ -1139,12 +1141,14 @@ $serenaTomlBlock
         Write-Host "Codex MCP config written to: $codexConfigFile"
     } catch {
         Write-Error "Failed to write Codex MCP config: $_"
-        exit 1
+        throw
     }
-} elseif ($cliType -eq "gemini") {
+}
+function Write-MoeGeminiConfig {
+    param([string]$Root, [string]$SerenaProject)
     # For gemini: write project-scoped .gemini/settings.json with MCP config
     Write-Host "Writing project-scoped Gemini MCP config..."
-    $geminiConfigDir = Join-Path $projectPath ".gemini"
+    $geminiConfigDir = Join-Path $Root ".gemini"
     $geminiConfigFile = Join-Path $geminiConfigDir "settings.json"
     # Recursively convert a PSCustomObject graph (as produced by ConvertFrom-Json
     # WITHOUT -AsHashtable on Windows PowerShell 5.1, where -AsHashtable does not
@@ -1250,9 +1254,11 @@ $serenaTomlBlock
         }
     } catch {
         Write-Error "Failed to write Gemini MCP config: $_"
-        exit 1
+        throw
     }
-} elseif ($cliType -eq "grok") {
+}
+function Write-MoeGrokConfig {
+    param([string]$Root, [string]$SerenaProject)
     # For grok: write project-scoped .grok/config.toml - the same
     # [mcp_servers.<name>] TOML shape as codex, with two load-bearing
     # differences: (1) a grok PROJECT config may only carry [mcp_servers.*],
@@ -1264,7 +1270,7 @@ $serenaTomlBlock
     # the real id, a human running grok by hand gets "" (which the proxy
     # treats as unset). Serena's --context is "agent" here (not "codex").
     Write-Host "Writing project-scoped Grok MCP config..."
-    $grokConfigDir = Join-Path $projectPath ".grok"
+    $grokConfigDir = Join-Path $Root ".grok"
     $grokConfigFile = Join-Path $grokConfigDir "config.toml"
     try {
         if (-not (Test-Path $grokConfigDir)) {
@@ -1389,11 +1395,18 @@ $serenaTomlBlock
         # exactly the bytes it wrote.
         [System.IO.File]::WriteAllText($grokConfigFile, $grokConfigText, [System.Text.UTF8Encoding]::new($false))
         Write-Host "Grok MCP config written to: $grokConfigFile"
-        Grant-GrokFolderTrust -ProjectPath $projectPath
+        Grant-GrokFolderTrust -ProjectPath $Root
     } catch {
         Write-Error "Failed to write Grok MCP config: $_"
-        exit 1
+        throw
     }
+}
+if ($cliType -eq "codex") {
+    Write-MoeCodexConfig -Root "$projectPath" -SerenaProject $serenaProject
+} elseif ($cliType -eq "gemini") {
+    Write-MoeGeminiConfig -Root "$projectPath" -SerenaProject $serenaProject
+} elseif ($cliType -eq "grok") {
+    Write-MoeGrokConfig -Root "$projectPath" -SerenaProject $serenaProject
 } else {
     Write-Host "MCP config written to: $mcpConfigFile"
 }
@@ -2810,6 +2823,33 @@ function Install-MoeTaskWorktree([string]$Top, [string]$W, [string]$Branch, [str
     }
     $script:MoeWtMode = 'worktree'; $script:MoeWtPath = $W; $script:MoeWtBranch = $Branch; $script:MoeWtTarget = $Target
     Write-Host "[worktree] $verb $W on $Branch"
+}
+
+# Worktree mode, design §5.1/§5.2: the CLI runs in $script:cliRoot = W. Writes
+# into W what the pre-flight writes into the control for this CLI (claude keeps
+# its temp --mcp-config; the grok writer also trusts W), mirrors
+# .moe/agents/*.md into W/.claude/agents and exports the worktree names;
+# MOE_PROJECT_PATH stays the control. A failed write refuses the seat: nothing
+# falls back to the control. Twin: prepare_worktree_launch.
+function Initialize-MoeWorktreeLaunch {
+    $script:cliRoot = $script:MoeWtPath
+    $env:MOE_WORKTREE_PATH = $script:MoeWtPath; $env:MOE_TASK_BRANCH = $script:MoeWtBranch; $env:MOE_LAND_TARGET = $script:MoeWtTarget
+    $what = "cannot write the $cliType config"; $at = Join-Path $script:cliRoot ".$cliType"
+    try {
+        switch ($cliType) {
+            'codex' { Write-MoeCodexConfig -Root $script:cliRoot -SerenaProject $serenaProject }
+            'gemini' { Write-MoeGeminiConfig -Root $script:cliRoot -SerenaProject $serenaProject }
+            'grok' { Write-MoeGrokConfig -Root $script:cliRoot -SerenaProject $serenaProject }
+        }
+        $agentsSrc = Join-Path $moeDir 'agents'
+        if ($enableAgentTeams -and (Test-Path -LiteralPath $agentsSrc)) {
+            $what = 'cannot copy the subagents'; $at = Join-Path (Join-Path $script:cliRoot '.claude') 'agents'
+            New-Item -ItemType Directory -Force -Path $at | Out-Null
+            Get-ChildItem -LiteralPath $agentsSrc -File -Filter '*.md' | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $at -Force }
+        }
+    } catch {
+        Stop-MoeWorktreeSeat -Code MOE_WORKTREE_CREATE_FAILED -Detail "$what (${at}): $($_.Exception.Message)"
+    }
 }
 
 # $true only for a symbolic link (to a file, a directory or nothing). The
@@ -6445,6 +6485,8 @@ do {
     $script:MoeRunnerId = "runner-" + [guid]::NewGuid().ToString("N")
     $preflightTaskId = ""
     $script:MoeWtMode = 'shared'; $script:MoeWtPath = ''; $script:MoeWtBranch = ''; $script:MoeWtTarget = ''
+    $script:cliRoot = "$projectPath"; Remove-Item Env:MOE_WORKTREE_PATH, Env:MOE_TASK_BRANCH, Env:MOE_LAND_TARGET -ErrorAction SilentlyContinue
+    if ($script:cliRootPushed) { Pop-Location; $script:cliRootPushed = $false }
     # Per-task launch hint from claim_next_task (reset so a tier never leaks into the next task).
     $taskLaunchTier = ""; $taskLaunchModel = ""; $taskLaunchEffort = ""; $taskLaunchCodexModel = ""; $taskLaunchCodexEffort = ""
     $preflightHeldTaskId = ""
@@ -7082,6 +7124,7 @@ If moe.wait_for_task returns hasChatMessage:true, call moe.chat_read on chatMess
         }
     }
     # -------- End pre-flight baseline --------
+    if ($script:MoeWtMode -eq 'worktree') { Initialize-MoeWorktreeLaunch }
 
     # Priority banner for unread messages routed at THIS worker. Goes LAST in
     # the dynamic context so it's the most recent text before the role-specific
@@ -7127,7 +7170,7 @@ $mentionsJson
         # Shared fallback stays role-neutral; otherwise a sibling role can change
         # the prefix. Private stable instructions and private task context remain
         # separate: task text must never enter model_instructions_file.
-        $agentInstructionsPath = Join-Path (Join-Path $projectPath ".codex") "agent-instructions.md"
+        $agentInstructionsPath = Join-Path (Join-Path $script:cliRoot ".codex") "agent-instructions.md"
         $codexDir = Split-Path $agentInstructionsPath -Parent
         if (-not (Test-Path $codexDir)) { New-Item -ItemType Directory -Force -Path $codexDir | Out-Null }
         [System.IO.File]::WriteAllText($agentInstructionsPath, 'Moe role instructions are supplied by the launcher. Follow the user message for this session context.', [System.Text.UTF8Encoding]::new($false))
@@ -7141,7 +7184,7 @@ $mentionsJson
         [System.IO.File]::WriteAllText($script:CodexSeatInstructionsFile, $fileBody, [System.Text.UTF8Encoding]::new($false))
         Write-Host "Agent instructions written to: $($script:CodexSeatInstructionsFile) (shared role doc: $agentInstructionsPath)"
     } elseif ($cliType -eq "gemini") {
-        $geminiInstructionsDir = Join-Path $projectPath ".gemini"
+        $geminiInstructionsDir = Join-Path $script:cliRoot ".gemini"
         if (-not (Test-Path $geminiInstructionsDir)) {
             New-Item -ItemType Directory -Force -Path $geminiInstructionsDir | Out-Null
         }
@@ -7282,6 +7325,7 @@ $mentionsJson
     # above stays on the operator's own config directory; nothing reads inside
     # an account's except an interactive seat's folder-trust key (the lease
     # sets it).
+    if ($script:MoeWtMode -eq 'worktree') { Push-Location -LiteralPath $script:cliRoot; $script:cliRootPushed = $true }
     Clear-MoeAccountLease
     if (-not $moeSkipLaunch -and $cliType -eq 'claude') {
         Get-MoeAccountLease
@@ -7372,7 +7416,7 @@ $mentionsJson
             if ($script:CodexSeatInstructionsFile) {
                 $codexSeatArgs += @('-c', "model_instructions_file=$($script:CodexSeatInstructionsFile.Replace('\', '/'))")
             }
-            $codexSeatArgs += @('-c', (Get-CodexMoeServerOverride (Join-Path (Join-Path $projectPath '.codex') 'config.toml') $WorkerId))
+            $codexSeatArgs += @('-c', (Get-CodexMoeServerOverride (Join-Path (Join-Path $script:cliRoot '.codex') 'config.toml') $WorkerId))
             # Per-task model/effort (launch.codex hint). An operator pin wins:
             # --model / settings.models.<role> keeps the model, MOE_CODEX_REASONING_EFFORT
             # keeps the effort; with no hint, config.toml's model_reasoning_effort applies.
@@ -7452,7 +7496,7 @@ $mentionsJson
                     $probePrevEap = $ErrorActionPreference
                     $ErrorActionPreference = 'Continue'
                     try {
-                        $probeOut = (Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)
+                        $probeOut = (Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$script:cliRoot" @codexSandboxArgs --help 2>&1 | Out-String)
                         $probeExit = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
                     } catch { $probeOut = "$_"; if ($probeExit -eq 0) { $probeExit = 1 } } finally { $ErrorActionPreference = $probePrevEap }
                     if ($probeExit -ne 0 -and $probeOut -match 'unexpected argument|unrecognized subcommand|unexpected value') {
@@ -7470,10 +7514,10 @@ $mentionsJson
                         exit 1
                     }
                 }
-                Write-Host "Command: $Command $($codexSeatArgs -join ' ') $($codexExecOverrides -join ' ') exec --json -C `"$projectPath`"$codexSandboxBanner `"<prompt>`""
+                Write-Host "Command: $Command $($codexSeatArgs -join ' ') $($codexExecOverrides -join ' ') exec --json -C `"$script:cliRoot`"$codexSandboxBanner `"<prompt>`""
                 Start-MoeUsageReceipt 'codex' 'headless'
                 & {
-                    Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"
+                    Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$script:cliRoot" @codexSandboxArgs "$shortPrompt"
                     $script:CliExitCode = $LASTEXITCODE
                 } | ForEach-Object -Begin {
                     # PS 5.1 holds a native-to-native pipe until the producer exits, so
@@ -7492,9 +7536,9 @@ $mentionsJson
                 }
             } else {
                 # Interactive TUI mode: codex -c <seat overrides> -C <project> "<prompt>"
-                Write-Host "Command: $Command $($codexSeatArgs -join ' ') -C `"$projectPath`" `"<prompt>`""
+                Write-Host "Command: $Command $($codexSeatArgs -join ' ') -C `"$script:cliRoot`" `"<prompt>`""
                 Start-MoeUsageReceipt 'codex' 'interactive'
-                Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs -C "$projectPath" "$shortPrompt"
+                Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs -C "$script:cliRoot" "$shortPrompt"
                 $script:CliExitCode = $LASTEXITCODE
             }
         } finally {
@@ -7552,7 +7596,7 @@ $mentionsJson
                 # Non-interactive headless mode
                 Write-Host "Command: $Command --print `"<prompt>`" --dangerously-skip-permissions"
                 try {
-                    Push-Location $projectPath
+                    Push-Location $script:cliRoot
                     Invoke-MoeGuardedCommand @CommandArgs --print "$shortPrompt" --dangerously-skip-permissions
                     $script:CliExitCode = $LASTEXITCODE
                 } finally { Pop-Location }
@@ -7560,7 +7604,7 @@ $mentionsJson
                 # Interactive mode
                 Write-Host "Command: $Command --prompt-interactive `"<prompt>`""
                 try {
-                    Push-Location $projectPath
+                    Push-Location $script:cliRoot
                     Invoke-MoeGuardedCommand @CommandArgs --prompt-interactive "$shortPrompt"
                     $script:CliExitCode = $LASTEXITCODE
                 } finally { Pop-Location }
@@ -7674,10 +7718,10 @@ $mentionsJson
                     # argv token, spaces and all); the TUI reads the role doc and
                     # session context from there.
                     $grokPointerPrompt = "Session context (routed mentions, pre-flight data) is in $($script:GrokPromptFile) - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
-                    Write-Host "Command: $Command --cwd `"$projectPath`" $($grokModelArgs -join ' ') `"<prompt>`""
+                    Write-Host "Command: $Command --cwd `"$script:cliRoot`" $($grokModelArgs -join ' ') `"<prompt>`""
                     try {
-                        Push-Location $projectPath
-                        Invoke-MoeGuardedCommand @CommandArgs --cwd "$projectPath" @grokModelArgs "$grokPointerPrompt"
+                        Push-Location $script:cliRoot
+                        Invoke-MoeGuardedCommand @CommandArgs --cwd "$script:cliRoot" @grokModelArgs "$grokPointerPrompt"
                         $script:CliExitCode = $LASTEXITCODE
                     } finally { Pop-Location }
                 } else {
@@ -7685,10 +7729,10 @@ $mentionsJson
                     # auto-approves tool calls (the fleet equivalent of claude's
                     # bypassPermissions), --output-format plain keeps the
                     # transcript greppable. The prompt body is never echoed.
-                    Write-Host "Command: $Command --prompt-file `"$($script:GrokPromptFile)`" --yolo --cwd `"$projectPath`" --no-auto-update --output-format plain $($grokModelArgs -join ' ') $($grokEffortArgs -join ' ')"
+                    Write-Host "Command: $Command --prompt-file `"$($script:GrokPromptFile)`" --yolo --cwd `"$script:cliRoot`" --no-auto-update --output-format plain $($grokModelArgs -join ' ') $($grokEffortArgs -join ' ')"
                     try {
-                        Push-Location $projectPath
-                        Invoke-MoeGuardedCommand @CommandArgs --prompt-file "$($script:GrokPromptFile)" --yolo --cwd "$projectPath" --no-auto-update --output-format plain @grokModelArgs @grokEffortArgs
+                        Push-Location $script:cliRoot
+                        Invoke-MoeGuardedCommand @CommandArgs --prompt-file "$($script:GrokPromptFile)" --yolo --cwd "$script:cliRoot" --no-auto-update --output-format plain @grokModelArgs @grokEffortArgs
                         $script:CliExitCode = $LASTEXITCODE
                     } finally { Pop-Location }
                 }
@@ -8155,6 +8199,7 @@ $mentionsJson
         $script:LaunchOutageAnnounce = $false
     }
 
+    if ($script:cliRootPushed) { Pop-Location; $script:cliRootPushed = $false }
     # -------- Post-flight: shutdown rituals after CLI exits --------
     # Status resolution first; the landing + session-ended chat line follow.
     $script:MoeLastLanding = $null
@@ -8408,6 +8453,7 @@ $mentionsJson
     # the next session's pre-flight lands the work on the branch. This finally
     # is SKIPPED on console-window close / SIGKILL (nothing runs; the
     # persisted baseline is the recovery there).
+    try { if ($script:cliRootPushed) { Pop-Location; $script:cliRootPushed = $false } } catch {}
     try { Remove-MoeAgentGitGuard } catch {}
     try { Stop-MoeGateChild } catch {}
     try { Invoke-MoeTeardownRescue } catch {}

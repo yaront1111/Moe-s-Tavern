@@ -919,11 +919,18 @@ print(f"[OK] Updated MCP config: {config_file}")
 EOF
     fi
 
+    write_project_mcp_json "$PROJECT" "$SERENA_PROJECT"
+}
+
+# write_project_mcp_json ROOT SERENA_PROJECT -- ROOT/.mcp.json (the control, or
+# the task worktree). Its moe server's MOE_PROJECT_PATH stays the control.
+write_project_mcp_json() {
+    local root="$1" SERENA_PROJECT="$2"
     # Also write project-level .mcp.json so Claude Code finds MCP tools
     # regardless of working directory or global config issues
-    local project_mcp="$PROJECT/.mcp.json"
+    local project_mcp="$root/.mcp.json"
     if [ -n "$PROXY_CMD" ]; then
-        $PYTHON_CMD - "$project_mcp" "$PROXY_CMD" "$PROXY_ARGS" "$PROJECT" "$SERENA_CMD" "$SERENA_PROJECT" << 'MCPEOF'
+        $PYTHON_CMD - "$project_mcp" "$PROXY_CMD" "$PROXY_ARGS" "$PROJECT" "$SERENA_CMD" "$SERENA_PROJECT" << 'MCPEOF' || return 1
 import json
 import sys
 
@@ -962,11 +969,13 @@ MCPEOF
 ensure_mcp_config
 
 # For codex: write project-scoped .codex/config.toml instead of global registration
-if [ "$CLI_TYPE" = "codex" ]; then
+# (write_codex_config ROOT SERENA_PROJECT: ROOT is the control or the task worktree)
+write_codex_config() {
+    local root="$1" SERENA_PROJECT="$2"
     echo "Writing project-scoped Codex MCP config..."
-    CODEX_CONFIG_DIR="$PROJECT/.codex"
+    CODEX_CONFIG_DIR="$root/.codex"
     CODEX_CONFIG_FILE="$CODEX_CONFIG_DIR/config.toml"
-    mkdir -p "$CODEX_CONFIG_DIR"
+    mkdir -p "$CODEX_CONFIG_DIR" || return 1
 
     # Determine the proxy command and args for TOML
     TOML_PROXY_CMD=""
@@ -986,7 +995,7 @@ if [ "$CLI_TYPE" = "codex" ]; then
     TOML_SERENA_PROJECT=$(normalize_path "$SERENA_PROJECT")
 
     if [ -n "$TOML_PROXY_CMD" ]; then
-        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" "$SERENA_CMD" "$TOML_SERENA_PROJECT" "${MOE_CODEX_REASONING_EFFORT:-xhigh}" << 'PYEOF'
+        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" "$SERENA_CMD" "$TOML_SERENA_PROJECT" "${MOE_CODEX_REASONING_EFFORT:-xhigh}" << 'PYEOF' || return 1
 import sys, os, re, json
 
 config_file = sys.argv[1]
@@ -1128,22 +1137,24 @@ PYEOF
             echo -e "${GREEN}[OK]${NC} Codex MCP config written to: $CODEX_CONFIG_FILE"
         else
             echo -e "${RED}[ERROR]${NC} Failed to write Codex MCP config"
-            exit 1
+            return 1
         fi
     fi
-fi
+}
+if [ "$CLI_TYPE" = "codex" ]; then write_codex_config "$PROJECT" "$SERENA_PROJECT" || exit 1; fi
 
 # For gemini: write project-scoped .gemini/settings.json with MCP config
-if [ "$CLI_TYPE" = "gemini" ]; then
+write_gemini_config() {
+    local root="$1" SERENA_PROJECT="$2"
     echo "Writing project-scoped Gemini MCP config..."
-    GEMINI_CONFIG_DIR="$PROJECT/.gemini"
+    GEMINI_CONFIG_DIR="$root/.gemini"
     GEMINI_CONFIG_FILE="$GEMINI_CONFIG_DIR/settings.json"
-    mkdir -p "$GEMINI_CONFIG_DIR"
+    mkdir -p "$GEMINI_CONFIG_DIR" || return 1
 
     if [ -z "$PROXY_CMD" ]; then
         echo -e "${YELLOW}[WARN]${NC} moe-proxy not found; cannot write Gemini MCP config"
     else
-        $PYTHON_CMD - "$GEMINI_CONFIG_FILE" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$SERENA_PROJECT" << 'GEMINIEOF'
+        $PYTHON_CMD - "$GEMINI_CONFIG_FILE" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$SERENA_PROJECT" << 'GEMINIEOF' || return 1
 import json
 import sys
 
@@ -1196,10 +1207,11 @@ GEMINIEOF
             echo -e "${GREEN}[OK]${NC} Gemini MCP config written to: $GEMINI_CONFIG_FILE"
         else
             echo -e "${RED}[ERROR]${NC} Failed to write Gemini MCP config"
-            exit 1
+            return 1
         fi
     fi
-fi
+}
+if [ "$CLI_TYPE" = "gemini" ]; then write_gemini_config "$PROJECT" "$SERENA_PROJECT" || exit 1; fi
 
 # Print this seat's `mcp_servers.moe=<inline table>` codex override: the
 # [mcp_servers.moe] and [mcp_servers.moe.env] tables of $1 (.codex/config.toml)
@@ -1328,11 +1340,12 @@ grant_grok_folder_trust() {
     echo -e "${GREEN}[OK]${NC} Grok folder trust granted: $project"
 }
 
-if [ "$CLI_TYPE" = "grok" ]; then
+write_grok_config() {
+    local root="$1" SERENA_PROJECT="$2"
     echo "Writing project-scoped Grok MCP config..."
-    GROK_CONFIG_DIR="$PROJECT/.grok"
+    GROK_CONFIG_DIR="$root/.grok"
     GROK_CONFIG_FILE="$GROK_CONFIG_DIR/config.toml"
-    mkdir -p "$GROK_CONFIG_DIR"
+    mkdir -p "$GROK_CONFIG_DIR" || return 1
 
     # Determine the proxy command and args for TOML
     TOML_PROXY_CMD=""
@@ -1351,7 +1364,7 @@ if [ "$CLI_TYPE" = "grok" ]; then
     TOML_SERENA_PROJECT=$(normalize_path "$SERENA_PROJECT")
 
     if [ -n "$TOML_PROXY_CMD" ]; then
-        $PYTHON_CMD - "$GROK_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$SERENA_CMD" "$TOML_SERENA_PROJECT" << 'PYEOF'
+        $PYTHON_CMD - "$GROK_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$SERENA_CMD" "$TOML_SERENA_PROJECT" << 'PYEOF' || return 1
 import sys, os, re, json
 
 config_file = sys.argv[1]
@@ -1481,13 +1494,14 @@ PYEOF
 
         if [ -f "$GROK_CONFIG_FILE" ]; then
             echo -e "${GREEN}[OK]${NC} Grok MCP config written to: $GROK_CONFIG_FILE"
-            grant_grok_folder_trust "$PROJECT"
+            grant_grok_folder_trust "$root"
         else
             echo -e "${RED}[ERROR]${NC} Failed to write Grok MCP config"
-            exit 1
+            return 1
         fi
     fi
-fi
+}
+if [ "$CLI_TYPE" = "grok" ]; then write_grok_config "$PROJECT" "$SERENA_PROJECT" || exit 1; fi
 
 # HTTP /health probe against a daemon endpoint. Used when a PID check cannot
 # answer liveness (a Windows daemon's PID is invisible inside WSL), and to ask a
@@ -3035,6 +3049,34 @@ sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
     MOE_WT_MODE=worktree; MOE_WT_PATH="$w"; MOE_WT_BRANCH="$branch"; MOE_WT_TARGET="$target"
     printf '[worktree] %s %s on %s\n' "$verb" "$w" "$branch"
     return 0
+}
+
+# prepare_worktree_launch -- worktree mode, design §5.1/§5.2: the CLI runs in
+# CLI_ROOT=W. Writes into W what the pre-flight writes into the control for
+# this CLI (the grok writer also trusts W), mirrors .moe/agents/*.md into
+# W/.claude/agents and exports the worktree names; MOE_PROJECT_PATH stays the
+# control. A failed write refuses the seat: nothing falls back to the control.
+# Twin: Initialize-MoeWorktreeLaunch.
+prepare_worktree_launch() {
+    local src
+    CLI_ROOT="$MOE_WT_PATH"
+    export MOE_WORKTREE_PATH="$MOE_WT_PATH" MOE_TASK_BRANCH="$MOE_WT_BRANCH" MOE_LAND_TARGET="$MOE_WT_TARGET"
+    write_project_mcp_json "$CLI_ROOT" "$SERENA_PROJECT" \
+        || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot write the MCP config ($CLI_ROOT/.mcp.json)"
+    case "$CLI_TYPE" in
+        codex|gemini|grok)
+            "write_${CLI_TYPE}_config" "$CLI_ROOT" "$SERENA_PROJECT" \
+                || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot write the $CLI_TYPE config ($CLI_ROOT/.$CLI_TYPE)" ;;
+    esac
+    if [ "$ENABLE_AGENT_TEAMS" = "true" ] && [ -d "$MOE_DIR/agents" ]; then
+        mkdir -p "$CLI_ROOT/.claude/agents" \
+            || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot create the subagents dir ($CLI_ROOT/.claude/agents)"
+        for src in "$MOE_DIR/agents"/*.md; do
+            [ -f "$src" ] || continue
+            cp -f "$src" "$CLI_ROOT/.claude/agents/" \
+                || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot copy a subagent ($src)"
+        done
+    fi
 }
 
 # moe_snapshot_hash P -- the snapshot blob of TOP-relative P, the blob `git add`
@@ -6645,9 +6687,9 @@ get_account_lease() {
             if [ "$f2" = "?" ]; then f2=unknown; else f2="$f2%"; fi
             account_say "MOE_ACCOUNT_LEASED account=$f1 usage=$f2" "$GREEN"
             # Only the TUI asks "Do you trust the files in this folder?"; claude
-            # runs after `cd "$PROJECT"`, so the launch directory is the project.
+            # runs after `cd "${CLI_ROOT:-$PROJECT}"`, the launch directory (W is passed as launchDir).
             [ "$CLAUDE_INTERACTIVE" = true ] || return 0
-            trust=$("$NODE_CMD" "$ACCOUNT_HELPER" trust "$f3" "$PROJECT" 2>/dev/null) || trust=""
+            trust=$("$NODE_CMD" "$ACCOUNT_HELPER" trust "$f3" "$PROJECT" ${CLI_ROOT:+"$CLI_ROOT"} 2>/dev/null) || trust=""
             case "$trust" in
                 trusted) return 0 ;;
                 granted) account_say "MOE_ACCOUNT_TRUST_GRANTED account=$f1 project=$PROJECT" "$GREEN"; return 0 ;;
@@ -6997,6 +7039,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     export MOE_SESSION_ID="$MOE_SID"
     MOE_TOP=""
     MOE_WT_MODE=shared; MOE_WT_PATH=""; MOE_WT_BRANCH=""; MOE_WT_TARGET=""
+    CLI_ROOT=""; unset MOE_WORKTREE_PATH MOE_TASK_BRANCH MOE_LAND_TARGET
     MOE_REL=""
     MOE_GITDIR=""
     MOE_BASELINE_PATH=""
@@ -8035,6 +8078,7 @@ $MOE_PREFLIGHT_NOTICE
 </system-reminder>"
         fi
     fi
+    if [ "${MOE_WT_MODE:-}" = worktree ]; then prepare_worktree_launch; fi
 
     # Compose final PROMPT = DYNAMIC_CONTEXT (per-iteration) + PROMPT_BODY (role).
     # Order: dynamic context first (sets the per-task scene), role body last (latest user instruction).
@@ -8113,7 +8157,7 @@ $PROMPT_BODY"
         # Keep the shared fallback role-neutral so another seat cannot change
         # this seat's prefix. Role instructions and task context are private,
         # separate files; only stable instructions become model_instructions_file.
-        AGENT_INSTRUCTIONS_PATH="$PROJECT/.codex/agent-instructions.md"
+        AGENT_INSTRUCTIONS_PATH="${CLI_ROOT:-$PROJECT}/.codex/agent-instructions.md"
         mkdir -p "$(dirname "$AGENT_INSTRUCTIONS_PATH")"
         printf '%s' 'Moe role instructions are supplied by the launcher. Follow the user message for this session context.' > "$AGENT_INSTRUCTIONS_PATH"
         CODEX_SEAT_INSTRUCTIONS_FILE="$(create_secure_temp)/moe-codex-instructions-${ROLE}-$$.md"
@@ -8126,7 +8170,7 @@ $PROMPT_BODY"
         fi
         printf '%s' "$CODEX_FILE_BODY" > "$CODEX_SEAT_INSTRUCTIONS_FILE"
         echo -e "${GREEN}[OK]${NC} Agent instructions written to: $CODEX_SEAT_INSTRUCTIONS_FILE (shared role doc: $AGENT_INSTRUCTIONS_PATH)"
-        CODEX_MOE_OVERRIDE="$(codex_moe_server_override "$PROJECT/.codex/config.toml" "$WORKER_ID")"
+        CODEX_MOE_OVERRIDE="$(codex_moe_server_override "${CLI_ROOT:-$PROJECT}/.codex/config.toml" "$WORKER_ID")"
 
         # Build role-aware short prompt for Codex CLI argument
         # Codex instruction delivery chain:
@@ -8243,7 +8287,7 @@ $PROMPT_BODY"
             if [ "${CODEX_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != "1" ]; then
                 CODEX_ARGV_PROBED=true
                 PROBE_EXIT=0
-                PROBE_OUT="$(agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
+                PROBE_OUT="$(agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "${CLI_ROOT:-$PROJECT}" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
                 if [ "$PROBE_EXIT" -ne 0 ] && printf '%s\n' "$PROBE_OUT" | grep -qiE 'unexpected argument|unrecognized subcommand|unexpected value'; then
                     PROBE_LINE="$(printf '%s\n' "$PROBE_OUT" | grep -i 'error' | head -n1)"
                     [ -n "$PROBE_LINE" ] || PROBE_LINE="exit $PROBE_EXIT"
@@ -8262,7 +8306,7 @@ $PROMPT_BODY"
             echo ""
             # The banner is the line the launch-failure hint tells the operator to re-run by
             # hand, so it carries every argv token the real launch does (ps1 twin parity).
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} ${CODEX_EXEC_OVERRIDES[*]} exec --json -C \"$PROJECT\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} ${CODEX_EXEC_OVERRIDES[*]} exec --json -C \"${CLI_ROOT:-$PROJECT}\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
             start_moe_usage_receipt codex headless
             set +e
 
@@ -8273,7 +8317,7 @@ $PROMPT_BODY"
             agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
                 -c "$CODEX_MOE_OVERRIDE" \
-                "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
+                "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "${CLI_ROOT:-$PROJECT}" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
 
             CLI_EXIT_CODE=${PIPESTATUS[0]}
 
@@ -8282,14 +8326,14 @@ $PROMPT_BODY"
             # Interactive TUI mode
             echo "Starting Codex (interactive TUI)..."
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} -C \"$PROJECT\" \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} -C \"${CLI_ROOT:-$PROJECT}\" \"<prompt>\""
             start_moe_usage_receipt codex interactive
             set +e
 
             agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
                 -c "$CODEX_MOE_OVERRIDE" \
-                "${CODEX_TASK_ARGS[@]}" -C "$PROJECT" "$SHORT_PROMPT"
+                "${CODEX_TASK_ARGS[@]}" -C "${CLI_ROOT:-$PROJECT}" "$SHORT_PROMPT"
 
             CLI_EXIT_CODE=$?
 
@@ -8312,7 +8356,7 @@ $PROMPT_BODY"
 
         # Write system/role context to .gemini/GEMINI.md (Gemini's native context file)
         # Gemini CLI auto-discovers and loads this file on every prompt
-        GEMINI_INSTRUCTIONS_PATH="$PROJECT/.gemini/GEMINI.md"
+        GEMINI_INSTRUCTIONS_PATH="${CLI_ROOT:-$PROJECT}/.gemini/GEMINI.md"
         mkdir -p "$(dirname "$GEMINI_INSTRUCTIONS_PATH")"
         printf '%s' "$SYSTEM_APPEND" > "$GEMINI_INSTRUCTIONS_PATH"
         echo -e "${GREEN}[OK]${NC} Agent instructions written to: $GEMINI_INSTRUCTIONS_PATH"
@@ -8349,7 +8393,7 @@ $PROMPT_BODY"
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --print \"<prompt>\" --dangerously-skip-permissions"
             set +e
 
-            (cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --print "$SHORT_PROMPT" --dangerously-skip-permissions)
+            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --print "$SHORT_PROMPT" --dangerously-skip-permissions)
 
             CLI_EXIT_CODE=$?
 
@@ -8361,7 +8405,7 @@ $PROMPT_BODY"
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --prompt-interactive \"<prompt>\""
             set +e
 
-            (cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-interactive "$SHORT_PROMPT")
+            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-interactive "$SHORT_PROMPT")
 
             CLI_EXIT_CODE=$?
 
@@ -8448,10 +8492,10 @@ $PROMPT_BODY"
         elif [ "$GROK_INTERACTIVE" = false ]; then
             # Non-interactive headless mode
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --prompt-file \"$GROK_PROMPT_FILE\" --yolo --cwd \"$PROJECT\" --no-auto-update --output-format plain$GROK_EXTRA_DISPLAY"
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --prompt-file \"$GROK_PROMPT_FILE\" --yolo --cwd \"${CLI_ROOT:-$PROJECT}\" --no-auto-update --output-format plain$GROK_EXTRA_DISPLAY"
             set +e
 
-            (cd "$PROJECT" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-file "$GROK_PROMPT_FILE" --yolo --cwd "$PROJECT" --no-auto-update --output-format plain "${GROK_MODEL_ARGS[@]}" "${GROK_EFFORT_ARGS[@]}")
+            (cd "${CLI_ROOT:-$PROJECT}" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-file "$GROK_PROMPT_FILE" --yolo --cwd "${CLI_ROOT:-$PROJECT}" --no-auto-update --output-format plain "${GROK_MODEL_ARGS[@]}" "${GROK_EFFORT_ARGS[@]}")
 
             CLI_EXIT_CODE=$?
 
@@ -8461,10 +8505,10 @@ $PROMPT_BODY"
             # keep it a short quote-free pointer at the prompt file.
             GROK_POINTER_PROMPT="Session context (routed mentions, pre-flight data) is in $GROK_PROMPT_FILE - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WORKER_ID. Then follow your role doc."
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --cwd \"$PROJECT\"${GROK_MODEL_ARGS:+ ${GROK_MODEL_ARGS[*]}} \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --cwd \"${CLI_ROOT:-$PROJECT}\"${GROK_MODEL_ARGS:+ ${GROK_MODEL_ARGS[*]}} \"<prompt>\""
             set +e
 
-            (cd "$PROJECT" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --cwd "$PROJECT" "${GROK_MODEL_ARGS[@]}" "$GROK_POINTER_PROMPT")
+            (cd "${CLI_ROOT:-$PROJECT}" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --cwd "${CLI_ROOT:-$PROJECT}" "${GROK_MODEL_ARGS[@]}" "$GROK_POINTER_PROMPT")
 
             CLI_EXIT_CODE=$?
 
@@ -8601,7 +8645,7 @@ $PROMPT_BODY"
         # approvals for the project's .mcp.json servers, so they are named
         # explicitly (a -p seat connects them without asking).
         if [ -n "$ACCOUNT_LEASED_ID" ] && [ ${#PRINT_ARGS[@]} -eq 0 ]; then
-            if [ -f "$PROJECT/.mcp.json" ]; then ACCOUNT_ARGS+=(--mcp-config "$PROJECT/.mcp.json"); fi
+            if [ -f "${CLI_ROOT:-$PROJECT}/.mcp.json" ]; then ACCOUNT_ARGS+=(--mcp-config "${CLI_ROOT:-$PROJECT}/.mcp.json"); fi
             if "$NODE_CMD" "$ACCOUNT_HELPER" statusline-settings "$ACCOUNT_SETTINGS_FILE" >/dev/null 2>&1; then
                 ACCOUNT_ARGS+=(--settings "$ACCOUNT_SETTINGS_FILE")
             fi
@@ -8905,10 +8949,10 @@ PYEOF
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 # Pipe through the parser; the subshell's exit (the CLI's) is
                 # PIPESTATUS[0] — the parser's own status is irrelevant.
-                (apply_account_env; cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
-                (apply_account_env; cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "$PROMPT")
+                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "$PROMPT")
                 CLI_EXIT_CODE=$?
             fi
 
@@ -8918,11 +8962,11 @@ PYEOF
 
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 start_moe_usage_receipt "$CLI_TYPE" headless
-                (apply_account_env; cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
                 start_moe_usage_receipt "$CLI_TYPE" interactive
-                (apply_account_env; cd "$PROJECT" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT")
+                (apply_account_env; cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT")
                 CLI_EXIT_CODE=$?
             fi
 

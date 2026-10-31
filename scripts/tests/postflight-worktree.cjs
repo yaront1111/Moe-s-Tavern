@@ -20,7 +20,14 @@ const present=f=>{try{fs.lstatSync(f);return true;}catch{return false;}};
 const readOr=f=>present(f)?read(f):null;
 
 if(process.argv[2]==='cli'){
+  // A version probe is not a launch.
+  if(process.argv.includes('--version')){console.log('0.0.0-fake');process.exit(0);}
   fs.appendFileSync(path.join(process.env.MOE_PROJECT_PATH,'.moe','wt-cli.log'),process.cwd()+'\n');
+  // WT_CLI_RECORD: one JSON line per launch (cwd, argv, the four worktree env values, --mcp-config text).
+  const argv=process.argv.slice(3),at=argv.indexOf('--mcp-config');
+  if(process.env.WT_CLI_RECORD)fs.appendFileSync(process.env.WT_CLI_RECORD,JSON.stringify({cwd:process.cwd(),argv,
+    env:Object.fromEntries(['MOE_PROJECT_PATH','MOE_WORKTREE_PATH','MOE_TASK_BRANCH','MOE_LAND_TARGET'].map(k=>[k,process.env[k]??null])),
+    mcpConfig:at>=0&&argv[at+1]?readOr(argv[at+1]):null})+'\n');
   process.exit(0);
 }
 
@@ -142,19 +149,32 @@ function cliShim(){
   }
   return f;
 }
+// A fake CLI named <type> in its own directory (the wrappers take the CLI type from
+// the --command basename), forwarding its argv.
+function typeShim(type){
+  const f=path.join(root,'shim-'+type,type+(win?'.cmd':'')),fwd=s=>s.replace(/\\/g,'/');
+  if(!present(f)){
+    write(f,win?`@echo off\r\n"${process.execPath}" "${__filename}" cli %*\r\nexit /b %errorlevel%\r\n`
+      :`#!/usr/bin/env bash\nexec "${fwd(process.execPath)}" "${fwd(__filename)}" cli "$@"\n`);
+    fs.chmodSync(f,0o700);
+  }
+  return f;
+}
 function killTree(child){
   if(child.exitCode!==null||child.signalCode!==null)return;
   if(winHost)cp.spawnSync('taskkill',['/T','/F','/PID',String(child.pid)],{stdio:'ignore'});
   else{try{process.kill(-child.pid,'SIGKILL');}catch{}}
 }
 // One worker-seat run. A null knob is unset; WT_GIT_* knobs put the stub first on PATH.
-async function launch(p,run,knobs={}){
+// opts.type launches typeShim(type) instead of the default CLI; opts.args extend the wrapper argv.
+async function launch(p,run,knobs={},opts={}){
   const moe=f=>path.join(p.dir,'.moe',f);
   for(const f of ['wt-cli.log','evidence-rpcs.jsonl','context-count'])fs.rmSync(moe(f),{force:true});
   fs.rmSync(moe('attempts'),{recursive:true,force:true});
-  const cli=cliShim();
+  const cli=opts.type?typeShim(opts.type):cliShim();
   const args=win?['-NoProfile','-ExecutionPolicy','Bypass','-File',wrapper,'-Project',p.dir,'-WorkerId',WID,'-Role','worker','-Team','Smoke','-NoStartDaemon','-Command',cli,'-NoLoop','-PollInterval','0']
     :[wrapper,'--project',p.dir,'--worker-id',WID,'--role','worker','--team','Smoke','--no-start-daemon','--command',cli,'--no-loop','--poll-interval','0'];
+  args.push(...(opts.args||[]));
   const env={...inherited,MOE_PROXY_PATH:proxy,MOE_NODE_COMMAND:process.execPath,MOE_DISABLE_HEARTBEAT:'1',
     HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),TMPDIR:wrapperTmp,TMP:wrapperTmp,TEMP:wrapperTmp,
     FAKE_TASK_STATUS:'WORKING',FAKE_CLAIM_WORKSPACE:p.ws(),...knobs};
@@ -286,8 +306,73 @@ async function sharedLanded(){
   assert.equal(r.code,0,`exit code ${r.code}`+tail(r.log));
 }
 
+// WT-05 (design §5.1-§5.2): in worktree mode every CLI runs against W, with W's own
+// configs naming the control as the moe server's MOE_PROJECT_PATH.
+const same=(a,b)=>typeof a==='string'&&typeof b==='string'&&norm(a)===norm(b);
+const execFlag=t=>win?'-'+t[0].toUpperCase()+t.slice(1)+'Exec':'--'+t+'-exec';
+const cfgText=f=>{assert.ok(present(f),`${f} is missing`);return read(f).replace(/^\uFEFF/,'');};
+const jsonMoe=s=>JSON.parse(s).mcpServers.moe.env.MOE_PROJECT_PATH;
+const tomlMoe=f=>{const m=/^MOE_PROJECT_PATH = (".*")\r?$/m.exec(cfgText(f));assert.ok(m,`${f} has no MOE_PROJECT_PATH line`);return JSON.parse(m[1]);};
+// [banner, config path under its root]; the sh Gemini writer prints its banner twice.
+const BANNERS={codex:['Codex MCP config written to:','.codex/config.toml'],gemini:['Gemini MCP config written to:','.gemini/settings.json'],
+  grok:['Grok MCP config written to:','.grok/config.toml']};
+// A fresh fixture whose control holds an untracked .moe/agents/x.md, and its headless launch.
+function wtCase(name,type){
+  const p=repo(name),dir=path.join(root,name+'-case'),record=path.join(dir,'record.jsonl'),grokHome=path.join(dir,'grok-home');
+  fs.mkdirSync(dir,{recursive:true});write(path.join(p.dir,'.moe','agents','x.md'),'agent x\r\nbytes\n');
+  return {p,record,grokHome,run:()=>launch(p,name,{MOE_DISABLE_ARGV_PROBE:'1',WT_CLI_RECORD:record,GROK_HOME:grokHome},
+    {type,args:type==='claude'?[]:[execFlag(type)]})};
+}
+async function launchAs(type){
+  const c=wtCase('launch-'+type,type),{p}=c,r=await c.run();
+  assert.equal(r.code,0,`exit code ${r.code}`+tail(r.log));
+  const recs=rows(c.record),rec=recs[0];
+  assert.equal(recs.length,1,`${recs.length} CLI launches recorded, expected 1`+tail(r.log));
+  if(type!=='codex')assert.ok(same(rec.cwd,p.W),`the CLI ran in ${rec.cwd}, not W`);
+  const flag={codex:'-C',grok:'--cwd'}[type],at=rec.argv.indexOf(flag);
+  if(flag)assert.ok(at>=0&&same(rec.argv[at+1],p.W),`${flag} ${rec.argv[at+1]} is not W: ${JSON.stringify(rec.argv)}`);
+  assert.ok(same(rec.env.MOE_PROJECT_PATH,p.dir),`MOE_PROJECT_PATH ${rec.env.MOE_PROJECT_PATH} is not the control`);
+  assert.ok(same(rec.env.MOE_WORKTREE_PATH,p.W),`MOE_WORKTREE_PATH ${rec.env.MOE_WORKTREE_PATH} is not W`);
+  assert.deepEqual([rec.env.MOE_TASK_BRANCH,rec.env.MOE_LAND_TARGET],['moe/task/'+TASK,'main'],'MOE_TASK_BRANCH / MOE_LAND_TARGET');
+  const inW=f=>path.join(p.W,...f.split('/')),named=[];
+  if(!win)named.push(['W/.mcp.json',jsonMoe(cfgText(inW('.mcp.json')))]);
+  if(win&&type==='claude'){assert.ok(rec.mcpConfig,'no --mcp-config text recorded');named.push(['the temp --mcp-config',jsonMoe(rec.mcpConfig.replace(/^\uFEFF/,''))]);}
+  if(type==='codex'||type==='grok')named.push([BANNERS[type][1],tomlMoe(inW(BANNERS[type][1]))]);
+  if(type==='gemini')named.push(['W/.gemini/settings.json',jsonMoe(cfgText(inW('.gemini/settings.json')))]);
+  for(const [what,v] of named)assert.ok(same(v,p.dir),`${what} names ${v} as MOE_PROJECT_PATH, not the control`);
+  for(const f of {codex:['.codex/agent-instructions.md'],gemini:['.gemini/GEMINI.md']}[type]||[])assert.ok(present(inW(f)),`W/${f} is missing`);
+  // Each writer wrote the control once (the pre-flight) and W once: never the control twice.
+  for(const [b,rel] of (win?[]:[['Wrote project MCP config:','.mcp.json']]).concat(BANNERS[type]?[BANNERS[type]]:[])){
+    const n=!win&&type==='gemini'&&rel==='.gemini/settings.json'?2:1,count={W:0,control:0,other:0};
+    for(const m of r.log.matchAll(new RegExp(b.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+' (.+?)\\r?$','gm'))){
+      const f=m[1].replace(/\\/g,'/');count[f.endsWith(`/.worktrees/${TASK}/${rel}`)?'W':f.endsWith('/'+rel)?'control':'other']++;
+    }
+    assert.deepEqual(count,{W:n,control:n,other:0},`"${b}" lines by root`+tail(r.log));
+  }
+  const src=path.join(p.dir,'.moe','agents'),dst=inW('.claude/agents'),names=fs.readdirSync(src).filter(n=>n.endsWith('.md')).sort();
+  assert.deepEqual(present(dst)?fs.readdirSync(dst).sort():null,names,'W/.claude/agents does not hold exactly .moe/agents/*.md');
+  for(const n of names)assert.ok(fs.readFileSync(path.join(dst,n)).equals(fs.readFileSync(path.join(src,n))),`W/.claude/agents/${n} differs`);
+  if(type==='grok'){
+    const t=readOr(path.join(c.grokHome,'trusted_folders.toml'))||'';
+    assert.ok([...t.matchAll(/^\[folders\.'(.+)'\]\r?$/gm)].some(m=>same(m[1],p.W)),'grok trust does not name W:\n'+t);
+  }
+  assert.ok(!present(inW('.moe')),'W/.moe exists');
+}
+// A failed config write in W refuses: W is already provisioned (index present), so the
+// failure is the codex writer's, whose config.toml is a directory.
+async function configFail(){
+  const c=wtCase('config-fail','codex'),{p}=c;
+  git(p.top,'worktree','add','--lock','--reason','moe '+TASK,'--no-checkout','--no-track','-b','moe/task/'+TASK,p.W,'main');
+  git(p.W,'sparse-checkout','set','--no-cone','/*','!/.moe/');git(p.W,'read-tree','-mu','HEAD');
+  fs.mkdirSync(path.join(p.W,'.codex','config.toml'),{recursive:true});
+  refused(await c.run(),'MOE_WORKTREE_CREATE_FAILED');
+  assert.ok(!present(c.record),'a CLI launch was recorded');
+}
+
 const cases={lifecycle,resume,'half-made':halfMade,
   ...Object.fromEntries(refusals.map(c=>[c[0],()=>refusal(...c)])),'shared-landed':sharedLanded};
+for(const t of ['claude','codex','gemini','grok'])cases['launch-'+t]=()=>launchAs(t);
+cases['config-fail']=configFail;
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
 (async()=>{
   let ok=0,failed=0;

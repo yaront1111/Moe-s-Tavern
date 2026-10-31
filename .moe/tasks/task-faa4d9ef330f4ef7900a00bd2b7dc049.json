@@ -1,0 +1,35 @@
+{
+  "id": "task-faa4d9ef330f4ef7900a00bd2b7dc049",
+  "epicId": "epic-be924fb8",
+  "title": "bug: an idle moe-agent.sh seat exits when its poll sleep is killed, and its EXIT trap reports every exit as terminal_closed",
+  "description": "Observed 2026-10-31 at 04:47:37Z. A review subagent in worker-25da16b2's CQ-R13 session ran a probe that killed every `sleep 30` process on the WSL host (a pattern kill). Five idle seats died in the same second: worker-c75a6f39, architect-4ff0711c, architect-915213a1, qa-12f7cf2d and qa-4b0c6c8e. Each one deregistered as `terminal_closed`, which first read as a deliberate human tab close. None held a task, and nothing was lost except the seats, which needed a human relaunch.\n\nMechanism (scripts/moe-agent.sh):\n- The idle branch of the main loop waits in `sleep \"$POLL_INTERVAL\"` (~:6932). The launch-failure/outage backoff waits in `sleep \"$LAUNCH_FAIL_BACKOFF_SEC\"` (~:6925). The script runs under `set -e`. A killed sleep exits 143 (SIGTERM) or 137 (SIGKILL), so the wrapper exits.\n- cleanup_temp, the EXIT trap (~:186-191), always deregisters with `\"reason\":\"terminal_closed\"`, whatever the exit cause. That hides crashes and stray kills behind a reason that reads as an operator action.\n\nFix direction (the planner decides):\n- A poll or backoff sleep that is interrupted by anything other than the wrapper's own INT/TERM handling should not end the seat. For example `sleep \"$POLL_INTERVAL\" || true`, while keeping Ctrl+C and the trap's own teardown semantics intact.\n- The EXIT trap's deregister reason should tell an operator close or Ctrl+C apart from an unexpected exit, for example by including the exit status.\n- Check the ps1 twin's idle wait (Start-Sleep) for the same class of exit.\n\nOut of scope: the agent-side cause. A GLOBAL rule forbidding pattern kills on the shared host was proposed separately.",
+  "definitionOfDone": [
+    "Killing an idle seat's poll sleep (SIGTERM or SIGKILL to that sleep process only) no longer ends the moe-agent.sh seat: it logs the interruption and continues its loop. Ctrl+C / SIGINT / SIGTERM to the wrapper itself still tears down exactly as today.",
+    "The EXIT-trap deregister reason distinguishes an unexpected exit, for example by carrying the exit status, from terminal_closed. The daemon accepts the new reason value, or the existing reason field carries it.",
+    "A regression arm in scripts/tests/postflight.sh kills the idle seat's sleep child and proves the seat survives and re-polls. Pre-existing arms stay unchanged and pass. bash -n and parity-check pass, and the ps1 twin is either aligned or shown unaffected in the completion summary."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 323.7,
+  "comments": [
+    {
+      "id": "comment-07b4266e07af4d9e9eed1ad5083127b3",
+      "author": "governor-693b7073",
+      "content": "Line refs verified at HEAD by governor-4764040b (04:54Z):\n- moe-agent.sh:5 sets `set -e`.\n- moe-agent.sh's two idle waits are `sleep \"$POLL_INTERVAL\"` (:6932) and `sleep \"$LAUNCH_FAIL_BACKOFF_SEC\"` (:6924). A killed sleep exits 143 and aborts the wrapper.\n- moe-agent.sh's EXIT trap (:190) always sends `\"reason\":\"terminal_closed\"`.\n- ps1: its idle wait is an in-process `Start-Sleep -Seconds $PollInterval` (:6411), so a pattern kill can't reach it. Its deregister reason also defaults to 'terminal_closed' (:445), so the misleading-reason half of the fix applies to both twins.\n\nPriority lowered to LOW: the trigger was agent misbehaviour, and the GLOBAL rule against pattern kills (prop-c598324b, customRules[1]) now covers it.",
+      "timestamp": "2026-10-31T04:55:34.467Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T04:54:29.471Z",
+  "updatedAt": "2026-10-31T04:55:38.773Z"
+}
