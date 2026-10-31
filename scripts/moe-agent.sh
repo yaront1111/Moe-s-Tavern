@@ -3072,27 +3072,19 @@ sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
     return 0
 }
 
-# prepare_worktree_launch -- worktree mode, design §5.1/§5.2: the CLI runs in
-# CLI_ROOT=W. Writes into W what the pre-flight writes into the control for
-# this CLI (the grok writer also trusts W), mirrors .moe/agents/*.md into
-# W/.claude/agents and exports the worktree names; MOE_PROJECT_PATH stays the
-# control. A failed write refuses the seat: nothing falls back to the control.
-# Twin: Initialize-MoeWorktreeLaunch.
-prepare_worktree_launch() {
-    local src out mode serena line re
-    CLI_ROOT="$MOE_WT_PATH"
-    export MOE_WORKTREE_PATH="$MOE_WT_PATH" MOE_TASK_BRANCH="$MOE_WT_BRANCH" MOE_LAND_TARGET="$MOE_WT_TARGET"
-    # Design §5.2-§5.4, §1.10: one node program, the same text in both wrappers (no
-    # shell or PowerShell link primitives, so Windows gets junctions). It maps the
-    # Serena root (the control becomes W; an override is kept, outside the control
-    # with MOE_WORKTREE_SERENA_OUTSIDE), links W/.serena/memories and W/.claude/skills
-    # to the control's, each recorded in <common gitdir>/moe/worktree/<taskId>.links
-    # before it is made (MOE_WORKTREE_LINK_FAILED leaves every byte as it is), copies
-    # .serena/project.yml with project_name <name>@<taskId>, and names each tracked
-    # package-lock.json directory of W without node_modules (MOE_WORKTREE_DEPS_MISSING).
-    # Prints those lines, then W, KEEP or OFF (no Serena: its memories link failed);
-    # any other failure exits 1 with the detail as its last line.
-    out=$("$NODE_CMD" - "$PROJECT" "$CLI_ROOT" "$SERENA_PROJECT" "$PREFLIGHT_TASK_ID" <<'MOE_WT_TOOLING_JS'
+# Design §5.2-§5.4, §1.10: one node program, the same text in both wrappers (no
+# shell or PowerShell link primitives, so Windows gets junctions). It maps the
+# Serena root (the control becomes W; an override is kept, outside the control
+# with MOE_WORKTREE_SERENA_OUTSIDE), links W/.serena/memories and W/.claude/skills
+# to the control's, each recorded in <common gitdir>/moe/worktree/<taskId>.links
+# before it is made (MOE_WORKTREE_LINK_FAILED leaves every byte as it is), copies
+# .serena/project.yml with project_name <name>@<taskId>, and names each tracked
+# package-lock.json directory of W without node_modules (MOE_WORKTREE_DEPS_MISSING).
+# Prints those lines, then W, KEEP or OFF (no Serena: its memories link failed);
+# any other failure exits 1 with the detail as its last line.
+# It runs from a function, not inside $( ): macOS /bin/bash 3.2 cannot parse a quoted heredoc inside $( ).
+worktree_tooling_node() {
+    "$NODE_CMD" - "$PROJECT" "$CLI_ROOT" "$SERENA_PROJECT" "$PREFLIGHT_TASK_ID" <<'MOE_WT_TOOLING_JS'
 const fs = require('fs'), path = require('path'), cp = require('child_process');
 const [ctl, w, sp, tid] = process.argv.slice(-4), win = process.platform === 'win32', out = [];
 const key = p => { try { p = fs.realpathSync.native(p); } catch { p = path.resolve(p); } return win ? p.toLowerCase() : p; };
@@ -3151,7 +3143,20 @@ try {
     process.exit(1);
 }
 MOE_WT_TOOLING_JS
-    ) || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot prepare Serena, the shared links and the dependency check in $CLI_ROOT: ${out##*$'\n'}"
+}
+
+# prepare_worktree_launch -- worktree mode, design §5.1/§5.2: the CLI runs in
+# CLI_ROOT=W. Writes into W what the pre-flight writes into the control for
+# this CLI (the grok writer also trusts W), mirrors .moe/agents/*.md into
+# W/.claude/agents and exports the worktree names; MOE_PROJECT_PATH stays the
+# control. A failed write refuses the seat: nothing falls back to the control.
+# Twin: Initialize-MoeWorktreeLaunch.
+prepare_worktree_launch() {
+    local src out mode serena line re
+    CLI_ROOT="$MOE_WT_PATH"
+    export MOE_WORKTREE_PATH="$MOE_WT_PATH" MOE_TASK_BRANCH="$MOE_WT_BRANCH" MOE_LAND_TARGET="$MOE_WT_TARGET"
+    # The tooling program (worktree_tooling_node above) prints its WARN lines, then W, KEEP or OFF.
+    out=$(worktree_tooling_node) || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot prepare Serena, the shared links and the dependency check in $CLI_ROOT: ${out##*$'\n'}"
     mode=${out##*$'\n'}
     [ "$out" = "$mode" ] || while IFS= read -r line; do printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$line"; done <<< "${out%$'\n'*}"
     case "$mode" in W) serena="$CLI_ROOT" ;; KEEP) serena="$SERENA_PROJECT" ;; *) serena="" ;; esac
@@ -7454,10 +7459,9 @@ get_account_lease() {
     done
 }
 
-# Process-scoped Git hooks: the wrapper and its sidecars never inherit this overlay.
-prepare_agent_git_guard() {
-    local entry
-    AGENT_GIT_GUARD_ROOT=$("$NODE_CMD" - "$PROJECT" "$SECURE_TEMP_DIR" <<'MOE_GIT_GUARD_JS'
+# The guard program runs from a function, not inside $( ): macOS /bin/bash 3.2 cannot parse a quoted heredoc inside $( ).
+agent_git_guard_node() {
+    "$NODE_CMD" - "$PROJECT" "$SECURE_TEMP_DIR" <<'MOE_GIT_GUARD_JS'
 const fs = require('fs'), path = require('path'), cp = require('child_process');
 const [project, temp] = process.argv.slice(-2), win = process.platform === 'win32';
 const native = p => win ? p.replaceAll('\\', '/') : p;
@@ -7517,7 +7521,12 @@ try {
     process.stderr.write('MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI\n'); process.exit(1);
 }
 MOE_GIT_GUARD_JS
-    ) || return 1
+}
+
+# Process-scoped Git hooks: the wrapper and its sidecars never inherit this overlay.
+prepare_agent_git_guard() {
+    local entry
+    AGENT_GIT_GUARD_ROOT=$(agent_git_guard_node) || return 1
     AGENT_GIT_GUARD_ENV=()
     [ -n "$AGENT_GIT_GUARD_ROOT" ] || return 0
     while IFS= read -r -d '' entry; do AGENT_GIT_GUARD_ENV+=("$entry"); done < "$AGENT_GIT_GUARD_ROOT/env"
