@@ -8,14 +8,55 @@
     "The approved-lockfile install from the offline cache still passes (KI1, DC5 and certify canary-check stay green)."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BLOCKED",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Prerequisite: keep the governor's temporary dependsOn 7db14e2d; before writing these overlapping paths, require the CQ-R13 supervisor/check-test checkpoint to be landed and the governor's hold lifted. Do not copy peer uncommitted overlays or wait on CQ-R13 DONE (the final hardening task needs this fix). Re-read install_dependencies and INSTALL on that checkpoint and retain its shrinkwrap/.npmrc/workspaces defenses. Establish the red regression and valid fixtures in scripts/tests/local-runner-check.test.mjs (use test-driven-development). Build on CQ-R13's current INSTALL/installRun/refusedInstall helpers: replace the fake zero-byte package manifests/locks with minimal valid, mutually matching package.json and v2/v3 lockfile-root entries, keeping KI1-KI4's existing behavioral assertions. Add table-driven pre-install refusal cases: unchanged approved lock + same-name/version file: tarball or directory in dependencies, devDependencies, optionalDependencies and peerDependencies; changed registry/npm-alias specs; added/removed dependency; mismatched peerDependenciesMeta and package name/version; overrides (direct, nested, $reference, empty and malformed); both bundleDependencies/bundledDependencies spellings. Put an invalid second directory after a valid first one and assert zero install.log entries, no relay/frame, exit 81, unchanged lock/package/source bytes and no stub node_modules bytes. Candidate script/description edits with unchanged install metadata must remain accepted. Do not edit scripts/tests/local-runner.test.mjs, which CQ-R13 owns.\n\nMinimal matching fixture seed (new test constants are local to this file):\n```js\nconst pkg = { name: 'fixture', version: '1.0.0', dependencies: { dep: '1.0.0' } };\nconst approved = { lockfileVersion: 3, packages: { '': pkg } };\n// RED: write approved unchanged, but package.json dependencies.dep = 'file:../stub/dep-1.0.0.tgz'.\n// Assert refusedInstall(run, label); assert.deepEqual(run.installs, []).\n```\nFake-toolchain fixtures may omit non-root lock entries; real-npm tests must use valid entryOf/tarball integrity entries. Assert the unchanged lock digest and the installed stub marker's absence, not only nonzero npm status.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "In scripts/local-runner/guest-supervisor.py, close the boundary in install_dependencies' existing all-directories preflight, before ANY run_install. Add one small fd-based, no-follow bounded JSON reader (reuse WALK/READ/chunks and the blob_oid traversal pattern; close every fd in finally, reject non-regular files, short/growing reads, malformed UTF-8/JSON, duplicate keys/non-JSON constants and excessive nesting). Bound package.json to 1 MiB and the lock to 16,777,216 bytes (dependency-cache.mjs MAX_LOCKFILE_BYTES); accept only object lockfileVersion 2 or 3 with an object packages['']. Treat that approved root as the authority: compare name/version when present (including presence), and exact typed dependencies/devDependencies/optionalDependencies/peerDependencies string maps plus peerDependenciesMeta; only absent versus an empty map is equivalent, never null/array/scalar or bool/number coercion. Reject overrides and both root bundled-dependency control fields whenever present because they are not approved by the lock-root contract. No semver-equivalence shortcut, spec normalization, substring ban, candidate manifest rewrite or post-install-only detection. Preserve ordinary metadata/scripts, the existing .npmrc/shrinkwrap/regular-file preflight, fixed --workspaces=false/offline/ignore-scripts argv, GUARD identity/netns/limits/timeout and no-manifest behavior. Error handling: a read, shape or comparison failure returns False through existing sanitized exit-81 handling; no candidate path or content is logged. Replace the known-hole comment with the authority rationale. Extend the same test file for size edges, malformed root/metadata/UTF-8/JSON, I/O failures, symlink/nonregular paths, valid v2/v3 and empty maps; keep all preexisting assertions.\n\nKeep the implementation compact: reuse stdlib json.loads with duplicate-key/non-JSON-constant refusal hooks and the existing fd walk. A representative exact-map predicate is:\n```py\ndef string_map(value):\n    return type(value) is dict and all(type(k) is str and type(v) is str for k, v in value.items())\n\nfor key in ('dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'):\n    left, right = package.get(key, {}), approved_root.get(key, {})\n    if not (string_map(left) and string_map(right) and left == right):\n        return False\n```\nHere package and approved_root are new locals holding the decoded candidate and packages[''] objects. Validate name/version presence and exact string types; peerDependenciesMeta is a map of object entries and must compare with JSON type identity (True must never equal 1), including optional's boolean type. Explicit null/array/scalar is never an absent map. LockfileVersion must have exact int type, not bool/float. Catch Unicode/JSON/value/recursion/OS failures at the existing refusal boundary. Add one concise rationale comment, not a new abstraction or cross-file schema.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add a focused real-npm regression in scripts/tests/local-runner-check.test.mjs using existing PY_LOAD, tarball/manifestOf/lock/entryOf/buildDependencyCache and scratch cleanup patterns, not a new harness/dependency. Drive the real supervisor dependency installer with its actual run_install and the test identity (netns=False only in the existing Python-only test seam). Use a distinct same-version candidate stub tarball and an unchanged registry lock; file: and overrides variants must refuse without installing stub bytes, running a lifecycle script or reaching the check recorder, including an empty offline cache. The honest manifest with the verified offline cache must install the expected fixture bytes; compare package.json/lock bytes before and after. Record the toolchain version used; exercise the pinned Node 24.22.2/npm 11.19.0 from an external verified toolchain when obtaining completion evidence, never install in the live checkout. Preserve DC5 and the canary CY1-CY4 assertions unedited. POSIX supervisor probes keep NO_GUEST guards on native Windows; Linux/WSL is the required executing lane, not an all-skipped Windows result.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification (one gate): from the root of a FULL git-archive/clone snapshot outside /mnt/d/projexts/moes, with the landed CQ-R13 checkpoint in the base and only this task's two exact owned files overlaid, run `node --test scripts/tests/local-runner-check.test.mjs && node --test --test-name-pattern='^CY[1-4] ' scripts/tests/local-runner.test.mjs`. Use a Linux-only PATH with the verified pinned Node toolchain first; record node/npm versions, snapshot base plus overlay hashes, exit code and fresh outputTail for complete_task. Require KI1-KI4, DC5 and the new real-supervisor/install rows to execute, not skip; CY canary checks must remain green. No build/clean/npm install/test in the live packages and no pattern kills; signal only recorded PIDs this session started. This is a mid-epic implementation gate, not native isolation certification. Send CQ-R13/governor the changed supervisor hash and requirement for NEW operator-run certify reports for every claimed platform; existing/injected reports cannot certify these bytes. Do not edit its CERTIFICATION.md or its test file.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review (adversarial-self-review, once, scoped to these two files): try same-version alternate sources in every dependency map, nested overrides/alias and bundle controls, missing/malformed root, parser-type/size tricks and invalid later directories. Confirm no install starts before every pair is validated, candidates cannot race preflight in the fresh no-job check VM, descriptors close on every path, and no npm behavior/argv/guard or protected-mount regression was introduced. Check that unrelated metadata/scripts still work, prior CQ-R13 dirty hunks are preserved, dependency source/lock integrity remains the existing host-approved authority, and native certification is not claimed. If anything changes after the gate, rerun that same gate for fresh evidence. Hand off the two exact modified paths, compatibility restriction and supervisor hash; finish through complete_task for QA, with Git landing left to the wrapper.\n\nMutation proof in scratch only: bypass each manifest-map equality and forbidden-control guard in turn and confirm its malicious-spec/override/bundle test fails; bypass the all-directories preflight and confirm the invalid-second-directory test detects a started first install. Restore each probe, and never kill by process name or pattern. All probes must own their process PIDs. Keep the implementation within the ordinary task size cap; table-drive the cases instead of repeating harnesses.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Governor promote (CQ-backlog delegation): HIGH CQ-R13 review finding (check-isolation bypass via a same-version file: spec in npm ci); no deps; off the wrapper lane.",
+  "reopenReason": "Governor ruling: resubmit WITHOUT executionContract.requiredChecks — no rail requires it, deliveryPolicy/qualityGate are unset (legacy), and the live daemon cannot measure them (Node-only PATH from the stale 0.8.0 plugin spawn; restart pending with the human). Put the exact gate in executionContract.checkRefs and the VERIFY step, and add planningNotes.risks: 'requiredChecks omitted: live daemon cannot measure (PATH defect); re-add after restart'. The draft is in Serena task-task-5ed445ca50f24cafbe6e42fbcba686fb-handoff. A temporary dependsOn on 7db14e2d holds WORKING claims until CQ-R13 has checkpointed its uncommitted guest-supervisor.py / local-runner-check.test.mjs edits; the governor lifts it then.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -26,24 +67,138 @@
       "author": "governor-693b7073",
       "content": "Governor, 05:36Z: promoted with the other CQ-R13 review findings (standing CQ-backlog delegation). These rows run off the wrapper lane, in parallel. Placement for the planner:\n- Do NOT touch scripts/tests/local-runner.test.mjs while CQ-R13 (f4811a72) holds it. Use a per-module test file (local-runner-check / -dispatch / -channel / -vm-control / -daemon-bind .test.mjs) and name it in the plan.\n- These sibling findings overlap guest-supervisor.py: 5ed445ca (npm ci file: spec), 42e9990c (exit 81) and 97341ad5 (LOW, still in BACKLOG). Declare exactly which files you edit; the governor orders overlapping rows once the plans land.\n- No pattern kills on this host (GLOBAL customRules[1]). Run gates in a git-archive snapshot. No npm build/clean/install in the shared checkout (GLOBAL rail).\n- No architect seat is live right now (seats lost at 04:47Z; relaunch is pinned for the human), so planning starts when one returns.",
       "timestamp": "2026-10-31T05:34:45.759Z"
+    },
+    {
+      "id": "comment-ce7c532b8fc340a08c13bfbaa953bc00",
+      "author": "governor-693b7073",
+      "content": "Governor, 05:45Z, for architect-1440caeb. Your #governors note (msg-c7454ff1) got no route back, so I'm answering here.\n1. executionContract.requiredChecks is OPTIONAL. No global or CQ-R epic rail requires it, and none of the 142 plans submitted since the live daemon started (2026-10-30 06:07Z) declared any. Resubmit WITHOUT requiredChecks, and keep the exact check command in the VERIFY step as the completion evidence. That isn't a bypass.\n2. The daemon refusal (gitExecutable: no fully-qualified Git dir in the daemon's PATH) is a real launch-environment defect. Machine and user PATH both hold C:\\Program Files\\Git\\cmd; the daemon was spawned by the PyCharm plugin. It has been added to the human's pending daemon-restart ask. Don't restart anything yourself.\n3. Ordering: CQ-R13 (f4811a72) holds UNCOMMITTED step-3 edits to guest-supervisor.py and local-runner-check.test.mjs. I've asked it to self-block, which checkpoints those bytes. If your plan lands before that checkpoint, the governor holds this row BLOCKED until it does. Anchor on names; R13's checkpoint will have changed those files. 42e9990c (exit 81) is already ordered after this row.",
+      "timestamp": "2026-10-31T05:44:10.920Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:22:50.485Z",
-  "updatedAt": "2026-10-31T05:41:52.801Z",
+  "updatedAt": "2026-10-31T05:49:09.205Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:42.944Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-10-31T05:35:40.816Z"
+    "firstClaimAt": "2026-10-31T05:35:40.816Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
-    "architect-1440caeb"
+    "architect-1440caeb",
+    "architect-21c9ed65"
   ],
-  "blockedReason": "Complete two-file security fix plan is drafted but moe.submit_plan cannot measure executionContract.requiredChecks: INVALID_INPUT: git rev-parse --show-toplevel: ENOENT: git.com or git.exe not found in any fully qualified PATH entry. The live native Windows daemon cannot resolve Git through its security-filtered process PATH; C:\\Program Files\\Git\\cmd\\git.exe is present. This is an actual submission/runtime prerequisite, not unanswered REPL input. Draft including exact gate and full submission payload is preserved in Serena task-task-5ed445ca50f24cafbe6e42fbcba686fb-handoff. No source edits, daemon restart or security-binding bypass attempted. Governor notified (msg-c7454ff13b5549868f07b30eeae27a83).",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "PLANNING",
-  "blockedAt": "2026-10-31T05:41:52.801Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "76ea863361b9e1ecbb4f53dd827112377cbf6e6a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-1440caeb@2026-10-31T05:35:42Z",
+      "paths": [
+        ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+        ".moe/tasks/task-12e89395b0dd4b34a2e0c50dd7dfa776.json",
+        ".moe/tasks/task-42e9990c286a43fcab7edd716290a515.json",
+        ".moe/tasks/task-4aa5440b5d8f4eda846be5a430c34cb2.json",
+        ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json",
+        ".moe/tasks/task-97341ad5be744d19ac869972299a2714.json",
+        ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json",
+        ".moe/tasks/task-faa4d9ef330f4ef7900a00bd2b7dc049.json"
+      ],
+      "recordedBy": "architect-1440caeb",
+      "recordedAt": "2026-10-31T05:42:36.304Z",
+      "treeId": "8c4d91e5e6714228e0d0b0be44d5e6b8e648c44b",
+      "status": "BLOCKED",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+    ".moe/tasks/task-12e89395b0dd4b34a2e0c50dd7dfa776.json",
+    ".moe/tasks/task-42e9990c286a43fcab7edd716290a515.json",
+    ".moe/tasks/task-4aa5440b5d8f4eda846be5a430c34cb2.json",
+    ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json",
+    ".moe/tasks/task-97341ad5be744d19ac869972299a2714.json",
+    ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json",
+    ".moe/tasks/task-faa4d9ef330f4ef7900a00bd2b7dc049.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-1440caeb@2026-10-31T05:35:42Z",
+    "at": "2026-10-31T05:42:36.304Z"
+  },
+  "dependsOn": [
+    "task-7db14e2df19949a8bfdb150e0f29ffcb"
+  ],
+  "priorBlockedReason": "Complete two-file security fix plan is drafted but moe.submit_plan cannot measure executionContract.requiredChecks: INVALID_INPUT: git rev-parse --show-toplevel: ENOENT: git.com or git.exe not found in any fully qualified PATH entry. The live native Windows daemon cannot resolve Git through its security-filtered process PATH; C:\\Program Files\\Git\\cmd\\git.exe is present. This is an actual submission/runtime prerequisite, not unanswered REPL input. Draft including exact gate and full submission payload is preserved in Serena task-task-5ed445ca50f24cafbe6e42fbcba686fb-handoff. No source edits, daemon restart or security-binding bypass attempted. Governor notified (msg-c7454ff13b5549868f07b30eeae27a83).",
+  "blockedOnTaskIds": null,
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T05:49:09.185Z",
+  "executionContract": {
+    "intendedBehavior": "Unprotected package.json cannot change the approved offline dependency resolution; refuse before any install if install metadata disagrees with the approved lock root or introduces unrepresented resolution controls.",
+    "acceptanceCriteria": [
+      "Same-version file:/directory, aliases and changed dependency maps refuse before any install; all-dir preflight prevents partial work on later refusal.",
+      "Overrides and both bundled-dependency control spellings refuse without installing candidate bytes.",
+      "Malformed or oversized manifests/locks and filesystem errors fail closed with the existing pre-hello exit 81.",
+      "Matching v2/v3 manifests and ordinary script/metadata edits retain offline installation; KI1-KI4, DC5 and canary CY1-CY4 pass.",
+      "No wire/schema, activation, certification claims or reserved CQ-R13 tests/docs change."
+    ],
+    "invariants": [
+      "Approved lock bytes and host-offline-cache/SHA512 remain the authority.",
+      "No candidate code, network, lifecycle scripts or new install authority.",
+      "No package/source rewrite and no loosening of GUARD, readonly mounts, flags or cleanup.",
+      "No changes to scripts/tests/local-runner.test.mjs; preserve peer/preexisting dirty bytes."
+    ],
+    "compatibility": [
+      "Guest Python runs in Linux; POSIX tests may skip on native Windows but required evidence is an executing Linux lane.",
+      "Dependency metadata changes require a matching approved lock; overrides/bundling deliberately unsupported in this offline path; legacy no-manifest path unchanged."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-check.test.mjs"
+    ],
+    "reuse": [
+      "install_dependencies all-dir preflight, blob_oid WALK/READ pattern, run_install GUARD",
+      "installRun/refusedInstall/PY_LOAD and DC5 fixture/cache helpers"
+    ],
+    "sourceAssumptions": [
+      "CQ-R13 checkpoint is landed before edits; governor releases the temporary 7db14e2d hold and serializes overlapping file owners. Do not wait for final CQ-R13 DONE.",
+      "The host's admitted lockfile bytes are protected for production checks and the fresh check VM has no concurrent candidate process."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner-check.test.mjs && node --test --test-name-pattern='^CY[1-4] ' scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Choose pre-install exact manifest/approved-lock-root agreement plus fail-closed rejection of unrepresented resolution controls. Protecting all package.json bytes needs approval/caller changes and breaks candidate-script flexibility; root-owned staging is larger and changes node_modules publication/cleanup; post-install lock comparison is too late for 'no install of those bytes'. npm 11.19.0 lib/utils/validate-lockfile.js (https://raw.githubusercontent.com/npm/cli/v11.19.0/lib/utils/validate-lockfile.js) checks versions only; load-virtual.js reads root package metadata and overrides. Source: https://raw.githubusercontent.com/npm/cli/v11.19.0/workspaces/arborist/lib/arborist/load-virtual.js . Reuse the prior draft rather than redesigning the boundary; an asynchronous REPL question offers the documented compatibility restriction, with TURBO default to this fail-closed policy.",
+    "codebaseInsights": "Current CQ-R13 dirty checkpoint already rejects .npmrc, shrinkwrap and missing/nonregular package.json and sets --workspaces=false. install_dependencies validates all dirs then all(run_install); check_job maps False to 81 before hello. Host dependency-cache admits registry/SHA512 entries and configs bind approved lock bytes; no second revision authority. Existing KI helper writes empty files and needs structurally valid JSON. DC5 has real cache fixtures. CY1-CY4 live in the reserved local-runner.test.mjs and are read-only for this task. Refreshed 2026-10-31 by architect-21c9ed65: exact function/helper definitions and existing dirty CQ-R13 guards match the earlier draft. npm v11.19.0 validate-lockfile.js and arborist/load-virtual.js were re-read from npm's tagged upstream source; version-only inventory comparison and candidate-root metadata loading confirmed. No task implementation edits made.",
+    "risks": "Security-sensitive, two-file bugfix; preserve current dirty checkpoint bytes. Governor must serialize guest-supervisor.py and local-runner-check.test.mjs against CQ-R13 and task-42e9990c286a43fcab7edd716290a515 (plus later 97341ad5), not parallelize overlapping edits. No native report currently certifies the changed supervisor; operator-run reruns belong to final CQ-R13. Conservative unsupported overrides/bundling and dependency changes intentionally fail closed; legacy no-dependency runs unchanged. requiredChecks omitted: live daemon cannot measure (PATH defect); re-add after restart. Governor explicitly authorized this optional-field omission on the legacy profile; exact completion gate remains required. Keep temporary dependsOn 7db14e2d until the governor releases it after CQ-R13 checkpointing. Do not restart the daemon.",
+    "keyFiles": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-check.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T05:49:09.205Z",
+  "approvedPlanRevision": 1
 }

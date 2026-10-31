@@ -8,9 +8,63 @@
     "The full daemon `npm test`, run in a snapshot outside the live checkout, passes with 0 failed"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Restore narrowly bounded Codex construction-site extraction, tests first. This is a two-file daemon contract repair, not a launcher change. Before editing, confirm task-7db14e2df19949a8bfdb150e0f29ffcb has landed from Moe sibling landing evidence or its Moe-Task commit trailer; read its committed scripts/moe-agent.sh and scripts/moe-agent.ps1, not a peer's uncommitted launcher changes. Keep the dependency. Note foreign dirty paths and leave them alone.\n\nThe existing 23 tests are the regression: an architect's complete archive of 76ea863361b9e1ecbb4f53dd827112377cbf6e6a produced 4 failed / 19 passed (site floor, shared facts, emitter facts, divergent facts). Preserve every original assertion verbatim in strength, including site >200, MAX_BRANCH_LINES=400, six global exceptions, all fact counts, emitter minimum length/count, whole-other-launcher absence, and four distinct whole launch invocations. Do not add global exceptions, widen matching to the whole wrapper, or skip tests.\n\nIn providerDescriptor.contract.test.ts, keep BRANCH_ANCHORS' existing provider-branch extraction and add only the two named config writers to site. Reuse the existing line split, comment stripping and Bash continuation normalization. Suggested definitions:\n```ts\nconst WRITER_ANCHORS: Record<WrapperId, RegExp> = {\n  bash: /^write_codex_config\\(\\) \\{$/,\n  powershell: /^function Write-MoeCodexConfig \\{$/,\n};\n// Make source injection possible for local extractor assertions:\nfunction buildView(id: WrapperId, raw = loadWrapper(id)): WrapperView\n```\nFor the selected writer, require exactly one raw-line start match. Collect through its unindented closing line ('}'), inclusive; match RAW lines, never trim(), because PowerShell nested blocks close with indented braces. Fail with a wrapper/function-specific error on absent/duplicate start, EOF, a new top-level function before the close, or a span exceeding MAX_BRANCH_LINES. No fallback to EOF/whole-file matching. Track writer span separately from branchSpans, append this one bounded body to siteLines, and apply the existing normalization. This is error handling for malformed anchors, not a shell parser; comment the top-level-brace formatting assumption.\n\nExtend the existing fixture-anchor and sentinel test bodies rather than replacing or removing their assertions (retain 23 test cases): pin one nonempty bounded writer per wrapper; inject LF and CRLF versions and assert identical normalized sites; assert missing writer, duplicate writer, missing terminator/next top-level function, and an oversized writer throw; put a distinctive executable-text sentinel just outside the writer and in an unrelated provider/helper and assert it is absent from site. The real writer includes nested blocks and its later emitters, so those must remain captured. Keep existing missing-file diagnostics. Update only this test file's scope comments/diagnostics to say Codex branches plus named writer; no docs sweep or new extraction dependency.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts"
+      ],
+      "note": "Added WRITER_ANCHORS + extractWriter (exact-one start, raw unindented close, fails on absent/dup/EOF/next top-level fn/oversize), buildView(id, raw) injectable, new extractor test (LF/CRLF, decoys). Original 23 cases and all thresholds untouched; now 24 cases. Dependency 7db14e2d is not fully landed (only wip commit 53c35e3e in HEAD); used committed HEAD wrappers (CLI_ROOT shapes verified). Foreign dirt (scripts/moe-agent.sh etc.) left alone.",
+      "startedAt": "2026-10-31T06:00:05.125Z",
+      "completedAt": "2026-10-31T06:00:54.884Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update CODEX_DESCRIPTOR's stale worktree-path evidence, not its contract strength. Read the dependency's landed launcher invocations again and transcribe them literally. Preserve the entire command invocation for each mode, not just '-C' or a path token; preserve every table/key, every fact, and every distinct emitter occurrence. On the explored baseline the concrete changes are:\n- BASH_LAUNCH_INTERACTIVE and BASH_LAUNCH_EXEC: replace -C \"$PROJECT\" with -C \"${CLI_ROOT:-$PROJECT}\".\n- PS_LAUNCH_INTERACTIVE and PS_LAUNCH_EXEC: replace -C \"$projectPath\" with -C \"$script:cliRoot\"; retain Invoke-MoeGuardedCommand and all argument splats.\n- BASH_SEAT_ARG_WORKER_ID: read \"${CLI_ROOT:-$PROJECT}/.codex/config.toml\", not \"$PROJECT/.codex/config.toml\".\n- PS_SEAT_ARG_WORKER_ID: inner Join-Path uses $script:cliRoot, not $projectPath.\n- config.pathFragments.emitterEvidence.bash pins 'CODEX_CONFIG_DIR=\"$root/.codex\"' and keeps the CODEX_CONFIG_FILE emission.\n- config.pathFragments.emitterEvidence.powershell pins '$codexConfigDir = Join-Path $Root \".codex\"' and keeps the codexConfigFile emission.\n- Update the same old -C spellings in the descriptor's argv-probe evidence if present; those are actual emitting/probing lines too.\nFor example, the Bash override must remain the full literal:\n```ts\nconst BASH_SEAT_ARG_WORKER_ID =\n  'CODEX_MOE_OVERRIDE=\"$(codex_moe_server_override \"${CLI_ROOT:-$PROJECT}/.codex/config.toml\" \"$WORKER_ID\")\"';\n```\nDo not globally replace PROJECT/projectPath: the MCP daemon control-project env intentionally still uses the control root, while the configuration destination and CLI -C use the worktree root. Preserve those control-root pins. The helper parameter names are case-sensitive literal evidence ($root vs $Root). If the prerequisite changed an invocation, use its actual full landed invocation with equivalent or stronger evidence, never delete an evidence entry to make it pass. Do not modify either launcher, providerDescriptor.ts, event-fact classification, or unrelated descriptor prose.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/providers/codexDescriptor.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/providers/codexDescriptor.ts"
+      ],
+      "note": "Transcribed landed shapes: 2 bash launches + probe -C \"${CLI_ROOT:-$PROJECT}\", ps launches + probe -C \"$script:cliRoot\", both seat-override config roots, CODEX_CONFIG_DIR=\"$root/.codex\", $codexConfigDir = Join-Path $Root \".codex\". MOE_PROJECT_PATH control-root pins untouched. No evidence removed.",
+      "startedAt": "2026-10-31T06:00:55.872Z",
+      "completedAt": "2026-10-31T06:00:59.258Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, in a disposable full-repository snapshot outside the live checkout. The full daemon suite is mandatory here because DoD explicitly requires it, even though this is not the epic-final task. Run the following exact command from the repository root after the dependency's launcher commit is in HEAD; it archives committed wrappers/docs, overlays only the two owned daemon files, installs host-native dependencies solely in the snapshot, runs all 23 contract cases, then the full daemon npm test:\n```bash\nbash -c 'set -euo pipefail; src=\"$PWD\"; snap=$(mktemp -d \"${TMPDIR:-/tmp}/moe-provider-gate-XXXXXX\"); printf \"SNAPSHOT=%s\\n\" \"$snap\"; git rev-parse HEAD; git archive HEAD | tar -x -C \"$snap\"; for f in packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts packages/moe-daemon/src/providers/codexDescriptor.ts; do cp \"$src/$f\" \"$snap/$f\"; cmp \"$src/$f\" \"$snap/$f\"; done; cd \"$snap/packages/moe-daemon\"; npm ci --no-audit --no-fund; npx vitest run src/providers/providerDescriptor.contract.test.ts; npm test'\n```\nExpected: targeted 23 passed, zero failed/skipped contract cases; full daemon npm test exit 0 with zero failed. Capture the base SHA, the two overlaid files' diff, snapshot path, complete gate log and final output tail; fresh command/exitCode/outputTail are complete_task evidence. QA reruns this same command from a checkout/snapshot of the recorded fix commit, not a later drifting shared HEAD. No baseline-failure waivers or assertion changes.\n\nThe command is Bash: Linux/macOS Bash or Git Bash on Windows; npm ci must install dependencies for the OS running Node (never reuse the live Windows node_modules from WSL). CRLF/LF normalization is covered by step 1; no PowerShell process is needed because both scripts are read as text. Never run npm ci/install/build/clean or any daemon test in /mnt/d/projexts/moes itself. Retain the disposable snapshot/log for evidence; do not touch live dist. No pattern-killing processes; terminate only recorded PIDs this session started if cleanup is needed.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate in snapshot /tmp/moe-provider-gate-xqZh7Y (base 76ea8633 + 2 overlaid files, cmp-verified): targeted contract 24/24 (23 original + 1 new extractor case), full npm test 215 files passed, 6255 passed | 20 skipped, 0 failed. Log /tmp/w4aa-gate.log. Exit 0.",
+      "startedAt": "2026-10-31T06:01:00.153Z",
+      "completedAt": "2026-10-31T06:02:05.102Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review (load adversarial-self-review), scoped to these two files only. Verify the original 23 cases and every original fact/threshold are retained; GLOBAL_FACT_PATHS is still exactly six, MAX_BRANCH_LINES remains 400, and site floor remains >200. Compare the fact/evidence arrays before and after: only actual relocated worktree emitter strings change; table-header and timeout emitters cannot be satisfied by merge-filter copies. Confirm the original provider regions plus exactly the named writer are included, never adjacent Gemini/Grok helpers, whole-file presence, repeated padding, or duplicated captured ranges to meet the floor. Missing/duplicate/empty/huge malformed inputs fail closed, CRLF matches LF, and nested braces do not truncate PowerShell. Concurrent test runs only read wrappers and own separate snapshot directories; they write nothing to live config/runtime state.\n\nIn a disposable copy only, demonstrate mutation resistance independently on Bash and PowerShell: remove the named writer (must fail), delete the actual [mcp_servers.moe] emitting line while leaving filter/prose copies (must fail the emitter check), delete startup_timeout_sec's emitting line while leaving parsing/default references (must fail), and drop one argument from one actual mode's invocation while leaving the other mode/probe intact (must fail). Never mutate live wrappers; restore each snapshot mutation before the next. Verify outside-region/comment-only decoys cannot restore these checks. Existing fixture tests plus these targeted negative probes are enough; do not build a new mutation framework.\n\nReview path split specifically: CLI/config destination use task root, MOE_PROJECT_PATH still uses control root. Check diff scope and no unrelated dirty bytes. If review changes either owned file, rerun the exact step-3 gate on the final bytes. Hand back via complete_task with gate evidence, mutation results and dependency SHA; wrapper owns Git writes, QA owns approval. No API/state-file changes or extra docs are required.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
+        "packages/moe-daemon/src/providers/codexDescriptor.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
+        "packages/moe-daemon/src/providers/codexDescriptor.ts"
+      ],
+      "note": "Self-review: thresholds unchanged (>200, MAX 400, 6 globals, 4 launch literals, checked>=30); no fact removed, only path literals changed; writer included once, bounded. Mutation probes in snapshot copy (originals restored, 24/24 after): remove writer -> suite fails to load (both wrappers); delete [mcp_servers.moe] emitter -> fail (bash 1, ps 2); delete startup_timeout_sec emitter -> 2 failed each; drop arg from one mode -> 1 failed each. Owned files unchanged since the step-3 gate, so no rerun needed. Dependency 7db14e2d: only wip commit 53c35e3e in HEAD; used committed HEAD wrappers.",
+      "startedAt": "2026-10-31T06:02:06.064Z",
+      "completedAt": "2026-10-31T06:02:11.118Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -30,13 +84,97 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:40:42.351Z",
-  "updatedAt": "2026-10-31T05:41:26.311Z",
-  "dependsOn": [
-    "task-7db14e2df19949a8bfdb150e0f29ffcb"
-  ],
+  "updatedAt": "2026-10-31T06:02:15.112Z",
+  "dependsOn": [],
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:41:26.311Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T05:43:03.156Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-21c9ed65",
+    "worker-c0a1ac70"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T05:47:06.714Z",
+  "executionContract": {
+    "intendedBehavior": "The existing provider descriptor contract recognizes Codex config writers moved out of provider branches and pins the current worktree-aware emitters without weakening any assertion.",
+    "acceptanceCriteria": [
+      "All original 23 providerDescriptor.contract.test.ts cases pass with unchanged assertion strength, including >200 normalized site lines and every fact/evidence check.",
+      "Extraction includes exactly the named Codex writer per launcher and rejects missing, duplicate, unbounded or oversized writers; unrelated source cannot satisfy site evidence.",
+      "The full daemon npm test passes with zero failed in an external full-repository snapshot of the fix bytes."
+    ],
+    "invariants": [
+      "No launcher edits, no new global fact exceptions, no lowered floors or removed assertions/evidence facts.",
+      "Preserve whole-invocation per-mode pins, emitter-specific evidence, and whole-other-wrapper absence checks.",
+      "Configuration destination and CLI root may be worktree-local; MCP daemon env remains control-project scoped."
+    ],
+    "compatibility": [
+      "No MCP API, persisted .moe state, provider schema or production runtime behavior changes.",
+      "Both launcher text forms and LF/CRLF inputs remain covered without requiring shell execution."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts: bounded named-writer source view, additive extractor assertions and comments.",
+      "packages/moe-daemon/src/providers/codexDescriptor.ts: worktree-aware config/override/launch/probe evidence literals only."
+    ],
+    "reuse": [
+      "Reuse buildView, BRANCH_ANCHORS, stripFullLineComments, joinBashContinuations and the current 23 contract cases."
+    ],
+    "sourceAssumptions": [
+      "The prerequisite task-7db14e2df19949a8bfdb150e0f29ffcb remains a working-claim dependency; worker inspects its landed wrappers before editing.",
+      "Explored writer names are write_codex_config and Write-MoeCodexConfig; raw top-level closing braces delimit these bodies."
+    ],
+    "checkRefs": [
+      "bash -c 'set -euo pipefail; src=\"$PWD\"; snap=$(mktemp -d \"${TMPDIR:-/tmp}/moe-provider-gate-XXXXXX\"); printf \"SNAPSHOT=%s\\n\" \"$snap\"; git rev-parse HEAD; git archive HEAD | tar -x -C \"$snap\"; for f in packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts packages/moe-daemon/src/providers/codexDescriptor.ts; do cp \"$src/$f\" \"$snap/$f\"; cmp \"$src/$f\" \"$snap/$f\"; done; cd \"$snap/packages/moe-daemon\"; npm ci --no-audit --no-fund; npx vitest run src/providers/providerDescriptor.contract.test.ts; npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected widening GLOBAL_FACT_PATHS, lowering the site floor, shortening evidence to bare keys, or modifying launchers to satisfy a stale test. Reuse the current text-view builder and add bounded named config-writer extraction; transcribe only the stale worktree emitter literals.",
+    "codebaseInsights": "Architect reproduced 4 failed / 19 passed in a full git archive of 76ea863361b9e1ecbb4f53dd827112377cbf6e6a at /tmp/moe-provider-plan-zBTlIO. Baseline branch-only sites: Bash 122 normalized lines, PowerShell 145; adding writer bodies yields 256 and 261. write_codex_config body is 171 raw lines, Write-MoeCodexConfig 150. Scratch-only hypothesis (writer inclusion plus six categories of worktree path replacements including probe copies) passed 23/23. This was not a production edit or final gate; worker must add bounded/fail-closed extraction tests and use dependency's landed shape. Both writers continue to emit daemon control-project env while accepting a distinct destination root.",
+    "risks": "Dependency 7db14e2d was WORKING during exploration and changes Codex exec helper/witness plumbing; keep its dependency and use only committed final wrappers for gate. Current shared scripts/moe-agent.sh contains peer dirt and must not be overlaid into gate. A top-level close matcher must use raw indentation and reject missing boundaries, not swallow the next helper. Whole-line mode and probe pins must all be refreshed. All npm operations/test runs belong in external snapshots.",
+    "keyFiles": [
+      "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
+      "packages/moe-daemon/src/providers/codexDescriptor.ts",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T05:47:06.734Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T06:00:05.125Z",
+  "reviewStartedAt": "2026-10-31T06:02:15.110Z",
+  "verification": {
+    "command": "bash -c 'snapshot of HEAD 76ea8633 + 2 overlaid files; cd packages/moe-daemon; npm ci; npx vitest run src/providers/providerDescriptor.contract.test.ts; npm test' (snapshot /tmp/moe-provider-gate-xqZh7Y)",
+    "exitCode": 0,
+    "outputTail": "Test Files  215 passed (215)\n     Tests  6255 passed | 20 skipped (6275)\n  (targeted providerDescriptor.contract.test.ts: Tests 24 passed (24))",
+    "reportedAt": "2026-10-31T06:02:15.110Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
+    "packages/moe-daemon/src/providers/codexDescriptor.ts"
+  ],
+  "completionSummary": "Contract test now anchors the named Codex config writers (write_codex_config / Write-MoeCodexConfig) via a bounded exact-one extractor, and codexDescriptor.ts pins the worktree-aware literals. No assertion weakened; 24/24 contract cases and full daemon suite pass in an external snapshot."
 }

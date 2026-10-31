@@ -67,6 +67,19 @@ const BRANCH_ANCHORS: Record<WrapperId, { readonly start: RegExp; readonly end: 
     end: /^(\} elseif|if) \(\$cliType -eq "(gemini|grok|claude)"\) \{$/,
   },
 };
+/**
+ * The codex config writer lives in a top-level function, outside every provider
+ * branch. Exactly one such function per launcher is part of the construction site.
+ */
+const WRITER_ANCHORS: Record<WrapperId, RegExp> = {
+  bash: /^write_codex_config\(\) \{$/,
+  powershell: /^function Write-MoeCodexConfig \{$/,
+};
+/** A new top-level function opening before the writer's close means the close was missed. */
+const TOP_LEVEL_FUNCTION_START: Record<WrapperId, RegExp> = {
+  bash: /^[A-Za-z_][A-Za-z0-9_]*\(\) \{$/,
+  powershell: /^function \S+/i,
+};
 /** A branch longer than this means an end anchor was missed and the region swallowed unrelated code. */
 const MAX_BRANCH_LINES = 400;
 
@@ -143,13 +156,41 @@ interface WrapperView {
   readonly raw: string;
   /** The whole file, comment-stripped. */
   readonly code: string;
-  /** Only the codex branches, comment-stripped. */
+  /** Only the codex branches plus the named config writer, comment-stripped. */
   readonly site: string;
   readonly branchSpans: readonly number[];
+  /** Raw line count of the named config writer body, start and close inclusive. */
+  readonly writerSpan: number;
 }
 
-function buildView(id: WrapperId): WrapperView {
-  const raw = loadWrapper(id);
+/**
+ * Cuts the named writer: exactly one raw-line start match, through the next
+ * UNINDENTED `}`. Raw lines are matched, never trimmed, because PowerShell's
+ * nested blocks close with indented braces. This assumes both launchers keep
+ * top-level functions flush-left with a flush-left closing brace; it is a
+ * bounded text cut, not a shell parser, and it fails closed otherwise.
+ */
+function extractWriter(id: WrapperId, all: readonly string[]): readonly string[] {
+  const where = `${WRAPPER_FILES[id]} codex config writer`;
+  const starts = all.flatMap((line, i) => (WRITER_ANCHORS[id].test(line) ? [i] : []));
+  if (starts.length !== 1) {
+    throw new Error(`${where}: expected exactly one start line matching ${WRITER_ANCHORS[id]}, found ${starts.length}`);
+  }
+  const start = starts[0];
+  for (let j = start + 1; j < all.length; j++) {
+    if (all[j] === '}') {
+      if (j - start + 1 > MAX_BRANCH_LINES) throw new Error(`${where}: body exceeds ${MAX_BRANCH_LINES} lines`);
+      return all.slice(start, j + 1);
+    }
+    if (TOP_LEVEL_FUNCTION_START[id].test(all[j])) {
+      throw new Error(`${where}: another top-level function opens at line ${j + 1} before the writer closes`);
+    }
+    if (j - start + 1 > MAX_BRANCH_LINES) throw new Error(`${where}: body exceeds ${MAX_BRANCH_LINES} lines without closing`);
+  }
+  throw new Error(`${where}: reached end of file without a closing brace`);
+}
+
+function buildView(id: WrapperId, raw: string = loadWrapper(id)): WrapperView {
   const all = raw.split(/\r?\n/);
   const siteLines: string[] = [];
   const branchSpans: number[] = [];
@@ -161,12 +202,15 @@ function buildView(id: WrapperId): WrapperView {
     siteLines.push(...all.slice(i, j));
     i = j - 1;
   }
+  const writer = extractWriter(id, all);
+  siteLines.push(...writer);
   const normalize = id === 'bash' ? joinBashContinuations : (s: string) => s;
   return {
     raw,
     code: normalize(stripFullLineComments(raw)),
     site: normalize(stripFullLineComments(siteLines.join('\n'))),
     branchSpans,
+    writerSpan: writer.length,
   };
 }
 
@@ -222,9 +266,11 @@ describe('provider descriptor contract: fixtures are real', () => {
     expect(views.powershell.raw).not.toContain('<#');
   });
 
-  it('finds the codex branches in both launchers, each one bounded', () => {
+  it('finds the codex branches and the named config writer in both launchers, each one bounded', () => {
     for (const id of WRAPPER_IDS) {
-      const { branchSpans, site } = views[id];
+      const { branchSpans, site, writerSpan } = views[id];
+      expect(writerSpan, `no codex config writer body captured from ${WRAPPER_FILES[id]}`).toBeGreaterThan(20);
+      expect(writerSpan, `the codex config writer in ${WRAPPER_FILES[id]} ran past its close`).toBeLessThanOrEqual(MAX_BRANCH_LINES);
       expect(branchSpans.length, `no codex branch found in ${WRAPPER_FILES[id]}`).toBeGreaterThan(0);
       for (const span of branchSpans) {
         expect(span, `a codex branch in ${WRAPPER_FILES[id]} ran past its end anchor`).toBeLessThanOrEqual(MAX_BRANCH_LINES);
@@ -248,6 +294,43 @@ describe('provider descriptor contract: fixtures are real', () => {
     for (const id of WRAPPER_IDS) {
       expect(contains(id, sentinel)).toBe(false);
       expect(views[id].site.includes(sentinel)).toBe(false);
+    }
+  });
+
+  it('the writer extractor is bounded, exact-one, line-ending-agnostic and fail-closed', () => {
+    const decoy = 'MOE_WRITER_DECOY_OUTSIDE_THE_REGION';
+    const fixtures: Record<WrapperId, { open: string; body: string[]; nextFn: string }> = {
+      bash: { open: 'write_codex_config() {', body: ['  if true; then', '    echo inner', '  fi'], nextFn: 'other_helper() {' },
+      powershell: { open: 'function Write-MoeCodexConfig {', body: ['    if ($x) {', '        inner', '    }'], nextFn: 'function Other-Helper {' },
+    };
+    for (const id of WRAPPER_IDS) {
+      const f = fixtures[id];
+      const compose = (parts: string[], eol: string) => parts.join(eol) + eol;
+      const good = [`echo ${decoy}`, f.open, ...f.body, '}', f.nextFn, `  echo ${decoy}`, '}'];
+      const lf = extractWriter(id, compose(good, '\n').split(/\r?\n/));
+      const crlf = extractWriter(id, compose(good, '\r\n').split(/\r?\n/));
+      expect(lf).toEqual(crlf);
+      expect(lf[0]).toBe(f.open);
+      expect(lf.at(-1)).toBe('}');
+      // Nested (indented) closing braces must not end the body early.
+      expect(lf).toHaveLength(f.body.length + 2);
+      // Text just outside the writer, and in an unrelated helper, never reaches the site.
+      expect(lf.join('\n')).not.toContain(decoy);
+      // buildView on injected sources: identical normalized sites for LF and CRLF.
+      const branch = id === 'bash' ? ['if [ "$CLI_TYPE" = "codex" ]; then', '  echo codex', 'elif [ "$CLI_TYPE" = "grok" ]; then'] : ['if ($cliType -eq "codex") {', '  codex', '} elseif ($cliType -eq "grok") {'];
+      const src = [...branch, ...good];
+      const a = buildView(id, compose(src, '\n'));
+      const b = buildView(id, compose(src, '\r\n'));
+      expect(a.site).toBe(b.site);
+      expect(a.site).toContain('inner');
+      expect(a.site).not.toContain(decoy);
+      expect(a.writerSpan).toBe(f.body.length + 2);
+      // Fail closed: absent, duplicate, unterminated, interrupted by another top-level function, oversized.
+      expect(() => extractWriter(id, ['echo none', '}'])).toThrow(/exactly one start/);
+      expect(() => extractWriter(id, [f.open, '}', f.open, '}'])).toThrow(/exactly one start/);
+      expect(() => extractWriter(id, [f.open, ...f.body])).toThrow(/end of file/);
+      expect(() => extractWriter(id, [f.open, ...f.body, f.nextFn, '}'])).toThrow(/another top-level function/);
+      expect(() => extractWriter(id, [f.open, ...Array(MAX_BRANCH_LINES + 5).fill('  x'), '}'])).toThrow(/exceeds/);
     }
   });
 
@@ -286,7 +369,7 @@ describe('provider descriptor contract: shared facts appear in BOTH launchers', 
         expect(literal.length, `${at} declares a too-short literal`).toBeGreaterThanOrEqual(3);
         for (const id of WRAPPER_IDS) {
           if (!presentAtSite(id, literal, at)) {
-            missing.push(`${at}: ${JSON.stringify(literal)} absent from the codex branches of ${WRAPPER_FILES[id]}`);
+            missing.push(`${at}: ${JSON.stringify(literal)} absent from the codex branches + config writer of ${WRAPPER_FILES[id]}`);
           }
         }
       }
@@ -318,7 +401,7 @@ describe('provider descriptor contract: shared facts appear in BOTH launchers', 
           // Long enough that it cannot be a bare key the merge filter repeats.
           if (literal.length < 12) problems.push(`${at}: emitter literal ${JSON.stringify(literal)} is too short to pin an emission`);
           if (!views[id].site.includes(literal)) {
-            problems.push(`${at}: emitter literal ${JSON.stringify(literal)} absent from the codex branches of ${WRAPPER_FILES[id]}`);
+            problems.push(`${at}: emitter literal ${JSON.stringify(literal)} absent from the codex branches + config writer of ${WRAPPER_FILES[id]}`);
           }
         }
       }
@@ -365,7 +448,7 @@ describe('provider descriptor contract: divergent facts really do diverge', () =
       for (const [own, other, literals] of sides) {
         for (const literal of literals) {
           if (!presentAtSite(own, literal, at)) {
-            problems.push(`${at}: ${JSON.stringify(literal)} missing from the codex branches of ${WRAPPER_FILES[own]}`);
+            problems.push(`${at}: ${JSON.stringify(literal)} missing from the codex branches + config writer of ${WRAPPER_FILES[own]}`);
           }
           if (contains(other, literal)) {
             problems.push(`${at}: ${JSON.stringify(literal)} is NOT ${own}-only -- it is also in ${WRAPPER_FILES[other]}`);

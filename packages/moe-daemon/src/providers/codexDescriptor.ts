@@ -23,17 +23,17 @@ import type { ProviderDescriptor } from './providerDescriptor.js';
  * test views moe-agent.sh.
  */
 const BASH_LAUNCH_INTERACTIVE =
-  '"$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" -C "$PROJECT" "$SHORT_PROMPT"';
+  '"$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" -C "${CLI_ROOT:-$PROJECT}" "$SHORT_PROMPT"';
 const BASH_LAUNCH_EXEC =
-  '"$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT"';
-const PS_LAUNCH_INTERACTIVE = 'Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs -C "$projectPath" "$shortPrompt"';
+  '"$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "${CLI_ROOT:-$PROJECT}" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT"';
+const PS_LAUNCH_INTERACTIVE = 'Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs -C "$script:cliRoot" "$shortPrompt"';
 const PS_LAUNCH_EXEC =
-  'Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"';
+  'Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$script:cliRoot" @codexSandboxArgs "$shortPrompt"';
 /** PowerShell builds the per-seat overrides once and splats them into both launches. */
 const PS_SEAT_ARG_WORKER_ID =
-  "$codexSeatArgs += @('-c', (Get-CodexMoeServerOverride (Join-Path (Join-Path $projectPath '.codex') 'config.toml') $WorkerId))";
+  "$codexSeatArgs += @('-c', (Get-CodexMoeServerOverride (Join-Path (Join-Path $script:cliRoot '.codex') 'config.toml') $WorkerId))";
 /** bash builds the same override once per seat and repeats it inline at each launch. */
-const BASH_SEAT_ARG_WORKER_ID = 'CODEX_MOE_OVERRIDE="$(codex_moe_server_override "$PROJECT/.codex/config.toml" "$WORKER_ID")"';
+const BASH_SEAT_ARG_WORKER_ID = 'CODEX_MOE_OVERRIDE="$(codex_moe_server_override "${CLI_ROOT:-$PROJECT}/.codex/config.toml" "$WORKER_ID")"';
 const PS_SEAT_ARG_INSTRUCTIONS = "$codexSeatArgs += @('-c', \"model_instructions_file=$($script:CodexSeatInstructionsFile.Replace('\\', '/'))\")";
 
 export const CODEX_DESCRIPTOR: ProviderDescriptor = {
@@ -173,8 +173,8 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
       value: ['.codex', 'config.toml'],
       presentInBoth: ['.codex', 'config.toml'],
       emitterEvidence: {
-        bash: ['CODEX_CONFIG_DIR="$PROJECT/.codex"', 'CODEX_CONFIG_FILE="$CODEX_CONFIG_DIR/config.toml"'],
-        powershell: ['$codexConfigDir = Join-Path $projectPath ".codex"', '$codexConfigFile = Join-Path $codexConfigDir "config.toml"'],
+        bash: ['CODEX_CONFIG_DIR="$root/.codex"', 'CODEX_CONFIG_FILE="$CODEX_CONFIG_DIR/config.toml"'],
+        powershell: ['$codexConfigDir = Join-Path $Root ".codex"', '$codexConfigFile = Join-Path $codexConfigDir "config.toml"'],
       },
     },
     topLevelKeys: [
@@ -458,8 +458,8 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
           // bash (the two launches are the others); pin it so a change there
           // cannot slip past the per-mode launch literals.
           emitterEvidence: {
-            bash: ['-c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1'],
-            powershell: ['(Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)'],
+            bash: ['-c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "${CLI_ROOT:-$PROJECT}" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1'],
+            powershell: ['(Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$script:cliRoot" @codexSandboxArgs --help 2>&1 | Out-String)'],
           },
         },
         escalation: {
