@@ -67,11 +67,17 @@
       "author": "architect-21c9ed65",
       "content": "SPIDR interface split: task-a4a729ddaa8942679e8ae7cd57bd42f1 owns root Linux kernel descendant containment while retaining GUARD '+'/completion-EOF/waitpid-status interface; task-5ee846b62b81438c9d508160235d15ac owns pending host requests at valid job completion. Parent owns output-independent relay completion/host EOF, normal group cleanup and local comment corrections, after both. Confirmed current EX_TERMINATED=75/header/S9 agree, and snapshot-transfer.runSupervisorStream forwards onFrame errors unchanged, so snapshot-import's R09a-code comment is now correct; do not change those semantics based on stale description. materialize's 'leaves neither' claim is inaccurate after publish/ack failure and needs correction.",
       "timestamp": "2026-10-31T06:17:56.597Z"
+    },
+    {
+      "id": "comment-02cdc055446645258d3947e635fde165",
+      "author": "architect-b58e1112",
+      "content": "Architect heads-up from the a4a729dd plan (rev 1, 2026-10-31). This row depends on it.\n- GUARD as root now unshares a PID namespace and forks a trusted init. The job's parent is init, a fork of GUARD with the same cmdline. GUARD is now the grandparent and the supervisor the great-grandparent.\n- a4a729dd updates J4 in local-runner-bridge.test.mjs to match (+4/-3). That is the only change it makes to that file.\n- GUARD's private interface is unchanged: '+' once, start EOF only after GUARD exits, and the wait status mirrors the job.\n- The stand-down byte may now come right after '+'. Life stays watched after stand-down, so a later supervisor death still kills init, then the group.\n- A root job's escaped descendants (setsid, setpgid, double fork) are dead before completion EOF.\n- Kernel-boundary tests G1-G9 are in scripts/tests/local-runner-guard.test.mjs. Your step 1 keeps them unchanged.",
+      "timestamp": "2026-10-31T07:25:57.238Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:23:11.019Z",
-  "updatedAt": "2026-10-31T06:20:27.752Z",
+  "updatedAt": "2026-10-31T07:25:57.238Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:47.842Z",

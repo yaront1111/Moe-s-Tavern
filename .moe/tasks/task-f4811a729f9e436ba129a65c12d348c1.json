@@ -186,11 +186,23 @@
       "author": "worker-25da16b2",
       "content": "@governor-693b7073 @governor-4764040b Re-sent from chan-15c8e232 msg-cc1acaba, which routed to nobody. The 06:20Z checkpoint 80038a06 landed 7 of this row's 10 paths. Three are still dirty in the shared tree, and no rescue ref holds them:\n- scripts/local-runner/guest-supervisor.py (the step-3 install_dependencies guard, and --workspaces=false)\n- scripts/tests/local-runner-check.test.mjs (step-3 test edits)\n- docs/TROUBLESHOOTING.md (step-2 docs, +21/-2)\nThe temp edges are already gone, and both HIGH rows are WORKING: 5ed445ca on worker-3a9b4568, 92307adc on worker-88af1437. Please tell those seats the hunks belong to CQ-R13: keep them, don't revert them, and name them in the step note.\nFor the session that resumes this row: re-check these 3 paths before re-running step 4. The row blocks on [5ed445ca, 42e9990c, 97341ad5]. 92307adc is covered through 42e9990c -> a80f46db -> 92307adc.",
       "timestamp": "2026-10-31T06:25:44.743Z"
+    },
+    {
+      "id": "comment-f642c5d8062e4cf38efef0bdefe1baca",
+      "author": "architect-b58e1112",
+      "content": "Architect heads-up from a4a729dd (planned 2026-10-31, root Linux GUARD PID-namespace containment). Three items for CQ-R13:\n1. CI wiring. a4a729dd adds scripts/tests/local-runner-guard.test.mjs (G1-G9). It does not edit .github/workflows/ci.yml, because that file is dirty and owned by peers. Please append the new file to the 'Test local runner prerequisite bundles' run line in your final integration. Its root rows skip when the host refuses unprivileged user namespaces.\n2. Re-certification. GUARD changes: as root it unshares a PID namespace and forks a trusted init. So the guest-supervisor.py sha256 changes, and native certification must run against the new bytes. a4a729dd claims no verified-local status.\n3. Watch item for the native run. The job still sees the guest's own procfs, because there is no mount namespace. ps and pgrep inside an agent job therefore list pids outside its namespace. Signals cannot cross out, so containment holds, but please exercise the real CLIs under the new GUARD.",
+      "timestamp": "2026-10-31T07:25:57.180Z"
+    },
+    {
+      "id": "comment-54ceb941d3304ef395cbea2195ccc984",
+      "author": "worker-3a9b4568",
+      "content": "From task-5ed445ca (worker-3a9b4568), step 4, for CQ-R13 and @governor-693b7073. The guest supervisor's bytes changed on top of R13's carried hunks (its 7e6ed20c bytes, all kept):\n- scripts/local-runner/guest-supervisor.py sha256 is now 83a1f9645bd2bad034b957bc1682e0f32b5cb2d183dba0d42038ae36954cbb36.\n- scripts/tests/local-runner-check.test.mjs is now b1734e1cf67c194ffbe2549a96323023c09ad161faa507fd57371f3cca2b1be8.\ninstall_dependencies' all-directories preflight now also exits 81 before hello on three cases: a package.json whose install metadata differs from the lockfile root, any overrides, bundleDependencies, bundledDependencies or workspaces, and a malformed, oversized or non-regular package.json or lockfile.\nCertify reports produced before this change, existing or injected, cannot certify these bytes. Every claimed platform needs a NEW operator-run certify report on them.\nGate: a git-archive snapshot of a97da8b5 (contains 80038a06) plus the two overlays, run with node v24.22.2 and npm 11.19.1. `node --test scripts/tests/local-runner-check.test.mjs` gave 55 tests, 54 pass, 0 fail, 1 skip (K9 needs root). The `--test-name-pattern='^CY[1-4] '` run of local-runner.test.mjs gave 4 of 4. Exit 0.\nCERTIFICATION.md and local-runner.test.mjs are untouched. Out of scope, filed as task-adbab50d16f048bd9e55fa43d8870927: a candidate-edited package-lock.json can still reach candidate bytes.",
+      "timestamp": "2026-10-31T07:26:36.401Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T06:25:44.743Z",
+  "updatedAt": "2026-10-31T07:26:43.470Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",
@@ -289,14 +301,15 @@
       "reason": "seat launch outage"
     }
   ],
-  "blockedReason": "Waiting on operator certification (DoD 1). No agent here can run Multipass, so certify needs real Windows x64, Linux x64 and macOS hardware. The #general request (msg-63e7fb95) has the per-OS commands. Steps 1-4 are COMPLETED, and the step-4 note holds the fresh evidence (DoD local-runner.test.mjs exit 0: 349 pass, 0 fail, 1 skipped).\nCertification is sequenced after task-5ed445ca50f24cafbe6e42fbcba686fb, task-42e9990c286a43fcab7edd716290a515 and task-97341ad5be744d19ac869972299a2714. All three change scripts/local-runner/guest-supervisor.py, and a report certifies only the supervisor sha256 it ran. Certifying before they land would mean re-running all three OSes.\nWhen all three are DONE this row auto-unblocks. The next session then:\n1. re-runs step 4 fresh;\n2. posts the exact commit and the expected supervisorSha256 in #general;\n3. blocks again with no task ids, waiting on the 3 report files.\nIf the reports arrive sooner, a human can set this row to WORKING to validate them. This row's Serena handoff memory holds the full recipe.\nOther rows filed during this task are not blockers: 92307adc (HIGH), 12e89395 and 4e8a274a (MEDIUM). Bug 4aa5440b, the daemon providerDescriptor contract regression from WT-05, is already DONE.",
+  "blockedReason": "Waiting on operator certification (DoD 1). No agent here can run Multipass, so certify needs real Windows x64, Linux x64 and macOS hardware. The #general request (msg-63e7fb95) has the per-OS commands. Steps 1-4 are COMPLETED, and the step-4 note holds the fresh evidence (DoD local-runner.test.mjs exit 0: 349 pass, 0 fail, 1 skipped).\nCertification is sequenced after task-5ed445ca50f24cafbe6e42fbcba686fb, task-42e9990c286a43fcab7edd716290a515 and task-97341ad5be744d19ac869972299a2714. All three change scripts/local-runner/guest-supervisor.py, and a report certifies only the supervisor sha256 it ran. Certifying before they land would mean re-running all three OSes.\nWhen all blockers are DONE this row auto-unblocks. The next session then:\n1. re-runs step 4 fresh;\n2. posts the exact commit and the expected supervisorSha256 in #general;\n3. blocks again with no task ids, waiting on the 3 report files.\nIf the reports arrive sooner, a human can set this row to WORKING to validate them. This row's Serena handoff memory holds the full recipe.\nOther rows filed during this task are not blockers: 92307adc (HIGH), 12e89395 and 4e8a274a (MEDIUM). Bug 4aa5440b, the daemon providerDescriptor contract regression from WT-05, is already DONE.\nGovernor addendum, 07:28Z: certification is also sequenced after task-adbab50d16f048bd9e55fa43d8870927 (HIGH, filed 07:23Z). A candidate-edited package-lock.json still sends the check's offline npm ci to candidate bytes. That fix changes the dependency install certification exercises, so certify after it lands.",
   "blockedResourceId": null,
   "blockedFromStatus": "WORKING",
   "blockedAt": "2026-10-31T06:19:30.054Z",
   "blockedOnTaskIds": [
     "task-5ed445ca50f24cafbe6e42fbcba686fb",
     "task-42e9990c286a43fcab7edd716290a515",
-    "task-97341ad5be744d19ac869972299a2714"
+    "task-97341ad5be744d19ac869972299a2714",
+    "task-adbab50d16f048bd9e55fa43d8870927"
   ],
   "workStartedAt": "2026-10-31T03:50:54.662Z",
   "declaredFiles": [
