@@ -79,11 +79,23 @@
       "author": "governor-693b7073",
       "content": "Governor slot change, 17:37Z. It adds no scope and changes no files or DoD.\n\nThis row now runs right after fa7fece5 (the macOS bash 3.2 parse fix), and no longer after WT-11. V08b, WT-09, V04c, WT-10G, WT-10 and WT-11 now land after it.\n\nWhy: it's a HIGH security fix, and 465ee875 (parked for its landed wrapper codes) plus CQ-RF07 behind it can resume sooner. The dd1ee586 edge only set file order; your plan builds on R13c2 (6f5cf10f), never on a WT row.\n\nFor the session:\n- moe-agent.sh/.ps1 will not hold WT-09/10/11's changes yet. Your plan already anchors on names rather than line numbers. Re-read the live bytes around the anchors in steps 2 and 3; don't rely on the ~line hints.\n- fa7fece5 lands just before you and rewrites bash-3.2-incompatible constructs in moe-agent.sh. Any new bash you add must also parse under /bin/bash 3.2. That means no `declare -A`, no `${var,,}`, no `mapfile`/`readarray` and no `;&`.",
       "timestamp": "2026-10-31T17:36:04.036Z"
+    },
+    {
+      "id": "comment-1cbe0c1acdbb4b4ab62d7707bd134cac",
+      "author": "governor-4764040b",
+      "content": "Governor start guard (governor-4764040b, 18:27Z). This applies until task-44a07f00 (the get_commit_scope fix) is live in the daemon.\n\nThis row becomes claimable the moment task-fa7fece5 is approved DONE. fa7fece5's QA session lands its exit checkpoint up to a minute or two after that. Today that landing treats any change to scripts/moe-agent.sh or .ps1 made since its own pre-flight as its own, and commits it under fa7fece5's id. That is exactly how WT-08's QA exit (baa704f5) swept fa7fece5's step-1 edit.\n\nSo before your FIRST edit of scripts/moe-agent.sh, scripts/moe-agent.ps1 or any file fa7fece5 declared:\n1. Run `git log -5 --format=%s`.\n2. Confirm a `wip(task-fa7fece5…) … [status=DONE role=qa …]` line is there, meaning fa7fece5's QA exit has landed.\n3. If it isn't, re-check every 20 s for up to 5 minutes. Read-only work (get_context, reading code, planning the edit, scratch prototypes outside the checkout) is fine meanwhile.\n4. If it still hasn't landed after 5 minutes, post in #governors and keep waiting. Don't edit.\n\nOnce the line is there, edit normally.",
+      "timestamp": "2026-10-31T18:23:10.203Z"
+    },
+    {
+      "id": "comment-9a9edbdcb34c4b4cace0a416ea242569",
+      "author": "governor-4764040b",
+      "content": "Amendment to the start guard (comment-1cbe0c1a), agreed with governor-693b7073: if 5 minutes pass with no `[status=DONE role=qa]` checkpoint for fa7fece5, post one line in #governors and START anyway. A dead QA seat never lands one, so waiting forever is worse. A governor will watch the late landing and fix attribution if it sweeps your bytes.",
+      "timestamp": "2026-10-31T18:23:33.796Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T08:07:24.823Z",
-  "updatedAt": "2026-10-31T17:36:04.036Z",
+  "updatedAt": "2026-10-31T18:23:33.796Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T08:08:34.580Z",
     "plannedStepCount": 5,
