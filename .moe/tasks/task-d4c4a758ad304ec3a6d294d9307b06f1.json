@@ -13,11 +13,17 @@
     {
       "stepId": "step-1",
       "description": "TDD RED. Create moe-vscode/tests/managed-vm-runtime.test.cjs (node:test; `npm test` already globs tests/*.test.cjs).\n\nLOADER: transpile src/services/MoeDaemonClient.ts, src/util/ManagedVm.ts and src/providers/ManagedVmTreeProvider.ts with ts.transpileModule (CommonJS, ES2020, esModuleInterop). Give every fixture fresh module instances, so runtimeProfile's session pin cannot leak. Use managed-vm.test.cjs's same-realm wrapper, `vm.runInThisContext('(function (exports, module, require, process) {...})')`, and inject `process: { ...process, env }`. Objects built under vm.runInNewContext carry another realm's prototype and fail deepStrictEqual (protected-daemon-spawn.test.cjs works around that with JSON plain(), which would drop the AbortSignal).\n\nREQUIRE MAP:\n- 'vscode': a stub with an EventEmitter class (event/fire/dispose), window.createOutputChannel returning { appendLine }, window.showErrorMessage, workspace.workspaceFolders = [{ uri: { fsPath: project } }], and workspace.getConfiguration returning get(_, fallback).\n- 'child_process': { execFile: a recorder that pushes {file, args, options} and answers via setImmediate(callback(null, one valid moe-vm-status-v1 line + '\\n')) }.\n- '../services/MoeDaemonClient' and '../util/ManagedVm': the loaded modules.\n- Anything else: the real require.\n\nFIXTURE (copy fixture() in protected-daemon-spawn.test.cjs):\n- root = fs.realpathSync.native(mkdtemp), removed in t.after; under it project/, extension/, home/, outside/ and state/;\n- an optional project/.moe/project.json;\n- extension/bundled/scripts/local-runner/vm-control.mjs (an empty file);\n- a node file at root/node-bin/node (node.exe on win32);\n- env = { HOME: home, MOE_NODE_COMMAND: node, MOE_RUNNER_STATE_DIR: state, NODE_OPTIONS: '--require=bad', NODE_PATH: project, PATH: ['rel/bin', project/bin, outside].join(path.delimiter) };\n- client stub = { onStateChanged: () => ({ dispose() {} }), resolveDaemonRuntime: counts its calls and returns { node: 'legacy-node', env: {} } };\n- provider = new ManagedVmTreeProvider(extension, client). Call the TS-private provider.execute('status', signal) directly.\n\nTESTS. Assert exact deepStrictEqual values, never truthiness.\n- R1 protected. Run with project.json {\"settings\":{\"executionProfile\":\"verified-local\"}}, and again with \"bogus\" (runtimeProfile fails closed to protected). Expect:\n  - report.kind === 'status';\n  - exactly one execFile call: file === fs.realpathSync.native(node), args [script, 'status', '--project', project], options deepStrictEqual { timeout: 120000, maxBuffer: 65537, windowsHide: true, signal, env: { HOME: home, MOE_NODE_COMMAND: node, MOE_RUNNER_STATE_DIR: state, PATH: outside } }. So NODE_OPTIONS and NODE_PATH are gone, relative and project PATH entries are gone, nothing is prepended, and MOE_RUNNER_STATE_DIR is kept;\n  - resolveDaemonRuntime is never called;\n  - the fixture env deepStrictEquals its pre-run copy.\n- R2 legacy and observe. Run with no project.json, then with executionProfile \"legacy\" and \"observe\". Expect one call, file 'legacy-node', options deepStrictEqual { timeout: 120000, maxBuffer: 65537, windowsHide: true, signal }, and Object.hasOwn(options, 'env') === false: the child inherits the extension-host env, as today. resolveDaemonRuntime is called once.\n- R3 (error handling) protected with a refused node: MOE_NODE_COMMAND is a file under project/. Expect a resolve to { kind: 'unreadable', reason: 'node-missing' }, zero execFile calls and zero resolveDaemonRuntime calls. It never falls back to the legacy node, as JetBrains nodeCommand returns null and gives NODE_MISSING.\n- R4 helper protectedVmControlRuntime(project, env, windows, home), for windows false and true (D6 style, runs on any host):\n  - windows=false: create home/.local/share/moe/node/current/bin and .../npm/bin; PATH is ['rel/bin', project/bin, outside, outside]. Expect { node: real(node), env: { HOME, MOE_NODE_COMMAND, MOE_RUNNER_STATE_DIR, PATH: [outside, outside].join(delimiter) } }: no dirname(node), no bootstrap dirs, no dedupe;\n  - windows=true: input { Path: project, PATH: the fixture PATH, node_options: 'bad', Node_Path: 'bad', HOME, MOE_NODE_COMMAND, MOE_RUNNER_STATE_DIR }. Expect exactly one PATH-like key, 'PATH' = outside, no NODE_OPTIONS or NODE_PATH in any case, and every other key kept;\n  - an env without PATH gets no PATH key;\n  - a refused node gives undefined;\n  - inputs are never mutated.\n\nRun the file alone and confirm it is RED for the right reason (protectedVmControlRuntime is not a function; R1's options lack env). Either run it in place under Windows node, `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && node --test tests\\managed-vm-runtime.test.cjs\"` (node --test only, never npm ci/install/build in the shared tree), or in a snapshot as in step 3.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/managed-vm-runtime.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/managed-vm-runtime.test.cjs"
+      ],
+      "note": "Created moe-vscode/tests/managed-vm-runtime.test.cjs (10 node:test cases: R1 x2 profiles, R2 x3, R3 x2, R4 x3). RED run in place under WSL node 24.21 (node --test only, no npm): 3 pass, 7 fail. R2 (legacy/observe/absent) passes against HEAD, which is the characterization of today's call. R1 (no env, legacy-node used), R3 (no node-missing; legacy path ran) and R4 (protectedVmControlRuntime is not a function) fail for the intended reasons. Loader: same-realm vm.runInThisContext wrapper with injected process, fresh module instances per fixture so the session pin cannot leak. Dirty paths owned by other sessions (.moe task JSONs, getCommitScope.*, postflight-worktree.cjs, .moe/decisions) left untouched.",
+      "startedAt": "2026-10-31T18:42:08.786Z",
+      "completedAt": "2026-10-31T18:43:41.308Z"
     },
     {
       "stepId": "step-2",
@@ -46,7 +52,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-c0a1ac70",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -75,7 +81,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T17:35:27.653Z",
-  "updatedAt": "2026-10-31T18:39:25.775Z",
+  "updatedAt": "2026-10-31T18:43:41.308Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T18:21:37.974Z",
@@ -84,16 +90,20 @@
   "metrics": {
     "firstClaimAt": "2026-10-31T18:21:49.935Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-b58e1112"
+    "architect-b58e1112",
+    "worker-c0a1ac70"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T18:38:32.119Z",
   "executionContract": {
@@ -195,5 +205,6 @@
     "kind": "checkpoint",
     "sessionId": "architect-b58e1112@2026-10-31T18:21:52Z",
     "at": "2026-10-31T18:39:25.775Z"
-  }
+  },
+  "workStartedAt": "2026-10-31T18:42:08.786Z"
 }
