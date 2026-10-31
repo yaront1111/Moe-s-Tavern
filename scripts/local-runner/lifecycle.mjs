@@ -161,9 +161,10 @@ async function writeNew(file, record) {
   await handle.close();
 }
 
-/** Windows refuses a rename onto a file any handle holds open (EPERM), and every ledger reader opens records: retry
- * briefly (5 tries, ~100ms), as the daemon's atomicWrite does, so a concurrent reader never fails the writer. */
-async function renameOver(from, to) {
+/** Windows refuses a rename onto a file any handle holds open, or that another rename is replacing (EPERM): every ledger
+ * reader opens records, and concurrent fetches of one pinned file rename onto one target. Retry briefly (5 tries,
+ * ~100ms), as the daemon's atomicWrite does, so neither fails the writer. */
+export async function renameOver(from, to) {
   for (let attempt = 1; ; attempt += 1) {
     try { return await rename(from, to); } catch (error) {
       if (attempt === 5 || !['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)) throw error;

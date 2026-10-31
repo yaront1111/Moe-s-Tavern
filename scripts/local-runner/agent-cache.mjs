@@ -7,12 +7,13 @@
 // and dependency (CQ-R11e3) caches; fetchAgentBinary maps those codes to its own.
 import { createHash, randomBytes } from 'node:crypto';
 import { constants, createReadStream } from 'node:fs';
-import { lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
 import { IMAGE_ARCHES } from './guest-bootstrap.mjs';
 import { DOWNLOAD_TIMEOUT_MS } from './image-cache.mjs';
+import { renameOver } from './lifecycle.mjs';
 
 export const AGENT_CLIS = Object.freeze(['claude', 'codex']); // the CQ-R10b supervisor JOBS keys
 export const MAX_AGENT_BINARY_BYTES = 2 ** 30;
@@ -267,7 +268,7 @@ async function download(pin, target, fetch, archive, member) {
       length = await holdsPin(verified, member);
       if (length === false) throw pinned('PINNED_CHECKSUM_MISMATCH');
     }
-    await rename(verified, target);
+    await renameOver(verified, target);
     return length;
   } catch (error) {
     await drop(response); // a body already read is released, and cancelling it again is a no-op
