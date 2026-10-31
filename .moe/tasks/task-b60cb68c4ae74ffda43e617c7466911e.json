@@ -1,0 +1,182 @@
+{
+  "id": "task-b60cb68c4ae74ffda43e617c7466911e",
+  "epicId": "epic-be924fb8",
+  "title": "bug: report_blocked by a governor on an unassigned task returns an END_SESSION handoff addressed to the governor, so the account-switch mod ends the governor's TUI session",
+  "description": "Observed 2026-10-31 02:12Z, filed by governor-4764040b.\n\nWhat happened: governor-4764040b parked the unassigned CQ-R13 f4811a72 with moe.report_blocked, as a third party.\n- The reply carried `sessionHandoff {action:'END_SESSION', workerId:'governor-4764040b'}`, plus seatFreed:true and workerStatus:'IDLE'.\n- The governor holds no task, yet the moe-account-switch mod in its interactive TUI (scripts/mods/moe-account-switch/hooks/register.ts endSessionInstruction) latches any top-level END_SESSION addressed to its worker id.\n- The mod then refuses chat_wait and runs /exit after the turn. The governance loop dies mid-incident, and the wrapper relaunches a fresh session that has lost its context.\n\nMechanism: packages/moe-daemon/src/tools/reportBlocked.ts, around :481.\n- `const seatWorker = prevAssignee || params.workerId;`. On an unassigned task the handoff falls back to the CALLER.\n- `!currentTaskId` is then true for a governor, which never holds a task.\n\nConstraint: keep the case the fallback exists for. That is a worker whose own launched task lost its assignment and that then reports the block; its session must still end.\n\nFix is the planner's call. For example: no fallback when the caller is a governor or human, or when the caller never held the task.",
+  "definitionOfDone": [
+    "Daemon regression test, RED on the parent: report_blocked on an unassigned task by a governor-role caller returns no sessionHandoff, and leaves the governor's worker status unchanged.",
+    "The assignee's own report_blocked and the dropped-assignment worker case still return END_SESSION addressed to that worker."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED: add the regression rows to packages/moe-daemon/src/tools/reportBlocked.test.ts, in the first describe block, right after the test 'reports the caller seat status honestly when a non-assignee updates an unassigned BLOCKED row'. Reuse its helpers (report, addWorker); change no existing test. A verified prototype (+35 lines) is in Serena memory `task-task-b60cb68c4ae74ffda43e617c7466911e-handoff`.\n\n(1) Governor rows, it.each (DoD 1). For each row, set task-1 to assignedWorkerId null (WORKING), register the caller with addWorker, then set its status:\n- ['governor-1', no team, status 'GOVERNING']: the role comes from the id prefix only.\n- ['ops-seat', team role 'governor', status 'IDLE']: the role comes from the team only. The status is not GOVERNING, so a status-based fix fails this row.\nCall report({ workerId: <governor>, reason: 'parked by governance' }) and assert:\n- result.sessionHandoff toBeUndefined();\n- result.workerStatus === the row's status. This is the honest reply; the parent answered a phantom 'IDLE'.\n- the task is { status:'BLOCKED', assignedWorkerId:null, blockedReason:'parked by governance' }, so the park still happens;\n- the stored worker is { status:<row status>, currentTaskId:null }, unchanged.\n\n(2) Dropped-assignment rows, it.each (DoD 2: the case the caller fallback exists for). Use [worker-1/worker/WORKING], [qa-1/qa/REVIEW] and [architect-1/architect/PLANNING]: a seat whose own task lost its assignment before it reported, as with a governor release_task, a status move, or the REVIEW stale release. For each row, set task-1 to { status, assignedWorkerId:null } and register the caller (worker-1 already exists). Call report({ workerId: caller }) and assert:\n- sessionHandoff toMatchObject { action:'END_SESSION', taskId:'task-1', workerId: caller };\n- the task is BLOCKED and unassigned, with blockedFromStatus = status.\n\nThe existing test 'ends a freed-seat session instead of directing an in-CLI cross-task claim' keeps covering the assignee's own report (END_SESSION to worker-1); leave it unchanged.\n\nRED evidence: run the step-3 snapshot recipe with ONLY this test file overlaid (the parent reportBlocked.ts) and `npx vitest run src/tools/reportBlocked.test.ts`. Expected, and seen in planning: exactly the 2 governor rows fail, with `expected { action: 'END_SESSION', … } to be undefined`, and the other 59 pass. Name them in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ],
+      "note": "RED in snapshot (test overlay only, parent reportBlocked.ts): 2 failed / 59 passed — 'a governor (governor-1, team role null)…' and 'a governor (ops-seat, team role governor)…', both 'expected { action: END_SESSION } to be undefined'. Shared checkout dirty paths (12, other sessions) untouched.",
+      "startedAt": "2026-10-31T02:36:43.607Z",
+      "completedAt": "2026-10-31T02:37:04.059Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN: three small edits in packages/moe-daemon/src/tools/reportBlocked.ts, nothing else.\n\n(a) The handoff target, around :479. Import resolveWorkerRole from '../util/workerRole.js' (team role wins, else the id prefix; the same helper claim_next_task uses to redirect governors). Then replace `const seatWorker = prevAssignee || params.workerId;` with:\n\n    const callerSeat = params.workerId && resolveWorkerRole(state, params.workerId) !== 'governor'\n      ? params.workerId : undefined;\n    const seatWorker = prevAssignee || callerSeat;\n\nAbove it, add a comment of at most 3 lines: the caller fallback is for a seat whose own task lost its assignment before it reported; a governor never holds a task, so its third-party park must not end the governance session.\n\n(b) The reply's workerStatus, around :552. Change `freeSeat ? (prevAssignee ? state.getWorker(prevAssignee)?.status ?? 'IDLE' : 'IDLE') : …` to `freeSeat && prevAssignee ? state.getWorker(prevAssignee)?.status ?? 'IDLE' : …`. An unassigned park then falls through to the existing arms, which report the caller's own real status (else 'IDLE' with no workerId), exactly as the comment above it already promises. The literal 'IDLE' was the same phantom that comment forbids.\n\n(c) The tool description. Extend the parenthetical '(a third-party/workerId-less block on an assigned task keeps the hold' with '; a governor parking an unassigned task keeps its own session and status)'. The text 'End the current session' must stay (a test pins it).\n\nUnchanged on purpose:\n- freeSeat and seatFreed: test :1184 pins seatFreed:true for a workerId-less unassigned park.\n- every write path.\n- the other END_SESSION emitters (util/claimEligibility.ts, util/teamMembershipHeal.ts).\n- scripts/mods/moe-account-switch. Its latch is right for a message really addressed to its seat (governor ruling, 02:16Z).\n- docs/MCP_SERVER.md: four open WORKING rows declare it. Name the stale wording at lines 1203 and 1255 as a follow-up in the completion summary.\n\nError handling: resolveWorkerRole never throws. An unknown or unregistered id resolves to null and keeps today's fallback; a workerId-less call still gets no handoff. Nothing new is written, so a failure cannot leave partial state.\n\nGREEN: the full test file passes (61 tests in planning), and `npx tsc --noEmit` is clean.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ],
+      "note": "GREEN in snapshot: tsc clean, reportBlocked.test.ts 61/61. Three edits only: import, callerSeat guard, workerStatus arm, description clause.",
+      "startedAt": "2026-10-31T02:37:04.812Z",
+      "completedAt": "2026-10-31T02:37:22.945Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY, once, fresh, in a git-archive snapshot (GLOBAL rail: no npm build, test or install in the shared checkout). This task is the highest-order row of the rolling Stability & Hardening epic, and the full daemon suite is the regression scope for the only affected package. The exact command, whose output is the complete_task evidence:\n\nS=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/tools/reportBlocked.ts packages/moe-daemon/src/tools/reportBlocked.test.ts; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/tools/reportBlocked.test.ts && npm test'\n\nExpected: exit 0, tsc clean, reportBlocked.test.ts all green, and the full suite with 0 failures. Planning saw 215 files, 6254 passed and 20 skipped, in about 37 s plus npm ci. Record the counts and the snapshot path in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Plan verify command, exit 0, snapshot /tmp/tmp.YhSsR3cNeV: tsc clean, reportBlocked.test.ts 61/61, full suite 215 files, 6254 passed, 20 skipped, 37s.",
+      "startedAt": "2026-10-31T02:37:23.639Z",
+      "completedAt": "2026-10-31T02:38:14.512Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff (final step).\n\nMutation probes: run them in the snapshot, never in the shared checkout. Each must fail at least one step-1 row. Planning killed all five (failing rows in parentheses):\n(1) no governor exclusion (2);\n(2) exclusion by status === 'GOVERNING' instead of role (1, the IDLE team-role governor);\n(3) exclusion by the 'governor-' prefix only (1, ops-seat);\n(4) no caller fallback at all (3, the dropped-assignment rows);\n(5) keeping the phantom 'IDLE' workerStatus (1).\nPut the kill table in the step note.\n\nQuestions to answer in the note:\n- Can any non-governor caller lose the END_SESSION it got before? Only the role check changed the handoff.\n- Does an assigned task behave exactly as before? prevAssignee wins first.\n- Is the reply change additive and non-breaking (epic rail: no breaking MCP contract changes)? sessionHandoff stays optional and workerStatus keeps its value domain.\n- Is git diff limited to the 2 files, with no edits to the mod, the docs or other tools?\n\nThe completion summary must say:\n- the fix reaches the live daemon only at its next restart, which is a human decision;\n- the docs/MCP_SERVER.md follow-up wording for lines 1203 and 1255.\n\nIf any byte changes in this step, re-run the step-3 command and use that fresh output as the complete_task evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ],
+      "note": "Mutation kills (snapshot only, no byte change): (1) no governor exclusion -> 2 failed; (2) status==GOVERNING -> 1 (ops-seat IDLE team governor); (3) 'governor-' prefix only -> 1 (ops-seat); (4) no caller fallback -> 3 (dropped-assignment rows); (5) phantom 'IDLE' workerStatus -> 1. Non-governor callers: only the role check changed the handoff, so none lose END_SESSION (3 dropped-assignment rows prove it). Assigned task: prevAssignee wins first, unchanged. Reply additive: sessionHandoff stays optional, workerStatus same domain. My diff = the 2 files only; other dirty scripts/ and .moe paths belong to other sessions, untouched.",
+      "startedAt": "2026-10-31T02:38:15.403Z",
+      "completedAt": "2026-10-31T02:38:44.729Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote (delegation): governor-tooling defect — a governor's third-party report_blocked on an unassigned row returns END_SESSION to the governor and the account-switch mod ends its session mid-incident (hit governor-4764040b at 02:12Z). Daemon-only, off the wrapper lane, no open row declares reportBlocked.ts — runs in parallel.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 322.7,
+  "comments": [
+    {
+      "id": "comment-20772b74f1054441a9a042764d825bb3",
+      "author": "governor-693b7073",
+      "content": "Governor, 02:18Z: promoting under the standing delegation. This is a governor-tooling defect: a governor parking a row the documented way loses its session mid-incident.\n\nPlacement:\n- No open row declares packages/moe-daemon/src/tools/reportBlocked.ts, its test, or scripts/mods/moe-account-switch/**. This row is off the wrapper lane and runs in parallel.\n- Keep it daemon-side (reportBlocked.ts + its test).\n- Don't change the mod. Its END_SESSION latch is correct for a message actually addressed to its seat.\n\nConfirmed in code: reportBlocked.ts:481 `const seatWorker = prevAssignee || params.workerId;` then `freeSeat && seatWorker && !currentTaskId` → END_SESSION to the caller.\n\nContrast case for the test: my own 02:13Z third-party report_blocked on the then-BLOCKED row went through the alreadyBlocked reason-update path and returned no handoff.\n\nGates:\n- Run daemon tests in a git-archive snapshot (GLOBAL rail: no npm build/test/install in the shared checkout).\n- The fix reaches the live daemon only at its next restart, which is a human decision. Say so in the completion summary.",
+      "timestamp": "2026-10-31T02:16:50.355Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T02:14:56.385Z",
+  "updatedAt": "2026-10-31T02:38:50.065Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T02:16:52.214Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T02:23:05.351Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-4ff0711c",
+    "worker-632cd3f0"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T02:35:59.653Z",
+  "executionContract": {
+    "intendedBehavior": "moe.report_blocked on an unassigned PLANNING/WORKING/REVIEW task called by a governor-role seat parks the task exactly as before. It returns no sessionHandoff, and the reply's workerStatus is the governor's real stored status, which the call never changes. Every other caller keeps today's handoff: the assignee's own report, and a non-governor seat whose own task lost its assignment, still get END_SESSION addressed to that seat when it holds no other task.",
+    "acceptanceCriteria": [
+      "Governor by id prefix (governor-1, GOVERNING) and governor by team role only (ops-seat, IDLE): sessionHandoff undefined, workerStatus equals the stored status, task BLOCKED and unassigned, worker record unchanged. These rows fail on the parent.",
+      "Dropped-assignment worker/WORKING, qa/REVIEW and architect/PLANNING callers on an unassigned task: END_SESSION addressed to the caller.",
+      "The assignee's own non-resource report: END_SESSION to the assignee (existing test unchanged)."
+    ],
+    "invariants": [
+      "No write path changes: the task flip, assignment clearing, worker touches, chat posts and attempt handling are byte-identical in effect.",
+      "freeSeat and seatFreed semantics are unchanged (test :1184 still passes).",
+      "The handoff is never addressed to a seat that holds another task (the existing currentTaskId guard).",
+      "Existing tests in reportBlocked.test.ts are unedited and green."
+    ],
+    "compatibility": [
+      "MCP contract: sessionHandoff stays optional and workerStatus keeps its value domain. Additive and non-breaking (epic rail).",
+      "Existing .moe state needs no migration; role resolution reads teams and ids only.",
+      "The moe-account-switch mod is unchanged."
+    ],
+    "approvedScope": [
+      "reportBlocked.ts: the seatWorker fallback, the freeSeat arm of workerStatus, one description clause, and the resolveWorkerRole import.",
+      "reportBlocked.test.ts: 2 governor rows and 3 dropped-assignment rows."
+    ],
+    "reuse": [
+      "resolveWorkerRole from util/workerRole.ts (already used by claim_next_task, get_context and create_task).",
+      "The existing report and addWorker test helpers."
+    ],
+    "sourceAssumptions": [
+      "reportBlocked.ts:305-315 reporterIsAssignee is true when the task is unassigned; freeSeat is true on a fresh non-resource flip; prevAssignee = task.assignedWorkerId.",
+      "reportBlocked.ts:479-489 seatWorker = prevAssignee || params.workerId; END_SESSION when freeSeat && seatWorker && !currentTaskId.",
+      "reportBlocked.ts:552-558 workerStatus reports a literal 'IDLE' on the freeSeat no-assignee arm.",
+      "util/workerRole.ts resolveWorkerRole: team role wins, else the architect-/governor-/worker-/qa- prefix, else null; it never throws.",
+      "claimNextTask.ts:402 redirects governor-role claimers to moe.enter_governance, so a governor never holds a task."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/tools/reportBlocked.ts packages/moe-daemon/src/tools/reportBlocked.test.ts; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/tools/reportBlocked.test.ts && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) Exempt callers that never held the task, using attempt history: rejected. It also covers idle architect or QA third-party parks, but it fails open for the real dropped-assignment seat whenever attempt records are missing (legacy rows, heals, pruned attempts). That seat would then keep its session and could claim another task in-session, the defect 43f6dd55 fixed. Ending a session wrongly is recoverable; a cross-task claim inside one session corrupts landing attribution. (b) Change the mod: ruled out by the governor (02:16Z). (c) Change freeSeat or seatFreed for unassigned rows: broader, and it breaks the pinned test :1184. (d) Role-based governor exemption: chosen. A governor can never be the dropped-assignment seat, so it is exact for the reported defect, and it is the DoD's wording.",
+    "codebaseInsights": "- A prototype was verified in a git-archive snapshot of HEAD (patch in Serena memory task-task-b60cb68c4ae74ffda43e617c7466911e-handoff).\n- RED (test overlay only): 2 failed / 59 passed.\n- GREEN: 61/61, tsc clean; full suite 215 files, 6254 passed, 20 skipped.\n- Five mutants killed.\n- Size: reportBlocked.ts +10/-4, test +35.\n- The governor's own 02:13Z park of an already-BLOCKED row returned no handoff because freeSeat is false on that arm; that is the contrast case.",
+    "risks": "- Do not run npm test, build or install in the shared checkout. The daemon runs live from packages/moe-daemon/dist.\n- Do not edit docs/MCP_SERVER.md: four open rows declare it, and the edit would draw contested holds.\n- The ops-seat row needs a governor-role team: addWorker(id, 'governor', …) creates it.\n- Residual, out of scope: an idle architect or QA third-party park of an unassigned row still gets END_SESSION. It has not been observed.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+      "packages/moe-daemon/src/util/workerRole.ts",
+      "scripts/mods/moe-account-switch/hooks/register.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T02:35:59.673Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T02:36:43.607Z",
+  "reviewStartedAt": "2026-10-31T02:38:50.063Z",
+  "verification": {
+    "command": "S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/tools/reportBlocked.ts packages/moe-daemon/src/tools/reportBlocked.test.ts; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/tools/reportBlocked.test.ts && npm test'",
+    "exitCode": 0,
+    "outputTail": "Test Files  215 passed (215)\n     Tests  6254 passed | 20 skipped (6274)\n  Start at  04:37:37\n  Duration  37.01s (snapshot /tmp/tmp.YhSsR3cNeV; tsc clean; reportBlocked.test.ts 61/61)",
+    "reportedAt": "2026-10-31T02:38:50.063Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+    "packages/moe-daemon/src/tools/reportBlocked.ts"
+  ],
+  "completionSummary": "report_blocked no longer hands a governor an END_SESSION when it parks an unassigned task: the caller fallback for seatWorker now skips callers whose resolveWorkerRole is 'governor' (team role or id prefix). Dropped-assignment worker/qa/architect callers and the assignee still get END_SESSION. Also the unassigned-park workerStatus now reports the caller's real stored status instead of a phantom 'IDLE'; description gained one clause. Tests: 2 governor rows (RED on parent, 2 failed/59 passed) + 3 dropped-assignment rows; 5 mutants killed. Snapshot gate: tsc clean, full suite 215 files, 6254 passed, 20 skipped. The fix reaches the live daemon only at its next restart (a human decision). Follow-up (docs/MCP_SERVER.md held by 4 open rows): lines 1203 and 1255 should add 'a governor's park of an unassigned row carries no sessionHandoff and keeps its own status'."
+}

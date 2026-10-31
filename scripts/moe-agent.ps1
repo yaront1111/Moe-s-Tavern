@@ -2765,12 +2765,21 @@ function Install-MoeTaskWorktree([string]$Top, [string]$W, [string]$Branch, [str
             $r = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'repair', $W) -MergeStderr
             if ($r.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git worktree repair failed: $(& $last $r)" }
         }
-        # No index file: a session died between the add and read-tree. Finish it.
+        # No index file: a session died between the add and read-tree. Finish it, but
+        # only a W holding nothing but .git: with no index, a sparse read-tree overwrites
+        # a file already in W with HEAD's bytes and still exits 0.
         # An empty index proves nothing: an agent's `git rm -r .` empties one on purpose.
         $r = Invoke-MoeGit -Top $W -GitArgs @('rev-parse', '--path-format=absolute', '--git-path', 'index')
         $index = "$(@($r.Out) | Select-Object -First 1)"
         if ($r.Rc -ne 0 -or -not $index) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git rev-parse failed in $W" }
-        $finish = -not (Test-Path -LiteralPath $index)
+        if (-not (Test-Path -LiteralPath $index)) {
+            # -Force: Git for Windows marks .git Hidden, and a plain listing leaves it out.
+            $names = @(Get-ChildItem -LiteralPath $W -Force -ErrorAction Stop | ForEach-Object { $_.Name })
+            if ($names.Count -ne 1 -or $names[0] -cne '.git') {
+                Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "$W has no index file but holds more than .git; a human must inspect it"
+            }
+            $finish = $true
+        }
     } elseif ((Test-Path -LiteralPath $W) -or (Test-MoeSymlink $W)) {
         Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "$W exists but is not a registered worktree; a human must inspect it"
     } else {

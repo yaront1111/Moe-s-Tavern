@@ -5212,6 +5212,24 @@ grep -q '\[ERROR\].* MOE_WORKTREE_CREATE_FAILED: git ls-tree failed' "$TMP_DIR/w
 [ "$(wtr_blocks)" = 1 ] && grep -q '"reason":"MOE_WORKTREE_CREATE_FAILED: git ls-tree failed' "$WTR_DIR/.moe/evidence-rpcs.jsonl" \
   || wtr_fail budget-probe "not exactly one report_blocked naming CREATE_FAILED"
 [ ! -s "$CLI_ARGS_FILE" ] && [ ! -e "$WTR_W" ] || wtr_fail budget-probe "the CLI ran, or W was made"
+# (d) W holds work, then loses its index FILE (an agent's `rm <index>`, then a crash). With
+# no index a sparse read-tree overwrites the edit and still exits 0, so reuse refuses
+# with CREATE_FAILED and touches nothing. (c) left no W, so the first run re-adds it.
+wtr_run index-setup
+[ "$wtr_code" -eq 0 ] && [ -f "$WTR_W/src/a.txt" ] || wtr_fail index-setup "W was not re-added"
+printf 'agent edit\n' > "$WTR_W/src/a.txt"; printf 'agent new\n' > "$WTR_W/src/new.txt"
+wtr_index="$(git -C "$WTR_W" rev-parse --path-format=absolute --git-path index)"
+rm "$wtr_index"
+wtr_run index-deleted
+[ "$wtr_code" -eq 1 ] || wtr_fail index-deleted "exit $wtr_code, expected 1"
+grep -q '\[ERROR\].* MOE_WORKTREE_CREATE_FAILED: .* has no index file but holds more than \.git' "$TMP_DIR/wrapper-wtr-index-deleted.out" \
+  || wtr_fail index-deleted "no CREATE_FAILED line for the missing index"
+[ "$(wtr_blocks)" = 1 ] && grep -q '"reason":"MOE_WORKTREE_CREATE_FAILED: .* has no index file' "$WTR_DIR/.moe/evidence-rpcs.jsonl" \
+  || wtr_fail index-deleted "not exactly one report_blocked naming CREATE_FAILED"
+[ ! -s "$CLI_ARGS_FILE" ] || wtr_fail index-deleted "the CLI ran"
+printf 'agent edit\n' | cmp -s - "$WTR_W/src/a.txt" && printf 'agent new\n' | cmp -s - "$WTR_W/src/new.txt" \
+  || wtr_fail index-deleted "the edited or the untracked file lost its bytes"
+[ ! -e "$wtr_index" ] || wtr_fail index-deleted "the refusal wrote W's index"
 echo "[worktree reuse] ok"
 
 # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the JetBrains

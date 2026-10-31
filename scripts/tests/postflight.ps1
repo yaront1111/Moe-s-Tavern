@@ -4729,6 +4729,23 @@ try {
     $blocks = @(Get-WtrBlocks)
     if ($blocks.Count -ne 1 -or -not $blocks[0].Contains('"reason":"MOE_WORKTREE_CREATE_FAILED: git ls-tree failed')) { Stop-Wtr 'budget-probe' 'not exactly one report_blocked naming CREATE_FAILED' $run }
     if ((Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) -or (Test-Path -LiteralPath $wtrW)) { Stop-Wtr 'budget-probe' 'the CLI ran, or W was made' $run }
+    # (d) W holds work, then loses its index FILE (an agent's `rm <index>`, then a crash). With
+    # no index a sparse read-tree overwrites the edit and still exits 0, so reuse refuses
+    # with CREATE_FAILED and touches nothing. (c) left no W, so the first run re-adds it.
+    $run = Invoke-WtrRun 'index-setup'
+    if ($run.Code -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $wtrW 'src\a.txt'))) { Stop-Wtr 'index-setup' 'W was not re-added' $run }
+    [IO.File]::WriteAllText((Join-Path $wtrW 'src\a.txt'), "agent edit`n")
+    [IO.File]::WriteAllText((Join-Path $wtrW 'src\new.txt'), "agent new`n")
+    $wtrIndex = "$(@(Invoke-WtrGit @('-C', $wtrW, 'rev-parse', '--path-format=absolute', '--git-path', 'index')) | Select-Object -First 1)"
+    Remove-Item -LiteralPath $wtrIndex -Force
+    $run = Invoke-WtrRun 'index-deleted'
+    if ($run.Code -ne 1) { Stop-Wtr 'index-deleted' "exit $($run.Code), expected 1" $run }
+    if ($run.Text -cnotmatch '\[ERROR\] MOE_WORKTREE_CREATE_FAILED: .+ has no index file but holds more than \.git') { Stop-Wtr 'index-deleted' 'no CREATE_FAILED line for the missing index' $run }
+    $blocks = @(Get-WtrBlocks)
+    if ($blocks.Count -ne 1 -or -not $blocks[0].Contains('"reason":"MOE_WORKTREE_CREATE_FAILED: ') -or -not $blocks[0].Contains(' has no index file')) { Stop-Wtr 'index-deleted' 'not exactly one report_blocked naming CREATE_FAILED' $run }
+    if (Test-Path -LiteralPath (Join-Path $wtrDir 'session-new.txt')) { Stop-Wtr 'index-deleted' 'the CLI ran' $run }
+    if ([IO.File]::ReadAllText((Join-Path $wtrW 'src\a.txt')) -cne "agent edit`n" -or [IO.File]::ReadAllText((Join-Path $wtrW 'src\new.txt')) -cne "agent new`n") { Stop-Wtr 'index-deleted' 'the edited or the untracked file lost its bytes' $run }
+    if (Test-Path -LiteralPath $wtrIndex) { Stop-Wtr 'index-deleted' "the refusal wrote W's index" $run }
     Write-Host '[worktree reuse] ok'
 
     # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the

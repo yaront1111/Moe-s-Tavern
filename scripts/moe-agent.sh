@@ -2975,11 +2975,17 @@ sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
         if [ "$raw" != "$w" ]; then
             out=$(git -C "$MOE_TOP" worktree repair "$w" 2>&1) || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree repair failed: ${out##*$'\n'}"
         fi
-        # No index file: a session died between the add and read-tree. Finish it.
+        # No index file: a session died between the add and read-tree. Finish it, but
+        # only a W holding nothing but .git: with no index, a sparse read-tree overwrites
+        # a file already in W with HEAD's bytes and still exits 0.
         # An empty index proves nothing: an agent's `git rm -r .` empties one on purpose.
         out=$(git -C "$w" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [ -n "$out" ] \
             || worktree_stop MOE_WORKTREE_CREATE_FAILED "git rev-parse failed in $w"
-        [ -e "$out" ] || finish=true
+        if [ ! -e "$out" ]; then
+            out=$(ls -A "$w" 2>/dev/null) && [ "$out" = .git ] \
+                || worktree_stop MOE_WORKTREE_CREATE_FAILED "$w has no index file but holds more than .git; a human must inspect it"
+            finish=true
+        fi
     elif [ -e "$w" ] || [ -L "$w" ]; then
         worktree_stop MOE_WORKTREE_CREATE_FAILED "$w exists but is not a registered worktree; a human must inspect it"
     elif git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/$branch" > /dev/null; then
