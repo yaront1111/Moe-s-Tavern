@@ -760,11 +760,12 @@ step start (`task.workStartedAt`), else `task.reviewStartedAt` (`completionCommi
 3. The fleet still runs an older installed wrapper that never calls `record_commit` (rebuild +
    reinstall, note below).
 
-Policy for QA: an empty `task.commits` at REVIEW is a bounded wait, then a self-land — the full rule is
-in `docs/roles/qa.md` and `docs/roles/qa.reference.md` ("Empty `task.commits` at REVIEW"). A warning
-that fires after QA landed the row itself and called `moe.record_commit` is this race, not a defect;
-it is grounds to reject only when the bytes cannot be attributed to the row at all. A DONE task with
-no completion commit from anyone is still a merge with no reviewed diff.
+Policy for QA: an empty `task.commits` at REVIEW (no completion entry for the round) is a bounded
+wait, then a `moe.qa_reject` citing the landing evidence (`task.lastCommitOutcome`), never a QA
+commit: the agent Git-write guard refuses one ([Agent Git-write refusal](#agent-git-write-refusal)),
+and the reopened row's worker session lands it through its wrapper. The full rule is in
+`docs/roles/qa.md` and `docs/roles/qa.reference.md` ("Empty `task.commits` at REVIEW"). A DONE task
+with no completion commit from anyone is still a merge with no reviewed diff.
 
 ---
 
