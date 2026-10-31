@@ -1,0 +1,27 @@
+{
+  "id": "task-42e9990c286a43fcab7edd716290a515",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: a candidate-caused dependency-phase refusal (supervisor exit 81) is infra-failure, so the daemon retries it on fresh VMs and escalates with an empty output tail",
+  "description": "guest-supervisor.py exits 81 for every dependency-phase failure: npm ci out of sync with the protected lockfile, and since CQ-R13 a planted npm-shrinkwrap.json/.npmrc or a missing package.json. npm's output goes to /dev/null, check-session.mjs maps 81 to infra-failure, and packages/moe-daemon/src/delivery/repairPolicy.ts retries infra failures, so a candidate that breaks its own install burns the infra retry budget on fresh VMs and the worker never sees why. Split candidate-caused install refusals into a code-failure outcome with a bounded output tail, apart from VM and toolchain faults.",
+  "definitionOfDone": [
+    "A dependency-phase refusal caused by the candidate's files resolves as code-failure with a bounded, sanitized output tail, and is not retried as infra.",
+    "A toolchain, cache or VM fault in the same phase stays infra-failure; tests cover both through check-session and the daemon's repair policy."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 314.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T05:22:54.584Z",
+  "updatedAt": "2026-10-31T05:22:54.584Z"
+}

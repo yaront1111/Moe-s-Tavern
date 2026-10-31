@@ -104,7 +104,7 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -151,7 +151,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:50:02.706Z",
-  "updatedAt": "2026-10-31T05:09:24.750Z",
+  "updatedAt": "2026-10-31T05:32:58.881Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T13:38:54.610Z",
@@ -161,12 +161,15 @@
     "firstClaimAt": "2026-10-30T13:14:01.009Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-31T05:32:58.881Z",
+    "wallClockMs": 58737872
   },
   "contextFetchedBy": [
     "architect-bc59d28a",
     "architect-eb7de546",
-    "worker-632cd3f0"
+    "worker-632cd3f0",
+    "qa-b29f7b3d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -259,7 +262,52 @@
     "scripts/tests/postflight-worktree.cjs",
     "scripts/moe-agent.sh",
     "scripts/tests/prompt-cache-launcher.test.mjs",
-    "scripts/moe-agent.ps1"
+    "scripts/moe-agent.ps1",
+    ".moe/project.json",
+    ".moe/tasks/task-28dfaeff2d5146958a8529d9d281e9e4.json",
+    ".moe/tasks/task-5d5175717f704c708bc5e7f76b45129f.json",
+    ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
+    ".moe/tasks/task-faa4d9ef330f4ef7900a00bd2b7dc049.json"
   ],
-  "completionSummary": "WT-05: in worktree mode every CLI now launches against the task worktree W with per-W configs. MOE_PROJECT_PATH stays the control checkout.\n- sh (scripts/moe-agent.sh):\n  - The codex, gemini, grok and .mcp.json writers are now ROOT-parameterised functions (write_*_config / write_project_mcp_json), with `|| return 1` on each mkdir and python write.\n  - prepare_worktree_launch sets CLI_ROOT=W and exports MOE_WORKTREE_PATH, MOE_TASK_BRANCH and MOE_LAND_TARGET. It writes W/.mcp.json plus the CLI's config (grok also trusts W) and copies .moe/agents/*.md into W/.claude/agents. Any failure goes to worktree_stop MOE_WORKTREE_CREATE_FAILED, with no fallback to the control.\n  - Every launch site uses ${CLI_ROOT:-$PROJECT}: claude cd and --mcp-config; codex -C, the instructions file and the override path; gemini/grok cd and --cwd. The trust helper gets W as launchDir.\n- ps1 (scripts/moe-agent.ps1), the twin:\n  - Write-Moe{Codex,Gemini,Grok}Config -Root and Initialize-MoeWorktreeLaunch; $script:cliRoot is used at every site.\n  - In worktree mode, Push-Location W runs before the account lease. Pop happens once: post-flight, the loop top, or the outer finally.\n  - Claude keeps its temp --mcp-config. BOM kept, ParseFile reports 0 errors on PS 5.1 and 7.\n- Shared mode produces the same output as HEAD.\n- Tests:\n  - postflight-worktree.cjs gains launch-claude/codex/gemini/grok (cwd W, -C/--cwd W, env, configs naming the control, agents byte-equal, grok trust for W, no W/.moe) and config-fail (MOE_WORKTREE_CREATE_FAILED, no CLI).\n  - These were RED on HEAD in both sh and ps1, and are now GREEN: sh 17/17, ps1 18/18, plus both postflight-safe harnesses.\n  - prompt-cache-launcher anchors and preambles are updated.\n- Net +175 LOC.\n- Filed task-5d517571: on Windows node, 14 taskless-handoff tests already fail at HEAD because of WT-04's unstubbed Initialize-MoeWorktree."
+  "completionSummary": "WT-05: in worktree mode every CLI now launches against the task worktree W with per-W configs. MOE_PROJECT_PATH stays the control checkout.\n- sh (scripts/moe-agent.sh):\n  - The codex, gemini, grok and .mcp.json writers are now ROOT-parameterised functions (write_*_config / write_project_mcp_json), with `|| return 1` on each mkdir and python write.\n  - prepare_worktree_launch sets CLI_ROOT=W and exports MOE_WORKTREE_PATH, MOE_TASK_BRANCH and MOE_LAND_TARGET. It writes W/.mcp.json plus the CLI's config (grok also trusts W) and copies .moe/agents/*.md into W/.claude/agents. Any failure goes to worktree_stop MOE_WORKTREE_CREATE_FAILED, with no fallback to the control.\n  - Every launch site uses ${CLI_ROOT:-$PROJECT}: claude cd and --mcp-config; codex -C, the instructions file and the override path; gemini/grok cd and --cwd. The trust helper gets W as launchDir.\n- ps1 (scripts/moe-agent.ps1), the twin:\n  - Write-Moe{Codex,Gemini,Grok}Config -Root and Initialize-MoeWorktreeLaunch; $script:cliRoot is used at every site.\n  - In worktree mode, Push-Location W runs before the account lease. Pop happens once: post-flight, the loop top, or the outer finally.\n  - Claude keeps its temp --mcp-config. BOM kept, ParseFile reports 0 errors on PS 5.1 and 7.\n- Shared mode produces the same output as HEAD.\n- Tests:\n  - postflight-worktree.cjs gains launch-claude/codex/gemini/grok (cwd W, -C/--cwd W, env, configs naming the control, agents byte-equal, grok trust for W, no W/.moe) and config-fail (MOE_WORKTREE_CREATE_FAILED, no CLI).\n  - These were RED on HEAD in both sh and ps1, and are now GREEN: sh 17/17, ps1 18/18, plus both postflight-safe harnesses.\n  - prompt-cache-launcher anchors and preambles are updated.\n- Net +175 LOC.\n- Filed task-5d517571: on Windows node, 14 taskless-handoff tests already fail at HEAD because of WT-04's unstubbed Initialize-MoeWorktree.",
+  "commits": [
+    {
+      "sha": "be889d732d5243b8ba99f7e735c9c3a38262a4d4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-632cd3f0@2026-10-31T03:42:17Z",
+      "paths": [
+        ".moe/project.json",
+        ".moe/tasks/task-28dfaeff2d5146958a8529d9d281e9e4.json",
+        ".moe/tasks/task-5d5175717f704c708bc5e7f76b45129f.json",
+        ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
+        ".moe/tasks/task-faa4d9ef330f4ef7900a00bd2b7dc049.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "recordedBy": "worker-632cd3f0",
+      "recordedAt": "2026-10-31T05:09:45.856Z",
+      "treeId": "4bd20e8174b5d45dd1281b5464f51c4cb986cd22",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/tests/prompt-cache-launcher.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-632cd3f0@2026-10-31T03:42:17Z",
+    "at": "2026-10-31T05:09:45.856Z"
+  },
+  "completedAt": "2026-10-31T05:32:58.881Z",
+  "reviewCompletedAt": "2026-10-31T05:32:58.881Z",
+  "reviewSummary": "Reviewed completion be889d73 (task.commits, pushed, on moe/work-2026-10-24). 4 code paths: +249/-74, net 175 LOC. The .moe/project.json change is the daemon's GLOBAL customRule (board).\n\nRe-ran task.verification in fresh `git archive be889d73 scripts docs` snapshots, MOE_/CLAUDE/GROK_ env scrubbed:\n- bash -n OK; parity-check PASS; DoD-5 codes diff empty.\n- Linux node --test (5 files): 161 pass, 0 fail, 3 skip.\n- Windows node (prompt-cache + usage): 126/126.\n- Windows taskless-handoff: 14 fails, identical set to parent be889d73^ (pre-existing, task-5d517571).\n- postflight-safe bash and powershell: both exit 0, NONE, Z.\nBoth harnesses abort on a postflight-worktree.cjs failure, so the new launch-* and config-fail cases plus all WT-04T and shared cases pass in both (DoD 1-4, 6).\n\nCode review:\n- sh ${CLI_ROOT:-$PROJECT} and ps1 $script:cliRoot at every launch, flag, config and trust site.\n- ps1 push/pop pairs on every path (traced breaks and exits).\n- MOE_PROJECT_PATH stays the control in env and configs.\n- Writer globals are in scope; MOE_DAEMON_HOST is exported first.\n- Every W failure goes to worktree_stop / Stop-MoeWorktreeSeat MOE_WORKTREE_CREATE_FAILED, with no fallback.\n- Shared-mode args, banners and trust argv are unchanged.\n- Tests are mutation-resistant (realpath cwd and flags, decoded config values, byte-equal agents, banner counts per root).\n- The config-fail deviation is justified by c7ee939a.\n\nNon-blocking:\n(1) sh writers run with set -e off (`||` list); only mkdir and python carry `|| return 1`.\n(2) ps1 New-Item -Path, not -LiteralPath, for W/.claude/agents.",
+  "requiredCheckAtDone": null
 }

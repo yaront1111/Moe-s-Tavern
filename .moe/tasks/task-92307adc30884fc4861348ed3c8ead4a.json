@@ -1,0 +1,27 @@
+{
+  "id": "task-92307adc30884fc4861348ed3c8ead4a",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: Multipass spawns use a bare `multipass` on Windows and outside provision/runCheckJob/certify, and Windows resolves a bare name from the current directory first",
+  "description": "windowsPlatform has no executable, so every win32 Multipass spawn (provision, runCheckJob, certify, doctor and cli prerequisites, vm-control, agent lifecycle) runs a bare 'multipass', which Windows libuv resolves from the cwd (.com, .exe) before PATH (Serena memory gotcha-windows-libuv-spawn-searches-cwd-first): a multipass.exe in the daemon's or CLI's cwd, e.g. an agent-written file in the project checkout, would run as the operator. On Linux and macOS, vm-control.mjs (provider = {}), the cli doctor command and agent-lifecycle.mjs also skip the platform's pinned EXECUTABLE; CQ-R13 pinned it only inside runCheckJob. Pin one absolute client on every path (verify the Windows install path on a real host), or resolve it from PATH only as source-export.mjs does for git. Until then CERTIFICATION.md has the operator run from the work dir.",
+  "definitionOfDone": [
+    "No local-runner Multipass spawn on any platform runs a bare 'multipass'; a test plants multipass.exe/.com in the cwd and shows it never runs.",
+    "Each platform's client path is pinned once and used by provision, runCheckJob, certify, doctor, prerequisites, vm-control and agent lifecycle, with tests per path."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 315.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T05:22:59.885Z",
+  "updatedAt": "2026-10-31T05:22:59.885Z"
+}

@@ -1,0 +1,27 @@
+{
+  "id": "task-5ed445ca50f24cafbe6e42fbcba686fb",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: the check's offline npm ci installs candidate bytes from a same-version file: spec in an unprotected package.json, despite the approved lockfile",
+  "description": "guest-supervisor.py install_dependencies runs `npm ci` against the protected package-lock.json, but npm 11.19 (the pinned toolchain's) checks package.json against it by version only. With the lockfile byte-identical, a candidate package.json spec `file:../stub/is-number-7.0.0.tgz` (same name and version) installed the stub's bytes offline from an empty cache (CQ-R13 probe, npm 11.19.0), so check-evidence's dependencies boundary (host-offline-cache, lockfile-sha512) does not hold; `overrides` is likely a second route. CQ-R13's checkpoint already refuses an npm-shrinkwrap.json or .npmrc, requires a regular package.json and pins --workspaces=false; the remaining fix needs a design choice, e.g. install from the approved lockfile's root entry in a root-owned staging dir, protect package.json, or verify node_modules/.package-lock.json against the approved lockfile after the install. Build on CQ-R13's guest-supervisor.py checkpoint; the change alters supervisorSha256, so CERTIFICATION.md reports must be re-run on it.",
+  "definitionOfDone": [
+    "A candidate that changes an unprotected package.json, adds overrides, or otherwise points a dependency at non-cache bytes gets no install of those bytes: the check fails closed, with a test per route.",
+    "The approved-lockfile install from the offline cache still passes (KI1, DC5 and certify canary-check stay green)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 313.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T05:22:50.485Z",
+  "updatedAt": "2026-10-31T05:22:50.485Z"
+}

@@ -1,0 +1,27 @@
+{
+  "id": "task-12e89395b0dd4b34a2e0c50dd7dfa776",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: check dispatch loses runCheckJob's VM outcome, so infra retries launch new VMs while deletes keep failing",
+  "description": "check-lifecycle.mjs rejects with onReady's own error (or CHECK_READY_TIMEOUT) after its delete, so the caller never learns `vm`; check-dispatch.mjs runOnce never reads result.vm, so retry-infra relaunches fresh VMs while deletes fail. 'inconclusive' also covers both a delete-failed pass and an unverified-workspace pass, which the daemon cannot tell apart. Carry vm and failure through the dispatch contract (CQ-V04b) and stop launching once a delete has failed.",
+  "definitionOfDone": [
+    "A delete-failed run, including one ended by an onReady rejection or timeout, is visible to check dispatch and stops further VM launches for that dispatch, with tests.",
+    "The recorded result distinguishes a delete-failed pass from an unverified-workspace pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 316.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T05:23:03.584Z",
+  "updatedAt": "2026-10-31T05:23:03.584Z"
+}

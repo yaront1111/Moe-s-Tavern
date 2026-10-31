@@ -1,0 +1,27 @@
+{
+  "id": "task-97341ad5be744d19ac869972299a2714",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: the guest supervisor's relay leaves a finished job's background processes running and stops watching host EOF once the job closes its output pipes",
+  "description": "run_bridge stands the guard down on a normal finish without killpg (run_install always kills), so `sleep 300 &` or a setsid child outlives the job until VM deletion, contrary to check-evidence's teardown 'killed-and-reaped'; and pump stops polling in_fd once both output pipes close, so a host EOF (header: exit 74) goes unnoticed while the job runs on. Also: a bridge request pending at job exit turns a real observation into SESSION_PROTOCOL_VIOLATION (guest-session.mjs:169; runAgentJob has no caller yet), and the header's exit 75, materialize's \"leaves neither\" comment and snapshot-import.mjs's \"limit codes surface unchanged\" disagree with the code. Changes supervisorSha256, so certification reports must be re-run.",
+  "definitionOfDone": [
+    "After any job ends, no process of its group or session survives the observation frame, and a host EOF is acted on while a job with closed output pipes still runs, with tests.",
+    "The supervisor header and the cited comments match the code."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 318.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T05:23:11.019Z",
+  "updatedAt": "2026-10-31T05:23:11.019Z"
+}
