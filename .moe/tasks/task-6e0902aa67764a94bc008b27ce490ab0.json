@@ -76,7 +76,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -102,16 +102,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T15:21:40.175Z",
-  "updatedAt": "2026-10-31T15:28:42.956Z",
+  "updatedAt": "2026-10-31T15:31:14.449Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T15:22:49.367Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-31T15:31:14.449Z",
+    "wallClockMs": 505082
   },
   "contextFetchedBy": [
     "architect-8419009e",
-    "worker-c0a1ac70"
+    "worker-c0a1ac70",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -192,7 +195,60 @@
   },
   "filesModified": [
     "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-6e0902aa67764a94bc008b27ce490ab0.json",
+    ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json",
+    ".moe/tasks/task-f622843305224cf49ca24478b26c3351.json"
+  ],
+  "completionSummary": "Documented the landed worktree daemon contracts (WT-01/02/03/03b) in docs/MCP_SERVER.md and docs/SCHEMA.md, each in its existing section and spelled as in the code. MCP_SERVER.md: claim_next_task and get_context `workspace: { mode, path, branch, target }`, with which replies carry it and pinned mode/path versus live target; complete_task moe/task/<taskId> BRANCH-POLICY-FAIL rule; finalize_attempt 'unlanded' (unlandedReason, conflictPaths, rescueRef, targetTip, errors, REVIEW to WORKING/BLOCKED routing, landingRetry set/clear, paths vs conflictPaths). SCHEMA.md: ProjectSettings.worktreeMode, Task.landingRetry with LandingRetry and UnlandedReason, ExecutionAttempt.workspaceMode and AttemptWorkspace. Drift audit (12 items) posted on task-cda65eb0. Only the two docs changed; no wrapper-side names; no code change.",
+  "commits": [
+    {
+      "sha": "a42b519d26c9665b199424f37e233a1c2de2ad54",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T15:26:06Z",
+      "paths": [
+        ".moe/tasks/task-6e0902aa67764a94bc008b27ce490ab0.json",
+        ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json",
+        ".moe/tasks/task-f622843305224cf49ca24478b26c3351.json",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T15:29:05.260Z",
+      "treeId": "36fe175a54fd620de5c242b3e7d7a271e270f6e4",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-b621ddc99fe44d50ab700b2aa51c84fc"
+        },
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-b621ddc99fe44d50ab700b2aa51c84fc"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/MCP_SERVER.md",
     "docs/SCHEMA.md"
   ],
-  "completionSummary": "Documented the landed worktree daemon contracts (WT-01/02/03/03b) in docs/MCP_SERVER.md and docs/SCHEMA.md, each in its existing section and spelled as in the code. MCP_SERVER.md: claim_next_task and get_context `workspace: { mode, path, branch, target }`, with which replies carry it and pinned mode/path versus live target; complete_task moe/task/<taskId> BRANCH-POLICY-FAIL rule; finalize_attempt 'unlanded' (unlandedReason, conflictPaths, rescueRef, targetTip, errors, REVIEW to WORKING/BLOCKED routing, landingRetry set/clear, paths vs conflictPaths). SCHEMA.md: ProjectSettings.worktreeMode, Task.landingRetry with LandingRetry and UnlandedReason, ExecutionAttempt.workspaceMode and AttemptWorkspace. Drift audit (12 items) posted on task-cda65eb0. Only the two docs changed; no wrapper-side names; no code change."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-31T15:26:06Z",
+    "at": "2026-10-31T15:29:05.260Z"
+  },
+  "completedAt": "2026-10-31T15:31:14.449Z",
+  "reviewCompletedAt": "2026-10-31T15:31:14.449Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit a42b519d (moe/work-2026-10-24, pushed) via git show: docs +63/-7 (~56 net) over MCP_SERVER.md and SCHEMA.md.\n\nRe-ran the verification command from repo root: exit 0 (role-doc lint OK; every grep key present in both docs).\n\nChecked each new sentence against the code, which wins:\n- schema.ts/validators.ts: WorktreeMode, ExecutionWorkspaceMode, AttemptWorkspace, UnlandedReason, LandingRetry, Task.landingRetry?: LandingRetry|null and ExecutionAttempt.workspaceMode? match on optionality, unions and null.\n- claimNextTask.ts and getContext.ts: when workspace is present (claim: claimed attempt only; get_context: decodable attempt, not view:'status'), pinned mode/path vs live target, WORKING-only worktree mode.\n- completeTask.ts: exact moe/task/<taskId> match, else CONSTRAINT_VIOLATION BRANCH-POLICY-FAIL.\n- finalizeAttempt.ts: unlandedReason/rescueRef/targetTip validation, conflictPaths stored as paths (cap 500), non-worktree attempt refused INVALID_INPUT, REVIEW to BLOCKED on 'diverged' or count>=3 else WORKING, non-REVIEW keeps status, landed and nothing-to-commit null the retry. WT-03b denylist and nextStatusForRelease also confirmed.\n\nDoD3: grep of the added lines for MOE_|git-land-|refs/moe/board|moe/control prints nothing. The commit also carries two daemon-written board records (cda65eb0's required drift comment, f622843305's lastCommitOutcome) swept in by the wrapper, not worker edits; not treated as a breach. No peer hunks in the docs.\n\nDrift comment comment-251f69ef on task-cda65eb0 lists 12 items.\n\nNot run: vitest cannot start here (Windows node_modules lacks the WSL rolldown binding), so the doc-guard tests were not executed. Instead I grepped the 65 added lines against their stale-phrase patterns: no hits, no tool headings added. Static evidence only.\n\nNon-blocking: claim_next_task and get_context both have a paragraph titled 'Workspace (WT-01)'; the complete_task cross-reference names claim_next_task.",
+  "requiredCheckAtDone": null
 }
