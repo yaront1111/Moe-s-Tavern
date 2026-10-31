@@ -80,7 +80,7 @@ export function readiness(report: ManagedVmReport | undefined): string[] {
     ];
 }
 /** Blocked whatever a report claims: activation needs certification this extension cannot check. */
-export const strongProfile = (_report: ManagedVmReport | undefined): string => 'Strong profile (verified-local) is unavailable: protected isolation, '
+export const strongProfile: (report: ManagedVmReport | undefined) => string = () => 'Strong profile (verified-local) is unavailable: protected isolation, '
     + 'trusted runner evidence and revision-bound delivery are not certified. Moe keeps the current execution profile.';
 export const rows = (report: ManagedVmReport | undefined): ManagedVmRow[] => (report?.kind === 'status' ? report.instances.filter(row => !HIDDEN.has(row.phase)) : []);
 export function actions(lastStatus: ManagedVmReport | undefined, running: boolean): { refresh: boolean; reconcile: boolean; cleanup: boolean } {
