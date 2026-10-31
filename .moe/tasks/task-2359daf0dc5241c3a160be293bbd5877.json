@@ -92,7 +92,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -127,7 +127,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T18:19:37.949Z",
-  "updatedAt": "2026-10-31T17:29:43.742Z",
+  "updatedAt": "2026-10-31T17:33:44.215Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T18:25:22.147Z",
@@ -137,11 +137,14 @@
     "firstClaimAt": "2026-10-30T18:25:27.283Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-31T17:33:44.215Z",
+    "wallClockMs": 83296932
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-88af1437"
+    "worker-88af1437",
+    "qa-4398294e"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -250,6 +253,38 @@
       "treeId": "bd6bed3c50dc5cd9e33f09d599f877c9c5eb6254",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "edb284995d1a8bb07df9cb7bd29dd5ff8ec3e00a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-88af1437@2026-10-31T17:14:03Z",
+      "paths": [
+        ".moe/tasks/task-2359daf0dc5241c3a160be293bbd5877.json",
+        "docs/TROUBLESHOOTING.md",
+        "docs/roles/qa.md",
+        "docs/roles/qa.reference.md",
+        "docs/skills/moe-qa-loop/SKILL.md",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts",
+        "packages/moe-daemon/src/util/qaCommitPolicy.test.ts"
+      ],
+      "recordedBy": "worker-88af1437",
+      "recordedAt": "2026-10-31T17:30:07.469Z",
+      "treeId": "e9cd45fcbf0710d117bfc5ac460a211fef0d1987",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-48f0b3aaa82c4b938d3a15f3710a66e5"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -259,14 +294,15 @@
     "docs/skills/moe-qa-loop/SKILL.md",
     "docs/TROUBLESHOOTING.md",
     "packages/moe-daemon/src/generated/initFiles.ts",
-    "packages/moe-daemon/src/generated/skillFiles.ts"
+    "packages/moe-daemon/src/generated/skillFiles.ts",
+    ".moe/tasks/task-2359daf0dc5241c3a160be293bbd5877.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-bd1eb82d@2026-10-30T18:25:27Z",
-    "at": "2026-10-30T18:55:09.154Z"
+    "kind": "completion",
+    "sessionId": "worker-88af1437@2026-10-31T17:14:03Z",
+    "at": "2026-10-31T17:30:07.469Z"
   },
   "workStartedAt": "2026-10-31T17:16:30.146Z",
   "reviewStartedAt": "2026-10-31T17:29:43.740Z",
@@ -277,5 +313,18 @@
     "reportedAt": "2026-10-31T17:29:43.740Z",
     "source": "agent-reported"
   },
-  "completionSummary": "The route is now one rule in either mode: QA never commits in the control checkout, because the agent Git-write guard (447281cf) refuses it with MOE_AGENT_GIT_REFUSED.\n\nWhen the bounded wait and the isolated-clone check find no `completion` entry for this round, QA calls moe.qa_reject with one `other` issue that starts 'Landing gap:'. The issue cites task.lastCommitOutcome (null means nothing was recorded), landingRetry, rescueRefsHint, and the still-dirty paths with MOE_CONTESTED_HELD.\n- failedDodItems are named only for items verified failing.\n- A landing-gap reject counts toward the reopen cap. On a second gap the row stays in REVIEW with a single #governors post per round (amendment comment-28541674).\n- With autoCommit off, QA judges the working tree on merit.\n\nThis replaces the governor's interim #qa rule (msg-6a3ac67b + addendum msg-fa898537) once this row is DONE.\n\nDoD 1:\n- qa.md (36 lines), qa.reference.md (path recipe deleted; new **The reject.** and **A second landing gap.** sections) and moe-qa-loop SKILL.md were edited. Its allowed-tools no longer list Bash(git add:*) or Bash(git commit:*).\n- TROUBLESHOOTING.md: only the 'Policy for QA:' paragraph changed. It now points to the reject and to #agent-git-write-refusal.\n- The .claude/skills mirror is a symlink; the daemon restamps it on restart.\n\nDoD 2: initFiles.ts and skillFiles.ts were regenerated in a git clone --shared and applied with Edit. They cmp-equal prebuild output, and only the three QA entries changed. Lint passes.\n\nDoD 3: qaCommitPolicy.test.ts pins ROUTE_SENTINELS (8 phrases) and RETIRED (8 phrases, including WT-18b's 'shared mode only') across every source and generated QA doc. It adds a TROUBLESHOOTING section test.\n- RED at 0733a436: 2 failed / 8 passed.\n- GREEN in the checkRefs[0] gate: EXIT 0, 218 files, 6431 passed / 20 skipped.\n- scripts/moe-agent.{sh,ps1} are not in my diff. Their dirt is a peer's and predates this session.\n\nTotal non-board change: +122/-71 (net 51).\n\nNote: MOE_CONTRO"
+  "completionSummary": "The route is now one rule in either mode: QA never commits in the control checkout, because the agent Git-write guard (447281cf) refuses it with MOE_AGENT_GIT_REFUSED.\n\nWhen the bounded wait and the isolated-clone check find no `completion` entry for this round, QA calls moe.qa_reject with one `other` issue that starts 'Landing gap:'. The issue cites task.lastCommitOutcome (null means nothing was recorded), landingRetry, rescueRefsHint, and the still-dirty paths with MOE_CONTESTED_HELD.\n- failedDodItems are named only for items verified failing.\n- A landing-gap reject counts toward the reopen cap. On a second gap the row stays in REVIEW with a single #governors post per round (amendment comment-28541674).\n- With autoCommit off, QA judges the working tree on merit.\n\nThis replaces the governor's interim #qa rule (msg-6a3ac67b + addendum msg-fa898537) once this row is DONE.\n\nDoD 1:\n- qa.md (36 lines), qa.reference.md (path recipe deleted; new **The reject.** and **A second landing gap.** sections) and moe-qa-loop SKILL.md were edited. Its allowed-tools no longer list Bash(git add:*) or Bash(git commit:*).\n- TROUBLESHOOTING.md: only the 'Policy for QA:' paragraph changed. It now points to the reject and to #agent-git-write-refusal.\n- The .claude/skills mirror is a symlink; the daemon restamps it on restart.\n\nDoD 2: initFiles.ts and skillFiles.ts were regenerated in a git clone --shared and applied with Edit. They cmp-equal prebuild output, and only the three QA entries changed. Lint passes.\n\nDoD 3: qaCommitPolicy.test.ts pins ROUTE_SENTINELS (8 phrases) and RETIRED (8 phrases, including WT-18b's 'shared mode only') across every source and generated QA doc. It adds a TROUBLESHOOTING section test.\n- RED at 0733a436: 2 failed / 8 passed.\n- GREEN in the checkRefs[0] gate: EXIT 0, 218 files, 6431 passed / 20 skipped.\n- scripts/moe-agent.{sh,ps1} are not in my diff. Their dirt is a peer's and predates this session.\n\nTotal non-board change: +122/-71 (net 51).\n\nNote: MOE_CONTRO",
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/qaCommitPolicy.test.ts",
+    "docs/roles/qa.md",
+    "docs/roles/qa.reference.md",
+    "docs/skills/moe-qa-loop/SKILL.md",
+    "docs/TROUBLESHOOTING.md",
+    "packages/moe-daemon/src/generated/initFiles.ts",
+    "packages/moe-daemon/src/generated/skillFiles.ts"
+  ],
+  "completedAt": "2026-10-31T17:33:44.215Z",
+  "reviewCompletedAt": "2026-10-31T17:33:44.215Z",
+  "reviewSummary": "Reviewed completion edb28499 (moe/work-2026-10-24, pushed). Non-board diff: +122/-71, net 51, 7 plan files. moe-agent.{sh,ps1} not in it.\n\nRe-ran task.verification (checkRefs[0]) fresh at HEAD edb28499: EXIT=0.\n- Lint OK; qa.md 36 lines.\n- Both generated files cmp-equal the regeneration.\n- Daemon suite: 218/218 files, 6431 passed, 20 skipped. Includes qaCommitPolicy 10, targetedContextGuidance 6, daemonGitDocs 4.\n\nRed proof re-done in the snapshot: pre-change docs plus the new test gave 2 failed / 8 passed. Three scratch mutants were each caught:\n- re-adding Bash(git commit:*) to allowed-tools;\n- dropping 'Landing gap:' from qa.md;\n- putting 'then a self-land' back into TROUBLESHOOTING.\n\nDoD 1: all three QA docs state one rule: no self-landing in either mode, never commit in the control checkout (MOE_AGENT_GIT_REFUSED). An empty ledger after the wait and the isolated-clone check gets a qa_reject with a 'Landing gap:' issue citing lastCommitOutcome. The skill's allowed-tools no longer list git add or commit. The TROUBLESHOOTING change is one Policy hunk; its anchor resolves.\n\nDoD 2: generated files match the regeneration; lint passes.\n\nDoD 3: ROUTE_SENTINELS and RETIRED are pinned in every QA doc, plus a TROUBLESHOOTING test; invariant sentinels still pass.\n\nCited names exist in landed code (sh:7504/4769/6724; getContext.ts:643/646/657/661; schema.ts:524).\n\nComplexity pass: no findings. The live .moe copies refresh on the next daemon restart.",
+  "requiredCheckAtDone": null
 }
