@@ -73,6 +73,15 @@ toolchain (nodejs.org) and one registry tarball, `is-number@7.0.0` (registry.npm
 and are re-verified against their pins on every use. The altered-integrity canary run downloads the tarball again on
 every run, on purpose. A network failure fails closed (for example `CERTIFY_CANARY_NOT_PASSED`); re-run certify.
 
+**Windows image.** Multipass 1.17.0+win cannot launch a local image file. Its client sends `file://C:/…`, which the
+daemon refuses because it reads `C:` as a host (canonical/multipass#5490), and `file:///C:/…` gains the current drive
+(`file://D:/C:/…` from `D:`). A UNC path imports, but `hcs` converts it in place into a sparse VHDX that it cannot resize,
+`0xC03A001A` (#5491). So on Windows Moe still downloads and checks its own copy in `<work-dir>/images` first, then
+launches `release:<pin sha256>`. Multipass takes that exact image from its official Ubuntu release stream and checks the
+download's sha256 before using it. Moe then refuses the guest with `IMAGE_PROVIDER_HASH_MISMATCH` unless `multipass info`
+reports the pin as `image_hash`. The host needs HTTPS to cloud-images.ubuntu.com, and the first launch downloads the
+621 MB image again, inside the launch's 15-minute window.
+
 **Cleanup.** Certify deletes every VM it launches by exact owned name, and a check that cannot fails with its
 `*_VM_NOT_DELETED` code. An interrupted run can leave a `moe-vm-<20 hex>` VM, recorded in `<work-dir>/ledger/<name>.json`.
 Delete exactly that name with `multipass delete --purge <name>`, never `multipass delete --all` or `multipass purge`,
@@ -89,7 +98,7 @@ never overwrites) with mode 0600.
 | `platform`, `arch` | `'win32'`, `'linux'` or `'darwin'`; the image arch `'x64'` or `'arm64'`, or `null` |
 | `transport` | `'native'` for the CLI run, `'injected'` for tests |
 | `provider` | `{ name: 'multipass', version }`, the version the provider doctor read, or `null` |
-| `image` | `{ sourceSha256, providerImageHash }`: the pinned image's sha256 and Multipass's id of the prepared image |
+| `image` | `{ sourceSha256, providerImageHash }`: the pinned image's sha256 and Multipass's id of the prepared image; on Windows both values are the pin |
 | `supervisorSha256` | The sha256 of the `guest-supervisor.py` bytes the run installed |
 | `startedAt`, `finishedAt` | ISO-8601 UTC |
 | `checks` | The checks above, in order, each `{ id, result: 'passed' \| 'failed' \| 'not-run', code }`, with a code only on `'failed'` |

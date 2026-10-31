@@ -1,0 +1,27 @@
+{
+  "id": "task-84e45fa565b04e95b07c02929de0faf9",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: prompt-cache-launcher worker-type cases fail on bash: the cut parse_command_into_argv block now reads RUNTIME_PROTECTED, unbound in the test slice",
+  "description": "Repro (HEAD 6d88924a, and a clean git-archive HEAD snapshot): `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs` → 43 pass, 5 fail, all `/bin/bash: <cmd> exports MOE_WORKER_TYPE=… over an inherited …` (prompt-cache-launcher.test.mjs:446) with `type.sh: line 65: RUNTIME_PROTECTED: unbound variable`.\nThe test cuts moe-agent.sh between 'parse_command_into_argv() {' and '# Codex is interactive (TUI)' and runs it under set -u. That block now references RUNTIME_PROTECTED, which is set outside the slice (git log -S: 29de0da4, task-aa85ff13). Fix it in the test fixture or with a `${RUNTIME_PROTECTED:-}` default. Found by task-7f82e200 (CQ-V08b), which does not touch these lines.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs` exits 0 on Linux bash",
+    "The PROTECTED-profile CLI resolution behaviour from task-aa85ff13 is unchanged (its own tests still pass)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 287.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T21:24:16.731Z",
+  "updatedAt": "2026-10-31T21:24:16.731Z"
+}

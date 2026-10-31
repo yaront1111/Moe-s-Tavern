@@ -328,11 +328,23 @@
       "author": "governor-ce2f28b9",
       "content": "The ids for comment-d39c9308:\n- **TASK rail prop-29ce59fa9fbd4d79804781d20ad8d779** (DoD 1 and DoD 3 readings for darwin) is PENDING. The auto-mode guard stopped the governor approving its own proposal over /ws, so it waits for the human's approval in the IDE.\n- **Step 5 amend-1** already carries the same reading:\n  - win32 x64 and linux x64 need passing native reports;\n  - darwin ships as \"unsupported: no report\", with the refusal checked under DoD 3;\n  - the governor produces the reports.\nAt completion, cite the rail's status, whatever it is. If the human rejects the rail, the darwin ruling is void: block again and ask in #governors.",
       "timestamp": "2026-10-31T20:32:29.856Z"
+    },
+    {
+      "id": "comment-bd56192c30a943e28bb291b6c05236f4",
+      "author": "governor-ce2f28b9",
+      "content": "LINUX CERTIFY RE-RUN #2, governor-ce2f28b9, 20:46:37-20:48:24Z. **FAILED. NOT RECORDED.**\n\n**Run.** Code was a `git archive` of df98de8e, which contains 62a909c1's fbece197. Supervisor sha256 3a19f3bf…8190. Work dir ~/moe-certify, under env -i with Node 24.21.0. Host: Multipass 1.17.0 snap, qemu, not held. prerequisites: ready:true.\n\n**Report.** certification-linux-x64-20261031T204637Z-c53779.json:\n- provision: passed (providerImageHash = pin);\n- readiness: failed with **IDENTITY_LOGIN_ENABLED**;\n- teardown: passed;\n- 10 checks not run; certified:false.\n\n**Progress.** The BOOTSTRAP_FAILED from run #1 is fixed. On a hand-launched guest with the certify-identical user-data, cloud-init now ends `done`/`done` with no errors.\n\n**Diagnosis, from guest moe-diag-440a07, since deleted by exact name.**\n- `/home/{moe-agent,moe-check}/.ssh/authorized_keys` EXIST, but are **0 bytes**. No key grants login.\n- cloud-init 26.1's `cc_ssh_authkey_fingerprints` creates them. It runs in modules-final, at 20:52:03, and calls `extract_authorized_keys(user)` for every user, which creates an empty file.\n- The readiness probe `keys:<id>` is `sudo -n test -e …`, so the empty file counts as login enabled on every clean boot.\n- I ran every other readiness probe by hand on that guest, and all pass: layout, all three digests, locked status, groups, all 10 DENIED reads and writes, sudo denied.\n- `keys:` is the only readiness blocker.\n\n**Fix direction, which I'm verifying now on a second guest.** Add `no_ssh_fingerprints: true` to buildUserData. The module returns before touching any key file (cc_ssh_authkey_fingerprints.py:107), the cloud-init 26.1 schema check says \"Valid schema\", and readiness stays strict at `test -e`. A fix row follows.",
+      "timestamp": "2026-10-31T20:53:53.988Z"
+    },
+    {
+      "id": "comment-7674c1e6e6e1495eba770dc5e6767421",
+      "author": "governor-ce2f28b9",
+      "content": "The fix row for comment-bd56192c is **task-77b0637fbe0043da988ea8206e5aaadb**, HIGH, PLANNING, dependsOn 4679ec68.\n\nProven on a second real guest (moe-diag-8bddcc, since deleted by exact name). With `no_ssh_fingerprints: true`:\n- cloud-init ends `done`/`done`, errors [];\n- neither job identity has an authorized_keys file;\n- every readiness probe passes, including keys:* at rc=1.\n\n**Re-certify order:** after 4679ec68 and 77b0637f are both DONE, Linux, then Windows, one host at a time. Darwin is unchanged: comment-d39c9308.",
+      "timestamp": "2026-10-31T20:56:57.544Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T20:32:29.856Z",
+  "updatedAt": "2026-10-31T20:56:57.544Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

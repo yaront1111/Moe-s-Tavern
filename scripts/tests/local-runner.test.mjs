@@ -1675,7 +1675,7 @@ import { Writable } from 'node:stream';
 import { MAX_IMAGE_BYTES } from '../local-runner/guest-bootstrap.mjs';
 import { DOWNLOAD_TIMEOUT_MS, ensurePinnedImage } from '../local-runner/image-cache.mjs';
 import { probeHypervisor, windowsPlatform } from '../local-runner/platform-windows.mjs';
-import { fileImageUrl, launchInstance, provisionGuest } from '../local-runner/provision.mjs';
+import { fileImageUrl, launchInstance, provisionGuest, releaseImage } from '../local-runner/provision.mjs';
 
 const WIN_HOST = { platform: 'win32', arch: 'x64' };
 const IMAGE_BYTES = Buffer.from('pinned ubuntu image bytes');
@@ -1685,7 +1685,8 @@ const F = false;
 const U = null;
 const POWERSHELL_ARGS = ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance -ClassName Win32_ComputerSystem).HypervisorPresent'];
 const launchArgs = (url, name = GUEST) => ['launch', url, '--name', name, '--cloud-init', '-', '--timeout', '900', '--cpus', '2', '--memory', '4G', '--disk', '20G'];
-const hostUrl = file => `file://${process.platform === 'win32' ? file.replaceAll('\\', '/') : file}`;
+// Only the POSIX-host provisioning tests use it: no Windows host launches a file URL.
+const hostUrl = file => `file://${file}`;
 const WIN_ITEMS = [
   ['host-windows-x64', false, 'Run Moe on a Windows x64 host.'],
   ['multipass-installed', true, 'Install Multipass 1.17.0 for Windows (+win build) as an Administrator.'],
@@ -1754,14 +1755,15 @@ function fakeLaunch(settle = () => ({ stdout: 'Launched\n', stderr: '' })) {
   return { run, calls, launches };
 }
 
-/** One provider for the R02 doctor, the R03 launch, the R06 query and the R07 probes (R07's fakeGuest). */
-function fakeVm({ primaryName = 'primary', versionError, launch, answers } = {}) {
-  const present = new Map();
-  const guest = fakeGuest({ answers });
+/** One provider for the R02 doctor, the R03 launch, the R06 query and the R07 probes (R07's fakeGuest). As in Multipass 1.17.0, a VM
+ * launched from `release:<sha>` reports image_hash <sha> and a file launch keeps the guest's; an explicit `info` answers as given. */
+function fakeVm({ primaryName = 'primary', versionError, launch, answers, info } = {}) {
+  const [present, images] = [new Map(), new Map()];
+  const guest = fakeGuest({ answers, info });
   const calls = [];
   const launcher = fakeLaunch((args, count) => {
     const outcome = launch?.(count) ?? {};
-    if (outcome.create !== false) present.set(args[3], 'Running');
+    if (outcome.create !== false) { present.set(args[3], 'Running'); images.set(args[3], args[1]); }
     if (outcome.error) throw outcome.error;
     return { stdout: `Launched: ${args[3]}\n`, stderr: '' };
   });
@@ -1774,7 +1776,8 @@ function fakeVm({ primaryName = 'primary', versionError, launch, answers } = {})
     if (command === 'get local.driver') return { stdout: 'hcs\n', stderr: '' };
     if (command === 'get client.primary-name') return { stdout: `${primaryName}\n`, stderr: '' };
     if (args[0] === 'info' && !present.has(args[1])) throw notFound('info', args[1]);
-    return guest.run(executable, args, options);
+    const [result, image] = [await guest.run(executable, args, options), images.get(args[1])];
+    return args[0] === 'info' && info === undefined && image?.startsWith('release:') ? { ...result, stdout: result.stdout.replace(PROVIDER_HASH, image.slice(8)) } : result;
   };
   const run = (executable, args, options) => {
     calls.push([...args]);
@@ -1803,25 +1806,38 @@ const provisionWith = (h, overrides = {}) => provisionGuest({
   provider: { run: h.fake.run }, fetch: h.download.fetch, digest: h.digest, sleep: async ms => { h.sleeps.push(ms); }, ...overrides,
 });
 
-const provisioned = (failures = []) => ({
+const provisioned = (failures = [], imageHash = PROVIDER_HASH) => ({
   provisioned: true, instance: GUEST, bootstrapReady: failures.length === 0, executionReady: false, prerequisites: READY_ITEMS,
-  image: { source: SOURCE, provider: { imageHash: PROVIDER_HASH, imageRelease: '24.04 LTS' } }, supervisorSha256: BOOTSTRAP.supervisorSha256, failures,
+  image: { source: SOURCE, provider: { imageHash, imageRelease: '24.04 LTS' } }, supervisorSha256: BOOTSTRAP.supervisorSha256, failures,
 });
+/** Windows launches release:<pin>, so its guest's image id is the pin; linux and macOS keep provisioned(). */
+const winProvisioned = failures => provisioned(failures, PINS.x64.sha256);
+const WIN_LAUNCH = launchArgs(`release:${PINS.x64.sha256}`);
 
-test('fileImageUrl keeps the literal path Multipass strips from file://, never percent-encoded', () => {
-  assert.equal(fileImageUrl(`C:\\Users\\me\\My Images\\${IMAGE_FILE}`, 'win32'), `file://C:/Users/me/My Images/${IMAGE_FILE}`);
-  assert.equal(fileImageUrl('d:/cache/x.img', 'win32'), 'file://d:/cache/x.img');
+// No Windows path gets a file URL on Multipass 1.17.0+win: its client sends file://C:/…, whose QUrl host `c` the daemon
+// refuses ('did you forget a slash?'), file:///C:/… gains the current drive (file://D:/C:/… from D:), and a UNC path imports but hcs leaves a sparse
+// VHDX it cannot resize (canonical/multipass#5490, #5491). Windows launches releaseImage(pin) instead.
+test('fileImageUrl keeps the literal POSIX path Multipass strips from file://, never percent-encoded, and refuses every Windows path', () => {
   assert.equal(fileImageUrl('/home/u/My Images/x.img', 'linux'), 'file:///home/u/My Images/x.img');
   assert.equal(fileImageUrl('/Users/u/x%20y#1.img', 'darwin'), 'file:///Users/u/x%20y#1.img');
   for (const [file, platform] of [
+    [`C:\\Users\\me\\My Images\\${IMAGE_FILE}`, 'win32'], ['d:/cache/x.img', 'win32'],
     ['x.img', 'linux'], ['C:\\x.img', 'linux'], ['\\\\server\\share\\x.img', 'win32'], ['\\\\?\\C:\\x.img', 'win32'], ['/home/u/x.img', 'win32'],
     ['C:x.img', 'win32'], ['C:\\a\nb.img', 'win32'], ['/tmp/a\u0000.img', 'linux'], ['/tmp/a\x7f.img', 'linux'], ['', 'linux'], [undefined, 'linux'],
   ]) assert.throws(() => fileImageUrl(file, platform), error => assertSanitized(error, 'PROVISION_INPUT_INVALID'), JSON.stringify([file, platform]));
 });
 
+test('releaseImage selects exactly one pinned release-stream image and refuses any other selector', () => {
+  for (const arch of ['x64', 'arm64']) assert.equal(releaseImage(PINS[arch].sha256), `release:${PINS[arch].sha256}`);
+  const pin = PINS.x64.sha256;
+  for (const value of [pin.toUpperCase(), pin.slice(1), `${pin}0`, `${pin.slice(1)}g`, `release:${pin}`, `${pin}\n`, '', undefined, null, 1]) {
+    assert.throws(() => releaseImage(value), error => assertSanitized(error, 'PROVISION_INPUT_INVALID'), JSON.stringify(value));
+  }
+});
+
 const LAUNCH = { name: GUEST, imageFile: `/var/cache/moe images/${IMAGE_FILE}`, userData: BOOTSTRAP.userData, platform: 'linux' };
 
-test('launchInstance runs one bounded launch of a local image with cloud-init only on stdin', async () => {
+test('launchInstance runs one bounded launch of a local or pinned release image with cloud-init only on stdin', async () => {
   const fake = fakeLaunch();
   assert.equal(await launchInstance({ ...LAUNCH, provider: { run: fake.run } }), undefined);
   assert.deepEqual(fake.launches, [{
@@ -1832,9 +1848,9 @@ test('launchInstance runs one bounded launch of a local image with cloud-init on
   assert.equal(fake.launches[0].args.some(arg => ['--mount', '--network', '--bridged', '--all'].includes(arg) || arg.includes(secret)), false);
   const windows = fakeLaunch();
   const executable = 'C:\\Program Files\\Multipass\\bin\\multipass.exe';
-  await launchInstance({ ...LAUNCH, imageFile: 'C:\\Moe Cache\\x.img', platform: 'win32', timeoutSeconds: 60, provider: { run: windows.run, executable } });
+  await launchInstance({ ...LAUNCH, imageFile: undefined, imageSha256: PINS.x64.sha256, platform: 'win32', timeoutSeconds: 60, provider: { run: windows.run, executable } });
   assert.deepEqual(windows.launches.map(({ executable: exe, args, options }) => [exe, args, options.timeout]),
-    [[executable, ['launch', 'file://C:/Moe Cache/x.img', '--name', GUEST, '--cloud-init', '-', '--timeout', '60', '--cpus', '2', '--memory', '4G', '--disk', '20G'], 120_000]]);
+    [[executable, ['launch', `release:${PINS.x64.sha256}`, '--name', GUEST, '--cloud-init', '-', '--timeout', '60', '--cpus', '2', '--memory', '4G', '--disk', '20G'], 120_000]]);
 });
 
 test('a failed launch reports a sanitized provider code, never its diagnostics', async () => {
@@ -1856,6 +1872,9 @@ test('launchInstance refuses invalid input before running and a transport that c
     [{ userData: '' }, 'PROVISION_INPUT_INVALID'], [{ userData: Buffer.from('#cloud-config\n') }, 'PROVISION_INPUT_INVALID'],
     [{ imageFile: 'relative.img' }, 'PROVISION_INPUT_INVALID'], [{ imageFile: 'C:\\x.img', platform: 'linux' }, 'PROVISION_INPUT_INVALID'],
     [{ timeoutSeconds: 0 }, 'PROVISION_INPUT_INVALID'], [{ timeoutSeconds: 3601 }, 'PROVISION_INPUT_INVALID'], [{ timeoutSeconds: 1.5 }, 'PROVISION_INPUT_INVALID'],
+    // A Windows image file, neither image input, both, and a malformed release pin.
+    [{ imageFile: 'C:\\x.img', platform: 'win32' }, 'PROVISION_INPUT_INVALID'], [{ imageFile: undefined }, 'PROVISION_INPUT_INVALID'],
+    [{ imageSha256: PINS.x64.sha256 }, 'PROVISION_INPUT_INVALID'], [{ imageFile: undefined, imageSha256: PINS.x64.sha256.toUpperCase() }, 'PROVISION_INPUT_INVALID'],
     [{ provider: { run: fake.run, executable: ' ' } }, 'PROVIDER_INPUT_INVALID'],
   ]) {
     await assert.rejects(launchInstance({ ...LAUNCH, provider: { run: fake.run }, ...changes }), error => assertSanitized(error, code), JSON.stringify(changes));
@@ -2086,17 +2105,17 @@ test('provisioning does nothing until every Windows prerequisite is satisfied', 
   }
 });
 
-test('provisionGuest launches the verified cached image once under one durable owned name', async t => {
+test('Windows provisionGuest verifies the cached pin, then launches release:<pin> once under one durable owned name', async t => {
   const h = provisionHarness(t);
-  assert.deepEqual(await provisionWith(h), provisioned());
-  const cached = path.join(h.cacheDir, IMAGE_FILE);
-  assert.deepEqual(h.fake.launches.map(({ args, stdin, ended }) => ({ args, stdin, ended })), [{ args: launchArgs(hostUrl(cached)), stdin: BOOTSTRAP.userData, ended: true }]);
+  assert.deepEqual(await provisionWith(h), winProvisioned());
+  assert.deepEqual(h.fake.launches.map(({ args, stdin, ended }) => ({ args, stdin, ended })), [{ args: WIN_LAUNCH, stdin: BOOTSTRAP.userData, ended: true }]);
   assert.deepEqual(h.fake.launches[0].options, lifecycleOptions(960_000));
-  assert.deepEqual(h.fake.commands(), ['version', 'get', 'get', 'info', 'launch', 'info', ...Array(1 + BOUNDARY.length).fill('exec')]);
+  // The identity read follows the launch, before R07's first poll.
+  assert.deepEqual(h.fake.commands(), ['version', 'get', 'get', 'info', 'launch', 'info', 'info', ...Array(1 + BOUNDARY.length).fill('exec')]);
   assert.deepEqual(h.fake.guest.unexpected, []);
   assert.deepEqual(readdirSync(h.ledgerDir), [`${GUEST}.json`]);
   const record = await h.ledger.read(GUEST);
-  assert.deepEqual([record.phase, record.launchTries, record.image], ['owned', 1, { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH }]);
+  assert.deepEqual([record.phase, record.launchTries, record.image], ['owned', 1, { sourceSha256: SOURCE.sha256, providerImageHash: PINS.x64.sha256 }]);
   assert.deepEqual(h.download.calls.map(call => call.target), [PINS.x64.url]);
   assert.deepEqual(readdirSync(h.cacheDir), [IMAGE_FILE]);
   assert.deepEqual([...h.fake.present.keys()], [GUEST]);
@@ -2109,7 +2128,7 @@ for (const [label, created, launches, sleeps] of [
 ]) {
   test(`a timed-out launch whose VM is ${label}`, async t => {
     const h = provisionHarness(t, { launch: count => (count === 1 ? { error: failWith({ killed: true, code: 'ETIMEDOUT' }), create: created } : {}) });
-    assert.deepEqual(await provisionWith(h), provisioned());
+    assert.deepEqual(await provisionWith(h), winProvisioned());
     assert.deepEqual(h.fake.launches.map(launch => [launch.args[3], launch.stdin === BOOTSTRAP.userData, launch.ended]), launches.map(name => [name, true, true]));
     assert.deepEqual(readdirSync(h.ledgerDir), [`${GUEST}.json`]);
     assert.equal((await h.ledger.read(GUEST)).launchTries, launches.length);
@@ -2140,7 +2159,7 @@ test('refusals before reservation leave no record, launch or extra download', as
 
 test('a launched guest that fails readiness keeps its record for reconcile and is never deleted here', async t => {
   const h = provisionHarness(t, { answers: healthy({ mountinfo: mountinfo([...MOUNTS, '41 22 0:60 / /home/ubuntu rw - 9p host rw']) }) });
-  assert.deepEqual(await provisionWith(h), provisioned(['MOUNTS_PRESENT']));
+  assert.deepEqual(await provisionWith(h), winProvisioned(['MOUNTS_PRESENT']));
   const record = await h.ledger.read(GUEST);
   assert.deepEqual([record.phase, record.image], ['owned', undefined]);
   assert.equal(h.fake.commands().includes('delete'), false);
@@ -2151,6 +2170,36 @@ test('a launched guest that fails readiness keeps its record for reconcile and i
   assert.deepEqual(readdirSync(exhausted.ledgerDir), [`${GUEST}.json`]);
   assert.equal((await exhausted.ledger.read(GUEST)).phase, 'failed');
   assert.equal(exhausted.fake.commands().includes('delete'), false);
+});
+
+// What Multipass 1.17.0 reports after a launch of the https manifest URL itself: the sha256 of the URL string (48a1761f187e…).
+const URL_ROUTE_ID = createHash('sha256').update(PINS.x64.url).digest('hex');
+
+test('a Windows guest whose full image id is not exactly the pin is refused before readiness, keeps its record and is never deleted', async t => {
+  const adopted = count => (count === 1 ? { error: failWith({ killed: true, code: 'ETIMEDOUT' }), create: true } : {});
+  for (const [label, info, code, launch] of [
+    ['the https URL route id', guestDetail({ image_hash: URL_ROUTE_ID }), 'IMAGE_PROVIDER_HASH_MISMATCH'],
+    ['another image id', guestDetail(), 'IMAGE_PROVIDER_HASH_MISMATCH'],
+    ['an adopted timed-out launch', guestDetail({ image_hash: URL_ROUTE_ID }), 'IMAGE_PROVIDER_HASH_MISMATCH', adopted],
+    // The text view truncates the id to 12 characters; only the full JSON id counts.
+    ['a 12-character pin prefix', guestDetail({ image_hash: PINS.x64.sha256.slice(0, 12) }), 'PROVIDER_INFO_INVALID'],
+    ['no image_hash', guestDetail({ image_hash: undefined }), 'PROVIDER_INFO_INVALID'],
+    ['a numeric image_hash', guestDetail({ image_hash: 4 }), 'PROVIDER_INFO_INVALID'],
+    ['an info transport failure', { error: failWith({ killed: true, code: 'ETIMEDOUT', stderr: 'secret-diagnostic' }) }, 'PROVIDER_TIMEOUT'],
+  ]) {
+    const h = provisionHarness(t, { info, launch });
+    const quiet = error => assertSanitized(error, code) && ![PINS.x64.sha256, URL_ROUTE_ID, PINS.x64.url].some(text => error.message.includes(text));
+    await assert.rejects(provisionWith(h), quiet, label);
+    // Never ready or recorded: one launch, no image, no readiness probe, no delete; only the owned record stays for exact-name cleanup.
+    const record = await h.ledger.read(GUEST);
+    assert.deepEqual([record.phase, record.launchTries, record.image, h.fake.commands().slice(4), readdirSync(h.ledgerDir), [...h.fake.present.keys()]],
+      ['owned', 1, undefined, ['launch', ...(launch ? ['info'] : []), 'info'], [`${GUEST}.json`], [GUEST]], label);
+  }
+});
+
+test('a Windows guest reporting the pin in uppercase is accepted, because readGuestInfo lowercases image_hash', async t => {
+  const h = provisionHarness(t, { info: guestDetail({ image_hash: PINS.x64.sha256.toUpperCase() }) });
+  assert.deepEqual(await provisionWith(h), winProvisioned());
 });
 
 const USAGE = 'Usage: cli.mjs doctor [--executable <path>] | prerequisites [--executable <path>] [--cache-dir <absolute path>] | native-smoke --work-dir <absolute path> | certify --work-dir <absolute path>';
@@ -2271,7 +2320,10 @@ function main() {
       process.stderr.write('info failed: The following errors occurred:\\ninstance "' + args[1] + '" does not exist\\n');
       return 2;
     }
-    return out(JSON.stringify({ errors: [], info: { [args[1]]: state.info } }));
+    // Multipass 1.17.0 ids: a release:<sha> launch reports image_hash <sha>.
+    const image = state.launches.find(launch => launch.args[3] === args[1]).args[1];
+    const id = image.startsWith('release:') ? { image_hash: image.slice(8) } : {};
+    return out(JSON.stringify({ errors: [], info: { [args[1]]: { ...state.info, ...id } } }));
   }
   const exec = args.length > 4 && args[0] === 'exec' && args[1] === '--no-map-working-directory' && Object.hasOwn(state.instances, args[2]) && args[3] === '--';
   const answer = exec ? state.probes[JSON.stringify(args.slice(4))] : undefined;
@@ -2289,9 +2341,9 @@ process.exitCode = main();
     platform: onWindows(), ledger: createLedger(path.join(dir, 'ledger state'), { random: sequence() }), owner, cacheDir,
     supervisor: SUPERVISOR, credential: CREDENTIAL, provider: { executable }, fetch: fakeFetch().fetch, digest: pinDigest().digest, sleep: noSleep,
   });
-  assert.deepEqual(result, provisioned());
+  assert.deepEqual(result, winProvisioned());
   const state = JSON.parse(readFileSync(statePath, 'utf8'));
-  assert.deepEqual(state.launches, [{ args: launchArgs(hostUrl(path.join(cacheDir, IMAGE_FILE))), stdin: BOOTSTRAP.userData }]);
+  assert.deepEqual(state.launches, [{ args: WIN_LAUNCH, stdin: BOOTSTRAP.userData }]);
   assert.deepEqual(state.instances, { [GUEST]: 'Running' });
   assert.equal(existsSync(violations), false);
 });
@@ -2547,7 +2599,7 @@ test('Windows provisioning keeps its own multipass client and ignores the cache 
   const h = provisionHarness(t);
   const executables = new Set();
   const run = (executable, args, options) => { executables.add(executable); return h.fake.run(executable, args, options); };
-  assert.deepEqual(await provisionWith(h, { provider: { run } }), provisioned());
+  assert.deepEqual(await provisionWith(h, { provider: { run } }), winProvisioned());
   assert.deepEqual([...executables], [windowsPlatform.executable]);
 });
 
@@ -2674,7 +2726,7 @@ function macVm(h, changes) {
 }
 const onMac = arch => ({ ...macosPlatform, prerequisites: options => macosPlatform.prerequisites({ ...options, host: { platform: 'darwin', arch } }) });
 
-test('macOS provisioning launches the pinned image of the hardware arch, even under Rosetta; an unknown arch downloads nothing', async t => {
+test('macOS provisioning launches the pinned image of the hardware arch, even under Rosetta; an unknown arch downloads nothing', { skip: process.platform === 'win32' }, async t => {
   for (const [sysctl, processArch, arch] of [['1\n', 'x64', 'arm64'], ['1\n', 'arm64', 'arm64'], ['\n', 'x64', 'x64'], ['', 'arm64'], [failWith({}), 'x64'], ['', 'ia32']]) {
     const h = provisionHarness(t);
     const vm = macVm(h, { [ARM64]: sysctl });
@@ -2718,7 +2770,7 @@ function smokeHarness(t, { guest, deleteFails = false, ...fakeOptions } = {}) {
   return { workDir, fake, download, deletes, smoke: (platform = onWindows()) => nativeSmokeCore({ platform, workDir, deps }) };
 }
 const evidence = changes => ({ kind: 'native-provider-smoke', platform: 'win32', arch: 'x64', result: 'passed', transport: 'injected', supportEstablished: false,
-  bootstrapReady: true, image: { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH }, failures: [], cleanup: 'deleted', ...changes });
+  bootstrapReady: true, image: { sourceSha256: SOURCE.sha256, providerImageHash: PINS.x64.sha256 }, failures: [], cleanup: 'deleted', ...changes }); // win32: release:<pin>
 const unready = changes => evidence({ result: 'failed', bootstrapReady: false, image: null, ...changes });
 
 test('an injected smoke passes, deletes only its own guest and never establishes support', async t => {
@@ -2960,7 +3012,8 @@ function certifyHarness(t, { guest, deleteFails = false, run: wrap = run => run,
 const checksOf = (...rows) => rows.map(([id, result, code = null]) => ({ id, result, code }));
 const certification = changes => ({
   kind: 'isolation-certification', version: 1, platform: 'win32', arch: 'x64', transport: 'injected', provider: { name: 'multipass', version: '1.17.0' },
-  image: { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH }, supervisorSha256: REAL_SUPERVISOR_SHA256, startedAt: STARTED, finishedAt: STARTED,
+  // certify runs win32 (onWindows), which launches release:<pin>, so the guest's image id is the pin.
+  image: { sourceSha256: SOURCE.sha256, providerImageHash: PINS.x64.sha256 }, supervisorSha256: REAL_SUPERVISOR_SHA256, startedAt: STARTED, finishedAt: STARTED,
   checks: CERTIFY_IDS.map(id => ({ id, result: 'passed', code: null })), certified: false, executionReady: false, ...changes,
 });
 const deepFrozen = value => value === null || typeof value !== 'object' || (Object.isFrozen(value) && Object.values(value).every(deepFrozen));
@@ -5686,7 +5739,7 @@ test('CJ7 a changed image, supervisor, toolchain or dependency set gives a new e
 
 test('CJ8 the real provisionGuest and deleteOwned purge exactly the VM this run reserved, and nothing foreign', async t => {
   const exhausted = { launch: () => ({ error: failWith({ code: 1, stderr: 'secret' }), create: false }) };
-  for (const [label, fakeOptions, expected, taken = false] of [['ready', {}, ranWith(PASSED_RUN)],
+  for (const [label, fakeOptions, expected, taken = false] of [['ready', {}, ranWith(PASSED_RUN, { environment: identityOf({ image: PINS.x64.sha256 }) })],
     ['the check identity can read the credential', { answers: healthy({ 'readCredential:moe-check': { code: 0, stdout: '' } }) }, stopped('CHECK_GUEST_NOT_READY')],
     ['launch retries exhausted', exhausted, stopped('LIFECYCLE_RETRY_EXHAUSTED')],
     ['a name collision', {}, stopped('LIFECYCLE_NAME_COLLISION', { vm: 'not-launched' }), true]]) {
