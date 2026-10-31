@@ -111,7 +111,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:23:03.584Z",
-  "updatedAt": "2026-10-31T08:25:28.003Z",
+  "updatedAt": "2026-10-31T08:25:54.819Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:45.209Z",
@@ -208,7 +208,8 @@
     "scripts/local-runner/check-dispatch.mjs",
     ".moe/tasks/task-12e89395b0dd4b34a2e0c50dd7dfa776.json",
     ".moe/tasks/task-92307adc30884fc4861348ed3c8ead4a.json",
-    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json"
   ],
   "completionSummary": "A failed VM delete is now visible to check dispatch, and nothing launches a VM after one.\n\nLifecycle: runCheckJob takes an optional onCleanup. After the delete settles it gets one frozen {vm, failure}, on resolve, on reject and on timeout. It is never awaited, and its throw or rejection is ignored. onReady's own error and CHECK_READY_TIMEOUT are unchanged.\n\nDispatch:\n- landedRunCheck forwards onCleanup. runOnce merges the cleanup report with result.vm/failure; a failed or unconfirmed delete always wins.\n- Such a run stops the whole dispatch with RUNNER_VM_DELETE_FAILED. Neither a retry-infra answer nor checks still owed launch another VM.\n- If the dispatch was accepted, the observation is recorded once first, never as passed, with a fixed line appended to its outputTail and the tail kept within 16 KiB of UTF-8. A deleted VM with an unverified workspace keeps its original tail, so the two stored results differ.\n- The report gains vm/failure fields, and causeCode on a stop.\n\nCompatibility:\n- Seams that report nothing get no new fields, so all earlier rows pass unchanged. There is no daemon schema change, and the reserved local-runner.test.mjs is untouched.\n- Diff is +292/-22 over the 3 owned files.\n\nTests: CL1-CL2 and CD1-CD6 use the real runCheckJob through landedRunCheck. 17 of 17 scratch mutations were killed.\n\nEvidence: the gate ran in /tmp/moe-12e8-gate.uVXv4Y, a git archive of HEAD 78eddb63 (which contains 92307adc and 4aa5440b) plus only the 3 overlays (sha256 c719ba83…, 54aa0821…, cc8674ba…). In that snapshot I ran npm ci and npm run build, then restored src/generated/initFiles.ts to HEAD's bytes. Node v24.21.0. The runner half ran 614 tests: 611 pass, 0 fail, 3 skipped. The daemon half: 215 files, 6338 passed, 20 skipped. Exit 0.\n\nThis is not native Windows certification; CQ-R13 has been told it still owes the docs.",
   "commits": [
@@ -237,14 +238,30 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "6fbb815a703763e2df5cfa4681ee19f5da6f3f0d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-31T08:20:21Z",
+      "paths": [
+        ".moe/tasks/task-12e89395b0dd4b34a2e0c50dd7dfa776.json",
+        ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-31T08:25:54.819Z",
+      "treeId": "f992d2fe183ca2a393af489a2e17d2f5fdd4febf",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-25da16b2@2026-10-31T07:46:03Z",
-    "at": "2026-10-31T08:12:50.079Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-31T08:20:21Z",
+    "at": "2026-10-31T08:25:54.819Z"
   },
   "completedAt": "2026-10-31T08:25:28.003Z",
   "reviewCompletedAt": "2026-10-31T08:25:28.003Z",

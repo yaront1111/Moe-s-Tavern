@@ -14,90 +14,57 @@
     {
       "stepId": "step-1",
       "description": "PRECONDITIONS, then TESTS FIRST (load test-driven-development).\n\nThis task is the last slice of the Codex witness chain:\n- task-4b0609d1: scripts/prompt-cache-witness.mjs harvests `codex exec --json` witnesses.\n- task-7db14e2d: both wrappers feed them into the TOOL tier. It also makes the wrappers' held= UNTOUCHED, EDIT and WITNESS clauses count codex exec sessions, and adds the postflight rows that prove DoD 1 and 2.\nThis task flips the daemon's alert text and the three docs, which until now still said only Claude witnesses. That stale text under-promises, so it was safe.\n\n(a) dependsOn guarantees 9d277494, 4b0609d1 and 7db14e2d are DONE; dc833bfb is DONE through 9d277494. Read the landed strings:\n- the wrappers' WITNESS clause, from attr_held_list in scripts/moe-agent.sh;\n- recordCommit.ts HELD_REMEDY_UNTOUCHED, HELD_REMEDY_EDITING and HELD_REMEDY_WITNESS, as dc833bfb landed them.\n\n(b) Hot-file check. `git status --porcelain -- packages/moe-daemon/src/tools/recordCommit.ts packages/moe-daemon/src/tools/recordCommit.test.ts docs/CONFIGURATION.md docs/TROUBLESHOOTING.md docs/MCP_SERVER.md` must print nothing.\n- If another session's hunks sit in one, do not edit over them: @mention that task's seat.\n- moe.report_blocked on that task only if it does not depend on this one; otherwise @mention the governor.\n- Edit with the Edit tool. After 7db14e2d, apply_patch from a codex exec seat also witnesses.\n\n(c) In packages/moe-daemon/src/tools/recordCommit.test.ts, change the exact-string expectations first:\n- HELD_REMEDY_WITNESS must equal the wrappers' WITNESS clause byte for byte. Planned text: `Only a one-shot Claude (claude -p) or codex exec session's editing call (Claude Edit/Write, Codex apply_patch, or a Serena editor) leaves a TOOL witness; a Codex TUI, Gemini, Grok or interactive Claude session's edits, Serena's included, leave none.`\n- HELD_REMEDY_UNTOUCHED: `a one-shot Claude session of this task edits the path` becomes `a one-shot Claude or codex exec session of this task edits the path`.\n- HELD_REMEDY_EDITING: `either a one-shot Claude session of this task edits the path` becomes `either a one-shot Claude or codex exec session of this task edits the path`.\n- Everything else stays as dc833bfb landed it. The strict-only line stays byte-identical, with no witness sentence.\n- Add one assertion that an untouched hold's line contains `codex exec`, and one that a strict-only line does not.\n\nRED: `cd packages/moe-daemon && npx vitest run src/tools/recordCommit.test.ts` must fail on exactly these string cases. Note the failing test names in the step note.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCommit.test.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/tools/recordCommit.test.ts"
-      ],
-      "note": "Hot-file check: only docs/TROUBLESHOOTING.md dirty (CQ-R13's held hunk, to keep). Test strings flipped; RED in /tmp snapshot: 6 failing tests (untouched hold; editing hold; keeps first skip entry; untouched+editing one line; witness after editing remedy; witness after untouched remedy). Strict-only line asserts no 'codex exec'.",
-      "startedAt": "2026-10-31T07:46:17.835Z",
-      "completedAt": "2026-10-31T07:46:38.625Z"
+      ]
     },
     {
       "stepId": "step-2",
       "description": "GREEN, in packages/moe-daemon/src/tools/recordCommit.ts: change only the three constants, to the step-1 strings.\n- HELD_REMEDY_STRICT, HELD_REMEDY_NEVER, heldContestedPaths, heldContestedLine (remedy order and when the witness sentence is appended), the 5-path bound and the #governors rate limit are unchanged.\n- error handling is unchanged: chat failures still never fail the record, and malformed skip codes are still ignored. This step adds no code path, only text.\n\nCheck: `cd packages/moe-daemon && npx vitest run src/tools/recordCommit.test.ts` is green, and `git diff --stat` shows only the three constants changed in recordCommit.ts.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCommit.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/tools/recordCommit.ts"
-      ],
-      "note": "3 constants changed (+3/-3); recordCommit.test.ts 73/73 in snapshot; WITNESS sentence byte-present in both wrappers and both harnesses.",
-      "startedAt": "2026-10-31T07:46:39.294Z",
-      "completedAt": "2026-10-31T07:46:52.497Z"
+      ]
     },
     {
       "stepId": "step-3",
       "description": "Docs, with the Edit tool, after rerunning step 1(b)'s clean check for each doc. State the codex exec witness tersely, consistent with scripts/CLAUDE.md as 7db14e2d left it and with prompt-cache-witness.mjs (task-4b0609d1).\n\n1. docs/CONFIGURATION.md, Session touch evidence.\n- The opening sentence says witnesses come only from Claude one-shot stream-json events. Add `codex exec --json` events, which the wrapper pipes through scripts/prompt-cache.mjs codex-stream (prompt-cache-witness.mjs).\n- What counts from codex: each path of a completed file_change (Codex apply_patch), and a successful Serena editing MCP call, under the same per-tool rules already listed for Serena (safe_delete_symbol on OK, replace_in_files' applied summary, rename_symbol's declaring path).\n- A failed file_change, or a failed, errored or result-less MCP call, witnesses nothing. A shell write (command_execution) witnesses nothing.\n- Codex TUI, Gemini, Grok and interactive Claude sessions still supply none.\n- Update the closing \"Under skip-untouched ...\" sentence to name a one-shot Claude or codex exec session.\n\n2. docs/TROUBLESHOOTING.md:\n- the \"Current witness limit\" paragraph, as 9d277494 left it;\n- the MOE_ATTR_CONTESTED_UNTOUCHED and MOE_ATTR_CONTESTED_EDITING rows.\nEach now names a one-shot Claude or codex exec session, and the seats that still leave no witness (Codex TUI, Gemini, Grok, interactive Claude).\n\n3. docs/MCP_SERVER.md, the record_commit \"Held contested paths\" bullets: update every place that quotes or paraphrases HELD_REMEDY_UNTOUCHED, HELD_REMEDY_EDITING or HELD_REMEDY_WITNESS to the new constants, verbatim where the doc quotes.\n\nNever describe a policy change: attribution.contested, the idle-peer exception and the EDITING hold are unchanged.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "docs/CONFIGURATION.md",
         "docs/TROUBLESHOOTING.md",
         "docs/MCP_SERVER.md"
-      ],
-      "modifiedFiles": [
-        "docs/CONFIGURATION.md",
-        "docs/TROUBLESHOOTING.md",
-        "docs/MCP_SERVER.md"
-      ],
-      "note": "CONFIGURATION.md and MCP_SERVER.md were clean before the first edit. TROUBLESHOOTING.md carried CQ-R13's uncommitted Local Runner Issues hunk (kept; my edits are in the witness paragraph and the two MOE_ATTR rows only).",
-      "startedAt": "2026-10-31T07:46:53.196Z",
-      "completedAt": "2026-10-31T07:47:21.359Z"
+      ]
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE. Fresh output of this exact command is the complete_task verification evidence. Run it from this WSL seat.\n\n- The postflight legs run on a HEAD snapshot, because this task changes no script.\n- They are the DoD 1, 2 and 4 evidence: the codex witness rows that task-7db14e2d added, and the existing Claude-stream and codex TUI scenarios.\n- The vitest leg covers DoD 3's recordCommit.test.ts.\n\n```\ncd /mnt/d/projexts/moes && (cd packages/moe-daemon && npx vitest run src/tools/recordCommit.test.ts) && W=$(mktemp -d /mnt/d/moe-scratch/t7cc9-XXXX) && git archive HEAD scripts | tar -x -C \"$W\" && cd \"$W\" && env $(env | sed -n 's/^\\(\\(MOE\\|CLAUDE\\)[A-Za-z0-9_]*\\)=.*/-u \\1/p') bash -c 'set -e; bash scripts/tests/parity-check.sh; node --test scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache.test.mjs; MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh; for ps in powershell.exe pwsh.exe; do for t in parity-check postflight; do WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 \"$ps\" -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$PWD/scripts/tests/$t.ps1\")\"; done; done'\n```\n\n- It runs for about an hour. Start it in the background with a log file, then poll in foreground `timeout 570` loops.\n- The cwd must be a Windows drive (mem:gotcha-qa-ps1-postflight-from-wsl). PS 5.1 `*>` logs are UTF-16LE.\n- On a native Windows seat, run the same legs in the snapshot from Git Bash plus powershell.exe and pwsh.exe, with the Git Bash leg launched detached (mem:convention-postflight-scratch-harness).\n- Before blaming this task for a postflight failure, note that this task changes no script. A red postflight leg is a HEAD regression: report it to the governor with the failing scenario, and do not edit scripts here.\n- Record the codex-witness and scope-scenario counts each harness prints.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCommit.ts",
         "packages/moe-daemon/src/tools/recordCommit.test.ts"
-      ],
-      "note": "Verify run (log /tmp/t7cc9-verify.log): recordCommit.test.ts 73/73 in /tmp snapshot (npm ci there; shared tree untouched); parity-check.sh PASS; node --test prompt-cache-witness + prompt-cache 39 pass/0 fail; postflight.sh PASS (scenario AM codex-exec witness row ok, 45 commit-scope scenarios, 74 frozen candidate, 16 owner guard); powershell.exe parity PASS + postflight.ps1 PASS (AM ok, 44 scope scenarios); pwsh.exe parity PASS; pwsh.exe postflight.ps1 FAILS with MOE_AGENT_GIT_GUARD_FAILED (task-44b817f9, pre-existing, WORKING; this task changes no script) -- same skip 9d277494 used.",
-      "startedAt": "2026-10-31T07:47:21.981Z",
-      "completedAt": "2026-10-31T08:22:20.353Z"
+      ]
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW of this task's own diff, the last step (load adversarial-self-review). Check and note each item:\n\n(1) Byte equality. HELD_REMEDY_WITNESS equals the wrappers' WITNESS clause in moe-agent.sh and moe-agent.ps1: compare with grep -F on the exact sentence, in all three files and both harnesses.\n\n(2) Only text changed. The strict-only line is unchanged, and no classification, ordering or rate-limit code moved (`git diff` of recordCommit.ts touches three constants only).\n\n(3) Honest scope. Nothing says Codex TUI, Gemini, Grok or interactive Claude sessions witness, and nothing says a shell write does. `git grep -n \"codex exec\" -- docs/CONFIGURATION.md docs/TROUBLESHOOTING.md docs/MCP_SERVER.md packages/moe-daemon/src/tools/recordCommit.ts` reads consistently.\n\n(4) No stale claim remains. `git grep -n \"only Claude one-shot\\|Only a one-shot (claude -p) Claude session\" -- docs packages/moe-daemon/src scripts/moe-agent.sh scripts/moe-agent.ps1` finds no sentence still saying only Claude witnesses.\n\n(5) The docs agree with prompt-cache-witness.mjs's actual rules: failed file_change, errored or result-less MCP calls, and the per-tool Serena rules.\n\n(6) Test quality: the new assertions fail if the constants revert. Check by temporarily reverting one constant locally, then restore it; never commit the revert.\n\nIn the completion summary, report:\n- the net non-board LOC;\n- whether each doc was clean before its first edit;\n- the gate result, with the codex-witness row counts.\nName the chain: task-4b0609d1 (the helper harvest) and task-7db14e2d (wrapper wiring and the postflight rows that carry DoD 1 and 2) delivered the harvest, and this task flipped the daemon text and docs.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCommit.ts",
         "docs/CONFIGURATION.md",
         "docs/TROUBLESHOOTING.md",
         "docs/MCP_SERVER.md"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/tools/recordCommit.ts",
-        "packages/moe-daemon/src/tools/recordCommit.test.ts",
-        "docs/CONFIGURATION.md",
-        "docs/TROUBLESHOOTING.md",
-        "docs/MCP_SERVER.md"
-      ],
-      "note": "(1) WITNESS sentence present via exact-string match in both wrappers and both harnesses. (2) recordCommit.ts diff = 3 constants only. (3)(4) docs consistent; no 'only Claude' stale claim (the remaining 'only Claude one-shot ... and codex exec' sentence lists both). (5) matches prompt-cache-witness.mjs (status completed only; file_change paths). (6) tests were RED (6 failing) before the constants changed. Net non-board LOC ~ +10/-6 code+test, docs +42/-18.",
-      "startedAt": "2026-10-31T08:22:21.285Z",
-      "completedAt": "2026-10-31T08:22:28.601Z"
+      ]
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-88af1437",
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Narrow reject: DoD 3 is half-unmet at HEAD. It names docs/TROUBLESHOOTING.md 'Current witness limit', but completion 8372d311 carries no TROUBLESHOOTING.md change: HEAD (L611-615) still says only Claude one-shot stream-json feeds the TOOL set, and the CONTESTED_UNTOUCHED/EDITING rows (~L595-596) still say 'one-shot Claude session'. Cause: the wrapper held the file (MOE_ATTR_CONTESTED_UNTOUCHED, peer 2359daf0). It was dirty at pre-flight with CQ-R13's 'Local Runner Issues' hunk, and the step-3 edits were a python3 script run through Bash (a shell write, no TOOL witness). The correct text sits uncommitted in the shared tree (sha256 538845f7..., +28/-8 vs HEAD): a landing gap, not a wording defect.\n\nFIX: (1) Leave recordCommit.ts/.test.ts, CONFIGURATION.md, MCP_SERVER.md alone; they landed and are verified. (2) In the main one-shot Claude session, use the Edit tool (no Bash/python, no subagent) on docs/TROUBLESHOOTING.md: make at least one real Edit on a line this row owns, e.g. re-wrap the ragged 'Current witness limit' paragraph (~L612-622). Keep every existing hunk, including CQ-R13's TOC renumber and 'Local Runner Issues' section; do not revert or stash. (3) The new completion's `git show --stat` must list docs/TROUBLESHOOTING.md, with no held= in the session-ended line. (4) Re-record verification with the cheap legs only (no script changes): recordCommit vitest in a git-archive snapshot, parity-check.sh, node --test prompt-cache-witness + prompt-cache. The ~1h postflight legs need not repeat unless a script changes.\n\nQA verified OK (HEAD snapshot): recordCommit.test.ts 73/73; parity-check.sh PASS; node --test 39/0; recordCommit.ts diff is 3 constants; HELD_REMEDY_WITNESS byte-identical in recordCommit.ts/.test.ts, both wrappers and both postflight harnesses; CONFIGURATION.md and MCP_SERVER.md match prompt-cache-witness.mjs. Not re-run by QA: postflight legs (8372d311 changes no script; DoD 1, 2, 4 ride on task-7db14e2d).",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -136,29 +103,31 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:58:35.132Z",
-  "updatedAt": "2026-10-31T08:24:56.622Z",
+  "updatedAt": "2026-10-31T08:29:07.314Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T11:05:08.867Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0",
-    "worker-c0a1ac70"
+    "worker-88af1437",
+    "qa-b29f7b3d"
   ],
-  "tier": "standard",
-  "effort": "high",
-  "model": "claude-sonnet-5-5",
-  "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [
-    "step-1",
-    "step-2",
-    "step-3",
-    "step-4",
-    "step-5"
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [
+    {
+      "item": "The MOE_CONTESTED_HELD witness sentence (both wrappers and recordCommit.ts), docs/CONFIGURATION.md 'Session touch evidence' and docs/TROUBLESHOOTING.md 'Current witness limit' count `codex exec` seats. recordCommit.test.ts and `bash scripts/tests/parity-check.sh` pass.",
+      "rejectedAt": "2026-10-31T08:28:42.068Z",
+      "rejectedBy": "qa-b29f7b3d"
+    }
   ],
-  "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T11:13:23.515Z",
   "planningNotes": {
     "approachesConsidered": "As filed, this task needed 11-12 files: a new helper, prompt-cache.mjs, bundle lists, node tests, both wrappers, both harnesses, recordCommit.ts and its test, and three docs. That is over the 10-file hard cap. SPIDR split by interface, in landing order:\n1. task-4b0609d1 (no deps): the shared Node helper prompt-cache-witness.mjs. Both wrappers already pipe `codex exec --json` through prompt-cache.mjs codex-stream, so one Node implementation serves sh and ps1, with no Python or PowerShell twin. It is inert until a wrapper passes MOE_TOOL_WRITES_FILE.\n2. task-7db14e2d (needs 4b0609d1 and 9d277494): the wrappers pass the env (sh) or a temp file merged into $script:MoeToolWritten (ps1). They also flip their own held= clauses and add the postflight rows (DoD 1, 2).\n3. This task, last: the daemon constants and docs, plus a full gate re-proving DoD 1, 2 and 4.\n\nWhy the text flips last. Flipping the daemon or docs before the harvest is live would repeat 9d277494's bug: telling codex seats an edit releases a hold when it does not. The reverse window (wrapper text updated, daemon and docs still Claude-only) under-promises, which is safe.\n\nWhy this task keeps its DoD. The DoD is human-owned and cannot be edited, so DoD 1 and 2 are delivered by prerequisite 7db14e2d's rows and re-verified by this task's gate.",
@@ -244,5 +213,47 @@
     "kind": "completion",
     "sessionId": "worker-c0a1ac70@2026-10-31T07:45:55Z",
     "at": "2026-10-31T08:23:01.263Z"
-  }
+  },
+  "reviewCompletedAt": "2026-10-31T08:28:42.068Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "The MOE_CONTESTED_HELD witness sentence (both wrappers and recordCommit.ts), docs/CONFIGURATION.md 'Session touch evidence' and docs/TROUBLESHOOTING.md 'Current witness limit' count `codex exec` seats. recordCommit.test.ts and `bash scripts/tests/parity-check.sh` pass."
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "file": "docs/TROUBLESHOOTING.md",
+        "line": 611,
+        "description": "HEAD (8372d311) still has the old 'Current witness limit' paragraph and old UNTOUCHED/EDITING rows (~L595-596). Correct text is uncommitted in the tree beside CQ-R13's hunk; the wrapper held it because the edits were a python3 shell write. Re-edit with the Edit tool in the main Claude session, keep every existing hunk, let the wrapper land the whole file."
+      },
+      {
+        "type": "other",
+        "file": "docs/TROUBLESHOOTING.md",
+        "description": "Rework landing check: new completion's `git show --stat` lists docs/TROUBLESHOOTING.md; no held= in the session-ended line."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Narrow reject: DoD 3 is half-unmet at HEAD. It names docs/TROUBLESHOOTING.md 'Current witness limit', but completion 8372d311 carries no TROUBLESHOOTING.md change: HEAD (L611-615) still says only Claude one-shot stream-json feeds the TOOL set, and the CONTESTED_UNTOUCHED/EDITING rows (~L595-596) still say 'one-shot Claude session'. Cause: the wrapper held the file (MOE_ATTR_CONTESTED_UNTOUCHED, peer 2359daf0). It was dirty at pre-flight with CQ-R13's 'Local Runner Issues' hunk, and the step-3 edits were a python3 script run through Bash (a shell write, no TOOL witness). The correct text sits uncommitted in the shared tree (sha256 538845f7..., +28/-8 vs HEAD): a landing gap, not a wording defect.\n\nFIX: (1) Leave recordCommit.ts/.test.ts, CONFIGURATION.md, MCP_SERVER.md alone; they landed and are verified. (2) In the main one-shot Claude session, use the Edit tool (no Bash/python, no subagent) on docs/TROUBLESHOOTING.md: make at least one real Edit on a line this row owns, e.g. re-wrap the ragged 'Current witness limit' paragraph (~L612-622). Keep every existing hunk, including CQ-R13's TOC renumber and 'Local Runner Issues' section; do not revert or stash. (3) The new completion's `git show --stat` must list docs/TROUBLESHOOTING.md, with no held= in the session-ended line. (4) Re-record verification with the cheap legs only (no script changes): recordCommit vitest in a git-archive snapshot, parity-check.sh, node --test prompt-cache-witness + prompt-cache. The ~1h postflight legs need not repeat unless a script changes.\n\nQA verified OK (HEAD snapshot): recordCommit.test.ts 73/73; parity-check.sh PASS; node --test 39/0; recordCommit.ts diff is 3 constants; HELD_REMEDY_WITNESS byte-identical in recordCommit.ts/.test.ts, both wrappers and both postflight harnesses; CONFIGURATION.md and MCP_SERVER.md match prompt-cache-witness.mjs. Not re-run by QA: postflight legs (8372d311 changes no script; DoD 1, 2, 4 ride on task-7db14e2d).",
+      "rejectedAt": "2026-10-31T08:28:42.068Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "The MOE_CONTESTED_HELD witness sentence (both wrappers and recordCommit.ts), docs/CONFIGURATION.md 'Session touch evidence' and docs/TROUBLESHOOTING.md 'Current witness limit' count `codex exec` seats. recordCommit.test.ts and `bash scripts/tests/parity-check.sh` pass."
+      ],
+      "issues": [
+        {
+          "type": "missing_feature",
+          "file": "docs/TROUBLESHOOTING.md",
+          "line": 611,
+          "description": "HEAD (8372d311) still has the old 'Current witness limit' paragraph and old UNTOUCHED/EDITING rows (~L595-596). Correct text is uncommitted in the tree beside CQ-R13's hunk; the wrapper held it because the edits were a python3 shell write. Re-edit with the Edit tool in the main Claude session, keep every existing hunk, let the wrapper land the whole file."
+        },
+        {
+          "type": "other",
+          "file": "docs/TROUBLESHOOTING.md",
+          "description": "Rework landing check: new completion's `git show --stat` lists docs/TROUBLESHOOTING.md; no held= in the session-ended line."
+        }
+      ]
+    }
+  ]
 }
