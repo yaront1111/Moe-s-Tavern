@@ -61,7 +61,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -77,16 +77,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T20:56:44.213Z",
-  "updatedAt": "2026-10-31T21:54:01.676Z",
+  "updatedAt": "2026-10-31T21:56:44.511Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T20:57:16.938Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-31T21:56:44.510Z",
+    "wallClockMs": 3567572
   },
   "contextFetchedBy": [
     "architect-b742aab1",
-    "worker-4bc1a1b5"
+    "worker-4bc1a1b5",
+    "qa-1f1f912c"
   ],
   "tier": "light",
   "effort": "high",
@@ -170,18 +173,48 @@
       "treeId": "b0ba56d2a5c506a1a550d75bfb92d0d3109e5bf9",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "efa77f4fcdb8765da18b63695acfd224594509dd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4bc1a1b5@2026-10-31T21:49:44Z",
+      "paths": [
+        ".moe/tasks/task-77b0637fbe0043da988ea8206e5aaadb.json",
+        ".moe/tasks/task-84e45fa565b04e95b07c02929de0faf9.json",
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-4bc1a1b5",
+      "recordedAt": "2026-10-31T21:54:19.044Z",
+      "treeId": "01bdc5cf701378bf59a5fc78f99de4640851aaab",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-47d21b835b5e4f28bb08b17f83d22256"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
-    "scripts/local-runner/guest-bootstrap.mjs"
+    "scripts/local-runner/guest-bootstrap.mjs",
+    ".moe/tasks/task-77b0637fbe0043da988ea8206e5aaadb.json",
+    ".moe/tasks/task-84e45fa565b04e95b07c02929de0faf9.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-b742aab1@2026-10-31T20:57:20Z",
-    "at": "2026-10-31T21:12:42.449Z"
+    "kind": "completion",
+    "sessionId": "worker-4bc1a1b5@2026-10-31T21:49:44Z",
+    "at": "2026-10-31T21:54:19.044Z"
   },
   "workStartedAt": "2026-10-31T21:50:02.991Z",
   "reviewStartedAt": "2026-10-31T21:54:01.674Z",
@@ -192,5 +225,13 @@
     "reportedAt": "2026-10-31T21:54:01.674Z",
     "source": "agent-reported"
   },
-  "completionSummary": "buildUserData now emits `no_ssh_fingerprints: true` after `disable_root: true`, so cloud-init 26.1's ssh_authkey_fingerprints returns before extract_authorized_keys can create empty authorized_keys for moe-agent/moe-check (fixes IDENTITY_LOGIN_ENABLED on clean boots). JSDoc explains why. Tests: the buildUserData pin has the new line; new UD2 runs cloud-init's own handle in a python stub, with a positive control (without the key it opens moe-agent, moe-check, ubuntu) and a notEqual guard. RED vs fbece197: pin test and UD2 fail. Evidence: `cloud-init schema -c` (26.1-0ubuntu1~24.04.1) on user-data from the real supervisor => `Valid schema <file>`, exit 0. guest-readiness.mjs and guest-supervisor.py are unchanged (sha 3a19f3bf OK); UD1 and the readiness rows are unedited. Gate in a git-archive snapshot under env -i, Node v24.21.0: 356 tests, 355 pass, 0 fail, 1 skipped (opt-in macOS native smoke); UD1 and UD2 passed, not skipped. No Multipass was run; the real-guest proof stays the governor's R13 certify re-run."
+  "completionSummary": "buildUserData now emits `no_ssh_fingerprints: true` after `disable_root: true`, so cloud-init 26.1's ssh_authkey_fingerprints returns before extract_authorized_keys can create empty authorized_keys for moe-agent/moe-check (fixes IDENTITY_LOGIN_ENABLED on clean boots). JSDoc explains why. Tests: the buildUserData pin has the new line; new UD2 runs cloud-init's own handle in a python stub, with a positive control (without the key it opens moe-agent, moe-check, ubuntu) and a notEqual guard. RED vs fbece197: pin test and UD2 fail. Evidence: `cloud-init schema -c` (26.1-0ubuntu1~24.04.1) on user-data from the real supervisor => `Valid schema <file>`, exit 0. guest-readiness.mjs and guest-supervisor.py are unchanged (sha 3a19f3bf OK); UD1 and the readiness rows are unedited. Gate in a git-archive snapshot under env -i, Node v24.21.0: 356 tests, 355 pass, 0 fail, 1 skipped (opt-in macOS native smoke); UD1 and UD2 passed, not skipped. No Multipass was run; the real-guest proof stays the governor's R13 certify re-run.",
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-bootstrap.mjs"
+  ],
+  "completedAt": "2026-10-31T21:56:44.510Z",
+  "reviewCompletedAt": "2026-10-31T21:56:44.510Z",
+  "reviewSummary": "Approved. Reviewed completion commit efa77f4f (on moe/work-2026-10-24; git branch --contains confirms; recorded in task.commits, kind completion, pushed). Diff: guest-bootstrap.mjs +4/-1 (one new `no_ssh_fingerprints: true` line right after `disable_root: true`, plus JSDoc why-comment), local-runner.test.mjs +36/-1 (pin line, FINGERPRINT_STUB + UD2 right after UD1), plus 2 board JSON files. About 42 lines, no size issue. Contested path local-runner.test.mjs: the commit holds only this task's hunks. Re-ran myself: (1) worker's exact verification command, git-archive HEAD snapshot under env -i, Node v24.21.0: guest-supervisor.py sha256 3a19f3bf... OK; 356 tests, 355 pass, 0 fail, 1 skipped (pre-existing opt-in macOS native smoke); UD1 and UD2 both passed (not skipped). (2) DoD 1: emitted user-data from the REAL guest-supervisor.py plus a random 32-byte credential (scratch dir deleted; credential not pasted) shows `no_ssh_fingerprints: true` on line 4; `/usr/bin/cloud-init --version` => 26.1-0ubuntu1~24.04.1; `cloud-init schema -c <file>` => `Valid schema <file>`, exit 0, no deprecations line. (3) DoD 3 RED proof: UD2 and the buildUserData pin test against fbece197's guest-bootstrap.mjs => 2 tests, 0 pass, 2 fail (pin: missing line; UD2: actual ['moe-agent','moe-check','ubuntu'] vs expected []), so the tests fail on the old user-data and pass on the new. UD2 has a positive control (key removed => opens moe-agent, moe-check, ubuntu) plus a notEqual guard, and surfaces interpreter/API/YAML errors via result.error/status asserts instead of skipping; it skips only where UD1 skips. (4) DoD 2 and 4: guest-readiness.mjs and guest-supervisor.py have no diff against fbece197 or HEAD (sha 3a19f3bf), so keys:<id> stays `sudo -n test -e`; UD1 and the readiness rows are unedited. No Multipass run (task rail); the real-guest proof stays the governor's R13 certify re-run. Complexity pass: nothing to cut. Unverified by this seat: real-guest behavior on a live boot.",
+  "requiredCheckAtDone": null
 }
