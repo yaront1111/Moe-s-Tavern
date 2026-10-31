@@ -5619,6 +5619,330 @@ function Invoke-MoeLanding {
     }
 }
 
+# ---- worktree landing (design §2.2 L0-L2, §2.4, §3) ----
+# $true when this checkout is a worktree-mode control checkout: its HEAD is
+# refs/heads/moe/control (design §7.2). HEAD only, so WT-13 can reuse it.
+# Twin: control_worktree_mode.
+function Test-MoeControlWorktreeMode {
+    $g = Get-MoeGitTop
+    if ($null -eq $g) { return $false }
+    $h = Invoke-MoeGit -Top $g.Top -GitArgs @('symbolic-ref', '-q', 'HEAD')
+    return ($h.Rc -eq 0 -and ($h.Out -join '').Trim() -ceq 'refs/heads/moe/control')
+}
+
+# Test-MoeDenyPath plus .claude/skills/** (the wrapper's skill mirror), with no
+# BOARD exception: a task worktree never lands .moe (design §2.2). Twin: denied_wt.
+function Test-MoeDenyPathWorktree([string]$TopPath, [string]$XY, [string]$Rel, [hashtable]$Settings) {
+    if (Test-MoeDenyPath $TopPath $XY $Rel $Settings) { return $true }
+    $k = Get-MoePathKey $TopPath
+    $r = Get-MoePathKey $Rel
+    $roots = @($r)
+    if ($r) { $roots += '' }
+    foreach ($dr in $roots) {
+        if ($k -ceq "$dr.claude/skills" -or $k.StartsWith("$dr.claude/skills/")) { return $true }
+    }
+    return $false
+}
+
+# W's snapshot split into WORKTREE candidates and MOE_ATTR_EXCLUDED skips: every
+# dirty path but DENY lands (design §2.2 L0). Twin: resolve_attribution worktree.
+function Get-MoeWorktreeAttribution([hashtable]$S, [string]$Rel, [hashtable]$Settings) {
+    $c = New-Object System.Collections.ArrayList
+    $sk = New-Object System.Collections.ArrayList
+    foreach ($k in @($S.Keys | Sort-Object)) {
+        $e = $S[$k]
+        if (Test-MoeDenyPathWorktree $e.Path $e.XY $Rel $Settings) { [void]$sk.Add(@{ Path = $e.Path; Code = 'MOE_ATTR_EXCLUDED' }) }
+        else { [void]$c.Add(@{ Path = $e.Path; Blob = $e.Blob; Inferred = $false; Reason = 'WORKTREE' }) }
+    }
+    return @{ Candidates = @($c); Skipped = @($sk); Contested = @(); Unattributed = @() }
+}
+
+# Push refs/heads/<Branch> to the same name on origin: no force, no upstream,
+# no rebase (design §2.4). $true = pushed. A missing remote is said once; a
+# rejected or unreachable push is CHECKPOINT-UNPUSHED and moves no ref.
+# Twin: push_task_branch.
+function Push-MoeTaskBranch([string]$Worktree, [string]$Branch, [string]$TaskId) {
+    $script:MoePushResult = $null
+    if (Test-MoeNoRemote $Worktree) {
+        Write-Host "[info] no git remote configured; push skipped, the checkpoint stays local on $Branch." -ForegroundColor Cyan
+        return $false
+    }
+    $p = Invoke-MoeGit -Top $Worktree -GitArgs @('push', '--porcelain', 'origin', "refs/heads/${Branch}:refs/heads/$Branch") -MergeStderr
+    if ($p.Rc -eq 0) {
+        Write-Host "[OK] Pushed task $TaskId to $Branch." -ForegroundColor Green
+        $script:MoePushResult = "pushed $Branch"
+        return $true
+    }
+    $p.Out | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" }
+    $msg = "CHECKPOINT-UNPUSHED task=$TaskId — checkpoint committed locally only on $Branch; push when the remote is reachable"
+    Write-Host "[WARN] $msg" -ForegroundColor Yellow
+    Send-MoeGeneralChat $msg
+    return $false
+}
+
+# The commit half of Invoke-MoeWorktreeCheckpoint (design §2.2 L1-L2): a temp
+# index from the tip T, commit-tree -p T, ONE update-ref CAS, W's index
+# refresh. Never Ensure-MoeSafeBranch, never the 3-attempt loop: a moved tip is
+# contention (a rescue ref), never a rebuild. Sets $Res Outcome/Code/Sha/Ref/
+# PathCount/Landed and returns the staging-time drops. Twin: land_plumbing
+# under LAND_ONE_CAS.
+function Invoke-MoeWorktreeCommit([hashtable]$Wt, [string]$Ref, [hashtable]$Attr, [hashtable]$Res, [hashtable]$M) {
+    $o = Invoke-MoeGit -Top $Wt.Top -GitArgs @('rev-parse', '-q', '--verify', $Ref)
+    $old = if ($o.Rc -eq 0 -and $o.Out.Count -gt 0) { ($o.Out -join '').Trim() } else { '' }
+    if (-not $old) {
+        # No tip T to build on: never an orphan commit from an empty tree.
+        $Res.Outcome = 'failed'; $Res.Code = 'MOE_COMMIT_FAILED_REF_CONTENTION'
+        Write-Host "[WARN] MOE_COMMIT_FAILED_REF_CONTENTION: $Ref does not resolve; nothing committed for task $($M.TaskId), its bytes stay in $($Wt.Top)." -ForegroundColor Yellow
+        return
+    }
+    $idx = Join-Path (Join-Path $Wt.GitDir 'moe') "idx-$($M.TaskId)-$myPid"
+    $msgFile = ''
+    try {
+        $built = Build-MoeTempIndexTree -Top $Wt.Top -IndexFile $idx -OldSha $old -Candidates $Attr.Candidates
+        if (-not $built.Ok) {
+            $Res.Outcome = 'failed'; $Res.Code = 'MOE_COMMIT_FAILED'
+            Write-Host "[WARN] MOE_COMMIT_FAILED: could not build the landing index for task $($M.TaskId)." -ForegroundColor Yellow
+            return
+        }
+        foreach ($d in @($built.Dropped)) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow; $d }
+        if (-not $built.Changed) { $Res.Outcome = 'nothing'; return }
+        $landed = @($built.Landed | ForEach-Object { $_.Path })
+        $msg = New-MoeCommitMessage -Kind 'checkpoint' -TaskId $M.TaskId -Title $M.Title -Status $M.Status -ReopenCount $M.ReopenCount -Role $Role -Sid $M.Sid -CliExit $M.CliExit -Recovered $M.Recovered -PathCount $landed.Count -InferredCount 0 -Contested @() -Reason ''
+        $msgFile = Write-MoeMessageFile $Wt.GitDir $M.TaskId $msg
+        $ct = Invoke-MoeGit -Top $Wt.Top -GitArgs @('commit-tree', $built.Tree, '-p', $old, '-F', $msgFile) -MergeStderr
+        if ($ct.Rc -ne 0 -or $ct.Out.Count -eq 0) {
+            ($ct.Out | Select-Object -Last 3) | ForEach-Object { Write-Host "  $_" }
+            Write-Host "[WARN] MOE_COMMIT_FAILED: commit creation failed (identity or signing) for task $($M.TaskId); parking the edits on a rescue ref." -ForegroundColor Yellow
+            $Res.Outcome = 'failed'; $Res.Code = 'MOE_COMMIT_FAILED'
+            $rescue = Invoke-MoeRescueRef -Git $Wt -TaskId $M.TaskId -Reason 'commit-failed' -Title $M.Title -Status $M.Status -Sid $M.Sid -Attr $Attr
+            if ($rescue) { $Res.Ref = $rescue.Ref; $Res.Sha = $rescue.Sha }
+            return
+        }
+        $new = ($ct.Out -join '').Trim()
+        if ($env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF) {
+            # Test seam: lets the harness move the task branch between
+            # commit-tree and update-ref to prove the single CAS.
+            Push-Location $Wt.Top
+            try { & $env:ComSpec /d /s /c $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF 2>&1 | Out-Null } catch {} finally { Pop-Location }
+        }
+        $ur = Invoke-MoeGit -Top $Wt.Top -GitArgs @('update-ref', $Ref, $new, $old) -MergeStderr
+        if ($ur.Rc -ne 0) {
+            Write-Host "[WARN] MOE_COMMIT_FAILED_REF_CONTENTION: $Ref kept moving; keeping the snapshot on a rescue ref." -ForegroundColor Yellow
+            $Res.Outcome = 'failed'; $Res.Code = 'MOE_COMMIT_FAILED_REF_CONTENTION'
+            $rescue = Invoke-MoeRescueRef -Git $Wt -TaskId $M.TaskId -Reason 'ref-contention' -Title $M.Title -Status $M.Status -Sid $M.Sid -Attr $Attr -Sha $new
+            if ($rescue) { $Res.Ref = $rescue.Ref; $Res.Sha = $rescue.Sha }
+            return
+        }
+        $Res.Outcome = 'committed'; $Res.Sha = $new; $Res.Ref = $Ref; $Res.PathCount = $landed.Count; $Res.Landed = $landed
+        Update-MoeSharedIndex $Wt.Top $landed | Out-Null
+    } finally {
+        Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue
+        if ($msgFile) { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# Commit every dirty path of the task worktree W except DENY to
+# refs/heads/<Branch> as a checkpoint (design §2.2 L0-L2): the owner guard, W's
+# snapshot, Invoke-MoeWorktreeCommit, the push when settings.checkpointPush,
+# and the ledger row with the full ref. No baseline, tier, peel or shared push:
+# the target and the control checkout are never touched. A recovery with
+# nothing to land records nothing and never marks this session's landing done.
+# Returns Invoke-MoeLanding's result shape. Twin: land_worktree_checkpoint.
+function Invoke-MoeWorktreeCheckpoint {
+    param(
+        [Parameter(Mandatory = $true)][string]$TaskId,
+        [Parameter(Mandatory = $true)][string]$WorktreePath,
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [Parameter(Mandatory = $true)][hashtable]$Settings,
+        [string]$Rel = '', [string]$Title = '', [string]$Status = '',
+        [int]$ReopenCount = 0, [int]$CliExit = 0, [string]$Sid = '', [bool]$Recovered = $false
+    )
+    $res = @{ Outcome = 'pending'; Kind = 'checkpoint'; Sha = ''; Ref = ''; Code = ''; Branch = $Branch; Landed = @()
+        PathCount = 0; InferredCount = 0; SkippedCount = 0; UnattributedCount = 0; Pushed = $false; StopLoop = $false; Held = '' }
+    if (-not $Recovered) { $script:MoeLandingResult = $res }
+    $ref = "refs/heads/$Branch"
+    $rec = @{ taskId = $TaskId; kind = 'checkpoint'; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit }
+    $attr = @{ Candidates = @(); Skipped = @(); Contested = @() }
+    $dropped = @(); $recorded = $false
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $guard = Get-MoeOwnerGuard $TaskId $Sid
+        if ($guard.Code) {
+            $res.Outcome = 'refused'; $res.Code = $guard.Code
+            Send-MoeOwnerRefusal $TaskId 'checkpoint' $Status $Sid $guard $CliExit
+            return $res
+        }
+        if (-not $Title -and $guard.Scope -and $guard.Scope.Title) { $Title = $guard.Scope.Title }
+        $gd = Invoke-MoeGit -Top $WorktreePath -GitArgs @('rev-parse', '--absolute-git-dir')
+        $wt = @{ Top = $WorktreePath; GitDir = $(if ($gd.Rc -eq 0) { ($gd.Out -join '').Trim() } else { '' }); Rel = $Rel }
+        $S = if ($wt.GitDir) { Get-MoeDirtySnapshot $WorktreePath } else { $null }
+        if ($null -eq $S) {
+            $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED_ATTRIBUTION'
+            Write-Host "[WARN] MOE_COMMIT_FAILED_ATTRIBUTION: git status failed in $WorktreePath; nothing committed for task $TaskId, its bytes stay in the worktree." -ForegroundColor Yellow
+        } else {
+            $attr = Get-MoeWorktreeAttribution $S $Rel $Settings
+            if ($Recovered -and $attr.Candidates.Count -eq 0) { $res.Outcome = 'nothing'; return $res }
+            if ($attr.Skipped.Count -gt 0) { Write-Host "[attribution] $($attr.Skipped.Count) excluded path(s) untouched (MOE_ATTR_EXCLUDED: .moe/, tool config, worktrees)" -ForegroundColor Cyan }
+            $res.Outcome = 'nothing'
+            if ($attr.Candidates.Count -gt 0) {
+                $m = @{ TaskId = $TaskId; Title = $Title; Status = $Status; ReopenCount = $ReopenCount; CliExit = $CliExit; Sid = $Sid; Recovered = $Recovered }
+                $dropped = @(Invoke-MoeWorktreeCommit $wt $ref $attr $res $m)
+            }
+        }
+        if ($res.Outcome -eq 'nothing') { $res.Code = 'MOE_COMMIT_NOTHING_TO_COMMIT' }
+        if ($res.Outcome -ne 'committed') {
+            if ($res.Outcome -eq 'nothing') { Write-Host "[info] MOE_COMMIT_NOTHING_TO_COMMIT: task $TaskId -- nothing to land from $WorktreePath." -ForegroundColor Cyan }
+            $code = if ($res.Code) { $res.Code } else { 'MOE_COMMIT_FAILED' }
+            Send-MoeRecordCommit ($rec + @{ outcome = $res.Outcome; ref = $ref; code = $code } + (Get-MoeRecordHeldFields $attr $dropped $Rel)) | Out-Null
+            return $res
+        }
+        Write-Host "[OK] Committed checkpoint for task $TaskId on ${Branch}: $($res.Sha) ($($res.PathCount) paths)" -ForegroundColor Green
+        if (-not $Settings.checkpointPush) {
+            Write-Host "[info] settings.checkpointPush=false -- checkpoint kept local on $Branch." -ForegroundColor Cyan
+        } else { $res.Pushed = Push-MoeTaskBranch $WorktreePath $Branch $TaskId }
+        $tr = Invoke-MoeGit -Top $WorktreePath -GitArgs @('rev-parse', "$($res.Sha)^{tree}")
+        $treeId = if ($tr.Rc -eq 0 -and $tr.Out.Count -gt 0) { ($tr.Out -join '').Trim() } else { '' }
+        Send-MoeRecordCommit ($rec + @{ outcome = 'committed'; sha = $res.Sha; treeId = $treeId; ref = $ref; pushed = $res.Pushed
+            paths = @($res.Landed | Select-Object -First 500 | ForEach-Object { ConvertTo-MoeRootRelative $_ $Rel })
+            inferredPaths = @(); unattributedPaths = @() } + (Get-MoeRecordHeldFields $attr $dropped $Rel)) | Out-Null
+        $recorded = $true
+        return $res
+    } catch {
+        Write-Host "[WARN] worktree landing failed for task $($TaskId): $_; its bytes stay in $WorktreePath." -ForegroundColor Yellow
+        if ($res.Outcome -ne 'committed') { $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED' }
+        $res.StopLoop = $true
+        return $res
+    } finally {
+        # Interrupted after the CAS (push or ledger record): the commit is on
+        # the task branch, so re-send its row; record_commit is idempotent by sha.
+        if ($res.Outcome -eq 'committed' -and -not $recorded) {
+            Send-MoeRecordCommit ($rec + @{ outcome = 'committed'; sha = $res.Sha; ref = $ref }) | Out-Null
+        }
+        if (-not $Recovered -and $res.Outcome -ne 'pending') { $script:moeLandingDone = $true }
+        $ErrorActionPreference = $prev
+    }
+}
+
+# The control checkout's dirty paths minus Test-MoeDenyPathWorktree (so never
+# .moe/), as an array; $null when git status fails. Twin: worktree_control_dirt.
+function Get-MoeWorktreeControlDirt([hashtable]$Git, [hashtable]$Settings) {
+    $S = Get-MoeDirtySnapshot $Git.Top
+    if ($null -eq $S) { return $null }
+    return ,@((Get-MoeWorktreeAttribution $S $Git.Rel $Settings).Candidates | ForEach-Object { $_.Path })
+}
+
+# A worktree worker's pre-flight after Initialize-MoeWorktree's W/.moe guard
+# (design §3.3, §3.7): dirt a crashed session left in W becomes a recovery
+# checkpoint on the task branch (MOE_CHECKPOINT_RECOVERED; a failure leaves it
+# in W), then the control checkout's dirt is listed, NUL-terminated, in
+# <common gitdir>/moe/worktree/<id>.control-dirt for the stray-edit check. No
+# baseline, rescue replay or notice. Twin: worktree_preflight.
+function Invoke-MoeWorktreePreflight([string]$TaskId, [string]$Title, [string]$Status, [string]$Sid) {
+    $settings = Read-MoeCommitSettings
+    $git = Get-MoeGitTop
+    if ($settings.autoCommit -and $settings.checkpointCommits) {
+        $st = if ($Status) { $Status } else { 'UNKNOWN' }
+        $rel = if ($git) { $git.Rel } else { '' }
+        $r = Invoke-MoeWorktreeCheckpoint -TaskId $TaskId -WorktreePath $script:MoeWtPath -Branch $script:MoeWtBranch -Settings $settings -Rel $rel -Title $Title -Status $st -Sid $Sid -Recovered $true
+        if ($r.Outcome -eq 'committed') {
+            Write-Host "[OK] MOE_CHECKPOINT_RECOVERED task=$TaskId sha=$($r.Sha)" -ForegroundColor Green
+        } elseif ($r.Outcome -eq 'failed') {
+            Write-Host "[WARN] recovery checkpoint for $TaskId did not complete ($(if ($r.Code) { $r.Code } else { '?' })); its bytes stay in $($script:MoeWtPath)." -ForegroundColor Yellow
+        }
+    }
+    $list = ''
+    try {
+        $cd = if ($git) { Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', '--path-format=absolute', '--git-common-dir') } else { $null }
+        if ($cd -and $cd.Rc -eq 0 -and $cd.Out.Count -gt 0) { $list = Join-Path ($cd.Out -join '').Trim() "moe/worktree/$TaskId.control-dirt" }
+        $paths = if ($list) { Get-MoeWorktreeControlDirt $git $settings } else { $null }
+        if ($null -ne $paths) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $list) | Out-Null
+            [IO.File]::WriteAllText("$list.tmp", (@($paths | ForEach-Object { "$_$([char]0)" }) -join ''), (New-Object Text.UTF8Encoding($false)))
+            Move-Item -LiteralPath "$list.tmp" -Destination $list -Force
+            $script:MoeWtDirtList = $list
+            return
+        }
+    } catch {}
+    Write-Host "[WARN] could not write the control-checkout dirt list $(if ($list) { $list } else { '<no git dir>' }); the stray-edit check is off for this session." -ForegroundColor Yellow
+}
+
+# Design §3.7: a control-checkout path dirty now but absent from the pre-flight
+# list prints MOE_WORKTREE_STRAY_EDIT and becomes ONE task comment naming up to
+# 20 paths. Never landed, never reverted. Any failure is one [WARN] and leaves
+# the landing outcome alone. Twin: worktree_stray_check.
+function Invoke-MoeWorktreeStrayCheck([string]$TaskId) {
+    if (-not $script:MoeWtDirtList) { return }
+    $stray = $null; $git = $null
+    try {
+        $pre = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+        foreach ($p in [IO.File]::ReadAllText($script:MoeWtDirtList).Split([char]0)) { if ($p) { [void]$pre.Add((Get-MoePathKey $p)) } }
+        $git = Get-MoeGitTop
+        $now = if ($git) { Get-MoeWorktreeControlDirt $git (Read-MoeCommitSettings) } else { $null }
+        if ($null -ne $now) { $stray = @($now | Where-Object { -not $pre.Contains((Get-MoePathKey $_)) }) }
+    } catch { $stray = $null }
+    if ($null -eq $stray) {
+        Write-Host "[WARN] the stray-edit check for task $TaskId could not run (control-dirt list or git status unreadable)." -ForegroundColor Yellow
+        return
+    }
+    $n = $stray.Count
+    if ($n -eq 0) { return }
+    Write-Host "[WARN] MOE_WORKTREE_STRAY_EDIT count=$n task=${TaskId}: written into the control checkout $($git.Top), not $($script:MoeWtPath); never landed or reverted, a human decides: $(@($stray | Select-Object -First 5) -join ' ')" -ForegroundColor Yellow
+    $content = "MOE_WORKTREE_STRAY_EDIT: this session wrote $n path(s) into the control checkout instead of its worktree $($script:MoeWtPath). They were neither landed nor reverted; a human decides.`n" + (@($stray | Select-Object -First 20 | ForEach-Object { "- $_" }) -join "`n")
+    if ($n -gt 20) { $content += "`n+$($n - 20) more" }
+    $r = $null
+    try { $r = Invoke-MoeRpc -Tool 'add_comment' -Args @{ taskId = $TaskId; workerId = $WorkerId; content = $content } } catch {}
+    if ($null -eq $r) { Write-Host "[WARN] moe.add_comment failed for the MOE_WORKTREE_STRAY_EDIT note on $TaskId." -ForegroundColor Yellow }
+}
+
+# A worktree worker's exit (design §2.4, §3): its W bytes go to the task branch
+# only, then the stray-edit check. Never Invoke-MoeLanding, the peel, the
+# shared push or a baseline. A completion has no target landing here yet
+# (WT-08): its bytes are checkpointed and the outcome stays failed, so the
+# attempt never finalizes as landed. Twin: worktree_postflight.
+function Invoke-MoeWorktreePostflight([hashtable]$Settings, [string]$Status, [int]$ReopenCount, [int]$CliExit, [string]$Sid) {
+    $completion = ($Status -eq 'REVIEW' -or $Status -eq 'DONE')
+    $script:MoeWtCompletion = $completion
+    $res = $null
+    if (-not $Settings.autoCommit) {
+        Write-Host "[info] settings.autoCommit=false -- no git activity for task $preflightTaskId; its bytes stay in $($script:MoeWtPath)." -ForegroundColor Cyan
+    } elseif ($completion -or $Settings.checkpointCommits) {
+        $git = Get-MoeGitTop
+        $rel = if ($git) { $git.Rel } else { '' }
+        $res = Invoke-MoeWorktreeCheckpoint -TaskId $preflightTaskId -WorktreePath $script:MoeWtPath -Branch $script:MoeWtBranch -Settings $Settings -Rel $rel -Title $preflightTaskTitle -Status $Status -ReopenCount $ReopenCount -CliExit $CliExit -Sid $Sid
+    } else {
+        $dc = if ($env:MOE_DISABLE_CHECKPOINT) { $env:MOE_DISABLE_CHECKPOINT } else { '0' }
+        Write-Host "[info] no landing for task $preflightTaskId (checkpointCommits=$($Settings.checkpointCommits) MOE_DISABLE_CHECKPOINT=$dc); its bytes stay in $($script:MoeWtPath)." -ForegroundColor Cyan
+    }
+    if ($completion) {
+        Write-Host "[WARN] worktree completion landing to the target is not available in this wrapper; the bytes are on $($script:MoeWtBranch) and nothing reached $($script:MoeWtTarget)" -ForegroundColor Yellow
+        if (-not $res) {
+            $res = @{ Outcome = 'failed'; Kind = 'checkpoint'; Sha = ''; Ref = ''; Code = ''; Branch = $script:MoeWtBranch
+                PathCount = 0; InferredCount = 0; SkippedCount = 0; UnattributedCount = 0; Pushed = $false; StopLoop = $false; Held = '' }
+            $script:MoeLandingResult = $res
+        }
+        # Only a rescue ref keeps Ref+Sha (finalize: rescued); a branch checkpoint is not a landing.
+        if ($res.Outcome -eq 'committed') { $res.Ref = '' }
+        $res.Outcome = 'failed'
+    }
+    Invoke-MoeWorktreeStrayCheck $preflightTaskId
+    return $res
+}
+
+# Design §3.6: an architect or QA seat in a worktree-mode control checkout
+# lands nothing (it carries daemon and human bytes only) and records
+# MOE_COMMIT_NOTHING_TO_COMMIT; no ref moves. Twin: control_seat_postflight.
+function Invoke-MoeControlSeatPostflight([string]$Status, [int]$CliExit, [string]$Sid) {
+    $code = 'MOE_COMMIT_NOTHING_TO_COMMIT'
+    $res = @{ Outcome = 'nothing'; Kind = 'checkpoint'; Sha = ''; Ref = ''; Code = $code; Branch = ''
+        PathCount = 0; InferredCount = 0; SkippedCount = 0; UnattributedCount = 0; Pushed = $false; StopLoop = $false; Held = '' }
+    $script:MoeLandingResult = $res
+    Write-Host "[info] ${code}: task $preflightTaskId -- a $Role seat in the worktree-mode control checkout lands nothing." -ForegroundColor Cyan
+    Send-MoeRecordCommit @{ taskId = $preflightTaskId; outcome = 'nothing'; kind = 'checkpoint'; status = $Status; role = $Role
+        workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = $code } | Out-Null
+    return $res
+}
+
 # Section 4 steps 1-3 (shared by the pre-flight and the idle paths): scope,
 # DONE/ARCHIVED cleanup, recovery landing of a lingering baseline.
 function Invoke-MoeRecoveryCheck([hashtable]$Git, [hashtable]$Settings, [string]$TaskId, [string]$Status, [string]$Title, [string]$Sid) {
@@ -5694,6 +6018,10 @@ function Invoke-MoeRecoveryCheck([hashtable]$Git, [hashtable]$Settings, [string]
 # shared-checkout notice. Returns the text to inject into the dynamic context.
 function Invoke-MoePreflightBaseline([hashtable]$Git, [hashtable]$Settings, [string]$TaskId, [string]$Status, [string]$Title, [string]$Sid) {
     $result = @{ ContextText = ''; ForeignCount = 0; RescueRefs = @() }
+    # Worktree mode keeps no baseline (design §3): a worktree worker's
+    # pre-flight is Invoke-MoeWorktreePreflight, and a control seat lands nothing.
+    if ($script:MoeWtMode -eq 'worktree') { return $result }
+    if ($Role -ne 'worker' -and (Test-MoeControlWorktreeMode)) { return $result }
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -5814,6 +6142,8 @@ function Invoke-MoeIdleRecovery([string]$TaskId, [string]$Status) {
         if (-not $settings.autoCommit) { return }
         $git = Get-MoeGitTop
         if ($null -eq $git) { return }
+        # Same worktree-mode skip as Invoke-MoePreflightBaseline (sh: preflight_landing).
+        if ($script:MoeWtMode -eq 'worktree' -or ($Role -ne 'worker' -and (Test-MoeControlWorktreeMode))) { return }
         $baselinePath = Get-MoeBaselinePath $git.GitDir $TaskId
         if (-not $baselinePath -or -not (Test-Path -LiteralPath $baselinePath)) { return }
         $sid = "$WorkerId@" + (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
@@ -5836,7 +6166,10 @@ function Complete-MoePostflight {
     $r=$script:MoeLandingResult
     $outcome='nothing-to-commit'; $sha=''
     if ($r) {
-        if ($r.Outcome -eq 'committed') { $outcome='landed'; $sha=$r.Sha }
+        # A worktree completion's checkpoint is not a landing (WT-08 lands the
+        # target), even when an interrupt skipped Invoke-MoeWorktreePostflight's tail.
+        if ($r.Outcome -eq 'committed' -and $script:MoeWtCompletion) { $outcome='failed' }
+        elseif ($r.Outcome -eq 'committed') { $outcome='landed'; $sha=$r.Sha }
         elseif ($r.Outcome -eq 'nothing') { $outcome='nothing-to-commit' }
         elseif ($r.Ref -and $r.Sha) { $outcome='rescued' }
         else { $outcome='failed' }
@@ -5869,6 +6202,11 @@ function Invoke-MoeTeardownRescue {
         if ($null -eq $moeGit -and $null -eq (Get-MoeGitTop)) { return }
         $teardown.Outcome = 'failed'
         if ($null -eq $moeGit -or $null -eq $moeSettings) { return }
+        if ($script:MoeWtMode -eq 'worktree' -or ($Role -ne 'worker' -and (Test-MoeControlWorktreeMode))) {
+            $wtWhere = if ($script:MoeWtPath) { $script:MoeWtPath } else { $moeGit.Top }
+            Write-Host "[rescue] worktree mode: bytes stay in $wtWhere for the next pre-flight; no rescue ref for task $preflightTaskId." -ForegroundColor Cyan
+            return
+        }
         $baselinePath = Get-MoeBaselinePath $moeGit.GitDir $preflightTaskId
         if (-not $baselinePath -or -not (Test-Path -LiteralPath $baselinePath)) { return }
         # The owner guard first: a session that does not own the task parks
@@ -6646,7 +6984,7 @@ do {
     $script:PinnedAttemptProfile = ''; $script:PinnedAttemptPlanRevision = $null
     $script:MoeRunnerId ="runner-" + [guid]::NewGuid().ToString("N")
     $preflightTaskId = ""
-    $script:MoeWtMode = 'shared'; $script:MoeWtPath = ''; $script:MoeWtBranch = ''; $script:MoeWtTarget = ''
+    $script:MoeWtMode = 'shared'; $script:MoeWtPath = ''; $script:MoeWtBranch = ''; $script:MoeWtTarget = ''; $script:MoeWtDirtList = ''; $script:MoeWtCompletion = $false
     $script:cliRoot = "$projectPath"; Remove-Item Env:MOE_WORKTREE_PATH, Env:MOE_TASK_BRANCH, Env:MOE_LAND_TARGET -ErrorAction SilentlyContinue
     if ($script:cliRootPushed) { Pop-Location; $script:cliRootPushed = $false }
     if ($script:MoeMcpConfigDirty) { $mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $mcpConfigFile -Encoding UTF8; $script:MoeMcpConfigDirty = $false }
@@ -7287,7 +7625,13 @@ If moe.wait_for_task returns hasChatMessage:true, call moe.chat_read on chatMess
         }
     }
     # -------- End pre-flight baseline --------
-    if ($script:MoeWtMode -eq 'worktree') { Initialize-MoeWorktreeLaunch ([ref]$dynamicContext) }
+    if ($script:MoeWtMode -eq 'worktree') {
+        # Recovery checkpoint + control-dirt list (twin: worktree_preflight).
+        $moeWtStatus = ''
+        if ($preflightContext -and $preflightContext.task -and $preflightContext.task.PSObject.Properties['status']) { $moeWtStatus = [string]$preflightContext.task.status }
+        Invoke-MoeWorktreePreflight $preflightTaskId $preflightTaskTitle $moeWtStatus $moeSid
+        Initialize-MoeWorktreeLaunch ([ref]$dynamicContext)
+    }
 
     # Priority banner for unread messages routed at THIS worker. Goes LAST in
     # the dynamic context so it's the most recent text before the role-specific
@@ -8519,7 +8863,22 @@ $mentionsJson
         $moeSettings = Read-MoeCommitSettings
         $moeMode = 'none'
         $moeStatusForCommit = if ($finalStatus) { [string]$finalStatus } else { '' }
-        if (-not $moeSettings.autoCommit) {
+        # Worktree mode (design §3) never reaches the shared landing below.
+        $moeWtExit = ''
+        if ($script:MoeWtMode -eq 'worktree') { $moeWtExit = 'worktree' }
+        elseif (($Role -eq 'architect' -or $Role -eq 'qa') -and (Test-MoeControlWorktreeMode)) { $moeWtExit = 'control' }
+        if ($moeWtExit) {
+            if (-not $moeSid) { $moeSid = "$WorkerId@" + (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'") }
+            $moeExitForCommit = if ($null -ne $script:CliExitCode) { [int]$script:CliExitCode } else { 0 }
+            $moeWtStatus = if ($statusLookupError -or -not $finalStatus) { 'UNKNOWN' } else { [string]$finalStatus }
+            if ($moeWtExit -eq 'worktree') {
+                $moeLanding = Invoke-MoeWorktreePostflight $moeSettings $moeWtStatus ([int]$finalReopenCount) $moeExitForCommit $moeSid
+            } else {
+                $moeLanding = Invoke-MoeControlSeatPostflight $moeWtStatus $moeExitForCommit $moeSid
+            }
+            $script:MoeLastLanding = $moeLanding
+            if ($moeLanding -and $moeLanding.StopLoop) { $moeStopLoop = $true }
+        } elseif (-not $moeSettings.autoCommit) {
             Write-Host "[info] settings.autoCommit=false — no git activity for task $preflightTaskId (no completion, checkpoint or rescue); baseline deleted." -ForegroundColor Cyan
             if ($null -eq $moeGit) { $moeGit = Get-MoeGitTop }
             if ($moeGit) { Remove-MoeBaseline (Get-MoeBaselinePath $moeGit.GitDir $preflightTaskId) }

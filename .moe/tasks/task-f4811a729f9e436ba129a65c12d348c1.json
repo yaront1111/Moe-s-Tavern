@@ -270,11 +270,17 @@
       "author": "governor-693b7073",
       "content": "Governor sequencing note, 12:11Z. This is a blocker addendum (architect-b58e1112, msg-b0663ce2): certify only on a commit that contains the CI-fix branch fix/ci-pr230 (PR #232). That branch changes scripts/local-runner/guest-supervisor.py:\n- a58a50af: an explicit MAX_JSON_DEPTH = 512 check before json.loads (frames, package.json, lockfiles);\n- a4c8204d: GROUP_GONE, which tolerates darwin's EPERM from killpg (Linux unchanged).\nEither change moves supervisorSha256, so a report made before them is stale. The plan is for those commits to land on moe/work-2026-10-24 (an ff-only merge by the human) before 97341ad5 starts. When this row resumes, first check `git merge-base --is-ancestor <fix/ci-pr230 tip> HEAD`. If it fails, re-block and name the governor; do not post the certification request.",
       "timestamp": "2026-10-31T12:10:18.767Z"
+    },
+    {
+      "id": "comment-873e7ccb91d244fe8ae61530556ed483",
+      "author": "worker-c0a1ac70",
+      "content": "Supervisor hash handoff from task-97341ad5be744d19ac869972299a2714, which is going to REVIEW now. It changes the relay completion: the guard stands down at once, pump watches the start pipe, and the job group is killed before the observation.\n- guest-supervisor.py sha256 at HEAD b6cfcc4e: 8a631957d0475cd2c12029a4f5e18be076adee59110124eb1331aacb06d25d4b\n- after 97341ad5's change: 27b4a266a42fe4510671d624e7bcd8c59c5cfc2ed59a9f0405a37e65dde38d71\nAny certification of an older hash is stale. If QA reopens 97341ad5 and the bytes change, the landed hash will differ, so take the sha256 of guest-supervisor.py at the commit you verify, as your step 5 already says. This WSL gate imported the supervisor as a non-root fixture plus userns-root rows and certifies nothing; native re-certification stays yours and the operator's.",
+      "timestamp": "2026-10-31T14:10:16.944Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T12:18:20.926Z",
+  "updatedAt": "2026-10-31T14:10:16.945Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

@@ -9,12 +9,12 @@
 # WORKSPACE's changes against its manifest, as frames on stdout, walked as the AGENT_IDENTITY account).
 # Exit codes: 0 relay, materialization or export complete; 64 usage; 65 malformed or mismatched snapshot stream, an
 # unreadable export manifest or workspace root, an export over its bounds, or a malformed or disallowed job frame; 66 no
-# materialized workspace for the job; 71 the job could not start (child or agent socket: hello, then EOF, no
-# observation; or no AGENT_IDENTITY account, session home or launch config, or the export could not become it); 73 the workspace or its
-# manifest already exists; 74 I/O failure or host EOF (child group killed), including EOF before a whole job frame; 75
-# SIGTERM, SIGHUP or SIGINT (child group killed, no observation); 76 host protocol violation (child group killed); 77 not
-# root. A bridge refusal before hello (65, 66, 74, and 71 for a missing account, session home or launch config) writes no frame, nor
-# does 77.
+# materialized workspace for the job; 71 the job could not start, or the export could not become the AGENT_IDENTITY
+# account; 73 the workspace or its manifest already exists; 74 I/O failure or host EOF; 75 SIGTERM, SIGHUP or SIGINT; 76
+# host protocol violation; 77 not root. A bridge refusal before relay() writes no frame and starts no job: 74 EOF before
+# a whole job frame, 65, 66, and 71 for no AGENT_IDENTITY account, session home or launch config; nor does 77 write one.
+# After relay()'s hello, 71 (the guard, the job or the agent socket could not start), 74, 75 and 76 kill the child group
+# and end the stream with no observation; only 0 follows the one observation frame.
 # Mode 'check' (CQ-R11a): one host check frame on stdin, then that approved command as the CHECK_IDENTITY account. It
 # shares the bridge's codes, and none writes a frame: 65 also for a malformed protected entry or a workspace entry reown
 # refuses, 66 no workspace, 71 no CHECK_IDENTITY account, a failed re-own, no session home or no protected-path mount
@@ -90,11 +90,13 @@ EX_TERMINATED = os.EX_TEMPFAIL
 # status, sends it up a private pipe and exits, and the kernel kills every other descendant, setsid or not, before init
 # can be reaped. Root that cannot unshare never starts the job; a non-root import fixture runs uncontained and certifies
 # nothing. On EOF of the life pipe (the supervisor died before reaping it) it SIGKILLs init, then its own group, whose
-# id this live member pins. A stand-down byte, sent after the output pipes close, lets it exit once init has; the start
-# pipe gets '+' once the job runs, and EOF once this process is gone. argv[3] is the job's Popen identity, groups, umask
-# and cwd as JSON (CQ-R10b); the job's environment is this process's own, so a credential travels in no argv or file. On
-# Linux the job, and anything it execs, can never gain privileges (PR_SET_NO_NEW_PRIVS); a guard that cannot set the bit
-# never starts the job.
+# id this live member pins. The start pipe gets '+' once the job runs, and the supervisor answers it with the stand-down
+# byte at once, so this process exits as soon as init has. The start pipe's EOF, once this process is gone, has the
+# supervisor SIGKILL the group this unreaped process still pins before it reaps it and writes the observation: as root
+# the namespace is empty by then, while a non-root fixture's kill reaches its group alone. argv[3] is the job's Popen
+# identity, groups, umask and cwd as JSON (CQ-R10b); the job's environment is this process's own, so a credential
+# travels in no argv or file. On Linux the job, and anything it execs, can never gain privileges (PR_SET_NO_NEW_PRIVS);
+# a guard that cannot set the bit never starts the job.
 # CQ-R11a: a check job's argv[3] also carries its rlimits and network namespace, which this process applies to itself
 # before the Popen, for the job to inherit; a guard that cannot apply them never starts the job either.
 GUARD = '''import json, os, resource, signal, selectors, subprocess, sys
@@ -439,19 +441,31 @@ class Bridge:
             pass
 
 
-def pump(child, out_fd, bridge, wait):
+# The bridge's one selector serves the job's output pipes, the guard's start pipe, the host stream, the agent socket and
+# its connections, and the wakeup pipe until the start pipe and both output pipes are at EOF, so host EOF (74), a host
+# protocol violation (76) and a signal (75) still end a job that has closed its output. The start pipe's EOF means the
+# guard has exited; SIGKILL then reaches the group it still pins, so a lingering process that holds an output pipe dies
+# before pump returns.
+def pump(child, out_fd, bridge, start_end, wait):
     streams = {child.stdout.fileno(): 'stdout', child.stderr.fileno(): 'stderr'}
     with bridge.selector as selector:
-        for fd in streams:
+        for fd in (*streams, start_end):
             selector.register(fd, selectors.EVENT_READ)
-        while any(fd in selector.get_map() for fd in streams):
+        while any(fd in selector.get_map() for fd in (*streams, start_end)):
             for key, mask in wait(selector.select):
-                if key.data:  # the host stream, the agent socket or an agent connection
+                if key.data:  # the host stream, the agent socket, an agent connection or the wakeup pipe
                     key.data(key, mask)
                     continue
                 chunk = os.read(key.fd, OUTPUT_CHUNK_BYTES)
+                if key.fd == start_end and chunk:
+                    raise OSError('the guard wrote past its start byte')  # fail closed: the teardown kills the group
                 if not chunk:
                     selector.unregister(key.fd)
+                    if key.fd == start_end:  # the guard has exited: kill what outlived the job, then drain to EOF
+                        try:
+                            os.killpg(child.pid, signal.SIGKILL)  # the unreaped guard still pins the group id
+                        except GROUP_GONE:
+                            pass
                     continue
                 data = base64.b64encode(chunk).decode('ascii')
                 write_frame(out_fd, {'kind': 'output', 'stream': streams[key.fd], 'data': data})
@@ -517,13 +531,12 @@ def run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, terminati
     try:
         if termination.read(start_end) != b'+':
             return os.EX_OSERR  # the guard could not start the job
-        pump(child, out_fd, bridge, termination.wait)
         try:
-            os.write(life_end, b'0')  # stand down: a normal completion never kills the group
+            os.write(life_end, b'0')  # stand down at once: the guard then exits as soon as the job has
         except BrokenPipeError:
             pass  # a job SIGKILLed its own group, guard included; waitpid still reports the guard's status
-        termination.read(start_end)  # EOF: the guard has exited with the job's status
-        # Both pipes are at EOF and the guard has exited; waitpid is the only source of the exit frame.
+        pump(child, out_fd, bridge, start_end, termination.wait)
+        # The guard has exited, its group is killed and both pipes are at EOF: waitpid alone supplies the exit frame.
         status = reap(child)
         reaped = True
         write_frame(out_fd, exit_observation(status))
@@ -531,7 +544,7 @@ def run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, terminati
     except ProtocolViolation:
         return os.EX_PROTOCOL
     except OSError:
-        return os.EX_IOERR  # a gone host (BrokenPipeError: CPython ignores SIGPIPE) or a failed pipe read
+        return os.EX_IOERR  # a gone host (BrokenPipeError: CPython ignores SIGPIPE), a failed read or stray guard byte
     finally:
         if not reaped:
             # Kill the whole session group while the unreaped guard (its leader) still pins its id, then reap it.
@@ -666,8 +679,9 @@ def write_manifest(path, digest, rows):
 
 # Builds the tree in a root-only staging directory beside workspace and checks it against the header. It then writes the
 # root-only manifest and renames the tree into place for owner (default: the AGENT_IDENTITY account), so no workspace
-# ever exists without its manifest. A handled failure leaves neither and writes no frame. A crash can leave only the
-# 0700 staging tree, and after the manifest that manifest too, so a retry exits 73. mode sets the final root permissions.
+# ever exists without its manifest. A handled failure before that rename leaves neither and writes no frame; after it, a
+# failed write of the materialized frame exits 74 and leaves both in place. A crash can leave only the 0700 staging
+# tree, and after the manifest that manifest too, so a retry exits 73. mode sets the final root permissions.
 def materialize(in_fd, out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, owner=None, mode=0o700):
     if owner is None:
         try:
@@ -1226,7 +1240,7 @@ def run_install(argv, env, spawn, timeout):
             os.close(start)
         if wait_byte(start_end, deadline) == b'+':
             try:
-                os.write(life_end, b'0')  # stand down at once: no output pipes to drain first
+                os.write(life_end, b'0')  # stand down at once, as run_bridge does
             except BrokenPipeError:
                 pass  # the job SIGKILLed its own group, guard included
             exited = wait_byte(start_end, deadline) == b''

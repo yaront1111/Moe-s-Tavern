@@ -248,6 +248,25 @@ const RELAY = "r, w = os.pipe()\nsys.exit(m.relay(['python3', '-I', '-c', *sys.a
 const relay = (child, ...args) => harness(RELAY, child, ...args);
 const b64 = bytes => Buffer.from(bytes).toString('base64');
 const WRITE = 'import base64, os, sys\nos.write(1, base64.b64decode(sys.argv[1]))\nos.write(2, base64.b64decode(sys.argv[2]))\n';
+// A root runner's GUARD unshares a PID namespace, in which a job's os.getpid() and fork() give namespace-local numbers.
+// The job keeps the guest's procfs (it has no mount namespace), and procfs gives the global ones, so every pid the host
+// checks or signals is read there. Off Linux there is no procfs and no PID namespace.
+const GLOBAL_PIDS = process.platform !== 'linux' ? 'import os\ngpid, gfork = os.getpid, os.fork\n' : `import os
+def gpid():
+    return int(os.readlink('/proc/self'))
+def gfork():  # the child hands its parent its global pid
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(r)
+        os.write(w, b'%d' % gpid())
+        os.close(w)
+        return 0
+    os.close(w)
+    pid = int(os.read(r, 32))
+    os.close(r)
+    return pid
+`;
 
 // Every frame must decode within MAX_GUEST_FRAME_BYTES and pass parseGuestFrame: hello, output frames, one exit.
 function session(run) {
@@ -1157,27 +1176,84 @@ test('S10 a SIGKILLed supervisor leaves no process of the job session alive with
     }
   });
 
-test('S11 a normal relay completion never kills the group: a lingering grandchild outlives it', { skip: NO_GUEST, timeout: 30_000 }, async () => {
-  const run = relay(`import os, time
-grandchild = os.fork()
-if grandchild == 0:
-    null = os.open(os.devnull, os.O_RDWR)
-    os.dup2(null, 1)
-    os.dup2(null, 2)
-    time.sleep(30)
-    os._exit(0)
-os.write(1, b'%d' % grandchild)
-`);
-  const { exit, stdout } = session(run);
-  const grandchild = Number(stdout.toString());
+// The pids a job wrote on stdout, from its whole output frames, so a failed run still names what its cleanup kills.
+function reportedPids(stdout) {
   try {
-    assert.deepEqual(exit, EXIT);
-    await sleep(1000);
-    assert.ok(running(grandchild), 'the lingering grandchild was killed');
-  } finally {
-    try { process.kill(grandchild, 'SIGKILL'); } catch { /* already gone */ }
+    const outputs = createFrameDecoder().push(stdout).map(parseGuestFrame).filter(frame => frame.kind === 'output' && frame.stream === 'stdout');
+    return String(Buffer.concat(outputs.map(frame => frame.data))).split(/\s+/).filter(Boolean).map(Number);
+  } catch {
+    return []; // a malformed stream fails the row's own assertions; it recorded no pid to kill
   }
-});
+}
+// S11's job forks a child that lingers past it, holding the output pipes ('open') or not ('closed'), writes both pids
+// on stdout and ends with argv[1]: an exit code or a signal name.
+const LINGER = `${GLOBAL_PIDS}import signal, sys, time
+how, hold = sys.argv[1:3]
+if (child := gfork()) == 0:
+    if hold == 'closed':
+        null = os.open(os.devnull, os.O_RDWR)
+        os.dup2(null, 1)
+        os.dup2(null, 2)
+    time.sleep(600)
+    os._exit(0)
+os.write(1, b'%d %d\\n' % (gpid(), child))
+if how.startswith('SIG'):
+    os.kill(os.getpid(), getattr(signal, how))
+sys.exit(int(how))
+`;
+// The harness runs relay() on stdout. As the observation is written it records, for each pid the job reported, whether
+// that process can run no more: reaped, a zombie, or SIGKILL pending in proc(5)'s ShdPnd (Linux only; null elsewhere).
+const OBSERVE = `import base64, signal, time
+reported, dead = bytearray(), None
+def done(pid):
+    try:
+        status = dict(line.split(':\\t', 1) for line in open('/proc/%d/status' % pid) if ':\\t' in line)
+    except FileNotFoundError:
+        return True
+    return status['State'][0] == 'Z' or bool(int(status['ShdPnd'], 16) & (1 << signal.SIGKILL - 1))
+write = m.write_frame
+def write_frame(fd, value):
+    global dead
+    if value['kind'] == 'output' and value['stream'] == 'stdout':
+        reported.extend(base64.b64decode(value['data']))
+    if value['kind'] == 'observation' and sys.platform == 'linux':
+        dead = [done(int(pid)) for pid in reported.split()]
+    write(fd, value)
+m.write_frame = write_frame
+began = time.monotonic()
+code = m.relay(['python3', '-I', '-c', *sys.argv[2:]], in_fd=os.pipe()[0])
+print(json.dumps({'dead': dead, 'secs': time.monotonic() - began}), file=sys.stderr)
+sys.exit(code)
+`;
+const ENDINGS = [['0', 'exit 0', EXIT], ['7', 'exit 7', { ...EXIT, code: 7 }], ['SIGTERM', 'SIGTERM', { ...EXIT, code: null, signal: 'SIGTERM' }]];
+
+for (const [how, ending, observation] of ENDINGS) {
+  for (const hold of ['open', 'closed']) {
+    const title = `S11 after ${ending}, the job's lingering child that ${hold === 'open' ? 'holds' : 'closed'} the output pipes is killed before the one observation, which keeps the job's own status`;
+    test(title, { skip: NO_GUEST, timeout: 30_000 }, async () => {
+      // An unrelated process of the same uid, in its own session: relay() must leave it running.
+      const sentinel = spawn('python3', ['-I', '-c', 'import time; time.sleep(600)'], { stdio: 'ignore', detached: true });
+      // SIGKILL: relay() would turn a timeout's SIGTERM into a 75 and kill the group itself.
+      const run = spawnSync('python3', ['-I', '-B', '-c', LOAD + OBSERVE, SUPERVISOR, LINGER, how, hold], { maxBuffer: 64 << 20, timeout: 20_000, killSignal: 'SIGKILL' });
+      const pids = reportedPids(run.stdout);
+      try {
+        const { exit } = session(run);
+        const report = JSON.parse(String(run.stderr).trim().split('\n').at(-1));
+        assert.deepEqual(exit, observation);
+        assert.equal(pids.length, 2, String(pids));
+        assert.ok(pids.every(pid => Number.isSafeInteger(pid) && pid > 1), String(pids));
+        if (process.platform === 'linux') assert.deepEqual(report.dead, [true, true], 'a job process could still run when its observation was written');
+        assert.ok(report.secs < 10, `relay() took ${report.secs}s`);
+        assert.ok(running(sentinel.pid), 'relay() killed a process outside the job group');
+        for (let waited = 0; waited < 5000 && pids.some(running); waited += 100) await sleep(100);
+        assert.deepEqual(pids.filter(running), []);
+      } finally {
+        sentinel.kill('SIGKILL');
+        for (const pid of pids) try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+      }
+    });
+  }
+}
 
 test('S12 on every exit path relay() restores SIGTERM, SIGHUP, SIGINT and the wakeup fd, leaks no fd and leaves SIGCHLD at SIG_DFL; its guard is stdlib-only', { skip: NO_GUEST, timeout: 30_000 }, () => {
   // killSignal: this harness keeps a no-op SIGTERM handler, so a default SIGTERM timeout kill would not end it.
@@ -1258,9 +1334,9 @@ while data := os.read(r, 65536):
 print(json.dumps([code, [frame['kind'] for frame in frames], int(base64.b64decode(frames[1]['data']))]))
 `;
 
-test('S15 a termination signal that interrupts no syscall still ends a blocked wait with 75, in pump and in the last start-pipe read', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+test('S15 a termination signal that interrupts no syscall still ends a blocked wait with 75, whether or not the job has closed its output', { skip: NO_GUEST, timeout: 30_000 }, async () => {
   const started = 'import os, time\nos.write(1, b"%d" % os.getpid())\n';
-  const closed = 'null = os.open(os.devnull, os.O_RDWR)\nos.dup2(null, 1)\nos.dup2(null, 2)\n'; // pump ends; the guard waits on
+  const closed = 'null = os.open(os.devnull, os.O_RDWR)\nos.dup2(null, 1)\nos.dup2(null, 2)\n'; // pump waits on the start pipe
   for (const job of [`${started}time.sleep(600)\n`, `${started}${closed}time.sleep(600)\n`]) {
     // SIGKILL: a timeout's SIGTERM would itself wake the hung wait and let the run pass.
     const run = spawnSync('python3', ['-I', '-B', '-c', LOAD + STALLED, SUPERVISOR, job], { timeout: 10_000, killSignal: 'SIGKILL' });
@@ -1276,13 +1352,13 @@ test('S15 a termination signal that interrupts no syscall still ends a blocked w
   }
 });
 
-test('S16 a signal relay() does not handle still reaches the caller handler and never makes its wait spin, in pump and in the last start-pipe read', { skip: NO_GUEST, timeout: 30_000 }, () => {
+test('S16 a signal relay() does not handle still reaches the caller handler and never makes its wait spin, whether or not the job has closed its output', { skip: NO_GUEST, timeout: 30_000 }, () => {
   const run = harness(`import resource, signal
 calls = []
 signal.signal(signal.SIGUSR1, lambda number, frame: calls.append(number))
 cpu = lambda: sum(resource.getrusage(resource.RUSAGE_SELF)[:2])
 send = 'import os, signal, sys, time\\nos.kill(int(sys.argv[1]), signal.SIGUSR1)\\ntime.sleep(1)'
-quiet = 'import os, time\\nnull = os.open(os.devnull, os.O_RDWR)\\nos.dup2(null, 1)\\nos.dup2(null, 2)\\ntime.sleep(0.3)\\n'  # pump ends first
+quiet = 'import os, time\\nnull = os.open(os.devnull, os.O_RDWR)\\nos.dup2(null, 1)\\nos.dup2(null, 2)\\ntime.sleep(0.3)\\n'  # the output closes first
 results = []
 for job in (send, quiet + send):
     before, calls[:] = cpu(), []
@@ -1294,21 +1370,89 @@ print(json.dumps(results))
   assert.deepEqual(JSON.parse(run.stdout), [[0, [constants.signals.SIGUSR1], true], [0, [constants.signals.SIGUSR1], true]]);
 });
 
-// pump stops polling the listener once the job's output closes, so a connection made after that stays queued until
-// the bridge closes; S9's agent can race into the same queue between its connect and the signal.
+// pump polls the listener until the job completes, so this agent connects while the test holds the supervisor stopped,
+// and its connection stays queued until the bridge closes; S9's agent can race into the same queue between its connect
+// and the signal.
 test('S17 a connection the listener still queues when relay() ends reads EOF, never a reset', { skip: NO_GUEST, timeout: 30_000 }, async () => {
   const host = await guarded('import os, time\nos.write(1, b"%d" % os.getpid())\nnull = os.open(os.devnull, os.O_RDWR)\nos.dup2(null, 1)\nos.dup2(null, 2)\ntime.sleep(600)\n');
   try {
-    await sleep(500); // the job has closed its output, so pump has ended
+    host.proc.kill('SIGSTOP'); // the supervisor this test started
+    await until(() => process.platform !== 'linux' || procState(host.proc.pid)?.[0] === 'T', 'supervisor stopped');
     const agent = connect(host.socket);
     await once(agent, 'connect');
     const closed = once(agent, 'close'); // rejects on ECONNRESET, the reset of a connection never accepted
-    host.proc.kill('SIGTERM');
+    host.proc.kill('SIGTERM'); // pending until SIGCONT, which resumes relay() straight into that signal
+    host.proc.kill('SIGCONT');
     assert.deepEqual(await host.exited, [EX_TERMINATED, null]);
     await closed;
   } finally {
     try { process.kill(host.child, 'SIGKILL'); } catch { /* already gone */ }
   }
+});
+
+// S18's job writes its pid, closes both output pipes and keeps running. Its open of the FIFO at argv[1] returns only once
+// the host opens it too, so that rendezvous is the closed-output handshake.
+const QUIET_JOB = `${GLOBAL_PIDS}import sys, time
+os.write(1, b'%d\\n' % gpid())
+null = os.open(os.devnull, os.O_RDWR)
+os.dup2(null, 1)
+os.dup2(null, 2)
+os.close(os.open(sys.argv[1], os.O_WRONLY))
+time.sleep(600)
+`;
+// The host is a harness thread. After the handshake, and a settle in which relay() meets both output EOFs, it ends the
+// host stream ('eof'), writes a malformed frame on it ('malformed') or signals this process (a signal name).
+const QUIET_HOST = `import signal, threading, time
+fifo, act = sys.argv[2:4]
+os.mkfifo(fifo, 0o600)
+r, w = os.pipe()
+acted = []
+def host():
+    os.close(os.open(fifo, os.O_RDONLY))
+    time.sleep(0.5)
+    acted.append(time.monotonic())
+    if act == 'eof':
+        os.close(w)
+    elif act == 'malformed':
+        os.write(w, bytes([0, 0, 0, 1]) + b'x')
+    else:
+        os.kill(os.getpid(), getattr(signal, act))
+threading.Thread(target=host, daemon=True).start()
+code = m.relay(['python3', '-I', '-c', sys.argv[4], fifo], in_fd=r)
+print(json.dumps([code, time.monotonic() - acted[0]]), file=sys.stderr)
+`;
+
+for (const [act, event, code] of [['eof', 'host EOF', 74], ['malformed', 'a malformed host frame', 76], ['SIGTERM', 'SIGTERM', EX_TERMINATED]]) {
+  test(`S18 ${event} while a job that closed both output pipes still runs ends relay() promptly with ${code}, no observation and the job killed`, { skip: NO_GUEST, timeout: 30_000 }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'moe-quiet-'));
+    // SIGKILL: relay() would turn a timeout's SIGTERM into a 75 and kill the group itself.
+    const run = spawnSync('python3', ['-I', '-B', '-c', LOAD + QUIET_HOST, SUPERVISOR, join(dir, 'closed'), act, QUIET_JOB], { timeout: 20_000, killSignal: 'SIGKILL' });
+    const pids = reportedPids(run.stdout);
+    try {
+      assert.equal(run.status, 0, String(run.error ?? run.stderr));
+      const [relayed, secs] = JSON.parse(String(run.stderr).trim().split('\n').at(-1));
+      const decoder = createFrameDecoder();
+      assert.deepEqual([relayed, decoder.push(run.stdout).map(parseGuestFrame).map(frame => frame.kind)], [code, ['hello', 'output']]);
+      decoder.end();
+      assert.ok(secs < 5, `relay() ended ${secs}s after the host acted`);
+      assert.equal(pids.length, 1, String(pids));
+      for (let waited = 0; waited < 5000 && pids.some(running); waited += 100) await sleep(100);
+      assert.deepEqual(pids.filter(running), [], 'the job outlived relay()');
+    } finally {
+      for (const pid of pids) try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test('S19 a guard byte after the start byte fails relay() closed: 74 and no observation', { skip: NO_GUEST, timeout: 90_000 }, () => {
+  const run = harness(`old = "os.write(start, b'+')"
+assert m.GUARD.count(old) == 1, old
+m.GUARD = m.GUARD.replace(old, "os.write(start, b'++')")
+${RELAY}`, 'import time\ntime.sleep(600)\n');
+  const decoder = createFrameDecoder();
+  assert.deepEqual([run.status, decoder.push(run.stdout).map(parseGuestFrame)], [74, [HELLO]], String(run.error ?? run.stderr));
+  decoder.end();
 });
 
 // CQ-R10b: a root bridge reads one job frame from stdin before hello, then runs that agent CLI as the agent identity.
