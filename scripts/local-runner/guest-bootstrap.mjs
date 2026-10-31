@@ -112,6 +112,10 @@ function readAsset(name) {
  * Multipass seeds, neither name maps to a device anyway (DataSource.device_name_to_device returns None). As user-data
  * the list also outranks any vendor or system mounts. 26.1's schema refuses `mounts: []` (minItems 1), and that
  * warning ends boot "degraded done", which readiness reports as BOOTSTRAP_FAILED.
+ * no_ssh_fingerprints: true makes cloud-init 26.1's modules-final ssh_authkey_fingerprints return before it reads any
+ * user. Otherwise its handle calls ssh_util.extract_authorized_keys for every entry in users, which writes a missing
+ * ~/.ssh/authorized_keys as an empty 0600 file, and readiness's keys:<id> existence probe refuses that file on a job
+ * identity as IDENTITY_LOGIN_ENABLED. The module only logs key fingerprints to the console; Moe reads none of it.
  */
 export function buildUserData(input) {
   const { supervisor, credential } = input ?? {};
@@ -121,7 +125,7 @@ export function buildUserData(input) {
   const shim = readAsset('guest-mcp-shim.py');
   const shimTools = readAsset('guest-mcp-tools.json');
   const lines = [
-    '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'mounts: [[ephemeral0], [swap]]', 'users:', '  - default',
+    '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'no_ssh_fingerprints: true', 'mounts: [[ephemeral0], [swap]]', 'users:', '  - default',
     ...JOB_IDENTITIES.flatMap(name => [`  - name: ${name}`, '    lock_passwd: true', '    shell: /bin/bash']),
     'write_files:',
     ...writeFile(GUEST_LAYOUT.supervisor, '0500', supervisor),

@@ -18,33 +18,50 @@
     {
       "stepId": "step-1",
       "description": "TDD in this order: tests first, then the one-line fix. Read mem:decision-guest-cloud-config-mounts first (WSL cloud-init 26.1 offline schema recipe, user-data precedence over vendor/system config, and the rule for every guest user-data edit). Edit both files only with the Edit/Write tools: scripts/tests/local-runner.test.mjs is a contested path, and a shell write (sed -i, heredoc) leaves no TOOL witness. Do NOT touch scripts/local-runner/guest-readiness.mjs (keys:<id> stays `sudo -n test -e`, so an existing, even empty, authorized_keys stays IDENTITY_LOGIN_ENABLED), scripts/local-runner/guest-supervisor.py (R13's sha256 pin), UD1, or any readiness row (the 'authorized keys' row mapping keys:<id> exit 0 to IDENTITY_LOGIN_ENABLED stays as is).\n\n(a) scripts/tests/local-runner.test.mjs, CQ-R07 section.\n1. In test 'buildUserData renders deterministic cloud-config with a protected supervisor and locked identities', insert 'no_ssh_fingerprints: true' between 'disable_root: true' and 'mounts: [[ephemeral0], [swap]]' in `expected` (the user-data pin). Nothing else in that test changes.\n2. Directly after UD1, add this constant and test. The architect prototyped it under env -i with Node v24.21.0 and WSL cloud-init 26.1: 1 pass, 0 skipped with the fix; exit 1 against today's module (actual ['moe-agent','moe-check','ubuntu'], expected []).\n\n// cloud-init 26.1's modules-final ssh_authkey_fingerprints calls ssh_util.extract_authorized_keys for every user, and that\n// writes a missing ~/.ssh/authorized_keys as an empty 0600 file, which readiness's keys:<id> probe refuses (IDENTITY_LOGIN_ENABLED).\n// The stub runs the module's own handle on a cloud-config from stdin and prints the sorted users whose key file it would open.\nconst FINGERPRINT_STUB = `import json, sys\nfrom unittest import mock\nfrom cloudinit import ssh_util, util\nfrom cloudinit.config import cc_ssh_authkey_fingerprints as module\nclass Distro:\n    def get_default_user(self): return {'name': 'ubuntu'}\nclass Cloud:\n    distro = Distro()\nopened = []\ndef extract(user, *args, **kwargs):\n    opened.append(user)\n    return ('', [])\ncfg = util.load_yaml(sys.stdin.read())\nwith mock.patch.object(ssh_util, 'extract_authorized_keys', extract), mock.patch.object(module, '_pprint_key_entries', lambda *args, **kwargs: None):\n    module.handle('ssh_authkey_fingerprints', cfg, Cloud(), [])\nsys.stdout.write(json.dumps(sorted(opened)))\n`;\ntest('UD2 cloud-init 26.1 ssh_authkey_fingerprints opens no authorized_keys under the emitted cloud-config; without no_ssh_fingerprints it opens one per user', t => {\n  const env = { PATH: '/usr/bin:/bin' };\n  const version = process.platform === 'linux' && existsSync(CLOUD_INIT) ? spawnSync(CLOUD_INIT, ['--version'], { encoding: 'utf8', timeout: 60_000, env }).stdout : null;\n  if (!/^\\S+ 26\\.1-/.test(version ?? '')) return t.skip(`needs ${CLOUD_INIT} 26.1, found ${JSON.stringify(version?.trim() ?? null)}`);\n  const opened = userData => {\n    const result = spawnSync('/usr/bin/python3', ['-I', '-B', '-c', FINGERPRINT_STUB], { input: userData, encoding: 'utf8', timeout: 60_000, env });\n    assert.equal(result.error, undefined, String(result.error));\n    assert.equal(result.status, 0, result.stderr);\n    return JSON.parse(result.stdout);\n  };\n  assert.deepEqual(opened(BOOTSTRAP.userData), []);\n  const old = BOOTSTRAP.userData.replace('\\nno_ssh_fingerprints: true\\n', '\\n');\n  assert.notEqual(old, BOOTSTRAP.userData);\n  assert.deepEqual(opened(old), ['moe-agent', 'moe-check', 'ubuntu']);\n});\n\nDesign: the stub runs cloud-init's OWN cc_ssh_authkey_fingerprints.handle on the emitted cloud-config through /usr/bin/python3 -I -B (the interpreter /usr/bin/cloud-init names; -I still sees system dist-packages). ssh_util.extract_authorized_keys, whose check_create_path writes a missing authorized_keys as an empty 0600 file, is recorded instead of run, and _pprint_key_entries is silenced because it writes to /dev/console or stdout and would corrupt the JSON. Error handling: a missing interpreter, a renamed cloud-init symbol (mock.patch.object raises AttributeError) or a YAML error exits non-zero and fails the result.error/status asserts, never a silent pass. The positive control (the variant without the key opens exactly moe-agent, moe-check and ubuntu) proves the stub reaches the module; assert.notEqual proves the variant differs. UD2 skips exactly where UD1 skips. CLOUD_INIT, BOOTSTRAP, existsSync and spawnSync are already in scope.\n3. Run `node --test --test-name-pattern='^(UD1|UD2|buildUserData renders)' scripts/tests/local-runner.test.mjs` in /mnt/d/projexts/moes (a focused iteration run; it builds nothing) and confirm UD2 and the pin test FAIL on the unchanged module.\n\n(b) scripts/local-runner/guest-bootstrap.mjs, buildUserData: add 'no_ssh_fingerprints: true' to `lines` right after 'disable_root: true'; no other line changes. Append the why to the JSDoc above buildUserData (DoD 2), for example:\n * no_ssh_fingerprints: true makes cloud-init 26.1's modules-final ssh_authkey_fingerprints return before it reads any\n * user. Otherwise its handle calls ssh_util.extract_authorized_keys for every entry in users, which writes a missing\n * ~/.ssh/authorized_keys as an empty 0600 file, and readiness's keys:<id> existence probe refuses that file on a job\n * identity as IDENTITY_LOGIN_ENABLED. The module only logs key fingerprints to the console; Moe reads none of it.\nRe-run the focused command: UD1 (its mounts replace still matches), UD2 and the pin test pass, and UD2 is reported passed, not skipped.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs",
         "scripts/local-runner/guest-bootstrap.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/guest-bootstrap.mjs"
+      ],
+      "note": "RED on unchanged module: pin test failed (missing line) and UD2 failed (actual [moe-agent,moe-check,ubuntu] vs []). After fix: UD1, UD2, pin test pass (UD2 not skipped). Edits via Edit tool only.",
+      "startedAt": "2026-10-31T21:50:02.991Z",
+      "completedAt": "2026-10-31T21:50:30.969Z"
     },
     {
       "stepId": "step-2",
       "description": "Verification gate. Edits nothing: fix any finding in step 1's files, then re-run all of this. Read mem:gotcha-local-runner-qa-archive-inputs (why the snapshot is the full `git archive HEAD`, never `scripts` alone). Use a 600000 ms Bash timeout. Run each command fresh and paste it with its output into complete_step and the complete_task summary.\n(1) Scope: `git -C /mnt/d/projexts/moes diff --quiet HEAD -- scripts/local-runner/guest-readiness.mjs scripts/local-runner/guest-supervisor.py && echo unchanged` must print unchanged, and `git -C /mnt/d/projexts/moes diff HEAD -- scripts/local-runner/guest-bootstrap.mjs scripts/tests/local-runner.test.mjs` must hold only this task's hunks (name any foreign hunk in the step note; never revert it).\n(2) DoD 1 evidence. Emit user-data from the REAL guest-supervisor.py and a random 32-byte credential, then validate it. The file holds that throwaway credential: the command deletes it, and its content is never pasted.\nD=$(mktemp -d \"${TMPDIR:-/tmp}/moe-77b0-ud-XXXXXX\") && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --input-type=module -e \"import { randomBytes } from 'node:crypto'; import { readFileSync, writeFileSync } from 'node:fs'; const { buildUserData } = await import('/mnt/d/projexts/moes/scripts/local-runner/guest-bootstrap.mjs'); writeFileSync(process.argv[1], buildUserData({ supervisor: readFileSync('/mnt/d/projexts/moes/scripts/local-runner/guest-supervisor.py'), credential: randomBytes(32) }).userData, { mode: 0o600 })\" \"$D/user-data.yaml\" && /usr/bin/cloud-init --version && env -i PATH=/usr/bin:/bin /usr/bin/cloud-init schema -c \"$D/user-data.yaml\"; rc=$?; rm -rf -- \"$D\"; echo \"exit=$rc\"\nExpect `/usr/bin/cloud-init 26.1-0ubuntu1~24.04.1`, stdout exactly `Valid schema <file>`, exit=0, and no `Cloud config schema deprecations` line. The stderr `datasource not detected` WARNING is WSL noise.\n(3) DoD 3 RED proof: the new tests against the pre-fix module from fbece197, the last commit that touched it. It is pinned by sha so that a peer checkpoint carrying this edit into HEAD cannot hide the failure.\nR=$(mktemp -d \"${TMPDIR:-/tmp}/moe-77b0-red-XXXXXX\") && (git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$R\" && cd /mnt/d/projexts/moes && cp --parents scripts/tests/local-runner.test.mjs \"$R\" && git show fbece19715bd347091944988c135ed41f02e963b:scripts/local-runner/guest-bootstrap.mjs > \"$R/scripts/local-runner/guest-bootstrap.mjs\" && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test --test-name-pattern='^(UD2|buildUserData renders)' scripts/tests/local-runner.test.mjs); rc=$?; rm -rf -- \"$R\"; echo \"exit=$rc\"\nExpect exit=1, with UD2 failing on actual ['moe-agent','moe-check','ubuntu'] vs expected [] and the pin test failing on the missing line.\n(4) THE GATE, the exact verification command for complete_task (DoD 4: the supervisor sha pin, then the whole local-runner suite in a git-archive snapshot under env -i with the pinned Node v24.21.0, never in place):\nS=$(mktemp -d \"${TMPDIR:-/tmp}/moe-77b0-XXXXXX\") && (git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && cd /mnt/d/projexts/moes && cp --parents scripts/local-runner/guest-bootstrap.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && echo '3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190  scripts/local-runner/guest-supervisor.py' | sha256sum -c - && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs); rc=$?; rm -rf -- \"$S\"; (exit $rc)\nIt must exit 0, print `scripts/local-runner/guest-supervisor.py: OK`, and report UD1 and UD2 passed, not skipped. Record the pass/fail/skipped counts and name every skip; only pre-existing platform skips are acceptable. This seat never runs Multipass (task rail): the governor re-runs the real-guest certify after this lands.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs",
         "scripts/local-runner/guest-bootstrap.mjs"
-      ]
+      ],
+      "note": "(1) readiness+supervisor diff vs HEAD: unchanged; diff holds only my hunks (+42/-2 across the 2 files). (2) cloud-init schema -c on user-data from real supervisor + random 32-byte credential: /usr/bin/cloud-init 26.1-0ubuntu1~24.04.1; stdout `Valid schema <file>`; exit=0 (file deleted). (3) RED vs fbece197 bootstrap: tests 2, pass 0, fail 2 (pin test; UD2 actual ['moe-agent','moe-check','ubuntu'] expected []). (4) gate snapshot: supervisor sha OK; 356 tests, 355 pass, 0 fail, 1 skipped (opt-in macOS native smoke); UD1 and UD2 passed, not skipped.",
+      "startedAt": "2026-10-31T21:50:33.591Z",
+      "completedAt": "2026-10-31T21:52:15.745Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review: load the adversarial-self-review skill and read only this task's diff as an attacker. Check: (a) for the same inputs, buildUserData's output differs from fbece197's by exactly one added line, `no_ssh_fingerprints: true`, and the supervisor, shim and tools digests are unchanged; (b) guest-readiness.mjs and guest-supervisor.py are byte-unchanged, and the test diff is only the pin line plus the FINGERPRINT_STUB/UD2 block, with UD1 and every readiness row unedited; (c) UD2 cannot pass vacuously: the positive control and the notEqual guard are present, and step 2's RED run showed it failing on the old module; (d) error handling: UD2 fails loudly on a missing interpreter or a changed cloud-init API instead of skipping, and it skips only where UD1 does; (e) a vendor or system `no_ssh_fingerprints: false` cannot override the user-data value (user-data is read first; see mem:decision-guest-cloud-config-mounts); (f) no credential or user-data content is in any evidence, every scratch dir was removed by its exact path, and no process was killed by name. Fix findings in place, re-run step 2's gate if any byte changed, and report both modified paths in complete_step.modifiedFiles.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs",
         "scripts/local-runner/guest-bootstrap.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/guest-bootstrap.mjs"
+      ],
+      "note": "Self-review: (a) buildUserData diff is one added line plus JSDoc; digests unchanged. (b) readiness/supervisor untouched; test diff = pin line + FINGERPRINT_STUB/UD2; UD1 and readiness rows unedited. (c) UD2 has positive control + notEqual guard and failed RED on fbece197. (d) UD2 fails loudly on interpreter/API errors, skips only where UD1 skips. (e) user-data precedes vendor/system config. (f) no credential content in evidence; scratch dirs removed by exact path; no process killed. No findings, no byte changed after the gate.",
+      "startedAt": "2026-10-31T21:52:18.507Z",
+      "completedAt": "2026-10-31T21:53:51.602Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -60,20 +77,26 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T20:56:44.213Z",
-  "updatedAt": "2026-10-31T21:12:42.449Z",
+  "updatedAt": "2026-10-31T21:54:01.676Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T20:57:16.938Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
-    "architect-b742aab1"
+    "architect-b742aab1",
+    "worker-4bc1a1b5"
   ],
   "tier": "light",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T21:11:53.239Z",
   "executionContract": {
@@ -150,7 +173,8 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-77b0637fbe0043da988ea8206e5aaadb.json"
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-bootstrap.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -158,5 +182,15 @@
     "kind": "checkpoint",
     "sessionId": "architect-b742aab1@2026-10-31T20:57:20Z",
     "at": "2026-10-31T21:12:42.449Z"
-  }
+  },
+  "workStartedAt": "2026-10-31T21:50:02.991Z",
+  "reviewStartedAt": "2026-10-31T21:54:01.674Z",
+  "verification": {
+    "command": "S=$(mktemp -d \"${TMPDIR:-/tmp}/moe-77b0-XXXXXX\") && (git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && cd /mnt/d/projexts/moes && cp --parents scripts/local-runner/guest-bootstrap.mjs scripts/tests/local-runner.test.mjs \"$S\" && cd \"$S\" && echo '3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190  scripts/local-runner/guest-supervisor.py' | sha256sum -c - && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs); rc=$?; rm -rf -- \"$S\"; (exit $rc)",
+    "exitCode": 0,
+    "outputTail": "scripts/local-runner/guest-supervisor.py: OK\nℹ tests 356\nℹ suites 0\nℹ pass 355\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0",
+    "reportedAt": "2026-10-31T21:54:01.674Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "buildUserData now emits `no_ssh_fingerprints: true` after `disable_root: true`, so cloud-init 26.1's ssh_authkey_fingerprints returns before extract_authorized_keys can create empty authorized_keys for moe-agent/moe-check (fixes IDENTITY_LOGIN_ENABLED on clean boots). JSDoc explains why. Tests: the buildUserData pin has the new line; new UD2 runs cloud-init's own handle in a python stub, with a positive control (without the key it opens moe-agent, moe-check, ubuntu) and a notEqual guard. RED vs fbece197: pin test and UD2 fail. Evidence: `cloud-init schema -c` (26.1-0ubuntu1~24.04.1) on user-data from the real supervisor => `Valid schema <file>`, exit 0. guest-readiness.mjs and guest-supervisor.py are unchanged (sha 3a19f3bf OK); UD1 and the readiness rows are unedited. Gate in a git-archive snapshot under env -i, Node v24.21.0: 356 tests, 355 pass, 0 fail, 1 skipped (opt-in macOS native smoke); UD1 and UD2 passed, not skipped. No Multipass was run; the real-guest proof stays the governor's R13 certify re-run."
 }

@@ -1121,7 +1121,7 @@ test('verifySourceImage accepts only the installed manifest pin for the requeste
 test('buildUserData renders deterministic cloud-config with a protected supervisor and locked identities', () => {
   const [shim, tools] = ['guest-mcp-shim.py', 'guest-mcp-tools.json'].map(name => readFileSync(new URL(`../local-runner/${name}`, import.meta.url)));
   const expected = [
-    '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'mounts: [[ephemeral0], [swap]]', 'users:', '  - default',
+    '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'no_ssh_fingerprints: true', 'mounts: [[ephemeral0], [swap]]', 'users:', '  - default',
     '  - name: moe-agent', '    lock_passwd: true', '    shell: /bin/bash',
     '  - name: moe-check', '    lock_passwd: true', '    shell: /bin/bash',
     'write_files:',
@@ -1178,6 +1178,42 @@ test('UD1 the emitted cloud-config passes cloud-init 26.1 schema validation with
   const refused = schema('old.yaml', old);
   assert.deepEqual([refused.status, refused.stdout], [1, `Invalid user-data ${refused.file}\n`], refused.stderr);
   assert.match(refused.stderr, /Cloud config schema errors: mounts: \[\] is too short/);
+});
+
+// cloud-init 26.1's modules-final ssh_authkey_fingerprints calls ssh_util.extract_authorized_keys for every user, and that
+// writes a missing ~/.ssh/authorized_keys as an empty 0600 file, which readiness's keys:<id> probe refuses (IDENTITY_LOGIN_ENABLED).
+// The stub runs the module's own handle on a cloud-config from stdin and prints the sorted users whose key file it would open.
+const FINGERPRINT_STUB = `import json, sys
+from unittest import mock
+from cloudinit import ssh_util, util
+from cloudinit.config import cc_ssh_authkey_fingerprints as module
+class Distro:
+    def get_default_user(self): return {'name': 'ubuntu'}
+class Cloud:
+    distro = Distro()
+opened = []
+def extract(user, *args, **kwargs):
+    opened.append(user)
+    return ('', [])
+cfg = util.load_yaml(sys.stdin.read())
+with mock.patch.object(ssh_util, 'extract_authorized_keys', extract), mock.patch.object(module, '_pprint_key_entries', lambda *args, **kwargs: None):
+    module.handle('ssh_authkey_fingerprints', cfg, Cloud(), [])
+sys.stdout.write(json.dumps(sorted(opened)))
+`;
+test('UD2 cloud-init 26.1 ssh_authkey_fingerprints opens no authorized_keys under the emitted cloud-config; without no_ssh_fingerprints it opens one per user', t => {
+  const env = { PATH: '/usr/bin:/bin' };
+  const version = process.platform === 'linux' && existsSync(CLOUD_INIT) ? spawnSync(CLOUD_INIT, ['--version'], { encoding: 'utf8', timeout: 60_000, env }).stdout : null;
+  if (!/^\S+ 26\.1-/.test(version ?? '')) return t.skip(`needs ${CLOUD_INIT} 26.1, found ${JSON.stringify(version?.trim() ?? null)}`);
+  const opened = userData => {
+    const result = spawnSync('/usr/bin/python3', ['-I', '-B', '-c', FINGERPRINT_STUB], { input: userData, encoding: 'utf8', timeout: 60_000, env });
+    assert.equal(result.error, undefined, String(result.error));
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  assert.deepEqual(opened(BOOTSTRAP.userData), []);
+  const old = BOOTSTRAP.userData.replace('\nno_ssh_fingerprints: true\n', '\n');
+  assert.notEqual(old, BOOTSTRAP.userData);
+  assert.deepEqual(opened(old), ['moe-agent', 'moe-check', 'ubuntu']);
 });
 
 test('guest layout, identities and resource bounds are frozen constants shared with the launchers', () => {
