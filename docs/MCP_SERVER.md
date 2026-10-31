@@ -998,6 +998,7 @@ Any other argument, `runnerId`, `source` and `treeSha` included, is refused by n
 - An owed check is either of these:
   - an approved protected definition (`executionContract.requiredChecks`, while its approved snapshot is bound to the current definitions), matched by exact `checkId` and trimmed `command`;
   - the owed `qualityGate`, with no `checkId`, unless a definition already runs it.
+- The local runner (`scripts/local-runner/check-dispatch.mjs`) gives a check an offline npm dependency phase only from its approved definition: each `configs` entry that is exactly `package-lock.json`, or ends in `/package-lock.json`, adds that directory (`.` for the root). A directory in `configs` never adds one and no other lockfile is installed, so a definition naming no lockfile runs without `node_modules`. An owed `qualityGate` with no required check of the same command stops the dispatch before any VM with `RUNNER_DEPENDENCIES_UNDECLARED`: declare the gate's command as a required check, listing its lockfiles or none.
 - The `environment` must be listed in `settings.checkEnvironments`. That list is set in `.moe/project.json` only, and is read live. Absent approves none. A malformed list is `INVALID_INPUT` (`context.field` `checkEnvironments`).
 - Admission runs in the same tool call as the write, after the argument-name check, and writes nothing when it refuses.
 - An identical replay of an already-recorded dispatch `id` skips admission and is answered by the store's replay rules, even after its environment was revoked.

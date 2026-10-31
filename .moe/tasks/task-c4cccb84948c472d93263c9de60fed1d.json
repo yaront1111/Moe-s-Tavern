@@ -151,7 +151,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:50:02.706Z",
-  "updatedAt": "2026-10-31T05:32:58.881Z",
+  "updatedAt": "2026-10-31T05:33:38.806Z",
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-10-30T13:38:54.610Z",
@@ -267,7 +267,13 @@
     ".moe/tasks/task-28dfaeff2d5146958a8529d9d281e9e4.json",
     ".moe/tasks/task-5d5175717f704c708bc5e7f76b45129f.json",
     ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
-    ".moe/tasks/task-faa4d9ef330f4ef7900a00bd2b7dc049.json"
+    ".moe/tasks/task-faa4d9ef330f4ef7900a00bd2b7dc049.json",
+    ".moe/tasks/task-12e89395b0dd4b34a2e0c50dd7dfa776.json",
+    ".moe/tasks/task-42e9990c286a43fcab7edd716290a515.json",
+    ".moe/tasks/task-4e8a274ab9954c9d9c2ac29e22a67256.json",
+    ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json",
+    ".moe/tasks/task-92307adc30884fc4861348ed3c8ead4a.json",
+    ".moe/tasks/task-97341ad5be744d19ac869972299a2714.json"
   ],
   "completionSummary": "WT-05: in worktree mode every CLI now launches against the task worktree W with per-W configs. MOE_PROJECT_PATH stays the control checkout.\n- sh (scripts/moe-agent.sh):\n  - The codex, gemini, grok and .mcp.json writers are now ROOT-parameterised functions (write_*_config / write_project_mcp_json), with `|| return 1` on each mkdir and python write.\n  - prepare_worktree_launch sets CLI_ROOT=W and exports MOE_WORKTREE_PATH, MOE_TASK_BRANCH and MOE_LAND_TARGET. It writes W/.mcp.json plus the CLI's config (grok also trusts W) and copies .moe/agents/*.md into W/.claude/agents. Any failure goes to worktree_stop MOE_WORKTREE_CREATE_FAILED, with no fallback to the control.\n  - Every launch site uses ${CLI_ROOT:-$PROJECT}: claude cd and --mcp-config; codex -C, the instructions file and the override path; gemini/grok cd and --cwd. The trust helper gets W as launchDir.\n- ps1 (scripts/moe-agent.ps1), the twin:\n  - Write-Moe{Codex,Gemini,Grok}Config -Root and Initialize-MoeWorktreeLaunch; $script:cliRoot is used at every site.\n  - In worktree mode, Push-Location W runs before the account lease. Pop happens once: post-flight, the loop top, or the outer finally.\n  - Claude keeps its temp --mcp-config. BOM kept, ParseFile reports 0 errors on PS 5.1 and 7.\n- Shared mode produces the same output as HEAD.\n- Tests:\n  - postflight-worktree.cjs gains launch-claude/codex/gemini/grok (cwd W, -C/--cwd W, env, configs naming the control, agents byte-equal, grok trust for W, no W/.moe) and config-fail (MOE_WORKTREE_CREATE_FAILED, no CLI).\n  - These were RED on HEAD in both sh and ps1, and are now GREEN: sh 17/17, ps1 18/18, plus both postflight-safe harnesses.\n  - prompt-cache-launcher anchors and preambles are updated.\n- Net +175 LOC.\n- Filed task-5d517571: on Windows node, 14 taskless-handoff tests already fail at HEAD because of WT-04's unstubbed Initialize-MoeWorktree.",
   "commits": [
@@ -293,6 +299,27 @@
       "treeId": "4bd20e8174b5d45dd1281b5464f51c4cb986cd22",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "0912053364e43c5d46b3aab444093f4e390f7f3d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-31T05:10:03Z",
+      "paths": [
+        ".moe/tasks/task-12e89395b0dd4b34a2e0c50dd7dfa776.json",
+        ".moe/tasks/task-42e9990c286a43fcab7edd716290a515.json",
+        ".moe/tasks/task-4e8a274ab9954c9d9c2ac29e22a67256.json",
+        ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json",
+        ".moe/tasks/task-92307adc30884fc4861348ed3c8ead4a.json",
+        ".moe/tasks/task-97341ad5be744d19ac869972299a2714.json",
+        ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-31T05:33:38.806Z",
+      "treeId": "0125411ec1724613187656bd5037a9b1a3fbe70c",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -302,9 +329,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-632cd3f0@2026-10-31T03:42:17Z",
-    "at": "2026-10-31T05:09:45.856Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-31T05:10:03Z",
+    "at": "2026-10-31T05:33:38.806Z"
   },
   "completedAt": "2026-10-31T05:32:58.881Z",
   "reviewCompletedAt": "2026-10-31T05:32:58.881Z",

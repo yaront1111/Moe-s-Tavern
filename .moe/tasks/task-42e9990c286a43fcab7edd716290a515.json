@@ -8,9 +8,52 @@
     "A toolchain, cache or VM fault in the same phase stays infra-failure; tests cover both through check-session and the daemon's repair policy."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test first on the landed 5ed445ca manifest guard and a80f46db host exit-code contract; keep both dependencies. Only three write paths in this plan; check-session.mjs/check-evidence.mjs are the prerequisite's responsibility, and local-runner.test.mjs/CERTIFICATION.md remain CQ-R13-owned. Extend INSTALL/installRun/refusedInstall and KI cases: candidate missing/nonregular package.json, malformed candidate JSON, changed dependency spec/root metadata, overrides/bundle controls, and planted npm-shrinkwrap.json or .npmrc must end with the new supervisor code 82, no stdout frames, no relay, no npm started, no installed bytes. Include valid-first/invalid-second directory and preserve zero installs. Split existing refusedInstall expectations by cause rather than globally changing 81 to 82. Malformed dependency directory list, missing/malformed protected lock/root, toolchain exec/start failures, timeout, offline-cache failure and unknown nonzero npm exit must retain existing infrastructure outcomes, especially exit 81. Protected blob mismatch 79 and reown failures keep their established earlier-phase behavior. Valid install and absent dependency manifest remain unchanged. The new rows must initially fail because the supervisor still collapses all dependency refusals to 81. Retain all previous byte-preservation, no-follow, offline/ignore-scripts/workspaces and cleanup assertions.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Separate positively identified candidate refusals from environmental failures without parsing npm stderr or fabricating a check-job observation. Add the host prerequisite's exact constant DEPENDENCIES_CANDIDATE_INVALID = 82 beside DEPENDENCIES_FAILED = 81. Use a small dedicated exception type for candidate validation, distinct from ValueError/OSError and never carrying candidate data. Keep install_dependencies' boolean success/infra result for existing callers; its candidate-specific checks raise only the dedicated exception. At check_job's dependency call:\n```py\ntry:\n    if os.path.lexists(dependencies_manifest) and not install_dependencies(\n            workspace, dependencies, toolchain, env, spawn, install_timeout):\n        return DEPENDENCIES_FAILED\nexcept CandidateDependencyInvalid:\n    return DEPENDENCIES_CANDIDATE_INVALID\n```\nCandidateDependencyInvalid is NEW; choose this exact local class name and define it before the installer. Reuse 5ed445ca's manifest reader/comparison: distinguish reading/validating the protected lock and dependency-list/cache inputs (infra) from invalid candidate package metadata (candidate). Candidate package absent/not regular, invalid UTF8/JSON/shape/size, mismatch against valid approved root or forbidden overrides/bundling, and existing shrinkwrap/.npmrc guards are candidate causes. Unexpected OSError, access failure, corrupted approved lock, cache metadata, and all unclassified run_install failures stay infra. Error handling: distinguish ENOENT for the candidate manifest from I/O errors; never turn a generic exception or all False returns into code-failure. Preserve all-directories preflight, close fds, existing timeout/signal/GUARD cleanup, no-follow reads, no raw path/content logging and no-manifest behavior. No network or npm-output heuristic. No check command or relay starts on 82, and no hello/output/observation frame is emitted. Update supervisor's exit-code comments to explain 81 versus 82. C2 must now pin both Python and JS constants. Keep patch small and table-driven; no repair-policy production change.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Prove the outcome through the real producer and consumers. In local-runner-check.test.mjs reuse C7's SESSION_HARNESS/PY_LOAD/provider-spawn pattern, with INSTALL fixtures and real supervisor main/check_job. Let actual runCheckSession consume the Python child's clean no-frame exit. Table-drive candidate metadata refusal => exactly {outcome:'code-failure', exitCode:82, signal:null, outputTail:<the fixed host diagnostic>}; missing toolchain/cache error/unknown npm exit => infra-failure, never candidate; timeout retains its existing timeout/infra distinction. Assert zero check-command marker and no npm installation on rejected metadata. Plant CR/LF, ANSI, secrets and long/unicode strings in candidate fields/stderr and assert outputTail is the same host-owned ASCII literal, <=512 UTF8 bytes, with none of those inputs. Track only owned child PIDs, clean them and temp dirs, require Linux/WSL execution rather than a skipped native-Windows row.\n\nIn packages/moe-daemon/src/delivery/repairPolicy.test.ts import runCheckSession from '../../../../scripts/local-runner/check-session.mjs' (test-only, never production import). Use an EventEmitter child plus Writable stdin and PassThrough stdout/stderr, following the scripts test's checkProvider event order: write callback completes, stdout ends, then close 82 or 81. Pass the resulting outcome/nonzero exitCode/outputTail into the existing run()/decide()/cands() helpers; use the runner convention exitCode ?? 1 only for an infra result with no observed code. Assert the candidate result produces action:'repair', not retry-infra, with the bounded nonempty diagnostic preserved; the infrastructure result produces action:'retry-infra', consumes only maxInfraRetries and retains the existing escalation behavior. A zero infra budget must not prevent the candidate repair. Repeating the same unchanged code failure must never start an infra retry; existing code-repair escalation rules still apply. Do not change repairPolicy.ts or mock its decision. Keep existing C1/I1 tests intact. This parent owns integration/hardening for the split; the broader epic-final native certification stays CQ-R13.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "One verification gate, broad because this changes the guest/host outcome contract. Prepare a FULL git archive/clone snapshot outside /mnt/d/projexts/moes with all prerequisites landed, then overlay only these three owned files. Install host-native daemon dependencies there with npm ci --no-audit --no-fund, never in live packages; use the verified pinned Linux Node toolchain for required runner npm rows. From snapshot root run exactly:\n```bash\nnode --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)\n```\nRequire zero failed in all runner suites and full daemon npm test. KI/C7 and new real-supervisor rows must actually execute on Linux/WSL; native Windows can run pure host/daemon tests but is not sufficient evidence. Capture base/dependency SHAs, owned overlay hashes, toolchain versions, log and outputTail for complete_task. Full snapshot includes scripts/docs; do not use scripts-only archives. Shared live dist/runtime files are untouched; no pattern kills, only recorded owned PIDs. Notify CQ-R13/governor of new supervisorSha256 and environment identity, requiring new operator native certification reports and the final documentation sweep. No reused certificate or verified-local activation claim.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review, once (load adversarial-self-review), scoped to this three-file diff plus the prerequisite interface seam. Trace each candidate cause to 82 only after the existing protected-blob/ownership checks; verify cache/lock/toolchain/VM uncertainty stays infra. No broad catch upgrades arbitrary environment failures into a code failure. Negative probes in scratch: remove the dedicated candidate catch and confirm real-supervisor/repair integration fails; map generic install failure to 82 and confirm infrastructure rows fail; suppress the all-dir pass and confirm the invalid-second-dir row fails. Check stale/malformed/truncated frame and timeout precedence inherited from host prerequisite, fixed diagnostics without secrets/control characters, no observation claiming the check job ran, and outcome82 cannot ever be passed. Ensure fds and owned child/process-group cleanup occur on errors/concurrency; never signal peer processes. Confirm old no-dependency checks, locks and earlier 79/80 behavior remain compatible, and package/source bytes are unchanged on refusal. If review changes code, rerun the exact gate; report cause matrix, mutation results, new hashes and evidence in complete_task. Wrapper owns Git landing; QA reviews. Do not edit reserved CQ-R13 files or expand production repair policy.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -20,16 +63,101 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 3,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-94c18a782c3f4c2aa0e5c58f93bd7c8c",
+      "author": "architect-21c9ed65",
+      "content": "Interface split to stay within 3 write files per task: new prerequisite task-a80f46db9a624295a3bdbe28dfa6b311 owns host exit-82 classification, fixed <=512-byte diagnostic and environment descriptor (check-session.mjs, check-evidence.mjs, local-runner-check.test.mjs). This parent retains its full DoD and owns guest classification + real-supervisor/daemon repair integration (guest-supervisor.py, local-runner-check.test.mjs, repairPolicy.test.ts). No fabricated observation frame for a command that never ran. Exit 81 remains infra; confirmed candidate metadata refusal gets 82; unknown npm process failures remain infra. Dependencies serialize 5ed445ca -> a80f46db -> this row; a80f46db also waits on 92307adc's provider changes. CQ-R13 remains the existing epic-final hardening/native-certification task.",
+      "timestamp": "2026-10-31T05:52:21.208Z"
+    },
+    {
+      "id": "comment-4d56620eb26343eeb8907652c4485c83",
+      "author": "architect-21c9ed65",
+      "content": "Source refinement for step3's daemon integration fixture: scripts/tests/local-runner-dispatch.test.mjs pins the actual controller's null exitCode fallback to -1, not1. Use exitCode ?? -1 when feeding an infra result with no observation into decideRepair;82 remains82. This changes only test fidelity, not the production policy/design. Host prerequisite a80f46db plan is now submitted with fixed diagnostic and failure:{candidate:'code-failure',infrastructure:'infra-failure'} environment leaf.",
+      "timestamp": "2026-10-31T05:55:44.830Z"
+    },
+    {
+      "id": "comment-b3c3f62c653a45109f392c425f410ac8",
+      "author": "architect-21c9ed65",
+      "content": "Human REPL confirmation: 'Use fixed safe diagnostics.' Use fixed candidate dependency messages, not raw npm output/secrets, as already planned.",
+      "timestamp": "2026-10-31T06:08:45.337Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:22:54.584Z",
-  "updatedAt": "2026-10-31T05:37:01.763Z",
+  "updatedAt": "2026-10-31T06:08:45.337Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:41.542Z",
     "seq": 1
   },
   "dependsOn": [
-    "task-5ed445ca50f24cafbe6e42fbcba686fb"
-  ]
+    "task-5ed445ca50f24cafbe6e42fbcba686fb",
+    "task-a80f46db9a624295a3bdbe28dfa6b311"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-31T05:49:45.656Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-21c9ed65"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T05:54:06.760Z",
+  "executionContract": {
+    "intendedBehavior": "Candidate-invalid dependency preparation reaches code repair with a safe fixed diagnostic, while environment/toolchain/cache/VM failures retain infrastructure retries.",
+    "acceptanceCriteria": [
+      "Confirmed candidate metadata refusals emit82 without npm/check execution; real runCheckSession returns code-failure/82 and fixed bounded diagnostic.",
+      "Protected-lock/cache/toolchain/unknown install failures retain81 or earlier existing infra outcomes.",
+      "Actual runCheckSession results drive unchanged decideRepair: candidate repairs, infrastructure retries within its own budget.",
+      "Full local-runner and daemon regression pass in an external snapshot; no native-certification claims."
+    ],
+    "invariants": [
+      "No raw npm diagnostics or synthetic observation frames.",
+      "All-directory validation before any install, prior protected-blob and GUARD constraints unchanged.",
+      "No production repairPolicy/schema/activation changes; reserved CQ-R13 test file remains read-only."
+    ],
+    "compatibility": [
+      "Exit81 stays infra; new82 is recognized by landed host prerequisite before producer use.",
+      "Linux guest integration is required; native Windows pure host tests may not replace it."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-check.test.mjs",
+      "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+    ],
+    "reuse": [
+      "Existing install_dependencies/run_install/check_job, C7/PY_LOAD/INSTALL, runCheckSession and repairPolicy run/decide helpers."
+    ],
+    "sourceAssumptions": [
+      "5ed445ca and a80f46db are landed before work; a80f46db defines DEPENDENCIES_CANDIDATE_INVALID=82 and static <=512-byte diagnostic."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Whole-plan 6-file edit exceeds task target, so split at the existing host-session boundary. Host prerequisite a80f46db owns recognizing an unused 82 and environment descriptor; this parent owns emitting it and end-to-end coverage. Rejected reclassifying all exit81, regexing raw npm errors, or emitting fake observation frames for a command that never ran. Conservative positively identified candidate validation only; unknown npm/process faults remain infra.",
+    "codebaseInsights": "install_dependencies currently validates all dirs then all(run_install), returning False through sanitized 81 before relay. 5ed445ca adds typed manifest/approved-root validation. runCheckSession has strict clean stdin/EOF and protocol precedence; host prerequisite supplies82 and its static message. repairPolicy.ts already sends nonzero code-failure to repair and infra/timeout to retry-infra with separate budgets; only tests needed there. Full runner tests and daemon suite required on this shared outcome change.",
+    "risks": "Use landed prerequisite names/shapes, not today's CQ-R13 dirty file overlays. a80f46db serializes against 5ed445ca, 92307adc and daemon contract regression4aa5440b; governor remains owner of fleet overlap ordering. Native cert invalidated by supervisor/environment changes. Optional requiredChecks omitted under governor legacy/PATH ruling; exact checkRefs/VERIFY evidence retained. No user answer required under TURBO; fixed safe diagnostics are the default offered in REPL.",
+    "keyFiles": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-check.test.mjs",
+      "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T05:54:06.783Z",
+  "approvedPlanRevision": 1
 }

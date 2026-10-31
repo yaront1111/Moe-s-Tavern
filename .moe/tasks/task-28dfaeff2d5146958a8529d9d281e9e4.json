@@ -8,7 +8,9 @@
     "Every other bash launch path that hands the composed prompt to a CLI as one argv string (gemini, codex) is either covered by the same route or shown safe in the completion summary.",
     "A regression arm in scripts/tests/postflight.sh serves a claimed_task_context larger than 128 KiB through the fake proxy. It proves the CLI launches, receives the short directive, and that the file holds the full context byte for byte. Every pre-existing arm is unchanged and passes. bash -n scripts/moe-agent.sh and bash scripts/tests/parity-check.sh pass."
   ],
-  "taskRails": [],
+  "taskRails": [
+    "Reading of DoD 1's 'documented byte threshold': the comment at the PROMPT_ARGV_MAX_BYTES definition in scripts/moe-agent.sh documents it, and the [prompt-overflow] banner prints it. The comment gives the value (100000), says it counts bytes, not characters, and gives the reason: Linux MAX_ARG_STRLEN is 131072 bytes, and execve fails with E2BIG, CLI exit 126. No docs file changes: the governor's 02:08Z lane note keeps this row to scripts/moe-agent.sh, scripts/tests/postflight.sh and scripts/tests/postflight-fake-proxy.js."
+  ],
   "implementationPlan": [
     {
       "stepId": "step-1",
@@ -92,7 +94,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T02:07:32.248Z",
-  "updatedAt": "2026-10-31T03:42:34.772Z",
+  "updatedAt": "2026-10-31T05:34:57.051Z",
   "dependsOn": [
     "task-c7ee939a460641eab87eb799a38e6ff9"
   ],

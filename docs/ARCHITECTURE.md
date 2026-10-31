@@ -279,6 +279,50 @@ and the wrapper side (gate, rescue refs, receipts): `docs/CONFIGURATION.md`.
 
 ---
 
+## Local Runner Isolation
+
+`scripts/local-runner/` runs agent and check jobs in Moe-owned local Multipass VMs (Ubuntu 24.04). Each module's header
+comment is the reference; this is the map. Nothing here is active yet: every result carries `executionReady: false`,
+and `verified-local` stays refused until certification and the client gates pass.
+
+- **Protected control plane.** Under the protected profile the JetBrains plugin (`util/RuntimeSelectionPolicy.kt`)
+  runs only the daemon, proxy and wrapper installed with the plugin and an absolute node outside the project, never the
+  project's copies or a PATH lookup, and sets `MOE_RUNTIME_PROTECTED=1`: `moe-agent.{sh,ps1}` and `moe-call.sh` then
+  run exactly `MOE_DAEMON_PATH` and `MOE_PROXY_PATH` or refuse. Candidate source becomes Git objects only
+  (`admission.mjs`); branch writes stay in the wrappers' landing. A guest gets no daemon address: the host session
+  (`guest-session.mjs`) forwards its requests, and the runner client (`runner-client.mjs`) dials, only a daemon whose
+  own `/health` reports a loopback bind.
+- **Owned VM lifecycle** (`lifecycle.mjs`, `vm-control.mjs`). Multipass has no ownership labels, so ownership is an
+  owner-only ledger record (`~/.moe/runner-state/<project hash>/vms`, or under `MOE_RUNNER_STATE_DIR`), written before
+  launch under a random `moe-vm-<20 hex>` name. Reconcile and cleanup touch recorded names only, delete by exact name,
+  and preserve a record whose attempt or job lease is not proven closed. `vm-control.mjs status|reconcile|cleanup
+  --project <path>` is the IDE contract.
+- **Pinned bootstrap and readiness** (`guest-bootstrap.mjs`, `provision.mjs`, `guest-readiness.mjs`). The image is
+  verified against its sha256 pin and launched as a local file. The cloud-init user-data travels only on the launch's
+  stdin and installs the root-owned supervisor, the MCP shim and the locked job identities `moe-agent` and `moe-check`.
+  Readiness needs a clean cloud-init `done`, then zero mounts, the installed hashes, the credential denied to both
+  identities, locked unprivileged identities and bounded resources.
+- **Supervisor modes** (`guest-supervisor.py`, run as root through `multipass exec`; its header defines every code).
+  `bridge` runs one agent job, `check` one approved check, `materialize` copies a snapshot into the workspace, `export`
+  streams the workspace's changes back, `verify` compares the workspace with its manifest, and `agents`, `toolchain` and
+  `dependencies` install pinned bytes. Exit codes: 0 done, 64 usage, 65 malformed input, 66 no workspace, 71 the job
+  could not start, 73 already exists, 74 I/O failure or host EOF, 75 signal, 76 protocol violation, 77 not root. `check`
+  adds 79 (a protected path lacks its approved blob), 80 (the job changed one) and 81 (the dependency install failed).
+- **Check lifecycle** (`check-lifecycle.mjs`, `check-session.mjs`, `check-dispatch.mjs`). Each run gets a fresh VM:
+  provisioning and readiness; the pinned Node toolchain and an offline dependency tree, built on the host from the
+  approved definition's lockfiles (`toolchain-cache.mjs`, `dependency-cache.mjs`); a copy-only materialization; an
+  `npm ci --offline --ignore-scripts --workspaces=false` in the guest, refused (81) in a lockfile directory without a
+  `package.json` or with an `npm-shrinkwrap.json` or `.npmrc`; the check once, as `moe-check`; `verify` of a passed run's
+  workspace; then the VM deleted on every path. The outcome is `passed`, `code-failure`, `infra-failure`, `timeout`,
+  `skipped` or `inconclusive`, and it reaches the daemon only over the authenticated `/runner` channel.
+- **Environment identity and evidence freshness** (`check-evidence.mjs`). `checkEnvironment` hashes the declared
+  `CHECK_BOUNDARIES` with the observed image, supervisor, VM size, toolchain and dependency tree, so changing any of
+  them needs new evidence. `evidenceStatus` is `fresh` only when environment, tree, definition digest and plan revision
+  all match.
+- **Certification** (`certify.mjs`): the operator's native run on real hardware. See [CERTIFICATION.md](CERTIFICATION.md).
+
+---
+
 ## Data Flow Examples
 
 ### Task Status Change (Plugin Drag/Drop)

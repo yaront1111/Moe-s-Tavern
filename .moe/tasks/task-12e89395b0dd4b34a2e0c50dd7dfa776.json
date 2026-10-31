@@ -8,9 +8,52 @@
     "The recorded result distinguishes a delete-failed pass from an unverified-workspace pass."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first: preserve cleanup visibility on runCheckJob rejection without changing its documented error identity. Use landed92307adc provider changes; local-runner.test.mjs stays read-only. Add optional trusted input callback onCleanup to KEYS/OPTIONAL; validate/copy it once as a function when supplied. After remove settles inside existing finally, notify exactly once with frozen {vm,failure}: vm is existing deleted/not-launched/delete-failed/none, failure is CHECK_VM_DELETE_FAILED only for delete-failed, otherwise null. Notify even if onReady throws primitive/frozen errors or times out. Preserve original onReady rejection identity and CHECK_READY_TIMEOUT, and preserve ordinary resolved result shape. No error-property attachments or error-keyed map.\n```js\nconst report = Object.freeze({ vm, failure: vm === 'delete-failed' ? 'CHECK_VM_DELETE_FAILED' : null });\ntry { Promise.resolve(o.onCleanup?.(report)).catch(() => {}); } catch { /* notification cannot replace cleanup/result */ }\n```\nCall after deletion normalization, do not await the observer. Error handling: synchronous throw or rejected observer promise must not hide original result/rejection or prevent deletion. Invalid input before a run remains a no-side-effect refusal. Update lifecycle JSDoc.\n\nAdd lifecycle cases to local-runner-dispatch.test.mjs using its existing landedRunCheck/injected provision-ledger-remove pattern: successful delete; remove rejects/returns unexpected value; onReady rejection/null/string/frozen Error/timeout with successful versus failed delete; observer throws/rejects. Assert one notification AFTER remove, exact frozen safe report, original error identity, no session after readiness failure, no unhandled rejection. No credential/path/upstream message enters cleanup report.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Carry cleanup status through landedRunCheck and runOnce. Forward onCleanup from the runCheck seam into runCheckJob. runOnce installs a per-run synchronous callback which copies only allowlisted vm/failure values, and also reads result.vm/result.failure for normal resolutions. A known delete-failed from either source dominates any conflicting success. No global state. Add sanitized vm/failure fields to result entries and stopped summaries when known; older injected seams may omit unknown fields, never pretend deleted. Allow only existing vm enum and fixed NAME_RE failure codes, never spread result/error objects or serialize error messages.\n\nFor a completed run with accepted dispatch id, record its observation once, then stop the ENTIRE dispatch on delete-failed regardless of daemon retry-infra or later owed checks. Downgrade passed/delete-failed to inconclusive even if workspace is intact. Append this fixed diagnostic suffix to recorded outputTail:\n```text\nRUNNER_VM_DELETE_FAILED: VM cleanup was not confirmed; no further checks will be launched.\n```\nPreserve useful preceding tail within MAX_CHECK_TAIL_BYTES (import from check-session.mjs; reserve suffix bytes, trim oldest bytes, skip UTF8 continuation bytes as tailOf does). Deleted+unverified-workspace stays ordinary inconclusive with its original tail and supplied vm=deleted/failure=null, so the persisted results differ without new daemon schema fields.\n\nFor runCheck rejection/readiness timeout, use captured cleanup state in stopped code RUNNER_VM_DELETE_FAILED, vm/failure, sanitized prior causeCode and known dispatchId. Never invent an observation without accepted dispatch. If observation recording fails, retain cleanup failure plus sanitized transport/observation causeCode and stop; existing same-id bounded transport retries are still allowed, never new VM creation. Retain a recorded result before stopping: in dispatchFocusedChecks use 'if (step.result) results.push(step.result); if (step.stopped) return done(step.stopped);' before retry handling. Keep other retry/idempotency/MAX_RERUNS behavior.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Integration regression: table-drive infra+delete-failed with daemon retry-infra; passed/intact+delete-failed; code-failure/timeout+delete-failed; first of multiple checks fails cleanup; onReady rejects before dispatch; accepted dispatch then onReady timeout; observation write transport failure/rejection after failed deletion. For each known delete-failed assert exactly one create/remove attempt, no subsequent create/record_check_dispatch, report includes delete-failed/CHECK_VM_DELETE_FAILED, CLI exit2, and fixed recorded diagnostic when a valid observation is possible. Contrast deleted+unverified workspace: inconclusive, no cleanup stop, distinct recorded tail, later owed checks still run. Deleted infrastructure failures still obey daemon retries with fresh ids and existing cap. Exercise real runCheckJob via landedRunCheck with injected remove/readiness failures, not fake metadata alone; assert deletion settled before notification/summary. Include simultaneous dispatches, late onReady completion after timeout, huge/multibyte tails, credentials/ANSI in thrown messages and hostile cleanup/result metadata. Fail safely with fixed stop if metadata cannot be read; no unhandled exception. Preserve old happy-path/rejection assertions; no edit to CQ-R13 local-runner.test.mjs.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "One full regression gate for lifecycle/dispatch contract. Create a FULL external git archive/clone snapshot outside /mnt/d/projexts/moes with landed prerequisites and only these3 owned files overlaid; record hashes. Install native daemon dependencies via npm ci --no-audit --no-fund only in snapshot/packages/moe-daemon. From snapshot root run exactly:\n```bash\nnode --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)\n```\nRequire zero failed across runner/daemon, including unchanged CJ cases in reserved local-runner.test.mjs. Linux/WSL executes guest rows; new pure host fixtures must be Windows-path portable. Record base/prerequisite SHAs, overlay hashes, toolchain versions, log and fresh command/exitCode/outputTail for complete_task. No npm/build/clean/test/install in live packages or pattern kills; only recorded owned child PIDs. Not native certification: notify CQ-R13 for final docs/integration/certification sweep.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review, once (adversarial-self-review). Trace every resolve/reject/readiness-timeout path: one attempted owned deletion, one sanitized notification, original error identity retained. Primitive/frozen error or throwing/rejecting observer cannot erase cleanup. Notification promise is not awaited and cannot restart a launch. Known delete-failed dominates result conflict and retry-infra, blocks later checks, never passes, remains visible if recording fails. No observation before accepted dispatch and same ids across transport retries. Confirm UTF8 cap leaves fixed suffix visible and actual recorded cleanup failure differs from workspace-unverified. Race two dispatches and late events: isolated state, no resumed loop. Scratch mutations ignore callback, ignore result.vm, stop after retry, remove diagnostic suffix: regressions must fail. Restore mutations; rerun exact gate after any change. Report files, compatibility and fresh evidence through complete_task. No daemon schema expansion/reserved-file edits; wrappers own Git landing.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -20,16 +63,86 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-d449eb0561034bcfbf188e68e5ba6d60",
+      "author": "architect-21c9ed65",
+      "content": "Human REPL confirmation: 'Yes—reuse the existing record.' Stop on cleanup failure, include vm/failure in dispatch report and fixed safe diagnostic in existing check outputTail; no daemon schema fields, as planned.",
+      "timestamp": "2026-10-31T06:08:45.420Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:23:03.584Z",
-  "updatedAt": "2026-10-31T05:37:01.845Z",
+  "updatedAt": "2026-10-31T06:08:45.420Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:45.209Z",
     "seq": 1
   },
   "dependsOn": [
-    "task-92307adc30884fc4861348ed3c8ead4a"
-  ]
+    "task-92307adc30884fc4861348ed3c8ead4a",
+    "task-4aa5440b5d8f4eda846be5a430c34cb2"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-31T05:55:58.184Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-21c9ed65"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T05:59:48.230Z",
+  "executionContract": {
+    "intendedBehavior": "Failed deletion stays visible through lifecycle rejection and prevents every further VM launch in that focused dispatch; stored diagnostics distinguish cleanup from workspace verification failure.",
+    "acceptanceCriteria": [
+      "Cleanup notification occurs after remove on resolve/reject/timeout without changing original readiness error.",
+      "Known delete-failed stops retries/later checks, never records passed, and remains in CLI report.",
+      "Accepted dispatch records fixed bounded cleanup diagnostic, distinct from workspace-unverified-only result.",
+      "Full external runner and daemon regression pass."
+    ],
+    "invariants": [
+      "No new VM after known delete-failed; no observation without accepted dispatch.",
+      "No raw upstream error/credential serialization or daemon schema changes.",
+      "Reserved local-runner.test.mjs stays read-only."
+    ],
+    "compatibility": [
+      "Optional onCleanup preserves existing callers and onReady rejection identity.",
+      "Additive sanitized report fields; existing outputTail stores cleanup reason."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/check-lifecycle.mjs",
+      "scripts/local-runner/check-dispatch.mjs",
+      "scripts/tests/local-runner-dispatch.test.mjs"
+    ],
+    "reuse": [
+      "Existing remove normalization, runOnce/settle/idempotency, dispatch harness and MAX_CHECK_TAIL_BYTES."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Optional cleanup notification preserves onReady's exact error identity (including primitives/frozen errors), unlike wrapping or attaching metadata. Additive dispatch vm/failure plus fixed diagnostic in existing observation outputTail satisfies visibility without broad daemon schema work. Offered structured-daemon-fields alternative in async REPL; TURBO default uses existing record.",
+    "codebaseInsights": "runCheckJob finally deletes but rejection skips result construction, losing vm. runOnce ignores result.vm, and loop checks stopped before pushing result. Existing lifecycle downgrade for delete failure and dispatch downgrade for workspace verification both yield inconclusive, so stored tail must distinguish them. CJ4 pins original readiness rejection identity. Daemon retry-infra is a decision; runner must refuse new launches after cleanup failure.",
+    "risks": "Use landed92307adc lifecycle/provider changes. Dependency4aa5440b repairs known daemon-suite failure. New callback trusted internal input, values sanitized; no alternate cleanup ownership. Optional requiredChecks omitted per governor legacy/PATH ruling; exact checkRefs and fresh gate remain.",
+    "keyFiles": [
+      "scripts/local-runner/check-lifecycle.mjs",
+      "scripts/local-runner/check-dispatch.mjs",
+      "scripts/tests/local-runner-dispatch.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T05:59:48.253Z",
+  "approvedPlanRevision": 1
 }

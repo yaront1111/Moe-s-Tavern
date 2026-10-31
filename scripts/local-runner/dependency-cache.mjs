@@ -37,8 +37,9 @@ export const MAX_DEPENDENCY_BYTES = MAX_IMPORT_BYTES - 65_536;
 // The caller runs `<node> <npm-cli.js> ci ...OFFLINE_INSTALL_ARGS --cache <tree root>`; CQ-R11e5 mirrors it in Python.
 // --offline never fetches; --ignore-scripts runs no root or dependency lifecycle script; --no-update-notifier because the
 // update notifier ignores --offline and would reach the registry; --logs-max=0 writes no _logs into the cache;
-// --no-audit and --no-fund make no further registry calls.
-export const OFFLINE_INSTALL_ARGS = Object.freeze(['--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0']);
+// --no-audit and --no-fund make no further registry calls; --workspaces=false never adopts a parent workspace root's lockfile.
+export const OFFLINE_INSTALL_ARGS = Object.freeze(['--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0',
+  '--workspaces=false']);
 const MESSAGES = {
   DEPENDENCY_INPUT_INVALID: 'Dependency input was invalid.',
   DEPENDENCY_LOCKFILE_INVALID: 'Dependency lockfile was invalid.',

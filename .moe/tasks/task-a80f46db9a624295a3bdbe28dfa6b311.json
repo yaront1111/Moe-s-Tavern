@@ -1,0 +1,139 @@
+{
+  "id": "task-a80f46db9a624295a3bdbe28dfa6b311",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "Classify candidate dependency refusals in the host check session",
+  "description": "Interface slice from task-42e9990c. Objective: host recognizes a distinct supervisor exit 82 (DEPENDENCIES_CANDIDATE_INVALID), only on a completely clean no-frame pre-hello session, as code-failure with exitCode 82 and a fixed bounded ASCII diagnostic; existing 81 stays infra-failure. No npm stderr is forwarded. Add this internal exit-code capability and update checkEnvironment's dependency failure descriptor so fresh evidence binds the split. Files: scripts/local-runner/check-session.mjs, scripts/local-runner/check-evidence.mjs, scripts/tests/local-runner-check.test.mjs. No guest-supervisor edit: parent task emits 82 only after this host support lands and owns real-guest/repairPolicy integration. Keep all timeout/protocol/abort/kill precedence. Until parent lands, no supervisor emits 82, so old behavior remains compatible. Dependencies serialize the shared test file against 5ed445ca and host-session changes against 92307adc. NOT in scope: daemon repair logic, new JSON frame schemas, live VM certification, local-runner.test.mjs edits, or arbitrary npm diagnostics. Verification from a full external repo snapshot: node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test), with daemon npm ci only inside the snapshot. Full runner plus daemon because the outcome/environment contract changes. CQ-R13 remains epic-final integration/native certification owner.",
+  "definitionOfDone": [
+    "Clean stdout EOF and supervisor exit 82 before any frame produce exactly code-failure, exitCode 82, signal null and a fixed nonempty ASCII outputTail no greater than 512 bytes; stdout/stderr cannot supply diagnostic bytes.",
+    "Exit 81, absent EOF, failed stdin, provider faults, abort, local kill and malformed/partial/extra frames remain infra-failure; timeout remains timeout; 82 after hello/observation never becomes a candidate refusal or pass.",
+    "CHECK_BOUNDARIES dependencies distinguishes candidate refusal from infrastructure failure, and checkEnvironment hashes change from the old descriptor; existing source/cache/identity bounds stay unchanged.",
+    "Full local-runner tests and daemon npm test pass in an external snapshot; no guest producer or daemon repair implementation changes."
+  ],
+  "taskRails": [
+    "Keep scripts/tests/local-runner.test.mjs read-only; CQ-R13 owns it. No new wire frames or raw npm/guest stderr diagnostics."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first, then minimal host classification. Use the landed 5ed445ca/92307adc/4aa5440b prerequisites; do not copy another worker's dirty source. In local-runner-check.test.mjs, extend C5's real-stream checkProvider/hostCheck/ended table before implementation. New clean no-frame exit82 must resolve exactly to code-failure/82/null and this host-owned literal:\n```text\nMOE_DEPENDENCY_CANDIDATE_INVALID: Candidate package metadata is not compatible with the approved lockfile; remove npm-shrinkwrap.json/.npmrc and unsupported overrides or bundling.\n```\nPin exact bytes independently in tests, ASCII-only, no more than512 UTF8 bytes; changing candidate/nested error/stderr contents (secrets, ANSI, CR/LF, huge Unicode) cannot change it. Assert no observation is needed and a frozen result is still returned. Keep81 infra unchanged. Add82 paired with failed/unfinished stdin write, provider/stream error, abort, local kill, no stdout EOF, partial/bad frames, hello-only, hello+observation, output-before-hello, and a time budget expiring; error handling must retain infra/timeout precedence, never candidate/pass. Preserve all existing C3-C7 assertions and bounded tail/cleanup behavior. Do not yet pin a Python82 constant in C2: this task deliberately does not change the guest producer; parent42e9990c adds that parity test.\n\nIn check-session.mjs export DEPENDENCIES_CANDIDATE_INVALID = 82 beside81. In outcomeOf, insert exactly the clean no-frame branch AFTER existing timedOut/failed/killed/written/ended gates, and before the generic unopened-session rejection:\n```js\nif (code === DEPENDENCIES_CANDIDATE_INVALID && !s.opened) return 'code-failure';\n```\nIn settle, only when that clean candidate branch was actually selected, return result with {code:82,signal:null} and the fixed diagnostic rather than a null observation/empty ring. For instance derive candidateRefusal from outcome==='code-failure', !s.opened and code===82; never special-case raw exit82 before outcomeOf. Ordinary observation-based results remain untouched. The number82 is a SUPERVISOR refusal, not a claimed job exit; update module/JSDoc comments to make this exception explicit. Do not forward stderr, invent protocol frames, change the parser, relax a guard, or change dependency81 semantics.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/check-session.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Bind the changed interpretation into the existing environment identity. In CHECK_BOUNDARIES.dependencies replace only the old failure:'infra-failure' leaf with:\n```js\nfailure: { candidate: 'code-failure', infrastructure: 'infra-failure' }\n```\nUpdate its adjacent comment: confirmed candidate preparation refusals use code repair, infrastructure/unclassified install faults use infra retries; no statement that every dependency failure is infrastructure. Keep source:'host-offline-cache', integrity:'lockfile-sha512', scripts:'ignored', network:'none', all other boundaries and ENVIRONMENT_PREFIX unchanged. Reuse deepFreeze and canonicalJson hashing; do not introduce another version/revision authority.\n\nIn the test's independent LITERAL object pin the exact new failure object, retaining E1 deep freeze and E2/E4 complete identity coverage. Add an explicit old-descriptor oracle comparison: clone the expected descriptor, restore failure:'infra-failure', and assert its identity differs from checkEnvironment(VALID). Preserve key-order invariance and normal freshness checks, including null dependencyDigest. No native certificate is produced by these descriptor tests. This additive host capability lands before the guest begins emitting82, so old guest failures still classify as81/infra; parent task42e9990c owns the producer and actual repair integration.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "One shared-contract regression gate, not just the targeted cases. Prepare a FULL external git-archive/clone snapshot (outside /mnt/d/projexts/moes) of the landed prerequisites, with only these3 owned files overlaid and their hashes recorded. Run npm ci --no-audit --no-fund in snapshot/packages/moe-daemon only using host-native dependencies. Use verified pinned Linux Node for the runner npm cases. From snapshot root run exactly:\n```bash\nnode --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)\n```\nAll runner suites and full daemon suite must have zero failed. Require Linux/WSL for guest-dependent rows; native Windows may run host stream tests but not substitute an all-skipped guest gate. Retain source/prerequisite SHA, overlay digests, toolchain versions, log and fresh command/exitCode/outputTail for complete_task. No npm/test/build/clean/install in live packages, no pattern-kill process cleanup; only recorded owned child PIDs may be signaled. Full runner+daemon is required because outcome interpretation/environment identity is shared. CQ-R13 remains overall epic-final native certification/docs owner; tell it the identity changed and native reports must be rerun rather than reused.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review (adversarial-self-review), once, on this3-file diff. Trace precedence for82 under every timeout/error/abort/kill/EOF/framing condition and confirm it can never be passed. Unknown nonzero codes and81 remain infrastructure. Output before hello, partial headers and extra frames do not sneak through the no-frame branch; pre-hello stderr is drained unread, never trusted as diagnostics. Verify the fixed literal contains no variable interpolation and stays <=512ASCII bytes independently of huge/hostile inputs; ordinary bounded output tails still work. Check failed stdin and close-before-EOF event ordering, idempotent late close/error handling, timer/listener cleanup and simultaneous sessions' separate state. In scratch mutate the ordering (82 before errors), remove its exitCode assignment and restore the old descriptor; each must fail its corresponding test. Restore probes; rerun the exact gate if any source changes. Assert only these3 files changed and existing guest81 producer/CQ-R13 tests stayed unedited. Hand off constant/message/descriptor shape to42e9990c and complete_task with fresh evidence; wrappers own Git writes and QA owns approval.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/check-session.mjs",
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-42e9990c286a43fcab7edd716290a515",
+  "dependsOn": [
+    "task-5ed445ca50f24cafbe6e42fbcba686fb",
+    "task-92307adc30884fc4861348ed3c8ead4a",
+    "task-4aa5440b5d8f4eda846be5a430c34cb2"
+  ],
+  "priority": "MEDIUM",
+  "order": 2.9,
+  "comments": [
+    {
+      "id": "comment-7cd864cb4a914edd9b2b250ff2860846",
+      "author": "architect-21c9ed65",
+      "content": "Human REPL confirms fixed safe diagnostics instead of raw npm output, matching the approved82 sentinel plan.",
+      "timestamp": "2026-10-31T06:08:45.399Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T05:52:00.964Z",
+  "updatedAt": "2026-10-31T06:08:45.399Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T05:54:22.770Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-21c9ed65"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T05:55:44.791Z",
+  "executionContract": {
+    "intendedBehavior": "A clean no-frame supervisor82 is a bounded diagnosed code-failure;81 and transport/environment faults remain infrastructure; environment identity binds this distinction.",
+    "acceptanceCriteria": [
+      "Exact frozen result for clean82: code-failure, exitCode82, signal null, fixed ASCII diagnostic<=512bytes.",
+      "Timeout/error/abort/kill/incomplete-write/EOF/protocol precedence unchanged;82 with any frame never matches the candidate-refusal path.",
+      "Environment boundary descriptor and hash distinguish candidate versus infrastructure failure; no other boundary changes.",
+      "Full external-snapshot runner and daemon suites pass."
+    ],
+    "invariants": [
+      "No raw guest/npm stderr, fabricated observation or new JSON schema.",
+      "No guest-supervisor/repairPolicy production changes; CQ-R13 reserved test file unchanged."
+    ],
+    "compatibility": [
+      "Existing producer81 behavior remains until parent42e9990c emits82; host support lands first.",
+      "Environment identity changes require fresh evidence, never reuse native certificates."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/check-session.mjs",
+      "scripts/local-runner/check-evidence.mjs",
+      "scripts/tests/local-runner-check.test.mjs"
+    ],
+    "reuse": [
+      "outcomeOf/settle/result, checkProvider/hostCheck/ended, CHECK_BOUNDARIES/deepFreeze/canonicalJson/LITERAL/oracle."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Use an unused internal supervisor exit82 with host-owned bounded diagnostic, not a new frame schema or raw npm error parsing. This host capability can safely precede the producer; old81 remains infrastructure. No daemon policy change because code-failure already selects repair.",
+    "codebaseInsights": "outcomeOf already checks timedOut then failed/killed/written/ended before pre-hello cases; settle currently derives exit fields solely from observation and must supply the supervisor refusal code explicitly for82. CHECK_BOUNDARIES is deeply frozen and canonically hashed; independent LITERAL and oracle tests cover every leaf. Parent42e9990c owns guest exception classification and repairPolicy integration; C2's existing Python79/80/81 parity stays green during this interface-only slice.",
+    "risks": "Keep prerequisite edges:5ed445ca shared test fixture changes,92307adc provider executable hardening,4aa5440b current daemon contract failure. Outcome mapping after a failed session would mislabel environment errors, so error precedence is critical. This host-only slice cannot claim producer behavior or native certification. Optional requiredChecks omitted per governor legacy/PATH ruling; exact checkRefs and completion gate retained.",
+    "keyFiles": [
+      "scripts/local-runner/check-session.mjs",
+      "scripts/local-runner/check-evidence.mjs",
+      "scripts/tests/local-runner-check.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T05:55:44.817Z",
+  "approvedPlanRevision": 1
+}

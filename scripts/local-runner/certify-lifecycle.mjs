@@ -38,6 +38,7 @@ async function cancellation(c) {
   const result = await job({ platform: c.platform, ledger: c.ledger, owner: syntheticOwner(), cacheDir: c.cacheDir, supervisor: c.supervisor,
     credential: randomBytes(32), snapshot: certifySnapshot(), check: CANCEL_CHECK, budgetMs: c.bounds.cancelBudgetMs, onReady: async () => {},
     dependencies: [], provider: c.provider, signal: controller.signal }, { ...steps, session });
+  if (result?.vm === 'delete-failed') return failed('CERTIFY_CANCEL_VM_NOT_DELETED'); // first, as every certify check reports it
   if (!started) return failed('CERTIFY_CANCEL_NOT_STARTED');
   if (result?.outcome === 'passed') return failed('CERTIFY_CANCEL_PASSED');
   if (result?.outcome === 'timeout') return failed('CERTIFY_CANCEL_TIMED_OUT'); // the budget, not the abort, ended it

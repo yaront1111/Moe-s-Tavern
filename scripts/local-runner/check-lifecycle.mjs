@@ -66,7 +66,10 @@ function parse(input) {
     // Validation, and the lockfile bytes: the rest of the merged copy is dropped before provisioning.
     const lockfiles = lockfilesOf(dependencies, workspaceEntries(snapshot).entries);
     const { read, reserve, update, recordImage } = isRecord(ledger) ? ledger : {};
-    const kit = isRecord(provider) ? Object.freeze({ ...provider }) : null;
+    // Every call after provisioning uses the platform's pinned client too, as provisioning does, never a bare `multipass`.
+    const copy = isRecord(provider) ? { ...provider } : null;
+    const executable = copy?.executable ?? platform?.executable;
+    const kit = copy && Object.freeze(executable === undefined ? copy : { ...copy, executable });
     if (lockfiles && kit && validOwner(who) && [read, reserve, update, recordImage, onReady].every(fn => typeof fn === 'function')
       && within(budgetMs, MAX_BUDGET_MS) && within(timeoutMs, 60_000) && (signal === undefined || signal instanceof AbortSignal)) {
       return { platform, ledger: { read, reserve, update, recordImage }, owner: who, cacheDir, supervisor, credential, snapshot,

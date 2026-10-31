@@ -3657,9 +3657,12 @@ test('LC2 cancellation fails with one fixed code unless its session started, did
     await new Promise(setImmediate);
     return { outcome, exitCode: outcome === 'passed' ? 0 : null, signal: null, outputTail: '' };
   };
-  for (const [checkSteps, code] of [[{ session: async () => ({ outcome: 'infra-failure', exitCode: null, signal: null, outputTail: '' }) }, 'CERTIFY_CANCEL_NOT_STARTED'],
+  const unstarted = async () => ({ outcome: 'infra-failure', exitCode: null, signal: null, outputTail: '' });
+  const lost = async () => { throw failWith({ code: 1 }); }; // a VM left behind is reported first, whatever its session did
+  for (const [checkSteps, code] of [[{ session: unstarted }, 'CERTIFY_CANCEL_NOT_STARTED'],
     [{ session: started('passed'), verify: async () => 'intact' }, 'CERTIFY_CANCEL_PASSED'], [{ session: started('timeout') }, 'CERTIFY_CANCEL_TIMED_OUT'],
-    [{ remove: async () => { throw failWith({ code: 1 }); } }, 'CERTIFY_CANCEL_VM_NOT_DELETED'], [{ remove: async () => 'deleted' }, 'CERTIFY_CANCEL_RECORD_LIVE'],
+    ...[{}, { session: unstarted }, { session: started('timeout') }].map(steps => [{ ...steps, remove: lost }, 'CERTIFY_CANCEL_VM_NOT_DELETED']),
+    [{ remove: async () => 'deleted' }, 'CERTIFY_CANCEL_RECORD_LIVE'],
     [{ job: async () => { throw failWith({ code: 'CHECK_READY_TIMEOUT' }); } }, 'CHECK_READY_TIMEOUT']]) {
     const h = certifyHarness(t, { checkSteps });
     assert.deepEqual([await h.certify(), h.children, h.deletes.at(-1)], [failedAt('cancellation', code), [], ['delete', '--purge', GUEST]], code);
@@ -4847,7 +4850,7 @@ function dirtyRepo(t) {
   put('README.md', 'dirty readme\n');
   put('src/new.c', 'int added;\n');
   rmSync(path.join(dir, 'notes.txt'));
-  return { dir, head: git('rev-parse', 'HEAD') };
+  return { dir, head: git('rev-parse', 'HEAD'), git };
 }
 
 test('X7 end to end, a dirty checkout round-trips through the real supervisor and only the agent changes come back, never a refused one',
@@ -6220,4 +6223,143 @@ test('RA checkAgents reports AGENT_MISSING for an absent binary and AGENT_HASH_M
   await assert.rejects(checkAgents({ name: GUEST, arch: 'mips', provider: counting }), error => assertSanitized(error, 'BOOTSTRAP_INPUT_INVALID'));
   await assert.rejects(checkAgents({ name: 'primary', arch: 'x64', provider: counting }), error => assertSanitized(error, 'LIFECYCLE_INPUT_INVALID'));
   assert.equal(calls, 0);
+});
+
+// CQ-R13 RX: each replacement attempt (host key, state, ref, controller) drives the real module to its fixed refusal, and certification
+// off a supported host or over an injected transport stays blocked. No result here is ever executionReady.
+test('RX1 each provision mints its own 32-byte supervisor credential, sent only on its launch stdin: no argv, spawn, file or report holds it', async t => {
+  const content = / {2}- path: \/etc\/moe\/supervisor\.credential\n(?: {4}\w+: .*\n)*? {4}content: '([A-Za-z0-9+/=]+)'/;
+  const [credentials, held] = [[], []];
+  for (const run of ['first', 'second']) {
+    const calls = [];
+    const h = certifyHarness(t, { run: inner => (executable, args, options) => { calls.push([executable, args, options]); return inner(executable, args, options); } });
+    const report = await h.certify();
+    const files = readdirSync(h.workDir, { recursive: true }).map(name => path.join(h.workDir, name)).filter(file => statSync(file).isFile());
+    assert.deepEqual([report.executionReady, h.fake.launches.length, ['certification-', 'ledger'].map(part => files.some(file => path.relative(h.workDir, file).startsWith(part)))],
+      [false, 2, [true, true]], run);
+    credentials.push(...h.fake.launches.map(({ stdin }) => Buffer.from(content.exec(stdin)[1], 'base64'))); // certify's VM, then the cancellation's
+    held.push(JSON.stringify(calls), JSON.stringify(report), ...[...h.router.calls, ...h.children].flatMap(({ args, proc }) => [JSON.stringify(args), ...proc.written]),
+      ...files.map(file => readFileSync(file)));
+  }
+  assert.deepEqual([credentials.map(({ length }) => length), new Set(credentials.map(bytes => bytes.toString('hex'))).size], [[32, 32, 32, 32], 4]);
+  for (const credential of credentials) {
+    for (const form of [credential, ...['hex', 'base64', 'base64url'].map(encoding => credential.toString(encoding))]) {
+      held.forEach((bytes, at) => assert.equal(Buffer.from(bytes).includes(form), false, `held[${at}]`));
+    }
+  }
+});
+
+test('RX2 a ledger record rewritten to another owner or to a non-owned name is never launched, deleted or cleaned', async t => {
+  const h = harness(t, [[nameAt(2), 'Running'], [nameAt(3), 'Running'], ...FOREIGNERS]);
+  const file = name => path.join(h.dir, `${name}.json`);
+  const rewrite = (name, changes, to = name) => {
+    const record = { ...JSON.parse(readFileSync(file(name), 'utf8')), ...changes };
+    rmSync(file(name));
+    writeFileSync(file(to), JSON.stringify(record));
+  };
+  for (const phase of ['reserved', 'owned', 'owned', 'owned']) await seed(h.ledger, phase);
+  const forged = { taskId: 'task-forged', attemptId: 'attempt-forged', generation: 9 };
+  rewrite(nameAt(1), forged);
+  rewrite(nameAt(2), forged);
+  rewrite(nameAt(3), { instance: 'primary' });
+  rewrite(nameAt(4), { instance: 'primary' }, 'primary');
+  const bytes = () => readdirSync(h.dir).sort().map(name => [name, readFileSync(path.join(h.dir, name), 'utf8')]);
+  const [before, launched] = [bytes(), []];
+  for (const [name, code] of [[nameAt(1), 'LIFECYCLE_NOT_OWNER'], [nameAt(2), 'LIFECYCLE_NOT_OWNER'], [nameAt(3), 'LEDGER_RECORD_INVALID'], ['primary', 'LIFECYCLE_INPUT_INVALID']]) {
+    await assert.rejects(provision(h, { name, launch: async target => { launched.push(target); } }), error => assertSanitized(error, code), name);
+    await assert.rejects(deleteOwned({ ledger: h.ledger, name, owner, provider: h.provider }), error => assertSanitized(error, code), name);
+  }
+  // The daemon knows only the real owner's attempt: the forged one is unknown, so its launched record is preserved.
+  const swept = await cleanupOwned({ ledger: h.ledger, provider: h.provider, attemptPhase: async id => (id === owner.attemptId ? 'closed' : undefined),
+    leaseHeld: async () => false });
+  assert.deepEqual(swept, { deleted: [], preserved: [{ instance: nameAt(2), reason: 'attempt-unknown' }], errors: [], invalid: [`${nameAt(3)}.json`, 'primary.json'] });
+  assert.deepEqual([launched, h.fake.calls.length, bytes(), [nameAt(2), nameAt(3), FOREIGN, 'primary'].map(name => h.fake.present.get(name))],
+    [[], 0, before, ['Running', 'Running', 'Running', 'Running']]);
+});
+
+test('RX2 a daemon.json rebound off loopback stops the agent job before its bridge spawn and before each forward', async t => {
+  const rebind = bindHost => writeFileSync(AGENT_DAEMON, JSON.stringify({ port: agentHealth.address().port, pid: 1, projectPath: '/p', bindHost }));
+  for (const bindHost of ['0.0.0.0', '::', 'wsl', '10.0.2.2']) {
+    const h = agentHarness(t);
+    rebind(bindHost);
+    const result = await runAgentJob(h.input);
+    assert.deepEqual([result.failure, result.observation, result.executionReady, h.procs.length, h.calls()],
+      ['SESSION_DAEMON_NOT_LOOPBACK', null, false, 0, [ACQUIRE_CALL, RELEASE_CALL()]], bindHost);
+  }
+  // Rebound after the spawn: at the bridge spawn the first request is not forwarded; inside the first forward, the second is not.
+  for (const [at, forwarded] of [['spawn', []], ['moe.get_context', ['moe.get_context']]]) {
+    const h = agentHarness(t, { onCall: tool => tool === at && rebind('0.0.0.0') });
+    const spawn = h.input.provider.spawn;
+    h.input.provider.spawn = (...args) => { if (at === 'spawn') rebind('0.0.0.0'); return spawn(...args); };
+    const result = await runAgentJob(h.input);
+    assert.deepEqual([result.failure, result.observation, result.executionReady, h.procs.length, h.calls().map(([tool]) => tool)],
+      ['SESSION_DAEMON_NOT_LOOPBACK', null, false, 1, ['moe.acquire_resource', ...forwarded, 'moe.release_resource']], at);
+  }
+});
+
+test('RX3 an export pinned to a full commit id is unchanged after the branch ref moves and a replace object is added; a ref name is refused', async t => {
+  const { dir, head, git } = dirtyRepo(t);
+  const exported = commit => exportSourceSnapshot({ repoDir: dir, commit });
+  const pinned = await exported(head);
+  git('commit', '-q', '-a', '-m', 'moved');
+  const moved = git('rev-parse', 'HEAD');
+  git('replace', git('rev-parse', `${head}:README.md`), git('hash-object', '-w', 'src/new.c'));
+  // Positive controls: the branch now names other bytes, and the replacement is live outside the export's Git envelope.
+  assert.deepEqual([moved === head, (await exported(moved)).base.digest === pinned.base.digest, git('cat-file', 'blob', `${head}:README.md`)],
+    [false, false, 'int added;']);
+  assert.deepEqual(await exported(head), pinned);
+  for (const ref of ['HEAD', git('symbolic-ref', '--short', 'HEAD'), head.slice(0, 12)]) {
+    await assert.rejects(exported(ref), error => assertSanitized(error, 'EXPORT_INPUT_INVALID'), ref);
+  }
+});
+
+test('RX4 a replaced supervisor is refused by its hash at readiness, and certify\'s controller-replacement counts only that refusal as contained', async t => {
+  const replaced = createHash('sha256').update(Buffer.concat([SUPERVISOR, Buffer.from('#')])).digest('hex');
+  await expectRefused(await guestHarness(t), { answers: healthy({ supervisorHash: { code: 0, stdout: `${replaced}  /opt/moe/bin/moe-supervisor\n` } }) },
+    ['SUPERVISOR_HASH_MISMATCH']);
+  const h = certifyHarness(t);
+  const report = await h.certify();
+  assert.deepEqual([report.checks[CERTIFY_IDS.indexOf('controller-replacement')], h.hashed, report.executionReady],
+    [{ id: 'controller-replacement', result: 'passed', code: null }, [false, true], false]);
+  assert.deepEqual(await certifyHarness(t, { replace: answering('') }).certify(), failedAt('controller-replacement', 'CERTIFY_REPLACEMENT_ACCEPTED'));
+});
+
+test('RX5 certification stays blocked off a supported host or over an injected transport, and no local-runner module sets executionReady true', async t => {
+  const workDir = path.join(scratch(t), 'certify');
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  for (const id of ['sunos', 'aix', 'freebsd', 'openbsd', 'android']) {
+    const writes = [];
+    Object.defineProperty(process, 'platform', { ...platform, value: id });
+    try {
+      assert.deepEqual([platformFor(id), await runCli(['certify', '--work-dir', workDir], { write: text => writes.push(JSON.parse(text)) }), writes, await hostPrerequisites()],
+        [null, 2, [{ code: 'CERTIFY_UNSUPPORTED_HOST', certified: false, executionReady: false }], { code: 'PLATFORM_UNSUPPORTED', ready: false, executionReady: false }], id);
+    } finally { Object.defineProperty(process, 'platform', platform); }
+  }
+  assert.equal(existsSync(workDir), false);
+  // An injected run that passed every check is still uncertified, and no edit of its report into a certified one validates.
+  const report = await certifyHarness(t).certify();
+  assert.deepEqual([report.transport, report.checks.every(({ result }) => result === 'passed'), report.certified, report.executionReady], ['injected', true, false, false]);
+  const forge = change => { const value = structuredClone(report); change(value); return value; };
+  const native = change => forge(value => { Object.assign(value, { transport: 'native', certified: true }); change(value); });
+  assert.equal(validateCertificationReport(native(() => {})).certified, true); // the positive control: each forgery below breaks one rule
+  for (const [label, forged] of Object.entries({
+    injectedCertified: forge(value => { value.certified = true; }), missing: native(({ checks }) => checks.splice(CERTIFY_IDS.indexOf('recovery'), 1)),
+    extra: native(({ checks }) => checks.push({ id: 'attestation', result: 'passed', code: null })), reordered: native(({ checks }) => checks.reverse()),
+    failedCertified: native(({ checks }) => Object.assign(checks.at(-1), { result: 'failed', code: 'CERTIFY_TEARDOWN_FAILED' })),
+  })) assert.throws(() => validateCertificationReport(forged), error => assertSanitized(error, 'CERTIFY_REPORT_INVALID'), label);
+  const sources = new URL('../local-runner/', import.meta.url);
+  const modules = readdirSync(sources).filter(name => name.endsWith('.mjs'));
+  assert.deepEqual(['certify.mjs', 'lifecycle.mjs', 'guest-session.mjs'].map(name => modules.includes(name)), [true, true, true]);
+  for (const name of modules) assert.doesNotMatch(readFileSync(new URL(name, sources), 'utf8'), /executionReady['"]?\s*(?::|=(?!=))\s*true/, name);
+});
+
+test('RX6 runCheckJob pins every provider call to the platform\'s own Multipass client, unless the caller names one', async () => {
+  const pinned = '/snap/bin/multipass';
+  for (const [named, expected] of [[undefined, pinned], ['/opt/moe-test/multipass', '/opt/moe-test/multipass']]) {
+    const h = checkHarness();
+    const provider = named === undefined ? h.input.provider : { ...h.input.provider, executable: named };
+    assert.equal((await runCheckJob({ ...h.input, platform: { ...h.input.platform, executable: pinned }, provider }, h.deps)).outcome, 'passed');
+    assert.deepEqual(['provision', 'installToolchain', 'materialize', 'session', 'verify', 'remove'].map(step => h.seen[step].provider.executable),
+      Array(6).fill(expected), String(named));
+  }
 });
