@@ -52,7 +52,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -72,7 +72,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:24:16.731Z",
-  "updatedAt": "2026-10-31T21:44:08.136Z",
+  "updatedAt": "2026-10-31T21:52:48.404Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T21:30:26.551Z",
@@ -82,11 +82,14 @@
     "firstClaimAt": "2026-10-31T21:30:58.037Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-31T21:52:48.404Z",
+    "wallClockMs": 1310367
   },
   "contextFetchedBy": [
     "architect-125fd305",
-    "worker-4bc1a1b5"
+    "worker-4bc1a1b5",
+    "qa-1f1f912c"
   ],
   "tier": "light",
   "effort": "medium",
@@ -212,5 +215,9 @@
     "kind": "checkpoint",
     "sessionId": "architect-125fd305@2026-10-31T21:31:01Z",
     "at": "2026-10-31T21:44:08.136Z"
-  }
+  },
+  "completedAt": "2026-10-31T21:52:48.404Z",
+  "reviewCompletedAt": "2026-10-31T21:52:48.404Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 8df7daf1, which is on moe/work-2026-10-24. Its diff is test-only, +5/-1 in scripts/tests/prompt-cache-launcher.test.mjs (a 4-line comment and the `RUNTIME_PROTECTED=0\\n` prefix on the sh branch of the typeCases runSh call), plus the task's own board JSON. The same commit changes no byte of scripts/moe-agent.sh or moe-agent.ps1. The ps1 branch, runSh and between() are unchanged, and no test is skipped or weakened.\n\nI re-ran the gate myself in a fresh `git archive HEAD` (64ee76c0, scripts docs) snapshot outside the checkout, as the rail requires.\n- `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs` exits 0 on Linux /bin/bash: tests 50, pass 48, fail 0, skipped 2. The 2 skips are the PowerShell-only cases (\"no PowerShell engine on linux\"). All 5 `/bin/bash: <cmd> exports MOE_WORKER_TYPE=…` cases pass.\n- `node --test scripts/tests/protected-agent-command.test.mjs` exits 0: tests 27, pass 13, fail 0, skipped 14. The skips are pwsh rows, since pwsh is absent on Linux. This is DoD 2: task-aa85ff13's gate is unchanged.\n\nI also ran the acceptance-criteria scratch mutants, which the worker had skipped, on a copy of the test file in the snapshot.\n- Without the prefix: exactly the 5 bash worker-type cases fail with `RUNTIME_PROTECTED: unbound variable`.\n- With `RUNTIME_PROTECTED=1`: exactly the 4 non-claude cases (bin/codex, C:/tools/gemini.cmd, grok.exe, aider) fail with MOE_PROTECTED_AGENT_COMMAND_REFUSED, and claude passes. So the fixture value reaches the gate and the cases assert the unprotected path.\n- After the mutants, the test file was `cmp`-identical to the working tree, and `git diff HEAD` on it is empty.\n\nThe snapshot has been deleted. The shared-checkout dirty paths belong to other sessions; I touched none of them.",
+  "requiredCheckAtDone": null
 }

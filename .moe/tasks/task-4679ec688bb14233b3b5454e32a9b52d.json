@@ -140,7 +140,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T20:15:24.164Z",
-  "updatedAt": "2026-10-31T21:49:40.750Z",
+  "updatedAt": "2026-10-31T21:51:23.647Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T20:18:28.572Z",
     "plannedStepCount": 5,
@@ -253,7 +253,8 @@
     ".moe/tasks/task-62a909c1005946db8f9f73e31bf362ec.json",
     ".moe/tasks/task-77b0637fbe0043da988ea8206e5aaadb.json",
     ".moe/tasks/task-84e45fa565b04e95b07c02929de0faf9.json",
-    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json"
   ],
   "completionSummary": "Windows provisioning now launches `release:<pin sha256>` instead of a file:// URL: Multipass 1.17.0+win cannot launch a local image (file://C:/ fails the daemon's host check, #5490; an imported image becomes a sparse VHDX hcs cannot resize, #5491). provision.mjs: releaseImage() (64 lowercase hex only), launchImage (exactly one of imageFile/imageSha256), fileImageUrl refuses win32; provisionGuest picks the source once (win32: the manifest pin from verifySourceImage; linux/darwin keep the verified file:// launch byte-unchanged). After provisionOwned (also an R06-adopted timed-out launch), readGuestInfo (`info --format json`) must report image_hash exactly the pin, else IMAGE_PROVIDER_HASH_MISMATCH (fixed message); no retry, delete or fallback, the ledger record stays. Tests (local-runner.test.mjs): W1 win32 rows become refusals with the why-note; releaseImage + launchInstance win32/refusal rows; Windows provisionGuest argv, command order and recorded id; a mismatch table (URL-route id, other id, adopted launch, 12-char prefix, missing/numeric image_hash, info timeout), each refused before readiness with 1 launch, no image, no delete, record kept; an uppercase-pin accept row; fakeVm emulates the release id; certify/smoke/CJ8 defaults expect the pin on win32. Self-review: all 8 mutation probes killed (incl. the proof moved inside the launch closure or after readiness); 3 small test/doc fixes. Docs: CERTIFICATION 'Windows image' paragraph and image-row note; TROUBLESHOOTING rows for IMAGE_PROVIDER_HASH_MISMATCH and Windows LIFECYCLE_RETRY_EXHAUSTED. guest-supervisor.py unchanged (sha256 OK). Gate (git-archive snapshot, env -i, Node 24.21.0): exit 0, 370 tests, 369 pass, 0 fail, 1 skipped (opt-in macOS native smoke). Wider 11-file CI local-runner set: 634/643 pass; TY1 and C4-C9 need a built daemon dist and fail identically at pristine HEAD. The real win32 proof is the governor's R13 certify re-run.",
   "commits": [
@@ -313,6 +314,38 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "64ee76c0d27156659e0670bf2efb5b9097e5b07a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-1f1f912c@2026-10-31T21:30:05Z",
+      "paths": [
+        ".moe/tasks/task-4679ec688bb14233b3b5454e32a9b52d.json",
+        ".moe/tasks/task-84e45fa565b04e95b07c02929de0faf9.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "qa-1f1f912c",
+      "recordedAt": "2026-10-31T21:51:23.647Z",
+      "treeId": "8b0bcf3bd4e1b71b84dc7386c0997728685a27bf",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-77b0637fbe0043da988ea8206e5aaadb"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-47d21b835b5e4f28bb08b17f83d22256"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -324,9 +357,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-f21b922a@2026-10-31T20:50:18Z",
-    "at": "2026-10-31T21:29:30.401Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-1f1f912c@2026-10-31T21:30:05Z",
+    "at": "2026-10-31T21:51:23.647Z"
   },
   "completedAt": "2026-10-31T21:49:40.750Z",
   "reviewCompletedAt": "2026-10-31T21:49:40.750Z",
