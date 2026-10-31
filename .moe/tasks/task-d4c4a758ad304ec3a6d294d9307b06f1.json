@@ -71,7 +71,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -101,7 +101,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T17:35:27.653Z",
-  "updatedAt": "2026-10-31T18:47:25.758Z",
+  "updatedAt": "2026-10-31T19:05:51.304Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T18:21:37.974Z",
@@ -111,11 +111,14 @@
     "firstClaimAt": "2026-10-31T18:21:49.935Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T19:05:51.304Z",
+    "wallClockMs": 2641369
   },
   "contextFetchedBy": [
     "architect-b58e1112",
-    "worker-c0a1ac70"
+    "worker-c0a1ac70",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -281,5 +284,9 @@
     "reportedAt": "2026-10-31T18:47:02.017Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Under a protected profile (verified-local, session pin or fail-closed project.json), the VS Code Managed VMs view now runs vm-control.mjs like JetBrains ManagedVmPanel.execute does. The executable is the installed-executable-validated protected node. The env is a copy of the extension-host env without NODE_OPTIONS and NODE_PATH, with PATH filtered by protectedPathEntries. Nothing is added or deduplicated, and MOE_RUNNER_STATE_DIR and every other variable are kept. A refused node resolves unreadable 'node-missing' with no process and no legacy fallback. Legacy, observe and absent project.json keep HEAD's call byte for byte: resolveDaemonRuntime().node with options that have no env key.\n\nFiles: ManagedVm.ts (ExecFileLike env?, trailing optional env on runVmControl, still require-free); MoeDaemonClient.ts (new export protectedVmControlRuntime, one pure insertion; protectedDaemonEnvironment, startProtectedDaemon and resolveDaemonRuntime untouched); ManagedVmTreeProvider.ts (profile branch in execute); new tests/managed-vm-runtime.test.cjs (10 cases: R1 protected x2, R2 legacy/observe/absent x3, R3 refused node x2, R4 helper windows/posix/edge x3).\n\nVerification: plan gate in a Linux snapshot (git archive HEAD plus 4-file overlay, env -i, node 24.21): npm ci, lint, compile, test exit 0, 362 tests, 358 pass, 0 fail, 4 pre-existing Windows-only skips. Mutants M1 drop env, M2 env on legacy, M3 protectedDaemonEnvironment, M4 legacy fallback, M5 mutate input, M6 scrub state dir and M7 prepend node dir each fail the new file (2-5 failures); all restored and the snapshot deleted. Not run: the optional win32 node --test (R4 covers windows=true on Linux)."
+  "completionSummary": "Under a protected profile (verified-local, session pin or fail-closed project.json), the VS Code Managed VMs view now runs vm-control.mjs like JetBrains ManagedVmPanel.execute does. The executable is the installed-executable-validated protected node. The env is a copy of the extension-host env without NODE_OPTIONS and NODE_PATH, with PATH filtered by protectedPathEntries. Nothing is added or deduplicated, and MOE_RUNNER_STATE_DIR and every other variable are kept. A refused node resolves unreadable 'node-missing' with no process and no legacy fallback. Legacy, observe and absent project.json keep HEAD's call byte for byte: resolveDaemonRuntime().node with options that have no env key.\n\nFiles: ManagedVm.ts (ExecFileLike env?, trailing optional env on runVmControl, still require-free); MoeDaemonClient.ts (new export protectedVmControlRuntime, one pure insertion; protectedDaemonEnvironment, startProtectedDaemon and resolveDaemonRuntime untouched); ManagedVmTreeProvider.ts (profile branch in execute); new tests/managed-vm-runtime.test.cjs (10 cases: R1 protected x2, R2 legacy/observe/absent x3, R3 refused node x2, R4 helper windows/posix/edge x3).\n\nVerification: plan gate in a Linux snapshot (git archive HEAD plus 4-file overlay, env -i, node 24.21): npm ci, lint, compile, test exit 0, 362 tests, 358 pass, 0 fail, 4 pre-existing Windows-only skips. Mutants M1 drop env, M2 env on legacy, M3 protectedDaemonEnvironment, M4 legacy fallback, M5 mutate input, M6 scrub state dir and M7 prepend node dir each fail the new file (2-5 failures); all restored and the snapshot deleted. Not run: the optional win32 node --test (R4 covers windows=true on Linux).",
+  "completedAt": "2026-10-31T19:05:51.304Z",
+  "reviewCompletedAt": "2026-10-31T19:05:51.304Z",
+  "reviewSummary": "APPROVED. Reviewed the recorded commits: completion 35c43274 (on moe/work-2026-10-24) plus checkpoint a265cc8b, which carries the test file (unchanged through HEAD). Diff is moe-vscode ManagedVm.ts, MoeDaemonClient.ts, ManagedVmTreeProvider.ts and tests/managed-vm-runtime.test.cjs: +158/-6, ~152 net, within approvedScope. protectedDaemonEnvironment, startProtectedDaemon and resolveDaemonRuntime are untouched; ManagedVm.ts is still require-free; no UI or CODE_TEXT changes.\n\nRe-ran task.verification in a Linux snapshot (git archive HEAD plus 4-file overlay, env -i, node 24.21): npm ci, lint and compile clean; npm test exit 0, 362 tests, 358 pass, 0 fail, 4 pre-existing Windows-only skips. The new file's 10 cases pass: R1 x2 (verified-local, bogus), R2 x3 (absent, legacy, observe), R3 x2 (refused node), R4 x3 (helper windows/posix/edge). Snapshot deleted.\n\nDoD: (1) Protected read passes real(node) and an env of the extension-host env minus NODE_OPTIONS/NODE_PATH, PATH filtered by protectedPathEntries, nothing added, MOE_RUNNER_STATE_DIR kept, matching JetBrains ManagedVmPanel.execute. Legacy, observe and absent project.json keep HEAD's call with no env key (asserted with Object.hasOwn). (2) R1/R2 pin the exact execFile options for both profiles through the real ManagedVmTreeProvider.execute. (3) Snapshot gate green.\n\nAlso checked: a refused protected node resolves unreadable 'node-missing' with zero execFile and zero resolveDaemonRuntime calls (R3). The input env is never mutated (R1/R2/R4). No new throw or reject path.\n\nMutants I ran in a scratch snapshot, then restored (back to 10/10): M1 drop runtime.env gives 2 fail; M4 legacy fallback on refusal gives 2 fail. The worker reports M2, M3, M5, M6 and M7 also fail; I did not re-run those.\n\nNot verified: optional win32 node --test (R4 covers windows=true on Linux). Non-blocking, declared non-goals: JetBrains cwd (script dir) is not mirrored, and VS Code also drops NODE_OPTIONS case variants that JetBrains keeps.",
+  "requiredCheckAtDone": null
 }
