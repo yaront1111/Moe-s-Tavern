@@ -10,23 +10,147 @@
     "There is no behavior change on bash 5: node scripts/tests/postflight-safe.mjs bash reports failureClass NONE, and parity-check PASSes."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "scripts/moe-agent.sh: run both node programs outside $( ). This is the fix (DoD 1). Anchor by name, not line: at HEAD 78167a9c, MOE_WT_TOOLING_JS opens in prepare_worktree_launch (~3089) and MOE_GIT_GUARD_JS in prepare_agent_git_guard (~7188).\n\n(a) RED first. Build or reuse the bash 3.2 probe image. Its parts are cached on this host; bash:3.2 = GNU bash 3.2.57, the parser Apple ships.\nprintf 'FROM node:24-alpine\\nRUN apk add --no-cache python3 git ncurses-libs readline\\nCOPY --from=bash:3.2 /usr/local/bin/bash /bin/bash\\n' | docker build -q -t moe-bash32-probe:local -\nThen:\ndocker run --rm -v \"$PWD:/repo:ro\" -w /repo moe-bash32-probe:local /bin/bash -c '/bin/bash --version | head -1; /bin/bash -n scripts/moe-agent.sh; echo rc=$?'\nExpect `syntax error near unexpected token `)'` inside MOE_WT_TOOLING_JS, then rc=2. Keep that output for the completion summary.\n\n(b) Target layout. Each site gets a new top-level function whose body is the existing node line plus its heredoc. Bash's real parser reads a heredoc in a function body fine, even on 3.2, and $( ) only calls the function:\n\n# (one line: macOS /bin/bash 3.2 cannot parse a quoted heredoc inside $( ))\nworktree_tooling_node() {\n    \"$NODE_CMD\" - \"$PROJECT\" \"$CLI_ROOT\" \"$SERENA_PROJECT\" \"$PREFLIGHT_TASK_ID\" <<'MOE_WT_TOOLING_JS'\n<JS body, unchanged>\nMOE_WT_TOOLING_JS\n}\n\n- Site 1: worktree_tooling_node sits above prepare_worktree_launch.\n  - Keep the `# prepare_worktree_launch --` header comment directly above prepare_worktree_launch.\n  - The `# Design §5.2-§5.4` comment describes the program, so it may move above the new function.\n  - prepare_worktree_launch's assignment becomes `out=$(worktree_tooling_node) || worktree_stop MOE_WORKTREE_CREATE_FAILED` plus the unchanged message.\n- Site 2: agent_git_guard_node() goes directly above `prepare_agent_git_guard() {`.\n  - Its body: `\"$NODE_CMD\" - \"$PROJECT\" \"$SECURE_TEMP_DIR\" <<'MOE_GIT_GUARD_JS'`, the unchanged JS, `MOE_GIT_GUARD_JS`, then `}`.\n  - prepare_agent_git_guard's assignment becomes `AGENT_GIT_GUARD_ROOT=$(agent_git_guard_node) || return 1`.\n- Never retype a JS body. Restructure around each body with two small edits, one for the lines above it and one for the lines below it, so the body bytes never pass through an edit string.\n- Issue a site's two edits back to back in one response: the file does not parse between them.\n\n(c) Write rule: edit only through a tool the wrapper witnesses.\n- Use the Claude Edit tool, which is rename-safe (running sh seats keep their old inode), or a Serena editor from a one-shot seat.\n- Never use a shell write (sed -i, python, >, cp/mv). 16 open rows declare this path, so an unwitnessed write is HELD at landing.\n\nThe error handling is unchanged by construction. Each function's exit status is node's, so a node failure or a failed heredoc redirection still fails the $( ). The callers' existing `|| return 1` and `|| worktree_stop MOE_WORKTREE_CREATE_FAILED` still fail closed, so no path launches a CLI without the git guard.\n\nDo not touch any of these:\n- moe-agent.ps1;\n- the 8 python heredocs inside $( ), each of which was measured alone to parse under 3.2.57;\n- any other line.\n\n(d) Tests for this step:\n- `bash -n scripts/moe-agent.sh`.\n- The probe command from (a) now prints rc=0. Record it as DoD 1's evidence.\n- Both lines of this body check must print. It is the only twin guard for the WT tooling body:\nfor t in MOE_WT_TOOLING_JS MOE_GIT_GUARD_JS; do diff <(git show HEAD:scripts/moe-agent.sh | sed -n \"/<<'$t'\\$/,/^$t\\$/p\" | sed 1d) <(sed -n \"/<<'$t'\\$/,/^$t\\$/p\" scripts/moe-agent.sh | sed 1d) && echo \"$t body unchanged\"; done\n- `node --test scripts/tests/agent-git-guard.test.mjs`. Its first case asserts that the sh guard program still equals moe-agent.ps1's.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": ".github/workflows/ci.yml: make macOS CI parse the wrapper with its stock /bin/bash (DoD 2). In job build-all-platforms, directly after its `- uses: actions/checkout@v7`, add:\n\n      - name: Parse the Bash launcher with the stock macOS bash\n        # macOS /bin/bash is 3.2, and JetBrains launches Mac seats through it. Linux and Windows run bash 5,\n        # which parses constructs 3.2 rejects (a quoted heredoc inside $( ) is the known one).\n        if: runner.os == 'macOS'\n        run: |\n          /bin/bash --version\n          /bin/bash -n scripts/moe-agent.sh\n\nNotes:\n- Use the literal /bin/bash. On the macOS image, `bash` on PATH can resolve to Homebrew's bash 5.\n- The default macOS run shell stops at the first failing command, so a 3.2 parse regression fails the job.\n- Change nothing else. The macOS leg already runs moe-account-lease.test.mjs in `Test agent runtime discovery`.\n- Five open rows also declare ci.yml, so step 1's write rule applies.\n\nTest (PyYAML is installed). It prints CI_MACOS_PARSE_STEP_OK; the architect checked that it fails on HEAD:\npython3 -c \"import yaml; s=[x for x in yaml.safe_load(open('.github/workflows/ci.yml'))['jobs']['build-all-platforms']['steps'] if '/bin/bash -n scripts/moe-agent.sh' in x.get('run', '')]; assert len(s) == 1 and s[0].get('if') == 'runner.os == ' + chr(39) + 'macOS' + chr(39), s; print('CI_MACOS_PARSE_STEP_OK')\"",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/tests/moe-account-lease.test.mjs: remove #232's bash<4 skip (DoD 3). PR #232 reached this branch through main (439709fd, merged in at c9b771ea), and its skip is commit cb3c04af. Reverse exactly that hunk (git show cb3c04af -- scripts/tests/moe-account-lease.test.mjs) and nothing else:\n- delete the 3-line `// macOS's /bin/bash is 3.2. ...` comment and the `const bashVersion = ...` line below LEASE_ENGINES;\n- delete `const version = ext === 'sh' ? bashVersion(engine) : '';`;\n- restore `const skip = ext === 'sh' && !PYTHON && 'no python 3';`.\nspawnSync stays imported, because other code uses it.\n\nAfterwards:\n- `grep -nE 'bashVersion|before bash 4|known launcher bug' scripts/tests/moe-account-lease.test.mjs` prints nothing.\n- While no other commit has touched the file, `git diff cb3c04af^ -- scripts/tests/moe-account-lease.test.mjs` is empty.\n\nTests:\n(1) bash 5 on the host: `node --test scripts/tests/moe-account-lease.test.mjs` passes.\n(2) bash 3.2:\ndocker run --rm --user \"$(id -u):$(id -g)\" -e HOME=/tmp -v \"$PWD:/repo:ro\" -w /repo moe-bash32-probe:local node --test scripts/tests/moe-account-lease.test.mjs\nExpect 39 pass, 1 skip (Windows only) and 0 fail. The six `/bin/bash: ...` cases must RUN under 3.2.57, not skip.\n\nArchitect RED reference, on HEAD without step 1 and with the skip removed: those six fail with \"unexpected EOF while looking for matching `''\", the exact macOS CI error. With step 1 they pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/moe-account-lease.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification: ONE command. Its fresh output is the complete_task evidence, and QA re-runs it. It snapshots HEAD plus this task's three files under /mnt/d/moe-scratch, so peers' dirty bytes stay out. It then checks:\n- under bash 3.2.57: the parse, plus the lease and git-guard suites (the guard suite launches the whole wrapper);\n- that the skip is gone, and the ci.yml step's structure;\n- under bash 5: the parse, parity-check, the four anchored node suites, and postflight-safe bash (DoD 4, about 20 min).\nThe architect ran this exact chain on the planned edits: VERIFY_EXIT=0, and postflight-safe printed {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}.\n\nStart it from the repo root with run_in_background, output redirected to a log. Wait with `until grep -q '^VERIFY_EXIT=' <log>; do sleep 10; done`, re-issued if it times out. Do not end the turn while it runs.\n\nW=$(mktemp -d /mnt/d/moe-scratch/fa7fece5-XXXX) && git archive HEAD | tar -x -C \"$W\" && for f in scripts/moe-agent.sh scripts/tests/moe-account-lease.test.mjs .github/workflows/ci.yml; do cp \"$f\" \"$W/$f\"; done && cd \"$W\" && printf 'FROM node:24-alpine\\nRUN apk add --no-cache python3 git ncurses-libs readline\\nCOPY --from=bash:3.2 /usr/local/bin/bash /bin/bash\\n' | docker build -q -t moe-bash32-probe:local - && docker run --rm -v \"$W:/repo:ro\" -w /repo moe-bash32-probe:local /bin/bash -c 'echo \"bash $BASH_VERSION\"; /bin/bash -n scripts/moe-agent.sh && echo BASH32_PARSE_OK' && docker run --rm --user \"$(id -u):$(id -g)\" -e HOME=/tmp -v \"$W:/repo:ro\" -w /repo moe-bash32-probe:local node --test scripts/tests/moe-account-lease.test.mjs scripts/tests/agent-git-guard.test.mjs && ! grep -n -E 'bashVersion|before bash 4|known launcher bug' scripts/tests/moe-account-lease.test.mjs && python3 -c \"import yaml; s=[x for x in yaml.safe_load(open('.github/workflows/ci.yml'))['jobs']['build-all-platforms']['steps'] if '/bin/bash -n scripts/moe-agent.sh' in x.get('run', '')]; assert len(s) == 1 and s[0].get('if') == 'runner.os == ' + chr(39) + 'macOS' + chr(39), s; print('CI_MACOS_PARSE_STEP_OK')\" && bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && UNSET=$(env | grep -oE '^MOE_[A-Z_]+' | sed 's/^/-u /' | tr '\\n' ' ') && env $UNSET node --test scripts/tests/moe-account-lease.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs && env $UNSET node scripts/tests/postflight-safe.mjs bash; rc=$?; cd /mnt/d/projexts/moes; rm -rf \"$W\"; echo \"VERIFY_EXIT=$rc\"; [ \"$rc\" -eq 0 ]\n\nPass = VERIFY_EXIT=0, with:\n- BASH32_PARSE_OK;\n- the 3.2 suites at 0 fail (dry run: 64 pass, 1 Windows-only skip);\n- CI_MACOS_PARSE_STEP_OK;\n- PASS parity-check.sh;\n- the bash 5 suites at 0 fail;\n- postflight-safe failureClass NONE.\n\nThe completion summary must quote step 1's RED and GREEN probe output for /bin/bash -n scripts/moe-agent.sh under 3.2.57 (DoD 1), and the 3.2 lease result (DoD 3). It must also state that macos-latest CI runs only on PRs to main. DoD 2's CI run and DoD 3's macOS-CI pass are therefore confirmed at the next CI PR. Until then, the local 3.2.57 run stands in; it reproduces the macOS error exactly. Never claim a CI run that did not happen.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's 3-file diff. Load adversarial-self-review, check each item, and fix anything that fails:\n1. Step 1's body check prints both 'body unchanged' lines. `git diff -- scripts/moe-agent.sh` is small: tens of lines of new function headers, comments, closing braces and the two call sites.\n2. These counts are each exactly 1:\n   - each name in grep -cE '^(worktree_tooling_node|agent_git_guard_node)\\(\\)';\n   - `<<'MOE_GIT_GUARD_JS'`;\n   - `<<'MOE_WT_TOOLING_JS'`.\n   Each opener ends its line. `grep -n \"\\$(.*<<'\" scripts/moe-agent.sh` lists only the 8 python sites.\n3. Fail-closed. Walk a node failure and a missing or broken NODE_CMD through both callers:\n   - prepare_agent_git_guard returns non-zero, so its caller prints MOE_AGENT_GIT_GUARD_FAILED and exits 1;\n   - prepare_worktree_launch reaches worktree_stop MOE_WORKTREE_CREATE_FAILED;\n   - neither launches unguarded.\n4. Twice or concurrently: both functions are stateless wrappers around one node run, and the guard program's mkdtemp is unchanged. Running seats kept their inode, and hot reload runs bash -n before exec.\n5. ci.yml: the literal /bin/bash; `if` is exactly runner.os == 'macOS'; no other line changed.\n6. The lease-test diff is exactly the reverse of cb3c04af.\n7. `git diff --quiet -- scripts/moe-agent.ps1` passes: the ps1 twin is untouched, so parity stays.\nIf this review changes any byte, re-run step 4's command and submit that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        ".github/workflows/ci.yml",
+        "scripts/tests/moe-account-lease.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Promoted by the governor on the human's 14:5xZ instruction to keep the board moving and coders busy. HIGH: stock macOS bash 3.2 cannot parse moe-agent.sh, so no Mac seat can launch. dependsOn d4810c9c (the #232 merge gate) still gates the WORKING claim; planning can proceed now. The plan touches lane files: governor-693b7073 slots it into the wrapper chain.",
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "dependsOn": [
-    "task-d4810c9c0b0244598e275cc5cbe40ed7"
+    "task-d4810c9c0b0244598e275cc5cbe40ed7",
+    "task-7a4aab5e0bfa48e0978eb76506edfd57"
   ],
   "priority": "HIGH",
   "order": 32,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T14:35:40.181Z",
-  "updatedAt": "2026-10-31T14:35:40.181Z"
+  "updatedAt": "2026-10-31T15:36:40.842Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T14:49:00.789Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T14:49:17.026Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-b58e1112"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T15:36:40.821Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/moe-agent.sh parses and runs under macOS /bin/bash 3.2 (GNU bash 3.2.57). Two node programs used to be quoted heredocs inside $( ). They now run from top-level functions, worktree_tooling_node and agent_git_guard_node, and $( ) only calls those functions. Program text, argv, stdin delivery, output, exit status and fail-closed handling are all unchanged, so bash 5 behavior on Linux, WSL and Git Bash for Windows is identical. macOS CI parses the wrapper with /bin/bash. With #232's bash<4 skip removed, the six /bin/bash lease-loop cases run again.",
+    "acceptanceCriteria": [
+      "Under bash 3.2.57, `/bin/bash -n scripts/moe-agent.sh` exits 0. At HEAD it exits 2.",
+      "Under bash 3.2.57, moe-account-lease.test.mjs runs its six /bin/bash cases and they pass, and agent-git-guard.test.mjs passes.",
+      "ci.yml job build-all-platforms has exactly one step, macOS-only, that runs `/bin/bash -n scripts/moe-agent.sh`.",
+      "moe-account-lease.test.mjs no longer contains bashVersion or the bash<4 skip.",
+      "On bash 5, postflight-safe.mjs bash reports failureClass NONE, and parity-check PASSes."
+    ],
+    "invariants": [
+      "The MOE_WT_TOOLING_JS and MOE_GIT_GUARD_JS bodies are byte-identical to HEAD, and the guard body still equals moe-agent.ps1's $program.",
+      "Each heredoc opener appears exactly once and ends its line, and each terminator stands alone on its line. agent-git-guard.test.mjs and postflight-worktree.cjs pin both.",
+      "A node failure or a failed heredoc redirection still fails closed with MOE_AGENT_GIT_GUARD_FAILED or MOE_WORKTREE_CREATE_FAILED. No CLI launches without the git guard.",
+      "Untouched: moe-agent.ps1, the eight python heredocs inside $( ), and every other test anchor."
+    ],
+    "compatibility": [
+      "Shared-checkout mode and worktree mode behave exactly as before on bash 5. The epic rail requires shared mode to stay unchanged.",
+      "Kept anchors: the lease slice markers ('# printf, not echo -e: ...' to \"# Runs inside the CLI's subshell\"), `agent_git_exec() (`, `if [ -n \"${AGENT_GIT_GUARD_ROOT:-}\" ]` and STREAM_JSON_PARSER."
+    ],
+    "approvedScope": [
+      "The new top-level functions worktree_tooling_node and agent_git_guard_node in scripts/moe-agent.sh, plus their single call sites in prepare_worktree_launch and prepare_agent_git_guard.",
+      "One new step in .github/workflows/ci.yml, job build-all-platforms.",
+      "The reverse of commit cb3c04af's hunk in scripts/tests/moe-account-lease.test.mjs."
+    ],
+    "reuse": [
+      "`node -` keeps taking the program on stdin, exactly as today. No new files, no sidecar .cjs, and no node -e argv."
+    ],
+    "sourceAssumptions": [
+      "At HEAD 78167a9c (moe-agent.sh unchanged since c9b771ea), only two heredocs inside $( ) fail under bash 3.2.57: prepare_worktree_launch's `out=$(\"$NODE_CMD\" - ... <<'MOE_WT_TOOLING_JS'` and prepare_agent_git_guard's `AGENT_GIT_GUARD_ROOT=$(\"$NODE_CMD\" - ... <<'MOE_GIT_GUARD_JS'`. Each site was measured in isolation.",
+      "PR #232 is on the work branch through main 439709fd, merged in at c9b771ea. Its bash<4 skip is commit cb3c04af. The lease-test blob at cb3c04af^ is 6a3a9eb3.",
+      "ci.yml runs only on pushes to main and on PRs to main. Its macOS leg runs moe-account-lease.test.mjs in `Test agent runtime discovery`.",
+      "This host's docker has bash:3.2 (GNU bash 3.2.57) and node:24-alpine. moe-bash32-probe:local is built from them: node 24, python3 and git, with /bin/bash at 3.2.57."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: run each node program from a top-level function whose body is the node line plus its heredoc, so $( ) only calls the function. In the prototype the JS bytes are identical to HEAD, the program still reaches node on stdin via `node -`, and the exit status still fails closed.\n\nRejected:\n(1) The description's `IFS= read -r -d '' VAR <<'JS' ... JS || true` + `node -e \"$VAR\"`.\n- `|| true` swallows a failed heredoc redirection. Node on an empty program exits 0 with no output, so prepare_agent_git_guard would hit `[ -n \"$AGENT_GIT_GUARD_ROOT\" ] || return 0` and launch the CLI with NO git guard. That is fail-open.\n- `-e` puts ~5 KB of JS on argv, where Git Bash's MSYS argument conversion can rewrite path-like text.\n- It breaks the guard test's `<<'MOE_GIT_GUARD_JS'\\n` anchor.\n(2) Sidecar .cjs files: two new files that both IDE bundles must ship, while the ps1 twin keeps the inline text the guard test compares byte for byte.\n(3) Converting all 10 heredoc-in-$( ) sites: needless. The 8 python sites parse on 3.2.57, and two tests pin STREAM_JSON_PARSER.\n(4) Nested function definitions inside the callers: they work, but the file's convention is top-level helpers.",
+    "codebaseInsights": "Measured on this host with docker bash:3.2 (GNU bash 3.2.57) and a node:24-alpine probe image whose /bin/bash is 3.2.57.\n- HEAD: `bash -n` fails inside MOE_WT_TOOLING_JS. Testing each of the 10 sites alone, only MOE_WT_TOOLING_JS and MOE_GIT_GUARD_JS fail. With every body blanked, rc is 0.\n- Prototype (scratch only):\n  - `-n` gives rc 0 under bash 3.2 and 5.2.\n  - The lease suite under 3.2 had 6 /bin/bash failures before the fix, with the macOS CI message. After the fix it gives 39 pass and 1 skip.\n  - agent-git-guard.test.mjs passes 25/25 under 3.2; it launches the whole wrapper.\n  - With bash 5 on the host, the agent-git-guard, lease, prompt-cache-launcher, usage-launcher, taskless-handoff and importee-guard-bash suites gave 186 pass, 0 fail. parity-check PASSes.\n  - The full step-4 chain returned VERIFY_EXIT=0, with postflight-safe failureClass NONE.\n- All 11 scripts/*.sh files parse on 3.2 with the fix. No bash-4-only construct is in moe-agent.sh, and `--help` runs under 3.2.\n- #232 is main 439709fd, merged into the work branch at c9b771ea. Its skip is cb3c04af.\n- ci.yml triggers only on pushes to main and PRs to main. gh is not executable here.\n- Notes: mem:gotcha-bash32-heredoc-inside-comsub, mem:gotcha-moe-agent-sh-text-anchored-tests, mem:gotcha-wrapper-slice-tests-execute-text, mem:gotcha-bash-hot-reload-incremental-parse (the Claude Edit tool renames).",
+    "risks": "- DoD 3's 'pass on macos-latest CI', and DoD 2's CI run, are observable only when the next PR to main runs CI. Report the 3.2.57 container evidence, say the CI half is pending, and never invent a CI result.\n- moe-agent.sh is a wrapper-lane file declared by 16 open rows; ci.yml is declared by 5. Use witnessed edits (Edit or Serena). An EDITING hold means: wait for the peer's step. governor-693b7073 slotted this row right after WT-08.\n- Never edit the wrapper while a postflight harness runs from this tree. The gate uses a snapshot.\n- Each site's two edits leave the file unparseable for an instant, so issue them back to back.\n- A skip left in the lease test makes the 3.2 run look green. The gate's grep catches that; the architect's first dry run proved it.\n- The gate needs docker with the bash:3.2 and node:24-alpine images, both cached here. The image build line is idempotent.\n- postflight-safe takes about 20 min, so run it in the background.\n- Line numbers drift, so anchor every edit by name.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      ".github/workflows/ci.yml",
+      "scripts/tests/moe-account-lease.test.mjs",
+      "scripts/tests/agent-git-guard.test.mjs",
+      "scripts/tests/postflight-worktree.cjs",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/postflight-safe.mjs",
+      "scripts/moe-agent.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "78167a9c40880a3004e4e38b84f3a20b9993378d",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T15:36:40.842Z",
+  "approvedPlanRevision": 1
 }
