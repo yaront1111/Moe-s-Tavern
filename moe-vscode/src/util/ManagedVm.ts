@@ -44,7 +44,7 @@ const CODE_TEXT = new Map(Object.entries({
     PLATFORM_UNSUPPORTED: 'This host platform is not supported for Moe-managed VMs.',
     PREREQUISITES_UNAVAILABLE: 'Host prerequisites could not be checked; run the local-runner doctor.',
     PROVIDER_PREREQUISITES_READY: 'Multipass is ready, but another host prerequisite is not (on Windows, Hyper-V).',
-    PROVIDER_NOT_FOUND: 'Multipass was not found. Install Multipass and make sure it is on PATH.',
+    PROVIDER_NOT_FOUND: 'Multipass was not found at its default install location. Install it to the default location (the official installer, or snap on Linux); a copy elsewhere, even on PATH, is not used.',
     PROVIDER_ACCESS_DENIED: 'Multipass denied access to this user; check its authentication or group membership.',
     PROVIDER_TIMEOUT: 'Multipass did not answer in time; check that its service is running.',
     HOST_UNSUPPORTED: 'This host platform or architecture is not in the supported prerequisite matrix.',

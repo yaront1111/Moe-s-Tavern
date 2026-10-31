@@ -43,8 +43,17 @@ test('V1: readiness keeps provider, execution and verification apart; only a lit
     assert.deepEqual(M.readiness(run('status', status({ executionReady: true, verified: true }))),
         [READY, 'Execution: the runner reports it ready.', 'Verification: the runner reports it verified.']);
     assert.equal(M.readiness(run('status', status({ provider: { ready: 'true', code: 'PROVIDER_NOT_FOUND' } })))[0],
-        'VM provider: not ready. Multipass was not found. Install Multipass and make sure it is on PATH.');
+        'VM provider: not ready. Multipass was not found at its default install location. Install it to the default location (the official installer, or snap on Linux); a copy elsewhere, even on PATH, is not used.');
     assert.equal(M.readiness(run('status', status({ provider: { ready: false } })))[0], 'VM provider: not ready. No reason was given; run the local-runner doctor.');
+});
+
+test('every JetBrains managed VM code text is the VS Code text, word for word', () => {
+    const bundle = fs.readFileSync(path.join(__dirname, '../../moe-jetbrains/src/main/resources/messages/MoeBundle.properties'), 'utf8');
+    const codes = [...bundle.matchAll(/^moe\.managedVm\.code\.([A-Z][A-Z0-9_]*)=(.*)$/gm)];
+    assert.ok(codes.length >= 13, `only ${codes.length} JetBrains code texts found`);
+    for (const [, code, text] of codes) {
+        assert.equal(M.readiness(run('status', status({ provider: { ready: false, code } })))[0], `VM provider: not ready. ${text.trimEnd()}`, code);
+    }
 });
 
 test('V1: rows are the owned instances in report order, never collision or deleted', () => {
