@@ -567,17 +567,21 @@ async function wtRecoverMoe(){
   assert.ok(revOf(p.top,p.branch)===main&&!r.log.includes('MOE_CHECKPOINT_RECOVERED'),'a recovery commit despite W/.moe'+tail(r.log));
   assert.deepEqual([readOr(path.join(p.W,'src','left.txt')),readOr(path.join(p.W,'.moe','x'))],['left\n','x\n'],'the dirt or W/.moe/x changed');
 }
-// Architect and QA seats in the control checkout (HEAD moe/control) land nothing.
+// Architect and QA seats in the control checkout (HEAD moe/control) land nothing, not even a
+// declared (ASSERTED) path, which the shared landing commits even with no baseline.
 async function wtControlSeats(){
   const p=repo('wt-control',{settings:LANDS});
   for(const role of ['architect','qa']){
-    const f=path.join(p.top,'src',role+'.txt'),refs=()=>git(p.top,'for-each-ref','--format=%(refname) %(objectname)'),before=refs();
-    const r=await landRun(p,'wt-control-'+role,{[f]:role+'\n'},{FAKE_CLAIM_WORKSPACE:null},{role});
+    const rel='src/'+role+'.txt',f=path.join(p.top,'src',role+'.txt'),refs=()=>git(p.top,'for-each-ref','--format=%(refname) %(objectname)');
+    write(path.join(p.dir,'.moe','tasks',TASK+'.json'),JSON.stringify({id:TASK,title:'Worktree smoke',status:'WORKING',declaredFiles:[rel]}));
+    const before=refs();
+    const r=await landRun(p,'wt-control-'+role,{[f]:role+'\n'},{FAKE_CLAIM_WORKSPACE:null,FAKE_SCOPE_DECLARED_FIELD:'1'},{role});
     assert.ok(r.code===0&&r.log.includes('MOE_COMMIT_NOTHING_TO_COMMIT'),`${role}: exit code ${r.code}, or no MOE_COMMIT_NOTHING_TO_COMMIT line`+tail(r.log));
     const rec=ledger(p);
     assert.deepEqual(rec.map(x=>[x.outcome,x.kind,x.code,x.sha,x.ref]),[['nothing','checkpoint','MOE_COMMIT_NOTHING_TO_COMMIT',undefined,undefined]],`${role}: the record_commit rows`);
     assert.deepEqual([refs(),probe(p.top,'symbolic-ref','-q','HEAD'),readOr(f)],[before,'0:refs/heads/moe/control\n',role+'\n'],`${role}: a ref moved, HEAD left moe/control, or the write changed`);
     noBaseline(p);
+    assert.equal(git(p.top,'log','--all','--format=%H','--',rel),'',`${role}: the declared ${rel} reached a ref`);
   }
 }
 // A write into the control checkout is reported once, never landed or reverted; dirt that was there before is not.
