@@ -7,8 +7,9 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const win = process.platform === 'win32';
+const pwsh = win && process.argv[2] !== 'cli' && spawnSync('pwsh.exe', ['-NoProfile', '-Command', 'exit 0'], { timeout: 60000 }).status === 0;
 const source = fileURLToPath(import.meta.url), scripts = path.dirname(path.dirname(source));
-const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(MOE_|FAKE_|GIT_|CLAUDE|CODEX|GUARD_)/i.test(k)));
+const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(MOE_|FAKE_|GIT_|CLAUDE|CODEX|GUARD_|PSMODULEPATH$)/i.test(k)));
 Object.assign(clean, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' });
 const quote = s => `'${s.replaceAll("'", "'\\''")}'`;
 const psquote = s => `'${s.replaceAll("'", "''")}'`;
@@ -90,6 +91,7 @@ function fixture(t, cli, hooks, status = 'REVIEW', mode = '') {
   return f;
 }
 function launch(f, cli, interactive, concurrent = false) {
+  const shell = win ? f.engine || 'powershell.exe' : 'bash';
   const args = win ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(scripts, 'moe-agent.ps1'), '-Project', f.repo,
     '-WorkerId', f.worker || 'worker-guard', '-Role', 'worker', '-Team', 'Guard', '-NoStartDaemon', '-NoLoop', '-Command', f.cli]
     : [path.join(scripts, 'moe-agent.sh'), '--project', f.repo, '--worker-id', f.worker || 'worker-guard', '--role', 'worker', '--team', 'Guard', '--no-start-daemon', '--no-loop', '--command', f.cli];
@@ -101,15 +103,15 @@ function launch(f, cli, interactive, concurrent = false) {
       ' } finally { @(' + keys.map(k => '$env:' + k).join(',') + ') | ConvertTo-Json | Set-Content -LiteralPath ' + psquote(f.result + '.restored') + ' -Encoding UTF8 }');
     args.splice(4, args.length, driver);
   }
-  if (concurrent) return new Promise(resolve => execFile(win ? 'powershell.exe' : 'bash', args, { cwd: f.repo, env: f.env, timeout: 90000, maxBuffer: 1048576 }, e => resolve(e?.code || 0)));
-  return run(win ? 'powershell.exe' : 'bash', args, f.repo, f.env, f.mode === 'non-git' ? 'cli stdin\n' : undefined);
+  if (concurrent) return new Promise(resolve => execFile(shell, args, { cwd: f.repo, env: f.env, timeout: 90000, maxBuffer: 1048576 }, e => resolve(e?.code || 0)));
+  return run(shell, args, f.repo, f.env, f.mode === 'non-git' ? 'cli stdin\n' : undefined);
 }
 if (process.argv[2] === 'cli') agent();
-else for (const [cli, interactive, hooks, status] of ['custom', 'claude', 'codex', 'gemini', 'grok'].flatMap(cli => [[cli, true, false, 'WORKING'], [cli, false, true, 'REVIEW']]).concat([['custom', false, false, 'REVIEW']])) {
-  test(`${win ? 'PS5.1' : 'bash'} ${cli} ${interactive ? 'interactive checkpoint' : `headless ${hooks ? 'hookful' : 'plumbing'} completion`} refuses failed-cd commit and push before wrapper landing`, t => {
-    const f = fixture(t, cli, hooks, status), before = snapshot(f), config = fs.readFileSync(path.join(f.gitdir, 'config'));
+else for (const [cli, interactive, hooks, status, opts = {}] of ['custom', 'claude', 'codex', 'gemini', 'grok'].flatMap(cli => [[cli, true, false, 'WORKING'], [cli, false, true, 'REVIEW']]).concat([['custom', false, false, 'REVIEW']], win ? [['custom', false, false, 'REVIEW', { engine: 'pwsh.exe' }]] : [])) {
+  test(`${opts.engine ? 'PS7' : win ? 'PS5.1' : 'bash'} ${cli} ${interactive ? 'interactive checkpoint' : `headless ${hooks ? 'hookful' : 'plumbing'} completion`} refuses failed-cd commit and push before wrapper landing`, { skip: opts.engine && !pwsh && 'pwsh.exe not found' }, t => {
+    const f = Object.assign(fixture(t, cli, hooks, status), opts), before = snapshot(f), config = fs.readFileSync(path.join(f.gitdir, 'config'));
     const r = launch(f, cli, interactive);
-    assert.ok(fs.existsSync(f.result), `CLI did not run: exit=${r.status}; codes=${r.stdout?.match(/MOE_[A-Z_]+/g)}`);
+    assert.ok(fs.existsSync(f.result), `CLI did not run: exit=${r.status}; codes=${((r.stdout ?? '') + (r.stderr ?? '')).match(/MOE_[A-Z_]+/g)}`);
     const observed = JSON.parse(fs.readFileSync(f.result, 'utf8'));
     assert.deepEqual(observed.results, Array(4).fill({ status: 1, refused: true, wrapper: true }));
     assert.deepEqual(observed.before, before); assert.deepEqual(observed.after, before);
@@ -128,6 +130,12 @@ else for (const [cli, interactive, hooks, status] of ['custom', 'claude', 'codex
 }
 
 if (process.argv[2] !== 'cli') {
+  test('both wrappers embed one guard program, and it keeps PSModulePath from its powershell.exe child', () => {
+    const cut = (file, open, close) => { const s = fs.readFileSync(path.join(scripts, file), 'utf8'), a = s.indexOf(open); assert.ok(a >= 0 && s.indexOf(open, a + 1) < 0, file); return s.slice(a + open.length, s.indexOf(close, a)); };
+    const program = cut('moe-agent.sh', "<<'MOE_GIT_GUARD_JS'\n", '\nMOE_GIT_GUARD_JS\n');
+    assert.equal(cut('moe-agent.ps1', "$program = @'\n", "\n'@\n"), program);
+    assert.match(program, /'PSMODULEPATH'/);
+  });
   for (const mode of ['bypass', 'notification', 'non-git', 'precedence', 'invalid-count', 'hook-directory', 'launch-failure', 'hook-spaces', 'lowercase-count', 'invalid-gitdir', 'broken-gitdir', 'hook-control']) test(`${mode} is explicit and fail-closed`, t => {
     const f = fixture(t, 'custom', false, 'REVIEW', mode);
     if (mode === 'notification') Object.assign(f.env, { FAKE_CLAIM_MODE: 'idle', FAKE_MENTION: '1' });

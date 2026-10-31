@@ -6241,7 +6241,9 @@ try {
     if (win) {
         const acl = "$ErrorActionPreference='Stop'; $p='" + root.replaceAll("'", "''") + "'; $a=Get-Acl -LiteralPath $p; $a.SetAccessRuleProtection($true,$false); " +
             "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User,'FullControl','ContainerInherit,ObjectInherit','None','Allow')); Set-Acl -LiteralPath $p -AclObject $a";
-        value(cp.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(acl, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 }));
+        // pwsh 7 lists its own modules first in PSModulePath, and a Windows PowerShell 5.1 child that inherits it cannot load Get-Acl.
+        const psenv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== 'PSMODULEPATH'));
+        value(cp.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(acl, 'utf16le').toString('base64')], { env: psenv, encoding: 'utf8', timeout: 10000, maxBuffer: 1048576 }));
     }
     const hooks = native(path.join(root, 'hooks')), config = native(path.join(root, 'config'));
     fs.mkdirSync(hooks, { mode: 0o700 });
