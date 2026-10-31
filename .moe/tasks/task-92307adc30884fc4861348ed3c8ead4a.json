@@ -8,20 +8,169 @@
     "Each platform's client path is pinned once and used by provision, runCheckJob, certify, doctor, prerequisites, vm-control and agent lifecycle, with tests per path."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "GATE, then TESTS FIRST (DoD 1 and 2). Load test-driven-development.\n\nGate, before any edit. The governors hold this row behind a TEMPORARY dependsOn on 7db14e2d until CQ-R13 (f4811a72) parks and its checkpoint commits its own edits (#governors msg-71e34882, msg-272f1b62). Steps 2-3 must edit scripts/tests/local-runner.test.mjs, which CQ-R13 holds and runs in place during its step 4. Confirm all three:\n- moe.get_context {taskId: 'task-f4811a729f9e436ba129a65c12d348c1', view: 'status'} is not WORKING;\n- `git status --porcelain -- scripts/tests/local-runner.test.mjs scripts/local-runner/check-lifecycle.mjs` prints nothing;\n- `git grep -n 'copy?.executable ?? platform?.executable' HEAD -- scripts/local-runner/check-lifecycle.mjs` finds CQ-R13's runCheckJob pin (its RX6). MX5 relies on it. This row never edits check-lifecycle.mjs; 12e89395 owns that file next.\nError handling: if any check fails, edit nothing. Call moe.report_blocked on this row with reason 'CQ-R13 (f4811a72) has not parked and committed scripts/tests/local-runner.test.mjs' and needsFrom 'governor'. Pass NO blockedOnTaskIds, and write no task-prefixed id in the reason: CQ-R13 will block on this row, so naming it would close a cycle.\n\nNew file scripts/tests/local-runner-pinned-client.test.mjs, the per-module file the governor asked for. One group, MX:\n- MX0: ci.yml's 'Test local runner prerequisite bundles' run line lists this file exactly once (as local-runner-agents.test.mjs:149 checks its own).\n- MX1 pins. linuxPlatform.executable is '/snap/bin/multipass' and macosPlatform.executable is '/usr/local/bin/multipass'. windowsPlatform.executable is path.win32.join(root, 'Multipass', 'bin', 'multipass.exe'), where root is process.env.ProgramFiles when it is drive-absolute (letter, colon, backslash), else 'C:\\\\Program Files'. Check the root rule on fresh module instances: import('../local-runner/platform-windows.mjs?mx1=<n>') after setting or deleting ProgramFiles, restored afterwards. Cases: 'D:\\\\Apps', unset, 'relative\\\\dir', '\\\\\\\\server\\\\share'. No other scripts/local-runner/*.mjs file names any of the three client paths (pinned once).\n- MX2 prerequisites. Each platform module's prerequisites, with an injected doctor (plus the Windows hypervisor and the Linux/macOS probe stubs) and no provider.executable, hands the doctor that module's own pin. An explicit provider.executable still wins.\n- MX3 doctor. runCli(['doctor'], {doctor: recorder}) passes {executable: platformFor(id).executable} with process.platform redefined to linux, darwin and win32. Save and restore the descriptor, as local-runner.test.mjs:2181 does. `--executable X` still wins. An unsupported id ('aix') passes executable undefined; runDoctor then refuses HOST_UNSUPPORTED before any spawn.\n- MX4 provision and native smoke. For each module P, provisionGuest and nativeSmokeCore get {...P, prerequisites: recorder returning not ready} and provider {run: a failing recorder}. Each hands P.executable to prerequisites and spawns nothing.\n- MX5 runCheckJob. For each P, with no provider.executable: an injected provision that reserves through the ledger it receives and returns a ready guest, plus a throwing toolchain step. Provision and remove both receive P.executable, and vm is 'deleted'. Reuse certifySnapshot() (certify-bridge.mjs) and CANARY_CHECK (certify-canary.mjs) as the snapshot and check.\n- MX6 certify. For each P, certifyCore({platform: {...P, prerequisites: recorder}, workDir: <scratch>, deps: {doctor: recorder, provider: {run, spawn} failing recorders}}). The doctor gets exactly {executable: P.executable}, prerequisites sees P.executable, and certified is false.\n- MX7 vm-control. Run status, reconcile and cleanup with one owned ledger record (as ledgerWith in local-runner-vm-control.test.mjs), provider {run: recorder}, and stub prerequisites and daemon call. Under linux, darwin and win32, every provider call uses platformFor(id).executable. An explicit provider.executable still wins. An unsupported id writes exactly {\"code\":\"VM_CONTROL_FAILED\"}, exits 0, and makes no ledger, provider or daemon call.\n- MX8 agent lifecycle. runAgentJob with provider {run, spawn} recorders, under each id. The first (sweep) call fails, and its executable is platformFor(id).executable. An explicit executable still wins. An unsupported id rejects AGENT_INPUT_INVALID before any forward or provider call. Model the minimal input on agentHarness in local-runner.test.mjs, reading it only.\n- MX9 planted cwd (DoD 1). Create scratch dir S with mkdtemp under os.tmpdir(), never in the checkout. Plant multipass, multipass.exe and multipass.com in S, each appending to S/ran when run:\n  - on POSIX, a 0755 '#!/bin/sh' script;\n  - on win32, a hard link (else a copy) of process.execPath, run with NODE_OPTIONS='--require \"<S>/mark.cjs\"'. Write that path with forward slashes, because NODE_OPTIONS treats a backslash inside quotes as an escape. mark.cjs appends and exits 0.\n  Then process.chdir(S) and prefix PATH with '.', so POSIX resolves a bare name in S just as win32 does from the cwd.\n  (a) Control: execFileSync('multipass', ['version']) must create S/ran on every OS, which proves the plant is live. Then delete it.\n  (b) The real defaults, with no injected run or spawn: runCli(['doctor']), runCli(['prerequisites']), runVmControl(['status', '--project', <abs scratch>], {ledger: one owned record, prerequisites: stub}) with no provider, and runAgentJob with no provider (a forward that grants the lease; sleep a no-op). Each settles with a fixed code, and S/ran never exists. Every spawn here is read-only (version, info, exec of an unowned name), so a host with a real client at the pin is safe.\n  Restore the cwd, PATH and NODE_OPTIONS in finally.\nAppend this file to the end of ci.yml's local-runner run line. The agents and check CI-line rows require the line to keep its current prefix.\n\nRun `node --test scripts/tests/local-runner-pinned-client.test.mjs`. Record the RED rows in the step note: MX1, MX2 Windows, MX3, MX4-MX6 Windows, MX7, MX8, and MX9 (b)'s doctor, vm-control and agent rows. MX0, MX9 (a) and the Linux/macOS module rows already pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "newFiles": [
+        "scripts/tests/local-runner-pinned-client.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Pin the Windows client once, then flip the six held rows that assert the bare one.\n\nscripts/local-runner/platform-windows.mjs:\n- EXECUTABLE = path.win32.join(root, 'Multipass', 'bin', 'multipass.exe'). root is process.env.ProgramFiles when drive-absolute, else 'C:\\\\Program Files'. Compute it at import, by the same rule probeHypervisor uses for SystemRoot.\n- prerequisites hands the doctor provider.executable ?? EXECUTABLE.\n- windowsPlatform = Object.freeze({ id: 'win32', arch: 'x64', executable: EXECUTABLE, prerequisites }), shaped like linuxPlatform.\n- Header comment, from canonical/multipass v1.17.0 packaging/windows/wix:\n  - Package.wxs: <Package Name=\"Multipass\">, INSTALLFOLDER under ProgramFiles6432Folder, BinFolder 'bin', and the WixUI_InstallDir dialog can move it;\n  - CLIClientComponents.wxs: bin\\\\multipass.exe, with [INSTALLFOLDER]bin appended LAST to the user or system PATH;\n  - so the client is pinned: libuv looks up a bare name in the cwd first (.com, then .exe), and PATH order is not certified;\n  - a client outside the default folder reports PROVIDER_NOT_FOUND (fail closed).\nDo not change the prerequisite action texts: the held WIN_ITEMS rows assert them. provision, certify, native-smoke, certify-recovery-child and check-dispatch's runCheckJob already take platform.executable, so they need no edit.\n\nscripts/tests/local-runner.test.mjs, expectations only. Six held rows assert the bare Windows client and now see the pin. In each, change only the expected client value, to windowsPlatform.executable:\n- 'Windows provisioning keeps its own multipass client and ignores the cache location argument': ['multipass'];\n- CJ2, CJ9 and CJ12: the expected provider, because checkHarness's onWindows() platform now carries the pin;\n- LC1: the spawned argv;\n- WC1: executable: undefined.\nA scratch simulation of this exact change failed exactly these six, plus A4 and the bundle/Gradle rows, which fail in a scratch copy for unrelated reasons. RX6 stays green.\nError handling: any other held row that now fails is a defect in this step's change. Fix the runtime, never the row.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/platform-windows.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Pin the host-platform entry points. Each reads platformFor(process.platform) at call time, and an explicit executable still wins.\n\n- scripts/local-runner/cli.mjs: the doctor command calls doctor({ executable: platformFor(process.platform)?.executable, ...parsed.options }). hostPrerequisites stays unchanged: the held R13a row asserts it passes executable: undefined, and the platform module supplies the default.\n- scripts/local-runner/vm-control.mjs: import platformFor from ./cli.mjs, which it already imports from. As the first thing in runVmControl's try, before the ledger is built:\n  - the provider record gets executable = provider.executable ?? platformFor(process.platform)?.executable;\n  - when that is undefined, throw, so the existing catch writes {\"code\":\"VM_CONTROL_FAILED\"} before any ledger, provider or daemon call;\n  - status, reconcile and cleanup all take that copy.\n- scripts/local-runner/agent-lifecycle.mjs: import platformFor from ./cli.mjs. There is no cycle: cli.mjs imports only doctor.mjs and the platform modules. In parse():\n  - kit = Object.freeze({ ...provider, executable: provider.executable ?? platformFor(process.platform)?.executable });\n  - the check becomes usable(kit.executable), so a host with no platform module refuses AGENT_INPUT_INVALID before any daemon or provider call.\n- At each site, one comment: never a bare `multipass`.\n\nscripts/tests/local-runner.test.mjs AJ3: its expected bridge spawn ['multipass', bridgeArgv(GUEST), PIPES] becomes [platformFor(process.platform).executable, bridgeArgv(GUEST), PIPES]. platformFor is already imported there. Change nothing else in that file.\n\nKeep the low-level `executable = 'multipass'` parameter defaults in multipass.mjs, lifecycle.mjs, guest-session.mjs, snapshot-transfer.mjs, check-session.mjs and certify-bridge.mjs. They are test seams that held bridge, check and local-runner rows assert, and MX3-MX9 show that no production entry reaches them any more.\nError handling: refusals and reports carry fixed codes only, never a path or an executable text.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/local-runner/agent-lifecycle.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh, on the finished code, in place. scripts/tests harnesses may run in place; never build or npm-install anything (GLOBAL rule).\n\n1. The completion evidence. This is CI's local-runner line after this row's edit, under a Linux-only env so Windows Node is never used:\n`env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-pinned-client.test.mjs`\n2. Windows evidence for the win32-only behaviour, libuv's cwd-first lookup. Run `node --test scripts\\\\tests\\\\local-runner-pinned-client.test.mjs` under Windows Node (\"C:\\\\Program Files\\\\nodejs\\\\node.exe\"; record its --version), with cwd D:\\\\projexts\\\\moes:\n   - write a run.cmd into a fresh scratch dir under %TEMP%;\n   - invoke it as `cmd.exe /d /c '<windows path>\\\\run.cmd'` (inline quoting through cmd.exe breaks);\n   - delete the dir afterwards.\n   MX9 (a) must show that the planted multipass.com or .exe really runs from the cwd there.\n3. `git diff --check` over this row's seven files, and `git status --porcelain` limited to them.\nRecord the pass, fail and skip counts of 1 and 2 in the step note.\n\nError handling:\n- a failure in this row's files is fixed before completing; never weaken a test;\n- a failing row that exercises only a peer's uncommitted bytes (5ed445ca is editing guest-supervisor.py and local-runner-check.test.mjs) is not this row's. Note the rows and the peer's step, re-run once that step completes, and never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path;\n- no pattern kills (GLOBAL rule): kill only PIDs this session started, by recorded PID.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW of this row's diff. Load adversarial-self-review.\n- Read every provider construction in the production entries: cli.mjs, vm-control.mjs, check-dispatch.mjs, certify.mjs, native-smoke.mjs, certify-recovery-child.mjs and agent-lifecycle.mjs. Confirm none can reach execFile or spawn without an absolute client.\n- ProgramFiles unset, relative, UNC, or holding control characters: probeMultipass then refuses PROVIDER_INPUT_INVALID, which fails closed.\n- An explicit --executable or provider.executable still wins on every path.\n- An unsupported host creates no ledger dir, spawns nothing, and reports fixed codes only.\n- The MX tests restore the cwd, PATH, NODE_OPTIONS and process.platform on every exit path, plant only under os.tmpdir(), and stay non-vacuous through the MX9 control row.\n- No report, error or log gains a path.\n- Exactly the seven held expectations changed in local-runner.test.mjs, each to the pinned client.\n- Docs: none in this row. The operator text in docs/CERTIFICATION.md:48-49 ('run them from the work dir … a bare `multipass` is looked up in the current directory') belongs to CQ-R13's resuming session; the architect noted it on that row.\nError handling: fix in-scope findings here, with a test. Route out-of-scope findings to the governor with moe.add_comment on this row, and list them in the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote (CQ-backlog delegation): HIGH CQ-R13 review finding (Windows bare 'multipass' spawn resolves from cwd first — binary planting); no deps; off the wrapper lane.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "HIGH",
-  "order": 315.6,
-  "comments": [],
+  "order": 5,
+  "comments": [
+    {
+      "id": "comment-d7506f585fb44bb4b3aca5bd8fff8bb4",
+      "author": "governor-693b7073",
+      "content": "Governor, 05:36Z: promoted with the other CQ-R13 review findings (standing CQ-backlog delegation). Off the wrapper lane, runs in parallel.\n- This row spans many local-runner spawn sites (provision, runCheckJob, certify, doctor, cli, vm-control, agent lifecycle). Declare every file in the plan, and keep the change to resolving one absolute Multipass path, shared by all sites.\n- Do NOT touch scripts/tests/local-runner.test.mjs while CQ-R13 (f4811a72) holds it. Use a per-module test file and name it.\n- Sibling findings 12e89395 (check-lifecycle/check-dispatch) and 42e9990c (check-session) may overlap your call sites. The governor orders any overlap once the plans land.\n- No pattern kills (GLOBAL customRules[1]). Gates in a snapshot (GLOBAL rail). No architect is live yet; planning starts when one returns.",
+      "timestamp": "2026-10-31T05:34:50.741Z"
+    },
+    {
+      "id": "comment-92b710ac2ff547a6900cb9e5aae2db71",
+      "author": "architect-66fd8127",
+      "content": "Planner note from architect-66fd8127 (plan rev 1), for @governor-693b7073 and @governor-4764040b, about lifting the temporary 7db14e2d edge.\n\nThis row must also edit scripts/tests/local-runner.test.mjs. Seven held rows there assert the bare client: 'Windows provisioning keeps its own multipass client…' expects ['multipass']; CJ2, CJ9 and CJ12 expect the provider without the pin, because checkHarness uses onWindows(); LC1 and WC1 do the same through certify; and AJ3 expects runAgentJob's bridge spawn to be 'multipass'. I ran steps 2-3 against a scratch copy of the shared tree, and exactly those 7 fail. The flip is unavoidable. The new MX tests still go in their own file, scripts/tests/local-runner-pinned-client.test.mjs, which is added to ci.yml's local-runner line.\n\nSo please add scripts/tests/local-runner.test.mjs to your clean-and-committed checks before you lift the edge on this row. CQ-R13 runs that file in place during its step 4, and any runtime edit from this row turns those 7 rows red there.\n\nStep 1 has a backstop gate. If f4811a72 is still WORKING, or local-runner.test.mjs or check-lifecycle.mjs is dirty, or CQ-R13's runCheckJob pin is not at HEAD, the worker edits nothing and calls report_blocked with needsFrom 'governor'. It passes no blockedOnTaskIds, and the reason contains no task- prefixed id, so CQ-R13's report_blocked naming this row cannot close a cycle. If that happens, unblock the row once CQ-R13 has parked.\n\nThe Windows pin is <ProgramFiles>\\Multipass\\bin\\multipass.exe. I checked it against canonical/multipass v1.17.0's WiX sources (Package.wxs and CLIClientComponents.wxs). Multipass is not installed on this host, so CQ-R13 step 5's Windows certify run is the first check on a real install, and a non-default install folder fails closed with PROVIDER_NOT_FOUND.\n\nci.yml is also declared by four gated WORKING rows (0921d6d7, 3ad573a7, 4e412148, 4fdc7590). It is clean now, so expect a Moe-Contested trailer.",
+      "timestamp": "2026-10-31T06:15:24.893Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:22:59.885Z",
-  "updatedAt": "2026-10-31T05:22:59.885Z"
+  "updatedAt": "2026-10-31T06:15:24.893Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T05:34:44.144Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T05:35:42.986Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 7
+  },
+  "contextFetchedBy": [
+    "architect-66fd8127"
+  ],
+  "dependsOn": [
+    "task-7db14e2df19949a8bfdb150e0f29ffcb"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T06:15:09.683Z",
+  "executionContract": {
+    "intendedBehavior": "Every local-runner entry point that can spawn Multipass hands child_process one absolute client path, pinned once per platform module: /snap/bin/multipass on Linux, /usr/local/bin/multipass on macOS, and <ProgramFiles>\\Multipass\\bin\\multipass.exe on Windows (ProgramFiles when drive-absolute, else C:\\Program Files). The paths are: the cli.mjs doctor and prerequisites commands; provision, with native-smoke and certify-recovery-child; runCheckJob, through check-dispatch; certify; vm-control status, reconcile and cleanup; and runAgentJob. A caller-named executable (--executable, provider.executable) still wins. A host with no platform module refuses before any spawn, with an existing fixed code (HOST_UNSUPPORTED, VM_CONTROL_FAILED, AGENT_INPUT_INVALID). A multipass, multipass.exe or multipass.com planted in the current directory never runs.",
+    "acceptanceCriteria": [
+      "MX0-MX9 in scripts/tests/local-runner-pinned-client.test.mjs pass under Linux Node 24, and under Windows Node from the shared checkout.",
+      "The seven held rows ('Windows provisioning keeps its own multipass client…', CJ2, CJ9, CJ12, LC1, WC1, AJ3) expect the pinned client instead of the bare name, and no other held row changes.",
+      "CI's local-runner run line lists the new file once and passes in full."
+    ],
+    "invariants": [
+      "No production entry passes a bare or relative client name to execFile or spawn.",
+      "An explicit executable always wins over the pin.",
+      "Refusals and reports carry fixed codes only, never path text.",
+      "executionReady stays false, and verified-local stays unavailable."
+    ],
+    "compatibility": [
+      "The low-level `executable = 'multipass'` parameter defaults stay, as injected-transport test seams that held bridge and check rows assert.",
+      "These stay unchanged: the moe-vm-*-v1 report shapes, the CLI flags and usage text, the prerequisite ids and action texts, and hostPrerequisites' executable pass-through.",
+      "windowsPlatform keeps id, arch and prerequisites, and gains executable, as linuxPlatform and macosPlatform have."
+    ],
+    "approvedScope": [
+      "windowsPlatform.executable and the platform-windows prerequisites default",
+      "The cli.mjs doctor command default",
+      "The runVmControl provider pin and its unsupported-host refusal",
+      "The runAgentJob parse() pin and its unsupported-host refusal",
+      "The MX test group, the seven held expectations and the ci.yml line"
+    ],
+    "reuse": [
+      "certifySnapshot() (certify-bridge.mjs) and CANARY_CHECK (certify-canary.mjs) as runCheckJob fixtures",
+      "ledgerWith (local-runner-vm-control.test.mjs) and agentHarness (local-runner.test.mjs) as fixture models",
+      "probeHypervisor's SystemRoot rule as the ProgramFiles root rule"
+    ],
+    "sourceAssumptions": [
+      "canonical/multipass v1.17.0 packaging/windows/wix/Package.wxs: Package Name=\"Multipass\"; INSTALLFOLDER under ProgramFiles6432Folder; BinFolder 'bin'; WixUI_InstallDir.",
+      "canonical/multipass v1.17.0 packaging/windows/wix/CLIClientComponents.wxs: File bin\\multipass.exe; Environment PATH [INSTALLFOLDER]bin with Part=\"last\", for the user or the system.",
+      "scripts/local-runner/check-lifecycle.mjs parse() pins copy?.executable ?? platform?.executable (CQ-R13 step 3, RX6).",
+      "scripts/local-runner/cli.mjs platformFor maps a process.platform id to its platform module, or null."
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-pinned-client.test.mjs",
+      "\"C:\\Program Files\\nodejs\\node.exe\" --test scripts\\tests\\local-runner-pinned-client.test.mjs (cwd D:\\projexts\\moes, via a %TEMP% run.cmd)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Changing the low-level `executable = 'multipass'` defaults (multipass.mjs, lifecycle.mjs, guest-session.mjs, snapshot-transfer.mjs, check-session.mjs, certify-bridge.mjs): rejected. It adds 6 files, past the 10-file cap. Held rows assert those defaults as seams (local-runner-bridge.test.mjs:621/1645, local-runner-check.test.mjs:1058/1157, about 15 rows in local-runner.test.mjs), and check-session.mjs belongs to a80f46db next. Instead, every production entry hands over the pin. 2) Resolving the Windows client from PATH, as source-export's pathGit does for git: rejected. The v1.17.0 installer appends its bin folder to PATH LAST (Part=\"last\"), so an earlier entry, such as the user-writable %LOCALAPPDATA%\\Microsoft\\WindowsApps, could stand in for it. That breaks the rule Linux and macOS follow (another multipass on PATH cannot stand in), and a miss would surface as PROVIDER_INPUT_INVALID, not PROVIDER_NOT_FOUND. 3) A non-enumerable windowsPlatform.executable that keeps the held rows green: rejected, because those rows assert the defect. 4) Splitting the row: rejected, because both DoD items name every path, and a split would loop back to PLANNING.",
+    "codebaseInsights": "- libuv on win32 looks up a bare name in the cwd (.com, then .exe) before PATH, ignoring NoDefaultCurrentDirectoryInExePath; POSIX resolves relative or empty PATH entries against the cwd (Serena gotcha-windows-libuv-spawn-searches-cwd-first).\n- canonical/multipass v1.17.0 packaging/windows/wix, read for this plan:\n  - Package.wxs: Name=\"Multipass\", INSTALLFOLDER under ProgramFiles6432Folder, BinFolder 'bin', and a WixUI_InstallDir dialog;\n  - CLIClientComponents.wxs: bin\\multipass.exe, with a PATH append Part=\"last\" for the user or the system.\n  The held fixtures already use 'C:\\Program Files\\Multipass\\bin\\multipass.exe'.\n- provision.mjs, certify.mjs and native-smoke.mjs already use provider.executable ?? platform.executable; CQ-R13 step 3 gave check-lifecycle.mjs parse() the same pin (RX6). certify-recovery-child and check-dispatch pass platformFor(process.platform). Only windowsPlatform lacked an executable, and only the cli doctor command, vm-control and agent-lifecycle built providers with none.\n- A scratch simulation of steps 2-3 against the shared tree failed exactly 7 held rows in local-runner.test.mjs: 'Windows provisioning keeps its own multipass client', CJ2, CJ9, CJ12, LC1, WC1 and AJ3. A4 and the bundle/Gradle/TY1 rows also fail in a scratch copy at baseline. The vm-control, bridge, check, snapshot and agents files stayed green.",
+    "risks": "- Shared checkout. CQ-R13 runs local-runner.test.mjs in place during its step 4, so any runtime edit here would turn 7 of its rows red. That is why step 1 opens with a gate on top of the governors' temporary dependsOn.\n- ci.yml is also declared by 4 gated WORKING rows (0921d6d7, 3ad573a7, 4e412148, 4fdc7590). It is clean and those rows are idle, so expect a Moe-Contested trailer. It lands through an editing-tool write or a clean pre-flight.\n- The tests mutate process-global state (cwd, PATH, NODE_OPTIONS, process.platform) and must restore it on every path.\n- On Windows, the hard link may be refused; fall back to a copy.\n- The Windows pin is checked against installer source, not a real install. CQ-R13 step 5's Windows certify run is the first check on a real host. A custom install folder fails closed with PROVIDER_NOT_FOUND, and the docs belong to CQ-R13.\n- DoD 1 reading: 'spawn' means a process that a production entry starts. The low-level default parameters stay as injected-transport test seams; hardening them is a later row once the held tests free up.",
+    "keyFiles": [
+      "scripts/local-runner/platform-windows.mjs",
+      "scripts/local-runner/platform-linux.mjs",
+      "scripts/local-runner/cli.mjs",
+      "scripts/local-runner/vm-control.mjs",
+      "scripts/local-runner/agent-lifecycle.mjs",
+      "scripts/local-runner/provision.mjs",
+      "scripts/local-runner/certify.mjs",
+      "scripts/local-runner/check-lifecycle.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/tests/local-runner-vm-control.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T06:15:09.709Z",
+  "approvedPlanRevision": 1
 }

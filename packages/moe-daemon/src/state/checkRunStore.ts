@@ -37,13 +37,12 @@ import type { Candidate, CheckOutcome, CheckRun, CheckRunSource } from '../types
 import { MoeError, MoeErrorCode, invalidInput, missingRequired } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
+import { MAX_REQUIRED_CHECK_COMMAND_CHARS } from './validators.js';
 import { assertAttemptOfTask, caseVariantId, getCandidate, hasControlChar, renderGot, SHA_RE } from './candidateStore.js';
 
 /** The most output a check run keeps: the END of the log, counted in UTF-8 BYTES, not characters. */
 export const MAX_CHECK_LOG_BYTES = 16384;
 
-/** The bound complete_task already puts on a verification command. */
-const MAX_COMMAND_CHARS = 500;
 /** The only two sources a report may declare. A third value is refused, never coerced or defaulted. */
 const SOURCES: readonly CheckRunSource[] = ['runner-observed', 'agent-reported'];
 
@@ -122,8 +121,8 @@ function requireTreeSha(value: unknown): string {
 function requireCommand(value: unknown): string {
   const text = requireString('command', value);
   if (text.trim() === '') throw invalidInput('command', 'must be a non-blank string');
-  if (text.length > MAX_COMMAND_CHARS) {
-    throw invalidInput('command', `must be ${MAX_COMMAND_CHARS} characters or fewer (got ${text.length})`);
+  if (text.length > MAX_REQUIRED_CHECK_COMMAND_CHARS) {
+    throw invalidInput('command', `must be ${MAX_REQUIRED_CHECK_COMMAND_CHARS} characters or fewer (got ${text.length})`);
   }
   return text;
 }

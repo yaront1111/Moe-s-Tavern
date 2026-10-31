@@ -146,6 +146,10 @@ describe('checkRunStore', () => {
     ['the largest safe exit code', { exitCode: Number.MAX_SAFE_INTEGER }],
     ['a command with inner and outer spaces', { command: '  node  gate.cjs --name "a b"  ' }],
     ['a command of exactly 500 characters', { command: 'x'.repeat(500) }],
+    ['a command of 501 characters', { command: 'x'.repeat(501) }],
+    ['a command of exactly 1000 characters', { command: 'x'.repeat(1000) }],
+    ['a 1000-unit command with outer whitespace', { command: ` \t${'x'.repeat(996)}\n ` }],
+    ['a command of 500 supplementary characters (1000 UTF-16 units)', { command: FOUR.repeat(500) }],
     ['an upper-case tree token', { candidateId: 'cand-upper', treeSha: SHA.upper }],
     ['a 7-character tree token', { candidateId: 'cand-short', treeSha: SHA.short }],
     ['a fully bound report', BOUND],
@@ -464,6 +468,45 @@ describe('checkRunStore', () => {
     expect(readRecord('check-1')).toStrictEqual(retried.checkRun);
   });
 
+  it('keeps a 1000-unit command verbatim through replay, a conflicting replay and a restart', async () => {
+    const command = `  ${FOUR.repeat(498)}x `;
+    expect(command.length).toBe(1000);
+    clockAt(T1);
+    const first = await record({ id: 'check-long', command });
+    expect(readRecord('check-long').command).toBe(command);
+    const before = snapshot();
+    clockAt(T2);
+    const write = vi.spyOn(h.state, 'writeEntity');
+
+    expect(await record({ id: 'check-long', command })).toStrictEqual({ checkRun: first.checkRun, duplicate: true });
+    const error = await refusal(record({ id: 'check-long', command: command.trim() }));
+    expect(error.codeName).toBe('CHECK_RUN_IMMUTABLE');
+    expect(write).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(before);
+    vi.useRealTimers();
+
+    const restarted = new StateManager({ projectPath: h.testDir });
+    await restarted.load();
+    try {
+      expect(getCheckRun(restarted, 'check-long')?.command).toBe(command);
+    } finally {
+      restarted.clearEmitter();
+    }
+  });
+
+  it('refuses a 1001-unit command before any write, leaving files and maps unchanged', async () => {
+    await record({ id: 'check-keep' });
+    const before = snapshot();
+    const write = vi.spyOn(h.state, 'writeEntity');
+
+    const error = await refusal(record({ id: 'check-1', command: 'x'.repeat(1001) }));
+
+    expect([error.code, error.codeName]).toEqual([-32602, 'INVALID_INPUT']);
+    expect(write).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(before);
+    expect(getCheckRun(h.state, 'check-1')).toBeNull();
+  });
+
   it('loads persisted runs into a fresh StateManager after a restart', async () => {
     clockAt(T1);
     const a = await record({ id: 'check-a' });
@@ -607,7 +650,9 @@ describe('checkRunStore', () => {
     ['a missing command', { command: undefined }, 'MISSING_REQUIRED', 'Missing required field: command'],
     ['a non-string command', { command: ['node', 'gate.cjs'] }, 'INVALID_INPUT', 'Invalid command: must be a string (got a value of type object)'],
     ['a blank command', { command: ' \t\n' }, 'INVALID_INPUT', 'Invalid command: must be a non-blank string'],
-    ['a 501-character command', { command: 'x'.repeat(501) }, 'INVALID_INPUT', 'Invalid command: must be 500 characters or fewer (got 501)'],
+    ['a 1001-character command', { command: 'x'.repeat(1001) }, 'INVALID_INPUT', 'Invalid command: must be 1000 characters or fewer (got 1001)'],
+    ['500 supplementary characters plus one unit', { command: `${FOUR.repeat(500)}x` }, 'INVALID_INPUT', 'Invalid command: must be 1000 characters or fewer (got 1001)'],
+    ['a 1001-unit command padded with whitespace', { command: ` ${'x'.repeat(999)} ` }, 'INVALID_INPUT', 'Invalid command: must be 1000 characters or fewer (got 1001)'],
     ['a missing exitCode', { exitCode: undefined }, 'MISSING_REQUIRED', 'Missing required field: exitCode'],
     ['a string exitCode', { exitCode: '0' }, 'INVALID_INPUT', 'Invalid exitCode: must be a safe integer (got "0")'],
     ['a fractional exitCode', { exitCode: 1.5 }, 'INVALID_INPUT', 'Invalid exitCode: must be a safe integer (got 1.5)'],

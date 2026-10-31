@@ -1404,7 +1404,7 @@ interface CheckRun {
   readonly candidateId: string;  // The Candidate whose bytes were checked; must exist when recorded
   readonly treeSha: string;      // The tree the reporter says it checked (7-40 hex). Must equal the
                                  // candidate's treeSha exactly when recorded: no prefix match, no case folding
-  readonly command: string;      // Exactly as reported, never trimmed and never run; at most 500 chars
+  readonly command: string;      // Exactly as reported, never trimmed and never run; at most 1000 UTF-16 code units
   readonly exitCode: number;     // Any signed safe integer. A failing run is recorded like a passing one
   readonly outputTail: string;   // The END of the output, at most 16384 UTF-8 BYTES; "" when none was sent
   readonly runnerId: string;     // The runner the report names: reported, not authenticated
@@ -1483,7 +1483,7 @@ interface CheckDispatch {
   readonly candidateId: string;  // The task's current candidate when recorded
   readonly treeSha: string;      // That candidate's treeSha, copied from the candidate
   readonly planRevision: number; // The task's planRevision, equal to its approvedPlanRevision, when recorded (>= 1)
-  readonly command: string;      // Verbatim, under the CheckRun command rule (non-blank, at most 500 chars)
+  readonly command: string;      // Verbatim, under the CheckRun command rule (non-blank, at most 1000 UTF-16 code units)
   readonly checkId?: string;     // Optional protected check id, [A-Za-z0-9][A-Za-z0-9._-]{0,63}
   readonly environment: string;  // Opaque, verbatim, compared exactly (non-blank, at most 255 chars, no control chars)
   readonly runnerId: string;     // The authenticated channel's runner-<16 hex>
@@ -2108,7 +2108,7 @@ function generateId(prefix: string): string {
 - Immutable: no field changes after the first record, and there is no delete path. A same-id record that differs in any field after normalization is refused (`CHECK_RUN_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored run, `createdAt` included. An `id` that differs from a stored run's id only by case is refused (`CHECK_RUN_ID_CASE_COLLISION`)
 - `id` (optional), `candidateId` and `runnerId` must match `[A-Za-z0-9_-]{1,128}`, and `candidateId` must name an existing candidate (`CANDIDATE_NOT_FOUND`)
 - `treeSha` must be 7-40 hex characters and exactly equal to the candidate's `treeSha` (`CHECK_RUN_TREE_MISMATCH`). It is never prefix-matched, truncated or case-folded
-- `command` must be a non-blank string of at most 500 characters, stored verbatim
+- `command` must be a non-blank string of at most 1000 UTF-16 code units, stored verbatim
 - `exitCode` must be a safe integer; zero, positive and negative values are all accepted
 - `source` must be exactly `runner-observed` or `agent-reported`, with no default
 - `outcome`, `planRevision`, `environment`, `dispatchId` and `attemptId` are optional. When present: `outcome` is one of the six values (`passed` needs `exitCode` 0, `code-failure` a nonzero one); `planRevision` a safe integer >= 1; `environment` non-blank, at most 255 chars, without control characters; `dispatchId` and `attemptId` match `[A-Za-z0-9_-]{1,128}`, and `attemptId` names an attempt of the candidate's task (`ATTEMPT_NOT_FOUND` / `ATTEMPT_ID_TASK_MISMATCH`). Only `undefined` is absent: a `null` is refused `INVALID_INPUT`. Each is a recorded field, so a same-id report that adds, drops or changes one is `CHECK_RUN_IMMUTABLE`

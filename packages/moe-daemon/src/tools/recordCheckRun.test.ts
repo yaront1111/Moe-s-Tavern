@@ -272,7 +272,7 @@ describe('moe.record_check_run', () => {
     ['a short treeSha', 'INVALID_INPUT', { ...RUNNER_PASS, treeSha: 'abc123' }],
     ['a string exitCode', 'INVALID_INPUT', { ...RUNNER_PASS, exitCode: '0' }],
     ['a fractional exitCode', 'INVALID_INPUT', { ...RUNNER_PASS, exitCode: 0.5 }],
-    ['a 501-character command', 'INVALID_INPUT', { ...RUNNER_PASS, command: 'x'.repeat(501) }],
+    ['a 1001-character command', 'INVALID_INPUT', { ...RUNNER_PASS, command: 'x'.repeat(1001) }],
     ['a null outputTail', 'INVALID_INPUT', { ...RUNNER_PASS, outputTail: null }],
     ['an outcome in another case', 'INVALID_INPUT', { ...RUNNER_PASS, outcome: 'PASSED' }],
     ['a passed outcome at exit 1', 'INVALID_INPUT', { ...RUNNER_PASS, outcome: 'passed', exitCode: 1 }],
