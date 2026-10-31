@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T20:58:12.787Z",
-  "updatedAt": "2026-10-31T08:38:26.099Z",
+  "updatedAt": "2026-10-31T09:02:18.415Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T05:34:39.847Z",
@@ -109,11 +109,14 @@
     "firstClaimAt": "2026-10-31T05:35:45.861Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-31T09:02:18.415Z",
+    "wallClockMs": 12392554
   },
   "contextFetchedBy": [
     "architect-b58e1112",
-    "worker-632cd3f0"
+    "worker-632cd3f0",
+    "qa-4398294e"
   ],
   "dependsOn": [
     "task-7db14e2df19949a8bfdb150e0f29ffcb"
@@ -203,19 +206,38 @@
       "treeId": "167cafa9b43d8966486c6856088bd792eb62e920",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "8d0617e0b8e2c3496228a135cfde99a4b087eaef",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-632cd3f0@2026-10-31T07:47:58Z",
+      "paths": [
+        ".moe/tasks/task-44b817f973374dffb578308278050497.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/agent-git-guard.test.mjs"
+      ],
+      "recordedBy": "worker-632cd3f0",
+      "recordedAt": "2026-10-31T08:38:44.568Z",
+      "treeId": "38adb09b1bd63ff1ba011f5cfe9c439e95ca491e",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/tests/agent-git-guard.test.mjs",
     "scripts/moe-agent.ps1",
-    "scripts/moe-agent.sh"
+    "scripts/moe-agent.sh",
+    ".moe/tasks/task-44b817f973374dffb578308278050497.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-b58e1112@2026-10-31T05:35:47Z",
-    "at": "2026-10-31T07:27:23.588Z"
+    "kind": "completion",
+    "sessionId": "worker-632cd3f0@2026-10-31T07:47:58Z",
+    "at": "2026-10-31T08:38:44.568Z"
   },
   "workStartedAt": "2026-10-31T07:48:22.019Z",
   "reviewStartedAt": "2026-10-31T08:38:26.096Z",
@@ -226,5 +248,13 @@
     "reportedAt": "2026-10-31T08:38:26.096Z",
     "source": "agent-reported"
   },
-  "completionSummary": "The agent Git guard no longer fails closed under PowerShell 7. postflight.ps1 now passes under pwsh 7 (postflight-safe pwsh: exit 0, lastScenario Z, failureClass NONE), so later lane rows get their pwsh 7 leg back.\n\nChange (both twins byte-identical, replacing the one powershell.exe ACL spawn in the embedded guard program): drop PSModulePath, any letter case, from that child's env (`env: psenv`). ps1 +3/-1 (BOM kept, LF), sh +3/-1 (validated cp, bash -n, mv -f; mode unchanged), test +15/-7. A failing ACL child still throws, so the guard still fails closed with MOE_AGENT_GIT_GUARD_FAILED.\n\nTest (agent-git-guard.test.mjs): win32-only PS7 row via a matrix options object (`engine`), `clean` also strips PSMODULEPATH, and a twin test that cuts both programs, requires them equal and requires the quoted 'PSMODULEPATH'.\nRED on HEAD: Linux twin test fails the /'PSMODULEPATH'/ match; Windows `not ok 1 - PS7 custom headless plumbing completion...` with codes=MOE_AGENT_GIT_GUARD_FAILED.\nGREEN: Linux guard 25/25. Windows guard 26/26, skipped 0, PS7 row and twin ok. delivery/acceptance.test.ts 6/6 natively including 'lands once, crashes before the receipt...'.\n\nThe CI-style chain pwsh -> node -> powershell.exe 5.1 wrapper failed the same way on HEAD (architect-measured) and is fixed by the same change.\n\nSelf-review found two defects in my own test diff, both fixed before this gate: `(r.stdout + r.stderr)` is NaN on a spawn failure and `.match` threw (now `?? ''`), and the top-level pwsh probe also ran inside every fake-CLI launch (now guarded by `process.argv[2] !== 'cli'`). The gate was re-run after them.\n\nOther powershell.exe spawns: the launchers have only this one per twin. The postflight leak probe and the local-runner hypervisor probe use Get-CimInstance and exit 0 under pwsh 7, and the IDE launchers start the wrapper itself, so no change is needed there.\n\nDirty `scripts/local-runner/*` and `.moe/*` paths belong to other sessions and are untouched."
+  "completionSummary": "The agent Git guard no longer fails closed under PowerShell 7. postflight.ps1 now passes under pwsh 7 (postflight-safe pwsh: exit 0, lastScenario Z, failureClass NONE), so later lane rows get their pwsh 7 leg back.\n\nChange (both twins byte-identical, replacing the one powershell.exe ACL spawn in the embedded guard program): drop PSModulePath, any letter case, from that child's env (`env: psenv`). ps1 +3/-1 (BOM kept, LF), sh +3/-1 (validated cp, bash -n, mv -f; mode unchanged), test +15/-7. A failing ACL child still throws, so the guard still fails closed with MOE_AGENT_GIT_GUARD_FAILED.\n\nTest (agent-git-guard.test.mjs): win32-only PS7 row via a matrix options object (`engine`), `clean` also strips PSMODULEPATH, and a twin test that cuts both programs, requires them equal and requires the quoted 'PSMODULEPATH'.\nRED on HEAD: Linux twin test fails the /'PSMODULEPATH'/ match; Windows `not ok 1 - PS7 custom headless plumbing completion...` with codes=MOE_AGENT_GIT_GUARD_FAILED.\nGREEN: Linux guard 25/25. Windows guard 26/26, skipped 0, PS7 row and twin ok. delivery/acceptance.test.ts 6/6 natively including 'lands once, crashes before the receipt...'.\n\nThe CI-style chain pwsh -> node -> powershell.exe 5.1 wrapper failed the same way on HEAD (architect-measured) and is fixed by the same change.\n\nSelf-review found two defects in my own test diff, both fixed before this gate: `(r.stdout + r.stderr)` is NaN on a spawn failure and `.match` threw (now `?? ''`), and the top-level pwsh probe also ran inside every fake-CLI launch (now guarded by `process.argv[2] !== 'cli'`). The gate was re-run after them.\n\nOther powershell.exe spawns: the launchers have only this one per twin. The postflight leak probe and the local-runner hypervisor probe use Get-CimInstance and exit 0 under pwsh 7, and the IDE launchers start the wrapper itself, so no change is needed there.\n\nDirty `scripts/local-runner/*` and `.moe/*` paths belong to other sessions and are untouched.",
+  "touchedFiles": [
+    "scripts/tests/agent-git-guard.test.mjs",
+    "scripts/moe-agent.ps1"
+  ],
+  "completedAt": "2026-10-31T09:02:18.415Z",
+  "reviewCompletedAt": "2026-10-31T09:02:18.415Z",
+  "reviewSummary": "Reviewed completion commit 8d0617e0 (on moe/work-2026-10-24, pushed) via git show. Source diff is 3 files, +21/-9 (ps1 +3/-1, sh +3/-1, test +15/-7), well under the size cap. Scope matches the plan: only the powershell.exe ACL spawn in the embedded guard program changes, identically in both twins (psenv = process.env minus PSMODULEPATH, case-insensitive; env: psenv). value() is untouched, so a failing ACL child still fails closed with MOE_AGENT_GIT_GUARD_FAILED. Invariants checked on the committed bytes: ps1 BOM efbbbf kept, 0 CR in both wrappers, sh mode 100755 unchanged, no hunks in the `& node -` line, Invoke-MoeGuardedCommand, Remove-MoeAgentGitGuard or any launch line. Tests: clean also strips PSMODULEPATH; win32-only PS7 row via an options object (skip only if pwsh.exe is absent); the NaN-safe stdout+stderr codes message; a twin test (anchors occur once, programs equal, quoted /'PSMODULEPATH'/ present). No tests deleted or weakened. I re-ran the worker's exact step-4 command myself in a fresh `git archive 8d0617e0` snapshot on /mnt/d with no cp overlays, in the foreground until VERIFY_EXIT: VERIFY_EXIT=0. Legs: bash -n and parity-check PASS; Linux guard 25/25 (0 fail, 0 skipped); native Windows guard 26/26 (# fail 0, # skipped 0) with `ok 12 - PS7 custom headless plumbing completion ...` and `ok 13 - both wrappers embed one guard program ...`; native Windows delivery/acceptance.test.ts 6/6 including 'lands once, crashes before the receipt...'; postflight-safe.mjs pwsh -> exit 0, lastScenario Z, failureClass NONE. So postflight.ps1 now passes under pwsh 7. I did not re-run the RED case; the worker's RED proof is in its step-1 note. Rails: all gates ran in the snapshot (removed afterwards); no build/install in the shared checkout; no process killed. Other powershell.exe spawns audited: no change needed. Dirty local-runner/.moe paths belong to other sessions and were untouched.",
+  "requiredCheckAtDone": null
 }
