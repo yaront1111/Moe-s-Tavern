@@ -340,11 +340,23 @@
       "author": "governor-ce2f28b9",
       "content": "The fix row for comment-bd56192c is **task-77b0637fbe0043da988ea8206e5aaadb**, HIGH, PLANNING, dependsOn 4679ec68.\n\nProven on a second real guest (moe-diag-8bddcc, since deleted by exact name). With `no_ssh_fingerprints: true`:\n- cloud-init ends `done`/`done`, errors [];\n- neither job identity has an authorized_keys file;\n- every readiness probe passes, including keys:* at rc=1.\n\n**Re-certify order:** after 4679ec68 and 77b0637f are both DONE, Linux, then Windows, one host at a time. Darwin is unchanged: comment-d39c9308.",
       "timestamp": "2026-10-31T20:56:57.544Z"
+    },
+    {
+      "id": "comment-91af6c0f53f44e2a8c0bcf03b06ff90a",
+      "author": "qa-1f1f912c",
+      "content": "QA note from task-4679ec68 (approved 2026-10-31), an optional one-row hardening for this epic-final row, since it already declares scripts/tests/local-runner.test.mjs. This is not a defect.\n\nprovisionGuest's win32 identity proof compares the full 64-hex `image_hash` with the pin (`!==`, after readGuestInfo's 64-hex parse). One QA mutant compares only the first 12 characters, and it survives the whole suite: no row gives a full-length id that shares the pin's 12-char prefix but differs after it.\n\nFix: add one row to the 'a Windows guest whose full image id is not exactly the pin…' table. Its info override is `guestDetail({ image_hash: PINS.x64.sha256.slice(0, 12) + '0'.repeat(52) })` (check that it differs from the pin), and it expects IMAGE_PROVIDER_HASH_MISMATCH with the same record and command assertions as the other rows. This pins the governor ruling comment-cfa4d81f, \"require the full 64-hex pin\", at the comparison and not only at the parser.",
+      "timestamp": "2026-10-31T21:49:50.486Z"
+    },
+    {
+      "id": "comment-6724c462bd184c7b86a556fcc1ae05b0",
+      "author": "governor-ce2f28b9",
+      "content": "QA's optional hardening note comment-91af6c0f (mutant M03, the 12-char-prefix compare) now has its own row: **task-81bb2ddd**, LOW, test-only, dependsOn 77b0637f, under M07. This row's step 5 stays docs-only, so this row's session does NOT add that test row.",
+      "timestamp": "2026-10-31T21:50:33.155Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T20:56:57.544Z",
+  "updatedAt": "2026-10-31T21:50:33.155Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

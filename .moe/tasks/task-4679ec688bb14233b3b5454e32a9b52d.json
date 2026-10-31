@@ -99,7 +99,7 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -140,16 +140,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T20:15:24.164Z",
-  "updatedAt": "2026-10-31T21:28:36.478Z",
+  "updatedAt": "2026-10-31T21:49:40.750Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T20:18:28.572Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-31T21:49:40.750Z",
+    "wallClockMs": 5472178
   },
   "contextFetchedBy": [
     "architect-125fd305",
-    "worker-f21b922a"
+    "worker-f21b922a",
+    "qa-1f1f912c"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -245,7 +248,88 @@
     "scripts/local-runner/provision.mjs",
     "scripts/tests/local-runner.test.mjs",
     "docs/CERTIFICATION.md",
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-4679ec688bb14233b3b5454e32a9b52d.json",
+    ".moe/tasks/task-62a909c1005946db8f9f73e31bf362ec.json",
+    ".moe/tasks/task-77b0637fbe0043da988ea8206e5aaadb.json",
+    ".moe/tasks/task-84e45fa565b04e95b07c02929de0faf9.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "completionSummary": "Windows provisioning now launches `release:<pin sha256>` instead of a file:// URL: Multipass 1.17.0+win cannot launch a local image (file://C:/ fails the daemon's host check, #5490; an imported image becomes a sparse VHDX hcs cannot resize, #5491). provision.mjs: releaseImage() (64 lowercase hex only), launchImage (exactly one of imageFile/imageSha256), fileImageUrl refuses win32; provisionGuest picks the source once (win32: the manifest pin from verifySourceImage; linux/darwin keep the verified file:// launch byte-unchanged). After provisionOwned (also an R06-adopted timed-out launch), readGuestInfo (`info --format json`) must report image_hash exactly the pin, else IMAGE_PROVIDER_HASH_MISMATCH (fixed message); no retry, delete or fallback, the ledger record stays. Tests (local-runner.test.mjs): W1 win32 rows become refusals with the why-note; releaseImage + launchInstance win32/refusal rows; Windows provisionGuest argv, command order and recorded id; a mismatch table (URL-route id, other id, adopted launch, 12-char prefix, missing/numeric image_hash, info timeout), each refused before readiness with 1 launch, no image, no delete, record kept; an uppercase-pin accept row; fakeVm emulates the release id; certify/smoke/CJ8 defaults expect the pin on win32. Self-review: all 8 mutation probes killed (incl. the proof moved inside the launch closure or after readiness); 3 small test/doc fixes. Docs: CERTIFICATION 'Windows image' paragraph and image-row note; TROUBLESHOOTING rows for IMAGE_PROVIDER_HASH_MISMATCH and Windows LIFECYCLE_RETRY_EXHAUSTED. guest-supervisor.py unchanged (sha256 OK). Gate (git-archive snapshot, env -i, Node 24.21.0): exit 0, 370 tests, 369 pass, 0 fail, 1 skipped (opt-in macOS native smoke). Wider 11-file CI local-runner set: 634/643 pass; TY1 and C4-C9 need a built daemon dist and fail identically at pristine HEAD. The real win32 proof is the governor's R13 certify re-run.",
+  "commits": [
+    {
+      "sha": "97286b6f22fe2c3367e74b296f8d05b6daecb638",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f21b922a@2026-10-31T20:50:18Z",
+      "paths": [
+        ".moe/tasks/task-4679ec688bb14233b3b5454e32a9b52d.json",
+        ".moe/tasks/task-62a909c1005946db8f9f73e31bf362ec.json",
+        ".moe/tasks/task-77b0637fbe0043da988ea8206e5aaadb.json",
+        ".moe/tasks/task-84e45fa565b04e95b07c02929de0faf9.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "docs/CERTIFICATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/local-runner/provision.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-f21b922a",
+      "recordedAt": "2026-10-31T21:29:30.401Z",
+      "treeId": "1a079a92094686eaf996d33aee79e66b9f8da6bf",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/CERTIFICATION.md",
+          "taskId": "task-47d21b835b5e4f28bb08b17f83d22256"
+        },
+        {
+          "path": "docs/CERTIFICATION.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-48f0b3aaa82c4b938d3a15f3710a66e5"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-76ae5c472f6a4651a45478b1893e07dc"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-f3f364a6c6864054901ec27f342a87f6"
+        },
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-47d21b835b5e4f28bb08b17f83d22256"
+        },
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-f4811a729f9e436ba129a65c12d348c1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/provision.mjs",
+    "scripts/tests/local-runner.test.mjs",
+    "docs/CERTIFICATION.md",
     "docs/TROUBLESHOOTING.md"
   ],
-  "completionSummary": "Windows provisioning now launches `release:<pin sha256>` instead of a file:// URL: Multipass 1.17.0+win cannot launch a local image (file://C:/ fails the daemon's host check, #5490; an imported image becomes a sparse VHDX hcs cannot resize, #5491). provision.mjs: releaseImage() (64 lowercase hex only), launchImage (exactly one of imageFile/imageSha256), fileImageUrl refuses win32; provisionGuest picks the source once (win32: the manifest pin from verifySourceImage; linux/darwin keep the verified file:// launch byte-unchanged). After provisionOwned (also an R06-adopted timed-out launch), readGuestInfo (`info --format json`) must report image_hash exactly the pin, else IMAGE_PROVIDER_HASH_MISMATCH (fixed message); no retry, delete or fallback, the ledger record stays. Tests (local-runner.test.mjs): W1 win32 rows become refusals with the why-note; releaseImage + launchInstance win32/refusal rows; Windows provisionGuest argv, command order and recorded id; a mismatch table (URL-route id, other id, adopted launch, 12-char prefix, missing/numeric image_hash, info timeout), each refused before readiness with 1 launch, no image, no delete, record kept; an uppercase-pin accept row; fakeVm emulates the release id; certify/smoke/CJ8 defaults expect the pin on win32. Self-review: all 8 mutation probes killed (incl. the proof moved inside the launch closure or after readiness); 3 small test/doc fixes. Docs: CERTIFICATION 'Windows image' paragraph and image-row note; TROUBLESHOOTING rows for IMAGE_PROVIDER_HASH_MISMATCH and Windows LIFECYCLE_RETRY_EXHAUSTED. guest-supervisor.py unchanged (sha256 OK). Gate (git-archive snapshot, env -i, Node 24.21.0): exit 0, 370 tests, 369 pass, 0 fail, 1 skipped (opt-in macOS native smoke). Wider 11-file CI local-runner set: 634/643 pass; TY1 and C4-C9 need a built daemon dist and fail identically at pristine HEAD. The real win32 proof is the governor's R13 certify re-run."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-f21b922a@2026-10-31T20:50:18Z",
+    "at": "2026-10-31T21:29:30.401Z"
+  },
+  "completedAt": "2026-10-31T21:49:40.750Z",
+  "reviewCompletedAt": "2026-10-31T21:49:40.750Z",
+  "reviewSummary": "Reviewed completion 97286b6f on moe/work-2026-10-24 (branch --contains; tree 1a079a92 = record). The 4 owned files are clean vs HEAD, and the contested paths carry no peer hunks. Size 193 lines (+143/-50): provision.mjs +46/-17, local-runner.test.mjs +85/-32, CERTIFICATION +10/-1, TROUBLESHOOTING +2.\n\nRe-ran task.verification exactly at HEAD 97286b6f: supervisor sha OK; 370 tests, 369 pass, 0 fail, 1 skip (macOS native smoke); exit 0. Windows Node 24.16 (%TEMP% archive) on both files: 366 tests, 315 pass, 0 fail, vs parent 6d88924a 363/313/0. The only new skip is the planned macOS one, and the new win32 tests pass on Windows. Sibling suites bundle+dispatch: 33/33.\n\nMutation, 13 probes, 11 killed: read dropped, === flip, proof after readiness, proof in the launch closure, fail-open read, win32 via file, linux via release, fileImageUrl accepting win32, releaseImage /i or unanchored, XOR allowing both. M11 (drop the pre-reserve launchImage) is equivalent: validateManifest already pins /^[a-f0-9]{64}$/. NON-BLOCKING: M03, comparing only the first 12 chars, survives the full suite. No row has a full 64-hex id that shares the pin's prefix. The code compares all 64; a one-row hardening note is on f4811a72.\n\nDoD 1: design comment-41c6a238 came before the plan, and governor comment-cfa4d81f made no scope call. The x64 pin 04e8f246 is unchanged in certified-provider.json. sha256(manifest URL) = 48a1761f187e, the governor's observed id. DoD 2: the release:<pin> argv, a 7-row refusal table (incl. an adopted timeout: record owned, no image, no exec or delete) and the W1 why-note are present; linux/darwin expectations are unchanged. DoD 3: docs cover #5490, #5491 and the remedy; the supervisor, doctor, multipass, lifecycle and readiness files are untouched. DoD 4: green. UNVERIFIED (deferred by DoD): the real win32 launch; that is the governor's R13 certify. No Multipass was run.",
+  "requiredCheckAtDone": null
 }
