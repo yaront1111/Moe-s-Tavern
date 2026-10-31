@@ -101,11 +101,17 @@
       "author": "governor-693b7073",
       "content": "Input for RF07's DoD 3 (\"files a row for each finding\"). These are known protected-profile residuals that already have tracking rows (LOW, BACKLOG). Cite them instead of re-filing:\n- task-dd545bf1: a not-yet-existing PATH leaf under a link, 8.3, subst or mapped ancestor is compared lexically. Both IDEs.\n- task-9a1da6f6: the JetBrains profile record is keyed by the real-path spelling, so a PROTECTED project opened through a UNC, subst or mapped spelling reads ABSENT and can resolve to LEGACY with no prompt.\nDocs input from 52fb6178's planner (msg-521369be): its completion summary carries the TROUBLESHOOTING text for UNC, \\\\wsl$ and \\\\wsl.localhost bases under protected, which are refused with no carve-out. Its new accepted cost is that a share-opened project's protected state is session-only. RF07 owns TROUBLESHOOTING.md.",
       "timestamp": "2026-10-30T17:03:50.258Z"
+    },
+    {
+      "id": "comment-1deae51a05554f9c948840191713781e",
+      "author": "architect-54e5eb09",
+      "content": "Architect note for the CQ-RF07 docs sweep and adversarial pass (architect-54e5eb09, planning task-64809b19, 2026-10-31).\n\n**Docs (your step 2, docs/TROUBLESHOOTING.md).** The wrappers' protected refusal codes have no table rows yet. Only R13c2's MOE_RUNTIME_PROTECTED_PATH_MISSING has one. Please add:\n- MOE_PROTECTED_AGENT_COMMAND_REFUSED and MOE_PROTECTED_AGENT_CLI_NOT_FOUND, from task-aa85ff13 (landed aae40eb0);\n- MOE_PROTECTED_INTERPRETER_NOT_FOUND, from task-64809b19 once it lands. moe-agent.sh/.ps1 print it when no trusted node (or, in sh, python3) is on an absolute PATH entry outside the project. The fix: install node/python3 outside the project and put it on PATH. sh also accepts an absolute MOE_NODE_COMMAND.\n\ndocs/ARCHITECTURE.md's \"Protected control plane\" bullet could also say that the wrappers pin node/python3 the same way.\n\n**Residuals for the adversarial pass.** task-64809b19 does not fix these; they are listed in its planningNotes:\n1. Under the marker, the sh wrapper still finds other tools by PATH lookup (git, dirname, uname, Serena's binary). A '.', empty or relative PATH entry still reaches a project-planted copy of those tools.\n2. A standalone `moe-call.sh` under the marker finds node by PATH. When the protected wrapper runs it, the pinned node's dir is first on PATH.\n3. On Windows, npm .cmd shims (claude.cmd/codex.cmd → `node`) and cmd.exe search the current directory before PATH. A project-root node.exe can therefore still be reached through the agent CLI's own shim. NoDefaultCurrentDirectoryInExePath would close that.\nEach one needs a row or an explicit acceptance.",
+      "timestamp": "2026-10-31T20:37:24.640Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:07:00.327Z",
-  "updatedAt": "2026-10-31T19:24:47.614Z",
+  "updatedAt": "2026-10-31T20:37:24.641Z",
   "dependsOn": [
     "task-b439d7fb2c3443789fe91971cad4ed04",
     "task-98ffe33f448746e6bc802db0b5624fd0",

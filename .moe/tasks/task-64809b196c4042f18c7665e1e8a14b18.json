@@ -7,10 +7,66 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-54e5eb09",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development. Re-anchor on the LANDED bytes at claim time: aa85ff13 landed as aae40eb0, and later wrapper-lane rows may have moved lines. Anchor on names, never line numbers: sh refuse_protected_agent, protected_resolve_cli, find_node, find_python, parse_command_into_argv; ps1 Stop-MoeProtectedAgent, Get-MoeRealPath, Resolve-MoeProtectedCli, $script:MoeProtectedCli (mem:task-task-aa85ff13a8894913ae34242dbab6f395-handoff).\n\nExtend aa85ff13's harness in scripts/tests/protected-agent-command.test.mjs; do not fork it.\n- run() takes an `env` option applied last; a key set to undefined is deleted, so a row can drop MOE_NODE_COMMAND.\n- run() appends the fixture's node-only dir (dirname(fx.node), POSIX only) to every row's PATH unless the row passes nodeDir:false. This keeps aa85ff13's ps1 rows resolving node on a pwsh host whose /usr/bin and /bin hold no node. Its sh rows already get node through MOE_NODE_COMMAND.\n- Planted interpreters: cliStub node, and python3 on sh rows, into the project root and project/bin with where='project' (Windows: node.cmd). N2 on Windows also copies a small System32 exe to project\\bin\\node.exe, so a wrong pick shows in the OK line.\n- Refusal rows build sys/ outside the project: symlinks to every entry of /usr/bin and /bin except node and python3 (POSIX). The wrapper's ordinary tools still run, but no trusted interpreter exists. Windows refusal rows use TAIL without dirname(process.execPath).\n- Constants: interpreterNotFound(name) = `[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: ${name} was not found on an absolute PATH entry outside the project; refusing to start.` OK lines, ANSI stripped: sh `[OK] Using node: <file> (<process.version>)` and `[OK] Using python3: <file>`; ps1 `[OK] Using node: <file>`. Expected files are a realpath'd dir plus the name, matching pwd -P and Get-MoeRealPath.\n\nRows. Names are engine-prefixed; ps1 rows skip where PowerShell is absent, as today.\n- N1 [sh, ps1]: for each of an empty, '.' and relative 'bin' entry placed FIRST, with MOE_NODE_COMMAND dropped and PATH [entry, empty, nodebin (POSIX), trusted, ...TAIL]:\n  - the protected run reaches its first runtime call and exits on its own, like L1 (not stopped, rpc.log exists);\n  - ran.log has no 'project ...' line, so no planted interpreter ran in pre-flight, at any RPC, or in the exit deregister through moe-call.sh;\n  - the OK lines name the trusted files;\n  - the written claude MCP config's moe command is the pinned node (sh: <project>/.mcp.json; ps1: moe-mcp-config-*.json in TMP).\n- N2 [sh, ps1]: an in-project absolute entry holding node, placed first, is skipped. Spell it directly, through a link to the project, and through '..' (like T3). Stop at 'MOE_PROTECTED_AGENT_CLI:'. The OK line names the trusted node and ran.log is absent.\n- N3 [sh]: MOE_NODE_COMMAND counts only as an absolute executable in a trusted dir.\n  - 'node', './node' and <project>/node (planted) are skipped; the PATH-scan node is used.\n  - An absolute file in another outside dir (altnode/node) is used.\n  - With it dropped, Moe's managed runtime $HOME/.local/share/moe/node/current/bin/node (a symlink to process.execPath under fx.home) is used ahead of PATH.\n- N4 [sh, ps1]: refusal for each planted entry kind when no trusted node exists (sys/ or TAIL without node; MOE_NODE_COMMAND dropped): assertRefused(engine, fx, r, interpreterNotFound('node')).\n- P1 [sh]: python3 refusal. node is trusted via MOE_NODE_COMMAND=fx.node; python3 is only planted or in-project; PATH [entry, nodebin, sys]. assertRefused(..., interpreterNotFound('python3')).\n- M1 [sh]: moe-call.sh under the marker never runs a planted ./python3, and the runtime is still called.\n  - Run `bash scripts/moe-call.sh get_context '{}' --project <project>` with cwd = project.\n  - The project gets .moe/daemon.json '{}'. MOE_PROXY_PATH is the runtime stub. PATH is ['.', nodebin, ...TAIL].\n  - Plant python3 only: standalone moe-call.sh still finds node by PATH order (step 4).\n- L2 [sh, ps1]: legacy, with the marker unset and '01', MOE_NODE_COMMAND dropped, nothing planted, PATH [nodebin, trusted, ...TAIL].\n  - sh prints the bare `[OK] Using node: node (...)` and `[OK] Using python3: python3`.\n  - ps1 prints no 'Using node:' line.\n  - There is no MOE_PROTECTED_ line, and the run reaches its first runtime call on its own.\n- S1 static (no engine), on scripts/moe-agent.ps1 with full-line comments stripped:\n  - no `-FilePath \"node\"`, no `command = \"node\"` and no TOML `command = ` + backtick-quoted node literal;\n  - the line after `ProcessStartInfo]::new('node',` is the $script:MoeNode FileName override;\n  - exactly one `Set-Alias -Name node -Value $script:MoeNode -Scope Script`, and one alias set from $Pin.Node in the heartbeat job.\n  Check absence over the whole file and pin presence to the emitting lines (mem:gotcha-wrapper-text-contract-unrelated-occurrences).\n\nRed proof: on the current wrappers N1-N4, P1, M1 and S1 fail and L2 passes; record which.\nError handling in the harness: every spawn keeps the 20 s cap and kills only its own process tree by recorded PID (killTree), never by name. Fixtures are removed in t.after.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/moe-agent.sh, NO behaviour change: make aa85ff13's trusted-PATH scan reusable. Move it out of protected_resolve_cli into two helpers, defined beside refuse_protected_agent (above the find_python site, which will call them):\n- protected_trusted_dir DIR PROJECT_REAL prints DIR's `pwd -P` real path when DIR starts with '/' and that real path is neither the project's real path nor under it (aa85ff13's -ef walk up to /). Otherwise it returns 1.\n- protected_path_lookup NAME PROJECT_DIR returns 1 when PROJECT_DIR is empty or does not resolve (`cd -- ... && pwd -P`; today's break). Otherwise it prints <real entry>/<NAME><ext> for the first PATH entry that passes protected_trusted_dir and holds an executable regular file. ext is '' plus '.exe .cmd' on msys/cygwin.\n- Use `case \"$OSTYPE\" in msys*|cygwin*)` instead of `$(uname -s)`, so the resolver runs no PATH-looked-up command.\n\nprotected_resolve_cli keeps its INFO line and MOE_PROTECTED_AGENT_CLI_NOT_FOUND refusal byte for byte. Its body becomes `COMMAND_BIN=$(protected_path_lookup \"$1\" \"$PROJECT\") || refuse_protected_agent \"...\"`, then COMMAND_ARGV=() and the INFO printf. A refusal must run in the main shell, never inside $( ).\n\nKeep the file parseable by bash 3.2 (mem:gotcha-bash32-heredoc-inside-comsub): no mapfile, no associative arrays, no heredoc inside $( ). Edit with the Edit tool only: it is rename-safe for live seats and leaves the TOOL witness (mem:gotcha-bash-hot-reload-incremental-parse). Then run `bash -n scripts/moe-agent.sh`. aa85ff13's rows must stay green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/moe-agent.sh: under RUNTIME_PROTECTED=1, pin node and python3 to trusted absolute files. Legacy behaviour stays byte-identical.\n\n(a) Top of the file. Move the lines after `NODE_CMD=$(find_node)` verbatim into use_node(): the NODE_EXECUTABLE dir prepend, the --version check and the `[OK] Using node:` line. Its 'Could not find node' exit also clears WORKER_ID, since nothing has registered in either mode.\n- Legacy runs `NODE_CMD=$(find_node); use_node` exactly where it does today. agent-runtime.test.mjs pins this: --help still prints the node line.\n- Under the marker nothing runs there, because the project is not known yet.\n\n(b) parse_command_into_argv. Under the marker, set COMMAND_BIN=\"$line\" and COMMAND_ARGV=() and return before any python3 runs. aa85ff13's gate admits only a bare claude|codex|gemini|grok, so shlex would return the same. The slice that prompt-cache-launcher.test.mjs executes (parse_command_into_argv() { ... # Codex is interactive (TUI)) has RUNTIME_PROTECTED unset and keeps its legacy path (mem:gotcha-wrapper-slice-tests-execute-text).\n\n(c) The find_python site. Under the marker, call protected_pin_interpreters in the main shell (it may exit); otherwise run `PYTHON_CMD=$(find_python)` as today. Both then fall through to the existing empty check and the `[OK] Using python3:` line. protected_pin_interpreters:\n- project = $(normalize_path \"$PROJECT\"), the raw --project. It is empty under --project-name/--list-projects, which therefore fail closed.\n- node is the first of these that qualifies:\n  - MOE_NODE_COMMAND, when it starts with '/' and is an executable regular file whose dir passes protected_trusted_dir;\n  - $HOME/.local/share/moe/node/current/bin/node, under the same test;\n  - `protected_path_lookup node`.\n- NODE_CMD = <real dir>/<basename>.\n- If no node qualifies: refuse_protected_agent \"[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: node was not found on an absolute PATH entry outside the project; refusing to start.\"\n- Then use_node. Its dir goes first on PATH, so agent-CLI shebangs and moe-call.sh find the same node.\n- python3 = `protected_path_lookup python3`; otherwise the same refusal, naming python3.\n\nThe legacy fixed install dirs (/opt/homebrew/bin, nvm, volta, fnm) and `py -3`/`python` are not probed under the marker. A terminal launch has them on PATH; otherwise MOE_NODE_COMMAND names node.\n\nError handling: every refusal exits 1 before any MCP config, daemon start, RPC or registration. Use the Edit tool, then `bash -n`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "scripts/moe-call.sh: with MOE_RUNTIME_PROTECTED exactly '1', skip the find_python probe and set PYTHON_CMD='' explicitly, because the script runs under set -u.\n- PYTHON_CMD's only reader is find_proxy's install-path fallback, which the CQ-R13c2 block already replaces under the marker.\n- node keeps find_node. When the protected wrapper runs this helper (the EXIT-trap and reload deregisters, an agent's MOE_FALLBACK_CLI call), the pinned node's dir is PATH's first entry (use_node), so `command -v node` resolves it.\n- Add one comment saying so, and that a standalone call under the marker still finds node by PATH lookup.\n\nWithout the marker nothing changes, and moe-call.test.mjs's CQ-R13c2 rows must stay green. This closes the planted-python3 run in a protected seat's exit deregister (rows N1 and M1). Use the Edit tool, then `bash -n scripts/moe-call.sh`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-call.sh"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "scripts/moe-agent.ps1, the twin. Keep UTF-8 with BOM (Edit tool). Every change applies only under $script:MoeRuntimeProtected.\n\n(a) Extract the scan out of Resolve-MoeProtectedCli into Find-MoeProtectedFile([string]$Name, [string[]]$Extensions). It runs the same loop and returns the file or $null: absolute entries only, Get-MoeRealPath, the in-project skip with the same comparison, the untrimmed [IO.Path]::Combine, Test-Path -PathType Leaf. Resolve-MoeProtectedCli keeps its .ps1+PATHEXT order, INFO line and MOE_PROTECTED_AGENT_CLI_NOT_FOUND refusal byte for byte.\n\n(b) Pin node just before `$script:MoeProtectedCli = $null`, so node refuses before the CLI, as in sh.\n- Set `$script:MoeNode = $null`.\n- Under the marker, set `$script:MoeNode = Find-MoeProtectedFile 'node'` with @('.exe') on Windows, else @(''). Only node.exe counts on Windows, because Start-Process, ProcessStartInfo and an MCP config can launch only an executable.\n- If it is $null, call Stop-MoeProtectedAgent with the MOE_PROTECTED_INTERPRETER_NOT_FOUND line for node, byte-identical to sh.\n- Otherwise run `Set-Alias -Name node -Value $script:MoeNode -Scope Script` and `Write-Host \"[OK] Using node: $script:MoeNode\"`.\n\n(c) Every `& node` call keeps its text. Aliases outrank applications, so under the marker each one runs the pinned file: Invoke-MoeRpc and Invoke-MoeRpcRaw, the usage and prompt-cache helpers, the account helper, the worktree and git-guard programs, the claude stream. The launcher tests that execute ps1 slices (usage-launcher, seat-registration, moe-account-lease, prompt-cache-launcher) keep running node from PATH with no preamble change.\n\n(d) The sites an alias cannot reach read $script:MoeNode; $null keeps the legacy 'node' byte for byte.\n- Start-Process -FilePath (daemon autostart).\n- The codex-stream ProcessStartInfo: add `if ($script:MoeNode) { $psi.FileName = $script:MoeNode }` on the line after it is built. .NET's Process.Start('node') searches the current directory, the project, before PATH. The line is null-safe inside the prompt-cache-launcher and usage-launcher slices.\n- The claude and gemini MCP JSON `command`.\n- The codex and grok TOML `command`, with .Replace('\\', '/') like $proxyScriptForToml. Get-CodexMoeServerOverride re-emits it unchanged.\n- The heartbeat Start-Job, a separate process: $pin gains `Node = [string]$script:MoeNode`, and the job body begins `if ($Pin.Node) { Set-Alias -Name node -Value $Pin.Node }`.\n\nError handling: the refusal exits 1 before any MCP config, daemon start, proxy RPC or CLI, like aa85ff13's.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "VERIFY ONCE, fresh, from the repo root on WSL. Run it after the last edit, with no wrapper edit in flight (mem:gotcha-editing-wrapper-while-harness-runs):\n\nbash -n scripts/moe-agent.sh && bash -n scripts/moe-call.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/moe-call.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs && bash scripts/tests/parity-check.sh\n\nIt must exit 0. Its command, exit code and output tail are complete_task's evidence.\n- The node.exe half runs the ps1 rows and slices under Windows PowerShell 5.1 and pwsh 7. Report pass and skip counts per engine; a skipped PowerShell 5.1 row is a failure.\n- Mutation spot-checks, on a scratch copy of scripts/ on /mnt/d outside the repo, never the live wrappers. Report each:\n  - restore `command -v node` in the pin: N1/N3 go red;\n  - drop the alias: ps1 N1 goes red;\n  - restore moe-call.sh's python3 probe: N1/M1 go red;\n  - drop a TOML .Replace: S1 goes red.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then check:\n- Under the marker, can any path still run node or python3 by bare name? Grep both twins and moe-call.sh for every node, python3, python and py token. Trace the sh hot-reload exec and the ps1 in-process reload, the heartbeat sidecar, the git-guard and worktree programs, the account helper and the MOE_FALLBACK_CLI call.\n- In-project through links: protected_trusted_dir uses pwd -P and -ef, and Find-MoeProtectedFile uses Get-MoeRealPath. A file-level link inside a trusted dir that points into the project is aa85ff13's documented limitation: unchanged, not widened.\n- Ordering: no interpreter runs before the pin (sh --help, the command gate, parse_command_first_token, CLI detection). A refusal leaves no MCP config, RPC, registration or temp dir.\n- Legacy is byte-identical: L2 and aa85ff13's L1 are green, and nothing new is printed without the marker.\n- bash 3.2: if docker exists, run `docker run --rm -v \"$PWD/scripts:/s:ro\" bash:3.2 bash -n /s/moe-agent.sh` and report it; otherwise say it was unavailable.\n- The postflight.{sh,ps1} protected-runtime rows (pr_run / Invoke-PrRow) inherit the caller's PATH, so they still find a trusted node and python3. Leave them to the epic-final regression (task-f3f364a6); do not run the 12-minute harness here.\n- Concurrency: two protected seats pinning at once share nothing mutable, because the pin only reads.\n- Would I be embarrassed if a planted ./node ran on a protected seat after this? Fix any finding inside these files, then re-run the step-6 command.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -33,17 +89,122 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T19:19:09.454Z",
-  "updatedAt": "2026-10-31T19:53:44.152Z",
+  "updatedAt": "2026-10-31T20:37:14.059Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T19:19:14.801Z",
     "seq": 1
   },
   "metrics": {
-    "firstClaimAt": "2026-10-31T19:19:27.108Z"
+    "firstClaimAt": "2026-10-31T19:19:27.108Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
     "architect-8419009e",
     "architect-54e5eb09"
-  ]
+  ],
+  "commits": [
+    {
+      "sha": "e3ba2f032d6ed80483c9570924e225a51d0c6c6f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-54e5eb09@2026-10-31T19:53:37Z",
+      "paths": [
+        ".moe/tasks/task-64809b196c4042f18c7665e1e8a14b18.json"
+      ],
+      "recordedBy": "architect-54e5eb09",
+      "recordedAt": "2026-10-31T19:53:54.755Z",
+      "treeId": "a83a596f8686f6be0c3b87f5f38df2c0bd2360c0",
+      "status": "PLANNING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-64809b196c4042f18c7665e1e8a14b18.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-54e5eb09@2026-10-31T19:53:37Z",
+    "at": "2026-10-31T19:53:54.755Z"
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T20:37:14.036Z",
+  "executionContract": {
+    "intendedBehavior": "With MOE_RUNTIME_PROTECTED exactly '1', scripts/moe-agent.sh pins node and python3, and scripts/moe-agent.ps1 pins node, to absolute files chosen by aa85ff13's trusted-PATH rule: the first absolute PATH entry whose real path is neither the project's real path nor under it. sh also accepts an absolute MOE_NODE_COMMAND, then Moe's managed runtime, under the same directory rule. ps1 takes only node.exe on Windows.\n\nEvery later launch uses the pinned file: wrapper RPCs and helpers, the MCP configs handed to the agent CLI, and the heartbeat job. In sh this includes moe-call.sh's deregister, which no longer probes python3 under the marker. Nothing reachable only through an empty, '.', relative or in-project PATH entry ever runs.\n\nWhen no trusted interpreter exists, the wrapper exits 1 before any MCP config write, daemon start, RPC or CLI. It prints `[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: <name> was not found on an absolute PATH entry outside the project; refusing to start.` to stderr; for node the line is byte-identical in both twins. Without the marker, behaviour and output are unchanged.",
+    "acceptanceCriteria": [
+      "N1 [sh, ps1]: an empty, '.' or relative entry is placed first. A planted node (sh: and python3) in the project root and project/bin never runs, through pre-flight, the first runtime call and the exit deregister. The [OK] lines name the trusted absolute files, and the claude MCP config's moe command is the pinned node.",
+      "N2 [sh, ps1]: an in-project absolute PATH entry is skipped whether it is spelled directly, through a link or through '..'. N3 [sh]: MOE_NODE_COMMAND counts only as an absolute executable in a trusted dir, and the managed runtime is used ahead of PATH.",
+      "N4 [sh, ps1] and P1 [sh]: when no trusted node (or python3) exists, the run exits 1 with exactly the MOE_PROTECTED_INTERPRETER_NOT_FOUND line on stderr. No stub ran, no runtime call was made and no MCP config was written.",
+      "M1 [sh]: moe-call.sh under the marker never runs a planted python3. L2 [sh, ps1]: without the marker (unset, '01'), sh prints the bare legacy names, ps1 prints no node line, there is no MOE_PROTECTED_ line, and the run reaches its first runtime call. aa85ff13's rows stay green.",
+      "S1: moe-agent.ps1 keeps no node launch literal outside the $script:MoeNode and alias paths.",
+      "The step-6 verification command exits 0, and its PowerShell 5.1 and pwsh 7 rows run under node.exe rather than being skipped."
+    ],
+    "invariants": [
+      "Legacy behaviour and output (marker not exactly '1') are unchanged, and the `& node` text in moe-agent.ps1 is unchanged.",
+      "Under the marker no interpreter runs before the pin: --help, aa85ff13's command gate, parse_command_first_token and CLI detection run none.",
+      "Refusals exit 1 before any MCP config, daemon start, proxy RPC, registration or CLI. sh refusals clear WORKER_ID.",
+      "aa85ff13's INFO and refusal lines stay byte-identical. moe-agent.ps1 stays UTF-8 with BOM, and moe-agent.sh stays bash-3.2 parseable."
+    ],
+    "compatibility": [
+      "Launcher tests that execute wrapper slices keep passing with no preamble edit: prompt-cache-launcher, usage-launcher, moe-account-lease, seat-registration and agent-runtime.",
+      "MCP config shapes are unchanged. Under the marker only the moe server's command value becomes an absolute path, forward-slashed in TOML.",
+      "moe-call.sh's CQ-R13c2 rows and its legacy proxy fallback are unchanged."
+    ],
+    "approvedScope": [
+      "sh: protected_trusted_dir, protected_path_lookup, use_node, protected_pin_interpreters, parse_command_into_argv's protected branch, and protected_resolve_cli (refactor only).",
+      "ps1: Find-MoeProtectedFile, Resolve-MoeProtectedCli (refactor only), $script:MoeNode, the node alias, and the non-alias node sites.",
+      "moe-call.sh: the protected skip of find_python.",
+      "protected-agent-command.test.mjs: harness options and rows N1-N4, P1, M1, L2 and S1."
+    ],
+    "reuse": [
+      "aa85ff13's trusted-PATH scan, extracted once per twin (protected_path_lookup, Find-MoeProtectedFile) and shared with the agent-CLI resolver.",
+      "refuse_protected_agent and Stop-MoeProtectedAgent for the refusal, normalize_path for --project, and the existing NODE_CMD/PYTHON_CMD variables with use_node's PATH prepend."
+    ],
+    "sourceAssumptions": [
+      "aa85ff13 landed as aae40eb0. sh has refuse_protected_agent and protected_resolve_cli (a PATH scan with the pwd -P/-ef walk, and uname -s for .exe/.cmd). ps1 has Stop-MoeProtectedAgent, Get-MoeRealPath, Resolve-MoeProtectedCli and $script:MoeProtectedCli. Re-anchor by name at claim time.",
+      "In sh, find_node runs before argument parsing (NODE_CMD, then the dir prepend and the version line). find_python runs after CLI detection. PROJECT is canonicalised later (normalize_path, cd/pwd). parse_command_into_argv uses ${PYTHON_CMD:-python3}.",
+      "ps1 runs node at its `& node` sites, plus Start-Process -FilePath \"node\", ProcessStartInfo('node') in the codex stream, four MCP config writers (claude and gemini JSON, codex and grok TOML) and the heartbeat Start-Job. ps1 never runs python or moe-call.sh.",
+      "moe-call.sh probes python3 and node before its CQ-R13c2 block. PYTHON_CMD's only reader is find_proxy's install-path fallback."
+    ],
+    "checkRefs": [
+      "bash -n scripts/moe-agent.sh && bash -n scripts/moe-call.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/moe-call.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs && bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Filter PATH once at the top (the description's alternative). Rejected. moe-agent.sh picks node before argument parsing and python3 before the project is canonicalised, so the in-project half of the rule cannot be applied there. An absolute in-project entry, such as an IDE-activated <project>/.venv/bin, would still win before the project is known. Dropping such entries would also strip the agent CLI's own environment.\n2. ps1: replace every `& node` with an explicit `& $script:MoeNode`. Rejected. Several launcher tests (usage-launcher, seat-registration, moe-account-lease) execute ps1 slices holding `& node`, and each would need a preamble edit, pushing the plan to 7+ files. A script-scope alias reaches every in-process `& node` with no text change. Only the six non-command sites read $script:MoeNode. $script:MoeNode is null unless protected, which is aa85ff13's $script:MoeProtectedCli pattern, so the codex-stream FileName override stays null-safe inside its two test slices.\n3. A separate row for moe-call.sh. Folded in instead: a protected sh seat's EXIT-trap deregister is the wrapper running moe-call.sh, whose python3 probe ran a planted ./python3. The fix is a few lines.\n4. Export MOE_NODE_COMMAND for moe-call.sh. Unnecessary: use_node already puts the pinned node's dir first on PATH.\n5. A new refusal code vs reusing MOE_PROTECTED_AGENT_CLI_NOT_FOUND. A new code, MOE_PROTECTED_INTERPRETER_NOT_FOUND: it is distinct from the agent CLI and still matches aa85ff13's 'MOE_PROTECTED_' test filter only on refusal rows. Success prints the existing [OK] lines, so aa85ff13's exact-line assertions stay intact.",
+    "codebaseInsights": "sh ordering:\n- find_node runs at the top, before argument parsing. Its dir is prepended to PATH, and `dirname ./node` yields '.'.\n- aa85ff13's command gate runs before parse_command_first_token. That call runs `${PYTHON_CMD:-python3}` (python3 bare, PYTHON_CMD unset) for shlex.\n- find_python runs after CLI detection.\n- PROJECT is canonicalised later (normalize_path, then cd/pwd).\n- `\"$NODE_CMD\" prompt-cache check` runs before the R13c2 gate and protected_resolve_cli.\n- bash `command -v node` returns './node' for an empty or '.' entry and 'bin/node' for a relative one (probed).\n\nps1:\n- It never uses python or moe-call.sh.\n- node runs at about 13 `& node` sites. It also runs at Start-Process -FilePath \"node\" (daemon autostart), ProcessStartInfo('node') (codex exec stream), the claude and gemini MCP JSON, the codex and grok TOML, and inside the heartbeat Start-Job, a separate process that sees no script variables.\n- Command precedence is alias > function > cmdlet > application.\n- .NET Process.Start with a bare name searches the current directory before PATH (Windows CreateProcess, and .NET's Unix ResolvePath).\n\nmoe-call.sh:\n- It probes python3 and node before its R13c2 block.\n- PYTHON_CMD's only reader is find_proxy's install-path fallback.\n\nTests:\n- agent-runtime.test.mjs runs sh --help with a stub-only PATH and requires the legacy node line. prompt-cache-launcher.test.mjs slices parse_command_into_argv through CLI detection.\n- The protected test fixture realpaths its root, so pwd -P outputs match.",
+    "risks": "- The codex-stream ProcessStartInfo and the codex, gemini and grok config writers are not reached by the rows. S1 pins them statically; review them by hand.\n- PYTHON_CMD is expanded unquoted at many sites (legacy 'py -3'). A trusted python3 path containing whitespace would break those sites. It is out of scope and practically absent on supported hosts.\n- MSYS python3.exe may be the WindowsApps stub. MSYS is not a JetBrains protected launch path.\n- A rejected MOE_NODE_COMMAND is skipped silently. The [OK] line shows the chosen node.\n- --project-name and --list-projects fail closed under the marker: there is no project to be outside of before the registry lookup. The JetBrains launcher always passes --project.\n- Refusal precedence differs between the twins only when several protected requirements fail at once. The sh pin runs before its R13c2 file checks; in ps1 the pin runs after them.\n- Residuals, not fixed here, flagged on the epic-final row:\n  - other tools (git, dirname, uname, serena) still resolve by PATH under the marker;\n  - a standalone moe-call.sh under the marker finds node by PATH;\n  - on Windows, npm .cmd shims and cmd.exe search the cwd before PATH for `node` (NoDefaultCurrentDirectoryInExePath).\n- Docs: the TROUBLESHOOTING rows for MOE_PROTECTED_INTERPRETER_NOT_FOUND and aa85ff13's two codes belong to f3f364a6's docs sweep (step 2).\n- Lane: this row edits moe-agent.sh/.ps1, the serialized wrapper lane. The governor sets its slot. Never edit while another seat's harness runs the live wrapper.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/moe-call.sh",
+      "scripts/tests/protected-agent-command.test.mjs",
+      "scripts/tests/agent-runtime.test.mjs",
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/tests/usage-launcher.test.mjs",
+      "scripts/tests/moe-call.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9f60aca3159887a5238c96fe91cbafa87d2b4944",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T20:37:14.058Z",
+  "approvedPlanRevision": 1
 }

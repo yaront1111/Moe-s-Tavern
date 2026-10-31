@@ -82,10 +82,20 @@
       "description": "OPERATOR CERTIFICATION (DoD 1), on the code verified in step 4. This step changes no code; only docs/CERTIFICATION.md changes.\n\n1. Post in #general with moe.chat_send:\n   - the exact per-OS commands from docs/CERTIFICATION.md;\n   - the commit under test;\n   - a request for the three report files that `cli.mjs certify --work-dir <abs>` writes on Windows, Linux and macOS hardware, attached as task comments or placed at a path the operator names.\n2. Call moe.report_blocked naming what is awaited. No agent here can run Multipass, so this block is legitimate.\n3. When the reports arrive, check each one:\n   - validateCertificationReport accepts it;\n   - certified === true and transport === 'native';\n   - supervisorSha256 equals the sha256 of guest-supervisor.py at the verified commit;\n   - together, the reports cover win32, linux and darwin.\n4. A failing or stale report is never recorded. Block again with its failing check ids and codes so a fix row is filed. After that fix lands, re-run step 4 and then this step.\n5. Record each passing report in docs/CERTIFICATION.md:\n   - one table row: platform, arch, Multipass version, image sha256, supervisor sha256, finishedAt, and the sha256 of the report bytes;\n   - the report verbatim, in a fenced json block.\n   An arch with no report, such as the other macOS arch, stays listed as unsupported.\n6. Call moe.complete_task. The evidence is step 4's DoD command, and the summary lists the report validation.\n\nError handling: never edit, synthesize or accept an injected or out-of-schema report, and never enable verified-local.",
       "status": "IN_PROGRESS",
       "affectedFiles": [],
-      "startedAt": "2026-10-31T06:17:19.236Z"
+      "startedAt": "2026-10-31T06:17:19.236Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "OPERATOR CERTIFICATION (DoD 1), on the code verified in step 4. This step changes no code; only docs/CERTIFICATION.md changes.\n\n1. The request is already posted (#general msg-99ba2572). Since the human's 17:31Z instruction, the GOVERNOR runs `cli.mjs certify --work-dir <abs>` itself: Linux after 62a909c1 lands, Windows after 4679ec68 lands, one host at a time (comment-28648a97). The governor attaches each report, as a file path plus sha256 or verbatim, in a row comment, then restores this row.\n2. While reports are awaited, the row stays BLOCKED (moe.report_blocked naming what is awaited). No agent seat runs Multipass.\n3. When reports arrive, check each one:\n   - validateCertificationReport accepts it;\n   - certified === true and transport === 'native';\n   - supervisorSha256 equals the sha256 of guest-supervisor.py at the verified commit (3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190 unless step 4 re-verifies another);\n   - together, the reports cover win32 x64 and linux x64.\n   DARWIN: by governor ruling under the human's delegation (comment-d39c93082f724e0ebd385bb1921ae8a1), no macOS host exists. darwin x64 and arm64 ship as 'unsupported: no report', with no support claim. That is not a DoD 1 failure; DoD 3 is met by darwin still refusing certification-dependent use (verified-local unavailable) with no silent fallback. The same reading is proposed as TASK rail prop-29ce59fa9fbd4d79804781d20ad8d779; cite its status at completion.\n4. A failing or stale report is never recorded. Block again with its failing check ids and codes so a fix row is filed. After that fix lands, re-run step 4 and then this step.\n5. Record each passing report in docs/CERTIFICATION.md:\n   - one table row: platform, arch, Multipass version, image sha256, supervisor sha256, finishedAt, and the sha256 of the report bytes;\n   - the report verbatim, in a fenced json block.\n   Both darwin rows, and any other arch with no report, stay listed as 'unsupported: no report'.\n6. Call moe.complete_task. The evidence is step 4's DoD command. The summary lists the report validation, the darwin ruling (comment-d39c9308) and the status of rail prop-29ce59fa.\n\nError handling: never edit, synthesize or accept an injected or out-of-schema report, and never enable verified-local.",
+          "reason": "Darwin scope ruling under the human's 2026-10-31 delegation (comment-d39c9308): there is no macOS host, so darwin ships as \"unsupported: no report\". Since the human's 17:31Z instruction the governor runs certify itself (comment-28648a97). The QA reading is proposed as TASK rail prop-29ce59fa, which is pending the human's approval.",
+          "amendedBy": "governor-ce2f28b9",
+          "amendedAt": "2026-10-31T20:32:21.668Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     }
   ],
-  "planRevision": 1,
+  "planRevision": 2,
   "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
@@ -312,11 +322,17 @@
       "author": "governor-ce2f28b9",
       "content": "DARWIN SCOPE RULING. Governor-ce2f28b9, 2026-10-31 ~20:33Z, under the human's explicit delegation.\n\n**The question and the answer.** In the governor's session the human was asked open item 1: \"darwin certification: do you have a Mac for it? If not, darwin stays 'unsupported: no report', and I'll record that scope ruling when R13 completes.\" They answered \"2 yes 3 ok rest decide\" (item 1 falls under \"rest decide\"), then \"go\".\n\n**Ruling: there is no macOS host, so darwin x64 and arm64 ship as \"unsupported: no report\".**\n- R13 completes on two passing native reports, win32 x64 and linux x64.\n- The governor produces both with `cli.mjs certify`, per the human's 17:31Z instruction (comment-28648a97), after 62a909c1 (Linux) and 4679ec68 (Windows) land: Linux first, then Windows, never together.\n- docs/CERTIFICATION.md keeps both darwin rows as \"unsupported: no report\", and verified-local stays refused there (DoD 3, no silent fallback).\n- A Mac report later is a follow-up row, not a blocker here.\n- QA's DoD 1 and DoD 3 readings are pinned by a TASK rail, and step 5 is amended to match. The ids follow in the next comment.\n\n**Other answers in the same exchange.**\n- (2) \"yes\": the governor files the two upstream Multipass issues (the Windows `file://` host check, and the sparse in-place VHDX) and links them on 4679ec68.\n- (3) \"ok\": re-enable the `qgc` adapter after the last certify run. The governor does it if it has the rights, otherwise asks the human.",
       "timestamp": "2026-10-31T20:31:33.307Z"
+    },
+    {
+      "id": "comment-eaef823e143a4cb6b656c193340fcd8a",
+      "author": "governor-ce2f28b9",
+      "content": "The ids for comment-d39c9308:\n- **TASK rail prop-29ce59fa9fbd4d79804781d20ad8d779** (DoD 1 and DoD 3 readings for darwin) is PENDING. The auto-mode guard stopped the governor approving its own proposal over /ws, so it waits for the human's approval in the IDE.\n- **Step 5 amend-1** already carries the same reading:\n  - win32 x64 and linux x64 need passing native reports;\n  - darwin ships as \"unsupported: no report\", with the refusal checked under DoD 3;\n  - the governor produces the reports.\nAt completion, cite the rail's status, whatever it is. If the human rejects the rail, the darwin ruling is void: block again and ask in #governors.",
+      "timestamp": "2026-10-31T20:32:29.856Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T20:31:33.307Z",
+  "updatedAt": "2026-10-31T20:32:29.856Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

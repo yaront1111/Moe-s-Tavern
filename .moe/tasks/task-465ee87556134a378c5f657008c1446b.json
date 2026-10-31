@@ -83,7 +83,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -103,17 +103,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:59:43.397Z",
-  "updatedAt": "2026-10-31T20:31:31.554Z",
+  "updatedAt": "2026-10-31T20:38:09.884Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T08:03:46.843Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-31T20:38:09.884Z",
+    "wallClockMs": 131663041
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
     "worker-c0a1ac70",
-    "worker-4bc1a1b5"
+    "worker-4bc1a1b5",
+    "qa-1f1f912c"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -206,22 +209,45 @@
       "treeId": "96338a792ed6d93a5c724d1785d6bdf0edf6157e",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "9f60aca3159887a5238c96fe91cbafa87d2b4944",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4bc1a1b5@2026-10-31T20:19:03Z",
+      "paths": [
+        ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+        ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "worker-4bc1a1b5",
+      "recordedAt": "2026-10-31T20:32:06.546Z",
+      "treeId": "d69be8dde960ef9b8c78a0e486802a3f05788cef",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
-    "docs/CONFIGURATION.md"
+    "docs/CONFIGURATION.md",
+    ".moe/tasks/task-465ee87556134a378c5f657008c1446b.json",
+    ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
   ],
   "touchedFiles": [
-    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    "docs/CONFIGURATION.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-c0a1ac70@2026-10-31T06:29:38Z",
-    "at": "2026-10-31T06:35:32.625Z"
+    "kind": "completion",
+    "sessionId": "worker-4bc1a1b5@2026-10-31T20:19:03Z",
+    "at": "2026-10-31T20:32:06.546Z"
   },
   "reviewStartedAt": "2026-10-31T20:31:31.534Z",
   "verification": {
@@ -231,5 +257,9 @@
     "reportedAt": "2026-10-31T20:31:31.534Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Under RuntimeProfile.PROTECTED, the JetBrains launcher no longer lets repository content choose the agent binary.\n- TerminalAgentLauncher.agentCommandFor(profile, explicit, setting) behaves like this:\n  - LEGACY returns Run(explicit ?: setting ?: \"claude\") exactly as before.\n  - PROTECTED runs only an exact, case-sensitive member of AgentProvider minus CUSTOM (claude/codex/gemini/grok), after trim.\n  - Anything else is Refused, with the value named: take(200), ISO control chars -> '?'.\n- resolveContext treats `selected != null` as PROTECTED and does not read project.json again. On a refusal it shows showErrorDialog and returns null before AgentContext, so no terminal and no wrapper start.\n- docs/CONFIGURATION.md's agentCommand row documents the IDE rule and the wrapper codes MOE_PROTECTED_AGENT_COMMAND_REFUSED / MOE_PROTECTED_AGENT_CLI_NOT_FOUND, exactly as landed by aa85ff13 (aae40eb0).\n\nDoD:\n1. TerminalAgentLauncherTest has 6 new rows, including temp .moe/project.json verified-local + '/tmp/evil-agent' -> PROTECTED + Refused.\n2. DoD 2 was delivered by aa85ff13. Its bash rows pass in the gate; its ps1 rows pass via Windows node.exe, 28/28. parity-check passes.\n3. Legacy is unchanged and pinned by the legacy row and mutant (iv).\n\nMutants run against TerminalAgentLauncherTest were all killed, then restored cmp-identical:\n- (i) case-insensitive -> 'CLAUDE';\n- (ii) startsWith -> 'claude --dangerously-skip-permissions' / 'claude --flag';\n- (iii) setting falls back to claude -> the setting, project.json and 200-char rows;\n- (iv) LEGACY filtered -> the legacy row.\n\nIDE vs wrapper sanitizing: identical, no drift.\n\nDelivery note: the two Kotlin files are in checkpoint 681c5092. docs/CONFIGURATION.md was carried verbatim by human commit b4c6985c (\"docs(site)…\", which contains only that file), so this completion may land only the board record.\n\nGotcha: a stale Kotlin incremental cache after peer 83692c69 failed compileKotlin on MoeSettingsDialog.kt:130. `gradlew.bat compileKo"
+  "completionSummary": "Under RuntimeProfile.PROTECTED, the JetBrains launcher no longer lets repository content choose the agent binary.\n- TerminalAgentLauncher.agentCommandFor(profile, explicit, setting) behaves like this:\n  - LEGACY returns Run(explicit ?: setting ?: \"claude\") exactly as before.\n  - PROTECTED runs only an exact, case-sensitive member of AgentProvider minus CUSTOM (claude/codex/gemini/grok), after trim.\n  - Anything else is Refused, with the value named: take(200), ISO control chars -> '?'.\n- resolveContext treats `selected != null` as PROTECTED and does not read project.json again. On a refusal it shows showErrorDialog and returns null before AgentContext, so no terminal and no wrapper start.\n- docs/CONFIGURATION.md's agentCommand row documents the IDE rule and the wrapper codes MOE_PROTECTED_AGENT_COMMAND_REFUSED / MOE_PROTECTED_AGENT_CLI_NOT_FOUND, exactly as landed by aa85ff13 (aae40eb0).\n\nDoD:\n1. TerminalAgentLauncherTest has 6 new rows, including temp .moe/project.json verified-local + '/tmp/evil-agent' -> PROTECTED + Refused.\n2. DoD 2 was delivered by aa85ff13. Its bash rows pass in the gate; its ps1 rows pass via Windows node.exe, 28/28. parity-check passes.\n3. Legacy is unchanged and pinned by the legacy row and mutant (iv).\n\nMutants run against TerminalAgentLauncherTest were all killed, then restored cmp-identical:\n- (i) case-insensitive -> 'CLAUDE';\n- (ii) startsWith -> 'claude --dangerously-skip-permissions' / 'claude --flag';\n- (iii) setting falls back to claude -> the setting, project.json and 200-char rows;\n- (iv) LEGACY filtered -> the legacy row.\n\nIDE vs wrapper sanitizing: identical, no drift.\n\nDelivery note: the two Kotlin files are in checkpoint 681c5092. docs/CONFIGURATION.md was carried verbatim by human commit b4c6985c (\"docs(site)…\", which contains only that file), so this completion may land only the board record.\n\nGotcha: a stale Kotlin incremental cache after peer 83692c69 failed compileKotlin on MoeSettingsDialog.kt:130. `gradlew.bat compileKo",
+  "completedAt": "2026-10-31T20:38:09.884Z",
+  "reviewCompletedAt": "2026-10-31T20:38:09.884Z",
+  "reviewSummary": "APPROVED (qa-1f1f912c, about 20:38Z).\nDelivery: completion 9f60aca3 (board only), pushed. The Kotlin is in checkpoint 681c5092, unchanged to HEAD. The docs line is in human commit b4c6985c (+1/-1, the agentCommand row only, disclosed), not in task.commits. About 122 net LOC.\nGate re-run at HEAD:\n- Gradle `gradlew.bat test --rerun` under the jetbrains-gradle lease (free at start, released): exit 0, 518 tests, 0 fail/err/skip. TerminalAgentLauncherTest 32/32, including the 6 new rows.\n- `node --test scripts/tests/protected-agent-command.test.mjs`: 13 pass, 14 pwsh skipped.\n- parity-check.sh in the shared tree failed (MOE_COMMIT_REFUSED_STRONG_CHECKPOINT), caused by a peer's uncommitted +48 lines in moe-agent.sh (likely CQ-V08b). On a git archive of 9f60aca3 it passes, and node gives 13 pass again.\n- ps1 rows via Windows node.exe on a git archive: 28/28 pass.\nTiming: gradle 25s, node 3s, ps1 50s. 9/10 seats alive. tasklist after the gate, a contention proxy only: 2 java, 6 node, 2 powershell.\nDoD:\n1. `selected != null` means PROTECTED, since protectedAgentRuntime returns null only when not PROTECTED. Refused shows a dialog and returns null before AgentContext, so no terminal or wrapper starts. All launch paths (StartAgentAction, MoeToolWindowPanel:221/223) go through resolveContext. Tests assert exact Run/Refused. The project.json row (verified-local + '/tmp/evil-agent') gives PROTECTED + Refused.\n2. Wrapper refusal from aa85ff13 (DONE), MOE_PROTECTED_AGENT_COMMAND_REFUSED naming the value. Its sh/ps1 rows and parity pass.\n3. LEGACY keeps the same expression and is pinned by a row. The docs row documents both codes as landed.\nAdversarial pass: dialog text is not HTML. Cf/bidi and surrogate-split residuals match the wrapper. I did not re-run the mutants; the exact assertions make them killable. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
