@@ -20,7 +20,7 @@ import org.junit.Test
 class MoeJsonTest {
     private val deliveryJson = """{
         "currentCandidate":{"id":" Candidate-X ","treeSha":"AbCdEf0123456789AbCdEf0123456789AbCdEf01","shortSha":"AbCdEf01","baseRevision":" Base-X "},
-        "latestCheckRun":{"command":" npm.cmd test -- --run \n","exitCode":-9,"source":"runner-observed"},
+        "latestCheckRun":{"command":" npm.cmd test -- --run \n","exitCode":-9,"source":"runner-observed","outcome":"code-failure"},
         "deliveryReceipt":{"target":" refs/heads/Pilot ","landedRevision":" LanDed-X "},
         "attemptPhase":"finalizing",
         "requiredCheckSatisfied":false
@@ -53,12 +53,12 @@ class MoeJsonTest {
     fun `delivery rejects numeric ids string exit codes and wrong shaped nested records`() {
         val fields = """"delivery":{
             "currentCandidate":{"id":42,"treeSha":true,"shortSha":[],"baseRevision":{}},
-            "latestCheckRun":{"command":17,"exitCode":"0","source":["runner-observed"]},
+            "latestCheckRun":{"command":17,"exitCode":"0","source":["runner-observed"],"outcome":["timeout"]},
             "deliveryReceipt":[],"attemptPhase":1,"requiredCheckSatisfied":"false"
         }"""
         val expected = JsonParser.parseString("""{
             "currentCandidate":{"id":null,"treeSha":null,"shortSha":null,"baseRevision":null},
-            "latestCheckRun":{"command":null,"exitCode":null,"source":null},"deliveryReceipt":null,"attemptPhase":null,
+            "latestCheckRun":{"command":null,"exitCode":null,"source":null,"outcome":null},"deliveryReceipt":null,"attemptPhase":null,
             "requiredCheckSatisfied":null
         }""")
         for ((path, task) in bothPaths(blockerTaskJson(fields))) {
@@ -88,6 +88,39 @@ class MoeJsonTest {
             for ((path, task) in bothPaths(blockerTaskJson("\"delivery\":{$verdict}"))) {
                 assertEquals("$path verdict $literal", expected, task.delivery?.requiredCheckSatisfied)
             }
+        }
+    }
+
+    @Test
+    fun `delivery keeps a JSON string check outcome verbatim and nulls absent or wrong kinds`() {
+        val outcomes = listOf("passed", "code-failure", "infra-failure", "timeout", "skipped", "inconclusive")
+            .map { "\"$it\"" to JsonPrimitive(it) } + listOf(
+            "" to JsonNull.INSTANCE, "\"cancelled\"" to JsonPrimitive("cancelled"),
+            "\" timeout \"" to JsonPrimitive(" timeout "), "\"\"" to JsonPrimitive(""),
+            "42" to JsonNull.INSTANCE, "true" to JsonNull.INSTANCE, "null" to JsonNull.INSTANCE,
+            "[\"timeout\"]" to JsonNull.INSTANCE, "{}" to JsonNull.INSTANCE
+        )
+        for ((literal, expected) in outcomes) {
+            val outcome = if (literal.isEmpty()) "" else ",\"outcome\":$literal"
+            val members = "\"delivery\":{\"latestCheckRun\":{\"exitCode\":0$outcome}}"
+            for ((path, task) in bothPaths(blockerTaskJson(members))) {
+                val run = serializedDelivery(task).asJsonObject.getAsJsonObject("latestCheckRun")
+                assertTrue("$path outcome $literal: parsed run dropped outcome", run.has("outcome"))
+                assertEquals("$path outcome $literal", expected, run.get("outcome"))
+                assertEquals("$path outcome $literal exitCode", JsonPrimitive(0), run.get("exitCode"))
+            }
+        }
+    }
+
+    @Test
+    fun `delivery check run from a daemon without outcome keeps command exit code and source`() {
+        val members = "\"delivery\":{\"latestCheckRun\":{\"command\":\"node gate.cjs\",\"exitCode\":0,\"source\":\"runner-observed\"}}"
+        val expected = JsonParser.parseString(
+            """{"command":"node gate.cjs","exitCode":0,"source":"runner-observed","outcome":null}"""
+        )
+        for ((path, task) in bothPaths(blockerTaskJson(members))) {
+            assertCompanions(path, task)
+            assertEquals(path, expected, serializedDelivery(task).asJsonObject.get("latestCheckRun"))
         }
     }
 

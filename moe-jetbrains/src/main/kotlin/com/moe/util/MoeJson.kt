@@ -440,7 +440,9 @@ object MoeJson {
             latestCheckRun = delivery.deliveryObject("latestCheckRun")?.let {
                 DeliveryCheckRun(
                     it.getStrictStringOrNull("command"), it.deliveryExitCode(),
-                    it.getStrictStringOrNull("source")?.takeIf { source -> source == "runner-observed" || source == "agent-reported" }
+                    it.getStrictStringOrNull("source")?.takeIf { source -> source == "runner-observed" || source == "agent-reported" },
+                    // Verbatim, never whitelisted: the presentation fails closed on anything but "passed".
+                    outcome = it.getStrictStringOrNull("outcome")
                 )
             },
             deliveryReceipt = delivery.deliveryObject("deliveryReceipt")?.let {

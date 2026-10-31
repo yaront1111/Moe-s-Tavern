@@ -19,14 +19,22 @@ object DeliveryPresentation {
             val candidate = delivery.currentCandidate
             addValue("moe.delivery.candidateSha", candidate?.treeSha?.takeIf { it.isNotEmpty() } ?: candidate?.shortSha, sha = true)
             addValue("moe.delivery.candidateBase", candidate?.baseRevision, sha = true)
-            addValue("moe.delivery.checkCommand", delivery.latestCheckRun?.command)
+            val run = delivery.latestCheckRun
+            val reported = run?.outcome
+            addValue("moe.delivery.checkCommand", run?.command)
             // This is what the runner REPORTED, never proof the daemon executed a check.
-            delivery.latestCheckRun?.exitCode?.let { code ->
-                val outcome = if (code == 0) DeliveryOutcome.PASS else DeliveryOutcome.FAIL
-                val key = if (outcome == DeliveryOutcome.PASS) "moe.delivery.checkPassed" else "moe.delivery.checkFailed"
-                add(DeliveryRow(key, code.toString(), outcome = outcome))
+            // Mirrors the daemon gate rule: only exit 0 with no outcome or exactly "passed" reads as passed.
+            run?.exitCode?.let { code ->
+                val passed = code == 0 && (reported.isNullOrEmpty() || reported == "passed")
+                val key = when {
+                    passed -> "moe.delivery.checkPassed"
+                    code != 0 -> "moe.delivery.checkFailed"
+                    else -> "moe.delivery.checkNotPassed"
+                }
+                add(DeliveryRow(key, code.toString(), outcome = if (passed) DeliveryOutcome.PASS else DeliveryOutcome.FAIL))
             }
-            addValue("moe.delivery.checkSource", delivery.latestCheckRun?.source)
+            addValue("moe.delivery.checkOutcome", reported)
+            addValue("moe.delivery.checkSource", run?.source)
             // The delivery policy's verdict, never inferred from the reported run above.
             when (delivery.requiredCheckSatisfied) {
                 true -> add(DeliveryRow("moe.delivery.requiredCheckCounted", "yes", outcome = DeliveryOutcome.PASS))

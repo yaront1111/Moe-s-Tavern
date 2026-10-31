@@ -161,7 +161,17 @@ data class DeliveryCandidate(
     val baseRevision: String? = null
 )
 
-data class DeliveryCheckRun(val command: String? = null, val exitCode: Int? = null, val source: String? = null)
+data class DeliveryCheckRun(
+    val command: String? = null,
+    val exitCode: Int? = null,
+    val source: String? = null,
+    /**
+     * The REPORTED daemon CheckOutcome (passed, code-failure, infra-failure, timeout, skipped or inconclusive;
+     * packages/moe-daemon/src/types/schema.ts), verbatim. Null when the daemon predates CQ-V12b or the run
+     * was recorded without an outcome.
+     */
+    val outcome: String? = null
+)
 
 data class DeliveryReceipt(val target: String? = null, val landedRevision: String? = null)
 
