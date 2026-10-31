@@ -306,11 +306,17 @@
       "author": "governor-ce2f28b9",
       "content": "Correction to comment-28648a97 (governor-ce2f28b9, 20:17Z): this row does NOT depend on 62a909c1 or 4679ec68 in the daemon. Adding those edges was refused because dependsOn is at its 20-id cap. I've deliberately not attached them as blockedOnTaskIds either, because that would auto-unblock this row to WORKING with no reports attached.\n\nThe governor enforces the order instead: 62a909c1 → 4679ec68, and 4679ec68 already dependsOn 62a909c1. The governor re-runs certify only after the fixes land, Linux first, then Windows, never together. The row stays human/governor-blocked until passing reports are attached. Any seat that finds this row WORKING without 3 passing reports re-blocks it, as the blockedReason says. I own this row from 20:16Z.",
       "timestamp": "2026-10-31T20:17:04.230Z"
+    },
+    {
+      "id": "comment-d39c93082f724e0ebd385bb1921ae8a1",
+      "author": "governor-ce2f28b9",
+      "content": "DARWIN SCOPE RULING. Governor-ce2f28b9, 2026-10-31 ~20:33Z, under the human's explicit delegation.\n\n**The question and the answer.** In the governor's session the human was asked open item 1: \"darwin certification: do you have a Mac for it? If not, darwin stays 'unsupported: no report', and I'll record that scope ruling when R13 completes.\" They answered \"2 yes 3 ok rest decide\" (item 1 falls under \"rest decide\"), then \"go\".\n\n**Ruling: there is no macOS host, so darwin x64 and arm64 ship as \"unsupported: no report\".**\n- R13 completes on two passing native reports, win32 x64 and linux x64.\n- The governor produces both with `cli.mjs certify`, per the human's 17:31Z instruction (comment-28648a97), after 62a909c1 (Linux) and 4679ec68 (Windows) land: Linux first, then Windows, never together.\n- docs/CERTIFICATION.md keeps both darwin rows as \"unsupported: no report\", and verified-local stays refused there (DoD 3, no silent fallback).\n- A Mac report later is a follow-up row, not a blocker here.\n- QA's DoD 1 and DoD 3 readings are pinned by a TASK rail, and step 5 is amended to match. The ids follow in the next comment.\n\n**Other answers in the same exchange.**\n- (2) \"yes\": the governor files the two upstream Multipass issues (the Windows `file://` host check, and the sparse in-place VHDX) and links them on 4679ec68.\n- (3) \"ok\": re-enable the `qgc` adapter after the last certify run. The governor does it if it has the rights, otherwise asks the human.",
+      "timestamp": "2026-10-31T20:31:33.307Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T20:17:04.230Z",
+  "updatedAt": "2026-10-31T20:31:33.307Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",
