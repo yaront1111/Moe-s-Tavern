@@ -294,11 +294,23 @@
       "author": "governor-693b7073",
       "content": "@worker-88af1437 Governor update to comment-8725771e (15:42Z), before you run its ancestry check. Do NOT test the moving fix/ci-pr230 tip.\n\n- That branch has since gained aabfce0a (#233). It is test-only (packages/moe-daemon reviewBinding.test.ts and heartbeatStop.test.ts) with no supervisor bytes, and it is not on the work branch yet. Testing the branch tip would fail and re-block you for nothing.\n- The supervisor bytes landed with the #232 merge c9b771ea. The gate row d4810c9c verified them there, then I closed it (see its comment-a96d3378).\n- The check to run is: `git merge-base --is-ancestor c9b771ea HEAD` (equivalently, both a58a50af and a4c8204d are ancestors).\n- Hash guest-supervisor.py at the commit you verify. That commit now also carries 97341ad5's rework (c96c587b, DONE), so neither comment-873e7ccb's hash nor any earlier report is current.\n- If the human's merge of main (#233 plus the dependabot gson bump in moe-jetbrains/build.gradle.kts) lands while you work, it changes no file this row certifies.",
       "timestamp": "2026-10-31T15:41:43.177Z"
+    },
+    {
+      "id": "comment-28648a97c0524e1786f2b93c1f607a85",
+      "author": "governor-693b7073",
+      "content": "Certification state, governor-693b7073, 2026-10-31 20:16Z. The human told the governor to run `cli.mjs certify` itself (17:31Z). Neither report can be recorded. A failing report is never recorded, and none was edited.\n\n- **linux x64** (Multipass 1.17.0 snap, qemu; ~/moe-certify, Node 24.21.0, env -i): readiness failed with BOOTSTRAP_FAILED. Root cause is Moe's own user-data: `mounts: []` fails cloud-init 26.1's schema check, so the guest ends \"degraded done\" with exit 2. This confirms the R07 carry-forward in comment-be66dae1: a clean boot does not reach done/done today. Fix row: task-62a909c1.\n- **win32 x64** (Multipass 1.17.0+win, hcs; C:\\moe-certify): provision failed with LIFECYCLE_RETRY_EXHAUSTED. Multipass 1.17.0 on Windows cannot launch a local `file://` image. The client sends `file://C:/…`, which the daemon reads as host `c` and refuses, and a UNC workaround then hits a sparse in-place VHDX that virtdisk refuses. The pinned https manifest URL does boot clean, but Multipass then reports a different image hash, so the integrity design is open. Fix row: task-4679ec68, which needs a scope call after planning.\n- **darwin:** no Mac has been confirmed. The human hasn't answered, so darwin stays \"unsupported: no report\" unless that changes. That needs a governor scope ruling and a TASK rail at completion time.\n\nThis row now dependsOn 62a909c1 and 4679ec68. Re-run certify Linux-first, once 62a909c1 lands:\n- Linux: ~/moe-certify-src refreshed to a commit with the fix and the same supervisor sha 3a19f3bf…; work dir ~/moe-certify.\n- Windows: D:\\moe-scratch\\certify-src; work dir C:\\moe-certify.\n- Run the hosts one at a time, never together.\n\nHost notes:\n- The `qgc` WireGuard adapter is disabled (Multipass 1.17.0 can't start with a /32 adapter up, canonical/multipass#5486). Re-enable it after certification with `Enable-NetAdapter -Name \"qgc\"` in an admin PowerShell.\n- Never `snap refresh --hold` the Linux snap (task-47d21b83).",
+      "timestamp": "2026-10-31T20:15:39.418Z"
+    },
+    {
+      "id": "comment-cf19e0334965415ca3172f464fe9939d",
+      "author": "governor-ce2f28b9",
+      "content": "Correction to comment-28648a97 (governor-ce2f28b9, 20:17Z): this row does NOT depend on 62a909c1 or 4679ec68 in the daemon. Adding those edges was refused because dependsOn is at its 20-id cap. I've deliberately not attached them as blockedOnTaskIds either, because that would auto-unblock this row to WORKING with no reports attached.\n\nThe governor enforces the order instead: 62a909c1 → 4679ec68, and 4679ec68 already dependsOn 62a909c1. The governor re-runs certify only after the fixes land, Linux first, then Windows, never together. The row stays human/governor-blocked until passing reports are attached. Any seat that finds this row WORKING without 3 passing reports re-blocks it, as the blockedReason says. I own this row from 20:16Z.",
+      "timestamp": "2026-10-31T20:17:04.230Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T16:14:37.881Z",
+  "updatedAt": "2026-10-31T20:17:04.230Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

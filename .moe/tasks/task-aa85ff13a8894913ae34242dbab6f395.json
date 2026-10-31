@@ -93,7 +93,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -133,12 +133,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T08:07:24.823Z",
-  "updatedAt": "2026-10-31T20:11:19.286Z",
+  "updatedAt": "2026-10-31T20:18:49.715Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T08:08:34.580Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-31T20:18:49.715Z",
+    "wallClockMs": 130215135
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -207,7 +209,8 @@
   "contextFetchedBy": [
     "worker-632cd3f0",
     "architect-8419009e",
-    "worker-4bc1a1b5"
+    "worker-4bc1a1b5",
+    "qa-1f1f912c"
   ],
   "workStartedAt": "2026-10-31T19:01:17.626Z",
   "commits": [
@@ -258,6 +261,22 @@
       "treeId": "67f2c790ff348abd853acc6025e7af3e9f1d0bee",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "aae40eb088855819bf3031d788a3014fb4e0127d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-4bc1a1b5@2026-10-31T19:53:22Z",
+      "paths": [
+        ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-4bc1a1b5",
+      "recordedAt": "2026-10-31T20:11:40.836Z",
+      "treeId": "4cc79ea911274b70549ac8b5edc5976b67b5a1e7",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -265,7 +284,8 @@
     "scripts/moe-agent.sh",
     "scripts/tests/postflight.sh",
     "scripts/moe-agent.ps1",
-    "scripts/tests/postflight.ps1"
+    "scripts/tests/postflight.ps1",
+    ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json"
   ],
   "touchedFiles": [
     "scripts/tests/protected-agent-command.test.mjs",
@@ -277,9 +297,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
+    "kind": "completion",
     "sessionId": "worker-4bc1a1b5@2026-10-31T19:53:22Z",
-    "at": "2026-10-31T19:53:46.936Z"
+    "at": "2026-10-31T20:11:40.836Z"
   },
   "reviewStartedAt": "2026-10-31T20:11:19.284Z",
   "verification": {
@@ -289,5 +309,9 @@
     "reportedAt": "2026-10-31T20:11:19.284Z",
     "source": "agent-reported"
   },
-  "completionSummary": "With MOE_RUNTIME_PROTECTED exactly '1', moe-agent.sh and moe-agent.ps1 run only claude, codex, gemini or grok, by bare name, resolved from an absolute PATH entry outside the project. Without the marker nothing changes.\n\nMessages. Each refusal is one stderr line, byte-identical in both wrappers, followed by exit 1:\n- `[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '<cmd>' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start.` The value has control chars replaced by '?' and is cut to 200 chars.\n- `[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: <name> was not found on an absolute PATH entry outside the project; refusing to start.`\n- On success: `[INFO] MOE_PROTECTED_AGENT_CLI: <name> -> <abs>`.\n\nPlacement and lookup:\n- The allowlist gate runs before CLI detection (sh) or right after the marker is read (ps1), ahead of any MCP config write or RPC.\n- The lookup is a manual PATH scan, never command -v or Get-Command. It skips empty, '.', relative and in-project entries: sh compares `pwd -P` with an ancestor `-ef` walk, ps1 follows junctions and symlinks.\n- Every later exec, the account signin probe included, uses the absolute path. gemini->agy never fires under the marker.\n- R13c2's P rows in postflight.{sh,ps1} now launch a `claude` stub from a trusted bin dir. This scope growth is needed because the gate refuses the old /bin/true.\n\nEvidence:\n- Verify (WSL): 27 tests, 13 pass, 0 fail, 14 pwsh rows skipped. parity-check.sh passes.\n- Windows node.exe on a snapshot: PS 5.1 14/14 and pwsh 7 14/14.\n- RED: the pre-task wrappers fail every protected row and pass L1 (sh 11 failing; ps1 12 failing on PS 5.1).\n- R13c2 [protected runtime] rows (trimmed harness): ok on bash, PS 5.1 and pwsh 7. parity-check.ps1 passes on both engines. bash -n and ParseFile are clean; BOM kept, 0 CR.\n- Mutants, each killed by the named rows: (i) prefix match: R1/R2; (ii) command -v: T1/T2/T3; (iii) no in-project skip: T3, on sh and on ps1; (iv"
+  "completionSummary": "With MOE_RUNTIME_PROTECTED exactly '1', moe-agent.sh and moe-agent.ps1 run only claude, codex, gemini or grok, by bare name, resolved from an absolute PATH entry outside the project. Without the marker nothing changes.\n\nMessages. Each refusal is one stderr line, byte-identical in both wrappers, followed by exit 1:\n- `[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '<cmd>' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start.` The value has control chars replaced by '?' and is cut to 200 chars.\n- `[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: <name> was not found on an absolute PATH entry outside the project; refusing to start.`\n- On success: `[INFO] MOE_PROTECTED_AGENT_CLI: <name> -> <abs>`.\n\nPlacement and lookup:\n- The allowlist gate runs before CLI detection (sh) or right after the marker is read (ps1), ahead of any MCP config write or RPC.\n- The lookup is a manual PATH scan, never command -v or Get-Command. It skips empty, '.', relative and in-project entries: sh compares `pwd -P` with an ancestor `-ef` walk, ps1 follows junctions and symlinks.\n- Every later exec, the account signin probe included, uses the absolute path. gemini->agy never fires under the marker.\n- R13c2's P rows in postflight.{sh,ps1} now launch a `claude` stub from a trusted bin dir. This scope growth is needed because the gate refuses the old /bin/true.\n\nEvidence:\n- Verify (WSL): 27 tests, 13 pass, 0 fail, 14 pwsh rows skipped. parity-check.sh passes.\n- Windows node.exe on a snapshot: PS 5.1 14/14 and pwsh 7 14/14.\n- RED: the pre-task wrappers fail every protected row and pass L1 (sh 11 failing; ps1 12 failing on PS 5.1).\n- R13c2 [protected runtime] rows (trimmed harness): ok on bash, PS 5.1 and pwsh 7. parity-check.ps1 passes on both engines. bash -n and ParseFile are clean; BOM kept, 0 CR.\n- Mutants, each killed by the named rows: (i) prefix match: R1/R2; (ii) command -v: T1/T2/T3; (iii) no in-project skip: T3, on sh and on ps1; (iv",
+  "completedAt": "2026-10-31T20:18:49.715Z",
+  "reviewCompletedAt": "2026-10-31T20:18:49.715Z",
+  "reviewSummary": "Reviewed completion aae40eb0 (pushed, on moe/work-2026-10-24) plus same-session checkpoint 29de0da4. scripts diff: +338/-4, net 334 (<400).\n\nRe-ran:\n- WSL in place: `node --test scripts/tests/protected-agent-command.test.mjs && bash scripts/tests/parity-check.sh` EXIT=0. 13 pass, 0 fail, 14 pwsh skipped. Parity PASS.\n- Windows node.exe on an aae40eb0 snapshot: 28 pass, 0 fail. PS 5.1 14/14, pwsh 7 14/14.\n- ps1 has its BOM and 0 CR.\n- Own mutants: removing the sh -ef in-project skip turns T3 red; command -v before the scan turns T1/T2 and T3 red.\n- Trimmed postflight.sh [protected runtime] P rows: ok, rc 0.\n\nDoD:\n1. Both wrappers print the byte-identical COMMAND_REFUSED line (control chars to '?', 200 cut) and exit 1. The gate sits ahead of R13c2's gate, MCP config and RPC. R1 asserts no rpc and no config.\n2. A manual PATH scan skips non-absolute entries and real-path in-project ones (sh -ef walk, ps1 junction-following). Every later exec, plus the signin probe, uses the absolute path; gemini->agy cannot fire. NOT_FOUND is covered by T1/T2, legacy by L1 (unset and '01').\n3. Evidence matches and re-runs green.\n\nRails: marker-only (exact '1'), set -e safe, bash 3.2 constructs.\n\nScope note: the postflight P-row edits are outside approvedScope but needed, since the gate refuses /bin/true.\n\nNon-blocking, host-controlled:\n- ps1 accepts UNC PATH entries without alias detection (like the 8.3 names).\n- The non-ASCII 200 cut is chars in sh but UTF-16 units in ps1.",
+  "requiredCheckAtDone": null
 }
