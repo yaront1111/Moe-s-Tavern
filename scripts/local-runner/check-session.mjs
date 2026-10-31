@@ -10,9 +10,15 @@ import { checkArgv, checkFrame, createFrameDecoder, parseGuestFrame } from './gu
 
 // guest-supervisor.py's codes, which C2 pins: 79 before hello (the candidate lacks an approved protected blob), 80
 // after the observation (the job changed one) and 81 before hello, with no frame (the CQ-R11e5 dependency install failed).
+// 82 is a SUPERVISOR refusal, never a job's exit: before hello, with no frame, it says the candidate's own package metadata
+// was refused (a code failure, not an infrastructure one). The guest producer is not pinned by C2 yet; until it emits 82,
+// every dependency failure arrives as 81.
 export const PROTECTED_MISMATCH = 79;
 export const PROTECTED_CHANGED = 80;
 export const DEPENDENCIES_FAILED = 81;
+export const DEPENDENCIES_CANDIDATE_INVALID = 82;
+// The one diagnostic for that refusal. It is host-owned ASCII, so no npm or guest byte (stderr is never read) reaches it.
+const CANDIDATE_REFUSAL = 'MOE_DEPENDENCY_CANDIDATE_INVALID: Candidate package metadata is not compatible with the approved lockfile; remove npm-shrinkwrap.json/.npmrc and unsupported overrides or bundling.';
 export const MAX_BUDGET_MS = 86_400_000;
 export const MAX_CHECK_TAIL_BYTES = 16_384; // the daemon's MAX_CHECK_LOG_BYTES (checkRunStore.ts)
 // Raw output bytes kept: twice the tail, so a cut sequence or U+FFFD expansion at the window's start never reaches it.
@@ -32,7 +38,9 @@ const result = (outcome, observation = null, outputTail = '') =>
  * before hello, such as supervisor exit 81 (DEPENDENCIES_FAILED, the dependency install failed); 'skipped' for
  * supervisor exit 79 with no frame; 'inconclusive' for exit 80 after hello and one observation; and only after hello,
  * one observation, a clean stdout EOF and exit 0, 'passed' for job exit code 0, else 'code-failure'. exitCode and signal
- * are the observation's for those three, else null. provider: {executable = 'multipass', spawn = child_process.spawn};
+ * are the observation's for those three, else null. One more 'code-failure' needs no observation: a clean stdout EOF and
+ * supervisor exit 82 (DEPENDENCIES_CANDIDATE_INVALID) with no frame at all and a whole session, which resolves exitCode 82,
+ * signal null and the fixed CANDIDATE_REFUSAL as outputTail, never any guest byte. provider: {executable = 'multipass', spawn = child_process.spawn};
  * timeoutMs (1-60000) bounds the stdin write and the wait for the provider to exit once stdin is closed. Invalid input
  * rejects with CHECK_SESSION_INPUT_INVALID before any spawn; nothing after that rejects.
  */
@@ -134,6 +142,11 @@ function settle(s, code) {
   for (const timer of [s.budget, s.deadline, s.kill]) clearTimeout(timer);
   s.options.signal?.removeEventListener('abort', s.onAbort);
   const outcome = outcomeOf(s, code);
+  // The refusal is selected only by the clean no-frame branch below, so the host supplies its code and text itself.
+  if (outcome === 'code-failure' && !s.opened && code === DEPENDENCIES_CANDIDATE_INVALID) {
+    s.resolve(result(outcome, { code, signal: null }, CANDIDATE_REFUSAL));
+    return;
+  }
   s.resolve(result(outcome, OBSERVED.includes(outcome) ? s.observation : null, tailOf(s)));
 }
 
@@ -142,6 +155,7 @@ function outcomeOf(s, code) {
   if (s.timedOut) return 'timeout';
   if (s.failed || s.killed || !s.written || !s.ended) return 'infra-failure';
   if (code === PROTECTED_MISMATCH && !s.opened) return 'skipped'; // hello is the first frame, so no frame at all
+  if (code === DEPENDENCIES_CANDIDATE_INVALID && !s.opened) return 'code-failure'; // likewise: the supervisor refused the candidate
   if (!s.opened || !s.observation) return 'infra-failure';
   if (code === PROTECTED_CHANGED) return 'inconclusive';
   if (code !== 0) return 'infra-failure';

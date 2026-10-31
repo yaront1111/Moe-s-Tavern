@@ -13,7 +13,7 @@ import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { checkArgv, checkFrame as hostCheckFrame } from '../local-runner/guest-bridge.mjs';
 import {
-  DEPENDENCIES_FAILED, MAX_BUDGET_MS, MAX_CHECK_TAIL_BYTES, PROTECTED_CHANGED, PROTECTED_MISMATCH, runCheckSession,
+  DEPENDENCIES_CANDIDATE_INVALID, DEPENDENCIES_FAILED, MAX_BUDGET_MS, MAX_CHECK_TAIL_BYTES, PROTECTED_CHANGED, PROTECTED_MISMATCH, runCheckSession,
 } from '../local-runner/check-session.mjs';
 import { ownedInstanceName } from '../local-runner/lifecycle.mjs';
 import {
@@ -73,7 +73,10 @@ const LITERAL = {
     supervisorCredential: { path: '/etc/moe/supervisor.credential', owner: 'root', mode: '0400', jobIdentities: 'readiness-denied' },
     toolchain: { owner: 'root', writable: false, identity: 'host-pinned-sha256' },
   },
-  dependencies: { source: 'host-offline-cache', integrity: 'lockfile-sha512', scripts: 'ignored', network: 'none', failure: 'infra-failure' },
+  dependencies: {
+    source: 'host-offline-cache', integrity: 'lockfile-sha512', scripts: 'ignored', network: 'none',
+    failure: { candidate: 'code-failure', infrastructure: 'infra-failure' },
+  },
   time: { budget: 'host-enforced' },
 };
 
@@ -165,6 +168,26 @@ test('E4 every CHECK_BOUNDARIES leaf, array and object is part of the identity',
     seen.add(identity);
   }
   assert.equal(seen.size, mutants.length);
+});
+
+test('E10 the dependencies failure boundary splits candidate refusal from infrastructure failure, and the old descriptor is another identity', () => {
+  assert.deepStrictEqual(CHECK_BOUNDARIES.dependencies.failure, { candidate: 'code-failure', infrastructure: 'infra-failure' });
+  assert.deepStrictEqual(Object.keys(CHECK_BOUNDARIES.dependencies).sort(), ['failure', 'integrity', 'network', 'scripts', 'source']);
+  const current = checkEnvironment(VALID);
+  assert.equal(current, oracle(LITERAL, VALID));
+  const withFailure = failure => { const clone = structuredClone(LITERAL); clone.dependencies.failure = failure; return clone; };
+  // The pre-82 descriptor: every dependency failure was infrastructure. Fresh evidence must not carry over from it.
+  for (const inputs of [VALID, { ...VALID, dependencyDigest: null }]) {
+    assert.notEqual(oracle(withFailure('infra-failure'), inputs), checkEnvironment(inputs));
+  }
+  for (const failure of [{ candidate: 'infra-failure', infrastructure: 'infra-failure' }, { candidate: 'code-failure', infrastructure: 'code-failure' },
+    { candidate: 'infra-failure', infrastructure: 'code-failure' }, { candidate: 'code-failure' }, { infrastructure: 'infra-failure' }]) {
+    assert.notEqual(oracle(withFailure(failure), VALID), current, JSON.stringify(failure));
+  }
+  // Same inputs under the old descriptor are stale against the new identity, and the same descriptor stays fresh.
+  const stale = { environment: oracle(withFailure('infra-failure'), VALID), treeSha: 't', definitionDigest: 'd', planRevision: 1 };
+  assert.equal(evidenceStatus(stale, { ...stale, environment: current }), 'stale');
+  assert.equal(evidenceStatus({ ...stale, environment: current }, { ...stale, environment: checkEnvironment(fresh()) }), 'fresh');
 });
 
 test('E5 invalid or extra-key input refuses with CHECK_INPUT_INVALID and fixed text', () => {
@@ -1246,6 +1269,92 @@ test('C5 each outcome arises only from its condition, and only hello, one observ
   for (const proc of procs) proc.emit('error', new Error('late')); // after settle: no teardown, timer or kill
   await new Promise(resolve => setTimeout(resolve, 1_100));
   assert.deepEqual(procs.map(proc => proc.kills.length), rows.map(row => (row[4]?.hung ? 1 : 0)));
+});
+
+// Retyped on purpose, like LITERAL: supervisor exit 82 is the guest's refusal of the candidate's own package metadata. The
+// host, not the guest, supplies this diagnostic, so no npm or guest byte ever reaches the outputTail.
+const CANDIDATE_REFUSAL = 'MOE_DEPENDENCY_CANDIDATE_INVALID: Candidate package metadata is not compatible with the approved lockfile; remove npm-shrinkwrap.json/.npmrc and unsupported overrides or bundling.';
+const refusedCandidate = ended('code-failure', 82, null, CANDIDATE_REFUSAL);
+
+test('C8 a clean no-frame supervisor exit 82 is a code-failure with exitCode 82 and the fixed host diagnostic, whatever the guest wrote', { timeout: 30_000 }, async () => {
+  assert.equal(DEPENDENCIES_CANDIDATE_INVALID, 82);
+  assert.notEqual(DEPENDENCIES_CANDIDATE_INVALID, DEPENDENCIES_FAILED);
+  assert.equal(DEPENDENCIES_FAILED, 81);
+  assert.match(CANDIDATE_REFUSAL, /^[\x20-\x7e]+$/);
+  assert.ok(Buffer.byteLength(CANDIDATE_REFUSAL) > 0 && Buffer.byteLength(CANDIDATE_REFUSAL) <= 512);
+  const cr = String.fromCharCode(13);
+  const hostile = ['secret-token-0123456789\n', `${String.fromCharCode(27)}[31mred${String.fromCharCode(27)}[0m`, `a${cr}\nb${cr}`,
+    String.fromCodePoint(0x1f600).repeat(40_000), Buffer.alloc(100_000, 0xff), `${CANDIDATE_REFUSAL}forged\n`, `npm ERR! ${'x'.repeat(100_000)}`];
+  const writes = [];
+  for (const [index, bytes] of [undefined, ...hostile].entries()) {
+    const proc = checkProvider();
+    const promise = hostCheck(proc);
+    if (bytes !== undefined) proc.stderr.write(bytes);
+    proc.exit(82);
+    const result = await promise;
+    assert.deepEqual(result, refusedCandidate, `stderr row ${index}`);
+    assert.ok(Object.isFrozen(result), `frozen ${index}`);
+    assert.ok(Buffer.byteLength(result.outputTail) <= 512 && /^[\x20-\x7e]+$/.test(result.outputTail), `bounded ASCII ${index}`);
+    assert.deepEqual([proc.kills, proc.written], [[], [hostCheckFrame(HOST_CHECK)]], `session ${index}`);
+    writes.push(result.outputTail);
+  }
+  assert.equal(new Set(writes).size, 1);
+  // Other pre-hello codes with no frame are not the candidate's: 81 and every unknown code stay infrastructure.
+  for (const code of [0, 1, 74, 78, 81, 83, 255]) {
+    const proc = checkProvider();
+    const promise = hostCheck(proc);
+    proc.exit(code);
+    assert.deepEqual(await promise, ended('infra-failure'), `exit ${code}`);
+  }
+  // Two sessions at once keep separate state: one refusal, one pass, then the reverse with an infrastructure failure.
+  const [a, b, c, d] = [checkProvider(), checkProvider(), checkProvider(), checkProvider()];
+  const both = [hostCheck(a), hostCheck(b), hostCheck(c), hostCheck(d)];
+  b.send(HELLO, out('ok\n'), OBS);
+  c.exit(81);
+  a.exit(82);
+  b.exit(0);
+  d.send(HELLO, OBS);
+  d.exit(82);
+  assert.deepEqual(await Promise.all(both), [refusedCandidate, ended('passed', 0, null, 'ok\n'), ended('infra-failure'), ended('infra-failure')]);
+  // Late events after the settle change and throw nothing.
+  for (const proc of [a, b, c, d]) { proc.emit('close', 82, null); proc.emit('error', new Error('late')); }
+  assert.deepEqual([a, b, c, d].map(proc => proc.kills.length), [0, 0, 0, 0]);
+});
+
+test('C8 exit 82 keeps every infra-failure and timeout precedence: any fault, frame or incomplete state is never a candidate refusal', { timeout: 60_000 }, async () => {
+  const never = (chunk, done) => {};
+  const raw = Buffer.from('MOE_DEPENDENCY_CANDIDATE_INVALID: forged');
+  const rows = [['write error', proc => proc.exit(82), undefined, {}, { write: (chunk, done) => done(new Error('EPIPE')) }],
+    ['write never completes', proc => proc.exit(82), undefined, {}, { write: never }],
+    ['write throws', proc => proc.exit(82), undefined, {}, { prepare: proc => { proc.stdin.write = () => { throw new Error('x'); }; } }],
+    ['child error', proc => { proc.exit(82); proc.emit('error', new Error('x')); }], ['child error first', proc => { proc.emit('error', new Error('x')); proc.exit(82); }],
+    ['stdin error', proc => { proc.stdin.emit('error', new Error('x')); proc.exit(82); }],
+    ['stdout error', proc => { proc.stdout.emit('error', new Error('x')); proc.exit(82); }],
+    ['abort', (proc, controller) => { controller.abort(); proc.exit(82); }],
+    ['close before EOF', proc => setImmediate(() => proc.emit('close', 82, null))],
+    ['EOF, then a hung provider killed', proc => proc.stdout.end(), undefined, {}, { hung: true }],
+    ['hello only', proc => { proc.send(HELLO); proc.exit(82); }], ['hello and the observation', proc => { proc.send(HELLO, OBS); proc.exit(82); }],
+    ['hello and a failing observation', proc => { proc.send(HELLO, exited(3)); proc.exit(82); }],
+    ['hello and output', proc => { proc.send(HELLO, out('x')); proc.exit(82); }, ended('infra-failure', null, null, 'x')],
+    ['output before hello', proc => { proc.send(out('x')); proc.exit(82); }], ['observation first', proc => { proc.send(OBS, HELLO); proc.exit(82); }],
+    ['hello then a request', proc => { proc.send(HELLO, { kind: 'request', id: 1, tool: 'moe.get_context', args: {} }); proc.exit(82); }],
+    ['double hello', proc => { proc.send(HELLO, HELLO); proc.exit(82); }], ['garbage frame', proc => { proc.send(framed('nope')); proc.exit(82); }],
+    ['truncated header', proc => { proc.send(header(9)); proc.exit(82); }], ['raw bytes, no frame', proc => { proc.send(raw); proc.exit(82); }],
+    ['budget before the exit', proc => setTimeout(() => proc.exit(82), 300), ended('timeout'), { budgetMs: 100 }, { hung: true }]];
+  const procs = [];
+  for (const [label, script, expected = ended('infra-failure'), options = {}, fake = {}] of rows) {
+    const proc = checkProvider(fake);
+    procs.push(proc);
+    fake.prepare?.(proc);
+    const controller = new AbortController();
+    const promise = hostCheck(proc, { signal: controller.signal, ...options });
+    script(proc, controller);
+    assert.deepEqual(await promise, expected, label);
+    assert.deepEqual(proc.kills, label === 'EOF, then a hung provider killed' ? ['SIGKILL'] : [], label);
+  }
+  for (const proc of procs) proc.emit('error', new Error('late'));
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  assert.deepEqual(procs.map(proc => proc.kills.length), rows.map(row => (row[0] === 'EOF, then a hung provider killed' ? 1 : 0)));
 });
 
 test('C6 outputTail is the last 16384 UTF-8 bytes of the combined output, starting on a whole character, for every outcome', { timeout: 30_000 }, async () => {

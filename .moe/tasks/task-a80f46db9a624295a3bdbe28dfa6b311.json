@@ -16,40 +16,65 @@
     {
       "stepId": "step-1",
       "description": "Tests first, then minimal host classification. Use the landed 5ed445ca/92307adc/4aa5440b prerequisites; do not copy another worker's dirty source. In local-runner-check.test.mjs, extend C5's real-stream checkProvider/hostCheck/ended table before implementation. New clean no-frame exit82 must resolve exactly to code-failure/82/null and this host-owned literal:\n```text\nMOE_DEPENDENCY_CANDIDATE_INVALID: Candidate package metadata is not compatible with the approved lockfile; remove npm-shrinkwrap.json/.npmrc and unsupported overrides or bundling.\n```\nPin exact bytes independently in tests, ASCII-only, no more than512 UTF8 bytes; changing candidate/nested error/stderr contents (secrets, ANSI, CR/LF, huge Unicode) cannot change it. Assert no observation is needed and a frozen result is still returned. Keep81 infra unchanged. Add82 paired with failed/unfinished stdin write, provider/stream error, abort, local kill, no stdout EOF, partial/bad frames, hello-only, hello+observation, output-before-hello, and a time budget expiring; error handling must retain infra/timeout precedence, never candidate/pass. Preserve all existing C3-C7 assertions and bounded tail/cleanup behavior. Do not yet pin a Python82 constant in C2: this task deliberately does not change the guest producer; parent42e9990c adds that parity test.\n\nIn check-session.mjs export DEPENDENCIES_CANDIDATE_INVALID = 82 beside81. In outcomeOf, insert exactly the clean no-frame branch AFTER existing timedOut/failed/killed/written/ended gates, and before the generic unopened-session rejection:\n```js\nif (code === DEPENDENCIES_CANDIDATE_INVALID && !s.opened) return 'code-failure';\n```\nIn settle, only when that clean candidate branch was actually selected, return result with {code:82,signal:null} and the fixed diagnostic rather than a null observation/empty ring. For instance derive candidateRefusal from outcome==='code-failure', !s.opened and code===82; never special-case raw exit82 before outcomeOf. Ordinary observation-based results remain untouched. The number82 is a SUPERVISOR refusal, not a claimed job exit; update module/JSDoc comments to make this exception explicit. Do not forward stderr, invent protocol frames, change the parser, relax a guard, or change dependency81 semantics.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/check-session.mjs",
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-session.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Tests first: C8 (two tests: clean no-frame exit 82 -> code-failure/82/null with the fixed 173-byte ASCII host diagnostic over hostile stderr, 81 and unknown codes stay infra, concurrent sessions, late events; and a 22-row precedence matrix of 82 with write errors, child/stdin/stdout errors, abort, close-before-EOF, hung-provider kill, hello-only, hello+observation, output/observation-before-hello, request, double hello, garbage, truncated, raw bytes and budget timeout). Red first: the import of DEPENDENCIES_CANDIDATE_INVALID failed. Then check-session.mjs: export DEPENDENCIES_CANDIDATE_INVALID = 82, outcomeOf branch placed after the timedOut/failed/killed/written/ended gates and the 79 branch, settle supplies {code:82,signal:null} + host literal only when outcome==='code-failure' && !opened && code===82. JSDoc/comments say 82 is a supervisor refusal, not a job exit. Existing C3-C7 untouched. Targeted rows C3-C8, E1-E10: 19/19 pass on node v24.21.0 under env -i. Dirty paths of other sessions (moe-agent.ps1/.sh, postflight-worktree.cjs, .moe/*) left untouched.",
+      "startedAt": "2026-10-31T10:05:21.427Z",
+      "completedAt": "2026-10-31T10:08:30.369Z"
     },
     {
       "stepId": "step-2",
       "description": "Bind the changed interpretation into the existing environment identity. In CHECK_BOUNDARIES.dependencies replace only the old failure:'infra-failure' leaf with:\n```js\nfailure: { candidate: 'code-failure', infrastructure: 'infra-failure' }\n```\nUpdate its adjacent comment: confirmed candidate preparation refusals use code repair, infrastructure/unclassified install faults use infra retries; no statement that every dependency failure is infrastructure. Keep source:'host-offline-cache', integrity:'lockfile-sha512', scripts:'ignored', network:'none', all other boundaries and ENVIRONMENT_PREFIX unchanged. Reuse deepFreeze and canonicalJson hashing; do not introduce another version/revision authority.\n\nIn the test's independent LITERAL object pin the exact new failure object, retaining E1 deep freeze and E2/E4 complete identity coverage. Add an explicit old-descriptor oracle comparison: clone the expected descriptor, restore failure:'infra-failure', and assert its identity differs from checkEnvironment(VALID). Preserve key-order invariance and normal freshness checks, including null dependencyDigest. No native certificate is produced by these descriptor tests. This additive host capability lands before the guest begins emitting82, so old guest failures still classify as81/infra; parent task42e9990c owns the producer and actual repair integration.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/check-evidence.mjs",
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "CHECK_BOUNDARIES.dependencies.failure is now { candidate: 'code-failure', infrastructure: 'infra-failure' }; adjacent comment rewritten (confirmed candidate refusals get code repair, install faults/unclassified get infra retries). Nothing else in the descriptor or ENVIRONMENT_PREFIX changed. Test side: LITERAL pins the new object independently; new E10 asserts the exact failure object and key set, that the old descriptor (failure:'infra-failure', with and without a null dependencyDigest) yields a different identity than checkEnvironment, that five collapsed/partial failure objects differ, and that evidence recorded under the old identity is stale. RED/GREEN proven: against HEAD's check-evidence.mjs in a scratch copy E1 and E10 fail (E2/E4 pass by construction since they hash the live descriptor); against the new file E1/E2/E4/E10 pass. Caught and fixed an Edit-tool artifact that had renamed 'E1 CHECK_BOUNDARIES' to 'E1CHECK_BOUNDARIES'; the final diff removes only the import line and the old dependencies line.",
+      "startedAt": "2026-10-31T10:08:33.521Z",
+      "completedAt": "2026-10-31T10:08:58.752Z"
     },
     {
       "stepId": "step-3",
       "description": "One shared-contract regression gate, not just the targeted cases. Prepare a FULL external git-archive/clone snapshot (outside /mnt/d/projexts/moes) of the landed prerequisites, with only these3 owned files overlaid and their hashes recorded. Run npm ci --no-audit --no-fund in snapshot/packages/moe-daemon only using host-native dependencies. Use verified pinned Linux Node for the runner npm cases. From snapshot root run exactly:\n```bash\nnode --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)\n```\nAll runner suites and full daemon suite must have zero failed. Require Linux/WSL for guest-dependent rows; native Windows may run host stream tests but not substitute an all-skipped guest gate. Retain source/prerequisite SHA, overlay digests, toolchain versions, log and fresh command/exitCode/outputTail for complete_task. No npm/test/build/clean/install in live packages, no pattern-kill process cleanup; only recorded owned child PIDs may be signaled. Full runner+daemon is required because outcome interpretation/environment identity is shared. CQ-R13 remains overall epic-final native certification/docs owner; tell it the identity changed and native reports must be rerun rather than reused.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Full external gate, all outside the live checkout. Snapshot /tmp/moe-a80f-snap-2K1cqY = git archive of HEAD deb7c8a1 plus ONLY the three owned files overlaid; overlay sha256: check-session.mjs 7b6919ab, check-evidence.mjs 0ed0f851, local-runner-check.test.mjs 1317a043 (guest-supervisor.py b82e4369 and local-runner.test.mjs ab8197b0 untouched). Toolchain: pinned node v24.22.2 / npm 11.19.1, tarball sha256 48cc0e21 and size 32039312 verified against toolchain.json then extracted fresh; env -i, python3 3.12.3. Daemon: npm ci --no-audit --no-fund and npm run build inside the snapshot only. Exact gate `node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)` exit 0: runner tests 624, pass 621, fail 0, cancelled 0, skipped 3 (LA5 needs MOE_PINNED_CODEX, K9 needs root, macOS native smoke); daemon 215 files passed, 6338 tests passed, 20 skipped. Log /tmp/moe-a80f-gate.log. No npm/build/test in live packages, no process kills. Handoff for CQ-R13: the environment identity changed (dependencies.failure object), so existing native certify reports must be rerun, not reused.",
+      "startedAt": "2026-10-31T10:09:56.135Z",
+      "completedAt": "2026-10-31T10:12:00.952Z"
     },
     {
       "stepId": "step-4",
       "description": "Final adversarial self-review (adversarial-self-review), once, on this3-file diff. Trace precedence for82 under every timeout/error/abort/kill/EOF/framing condition and confirm it can never be passed. Unknown nonzero codes and81 remain infrastructure. Output before hello, partial headers and extra frames do not sneak through the no-frame branch; pre-hello stderr is drained unread, never trusted as diagnostics. Verify the fixed literal contains no variable interpolation and stays <=512ASCII bytes independently of huge/hostile inputs; ordinary bounded output tails still work. Check failed stdin and close-before-EOF event ordering, idempotent late close/error handling, timer/listener cleanup and simultaneous sessions' separate state. In scratch mutate the ordering (82 before errors), remove its exitCode assignment and restore the old descriptor; each must fail its corresponding test. Restore probes; rerun the exact gate if any source changes. Assert only these3 files changed and existing guest81 producer/CQ-R13 tests stayed unedited. Hand off constant/message/descriptor shape to42e9990c and complete_task with fresh evidence; wrappers own Git writes and QA owns approval.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/check-session.mjs",
         "scripts/local-runner/check-evidence.mjs",
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-session.mjs",
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Adversarial self-review done once on the 3-file diff (check-session +16/-1, check-evidence +7/-2, test +111/-2; 133 added lines). Precedence traced: outcomeOf order is timedOut -> failed/killed/!written/!ended -> 79 -> 82 -> (!opened || !observation) -> 80 -> nonzero -> pass, so 82 can only win on a whole clean session; any frame (even output/observation before hello) fails the decoder path first (first frame must be hello), a hello makes opened true so 82 never matches, and 82 can never reach 'passed' (pass needs code 0). Kill always settles with code null, so killed+82 cannot co-occur; settle's extra `!s.opened` is redundant defence (a code-failure with code 82 is reachable only through the clean branch) and equivalent, not a gap. The diagnostic is a module constant, no interpolation, 173 ASCII bytes <= 512; stderr stays drained unread and the ring/tail is bypassed for this one result. Timers/listeners: settle's cleanup runs before the new early return, so budget/deadline/kill timers and the abort listener are cleared on this path; per-session state is local (C8 runs four concurrent sessions). Scratch mutation sweep (/tmp/moe-a80f-mut/mut.py, 22 single-site mutants, scored by exit code, copies removed): 22/22 killed, including the three the plan names - 82 ordered ahead of the error gates (and ahead of the timeout gate), dropped exitCode, and the old descriptor failure:'infra-failure' - plus ignoring written/ended/failed, signal, tail source, text drift, 81 treated as candidate, constant 83/81, 82->skipped/passed, swapped/renamed leaves, and a descriptor that is not hashed. Probes ran only in scratch; live files hash-equal the gated overlay (7b6919ab/0ed0f851/1317a043), so no gate rerun was needed. Only the 3 owned files changed; guest-supervisor.py, local-runner.test.mjs and the CQ-R13 rows untouched; no non-ASCII added; no pycache left. Hand-off to task-42e9990c: export DEPENDENCIES_CANDIDATE_INVALID=82 from check-session.mjs (parent adds the Python 82 constant and the C2 parity row), host result is {outcome:'code-failure', exitCode:82, signal:null, outputTail: the fixed literal} and the descriptor is CHECK_BOUNDARIES.dependencies.failure = {candidate:'code-failure', infrastructure:'infra-failure'}.",
+      "startedAt": "2026-10-31T10:12:01.743Z",
+      "completedAt": "2026-10-31T10:15:10.968Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -75,20 +100,27 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:52:00.964Z",
-  "updatedAt": "2026-10-31T08:18:27.677Z",
+  "updatedAt": "2026-10-31T10:15:43.002Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T05:54:22.770Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-21c9ed65"
+    "architect-21c9ed65",
+    "worker-c0a1ac70"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T05:55:44.791Z",
   "executionContract": {
@@ -136,5 +168,20 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-31T05:55:44.817Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T10:05:21.427Z",
+  "reviewStartedAt": "2026-10-31T10:15:42.999Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)",
+    "exitCode": 0,
+    "outputTail": "[run in a git-archive snapshot of HEAD deb7c8a1 + the 3 owned files, outside the live checkout; env -i, pinned node v24.22.2 / npm 11.19.1]\nℹ tests 624\nℹ suites 4\nℹ pass 621\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\n--- packages/moe-daemon npm test (vitest) ---\n Test Files  215 passed (215)\n      Tests  6338 passed | 20 skipped (6358)\n   Start at  12:11:14\n   Duration  37.58s\ngate exit=0",
+    "reportedAt": "2026-10-31T10:15:42.999Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/check-session.mjs",
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/check-evidence.mjs"
+  ],
+  "completionSummary": "Host recognition of supervisor exit 82 (DEPENDENCIES_CANDIDATE_INVALID), no guest/daemon change. Modified: scripts/local-runner/check-session.mjs (+16/-1), check-evidence.mjs (+7/-2), scripts/tests/local-runner-check.test.mjs (+111/-2). 133 added lines.\n\nBehaviour:\n- Clean stdout EOF + supervisor exit 82 with NO frame (hello never seen, whole session) resolves frozen {code-failure, exitCode 82, signal null, outputTail = fixed 173-byte ASCII host literal}. Guest stdout/stderr never reach it (stderr stays drained unread; ring bypassed for this result).\n- outcomeOf puts the 82 branch after timedOut/failed/killed/!written/!ended and the 79 branch, before the generic unopened rejection. 81, unknown codes, 82 after hello/observation, any frame before hello, partial/bad frames, write/stream/child errors, abort, kill, close-before-EOF stay infra-failure; budget expiry stays timeout. 82 can never reach passed.\n- CHECK_BOUNDARIES.dependencies.failure = {candidate:'code-failure', infrastructure:'infra-failure'}; other leaves and prefix unchanged. Every environment hash changes: native certify reports/evidence must be rerun (CQ-R13), not reused.\n\nTests: C8 (two tests: exact result over 8 hostile stderr rows incl. forged literal/ANSI/CR-LF/160 KB emoji/0xff, unknown-code controls, 4 concurrent sessions, late events; and a 22-row precedence matrix of 82), E10 (exact object, old-descriptor identity differs with and without null dependencyDigest, collapsed variants differ, old-identity evidence stale), LITERAL updated. Red first: missing export fails import; against HEAD's check-evidence.mjs E1 and E10 fail. 22/22 scratch mutants killed incl. 82-before-error-gates, dropped exitCode, old descriptor. C3-C7, C2 (79/80/81 only), local-runner.test.mjs and guest-supervisor.py untouched.\n\nGate: exact command in an external snapshot of HEAD deb7c8a1 + only these 3 files (sha256 7b6919ab/0ed0f851/1317a043, identical to the live files), pinned node v24.22.2/npm 11.19.1 (tarball sha256 48cc0e"
 }

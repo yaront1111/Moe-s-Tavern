@@ -36,8 +36,13 @@ export const CHECK_BOUNDARIES = deepFreeze({
     supervisorCredential: { path: GUEST_LAYOUT.credential, owner: 'root', mode: '0400', jobIdentities: 'readiness-denied' },
     toolchain: { owner: 'root', writable: false, identity: 'host-pinned-sha256' },
   },
-  // Installed by `npm ci --offline --ignore-scripts` in the private netns before the check; a failure is never the code's.
-  dependencies: { source: 'host-offline-cache', integrity: 'lockfile-sha512', scripts: 'ignored', network: 'none', failure: 'infra-failure' },
+  // Installed by `npm ci --offline --ignore-scripts` in the private netns before the check. A confirmed candidate
+  // preparation refusal (the supervisor's exit 82) is a code failure and gets code repair; an install fault or any
+  // unclassified failure is infrastructure and gets an infra retry. Not every dependency failure is infrastructure.
+  dependencies: {
+    source: 'host-offline-cache', integrity: 'lockfile-sha512', scripts: 'ignored', network: 'none',
+    failure: { candidate: 'code-failure', infrastructure: 'infra-failure' },
+  },
   time: { budget: 'host-enforced' },
 });
 
