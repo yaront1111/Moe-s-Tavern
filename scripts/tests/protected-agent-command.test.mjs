@@ -121,8 +121,10 @@ function assertRefused(engine, fx, r, want) {
   assert.equal(existsSync(fx.rpc), false, `a runtime call was made\n${show(r)}`);
   assert.equal(mcpWritten(engine, fx), false, `an MCP config was written\n${show(r)}`);
 }
+// Stopped at the INFO line (taskkill /F leaves exit code 1 on Windows, so the
+// code proves nothing there); a refusal exits on its own and is never stopped.
 function assertResolved(fx, r, name, file) {
-  assert.ok(r.stopped && r.code !== 1, `expected to reach the INFO line\n${show(r)}`);
+  assert.ok(r.stopped && (windows || r.code !== 1), `expected to reach the INFO line\n${show(r)}`);
   assert.deepEqual(protectedLines(r), [infoLine(name, file)], show(r));
   assert.equal(existsSync(fx.ran), false, `a CLI ran\n${show(r)}`);
 }

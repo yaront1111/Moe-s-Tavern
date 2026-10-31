@@ -47,31 +47,54 @@
     {
       "stepId": "step-3",
       "description": "scripts/moe-agent.ps1 is the twin, keeping parity with step 2. It stays UTF-8 with BOM (scripts/CLAUDE.md).\n\nRight after `$resolvedCommand = Resolve-CommandParts ...` (~:795-797), and before any MCP config write or daemon RPC, act only when R13c2's protected flag is set:\n1. Gate. Accept only when `$Command` is exactly one of claude, codex, gemini, grok (-ceq, case-sensitive) and `$CommandArgs` is empty. Otherwise:\n   - write the R1 line through [Console]::Error.WriteLine, byte-identical to sh, with the same sanitizing (control chars replaced, then truncated to 200);\n   - exit 1, the way R13c2's gate exits (the supervisor at the top re-exits with 1).\n2. Resolve.\n   - Split $env:PATH on [IO.Path]::PathSeparator.\n   - Skip empty entries and entries that are not fully qualified: a drive root with a separator, UNC, or a leading '/' on non-Windows pwsh.\n   - Skip entries inside the project: compare [IO.Path]::GetFullPath on both sides with a separator boundary, case-insensitively on Windows.\n   - For the first entry holding `<name>` with a PATHEXT extension (Windows) or the bare name (elsewhere) as a leaf file, set `$Command` to that absolute path and print the INFO line. Otherwise print the CLI_NOT_FOUND line and exit 1.\n   - Do NOT use Get-Command: it consults aliases, functions and the module path.\n3. Every later use of the CLI reads `$Command`, so they all get the absolute path. `$cmdBase` detection still works through GetFileNameWithoutExtension. A later gemini->agy style substitution under the flag goes through the same resolver, or is skipped.\n\nError handling:\n- GetFullPath or Test-Path exceptions on a malformed PATH entry are caught, and that entry is skipped;\n- a refusal writes one line and exits 1 before any write or RPC;\n- nothing runs without the flag.\n\nWithout the flag, behavior is unchanged. Run `bash scripts/tests/parity-check.sh`. If it pins wrapper strings, add the four new message codes the way it pins R13c2's codes.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-10-31T19:19:22.156Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "moe-agent.ps1, marker-only (the bytes are in checkpoint 29de0da4, recovered from the prior session's rescue ref; this session reviewed and tested them):\n- Gate: Stop-MoeProtectedAgent plus the allowlist check sit right after $script:MoeRuntimeProtected is set. That is ahead of R13c2's path gate, the exit handler and every MCP config write or RPC, which is EARLIER than the plan's 'after Resolve-CommandParts' (~:981): the MCP config and RPCs run before that point, and the sh gate makes the same early choice. -ceq claude|codex|gemini|grok (-cnotin) and an empty -CommandArgs are required. Otherwise the shown value is (Command + CommandArgs) joined with ' ', \\p{Cc} -> '?', cut to 200, and [Console]::Error.WriteLine then exit 1. The line is byte-identical to sh.\n- Resolve-MoeProtectedCli: a manual scan of $env:PATH split on PathSeparator, quotes trimmed. Windows keeps only drive-rooted or UNC entries; non-Windows keeps only a leading '/'. Get-MoeRealPath follows symlinks and junctions (GetFullPath keeps them). An entry equal to the project's real path, or under it with a separator boundary, is skipped (OrdinalIgnoreCase on Windows). Windows tries .ps1 and then PATHEXT, PowerShell's own order. A malformed entry is caught and skipped. If the project's real path can't be read, the scan stops and NOT_FOUND fails closed.\n- A protected $Command is never re-split by Resolve-CommandParts. gemini->agy compares $Command -eq 'gemini', which is never true for an absolute path, so it is skipped. The account signin-state probe passes the extensionless trusted path, so the helper resolves PATHEXT only in that dir.\n- postflight.ps1: R13c2's P rows now use -Command claude, with a claude.cmd stub on a prepended $prBin. This scope growth is needed because the gate refuses the old $trueCmd.\n- Test harness fix: assertResolved no longer requires code !== 1 on Windows, because taskkill /F leaves exit 1.\nEvidence, from snapshot /mnt/d/moe-scratch/taa85-OCWv with Windows node.exe --test: 41 tests, 28 pass, 0 fail, 13 skipped (the bash rows skip on win32). All 14 rows passed under PowerShell 5.1 and all 14 under pwsh 7.\nRED: the pre-task ps1 (03355c25) under PS 5.1 fails 12 protected rows and passes 2 (L1).\nBOM ef bb bf, 0 CR. ParseFile is clean on PS 5.1 and pwsh 7. bash -n is OK and parity-check.sh passes.\nparity-check pins no R13c2 code, so per the plan no codes were added; the test file asserts the same exact line for both engines.",
+      "startedAt": "2026-10-31T19:19:22.156Z",
+      "completedAt": "2026-10-31T19:59:48.855Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE, fresh, from the repo root on WSL:\n\nnode --test scripts/tests/protected-agent-command.test.mjs && bash scripts/tests/parity-check.sh\n\nIt must exit 0. Its command, exit code and output tail are complete_task's evidence; say whether the pwsh rows ran or were skipped. Also run `bash -n scripts/moe-agent.sh`, `pwsh -NoProfile -File scripts/tests/parity-check.ps1` when pwsh exists, and the existing R13c2 marker rows (postflight.sh's P rows), and report them, so the shared marker block is not regressed.\n\nMutants, on scratch copies, each turning the named rows red:\n(i) a prefix match (claude*): R1;\n(ii) `command -v` instead of the manual scan: T1 or T2;\n(iii) no in-project skip: T3;\n(iv) the gate placed after the MCP config write: R1's no-config assertion;\n(v) the gate active without the marker: L1.\n\nA read-only `git status --short` must show only the three owned paths. moe-agent.sh/.ps1 are hot files: if a peer row has unlanded hunks in them, never sweep, revert or stash them. Coordinate in chat instead.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "Fresh verification from the repo root on WSL: `node --test scripts/tests/protected-agent-command.test.mjs && bash scripts/tests/parity-check.sh` gives VERIFY_EXIT=0.\n- 27 tests: 13 pass (all bash rows), 0 fail, 14 skipped. The pwsh rows skip on Linux because WSL has no Linux pwsh. parity-check.sh passes.\n- The ps1 rows did run under Windows node.exe on snapshot /mnt/d/moe-scratch/taa85-OCWv: 41 tests, 28 pass, 0 fail, 13 skipped (the bash rows skip on win32). PowerShell 5.1 passed 14/14 and pwsh 7.6 passed 14/14.\n\nAlso run:\n- `bash -n scripts/moe-agent.sh`: OK.\n- parity-check.ps1: PASS under PS 5.1 and under pwsh 7.\n- The R13c2 [protected runtime] P1-P9 rows, run as a trimmed harness (prologue plus that section) on snapshot taa85pr-7WQY. `[protected runtime] ok` on bash (rc 0), PS 5.1 (rc 0) and pwsh 7 (rc 0), so the shared marker block is not regressed.\n\nMutants, run on scratch copies with the test file. Every mutant was killed, and the originals were restored and cmp-checked:\n- (i) prefix match claude*: R1 inline args, R1 extension and R2 go red.\n- (ii) `command -v` in place of the manual scan: T1/T2 empty, dot and relative entries plus T3 go red.\n- (iii) no in-project skip: T3 goes red. The ps1 twin mutant (the in-project check line removed) also turns PS 5.1 T3 red.\n- (iv) gate and resolver moved after ensure_mcp_config: all 5 R1 rows and R2 go red on \"an MCP config was written\" (8 such assertion failures), and T1/T2 go red too.\n- (v) gate active without the marker: L1 unset and L1 '01' go red.\n- ps1 RED from step 3: the pre-task ps1 fails 12 of its 14 PS 5.1 rows.\n\ngit status --short (read-only): the only dirty owned path is scripts/tests/protected-agent-command.test.mjs, the Windows taskkill fix. moe-agent.sh/.ps1 and postflight.sh/.ps1 are clean against HEAD, where checkpoint 29de0da4 holds them. The other dirty paths are pre-existing and belong to others (.moe/roles/*, .moe/skills/*, .moe/decisions/ and peer task records); none of them was touched.",
+      "startedAt": "2026-10-31T19:59:51.196Z",
+      "completedAt": "2026-10-31T20:08:19.750Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then check:\n- Under the marker, is there any path where a bare or repository-chosen name still reaches exec? Check every COMMAND_BIN or $Command use: re-parses, the account helper's signin-state call (sh ~:6381), the codex argv probe, the gemini/agy branch and the grok branch.\n- Could a symlinked PATH dir that points into the project slip through? pwd -P and GetFullPath must canonicalize it.\n- Does the message leak anything beyond the bounded, sanitized value?\n- Is legacy byte-identical?\n- Are the refusal lines identical in both wrappers (parity)?\n- Is set -e safety intact?\n\nFix any finding, then re-run step 4 fresh. Report the three paths in complete_step.modifiedFiles. Write the Serena handoff 'task-task-aa85ff13a8894913ae34242dbab6f395-handoff' for task-465ee875, the JetBrains slice and docs, which dependsOn this row and must cite the exact message codes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Adversarial self-review of `git diff 03355c25 -- scripts/`: +338/-4 (net 334). No real findings, so nothing changed in this step.\n\n- Exec under the marker:\n  - sh: every exec site after the resolver uses \"$COMMAND_BIN\", which is absolute. That covers the account signin-state (~:7646), the codex argv probe and --version, codex exec/TUI, gemini, grok and the 4 claude sites. agent_git_exec only `exec \"$@\"`.\n  - sh: `$COMMAND` is never used after the resolver. Both parse_command_into_argv re-parses (:594 and :727) are top-level and run before it. parse_command_first_token runs in a $( ) subshell. gemini->agy compares COMMAND_BIN = \"gemini\", which is never true for an absolute path.\n  - ps1: `& $Command` (Invoke-MoeGuardedCommand) and the Get-Command checks on the absolute path. `-eq \"gemini\"` is skipped. The account probe gets the extensionless trusted path.\n- Symlinked PATH dirs:\n  - sh: `pwd -P` plus an ancestor walk with `-ef` against the project's `pwd -P` compares inodes. T3's link and '..' rows are covered.\n  - ps1: Get-MoeRealPath follows junctions and symlinks per component. T3 passes with a junction on PS 5.1 and pwsh 7.\n- Message: only the bounded, sanitized command (or the fixed CLI name) is shown; no env or path values leak. bash 3.2-safe constructs.\n- Legacy: every new branch is behind RUNTIME_PROTECTED=1 / $script:MoeRuntimeProtected (exact '1'). The rest of the diff is inert function definitions and a `$null` init; L1 (unset and '01') is green on bash, PS 5.1 and pwsh 7.\n- Parity: the same refusedLine/notFoundLine/infoLine strings are asserted for both engines. parity-check.sh and parity-check.ps1 pass.\n- set -e: `|| continue`, `&& continue 2` and the if-wrapped tests are all errexit-safe. Refusals exit at top level (not in a subshell) and clear WORKER_ID, so the EXIT trap deregisters nothing.\n- An empty or unreadable project real path fails closed (NOT_FOUND) in both wrappers. A malformed ps1 PATH entry is caught and skipped.\n\nTheoretical ceilings, all host-controlled (PATH and trusted dirs are not repo content):\n- (a) a Windows 8.3 short-name spelling of the project in PATH (ponytail comment in ps1);\n- (b) a file-level symlink inside a trusted dir pointing into the project;\n- (c) on non-Windows pwsh a non-executable leaf can be picked, and its exec then fails closed.\n\nSerena: task-task-aa85ff13a8894913ae34242dbab6f395-handoff, with the exact codes for task-465ee875, and gotcha-launcher-ps1-rows-from-wsl.",
+      "startedAt": "2026-10-31T20:08:21.451Z",
+      "completedAt": "2026-10-31T20:10:34.594Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-4bc1a1b5",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -110,12 +133,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T08:07:24.823Z",
-  "updatedAt": "2026-10-31T19:53:27.805Z",
+  "updatedAt": "2026-10-31T20:11:19.286Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T08:08:34.580Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 5
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -123,7 +146,10 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T08:11:31.436Z",
@@ -208,19 +234,38 @@
       "status": "UNKNOWN",
       "pushed": false,
       "message": "MOE_RESCUE_REF task=task-aa85ff13a8894913ae34242dbab6f395 ref=refs/moe/rescue/task-aa85ff13a8894913ae34242dbab6f395/20261031T193300Z sha=4bb740ca1ee8ecacb8c69cc7b733a8d3ed1d4a71 reason=teardown"
+    },
+    {
+      "sha": "29de0da4995b105d59620952a7212cab2ac1833d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-4bc1a1b5@2026-10-31T19:53:22Z",
+      "paths": [
+        ".moe/tasks/task-64809b196c4042f18c7665e1e8a14b18.json",
+        ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
+        ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+        ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-4bc1a1b5",
+      "recordedAt": "2026-10-31T19:53:46.936Z",
+      "treeId": "67f2c790ff348abd853acc6025e7af3e9f1d0bee",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-64809b196c4042f18c7665e1e8a14b18.json",
-    ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
-    ".moe/tasks/task-aa85ff13a8894913ae34242dbab6f395.json",
-    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
-    ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json",
-    "scripts/moe-agent.ps1",
+    "scripts/tests/protected-agent-command.test.mjs",
     "scripts/moe-agent.sh",
-    "scripts/tests/postflight.ps1",
     "scripts/tests/postflight.sh",
-    "scripts/tests/protected-agent-command.test.mjs"
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.ps1"
   ],
   "touchedFiles": [
     "scripts/tests/protected-agent-command.test.mjs",
@@ -232,9 +277,17 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "rescue",
-    "code": "teardown",
-    "sessionId": "worker-632cd3f0@2026-10-31T19:00:45Z",
-    "at": "2026-10-31T19:32:56.134Z"
-  }
+    "kind": "checkpoint",
+    "sessionId": "worker-4bc1a1b5@2026-10-31T19:53:22Z",
+    "at": "2026-10-31T19:53:46.936Z"
+  },
+  "reviewStartedAt": "2026-10-31T20:11:19.284Z",
+  "verification": {
+    "command": "node --test scripts/tests/protected-agent-command.test.mjs && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "✔ bash: R1 refuses a path\n✔ bash: R1 refuses inline args\n✔ bash: R1 refuses an extension\n✔ bash: R1 refuses another case\n✔ bash: R1 refuses an empty value\n✔ bash: R2 shows the command with control characters replaced, cut to 200\n✔ bash: A1 resolves codex from a trusted absolute PATH entry\n✔ bash: T1/T2 never runs a project-local claude reachable only through an empty entry\n✔ bash: T1/T2 never runs a project-local claude reachable only through a dot entry\n✔ bash: T1/T2 never runs a project-local claude reachable only through a relative entry\n✔ bash: T3 skips an in-project PATH entry, spelled directly or through a link\n✔ bash: L1 legacy (marker unset) keeps custom commands\n✔ bash: L1 legacy (marker 01) keeps custom commands\n﹣ PowerShell 7: (14 rows) # pwsh is not available on linux\nℹ tests 27\nℹ pass 13\nℹ fail 0\nℹ skipped 14\nPASS parity-check.sh\nEXIT=0\n\nps1 rows, same file under Windows node.exe on snapshot /mnt/d/moe-scratch/taa85-OCWv: tests 41, pass 28, fail 0, skipped 13 (the bash rows on win32). PowerShell 5.1 14/14, PowerShell 7 14/14.",
+    "reportedAt": "2026-10-31T20:11:19.284Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "With MOE_RUNTIME_PROTECTED exactly '1', moe-agent.sh and moe-agent.ps1 run only claude, codex, gemini or grok, by bare name, resolved from an absolute PATH entry outside the project. Without the marker nothing changes.\n\nMessages. Each refusal is one stderr line, byte-identical in both wrappers, followed by exit 1:\n- `[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '<cmd>' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start.` The value has control chars replaced by '?' and is cut to 200 chars.\n- `[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: <name> was not found on an absolute PATH entry outside the project; refusing to start.`\n- On success: `[INFO] MOE_PROTECTED_AGENT_CLI: <name> -> <abs>`.\n\nPlacement and lookup:\n- The allowlist gate runs before CLI detection (sh) or right after the marker is read (ps1), ahead of any MCP config write or RPC.\n- The lookup is a manual PATH scan, never command -v or Get-Command. It skips empty, '.', relative and in-project entries: sh compares `pwd -P` with an ancestor `-ef` walk, ps1 follows junctions and symlinks.\n- Every later exec, the account signin probe included, uses the absolute path. gemini->agy never fires under the marker.\n- R13c2's P rows in postflight.{sh,ps1} now launch a `claude` stub from a trusted bin dir. This scope growth is needed because the gate refuses the old /bin/true.\n\nEvidence:\n- Verify (WSL): 27 tests, 13 pass, 0 fail, 14 pwsh rows skipped. parity-check.sh passes.\n- Windows node.exe on a snapshot: PS 5.1 14/14 and pwsh 7 14/14.\n- RED: the pre-task wrappers fail every protected row and pass L1 (sh 11 failing; ps1 12 failing on PS 5.1).\n- R13c2 [protected runtime] rows (trimmed harness): ok on bash, PS 5.1 and pwsh 7. parity-check.ps1 passes on both engines. bash -n and ParseFile are clean; BOM kept, 0 CR.\n- Mutants, each killed by the named rows: (i) prefix match: R1/R2; (ii) command -v: T1/T2/T3; (iii) no in-project skip: T3, on sh and on ps1; (iv"
 }
