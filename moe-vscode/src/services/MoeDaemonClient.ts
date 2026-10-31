@@ -481,6 +481,24 @@ export function protectedDaemonEnvironment(env: NodeJS.ProcessEnv, basePath: str
     return result;
 }
 
+/** VS Code mirror of the JetBrains ManagedVmPanel protected run: nodeCommand plus MoeDaemonSupervisor.protectedDaemonEnvironment WITHOUT applyDaemonPath.
+ * The env is the caller's copy minus NODE_OPTIONS/NODE_PATH with PATH filtered; nothing is added or deduplicated and every other variable
+ * (MOE_RUNNER_STATE_DIR: vm-control's ledger dir) is kept. Stricter than JetBrains only where VS Code already is (Windows case variants, duplicate PATH keys).
+ * undefined: the node was refused, so no process may start. */
+export function protectedVmControlRuntime(basePath: string, env: NodeJS.ProcessEnv = process.env, windows = process.platform === 'win32',
+    home: string | undefined = env.HOME || env.USERPROFILE): { node: string; env: NodeJS.ProcessEnv } | undefined {
+    const node = installedExecutable(protectedNodeCandidate(env, home, windows, basePath), basePath);
+    if ('rejected' in node) { return undefined; }
+    const result = { ...env };
+    for (const key of Object.keys(result)) {
+        if (['NODE_OPTIONS', 'NODE_PATH'].includes(windows ? key.toUpperCase() : key)) { delete result[key]; }
+    }
+    const [name, ...duplicates] = pathNames(result, windows);
+    for (const duplicate of duplicates) { delete result[duplicate]; }
+    if (name && result[name] !== undefined) { result[name] = protectedPathEntries(result[name]!, basePath).join(path.delimiter); }
+    return { node: node.accepted, env: result };
+}
+
 export class MoeDaemonClient implements vscode.Disposable {
     private readonly extensionPath: string;
     private ws: WebSocket | undefined;

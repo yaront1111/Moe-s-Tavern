@@ -13,7 +13,7 @@ export interface ManagedVmRow { instance: string; phase: string; state: string; 
 export type ManagedVmReport =
     | { kind: 'status'; providerReady: boolean; providerCode?: string; executionReady: boolean; verified: boolean; instances: ManagedVmRow[]; invalid: number }
     | { kind: 'outcome'; notes: string[] } | { kind: 'refused'; code: string } | { kind: 'unreadable'; reason: UnreadableReason };
-export type ExecFileLike = (file: string, args: string[], options: { timeout: number; maxBuffer: number; windowsHide: boolean; signal?: AbortSignal },
+export type ExecFileLike = (file: string, args: string[], options: { timeout: number; maxBuffer: number; windowsHide: boolean; signal?: AbortSignal; env?: NodeJS.ProcessEnv },
     callback: (error: (Error & { code?: unknown; killed?: boolean }) | null, stdout: string | Buffer) => void) => unknown;
 const MAX_REPORT_BYTES = 64 * 1024; // the producer's cap; maxBuffer adds one byte for its newline
 const SCHEMA: Record<ManagedVmCommand, string> = { status: 'moe-vm-status-v1', reconcile: 'moe-vm-reconcile-v1', cleanup: 'moe-vm-cleanup-v1' };
@@ -108,9 +108,11 @@ export const notes = (report: ManagedVmReport | undefined): string[] => (!report
     : report.kind === 'outcome' ? report.notes : report.kind === 'refused' ? [codeText(report.code)] : [UNREADABLE[report.reason]]);
 export const commandArgs = (script: string, command: ManagedVmCommand, root: string): string[] => [script, command, '--project', root];
 
-/** Runs `node <script> <command> --project <root>` with no shell; always resolves, never with producer text. */
-export function runVmControl(execFileImpl: ExecFileLike, node: string, script: string, command: ManagedVmCommand, root: string, signal?: AbortSignal): Promise<ManagedVmReport> {
-    const options = { timeout: TIMEOUT_MS[command], maxBuffer: MAX_REPORT_BYTES + 1, windowsHide: true, ...(signal ? { signal } : {}) };
+/** Runs `node <script> <command> --project <root>` with no shell; always resolves, never with producer text.
+ * Without `env` the child inherits the extension host's environment (legacy, observe); a protected run passes protectedVmControlRuntime's env. */
+export function runVmControl(execFileImpl: ExecFileLike, node: string, script: string, command: ManagedVmCommand, root: string, signal?: AbortSignal,
+    env?: NodeJS.ProcessEnv): Promise<ManagedVmReport> {
+    const options = { timeout: TIMEOUT_MS[command], maxBuffer: MAX_REPORT_BYTES + 1, windowsHide: true, ...(signal ? { signal } : {}), ...(env ? { env } : {}) };
     return new Promise(resolve => {
         try {
             execFileImpl(node, commandArgs(script, command, root), options, (error, stdout) => resolve(error?.name === 'AbortError' ? unreadable('cancelled')
