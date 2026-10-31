@@ -258,11 +258,23 @@
       "author": "qa-4398294e",
       "content": "@architect-b58e1112 QA finding from a4a729dd. a4a7 is approved and this is not a supervisor defect, but it lands on R13's certification path.\n\nSince b0734674, a root GUARD puts the job in its own PID namespace. Several existing tests carry pids out of the job and resolve them against the guest procfs or with a host-side kill. Under a root runner those pids are namespace-local numbers. The pid sources are:\n- os.getpid() / os.getppid();\n- $PPID;\n- a job that signals the harness by its outer pid, which the namespace now correctly blocks.\n\nRepro on a non-root host:\n`unshare -r env -i HOME=$HOME PATH=<node24 bin>:/usr/local/bin:/usr/bin:/bin node --test --test-reporter=tap scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs`\n- 65f78435: 131 tests, 129 pass, 0 fail (S8 and LA5 skip).\n- b0734674: 11 fail.\n  - S6, S10, I1, H5 and KI2: the host checks the liveness of pids the job reported.\n  - J4, K3 and KI1: getppid() is 1 inside the namespace, so /proc/$PPID is the wrong process. J4's PROBE crashes with exit 1.\n  - S12 and S16: the job signals the harness's outer pid, and that signal never arrives.\n  - S11: by design, root containment now kills its lingering grandchild.\n- G1-G6, G8 and G9 pass under fake root, and G7 skips.\n\nCI runs these files as the non-root runner user, so CI and the a4a7 gate are unaffected. The failures matter wherever the suite runs as root. Example: certifying K9 (root-only) on a real guest by running local-runner-check.test.mjs as root also hits K3, KI1 and KI2.\n\nSuggested fix:\n- Carry global pids out of the job: readlink('/proc/self'), and the ppid field of /proc/<pid>/stat, which procfs reports in its own namespace.\n- Give S11 a root expectation.\n- Send the S12/S16 signals from outside the job.\nThese files are outside a4a7's approved scope. They need a scoped follow-up task ordered before R13's native run, or folding into R13.",
       "timestamp": "2026-10-31T11:57:22.507Z"
+    },
+    {
+      "id": "comment-5d2c81fe00274fa8973219af74d6e805",
+      "author": "architect-b58e1112",
+      "content": "Architect, answering qa-4398294e's comment-666e86e0 (the a4a7 root-runner PID-namespace test finding). I filed it as task-a46b60e6aa63422fbd63934d17238396 (MEDIUM, PLANNING). That row depends on 97341ad5. It is NOT folded into this row, and it is NOT a blocker of this row.\n\nWhy: this row's native evidence is the `cli.mjs certify` reports, and they are keyed to the guest-supervisor.py sha256. Certify never runs local-runner-bridge/check.test.mjs. The step-4 gate runs as non-root, with K9 recorded as a skip. The fix is test-only and its rails forbid touching guest-supervisor.py or anything certify hashes, so it invalidates no report, whether it lands before or after them.\n\nResume this row exactly as its blockedReason says. Its plan is unchanged, and the step-4 commands are unaffected. The one exception: if task-a46b60e6 reports that its fix needs a supervisor change, it blocks and names this row, and certification must then be re-sequenced after it.",
+      "timestamp": "2026-10-31T12:03:31.652Z"
+    },
+    {
+      "id": "comment-8725771eb3164baeac5b58f7d797b9ae",
+      "author": "governor-693b7073",
+      "content": "Governor sequencing note, 12:11Z. This is a blocker addendum (architect-b58e1112, msg-b0663ce2): certify only on a commit that contains the CI-fix branch fix/ci-pr230 (PR #232). That branch changes scripts/local-runner/guest-supervisor.py:\n- a58a50af: an explicit MAX_JSON_DEPTH = 512 check before json.loads (frames, package.json, lockfiles);\n- a4c8204d: GROUP_GONE, which tolerates darwin's EPERM from killpg (Linux unchanged).\nEither change moves supervisorSha256, so a report made before them is stale. The plan is for those commits to land on moe/work-2026-10-24 (an ff-only merge by the human) before 97341ad5 starts. When this row resumes, first check `git merge-base --is-ancestor <fix/ci-pr230 tip> HEAD`. If it fails, re-block and name the governor; do not post the certification request.",
+      "timestamp": "2026-10-31T12:10:18.767Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T11:57:22.507Z",
+  "updatedAt": "2026-10-31T12:10:18.767Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",
