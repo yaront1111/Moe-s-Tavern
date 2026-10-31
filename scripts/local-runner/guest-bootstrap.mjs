@@ -107,6 +107,11 @@ function readAsset(name) {
 /**
  * Deterministic user-data built only from constants and base64. '- default' stays: Multipass execs as the
  * default user and injects its key through its own cloud-init data. Job identities get no groups or sudo.
+ * mounts lists only cloud-init's two built-in defaults (ephemeral0 for /mnt, and swap) as fs_spec-only entries: in
+ * cloud-init 26.1 cc_mounts such an entry is skipped and drops the default of the same name, and on NoCloud, which
+ * Multipass seeds, neither name maps to a device anyway (DataSource.device_name_to_device returns None). As user-data
+ * the list also outranks any vendor or system mounts. 26.1's schema refuses `mounts: []` (minItems 1), and that
+ * warning ends boot "degraded done", which readiness reports as BOOTSTRAP_FAILED.
  */
 export function buildUserData(input) {
   const { supervisor, credential } = input ?? {};
@@ -116,7 +121,7 @@ export function buildUserData(input) {
   const shim = readAsset('guest-mcp-shim.py');
   const shimTools = readAsset('guest-mcp-tools.json');
   const lines = [
-    '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'mounts: []', 'users:', '  - default',
+    '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'mounts: [[ephemeral0], [swap]]', 'users:', '  - default',
     ...JOB_IDENTITIES.flatMap(name => [`  - name: ${name}`, '    lock_passwd: true', '    shell: /bin/bash']),
     'write_files:',
     ...writeFile(GUEST_LAYOUT.supervisor, '0500', supervisor),

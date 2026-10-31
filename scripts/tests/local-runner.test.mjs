@@ -1121,7 +1121,7 @@ test('verifySourceImage accepts only the installed manifest pin for the requeste
 test('buildUserData renders deterministic cloud-config with a protected supervisor and locked identities', () => {
   const [shim, tools] = ['guest-mcp-shim.py', 'guest-mcp-tools.json'].map(name => readFileSync(new URL(`../local-runner/${name}`, import.meta.url)));
   const expected = [
-    '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'mounts: []', 'users:', '  - default',
+    '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'mounts: [[ephemeral0], [swap]]', 'users:', '  - default',
     '  - name: moe-agent', '    lock_passwd: true', '    shell: /bin/bash',
     '  - name: moe-check', '    lock_passwd: true', '    shell: /bin/bash',
     'write_files:',
@@ -1154,6 +1154,30 @@ test('buildUserData renders deterministic cloud-config with a protected supervis
     ['#!/bin/sh', CREDENTIAL], [SUPERVISOR, 'secret-credential'], [new Uint8Array([1]), CREDENTIAL], [SUPERVISOR, undefined],
   ]) assert.throws(() => buildUserData({ supervisor, credential }), error => assertSanitized(error, 'BOOTSTRAP_INPUT_INVALID'));
   assert.throws(() => buildUserData(null), error => assertSanitized(error, 'BOOTSTRAP_INPUT_INVALID'));
+});
+
+// The pinned image's cloud-init 26.1 refused the old `mounts: []` (minItems 1); a schema warning ends boot "degraded done".
+const CLOUD_INIT = '/usr/bin/cloud-init';
+test('UD1 the emitted cloud-config passes cloud-init 26.1 schema validation with no deprecation; the old mounts: [] fails it', t => {
+  const run = (...args) => spawnSync(CLOUD_INIT, args, { encoding: 'utf8', timeout: 60_000, env: { PATH: '/usr/bin:/bin' } });
+  const version = process.platform === 'linux' && existsSync(CLOUD_INIT) ? run('--version').stdout : null;
+  if (!/^\S+ 26\.1-/.test(version ?? '')) return t.skip(`needs ${CLOUD_INIT} 26.1, found ${JSON.stringify(version?.trim() ?? null)}`);
+  const dir = mkdtempSync(path.join(tmpdir(), 'moe-cloud-config-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const schema = (name, text) => {
+    const file = path.join(dir, name);
+    writeFileSync(file, text);
+    const result = run('schema', '-c', file);
+    assert.equal(result.error, undefined, String(result.error));
+    return { file, ...result };
+  };
+  const current = schema('current.yaml', BOOTSTRAP.userData);
+  assert.deepEqual([current.status, current.stdout], [0, `Valid schema ${current.file}\n`], current.stderr);
+  const old = BOOTSTRAP.userData.replace('\nmounts: [[ephemeral0], [swap]]\n', '\nmounts: []\n');
+  assert.notEqual(old, BOOTSTRAP.userData);
+  const refused = schema('old.yaml', old);
+  assert.deepEqual([refused.status, refused.stdout], [1, `Invalid user-data ${refused.file}\n`], refused.stderr);
+  assert.match(refused.stderr, /Cloud config schema errors: mounts: \[\] is too short/);
 });
 
 test('guest layout, identities and resource bounds are frozen constants shared with the launchers', () => {

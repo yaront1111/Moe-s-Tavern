@@ -1,0 +1,184 @@
+{
+  "id": "task-62a909c1005946db8f9f73e31bf362ec",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: guest bootstrap user-data `mounts: []` fails cloud-init 26.1 schema validation, so every real boot ends \"degraded done\" and readiness reports BOOTSTRAP_FAILED",
+  "description": "Found by governor-693b7073 on 2026-10-31 while diagnosing R13's Linux certify failure (BOOTSTRAP_FAILED, report ~/moe-certify/certification-linux-x64-20261031T191550Z-1d4c08.json). This bug blocks R13's operator certification on every platform, since every platform boots the same user-data.\n\n**Reproduction (real guest, 20:06Z).**\n- Multipass 1.17.0 snap (qemu) in WSL2, the pinned x64 image (sha256 04e8f2461a16…, ubuntu-24.04-server-cloudimg-amd64 release-20261017).\n- The user-data was built by `buildUserData` from the real guest-supervisor.py (sha256 3a19f3bf…) and a random 32-byte credential: byte-identical to what certify sends.\n- Launched with certify's argv: `launch file://… --cloud-init - --cpus 2 --memory 4G --disk 20G`.\n\n**Result.**\n- `cloud-init status --format json` exits 2: status \"done\", extended_status \"degraded done\", recoverable_errors.WARNING [\"cloud-config failed schema validation! …\"].\n- `sudo cloud-init schema --system` reports: `Cloud config schema errors: mounts: [] is too short`, user-data invalid. Vendor-data and network-config are valid; vendor-data has only a system_info deprecation, which did not degrade the status.\n- The guest's cloud-init is 26.1-0ubuntu1~24.04.1. WSL has the same version installed (/usr/bin/cloud-init), so the schema can be checked offline.\n- Everything else applied: /opt/moe/bin/{moe-supervisor 0500, moe-mcp-shim 0555, tools.json 0444} and /etc/moe/supervisor.credential 0400; the supervisor's sha256 is 3a19f3bf…; users moe-agent and moe-check exist; fstab has no cloud-init mounts.\n\n**Why readiness must stay strict.** guest-readiness.mjs cloudInitStatus correctly treats \"degraded done\" as failed. That strictness is deliberate: R07 QA made accepting degraded-done a test mutant, and R13 carries the forward (comment-be66dae1) \"R13 certification on a real pinned Ubuntu 24.04 guest must confirm that a clean boot actually reaches done/done\". It does not, because of Moe's own `mounts: []` (guest-bootstrap.mjs:119), pinned verbatim in scripts/tests/local-runner.test.mjs:1124.\n\n**Fix direction (the planner decides).** Make the emitted cloud-config schema-valid under cloud-init 26.1 while keeping its intent: no cloud-init-managed mounts in the guest. Either drop the key, if NoCloud adds no default mounts, or use a schema-valid construct; prove which. A trivial `#cloud-config` boot on the same image reaches done/done with exit 0, measured on Windows hcs at 22:12 local.",
+  "definitionOfDone": [
+    "The cloud-config emitted by buildUserData validates under cloud-init 26.1: `cloud-init schema -c <emitted user-data file>` (WSL /usr/bin/cloud-init 26.1-0ubuntu1~24.04.1) reports it valid, with no schema errors. The evidence names the command and its output.",
+    "The guest still gets no cloud-init-managed mounts. The change documents why its construct keeps that guarantee, either by citing cloud-init's NoCloud default mount behaviour or by naming the schema-valid construct used.",
+    "A regression test fails on the old `mounts: []` user-data and passes on the new one. The local-runner.test.mjs user-data pin (around line 1124) is updated, and guest-readiness strictness is unchanged: 'degraded done' and a non-zero `cloud-init status` exit still yield BOOTSTRAP_FAILED.",
+    "scripts/local-runner/guest-supervisor.py is byte-unchanged (sha256 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190), so R13's commit-under-test pin still holds. The local-runner suite passes in a git-archive snapshot under env -i with the pinned Node, not in place."
+  ],
+  "taskRails": [
+    "Do not loosen guest-readiness.mjs: 'degraded done' stays BOOTSTRAP_FAILED (R07 QA decision; R13 comment-be66dae1).",
+    "Do not touch scripts/local-runner/guest-supervisor.py: its sha256 is R13's certification pin.",
+    "No seat runs Multipass. The real-guest re-check happens at R13 certify time, run by the governor."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED). Edit scripts/tests/local-runner.test.mjs ONLY with the main session's Edit tool (no sed, heredoc or subagent writes). task-47d21b83's plan also declares this file, so a write without a TOOL witness is HELD at landing.\n(a) In test 'buildUserData renders deterministic cloud-config with a protected supervisor and locked identities' (~L1124), change the pinned line `'mounts: []'` to `'mounts: [[ephemeral0], [swap]]'`. Nothing else in that test changes.\n(b) Directly after that test's closing `});`, before 'guest layout, identities and resource bounds are frozen constants shared with the launchers', add exactly the following. The architect prototyped it green in a snapshot (0.5 s):\n```\n// The pinned image's cloud-init 26.1 refused the old `mounts: []` (minItems 1); a schema warning ends boot \"degraded done\".\nconst CLOUD_INIT = '/usr/bin/cloud-init';\ntest('UD1 the emitted cloud-config passes cloud-init 26.1 schema validation with no deprecation; the old mounts: [] fails it', t => {\n  const run = (...args) => spawnSync(CLOUD_INIT, args, { encoding: 'utf8', timeout: 60_000, env: { PATH: '/usr/bin:/bin' } });\n  const version = process.platform === 'linux' && existsSync(CLOUD_INIT) ? run('--version').stdout : null;\n  if (!/^\\S+ 26\\.1-/.test(version ?? '')) return t.skip(`needs ${CLOUD_INIT} 26.1, found ${JSON.stringify(version?.trim() ?? null)}`);\n  const dir = mkdtempSync(path.join(tmpdir(), 'moe-cloud-config-'));\n  t.after(() => rmSync(dir, { recursive: true, force: true }));\n  const schema = (name, text) => {\n    const file = path.join(dir, name);\n    writeFileSync(file, text);\n    const result = run('schema', '-c', file);\n    assert.equal(result.error, undefined, String(result.error));\n    return { file, ...result };\n  };\n  const current = schema('current.yaml', BOOTSTRAP.userData);\n  assert.deepEqual([current.status, current.stdout], [0, `Valid schema ${current.file}\\n`], current.stderr);\n  const old = BOOTSTRAP.userData.replace('\\nmounts: [[ephemeral0], [swap]]\\n', '\\nmounts: []\\n');\n  assert.notEqual(old, BOOTSTRAP.userData);\n  const refused = schema('old.yaml', old);\n  assert.deepEqual([refused.status, refused.stdout], [1, `Invalid user-data ${refused.file}\\n`], refused.stderr);\n  assert.match(refused.stderr, /Cloud config schema errors: mounts: \\[\\] is too short/);\n});\n```\nEvery import it needs already exists: spawnSync L2, mkdtempSync/rmSync/writeFileSync L3, tmpdir L4, path L5, existsSync L278, and BOOTSTRAP is built from SUPERVISOR/CREDENTIAL at ~L928. CLOUD_INIT and the UD row prefix are unused today.\nThe row's error handling:\n- each spawn has a 60 s timeout, and the row asserts result.error is undefined;\n- the skip reason names the version found, and Windows/macOS skip before spawning anything;\n- stderr is asserted only on the refused path, because WSL's cloud-init always prints a 'datasource not detected' WARNING;\n- the exact stdout match on the valid path also excludes a 'Cloud config schema deprecations:' line, which matters because readiness refuses DEPRECATED recoverable errors too.\nRED (DoD 3, 'fails on the old'): from the repo root run\n`S=$(mktemp -d /tmp/moe-62a909c1-red-XXXXXX) && git archive HEAD scripts packages/moe-daemon/src | tar -x -C \"$S\" && cp scripts/tests/local-runner.test.mjs \"$S/scripts/tests/local-runner.test.mjs\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test --test-name-pattern='^(buildUserData renders|UD1 )' scripts/tests/local-runner.test.mjs`\nExpect exactly 2 failures against HEAD's `mounts: []`:\n- the pin, on the mounts line;\n- UD1, with actual [1, 'Invalid user-data .../current.yaml\\n'] and stderr 'Cloud config schema errors: mounts: [] is too short'.\nPaste that output into the step note, then rm -rf only your own $S. See mem:gotcha-local-runner-tests for the snapshot recipe, the env -i gate and row-prefix collisions.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Pin updated to 'mounts: [[ephemeral0], [swap]]'; UD1 added with const CLOUD_INIT. RED run vs HEAD (mounts: []) in a git-archive snapshot under env -i: exactly 2 failures — the buildUserData pin, and UD1 (actual [1, 'Invalid user-data .../current.yaml\\n'], stderr 'Cloud config schema errors: mounts: [] is too short'). Snapshot removed. Other dirty paths (.moe/*, scripts/moe-agent.sh) belong to other sessions; untouched.",
+      "startedAt": "2026-10-31T20:39:51.362Z",
+      "completedAt": "2026-10-31T20:40:15.218Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix (GREEN). Edit scripts/local-runner/guest-bootstrap.mjs with the Edit tool only.\n(a) In buildUserData's `lines` array (L119), replace `'mounts: []'` with `'mounts: [[ephemeral0], [swap]]'` in the same position: after 'disable_root: true', before 'users:'.\n(b) Append these 5 lines to the JSDoc above buildUserData, before its closing ` */`. They cover DoD 2: they name the construct and cite the NoCloud behaviour.\n```\n * mounts lists only cloud-init's two built-in defaults (ephemeral0 for /mnt, and swap) as fs_spec-only entries: in\n * cloud-init 26.1 cc_mounts such an entry is skipped and drops the default of the same name, and on NoCloud, which\n * Multipass seeds, neither name maps to a device anyway (DataSource.device_name_to_device returns None). As user-data\n * the list also outranks any vendor or system mounts. 26.1's schema refuses `mounts: []` (minItems 1), and that\n * warning ends boot \"degraded done\", which readiness reports as BOOTSTRAP_FAILED.\n```\nChange no other bytes:\n- guest-readiness.mjs stays untouched, so cloudInitStatus stays strict;\n- guest-supervisor.py stays untouched (R13's sha256 pin);\n- buildUserData's input and return shape stay unchanged for provision.mjs and certify-containment.mjs.\nGREEN: rerun Step 1's command with `cp scripts/local-runner/guest-bootstrap.mjs \"$S/scripts/local-runner/guest-bootstrap.mjs\"` added before `cd \"$S\"`. Expect 2 pass, with UD1 not skipped.\nDoD 1 evidence: build the user-data from the real supervisor and a random 32-byte credential, byte-identical in form to what certify sends. From the repo root run:\n`D=$(mktemp -d /tmp/moe-userdata-XXXXXX) && node --input-type=module -e \"import { randomBytes } from 'node:crypto'; import { readFileSync, writeFileSync } from 'node:fs'; import { buildUserData } from './scripts/local-runner/guest-bootstrap.mjs'; writeFileSync(process.argv[1], buildUserData({ supervisor: readFileSync('scripts/local-runner/guest-supervisor.py'), credential: randomBytes(32) }).userData);\" \"$D/user-data\" && /usr/bin/cloud-init --version && /usr/bin/cloud-init schema -c \"$D/user-data\"; echo \"exit=$?\"; rm -rf \"$D\"`\nExpect:\n- '/usr/bin/cloud-init 26.1-0ubuntu1~24.04.1';\n- 'Valid schema .../user-data' and exit=0;\n- no 'schema errors' or 'deprecations' line. The stderr 'datasource not detected' WARNING is expected.\nRecord the command and its output in the step note. The file holds a throwaway credential, and the command deletes it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bootstrap.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-bootstrap.mjs"
+      ],
+      "note": "mounts line -> 'mounts: [[ephemeral0], [swap]]' + 5-line JSDoc. GREEN: pin and UD1 both pass (UD1 not skipped). DoD1 evidence: user-data built from real guest-supervisor.py + randomBytes(32), `/usr/bin/cloud-init --version` -> 26.1-0ubuntu1~24.04.1; `/usr/bin/cloud-init schema -c <file>` -> 'Valid schema <file>', exit=0, only the expected 'datasource not detected' WARNING; temp dir removed.",
+      "startedAt": "2026-10-31T20:40:16.185Z",
+      "completedAt": "2026-10-31T20:40:32.538Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once (DoD 3-4).\n(1) `sha256sum scripts/local-runner/guest-supervisor.py` must print 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190, and `git diff --quiet HEAD -- scripts/local-runner/guest-supervisor.py scripts/local-runner/guest-readiness.mjs` must exit 0.\n(2) From the repo root, run the one verification command. Its fresh output is the complete_task evidence, and QA re-runs the same command:\n`cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-62a909c1-XXXXXX) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp scripts/local-runner/guest-bootstrap.mjs \"$S/scripts/local-runner/guest-bootstrap.mjs\" && cp scripts/tests/local-runner.test.mjs \"$S/scripts/tests/local-runner.test.mjs\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`\nExpect exit 0 and 0 fail. The baseline at b4c6985c was 351 tests, 350 pass, 1 skip (the opt-in macOS smoke), 82 s, so expect one more test (UD1). The output must show `✔ UD1 ...`, never `# SKIP`. The readiness rows must pass unedited: 'cloud-init error, degradation, disablement or a stopped guest fails bootstrap without boundary probes' and 'CF2 a degraded cloud-init boot fails readiness with its own code...'.\nNever run the suite in place, and never run npm anywhere in the shared checkout.\nOptional consumer check: in the same snapshot, `--test-name-pattern='^SH9 '` on scripts/tests/local-runner-agents.test.mjs passes. Its TY1 needs a built daemon and fails in any bare archive, which is out of scope here.\nAfterwards rm -rf only your own $S.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Verification only. supervisor sha256 3a19f3bf…8190; git diff HEAD on guest-supervisor.py and guest-readiness.mjs clean. Full suite in snapshot under env -i, Node 24.21.0: exit 0, tests 352, pass 351, fail 0, skipped 1 (macOS smoke); UD1 ✔ not skipped. Snapshot removed.",
+      "startedAt": "2026-10-31T20:40:33.312Z",
+      "completedAt": "2026-10-31T20:42:06.297Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's own diff (no file edits). Check each of these:\n(a) `git diff --numstat` over scripts/ lists exactly guest-bootstrap.mjs (~+6/-1) and local-runner.test.mjs (~+25/-1). The prototype measured 33 changed lines.\n(b) No forbidden token from the global rails appears, and no dependency is added.\n(c) UD1 cannot pass vacuously. In the WSL gate it RAN (✔, not SKIP). It asserts the exact stdout and status on both paths. Its notEqual guard fails if the mounts line changes without the row.\n(d) YAML parses `[[ephemeral0], [swap]]` as plain strings, not a YAML 1.1 boolean or number.\n(e) Both temp files that carry a credential are removed: the row's through t.after, the evidence command's through rm -rf.\n(f) Concurrency: UD1 uses its own mkdtemp dir, so parallel runs never share a file.\n(g) The strictness rows still prove that 'degraded done' and a non-zero `cloud-init status` exit yield BOOTSTRAP_FAILED.\n(h) The JSDoc claims match the cloud-init 26.1 source facts in planningNotes.\nIn the complete_task summary, name the real-guest re-check as the governor's R13-certify follow-up, since no seat runs Multipass: fstab has no cloud-init entry, swapon is empty, and `cloud-init status --format json` exits 0 with done/done.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Self-review, no edits. (a) numstat: guest-bootstrap.mjs +6/-1, local-runner.test.mjs +25/-1, nothing else. (b) no forbidden token, no dependency. (c) UD1 ran (✔), asserts exact status+stdout on both paths, notEqual guard present; RED showed it fails on old. (d) cloud-init's own validator accepted the list as string arrays (Valid schema). (e)/(f) credential temp files removed (t.after, rm -rf), own mkdtemp dir. (g) readiness rows and CF2 passed unedited; guest-readiness.mjs untouched. (h) JSDoc matches 26.1 source facts. Real-guest re-check (fstab no cloud-init entry, swapon empty, cloud-init status --format json exit 0 done/done) is the governor's R13-certify follow-up.",
+      "startedAt": "2026-10-31T20:42:07.065Z",
+      "completedAt": "2026-10-31T20:42:13.620Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 254.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T20:14:45.851Z",
+  "updatedAt": "2026-10-31T20:42:21.324Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T20:14:55.874Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-b742aab1",
+    "worker-bdf1153c"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T20:39:25.648Z",
+  "executionContract": {
+    "intendedBehavior": "buildUserData emits `mounts: [[ephemeral0], [swap]]` where it emitted `mounts: []`. The cloud-config then validates under the pinned guest's cloud-init 26.1 with no schema warning, so a clean real boot can reach status done/done. cloud-init still manages no mount or swap in the guest, for three reasons: on NoCloud neither meta name maps to a device; fs_spec-only entries suppress the two built-in defaults; and the user-data list outranks any vendor or system mounts list. Readiness stays strict.",
+    "acceptanceCriteria": [
+      "`/usr/bin/cloud-init schema -c` (26.1-0ubuntu1~24.04.1), run on user-data built from the real guest-supervisor.py and a random 32-byte credential, exits 0 with stdout `Valid schema <file>` and no schema-error or deprecation line. The evidence names the command and its output.",
+      "UD1 passes, not skipped, in the WSL gate, and failed against HEAD's `mounts: []` in Step 1's RED run. The buildUserData pin expects `mounts: [[ephemeral0], [swap]]`.",
+      "The guest-bootstrap.mjs JSDoc names the construct and says why it keeps the no-mounts guarantee: cc_mounts 26.1, NoCloud's device_name_to_device, and user-data precedence.",
+      "guest-readiness.mjs and guest-supervisor.py are byte-unchanged (supervisor sha256 3a19f3bf07cf6d47a1fb93e425b4bf7f1eb7e2b3b2d31bb21ba00752ecef8190). The degraded-done and CF2 rows pass unedited.",
+      "The local-runner suite passes in a git-archive snapshot under env -i with Node v24.21.0: 0 fail, one more test than the base, and the same single macOS-smoke skip."
+    ],
+    "invariants": [
+      "'degraded done', any non-zero `cloud-init status` exit, errors or recoverable_errors still yield BOOTSTRAP_FAILED",
+      "No cloud-init-managed mount or swap in the guest",
+      "User-data stays deterministic and is built only from constants and base64; buildUserData's input and return shape are unchanged"
+    ],
+    "compatibility": [
+      "provision.mjs and certify-containment.mjs still call buildUserData({ supervisor, credential }) and read userData, supervisorSha256, shimSha256 and shimToolsSha256, all unchanged",
+      "SH9 (local-runner-agents.test.mjs) splits userData on write_files paths only, so the mounts line does not affect it"
+    ],
+    "approvedScope": [
+      "The mounts entry of buildUserData's lines array, and its JSDoc, in scripts/local-runner/guest-bootstrap.mjs",
+      "The buildUserData pin, and the new UD1 row with const CLOUD_INIT, in scripts/tests/local-runner.test.mjs"
+    ],
+    "reuse": [
+      "The existing test constants BOOTSTRAP, SUPERVISOR and CREDENTIAL, and the existing imports (spawnSync, existsSync, mkdtempSync, rmSync, writeFileSync, tmpdir, path)",
+      "cloud-init's own validator (`cloud-init schema -c`), rather than a vendored JSON schema or a hand-written check"
+    ],
+    "sourceAssumptions": [
+      "cloudinit/config/schemas/schema-cloud-config-v1.json $defs.cc_mounts.properties.mounts (26.1): outer minItems 1; items are string arrays with minItems 1 and maxItems 6; an fs_spec-only declaration is skipped",
+      "cloudinit/config/cc_mounts.py (26.1): handle() reads cfg.get('mounts', []); add_default_mounts_to_cfg adds ephemeral0 for /mnt and swap unless sanitize_devname returns None or the device is already listed; remove_nonexistent_devices drops entries whose fs_file is None; handle_swapcfg({}) makes no swap file",
+      "cloudinit/sources/__init__.py DataSource.device_name_to_device returns None, and DataSourceNoCloud does not override it",
+      "cloudinit/helpers.py ConfigMerger._read_cfg reads user-data cloud_config before vendor, datasource and base config, and util.mergemanydict keeps the first value of a key",
+      "scripts/tests/local-runner.test.mjs builds BOOTSTRAP at ~L928. The pin test starts ~L1121. The readiness strictness rows sit at ~L1290, and CF2 at ~L2953."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-62a909c1-XXXXXX) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp scripts/local-runner/guest-bootstrap.mjs \"$S/scripts/local-runner/guest-bootstrap.mjs\" && cp scripts/tests/local-runner.test.mjs \"$S/scripts/tests/local-runner.test.mjs\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: replace `mounts: []` with `mounts: [[ephemeral0], [swap]]`. It is schema-valid under 26.1 and keeps the old line's precedence over any vendor or system `mounts` list. It uses cloud-init's own fs_spec-only form to drop exactly the two built-in defaults that cc_mounts.add_default_mounts_to_cfg adds (ephemeral0 for /mnt, and swap). Rejected: (A) Dropping the key. It is also schema-valid, and on NoCloud cc_mounts behaves the same (handle() reads cfg.get('mounts', []), so absent equals []). But the user-data would then stop overriding a vendor-data or image cloud.cfg.d `mounts` list, so the guarantee would rest on Multipass 1.17.0's vendor-data and the image's cloud.cfg.d, and no seat can inspect either (no Multipass). (B) Disabling the mounts module through cloud_config_modules. That means restating the system module list, which is fragile. (C) Loosening readiness to accept degraded done. A task rail forbids it, and it was an R07 QA mutant.",
+    "codebaseInsights": "Source facts, read from WSL's /usr/lib/python3/dist-packages/cloudinit, version 26.1-0ubuntu1~24.04.1 (the same as the guest):\n- config/schemas/schema-cloud-config-v1.json, $defs.cc_mounts.properties.mounts: outer minItems 1, which is why [] is invalid. Items are string arrays with minItems 1 and maxItems 6. Description: 'A mount declaration with only fs_spec and no fs_file mountpoint will be skipped.'\n- config/cc_mounts.py: handle() L545-577. sanitize_mounts_configuration keeps an unmappable fs_spec-only entry with fs_file None. add_default_mounts_to_cfg skips a default whose sanitize_devname is None and never re-adds a listed device. remove_nonexistent_devices drops entries whose fs_file is None. handle_swapcfg({}) has size 0, so no swap file is made.\n- sources/__init__.py L807: DataSource.device_name_to_device returns None, and DataSourceNoCloud does not override it.\n- helpers.py ConfigMerger._read_cfg reads instance cloud_config (user-data) before vendor, datasource and base config. util.mergemanydict keeps the first value of a key.\n- The system /etc/cloud/cloud.cfg from the same package sets no mounts or swap.\nArchitect simulation: cc_mounts.handle run with a NoCloud-like cloud and a temp fstab, for mounts absent, [] and [[ephemeral0],[swap]]. Each left fstab unchanged, made zero subp calls and logged only at DEBUG, so no degraded status.\n`cloud-init schema -c` output:\n- valid: stdout exactly 'Valid schema <file>', exit 0;\n- deprecations: an extra 'Cloud config schema deprecations:' stdout line, still exit 0;\n- invalid: exit 1, stdout 'Invalid user-data <file>', stderr 'Error: Cloud config schema errors: mounts: [] is too short'.\nThe architect prototyped both file edits in a git-archive snapshot. Results: the pin and UD1 are green (UD1 0.5 s, not skipped). Both the old-`mounts: []` mutant and the dropped-key mutant fail both rows. The DoD 1 evidence command printed 'Valid schema', exit 0. The base suite at b4c6985c is 351 tests, 350 pass, 1 skip, 82 s.",
+    "risks": "- Contested test file: task-47d21b83 (WORKING, unassigned, waiting on R13) declares scripts/tests/local-runner.test.mjs. Edit with the main session's Edit tool only. A Codex/Grok/Gemini seat gets no TOOL witness, so it lands only if the file is clean at preflight and that peer is idle.\n- task-4679ec68 (Windows hcs launch, PLANNING) dependsOn this task.\n- R13's commit-under-test pin is guest-supervisor.py's sha256 only, so a guest-bootstrap.mjs change does not move it.\n- UD1 runs only where /usr/bin/cloud-init reports 26.1: the WSL gate, and possibly ubuntu CI. It skips on Windows and macOS. The deterministic pin runs everywhere.\n- The real-guest proof (done/done, no fstab entry) remains the governor's job at R13 certify.\n- Do not widen into readiness, docs or provisioning. Docs belong to R13.\n- local-runner-agents.test.mjs TY1 fails in any bare archive because it needs a built daemon. That is pre-existing and not a regression.",
+    "keyFiles": [
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/local-runner/provision.mjs",
+      "scripts/local-runner/certify-containment.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "44a86f65bc3f606a0eedcfb0d09c009a2775a613",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T20:39:25.670Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T20:39:51.362Z",
+  "reviewStartedAt": "2026-10-31T20:42:21.322Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-62a909c1-XXXXXX) && git archive HEAD scripts packages/moe-daemon/src packages/moe-daemon/package.json packages/moe-daemon/package-lock.json .github | tar -x -C \"$S\" && cp scripts/local-runner/guest-bootstrap.mjs \"$S/scripts/local-runner/guest-bootstrap.mjs\" && cp scripts/tests/local-runner.test.mjs \"$S/scripts/tests/local-runner.test.mjs\" && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ UD1 the emitted cloud-config passes cloud-init 26.1 schema validation with no deprecation; the old mounts: [] fails it (489ms)\n✔ RX6 runCheckJob pins every provider call to the platform's own Multipass client, unless the caller names one\nℹ tests 352\nℹ suites 0\nℹ pass 351\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 82290.583607",
+    "reportedAt": "2026-10-31T20:42:21.322Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/guest-bootstrap.mjs"
+  ],
+  "completionSummary": "buildUserData now emits `mounts: [[ephemeral0], [swap]]` instead of `mounts: []`, which cloud-init 26.1 refused (minItems 1). Delivered in guest-bootstrap.mjs (+6/-1, including a JSDoc that names the construct and why it keeps the no-mounts guarantee) and local-runner.test.mjs (+25/-1: updated pin, plus new UD1). DoD 1: user-data built from the real guest-supervisor.py and a random 32-byte credential; `/usr/bin/cloud-init schema -c <file>` (26.1-0ubuntu1~24.04.1) printed 'Valid schema <file>', exit 0, with no schema-error or deprecation line. DoD 3: UD1 ran (not skipped) and failed against HEAD's `mounts: []` in the RED run (status 1, 'mounts: [] is too short'); readiness is untouched, and the degraded-done and CF2 rows pass unedited. DoD 4: guest-supervisor.py sha256 is still 3a19f3bf…8190 and guest-readiness.mjs has no diff. The full local-runner suite ran in a git-archive snapshot under env -i with Node v24.21.0: 352 tests, 351 pass, 0 fail, 1 skip (macOS smoke), exit 0. Follow-up for the governor at R13 certify, because no seat runs Multipass: on a real guest, fstab has no cloud-init entry, swapon is empty, and `cloud-init status --format json` exits 0 with done/done."
+}
