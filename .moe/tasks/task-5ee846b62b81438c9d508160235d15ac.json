@@ -20,9 +20,9 @@
       "modifiedFiles": [
         "scripts/tests/local-runner-bridge.test.mjs"
       ],
-      "note": "Tests first, in scripts/tests/local-runner-bridge.test.mjs only.\n- H4 'unanswered' row flipped: it now resolves {observation: EXIT, executionReady:false} with observations [EXIT], written [], forwarded 1 and its signal aborted. No other H1-H8 row changed.\n- openSession's forward wrapper now also passes {signal} to answer as a 3rd arg, for the abort-aware row. Existing answers ignore it.\n- New H9 helpers, all local to H9: owe, finish, succeeds, fails. owe also spies on stdin.write and counts calls made after stdin was destroyed (proc.late).\n- H9 success cases: active+queued; late resolve; late reject; abort-aware forward; hang past timeoutMs (500, then wait 550); settle-before-EOF (written 1); in-flight reply write failed by teardown; in-flight reply write that succeeds after settle.\n- H9 negatives, each with a request owed: no observation; trailing partial frame; exit 1; frame after the observation; timeout before EOF then exit 0; caller abort after the clean EOF; job-frame write failing after the clean EOF.\nRED, focused run (node 24.21.0, env -i, --test-name-pattern '^H[0-9] '): 9 tests, 7 pass, 2 fail. H4 and H9 fail with SESSION_PROTOCOL_VIOLATION.\nPer-case RED, in scratch /tmp/moe-5ee8-red.z6Lm with succeeds and asserts made non-fatal: all 8 success cases fail. Seven give SESSION_PROTOCOL_VIOLATION; the teardown-failed in-flight write gives SESSION_PROVIDER_FAILED through pump's catch. All 7 negatives pass at RED.\nPeer dirty paths I left alone: .moe/tasks/{16bbf8ff,a4a729dd,b319b263,f4811a72}.json, scripts/moe-agent.sh, .moe/decisions/.",
-      "startedAt": "2026-10-31T12:02:01.667Z",
-      "completedAt": "2026-10-31T12:05:40.650Z"
+      "note": "QA reopen 1 fix: one new H9 success row, 'expiring', added after the 'past' row in scripts/tests/local-runner-bridge.test.mjs (+15/-1; ASCII only; diff --check clean; no line over 121 chars). No other H1-H9 row changed.\n\nThe row: owe({timeoutMs: 1_000, fake: {hung: true}}), with a forward that never settles. It records begun = Date.now() after the forward is seen; the deadline started at or before that. Then sleep(500), EXIT and stdout.end(), and wait for stdin.destroyed (teardown). It sleeps to begun+1250, asserts kills is [], emits close(0) and runs succeeds(): one observation, nothing written, no late write, signal aborted, 0 listeners.\n- Margins are 250 ms on each side. The deadline expires at or before begun+1000. Stop's kill timer expires at or after begun+1500, i.e. EOF plus 1 s.\n- Node runs due timers in expiry order, with microtasks drained between them. So a late wake-up still runs the deadline's rejection chain first, then our continuation, whose close settles and clears the kill timer.\n- QA's example was EOF at about 400 ms and close at about 1300 ms (300/100). I balanced it to 250/250.\n- The H9 header comment now says 'only the expiring-deadline row races real timers, with 250 ms margins'. It used to say no row uses sleep ordering, which is no longer true.\n\nTest-the-test evidence (no runtime change, as QA asked):\n- Current code: H9 passed 3/3 focused (2.31 s each). The full bridge file in place: tests 65, pass 64, fail 0, skipped 1 (LA5 env-gated), exit 0.\n- Mutant M03 (`if (session.closing && error !== TIMEOUT) return;`): H9 fails with SESSION_TIMEOUT. The stack frame is test line 965:17, the new row's emit('close'), so the new row is the killer.\n- QA's own sweep, a copy of /tmp/qa-5ee8/tools/mut.py and mutants.json against my scratch base with `^H[1-9] `: M00 control survives, M01-M16 and M18 are killed (M03 now included), and M17 (loop-head !closing, equivalent per QA) survives.\n- Flake check: 24 H9 runs, 12 concurrent per round, all exit 0 (2.40-2.44 s).\n\nPeer or pre-existing dirty paths, untouched: .moe/tasks/task-b319..., .moe/tasks/task-f481..., .moe/decisions/, .moe/tasks/task-a46b..., .moe/tasks/task-d481..., scripts/moe-agent.ps1, scripts/moe-agent.sh, scripts/tests/postflight-worktree.cjs.",
+      "startedAt": "2026-10-31T12:26:20.169Z",
+      "completedAt": "2026-10-31T12:34:40.313Z"
     },
     {
       "stepId": "step-2",
@@ -31,22 +31,18 @@
       "affectedFiles": [
         "scripts/local-runner/guest-session.mjs"
       ],
-      "modifiedFiles": [
-        "scripts/local-runner/guest-session.mjs",
-        "scripts/tests/local-runner-bridge.test.mjs"
-      ],
-      "note": "Fix, in scripts/local-runner/guest-session.mjs, relay/pump only:\n- The child 'close' handler no longer has `|| session.pending.length > 0`. A code 0 close succeeds when `ended && observation`; requests still owed were abandoned.\n- pump's loop head is `while (pending.length > 0 && !closing)`.\n- pump's catch: `if (session.closing) return;` before the TIMEOUT/PROVIDER_FAILED stop, so a deadline or reply write that teardown cut short records no code. Before closing, codes are unchanged.\n- The JSDoc 'no owed reply' sentence is rewritten: in-flight forwards see their signal abort, queued ones are never forwarded, no reply is written after the finish, and an aborted forward may already have acted upstream, with nothing reporting it undone.\n- Unchanged: the job-frame catch, onAbort, stop's kill timer, `failure ??=`, receive() and decoder guards, settle, and the result shape.\nTest growth (bridge file): one more H9 negative, \"a provider that exits 0 before its stdout reached a clean EOF\" gives SESSION_PROTOCOL_VIOLATION. Without it, the close-ignores-`ended` mutant survived.\nGREEN:\n- Full bridge file, node 24.21.0 under env -i, in place (imports only scripts/local-runner): exit 0, 65 tests, 64 pass, 0 fail, 1 skip (LA5, needs MOE_PINNED_CODEX).\n- H rows: 9/9.\n- H4+H9 flake loop: 8/8 runs green.\nMutation sweep in scratch /tmp/moe-5ee8-mut.79Q1, H rows, scored by exit code:\n- Killed 8/9: pending check restored (H4, H9); catch ignores closing (H9); failure `=` instead of `??=` (H2, H4, H9, H5, H6); close ignores observation (H2, H9); close ignores ended (H9, after the new row); settle keeps timers (H9); pump writes when reply returns bytes after closing (H9); stop without controller.abort (H4, H9).\n- One survivor, equivalent: the loop-head `!closing`. After teardown, reply() returns null before forward and pump returns before writing, so the guard only skips a wasted health probe.\n- The no-op control passes.",
-      "startedAt": "2026-10-31T12:05:42.776Z",
-      "completedAt": "2026-10-31T12:10:14.742Z"
+      "note": "No runtime change in this round, per QA's rejection item 2: \"`if (session.closing) return;` is correct as written\".\n\nscripts/local-runner/guest-session.mjs is byte-identical to HEAD efbb4101 (sha256 e26aea25592f..., the same as round 1). It still holds the landed fix:\n- the close handler has no pending check (line 172);\n- pump's loop head checks `!session.closing` (line 219);\n- pump's catch has `if (session.closing) return;` (line 225), now pinned for BOTH error classes. The TIMEOUT half is pinned by the new 'expiring' row (M03 killed) and the write-error half by the in-flight rows (M04 killed);\n- `failure ??=` is unchanged (lines 295 and 301).\n\nFocused run on the current bytes, in place with env -i and node v24.21.0: `node --test scripts/tests/local-runner-bridge.test.mjs` gives tests 65, pass 64, fail 0, cancelled 0, skipped 1 (LA5, env-gated MOE_PINNED_CODEX), exit 0. H1-H9 are all green. guest-bridge.mjs, guest-supervisor.py (GUARD/pump) and the certify modules are untouched.",
+      "startedAt": "2026-10-31T12:34:52.218Z",
+      "completedAt": "2026-10-31T12:35:02.800Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY ONCE, the external snapshot gate from the task description (DoD 3). Run it under a Linux-only env, never in the shared checkout: GLOBAL rule, the daemon dist there is live.\n`S=$(mktemp -d) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && cp /mnt/d/projexts/moes/scripts/local-runner/guest-session.mjs \"$S/scripts/local-runner/\" && cp /mnt/d/projexts/moes/scripts/tests/local-runner-bridge.test.mjs \"$S/scripts/tests/\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci && npm run build && npm test' && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner*.test.mjs`\n- This is the full archive, not just scripts/: some suites read docs/ (Serena gotcha-harness-snapshot-needs-full-archive).\n- The build is needed because local-runner-dispatch, channel and daemon-bind import packages/moe-daemon/dist.\n- The two cp steps overlay this row's uncommitted bytes. QA re-runs the same command on the completion commit without the overlay.\nRecord the pass, fail and skip counts in the step note, then remove $S. Also run `git diff --check` over the two files.\nError handling:\n- a failure outside these two files must reproduce at HEAD without the overlay before it is called pre-existing; name both runs;\n- never weaken a test;\n- never revert, stash or commit a peer's dirty path;\n- kill only recorded PIDs (GLOBAL rule).",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "External snapshot gate, run once, verbatim from executionContract.checkRefs (TMPDIR=/tmp/moe-5ee8-gate only so I could locate and remove $S). Full `git archive HEAD` at f46d3723 (HEAD had moved from b1e3ed20 to the a4a729dd QA wip), plus an overlay of the two task files. The overlay sha256 prefixes match the working tree: guest-session.mjs 92cecaa3506ae74e, local-runner-bridge.test.mjs cbd3ebd7cd7108de. Linux-only env -i PATH with node v24.21.0.\nResult: GATE_EXIT=0.\n- Daemon (npm ci, npm run build, npm test): Test Files 215 passed (215); Tests 6341 passed, 20 skipped (6361).\n- Runner (node --test scripts/tests/local-runner*.test.mjs): tests 636, pass 633, fail 0, cancelled 0, skipped 3. The skips are env-gated: LA5 needs MOE_PINNED_CODEX, K9 is root-only, and the native macOS smoke is opt-in.\n- This is the a4a729dd QA baseline (635 runner, 6341 daemon) plus the one new H9 row. No failures, so nothing to attribute as pre-existing.\n- `git diff --check` over the two files: clean (exit 0). Both files are ASCII-only. numstat: guest-session.mjs +8/-4, bridge test +129/-9.\n- $S has been removed.\nPeer dirty paths I left alone: .moe/tasks/*, scripts/moe-agent.sh, scripts/tests/postflight-worktree.cjs, .moe/decisions/.",
-      "startedAt": "2026-10-31T12:10:48.260Z",
-      "completedAt": "2026-10-31T12:13:36.182Z"
+      "note": "The external snapshot gate passed: GATE_EXIT=0.\n\nHow it ran:\n- The exact checkRefs command, verbatim, in a scratch script (/tmp/moe-5ee8-r2.Osk0pg/gate.sh). Its only addition is a trailer echoing $S and the exit code.\n- A full `git archive HEAD` at efbb41015f87, plus the two-file overlay: guest-session.mjs sha256 e26aea25592f... (equal to HEAD) and local-runner-bridge.test.mjs sha256 d966dfa59aab... (the new row).\n- env -i, node v24.21.0. Started 2026-10-31T12:36:31Z.\n\nResults:\n- Daemon (npm ci, build, npm test): Test Files 215 passed (215); Tests 6341 passed, 20 skipped (6361); exit 0.\n- Runner (`node --test scripts/tests/local-runner*.test.mjs`): tests 636, suites 4, pass 633, fail 0, cancelled 0, skipped 3, duration 85.8 s.\n  - The 3 skips are env-gated: LA5 needs MOE_PINNED_CODEX, K9 needs root, and the macOS native smoke.\n  - The counts match QA's efbb4101 run (636/633/3). The new row sits inside H9, so the test count is unchanged.\n- GATE_EXIT=0. The snapshot /tmp/tmp.gfL2JxNkpO was removed afterwards.\n- `git diff --check` over the two files is clean, and the diff is ASCII only.\n- No failures, so there was nothing to reproduce against HEAD. No PIDs were killed. No peer dirty path was touched: the archive used committed bytes, so the peer's dirty scripts/moe-agent.sh was not in the snapshot.",
+      "startedAt": "2026-10-31T12:35:16.546Z",
+      "completedAt": "2026-10-31T12:39:07.922Z"
     },
     {
       "stepId": "step-4",
@@ -54,11 +50,11 @@
       "status": "COMPLETED",
       "affectedFiles": [],
       "modifiedFiles": [
-        "scripts/local-runner/guest-session.mjs"
+        "scripts/tests/local-runner-bridge.test.mjs"
       ],
-      "note": "Adversarial self-review of this row's own diff (the two files only).\n- Forward or write after closing: none. pump's loop head checks !closing. reply() checks closing after its daemonRefusal await, and the forward call follows synchronously. pump checks closing after reply, then starts the write synchronously. The job-frame write happens only at relay start. H9's proc.late spy (stdin.write while destroyed) stays 0 in every case.\n- onObservation: settle is guarded by `settled`, and a failure rejects before onObservation. H9 asserts observations stays at length 1 after late resolve and reject.\n- First failure wins: `??=` only, and the catch's closing-return never clears a code. The `=` mutant dies on H2, H4, H5, H6 and H9.\n  - A TIMEOUT raised before teardown always records its code. Its rejection chain is all microtasks, which drain right after the timer callback, before any stdout 'end'.\n  - A real reply-write error before teardown also reaches stdin's 'error' listener (PROVIDER_FAILED).\n- Timers: closing is always true at settle, and bounded() is only ever called before a closing check, so no timer starts after settle. settle clears the rest. The keep-timers mutant dies on H9's 'past' row (no SIGKILL).\n- A forward that ignores abort: the session still settles on close. Its race stays pending and is garbage once the forward settles.\n- A hung provider still ends as SESSION_TIMEOUT with a local SIGKILL (H4 'killed' row).\n- receive() guards, MAX_PENDING_REQUESTS and the replay check are untouched.\n- runAgentJob reads only observation (agent-lifecycle.mjs:83). The AJ rows are green in the gate.\nFinding fixed: the close handler's comment sat on the violation line and read as if it explained the violation. It is now one line above the handler (\"Exit 0 after a clean EOF and the observation is the finish; a request still owed then was abandoned, not failed.\"). Comment only.\nTheoretical, not new: an aborted forward whose transport ignores the signal can still land upstream after runAgentJob's sweep and lease release. That already held on every failure path; the JSDoc says nothing reports it undone.\nGate rerun on the final bytes (the same checkRefs command; HEAD f46d3723 plus the overlay, sha256 prefixes guest-session e26aea25592fc0dd, bridge test cbd3ebd7cd7108de): GATE_EXIT=0.\n- Daemon: 215 files, 6341 passed, 20 skipped.\n- Runner: 636 tests, 633 pass, 0 fail, 3 skipped.\n- $S removed; `git diff --check` clean; numstat +9/-4 and +129/-9.",
-      "startedAt": "2026-10-31T12:13:38.594Z",
-      "completedAt": "2026-10-31T12:16:55.038Z"
+      "note": "Adversarial self-review of the task diff (efbb4101^ to now: guest-session.mjs +9/-4, unchanged this round; bridge test +144/-9). One real finding, fixed in this step.\n\nFINDING (my step-1 draft of the new row could fail on correct code):\n- Node keys timer lists by duration. processTimers runs EVERY due timer of one list (draining microtasks between them) before it moves to the next list.\n- The forward's deadline and stop's kill timer share the session's 1 s list. My draft closed through sleep(begun+1250-now), a ~730 ms timer in another list.\n- So a stall of 250 ms or more covering about 1.25-1.5 s ran the KILL before the close, and the row failed on correct code. The draft comment 'expiry order' was false.\n- Proof:\n  - A pure-Node model (/tmp/.../timer-order.mjs) with a 1.4 s busy-wait gives 'other' = deadline, micro, KILL, close.\n  - A stall-injected scratch copy of the draft fails on correct code with SESSION_TIMEOUT (case C).\n\nFIX (test only):\n- `const closeDue = sleep(1_000)` is created right after owe() returns, which is after the forward's deadline joined the 1 s list. The EOF (and the kill timer) comes 500 ms later.\n- List order is therefore deadline, close, kill. The close's settle clears the kill timer (clearTimeout nulls _onTimeout, so listOnTimeout skips it), however late the loop wakes.\n- The row comment and the H9 header were rewritten to say this.\n- Evidence:\n  - The model's 'same' run gives deadline, micro, close, with no KILL.\n  - Stall-injected scratch copies: A (new row, correct code) PASS; B (new row, M03) FAIL SESSION_TIMEOUT; C (draft, correct) FAIL; D (draft, no stall) PASS.\n  - QA's 19-mutant sweep on the final bytes (sha256 96761ed7c289...): control passes, M01-M16 and M18 killed (M03 included), M17 equivalent.\n  - 24/24 concurrent H9 runs pass.\n  - Fresh checkRefs gate on the final bytes, HEAD 7031d6bd (my files are unchanged from efbb4101; that commit only touched .moe/tasks): daemon 215 files, 6341 passed, 20 skipped; runner 636 tests, 633 pass, 0 fail, 3 env skips; GATE_EXIT=0.\n\nPlan checklist (runtime unchanged, rechecked):\n- No forward or write after closing: loop head, post-reply check, reply's null after the probe; the job frame is the first write.\n- onObservation runs once, never after a failure (M14).\n- `??=` only (M08).\n- settle clears timers (M09, plus the new row's kill-timer clear).\n- An abort-ignoring forward can't block settle ('past', 'expiring').\n- A hung provider still gives SESSION_TIMEOUT with SIGKILL (H4).\n- receive(), MAX_PENDING and the replay guards are untouched.\n- runAgentJob reads only .observation (agent-lifecycle.mjs:83).\n\nTHEORETICAL residual: a full stall of about 1 s or more between the forward call and owe()'s 10 ms poll returning lets the deadline fire before the EOF. That is legitimately a session timeout, the same risk class as every timer row.\n\nPeer note: task-a46b60e6 (unassigned, steps PENDING, depends on 97341ad5) plans to edit this test file later. It does not conflict now.",
+      "startedAt": "2026-10-31T12:39:13.764Z",
+      "completedAt": "2026-10-31T12:46:25.333Z"
     }
   ],
   "planRevision": 1,
@@ -66,8 +62,8 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD 1 is not fully proven. One half of the new pump catch guard has no test, and reverting that half brings back this task's bug: a valid observation lost to SESSION_TIMEOUT.\n\nVerified on efbb4101 (the source files are unchanged at HEAD):\n- The checkRefs gate on a full `git archive efbb4101`, no overlay, env -i, node 24.21.0. Daemon: 215 files, 6341 passed, 20 skipped, exit 0. Runner: 636 tests, 633 pass, 0 fail, 3 skipped, exit 0.\n- Diff +9/-4 runtime, +129/-9 tests. ASCII only, --check clean, no other H1-H8 row changed.\n- QA mutation sweep over `^H[1-9] `: 17 of 18 killed, plus a passing control. The loop-head `!closing` mutant survives and is equivalent, as the worker said.\n\nThe gap. Plan step 2 treats both a TIMEOUT and a reply-write error that arrive after session.closing as teardown artifacts. guest-session.mjs:225 implements both, but only the write-error half is pinned.\n\nMutant M03, `if (session.closing && error !== TIMEOUT) return;`, survives every H row. It is the old behavior when a forward's deadline runs out between the clean EOF and the provider's close(0). The race is realistic: a slow forward, and `multipass exec` taking a moment to exit after EOF. H9's 'past' row misses this window, because finish() exits at once and settle clears the deadline first.\n\nQA scratch probe:\n- Setup: a hung fake, a forward that never settles, timeoutMs 500.\n- Steps: EXIT and stdout end about 250 ms after the forward starts; wait for stdin.destroyed; wait until about 650 ms (past the forward deadline, before the kill timer); assert no kill; emit close(0).\n- Result: the current code resolves the observation 6 of 6 times. M03 rejects with SESSION_TIMEOUT.\n\nTo pass: add one H9 success row that pins this window, then re-run the gate.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-97341ad5be744d19ac869972299a2714",
   "dependsOn": [
@@ -82,23 +78,31 @@
       "author": "architect-b58e1112",
       "content": "Architect heads-up from the a4a729dd plan (rev 1, 2026-10-31). This row depends on it.\n- Contrary to the earlier assumption, a4a729dd does touch scripts/tests/local-runner-bridge.test.mjs, but only J4 (+4/-3).\n- The job's process tree is now job -> init (a fork of GUARD) -> GUARD -> supervisor. J4's PROBE reads one more ancestor.\n- It lands before you, so rebase your edits onto it. Nothing else in that file changes.",
       "timestamp": "2026-10-31T07:25:57.266Z"
+    },
+    {
+      "id": "comment-cfd85217d6e14516bf1034862ab5217c",
+      "author": "governor-4764040b",
+      "content": "Governor note for the reopen-1 fix (12:27Z). QA wants tests only: one H9 row, no runtime change.\n1. DoD 1 has now failed once. If it fails again, the row goes to PLANNING automatically, and that stalls 97341ad5 → R13 behind a re-plan. So kill QA's named mutant before complete_task.\n2. scripts/tests/local-runner-bridge.test.mjs is also declared by open rows 97341ad5 and a46b60e6. Edit it only with this session's Edit tool (GLOBAL rule 2), so the landing carries a TOOL witness.\n3. H9 depends on timing, and this WSL host is busy (11 seats). Use QA's margins (timeoutMs 1000, EOF at ~400 ms, close at ~1300 ms). Run the new row several times, e.g. 5 runs in the snapshot, and record the pass count with the gate counts. A flaky H9 would be a fresh reject reason.",
+      "timestamp": "2026-10-31T12:26:03.133Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T06:17:56.550Z",
-  "updatedAt": "2026-10-31T12:17:26.460Z",
+  "updatedAt": "2026-10-31T12:47:12.711Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T06:34:30.346Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 8,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-66fd8127",
-    "worker-25da16b2"
+    "worker-25da16b2",
+    "qa-4398294e"
   ],
-  "tier": "standard",
-  "effort": "xhigh",
+  "tier": "heavy",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
@@ -107,7 +111,13 @@
     "step-3",
     "step-4"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "Valid hello/one observation/clean EOF/exit0 succeeds once despite unresolved agent requests; pending work is cancelled without late forwarding/writes.",
+      "rejectedAt": "2026-10-31T12:25:48.831Z",
+      "rejectedBy": "qa-4398294e"
+    }
+  ],
   "planSubmittedAt": "2026-10-31T06:38:41.940Z",
   "executionContract": {
     "intendedBehavior": "A guest bridge session whose supervisor sent hello, exactly one observation and a clean EOF, then exited 0, resolves once with that observation even if agent requests are still pending. In-flight forwards are aborted and queued ones are never forwarded, and no reply is written after the finish. Real failures keep their codes and are never erased: malformed or extra frames, a missing observation, a nonzero or killed provider, a timeout or abort before the finish, and a job-frame write failure.",
@@ -147,17 +157,94 @@
   "planApprovedAt": "2026-10-31T06:38:41.964Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-31T12:02:01.667Z",
-  "reviewStartedAt": "2026-10-31T12:17:26.459Z",
+  "reviewStartedAt": "2026-10-31T12:47:12.709Z",
   "verification": {
     "command": "S=$(mktemp -d) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$S\" && cp /mnt/d/projexts/moes/scripts/local-runner/guest-session.mjs \"$S/scripts/local-runner/\" && cp /mnt/d/projexts/moes/scripts/tests/local-runner-bridge.test.mjs \"$S/scripts/tests/\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci && npm run build && npm test' && cd \"$S\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner*.test.mjs",
     "exitCode": 0,
-    "outputTail": "[daemon npm test] Test Files  215 passed (215) | Tests  6341 passed | 20 skipped (6361)\n[local-runner] ℹ tests 636\nℹ suites 4\nℹ pass 633\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 82048.401681\nGATE_EXIT=0",
-    "reportedAt": "2026-10-31T12:17:26.459Z",
+    "outputTail": "[daemon npm test] Test Files  215 passed (215) | Tests  6341 passed | 20 skipped (6361) | Duration 37.69s\n[local-runner] skipped (env-gated): LA5 (MOE_PINNED_CODEX), K9 (needs root), macOS native provider smoke\nℹ tests 636\nℹ suites 4\nℹ pass 633\nℹ fail 0\nℹ cancelled 0\nℹ skipped 3\nℹ todo 0\nℹ duration_ms 85349.694947\nSNAPSHOT=/tmp/tmp.NN8rv3zxL1 (removed after the run)\nGATE_EXIT=0\n[run 2026-10-31T12:43:30Z on HEAD 7031d6bd + overlay: guest-session.mjs sha256 e26aea25592f... (== efbb4101), local-runner-bridge.test.mjs sha256 96761ed7c289...]",
+    "reportedAt": "2026-10-31T12:47:12.709Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "scripts/tests/local-runner-bridge.test.mjs",
     "scripts/local-runner/guest-session.mjs"
   ],
-  "completionSummary": "A guest bridge session that ended cleanly now resolves once with its observation even while agent requests are still owed. A clean end means hello, one observation, a clean stdout EOF and provider exit 0. The owed requests are abandoned, not failed.\n\nguest-session.mjs (+9/-4, relay and pump only):\n- The close handler drops `|| session.pending.length > 0`.\n- pump loops only while `!session.closing`.\n- pump's catch returns without a code once closing, because a deadline or reply write cut short by teardown is not a failure.\n- The JSDoc is rewritten. In-flight forwards see their signal abort, queued requests are never forwarded, and no reply is written after the finish. An aborted forward may already have acted upstream, and nothing reports that undone.\n- Unchanged: the job-frame catch, caller abort, the kill timer, `failure ??=`, the receive() and decoder guards, and the result shape.\n\nlocal-runner-bridge.test.mjs (+129/-9):\n- The H4 'unanswered' row is flipped to success: one observation, nothing written, signal aborted.\n- openSession passes {signal} to answer.\n- New H9 success cases: active plus queued, late resolve or reject, an abort-aware forward, a hang past timeoutMs, settling just before EOF, and an in-flight reply write that fails or finishes after teardown. A stdin.write spy confirms no write is attempted after stdin is destroyed.\n- New H9 failure cases, each with a request owed: no observation (violation), a trailing partial frame (violation), exit 1 (provider failed), a frame after the observation (violation), close(0) before EOF (violation), a timeout before EOF and then exit 0 (stays SESSION_TIMEOUT), a caller abort after EOF (aborted), and a job-frame write failure after EOF (provider failed).\n\nEvidence:\n- RED: all 8 success cases failed one by one, and the negatives passed.\n- The check command above, on a full archive of HEAD f46d3723 plus the two-file overlay (sha256 e26aea25…, cbd3ebd7…; TMPDIR was set only to locate $S): GATE_EXIT=0. The daemon suit"
+  "completionSummary": "QA reopen 1 is addressed with a test-only change. guest-session.mjs is byte-identical to efbb4101, as QA asked.\n\nNew H9 success row 'expiring' (local-runner-bridge.test.mjs +16/-1; the task total vs efbb4101^ is runtime +9/-4, tests +144/-9). It pins the window M03 left open:\n- A hung fake and a never-settling forward with timeoutMs 1000.\n- `closeDue = sleep(1_000)` is started right after the forward. EXIT and stdout.end() follow 500 ms later. The test waits for stdin.destroyed, then awaits closeDue.\n- It asserts kills is [], emits close(0), then succeeds(): one observation, no write, signal aborted, 0 listeners.\n\nWhy closeDue is a 1 s timer: Node runs every due timer in one duration list before it moves to the next list. closeDue joins the session's own 1 s list after the forward's deadline and before stop's kill timer. That fixes the order (deadline, close, cleared kill) however late the loop wakes.\n- My first draft slept to begun+1250 in another list. Under a stall it ran the kill first and failed on correct code. My self-review caught it, with a pure-Node model and stall-injected scratch runs.\n- Stall-injected copies: the new row passes on correct code and fails on M03; the old draft fails on correct code.\n- The H9 header comment is updated to match.\n\nEvidence:\n- Mutant M03 `if (session.closing && error !== TIMEOUT) return;` fails H9 with SESSION_TIMEOUT. The stack frame is the new row's emit('close'), so the new row kills it.\n- QA's own sweep (/tmp/qa-5ee8/tools mut.py and mutants.json, copied to scratch) on the final bytes: control passes; M01-M16 and M18 are killed, M03 included; M17 (loop-head !closing) survives as an equivalent mutant.\n- 24/24 concurrent H9 runs pass. The full bridge file in place gives 65 tests, 64 pass, 1 env skip.\n- checkRefs gate, run fresh on the final bytes as a full archive of HEAD 7031d6bd plus the overlay (7031d6bd differs from efbb4101 only in .moe/tasks): daemon 215 files, 6341 passed, 20 skipped; runner 636 tests, 633 pass, 0 fa",
+  "commits": [
+    {
+      "sha": "efbb41015f87033d7cd5fb8866df08e859a5bdc6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T11:57:51Z",
+      "paths": [
+        ".moe/tasks/task-5ee846b62b81438c9d508160235d15ac.json",
+        ".moe/tasks/task-97341ad5be744d19ac869972299a2714.json",
+        ".moe/tasks/task-a4a729ddaa8942679e8ae7cd57bd42f1.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/local-runner/guest-session.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T12:17:47.077Z",
+      "treeId": "b5d738fe6a2d6afcf971a0fe96ba7dad046db2a9",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-session.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-25da16b2@2026-10-31T11:57:51Z",
+    "at": "2026-10-31T12:17:47.077Z"
+  },
+  "reviewCompletedAt": "2026-10-31T12:25:48.831Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Valid hello/one observation/clean EOF/exit0 succeeds once despite unresolved agent requests; pending work is cancelled without late forwarding/writes."
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "file": "scripts/tests/local-runner-bridge.test.mjs",
+        "line": 948,
+        "description": "Add an H9 success row in which a never-settling forward's deadline expires after the clean EOF but before close(0). Use a hung fake; send EXIT and stdout.end() partway through the deadline; wait past it; assert kills is [] before the kill timer; emit close(0); then call succeeds(). Leave margin under load, e.g. timeoutMs 1000, EOF at about 400 ms, close at about 1300 ms. The row must fail on mutant `if (session.closing && error !== TIMEOUT) return;`."
+      },
+      {
+        "type": "other",
+        "file": "scripts/local-runner/guest-session.mjs",
+        "line": 225,
+        "description": "No runtime change requested: `if (session.closing) return;` is correct as written. After adding the row, re-run the checkRefs gate in an external full-archive snapshot and record the counts. Do not touch GUARD, pump in guest-supervisor.py, or certification."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 1 is not fully proven. One half of the new pump catch guard has no test, and reverting that half brings back this task's bug: a valid observation lost to SESSION_TIMEOUT.\n\nVerified on efbb4101 (the source files are unchanged at HEAD):\n- The checkRefs gate on a full `git archive efbb4101`, no overlay, env -i, node 24.21.0. Daemon: 215 files, 6341 passed, 20 skipped, exit 0. Runner: 636 tests, 633 pass, 0 fail, 3 skipped, exit 0.\n- Diff +9/-4 runtime, +129/-9 tests. ASCII only, --check clean, no other H1-H8 row changed.\n- QA mutation sweep over `^H[1-9] `: 17 of 18 killed, plus a passing control. The loop-head `!closing` mutant survives and is equivalent, as the worker said.\n\nThe gap. Plan step 2 treats both a TIMEOUT and a reply-write error that arrive after session.closing as teardown artifacts. guest-session.mjs:225 implements both, but only the write-error half is pinned.\n\nMutant M03, `if (session.closing && error !== TIMEOUT) return;`, survives every H row. It is the old behavior when a forward's deadline runs out between the clean EOF and the provider's close(0). The race is realistic: a slow forward, and `multipass exec` taking a moment to exit after EOF. H9's 'past' row misses this window, because finish() exits at once and settle clears the deadline first.\n\nQA scratch probe:\n- Setup: a hung fake, a forward that never settles, timeoutMs 500.\n- Steps: EXIT and stdout end about 250 ms after the forward starts; wait for stdin.destroyed; wait until about 650 ms (past the forward deadline, before the kill timer); assert no kill; emit close(0).\n- Result: the current code resolves the observation 6 of 6 times. M03 rejects with SESSION_TIMEOUT.\n\nTo pass: add one H9 success row that pins this window, then re-run the gate.",
+      "rejectedAt": "2026-10-31T12:25:48.831Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Valid hello/one observation/clean EOF/exit0 succeeds once despite unresolved agent requests; pending work is cancelled without late forwarding/writes."
+      ],
+      "issues": [
+        {
+          "type": "missing_feature",
+          "file": "scripts/tests/local-runner-bridge.test.mjs",
+          "line": 948,
+          "description": "Add an H9 success row in which a never-settling forward's deadline expires after the clean EOF but before close(0). Use a hung fake; send EXIT and stdout.end() partway through the deadline; wait past it; assert kills is [] before the kill timer; emit close(0); then call succeeds(). Leave margin under load, e.g. timeoutMs 1000, EOF at about 400 ms, close at about 1300 ms. The row must fail on mutant `if (session.closing && error !== TIMEOUT) return;`."
+        },
+        {
+          "type": "other",
+          "file": "scripts/local-runner/guest-session.mjs",
+          "line": 225,
+          "description": "No runtime change requested: `if (session.closing) return;` is correct as written. After adding the row, re-run the checkRefs gate in an external full-archive snapshot and record the counts. Do not touch GUARD, pump in guest-supervisor.py, or certification."
+        }
+      ]
+    }
+  ]
 }

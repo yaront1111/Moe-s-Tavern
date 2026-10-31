@@ -899,7 +899,8 @@ test('H4 replies, bounds and failures each answer once or end the session with a
 });
 
 // A clean finish (hello, one observation, clean EOF, exit 0) means the guest ended its job, so the requests it still
-// owes are abandoned, never drained. Every race is driven by explicit promise control, never by sleep ordering.
+// owes are abandoned, never drained. Races are driven by explicit promise control, except the expiring-deadline row,
+// which orders real timers through the session's own timer list.
 test('H9 a clean finish abandons pending requests: in-flight forwards are aborted, queued ones are never forwarded, and nothing is written late', { timeout: 30_000 }, async () => {
   const hang = () => new Promise(() => {});
   // Sends hello and one request per id, then waits until `forwards` of them reached forward.
@@ -950,6 +951,20 @@ test('H9 a clean finish abandons pending requests: in-flight forwards are aborte
   await succeeds(past);
   await sleep(550);
   assert.deepEqual([past.proc.written, past.proc.late, past.proc.kills], [[], 0, []]);
+  // A forward whose own deadline runs out after the clean EOF but before the provider exits: teardown cut it short, so
+  // it is no session timeout. closeDue joins the session's 1 s timer list after the forward's deadline and before the
+  // kill timer stop starts at the EOF. Node runs one list in order and drains microtasks between timers, so however
+  // late the loop wakes: the deadline, then the close, whose settle clears the kill timer.
+  const expiring = await owe({ timeoutMs: 1_000, fake: { hung: true } });
+  const closeDue = sleep(1_000);
+  await sleep(500);
+  expiring.proc.send(EXIT);
+  expiring.proc.stdout.end();
+  await until(() => expiring.proc.stdin.destroyed, 'clean EOF');
+  await closeDue;
+  assert.deepEqual(expiring.proc.kills, []);
+  expiring.proc.emit('close', 0, null);
+  await succeeds(expiring);
   // An answer that settles just before the EOF is written once; the one still owed is abandoned.
   let calls = 0;
   const half = await owe({ ids: [1, 2], forwards: 2, answer: () => (calls++ === 0 ? { content: [] } : hang()) });
