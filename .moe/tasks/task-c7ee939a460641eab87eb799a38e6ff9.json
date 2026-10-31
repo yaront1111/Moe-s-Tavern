@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -110,7 +110,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T22:26:28.006Z",
-  "updatedAt": "2026-10-31T02:38:47.587Z",
+  "updatedAt": "2026-10-31T02:59:20.723Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T22:40:09.157Z",
@@ -120,13 +120,16 @@
     "firstClaimAt": "2026-10-30T22:40:20.385Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T02:59:20.723Z",
+    "wallClockMs": 15540338
   },
   "contextFetchedBy": [
     "architect-915213a1",
     "worker-c0a1ac70",
     "governor-693b7073",
-    "governor-4764040b"
+    "governor-4764040b",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -217,20 +220,50 @@
       "treeId": "4c0a46cb3688b6f6b2b1bcf820a96b43f63e2f54",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "eeca8aa0002412eb8c1af2626daa4d5944f197fa",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T02:02:42Z",
+      "paths": [
+        ".moe/tasks/task-6f5cf10f78184c38a46e6973cadda817.json",
+        ".moe/tasks/task-b60cb68c4ae74ffda43e617c7466911e.json",
+        ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
+        ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json",
+        ".moe/tasks/task-c7ee939a460641eab87eb799a38e6ff9.json",
+        ".moe/tasks/task-f366c96ad2d74206aaacca67efb5772d.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T02:39:05.339Z",
+      "treeId": "c620ec05e21e5f46681f5225501871ca6ced7d02",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/tests/postflight.sh",
     "scripts/moe-agent.sh",
     "scripts/tests/postflight.ps1",
-    "scripts/moe-agent.ps1"
+    "scripts/moe-agent.ps1",
+    ".moe/tasks/task-6f5cf10f78184c38a46e6973cadda817.json",
+    ".moe/tasks/task-b60cb68c4ae74ffda43e617c7466911e.json",
+    ".moe/tasks/task-c4cccb84948c472d93263c9de60fed1d.json",
+    ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json",
+    ".moe/tasks/task-c7ee939a460641eab87eb799a38e6ff9.json",
+    ".moe/tasks/task-f366c96ad2d74206aaacca67efb5772d.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-915213a1@2026-10-30T22:40:21Z",
-    "at": "2026-10-30T23:05:11.761Z"
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-31T02:02:42Z",
+    "at": "2026-10-31T02:39:05.339Z"
   },
   "workStartedAt": "2026-10-31T02:03:08.525Z",
   "reviewStartedAt": "2026-10-31T02:38:47.585Z",
@@ -241,5 +274,15 @@
     "reportedAt": "2026-10-31T02:38:47.585Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Worktree-mode resume no longer finishes a W that holds work. When the registered W on moe/task/<id> has no per-worktree index file, both wrappers finish it (sparse-checkout set, then read-tree -mu HEAD) only if W's directory holds exactly one entry, `.git`. Otherwise they refuse with `MOE_WORKTREE_CREATE_FAILED: <W> has no index file but holds more than .git; a human must inspect it`: one [ERROR] line, one report_blocked, no CLI, exit 1, and W (files and missing index) untouched. No new MOE_* code.\n\nChanges (4 files, 54 net non-board lines):\n- moe-agent.sh provision_worktree: `ls -A \"$w\"` must equal `.git`. The `|| worktree_stop` sits outside `$(...)`, so the stop runs in the main shell and a listing error fails closed.\n- moe-agent.ps1 Install-MoeTaskWorktree: `Get-ChildItem -LiteralPath $W -Force -ErrorAction Stop` must list exactly `.git` (-cne). -Force is mandatory, because Git for Windows marks .git Hidden and PS 5.1 otherwise lists nothing for a half-made W. A listing throw lands in Initialize-MoeWorktree's catch and still refuses with CREATE_FAILED.\n- postflight.sh / postflight.ps1: case (d) inside [worktree reuse], pure additions (0 removed lines), existing lines and case (b) byte-identical. postflight-worktree.cjs and postflight-fake-proxy.js are unchanged (git diff --exit-code rc 0).\n\nEvidence:\n- RED first: against HEAD's wrappers case (d) fails with 'index-deleted: exit 0, expected 1' on Linux bash and on PS 5.1. GREEN with the guard on both.\n- Held-out half-made, lifecycle and dir-exists print 3 ok.\n- Fresh step-3 chain in snapshot /mnt/d/moe-scratch/v-c7ee939a.fLtgSq (outside the shared checkout): EXIT=0. Token-set diff empty, PASS parity-check.sh, postflight-safe bash exit 0 failureClass NONE, postflight-safe powershell exit 0 failureClass NONE.\n- Edge probes of the guard: empty dir refuses; `.git` plus .DS_Store refuses; only `.git` finishes; a failing ls under errexit reaches the stop handler.\n\nResiduals, accepted and not fixed:\n- A crash in the middl"
+  "completionSummary": "Worktree-mode resume no longer finishes a W that holds work. When the registered W on moe/task/<id> has no per-worktree index file, both wrappers finish it (sparse-checkout set, then read-tree -mu HEAD) only if W's directory holds exactly one entry, `.git`. Otherwise they refuse with `MOE_WORKTREE_CREATE_FAILED: <W> has no index file but holds more than .git; a human must inspect it`: one [ERROR] line, one report_blocked, no CLI, exit 1, and W (files and missing index) untouched. No new MOE_* code.\n\nChanges (4 files, 54 net non-board lines):\n- moe-agent.sh provision_worktree: `ls -A \"$w\"` must equal `.git`. The `|| worktree_stop` sits outside `$(...)`, so the stop runs in the main shell and a listing error fails closed.\n- moe-agent.ps1 Install-MoeTaskWorktree: `Get-ChildItem -LiteralPath $W -Force -ErrorAction Stop` must list exactly `.git` (-cne). -Force is mandatory, because Git for Windows marks .git Hidden and PS 5.1 otherwise lists nothing for a half-made W. A listing throw lands in Initialize-MoeWorktree's catch and still refuses with CREATE_FAILED.\n- postflight.sh / postflight.ps1: case (d) inside [worktree reuse], pure additions (0 removed lines), existing lines and case (b) byte-identical. postflight-worktree.cjs and postflight-fake-proxy.js are unchanged (git diff --exit-code rc 0).\n\nEvidence:\n- RED first: against HEAD's wrappers case (d) fails with 'index-deleted: exit 0, expected 1' on Linux bash and on PS 5.1. GREEN with the guard on both.\n- Held-out half-made, lifecycle and dir-exists print 3 ok.\n- Fresh step-3 chain in snapshot /mnt/d/moe-scratch/v-c7ee939a.fLtgSq (outside the shared checkout): EXIT=0. Token-set diff empty, PASS parity-check.sh, postflight-safe bash exit 0 failureClass NONE, postflight-safe powershell exit 0 failureClass NONE.\n- Edge probes of the guard: empty dir refuses; `.git` plus .DS_Store refuses; only `.git` finishes; a failing ls under errexit reaches the stop handler.\n\nResiduals, accepted and not fixed:\n- A crash in the middl",
+  "touchedFiles": [
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1"
+  ],
+  "completedAt": "2026-10-31T02:59:20.723Z",
+  "reviewCompletedAt": "2026-10-31T02:59:20.723Z",
+  "reviewSummary": "Approved. Reviewed completion commit eeca8aa0 (moe/work-2026-10-24, pushed) with git show; the 4 scripts files are clean in the shared checkout.\n\nDoD 1: case (d) in [worktree reuse] of postflight.sh/.ps1 is pure additions (+18/+17, 0 removed). It asserts exit 1, the CREATE_FAILED 'no index file but holds more than .git' line, one report_blocked, no CLI, both files keep their bytes, index stays absent. QA's original probe (qa-c20464ff-r2 section-idxdel.sh) on a fresh snapshot now gives exit=1, a.txt=[agent edit], new.txt kept, cli=none, blocks=1 (before: exit 0, a.txt reverted).\n\nDoD 2: sh guard is ls -A == .git, with || worktree_stop outside $(...). ps1 guard is Get-ChildItem -Force -ErrorAction Stop names == exactly .git (-cne). Case (b) and the held-out half-made case pass unchanged in both full harnesses. postflight-worktree.cjs and postflight-fake-proxy.js diff is empty.\n\nDoD 3: MOE_(WORKTREE|LAND|CONTROL|BOARD)_ token diff empty; parity-check.sh PASS. No new MOE_* code; message text identical in both twins.\n\nDoD 4: I re-ran the task.verification chain in a fresh snapshot outside the shared checkout (/mnt/d/moe-scratch/v-c7ee939a-qa.NzDHlj), env scrubbed of MOE_*/CLAUDE*. Token diff empty; PASS parity-check.sh; postflight-safe bash exit 0, failureClass NONE; postflight-safe powershell exit 0, failureClass NONE. I ran the two legs concurrently on one snapshot, not in the chain's sequential order.\n\nInvariants hold: created/re-added paths, reuse with an index, the W/.moe check and shared mode are untouched; the refusal writes nothing to W. Size: 54 net non-board lines; the other 6 files are .moe/tasks board records.\n\nAccepted residuals (disclosed by the worker): a crash mid read-tree now refuses for a human; a W with all files and index deleted lists as just .git and is finished (only the deletions are lost); OS litter in a half-made W refuses (fail closed). Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
