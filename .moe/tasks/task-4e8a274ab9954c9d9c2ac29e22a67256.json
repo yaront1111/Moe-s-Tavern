@@ -7,20 +7,135 @@
     "Every daemon and guest limit on a required check command is the same value from one constant, with a boundary test at the limit and one past it on each path."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Align the declared tool contracts after both storage prerequisites ad5be1cf and d88bb990 land. Canonical value is the existing validators.MAX_REQUIRED_CHECK_COMMAND_CHARS=1000; do not lower required-check definitions/guest limits to500. Import that existing constant in recordCheckDispatch.ts and recordCheckRun.ts. Set command schema maxLength to it and interpolate its value in descriptions instead of stale500 prose:\n```ts\ncommand: {\n  type: 'string',\n  maxLength: MAX_REQUIRED_CHECK_COMMAND_CHARS,\n  description: `The command, stored verbatim; non-blank, at most ${MAX_REQUIRED_CHECK_COMMAND_CHARS} UTF-16 code units.`,\n}\n```\nRetain each tool's non-execution/provenance wording and all current required fields/runner-only authorization. Error handling remains store validation: no trimming, truncating, coercing or normalizing command bytes. All daemon runtime length checks and schema declarations now import this single canonical constant; prerequisites own store code/docs. Do not touch 500-character protected-path limits or10000-character completion verification limits.\n\nIn requiredChecks.test.ts add mutation-resistant schema/handler boundary tests using existing ToolTestHarness, validators and tool factories. Pin submitPlan requiredChecks command maxLength and both recording tool maxLength to the imported constant and explicit expected1000. Accept500,501 and1000; reject1001. Keep blank/non-string/control behavior unchanged on each path. Supplementary Unicode counts by UTF16: 500 emoji=1000 accepted, plus one ASCII unit rejected. Keep leading/trailing whitespace within the bound verbatim; do not trim to sneak1001 through. For record_check_dispatch invoke handler with its actual ToolCallContext.runner, approved revisions and current candidate; don't bypass auth. Record_check_run gets existing valid candidate/tree/source/runner fixture. Assert rejection before file/map writes. Preserve original tests, adjusting only obsolete cap expectations where relevant.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+        "packages/moe-daemon/src/tools/recordCheckRun.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Own final cross-layer integration for this split. Add a required-check definition at1000 units, approve through existing submitPlan binding fixture, then create a valid attempt/current candidate using the existing state APIs from checkObservationStore.test.ts (read-only reference), dispatch it through recordCheckDispatchTool and record its authenticated observation via recordCheckObservation. Assert persisted/reloaded CheckRun.command equals the approved bytes and1001 never reaches storage. Also cover direct legacy recordCheckRunTool at boundary without upgrading its declared provenance. No production import changes beyond the two schemas.\n\nPin the existing standalone Node/Python mirrors behaviorally against the SAME imported canonical daemon constant: import guest-bridge.mjs checkFrame from the repo scripts via test-only dynamic import; feed identical boundary/emoji/whitespace strings into it and actual guest-supervisor.py read_check using an isolated python3 -I -B subprocess, following local-runner-check.test.mjs C2's length-prefixed frame batching. Manually frame rejected inputs so Python checks them too. Assert m.MAX_CHECK_COMMAND equals the daemon constant, and both runtimes accept limit/reject limit+1. This is one canonical logical limit with test-enforced cross-language mirrors, not a runtime TS import in the standalone guest; no new packaging asset/generator. Linux/WSL must execute Python cases; native Windows may explicitly skip only guest-dependent cases, not the daemon/tool tests. Close subprocess pipes, use bounded timeout/maxBuffer, and assert diagnostics on failed subprocess rather than silently skipping it. Tests must not execute the command strings or start a VM.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Shared validation/schema contract means full regression. From a FULL git archive/clone snapshot outside the live checkout, with both prerequisite commits present and only these3 files overlaid, install host-native daemon dependencies using npm ci --no-audit --no-fund in snapshot/packages/moe-daemon. At snapshot root run exactly:\n```bash\nnode --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)\n```\nRequire zero failed in full runner and daemon suites and actual Linux/WSL Python boundary execution. Capture base/dependency SHAs, own overlay digests, versions, log and fresh command/exitCode/outputTail for complete_task. No live npm/build/clean/test/install, no pattern kills; only recorded subprocess PIDs owned here. Check docs/SCHEMA.md from ad5be1cf and docs/MCP_SERVER.md from d88bb990 describe1000 for both commands; parent does not edit them. CQ-R13 remains overall final native certification/integration owner.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review once (adversarial-self-review). Trace1000-unit string unchanged from approved definition through tool schema, direct run store, authenticated dispatch/observation, persisted reload, host checkFrame and Python read_check. Confirm one canonical daemon constant, no stale500 command cap/description, no alteration of unrelated500 path/10000 verification bounds. Test supplementary characters, exact whitespace and limit+1 errors without writes; no unapproved command/authentication bypass or fabricated provenance. Scratch mutation restore either tool500 schema and separately change a guest/host mirror: corresponding parity test must fail. Preserve Unicode valid-command rules rather than extending scope to other validation differences. Check no source command actually runs and subprocess timeout/cleanup uses owned PIDs only. Rerun exact gate after any fix; complete_task with fresh evidence, cross-language parity and dependency commits. Wrapper owns Git writes, QA owns approval.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+        "packages/moe-daemon/src/tools/recordCheckRun.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote (CQ-backlog delegation): MEDIUM CQ-R13 review finding (500 vs 1000-char required-check command limits); daemon + guest-supervisor limit; no deps; off the wrapper lane. Planner: declare files exactly; daemon gates in a snapshot (GLOBAL rail).",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
-  "order": 317.6,
-  "comments": [],
+  "order": 7,
+  "comments": [
+    {
+      "id": "comment-8004ba19657c429b8c3a294fa800517b",
+      "author": "architect-21c9ed65",
+      "content": "Split storage prerequisites to keep each task to3files: task-ad5be1cf18e6405bb562b172714debbc owns CheckRun storage/test + SCHEMA all relevant command bounds; task-d88bb99057b54b3bb02241557886aa85 owns authenticated dispatch store/test + MCP_SERVER command bounds. Parent retains fullDoD and owns two record_check_* tool schemas plus requiredChecks.test.ts integration. Canonical daemon constant remains MAX_REQUIRED_CHECK_COMMAND_CHARS=1000; standalone Node/Python already use1000 and are pinned behaviorally against it by parent boundary/drift tests rather than importing packaged TypeScript at runtime. Asked REPL whether a single physical cross-language asset is required; default is one shared logical limit with enforced mirrors, no new packaging/generation mechanism.",
+      "timestamp": "2026-10-31T06:02:38.045Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:23:06.787Z",
-  "updatedAt": "2026-10-31T05:23:06.787Z"
+  "updatedAt": "2026-10-31T06:03:43.676Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T05:34:46.297Z",
+    "seq": 1
+  },
+  "dependsOn": [
+    "task-7db14e2df19949a8bfdb150e0f29ffcb",
+    "task-d88bb99057b54b3bb02241557886aa85"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-31T06:00:05.448Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-21c9ed65"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T06:03:43.648Z",
+  "executionContract": {
+    "intendedBehavior": "A valid required check of up to1000UTF16 units can be approved, framed, dispatched and recorded unchanged; all paths refuse1001 consistently.",
+    "acceptanceCriteria": [
+      "Both record tool schemas/descriptions use MAX_REQUIRED_CHECK_COMMAND_CHARS=1000.",
+      "Boundary tests cover approval, direct run, authenticated dispatch/observation, host framing and actual Python parsing at limit/one past, including emoji.",
+      "Full external runner/daemon regression passes with guest parity executed."
+    ],
+    "invariants": [
+      "Single canonical daemon constant; standalone mirrors cannot drift without failing cross-language tests.",
+      "No trimming/truncation, command execution or provenance/auth changes.",
+      "Unrelated path and completion-command limits untouched."
+    ],
+    "compatibility": [
+      "Previously valid <=1000 definitions remain valid; recorder bound widens500->1000.",
+      "No packaging/layout/migration change; stored old records and same-id semantics retained."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+      "packages/moe-daemon/src/tools/recordCheckRun.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.test.ts"
+    ],
+    "reuse": [
+      "MAX_REQUIRED_CHECK_COMMAND_CHARS, existing ToolTestHarness/approval fixture, checkFrame and C2 Python frame-batch pattern."
+    ],
+    "sourceAssumptions": [
+      "ad5be1cf/d88bb990 landed before parent; standalone Node/Python retain existing1000 mirrors."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Keep existing approved1000 maximum and reuse its validator export across daemon storage/schemas; reducing to500 would reject already-valid definitions. Split CheckRun storage+SCHEMA and authenticated dispatch storage+MCP_SERVER into independent tested prerequisites, parent finishes schemas/integration. Cross-language Python/standalone JS currently both1000: enforce equivalence with canonical-bound behavioral tests rather than add a cross-package runtime asset/generation subsystem. REPL asks whether a literal shared physical asset is required; TURBO default is test-enforced logical limit.",
+    "codebaseInsights": "validators.ts already exports1000 and submitPlan schema imports it. checkRunStore private cap and checkObservationStore command requireText both500; prerequisites fix them. record tool schemas currently advertise500 without maxLength. guest-bridge checkFrame uses1000 and Python MAX_CHECK_COMMAND1000 checks utf-16-le length, so existing runtime behavior can remain. requiredChecks.test.ts already has schema/approval fixture and imports validators.",
+    "risks": "Preserve parent DoD across landed prerequisites; source comments designate SCHEMA ALL command-cap text toad5be1cf and MCP_SERVER tod88bb990. Optional requiredChecks omitted per governor legacy/PATH ruling; exact checkRefs remain. Explicit assumption: 'one constant' means canonical daemon limit plus tested language mirrors, not a new single physical deployed asset. Never claim Python imports TypeScript.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+      "packages/moe-daemon/src/tools/recordCheckRun.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T06:03:43.676Z",
+  "approvedPlanRevision": 1
 }

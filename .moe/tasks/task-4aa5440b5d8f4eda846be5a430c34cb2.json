@@ -64,7 +64,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -80,11 +80,17 @@
       "author": "governor-693b7073",
       "content": "Governor, 05:43Z: promoted HIGH (a regression that keeps CI's daemon test:coverage red).\n\nPlacement: this row edits daemon files only (providerDescriptor.contract.test.ts, plus codexDescriptor if its emitter evidence moves), so it is off the wrapper lane. It does READ scripts/moe-agent.{sh,ps1}. It dependsOn 7db14e2d, the lane head now, because that row is editing the wrappers' codex launch and witness paths. Anchor on its landed shape, not today's.\n\nGuidance:\n- Make the anchors follow the named writer functions (write_codex_config / Write-MoeCodexConfig) rather than line spans that the next lane rows will shift. Keep every assertion, including the >200-line floor, as the DoD says.\n- Gates: run the full daemon npm test in a git-archive or clone snapshot, never in the shared checkout (GLOBAL rail). No pattern kills (GLOBAL customRules[1]).\n- After this lands, any later lane row that moves the codex writer must keep this file green.",
       "timestamp": "2026-10-31T05:41:26.279Z"
+    },
+    {
+      "id": "comment-1dd561c47e4a4a739f1a90edd61159a4",
+      "author": "governor-4764040b",
+      "content": "Governor note for QA (06:05Z). Step 1 says \"confirm task-7db14e2d has landed … Keep the dependency.\" The board overrode that before the claim: governor-693b7073 removed the 7db14e2d edge at 05:59:36Z (system msg-f9d993e8). 7db14e2d has not landed; it is still WORKING. So the worker correctly anchored on HEAD (76ea8633) and could not have confirmed that landing. Don't count the unmet precondition as a plan deviation. Judge the row on its DoD against current HEAD. Any break that 7db14e2d's codex launch edits cause later will be owned by 7db14e2d, and I've flagged that on that row.",
+      "timestamp": "2026-10-31T06:04:10.899Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T05:40:42.351Z",
-  "updatedAt": "2026-10-31T06:02:15.112Z",
+  "updatedAt": "2026-10-31T06:04:42.202Z",
   "dependsOn": [],
   "planningEntry": {
     "from": "BACKLOG",
@@ -95,11 +101,14 @@
     "firstClaimAt": "2026-10-31T05:43:03.156Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T06:04:42.202Z",
+    "wallClockMs": 1299046
   },
   "contextFetchedBy": [
     "architect-21c9ed65",
-    "worker-c0a1ac70"
+    "worker-c0a1ac70",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -174,7 +183,40 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
-    "packages/moe-daemon/src/providers/codexDescriptor.ts"
+    "packages/moe-daemon/src/providers/codexDescriptor.ts",
+    ".moe/tasks/task-4aa5440b5d8f4eda846be5a430c34cb2.json",
+    ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json"
   ],
-  "completionSummary": "Contract test now anchors the named Codex config writers (write_codex_config / Write-MoeCodexConfig) via a bounded exact-one extractor, and codexDescriptor.ts pins the worktree-aware literals. No assertion weakened; 24/24 contract cases and full daemon suite pass in an external snapshot."
+  "completionSummary": "Contract test now anchors the named Codex config writers (write_codex_config / Write-MoeCodexConfig) via a bounded exact-one extractor, and codexDescriptor.ts pins the worktree-aware literals. No assertion weakened; 24/24 contract cases and full daemon suite pass in an external snapshot.",
+  "commits": [
+    {
+      "sha": "0993392899286ef0e902618740a87548b8f883d8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T05:59:42Z",
+      "paths": [
+        ".moe/tasks/task-4aa5440b5d8f4eda846be5a430c34cb2.json",
+        ".moe/tasks/task-5ed445ca50f24cafbe6e42fbcba686fb.json",
+        "packages/moe-daemon/src/providers/codexDescriptor.ts",
+        "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T06:02:37.660Z",
+      "treeId": "d238c75a38cd1cd6efb4249e1b1fe46bd5892f1a",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-31T05:59:42Z",
+    "at": "2026-10-31T06:02:37.660Z"
+  },
+  "completedAt": "2026-10-31T06:04:42.202Z",
+  "reviewCompletedAt": "2026-10-31T06:04:42.202Z",
+  "reviewSummary": "Approved. Reviewed completion commit 09933928 (on moe/work-2026-10-24, pushed). Owned non-board diff is ~+119/-26 (contract test +99, codexDescriptor.ts +10/-10), under the 400 cap. Re-ran the plan's gate from a git archive of the fix commit in /tmp/moe-qa-provider-gate-4gN9eE (nothing run in the live checkout): npm ci; targeted providerDescriptor.contract.test.ts = 24 passed (23 original + 1 new extractor case); full npm test = 215 files, 6255 passed | 20 skipped, 0 failed, exit 0. DoD1: no assertion removed or loosened; diff only adds code, reworded failure messages and updated literals; >200 site floor, MAX_BRANCH_LINES=400, six global exceptions, fact checks untouched. DoD2: full daemon suite green outside the live checkout. Extractor review: exactly-one raw-line start match, cut at next unindented }, nested PowerShell braces cannot end it early, fails closed on absent/duplicate/EOF/next top-level fn/oversize; new test covers LF/CRLF and an outside-region decoy. codexDescriptor.ts changes are only worktree-root literals (-C \"${CLI_ROOT:-$PROJECT}\" / -C \"$script:cliRoot\", seat-override config roots, CODEX_CONFIG_DIR=\"$root/.codex\", Join-Path $Root \".codex\"); MOE_PROJECT_PATH control-root pins untouched, no evidence removed. My mutation probes on snapshot wrappers (restored after): renaming the bash writer or the PS writer fails with the exactly-one-start error; breaking bash CODEX_CONFIG_DIR gives 1 failed | 23 passed; restored = 24/24. No launcher edits, no API/state changes. Note: dependency 7db14e2d was not fully landed when the worker ran; any later change to the codex launch/writer shape must re-run this contract in a snapshot.",
+  "requiredCheckAtDone": null
 }
