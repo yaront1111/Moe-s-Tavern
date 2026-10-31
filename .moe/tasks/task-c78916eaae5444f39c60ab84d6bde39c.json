@@ -61,7 +61,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -90,7 +90,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T01:35:38.722Z",
-  "updatedAt": "2026-10-31T02:25:07.282Z",
+  "updatedAt": "2026-10-31T02:26:49.345Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T02:03:23.829Z",
@@ -100,11 +100,14 @@
     "firstClaimAt": "2026-10-31T02:03:46.705Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T02:26:49.344Z",
+    "wallClockMs": 1382639
   },
   "contextFetchedBy": [
     "architect-4ff0711c",
-    "worker-c75a6f39"
+    "worker-c75a6f39",
+    "qa-12f7cf2d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -187,7 +190,40 @@
   },
   "filesModified": [
     "scripts/tests/moe-call.test.mjs",
-    "scripts/moe-call.sh"
+    "scripts/moe-call.sh",
+    ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
   ],
-  "completionSummary": "scripts/moe-call.sh now honors MOE_RUNTIME_PROTECTED. With the marker exactly '1' it runs only MOE_PROXY_PATH, which must be an absolute path to a regular file. Otherwise it prints one refusal line (MOE_RUNTIME_PROTECTED_PATH_MISSING, never the value) and exits 1 before any proxy runs. Any other marker value, or none, keeps the unchanged find_proxy order. Covers the deregister and MOE_FALLBACK_CLI call shapes. Tests: 15 appended rows in scripts/tests/moe-call.test.mjs with repo/global/plugin/inherited decoys. RED on the old helper: exactly the 6 refusal rows failed. GREEN: 41/41. Seven mutants all killed. Size: helper +15/-1, tests +122/-1."
+  "completionSummary": "scripts/moe-call.sh now honors MOE_RUNTIME_PROTECTED. With the marker exactly '1' it runs only MOE_PROXY_PATH, which must be an absolute path to a regular file. Otherwise it prints one refusal line (MOE_RUNTIME_PROTECTED_PATH_MISSING, never the value) and exits 1 before any proxy runs. Any other marker value, or none, keeps the unchanged find_proxy order. Covers the deregister and MOE_FALLBACK_CLI call shapes. Tests: 15 appended rows in scripts/tests/moe-call.test.mjs with repo/global/plugin/inherited decoys. RED on the old helper: exactly the 6 refusal rows failed. GREEN: 41/41. Seven mutants all killed. Size: helper +15/-1, tests +122/-1.",
+  "commits": [
+    {
+      "sha": "c1f8f8c002ad4552b14481d3800cd776df86074f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c75a6f39@2026-10-31T02:23:07Z",
+      "paths": [
+        ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "recordedBy": "worker-c75a6f39",
+      "recordedAt": "2026-10-31T02:25:26.326Z",
+      "treeId": "b507bce7c35ef647b3950238a372f5f3f45006d1",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c75a6f39@2026-10-31T02:23:07Z",
+    "at": "2026-10-31T02:25:26.326Z"
+  },
+  "completedAt": "2026-10-31T02:26:49.344Z",
+  "reviewCompletedAt": "2026-10-31T02:26:49.344Z",
+  "reviewSummary": "Reviewed completion commit c1f8f8c0 (on moe/work-2026-10-24; working tree matches it for both owned files). Diff: scripts/moe-call.sh +15/-1 at the PROXY_PATH=$(find_proxy) line only (find_proxy body untouched, mode 100755, LF, bash -n ok); scripts/tests/moe-call.test.mjs +122/-1 (appended rows plus existsSync import; the 26 CQ-C00 rows are untouched). About 137 changed LOC, under the 400 cap. No edits to moe-agent.*, postflight.* or docs.\n\nRe-ran the plan's verification command under env -i: bash -n scripts/moe-call.sh && node --test scripts/tests/moe-call.test.mjs gave exit 0, 41 tests, 41 pass, 0 fail. Both DoD items are covered:\n- DoD 1: marker exactly '1' refuses and runs no repo/global/plugin/inherited-PROXY_PATH decoy when MOE_PROXY_PATH is unset, empty, a directory, relative, or vanished before the deregister call or before the MOE_FALLBACK_CLI get_context call. Each row asserts status 1, ran [], empty stdout and the exact refusal line without the value. The positive row runs exactly the named absolute proxy.\n- DoD 2: marker unset keeps the order named, repo, global, plugin, then 'moe-proxy not found'; a relative MOE_PROXY_PATH still resolves from cwd; marker '', '0', '01', 'true', ' 1' and '1 ' fall back to the repo decoy.\n\nRan three independent mutants on a scratch copy outside the checkout; each was killed:\n- -e instead of -f: the directory row fails.\n- Fall back to find_proxy on a miss: 6 refusal rows fail.\n- Any non-empty marker counts: the '0', '01', 'true', ' 1' and '1 ' legacy rows fail.\nThe unmutated copy passes 41/41. The worker's seven-mutant table is consistent with this.\n\nNot run: the Windows-node/Git Bash rerun (the worker's note says the test file matches the planning prototype that passed 41/41 there; CI matrix covers it) and macOS bash 3.2; the branch uses only POSIX test/case syntax. No self-landing was needed because the completion commit was recorded.",
+  "requiredCheckAtDone": null
 }
