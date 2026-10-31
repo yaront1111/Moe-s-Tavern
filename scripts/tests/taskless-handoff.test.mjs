@@ -64,6 +64,9 @@ $preflightClaimFailed=$${bool(o.claimFailed)}
 $preflightRoutedMentions=@([pscustomobject]@{content='reply-fixture'})
 $preflightContext=$env:MOE_FIXTURE_CONTEXT | ConvertFrom-Json
 $statuses=@('WORKING'); $serenaProject=[IO.Path]::GetTempPath()
+# This fixture tests prompt rendering, not provisioning: psContext calls the real WT-04 helper
+# but excludes its definition, so supply a side-effect-free stand-in with the same signature.
+function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {}
 `;
     script = '\ufeff' + setup + psContext + psBody + '\n[Console]::Write(([char]30).ToString() + $dynamicContext + [char]30 + $claimPromptBody)';
   }

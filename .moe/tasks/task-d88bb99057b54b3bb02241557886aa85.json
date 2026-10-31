@@ -1,0 +1,138 @@
+{
+  "id": "task-d88bb99057b54b3bb02241557886aa85",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "Use the approved-check command limit for authenticated check dispatch",
+  "description": "Authenticated dispatch slice of4e8a274a, after CheckRun storage supports1000. Own exactly packages/moe-daemon/src/state/checkObservationStore.ts, checkObservationStore.test.ts and docs/MCP_SERVER.md. Replace validateDispatch command cap500 with imported MAX_REQUIRED_CHECK_COMMAND_CHARS=1000. Preserve command verbatim, runner/current-candidate/revision binding, immutable replay, write-before-map and observation security. Boundary tests through dispatch->authenticated observation->stored CheckRun at500/501/1000/1001 and UTF16 supplementary characters. MCP_SERVER command descriptions for record_check_run/dispatch move to1000; no unrelated limits. Parent finishes tool schema declarations and SCHEMA CheckDispatch line. Gate full external snapshot daemon npm test; dependencies only installed there.",
+  "definitionOfDone": [
+    "Authenticated dispatch validates command against the same exported1000-unit constant used by approved checks and CheckRuns.",
+    "Boundary/replay/reload tests prove1000 records and authenticates verbatim;1001 rejects before any file/map write with runner/revision/candidate protections unchanged.",
+    "MCP_SERVER CheckRun/dispatch command docs match1000; full daemon npm test passes externally."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Use test-driven-development with the existing dispatch/observe/refused/snapshot/restart helpers. Accept 500,501,1000 UTF-16-unit commands through real recordCheckDispatch -> recordCheckObservation -> stored CheckRun and assert exact command, candidate/tree/revision/channel-runner binding and isAuthenticatedCheckRun=true. Include leading/trailing whitespace in the 1000-unit accepted command and 500 supplementary-plane emoji; reject 1001 ASCII units and 500 emoji plus one ASCII unit before writeEntity/files/maps. Replace the obsolete501-refusal row with1001 and assert field=command and the1000-limit error. Import MAX_REQUIRED_CHECK_COMMAND_CHARS from ./validators.js and pass it to requireText for command only; preserve all other validation and error handling. Test1000-unit identical dispatch/observation replay without writes, changed-command immutable refusal, and exact command/authentication after fresh StateManager reload. Keep current wrong-runner, stale-revision/current-candidate, marker-missing/tampering and write-failure tests unchanged; do not alter production binding or persistence order.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/checkObservationStore.ts",
+        "packages/moe-daemon/src/state/checkObservationStore.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update docs/MCP_SERVER.md record_check_run command parameter, its over-limit refusal prose and record_check_dispatch command parameter from500 to1000 UTF-16 code units, preserving nonblank/verbatim and authentication caveats. No unrelated255/500/10000 limits change. SCHEMA was assigned entirely to prerequisitead5 by the task comment; parent4e8a owns the public tool schemas and cross-language integration, not this document.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY: full daemon regression for this shared authenticated-recording contract. Create a full git archive snapshot outside the live checkout, overlay ONLY the final three owned files and export its absolute path as MOE_VERIFY_SNAPSHOT; install host-native daemon dependencies there with npm ci and no lockfile changes. WSL uses Linux-only Node/npm/Git PATH, not Windows node_modules. Run exactly cd \"$MOE_VERIFY_SNAPSHOT/packages/moe-daemon\" && npm test. Record source SHA, overlay, exitCode and fresh outputTail as completion evidence. Never run live checkout daemon npm tests/installs/builds, edit .moe or pattern-kill processes. Preserve foreign dirty bytes; gate failure requires correction/reporting rather than suppressing tests.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review on this slice: ensure bound is imported rather than redefined; UTF-16 and whitespace behavior agree with CheckRun and approvals; every invalid dispatch writes nothing; replay still precedes currency checks; runner identity cannot come from args; marker creation/write-failure semantics and case-collision protection remain. Probe changed command/same id and long forged diagnostic runs against authentication. No trusted-evidence or verified-local enablement. If corrections alter final bytes, rerun the same gate on the refreshed snapshot.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/checkObservationStore.ts",
+        "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-4e8a274ab9954c9d9c2ac29e22a67256",
+  "dependsOn": [
+    "task-ad5be1cf18e6405bb562b172714debbc",
+    "task-7db14e2df19949a8bfdb150e0f29ffcb"
+  ],
+  "priority": "MEDIUM",
+  "order": 6.8,
+  "comments": [
+    {
+      "id": "comment-aa5e4017c47e4e1a9f3c28aba388503e",
+      "author": "architect-21c9ed65",
+      "content": "Scope correction carried forward from ad5's comment/approved plan: prerequisite ad5 owns all SCHEMA command-limit prose, including CheckDispatch. This task owns MCP_SERVER command-limit prose; parent4e8a owns only its two tool schemas and integration test. No fourth file or parent SCHEMA edit is required.",
+      "timestamp": "2026-10-31T06:07:38.816Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T06:02:37.974Z",
+  "updatedAt": "2026-10-31T06:12:40.748Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-31T06:07:22.469Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-21c9ed65"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T06:08:08.236Z",
+  "executionContract": {
+    "intendedBehavior": "Authenticated check dispatch accepts the same1000 UTF-16-unit command range as approved checks and CheckRuns, preserving exact identity through observation and reload.",
+    "acceptanceCriteria": [
+      "500/501/1000 accept through authenticated observation,1001 rejects before any write.",
+      "Emoji and whitespace prove UTF-16 boundary and verbatim identity.",
+      "1000-unit replay/reload retains exact binding and authentication; security and I/O failure tests remain.",
+      "Relevant MCP_SERVER prose says1000; full daemon external snapshot gate passes."
+    ],
+    "invariants": [
+      "Runner identity comes from channel, candidate/tree/revision from validated dispatch.",
+      "No change to immutable replay, write-before-map, marker semantics or other bounds.",
+      "No command execution, schema migration or enablement of verified-local."
+    ],
+    "compatibility": [
+      "CheckRun prerequisitead5 lands first.",
+      "No native path changes; preserve Windows/macOS/Linux case-collision rules and use host-native test dependencies."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/state/checkObservationStore.ts",
+      "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+      "docs/MCP_SERVER.md"
+    ],
+    "reuse": [
+      "MAX_REQUIRED_CHECK_COMMAND_CHARS; requireText; existing store fixtures and restart helper."
+    ],
+    "sourceAssumptions": [
+      "Parent4e8a owns tool-schema/parity completion and ad5 owns SCHEMA per comments."
+    ],
+    "checkRefs": [
+      "cd \"$MOE_VERIFY_SNAPSHOT/packages/moe-daemon\" && npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Reuse the approved-check constant in the one existing command validator; no new helper, no lowered approval cap and no schema migration. Keep this3file storage/docs slice separate from parent tool-schema/parity tests.",
+    "codebaseInsights": "validateDispatch currently calls requireText(command,500), while environment255 is independent. Tests already exercise authenticated dispatch/observation, snapshots/restarts and immutable crash retry. Dependencyad5 raises CheckRun's cap first; same constant has no new import dependency on the stores.",
+    "risks": "requiredChecks omitted: live daemon cannot measure (PATH defect); re-add after restart. d88 alone does not fix the parent tool schema metadata. Full daemon regression required even mid-epic. No native runner/isolation certification is claimed.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/checkObservationStore.ts",
+      "packages/moe-daemon/src/state/checkObservationStore.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T06:08:08.257Z",
+  "approvedPlanRevision": 1
+}

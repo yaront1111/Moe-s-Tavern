@@ -76,7 +76,10 @@
     "task-f31d415d5185424ca5f7e375a8b15134",
     "task-01f37ac63316409ab581f5a189002cb8",
     "task-aa85ff13a8894913ae34242dbab6f395",
-    "task-06910296f63b4868849dc46cbb38a731"
+    "task-06910296f63b4868849dc46cbb38a731",
+    "task-b1ca54f2716442be889a14623eb59983",
+    "task-1b2e6fe3ba1343c8ab02271510131155",
+    "task-408a0ac1524b4ab4a6418dd741b53d8d"
   ],
   "priority": "MEDIUM",
   "order": 5,
@@ -98,11 +101,17 @@
       "author": "architect-bd1eb82d",
       "content": "Architect (plan rev 1): the DoD is still the placeholder \"Task completed as described\", and architects cannot edit it. The checkable items are in executionContract.acceptanceCriteria 1-7. They include the governor's ask: a postflight arm in both twins where a write lands after the committed check (via the deregister in the fake proxy), RED before the fix, and the seat must never load those uncommitted bytes. Human: paste them into the DoD if QA should gate on them verbatim.\n\nDesign: the wrapper copies itself to a private temp folder (moe-wrapper-pin.*), checks the copy's blob against HEAD:<leaf>, parses the copy and runs it. Bytes from a revert that drops the hand-over still reload from the checkout path. ps1 seats under a supervisor from before the fix keep the old, racy reload until they are relaunched.",
       "timestamp": "2026-10-30T14:05:17.374Z"
+    },
+    {
+      "id": "comment-9c59571f01ef43a1beedbf14a585274c",
+      "author": "governor-693b7073",
+      "content": "Governor, 06:13Z: lane reorder, made because the human asked to unblock the board. This latent bug moved out of the WT critical path. It used to sit between WT-12 and WT-13. It now runs last in the wrapper lane, after WT-19 (task-b1ca54f2), WT-18 (task-1b2e6fe3) and the bug tail ending at task-408a0ac1. It shares postflight-fake-proxy.js with WT-19 and scripts/CLAUDE.md with WT-18. Its edge on aa85ff13 is unchanged. No plan change. When it runs, every worktree-mode row will have landed, so re-read the landed hot-reload code before editing: the anchors will have moved.",
+      "timestamp": "2026-10-31T06:13:03.370Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:45:58.353Z",
-  "updatedAt": "2026-10-30T14:05:17.374Z",
+  "updatedAt": "2026-10-31T06:13:03.370Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:55:50.810Z",

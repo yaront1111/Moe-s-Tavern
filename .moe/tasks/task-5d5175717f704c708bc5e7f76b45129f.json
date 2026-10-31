@@ -8,9 +8,47 @@
     "Linux node run of the same file stays green"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix only the PowerShell render preamble in scripts/tests/taskless-handoff.test.mjs. Existing claimed-worker/resume cases are the regression tests: psContext now includes the real WT-04 Initialize-MoeWorktree call, but intentionally excludes its definition. Before concatenating psContext, define a side-effect-free function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {} with a brief comment that this fixture tests prompt rendering, not provisioning. Match the real positional signature; emit no pipeline/console output, invoke no Git/daemon/filesystem operation and do not source the full wrapper. Preserve every existing assertion, source anchor, engine matrix, fixture option and test case. Keep $ErrorActionPreference='Stop', spawn error handling, timeout/status assertions, record separators and temp-file finally cleanup untouched; do not hide failures with catch/Continue or disable claimed-worker branches. No launcher behavior or docs contract changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ],
+      "note": "Added no-op Initialize-MoeWorktree stub (real signature) to the ps1 preamble. 37 other dirty paths belong to other sessions; untouched.",
+      "startedAt": "2026-10-31T06:12:21.276Z",
+      "completedAt": "2026-10-31T06:12:25.696Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "VERIFY once: use a full git archive snapshot outside the live checkout on a Windows-accessible /mnt/d/moe-scratch path, overlay only this final test file and export its absolute WSL path as MOE_VERIFY_SNAPSHOT. WSL node must be Linux; the quoted installed node.exe must be native Windows with powershell.exe, pwsh.exe and Git Bash discoverable. Run exactly cd \"$MOE_VERIFY_SNAPSHOT\" && node --test scripts/tests/taskless-handoff.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/taskless-handoff.test.mjs && bash scripts/tests/parity-check.sh. Require Linux0failed and native Windows0failed with both powershell and pwsh cases actually executed (currently44 Linux and106 Windows tests, zero skips), then parity PASS. Missing native engines are unmet evidence, not a skipped passing gate. Record SHA/overlay, engine versions and fresh command exitCode/outputTail for complete_task. No npm install/build is needed; never pattern-kill or edit .moe/live runtime files.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Snapshot /mnt/d/moe-scratch/wk-taskless-j1JgvM = git archive HEAD 0d6f2cd6 + overlay of scripts/tests/taskless-handoff.test.mjs. Linux node 44/44, Windows node v24.16.0 106/106 0 skips (powershell 5.1.26100, pwsh 7.6.9), parity PASS; chain exit 0.",
+      "startedAt": "2026-10-31T06:12:27.961Z",
+      "completedAt": "2026-10-31T06:15:46.243Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Final adversarial self-review: confirm the sole delta is the fixture stub/comment, no production wrapper copied/replaced, no assertions/engines weakened, and the stub cannot provision a real worktree or contaminate rendered output. Check PowerShell5.1/7 syntax, UTF-8 BOM, path quoting and Linux behavior remain as before. Existing failure/error handling still surfaces real rendering mistakes. If review changes bytes, refresh the same snapshot and rerun the same gate.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ],
+      "note": "Self-review: diff is +3 lines (comment + empty stub). No bytes changed after verification, so the gate result stands.",
+      "startedAt": "2026-10-31T06:15:47.196Z",
+      "completedAt": "2026-10-31T06:15:51.347Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -19,9 +57,94 @@
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
-  "order": 31,
+  "order": 9,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T04:28:54.917Z",
-  "updatedAt": "2026-10-31T04:28:54.917Z"
+  "updatedAt": "2026-10-31T06:15:55.140Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T05:34:49.679Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T06:08:20.028Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-21c9ed65",
+    "worker-3a9b4568"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T06:11:47.298Z",
+  "executionContract": {
+    "intendedBehavior": "Prompt-only PowerShell fixture provides the no-op worktree dependency needed by its real extracted claimed-worker path, restoring all native tests without changing wrappers.",
+    "acceptanceCriteria": [
+      "All existing Linux taskless-handoff tests pass unchanged.",
+      "Native Windows taskless-handoff runs powershell and pwsh with0fail/0skip.",
+      "Wrapper parity gate passes; no assertion, anchor or engine weakened."
+    ],
+    "invariants": [
+      "No live daemon claims, Git worktree creation or production code edits.",
+      "Preserve rendering errors, process status/timeout checks and temp cleanup.",
+      "All task operations remain Moe-owned; no .moe edits or Git writes."
+    ],
+    "compatibility": [
+      "Windows PowerShell5.1 and pwsh7; Linux Bash/node path unchanged.",
+      "Windows node runs from Windows-accessible snapshot; Linux node stays host-native."
+    ],
+    "approvedScope": [
+      "scripts/tests/taskless-handoff.test.mjs"
+    ],
+    "reuse": [
+      "Existing render setup and106native regression cases; no new harness."
+    ],
+    "sourceAssumptions": [
+      "The fixture remains prompt-only; provisioning behavior is covered by WT's separate harness."
+    ],
+    "checkRefs": [
+      "cd \"$MOE_VERIFY_SNAPSHOT\" && node --test scripts/tests/taskless-handoff.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/taskless-handoff.test.mjs && bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Add the missing dependency stub (chosen). Trimming psContext to evade the call, changing role/claimed flags, suppressing PowerShell errors or loading the full wrapper would weaken coverage or risk real claims/provisioning.",
+    "codebaseInsights": "Verified real Initialize-MoeWorktree signature and its call inside psContext. Architect pure-HEAD0d6f2cd6 archive /mnt/d/moe-scratch/arch-taskless-4KcEsl: Linux44/44; Windows failed on missing Initialize-MoeWorktree. Scratch-only one-stub hypothesis yields Windows106/106,0skips, parityPASS; no repo files edited. Relevant memories gotcha-taskless-handoff-test-anchor and WT-05handoff distinguish this from the old fixed-anchor failure.",
+    "risks": "requiredChecks omitted: live daemon cannot measure (PATH defect); re-add after restart. Native Windows evidence is mandatory and Linux-only green is insufficient. Full wrapper launch is prohibited in this isolated fixture. This mid-epic test-only slice does not own WT rollout certification.",
+    "keyFiles": [
+      "scripts/tests/taskless-handoff.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T06:11:47.324Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T06:12:21.276Z",
+  "reviewStartedAt": "2026-10-31T06:15:55.138Z",
+  "verification": {
+    "command": "cd /mnt/d/moe-scratch/wk-taskless-j1JgvM && node --test scripts/tests/taskless-handoff.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/taskless-handoff.test.mjs && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "Linux node: tests 44 pass 44 fail 0 skipped 0. Windows node v24.16.0 (powershell 5.1.26100, pwsh 7.6.9): tests 106 pass 106 fail 0 skipped 0. PASS parity-check.sh",
+    "reportedAt": "2026-10-31T06:15:55.138Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/taskless-handoff.test.mjs"
+  ],
+  "completionSummary": "Added a side-effect-free Initialize-MoeWorktree stub (real positional signature) to the ps1 render preamble in taskless-handoff.test.mjs. No assertion, anchor or engine changed. Verified on a git-archive snapshot of HEAD 0d6f2cd6 with only this file overlaid."
 }
