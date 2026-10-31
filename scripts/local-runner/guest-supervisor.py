@@ -69,6 +69,9 @@ import zlib
 PROTOCOL = 1
 MAX_GUEST_FRAME_BYTES = 262144  # mirrors guest-bridge.mjs
 MAX_HOST_FRAME_BYTES = 4194304  # mirrors guest-bridge.mjs
+# loads() refuses JSON nested deeper than this before json.loads parses it: far past the host's MAX_ARGUMENT_DEPTH (64)
+# and any npm manifest, and below the C scanner's own recursion limit on every CPython (about 1000 before 3.12).
+MAX_JSON_DEPTH = 512
 MAX_REQUEST_ID = 2147483647
 # base64 grows a full chunk to 87,384 bytes plus a 45-byte JSON envelope, far inside the frame limit.
 OUTPUT_CHUNK_BYTES = 65536
@@ -225,6 +228,21 @@ def exit_observation(status):
     raise ValueError('wait status is neither an exit nor a signal')
 
 
+JSON_STRING = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"')
+NOT_BRACKET = re.compile(r'[^\[\]{}]+')
+
+
+def loads(text, **hooks):
+    # json.loads once a count without recursion finds no bracket outside a string nested past MAX_JSON_DEPTH. The C
+    # scanner's own refusal is a RecursionError at a depth set by the interpreter version and, from 3.14, the stack size.
+    depth = 0
+    for bracket in NOT_BRACKET.sub('', JSON_STRING.sub('', text)):
+        depth += 1 if bracket in '[{' else -1
+        if depth > MAX_JSON_DEPTH:
+            raise ValueError('JSON nested past its limit')
+    return json.loads(text, **hooks)
+
+
 def take_frames(buffer, data, limit):
     # Appends data, then pops each whole frame: a length of 1..limit (refused before its body is buffered), UTF-8 JSON.
     buffer += data
@@ -235,7 +253,7 @@ def take_frames(buffer, data, limit):
             raise ValueError('frame length outside its limit')
         if len(buffer) < 4 + length:
             break
-        frames.append(json.loads(buffer[4:4 + length].decode('utf-8')))
+        frames.append(loads(buffer[4:4 + length].decode('utf-8')))
         del buffer[:4 + length]
     return frames
 
@@ -843,7 +861,7 @@ def read_frame(in_fd):
     length = struct.unpack('>I', read_exact(in_fd, 4))[0]
     if not 0 < length <= MAX_HOST_FRAME_BYTES:
         raise ValueError('frame length outside its limit')  # before any body byte is read
-    return json.loads(read_exact(in_fd, length).decode('utf-8'))
+    return loads(read_exact(in_fd, length).decode('utf-8'))
 
 
 def read_job(in_fd, jobs):
@@ -1198,9 +1216,9 @@ def no_constant(name):
 def read_json(root, path, limit):
     # The JSON value of the regular file of at most limit bytes at path under the root fd, opened by blob_oid's walk, so
     # no symlink is followed. One leading BOM is dropped, as npm drops it. Anything else that is not strict UTF-8 JSON
-    # raises ValueError, as do a repeated key, NaN or Infinity, and a file that is not regular or too big; nesting past
-    # the recursion limit raises RecursionError. A file that grows or shrinks while it is read raises OSError, as any
-    # other I/O failure does: its bytes say nothing about the file.
+    # raises ValueError, as do a repeated key, NaN or Infinity, nesting past MAX_JSON_DEPTH, and a file that is not
+    # regular or too big. A file that grows or shrinks while it is read raises OSError, as any other I/O failure does:
+    # its bytes say nothing about the file.
     fds = []
     try:
         *parents, name = path.split('/')
@@ -1216,7 +1234,7 @@ def read_json(root, path, limit):
     finally:
         for fd in fds:
             os.close(fd)
-    return json.loads(data.decode('utf-8-sig'), object_pairs_hook=unique_keys, parse_constant=no_constant)
+    return loads(data.decode('utf-8-sig'), object_pairs_hook=unique_keys, parse_constant=no_constant)
 
 
 def install_metadata(value):
