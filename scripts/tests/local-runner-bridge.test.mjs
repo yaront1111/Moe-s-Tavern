@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, getEventListeners, once } from 'node:events';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
@@ -1330,7 +1330,7 @@ test('J4 the job gets exactly the allowlisted environment and its one credential
     assert.equal(homes.length, 1);
     assert.deepEqual(probe.env, { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: join(dir, 'kept', 'sessions', homes[0]), USER: 'moe-agent',
       LOGNAME: 'moe-agent', LANG: 'C.UTF-8', MOE_ROLE: 'qa', CODEX_API_KEY: SECRET, CODEX_HOME: join(dir, 'kept', 'sessions', homes[0], '.codex') });
-    assert.deepEqual([probe.cwd, probe.umask, probe.nnp], [join(dir, 'kept', 'ws'), 0o077, ['NoNewPrivs:\t1']]);
+    assert.deepEqual([probe.cwd, probe.umask, probe.nnp], [realpathSync(join(dir, 'kept', 'ws')), 0o077, ['NoNewPrivs:\t1']]);
     assert.ok(probe.cmdlines[1].includes('\0-c\0import json, os, resource, signal'), 'the parent is the guard');
     assert.ok(probe.cmdlines[2].includes(`\0${SUPERVISOR}\0`), 'the grandparent is the supervisor');
     assert.deepEqual(probe.cmdlines.filter(line => line.includes(SECRET)), []);
@@ -1446,7 +1446,7 @@ print(json.dumps({'argv': sys.argv, 'cwd': os.getcwd(), 'home': home, 'configs':
     assert.deepEqual(result.exit, EXIT, String(run.stderr));
     const observed = JSON.parse(result.stdout), path = frame.cli === 'claude' ? '.moe-mcp.json' : '.codex/config.toml';
     assert.deepEqual(observed.argv, launchArgv(frame.cli, frame.role, observed.home, join(dir, 'probe')));
-    assert.equal(observed.cwd, join(dir, 'ws'));
+    assert.equal(observed.cwd, realpathSync(join(dir, 'ws'))); // getcwd() is a realpath: macOS's tmpdir is under /private
     assert.deepEqual(Object.keys(observed.configs), [path]);
     if (frame.cli === 'claude') assert.deepEqual(JSON.parse(observed.configs[path]), JSON.parse(LA_CONFIG.claude));
     else assert.equal(observed.configs[path], LA_CONFIG.codex);
@@ -1565,6 +1565,7 @@ test('H6 the job frame is the first stdin write, bounded, with the binding role,
 
 // CQ-R10c end to end through R10b's main(): the probe is the job's agent CLI. Its argv is the executable alone, so the
 // socket path is baked in. It reports its role, its env beyond the fixed keys and each credential's sha256, never a value.
+// On macOS, CoreFoundation sets __CF_USER_TEXT_ENCODING in every process it loads into, this python3 included.
 const PROBE_AGENT = `import hashlib, json, os, socket, struct
 s = socket.socket(socket.AF_UNIX)
 s.connect(SOCKET)
@@ -1572,7 +1573,7 @@ body = json.dumps({'kind': 'request', 'id': 1, 'tool': 'moe.get_context', 'args'
 s.sendall(struct.pack('>I', len(body)) + body)
 f = s.makefile('rb')
 answer = json.loads(f.read(struct.unpack('>I', f.read(4))[0]))
-names = sorted(set(os.environ) - {'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'MOE_ROLE', 'CODEX_HOME'})
+names = sorted(set(os.environ) - {'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'MOE_ROLE', 'CODEX_HOME'${process.platform === 'darwin' ? ", '__CF_USER_TEXT_ENCODING'" : ''}})
 print(json.dumps({'role': os.environ['MOE_ROLE'], 'names': names, 'sha': [hashlib.sha256(os.environ[name].encode()).hexdigest() for name in names],
                   'answer': answer}))
 `;
@@ -1782,7 +1783,7 @@ test('AE1 end to end, each installed CLI starts headless from its session config
       const config = job.cli === 'claude' ? { mcpServers: { moe: { command: GUEST_LAYOUT.shim } } }
         : { mcp_servers: { moe: { command: GUEST_LAYOUT.shim, env_vars: ['MOE_ROLE'], default_tools_approval_mode: 'approve' } } };
       assert.deepEqual([report.argv, report.cwd, report.config, report.shim],
-        [launchArgv(job.cli, binding.role, report.home, join(base, 'agents', job.cli)), join(base, 'ws'), config, 0], label);
+        [launchArgv(job.cli, binding.role, report.home, join(base, 'agents', job.cli)), realpathSync(join(base, 'ws')), config, 0], label);
       const tools = Object.entries(TABLE[binding.role]).map(([name, properties]) => ({ name, inputSchema: { type: 'object', properties, additionalProperties: false } }));
       assert.deepEqual(tools.map(tool => tool.name), Object.keys(TOOLS[binding.role]), label);
       const rpc = (id, body) => ({ jsonrpc: '2.0', id, ...body });
