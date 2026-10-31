@@ -283,6 +283,8 @@ jobs:
           pwsh -NoProfile -File scripts/tests/parity-check.ps1
 
       - name: Test VS Code daemon startup
+        # bash on every OS: Windows' default pwsh only fails on the last command, so a failing lint or compile passed.
+        shell: bash
         run: |
           npm ci
           npm run lint

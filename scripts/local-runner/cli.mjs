@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Read-only provider and host prerequisites. Provisioning and execution readiness are separate gates. The exceptions are the
 // operator-invoked native runs that launch and delete one owned VM: `native-smoke` (provider support) and `certify` (CQ-R13d).
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runDoctor } from './doctor.mjs';
@@ -85,7 +86,11 @@ export async function runCli(argv, { doctor = runDoctor, prerequisites = hostPre
   return parsed !== null && result[READY[parsed.command]] === true ? 0 : 2;
 }
 
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+// The entry's import.meta.url is its realpath, which argv[1] may reach through a symlink (macOS's /var is /private/var).
+function invokedDirectly() {
+  try { return pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url; } catch { return false; }
+}
+if (invokedDirectly()) {
   runCli(process.argv.slice(2)).then(code => { process.exitCode = code; }).catch(() => {
     process.stderr.write('Provider doctor could not emit its report.\n');
     process.exitCode = 2;

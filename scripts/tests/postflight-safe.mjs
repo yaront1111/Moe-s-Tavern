@@ -39,10 +39,12 @@ function runPostflight(engine) {
         : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', harness];
     return new Promise(resolveResult => {
         // Never inherit stdout/stderr or write them to artifacts. execFile keeps
-        // bounded buffers in memory and kills a timed-out/overlong child.
+        // bounded buffers in memory and kills a timed-out/overlong child. Windows
+        // PowerShell 5.1 runs every scenario in about 20 minutes on a desktop and
+        // past 30 on windows-latest, so the bound is an hour.
         execFile(engine, args, {
             cwd: fileURLToPath(new URL('../../', import.meta.url)),
-            windowsHide: true, encoding: 'utf8', timeout: 30 * 60 * 1000,
+            windowsHide: true, encoding: 'utf8', timeout: 60 * 60 * 1000,
             maxBuffer: 16 * 1024 * 1024, killSignal: 'SIGKILL',
         }, (error, stdout, stderr) => {
             const failure = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'OUTPUT_LIMIT'

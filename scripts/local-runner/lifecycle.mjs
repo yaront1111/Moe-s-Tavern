@@ -161,6 +161,18 @@ async function writeNew(file, record) {
   await handle.close();
 }
 
+/** Windows refuses a rename onto a file any handle holds open, or that another rename is replacing (EPERM): every ledger
+ * reader opens records, and concurrent fetches of one pinned file rename onto one target. Retry briefly (5 tries,
+ * ~100ms), as the daemon's atomicWrite does, so neither fails the writer. */
+export async function renameOver(from, to) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await rename(from, to); } catch (error) {
+      if (attempt === 5 || !['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)) throw error;
+      await delay(10 * attempt);
+    }
+  }
+}
+
 /** Best effort: win32 and some filesystems refuse directory fsync; losing it reverts at most one phase. */
 async function syncDir(stateDir) {
   try {
@@ -237,7 +249,7 @@ async function swapRecord(stateDir, expected, replace) {
   const temp = path.join(stateDir, `.${name}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`);
   try {
     await writeNew(temp, next);
-    await rename(temp, path.join(stateDir, `${name}.json`));
+    await renameOver(temp, path.join(stateDir, `${name}.json`));
   } catch {
     await unlink(temp).catch(() => {});
     throw lifecycleError('LEDGER_WRITE_FAILED');

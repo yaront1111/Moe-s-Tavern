@@ -8,7 +8,7 @@
 // cleanup deletes only what the daemon (loopback /mcp; Node 22+ WebSocket, else unreachable) proves closed and
 // lease-free. Residual: a lease granted between list_resources and the delete is unseen; R10 pins its release.
 import { createHash } from 'node:crypto';
-import { constants, mkdirSync } from 'node:fs';
+import { constants, mkdirSync, realpathSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -170,6 +170,10 @@ export async function runVmControl(argv, { write = text => process.stdout.write(
   return 0;
 }
 
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+// The entry's import.meta.url is its realpath, which argv[1] may reach through a symlink (macOS's /var is /private/var).
+function invokedDirectly() {
+  try { return pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url; } catch { return false; }
+}
+if (invokedDirectly()) {
   runVmControl(process.argv.slice(2)).then(code => { process.exitCode = code; }, () => { process.exitCode = 2; });
 }

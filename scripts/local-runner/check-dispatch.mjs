@@ -6,6 +6,7 @@
 // Dependencies come only from lockfiles named in the approved definition's configs. An uncovered owed gate stops every
 // check before a VM with RUNNER_DEPENDENCIES_UNDECLARED: it has no approved dependency choice.
 import { randomBytes } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -245,7 +246,11 @@ export async function runDispatchCli(argv, { open = openRunnerChannel, exportSna
   return allPassed(report) ? 0 : 2;
 }
 
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+// The entry's import.meta.url is its realpath, which argv[1] may reach through a symlink (macOS's /var is /private/var).
+function invokedDirectly() {
+  try { return pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url; } catch { return false; }
+}
+if (invokedDirectly()) {
   const controller = new AbortController(); // an interrupt still lets runCheckJob delete its VM before the process ends
   for (const name of ['SIGINT', 'SIGTERM']) process.once(name, () => controller.abort());
   runDispatchCli(process.argv.slice(2), { signal: controller.signal }).then(code => { process.exitCode = code; }, () => {

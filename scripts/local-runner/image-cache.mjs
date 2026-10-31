@@ -4,10 +4,11 @@
 // controller-private, because the verified image waits there until launch (R07's TOCTOU note). Callers
 // choose it; there is no environment variable or default location.
 import { randomBytes } from 'node:crypto';
-import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { loadCertifiedProvider } from './doctor.mjs';
 import { bootstrapError, IMAGE_ARCHES, MAX_IMAGE_BYTES, verifySourceImage } from './guest-bootstrap.mjs';
+import { renameOver } from './lifecycle.mjs';
 
 export const DOWNLOAD_TIMEOUT_MS = 3_600_000;
 const CONTROL = /[\x00-\x1f\x7f]/;
@@ -68,7 +69,7 @@ async function downloadImage({ pin, arch, cacheDir, target, fetch, digest, maxBy
     await handle.close();
     handle = undefined;
     const sourceImage = await verifySourceImage({ file: part, arch }, { digest });
-    await rename(part, target);
+    await renameOver(part, target);
     return { file: target, sourceImage };
   } catch (error) {
     await handle?.close().catch(() => {});

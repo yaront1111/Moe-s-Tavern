@@ -31,7 +31,9 @@ const FAKE_PROXY = String.raw`const fs = require('fs');
 let input = '';
 process.stdin.on('data', (d) => { input += d; });
 process.stdin.on('end', () => {
-  const req = JSON.parse(input.split(/\r?\n/).find((l) => l.trim()));
+  // Trimmed like moe-proxy's lines: the Actions runner runs chcp 65001 before every
+  // Windows step, and under it Windows PowerShell 5.1 starts stdin with a UTF-8 BOM.
+  const req = JSON.parse(input.split(/\r?\n/).map((l) => l.trim()).find(Boolean));
   const tool = req.params.name.replace(/^moe\./, ''); const args = req.params.arguments || {};
   fs.appendFileSync(process.env.SEAT_RPC_LOG, tool + '\t' + JSON.stringify(args) + '\n');
   const s = JSON.parse(fs.readFileSync(process.env.SEAT_FAKE_STATE, 'utf8'));
