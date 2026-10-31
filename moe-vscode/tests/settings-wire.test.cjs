@@ -87,7 +87,7 @@ function loadPage(html, postMessage) {
 
 /** Open the real panel on a real client fed one STATE_SNAPSHOT; `settings` undefined means no project. */
 function withSettingsPage(settings, body) {
-    const seen = { frames: [], info: [], errors: [], disposes: 0, handler: undefined };
+    const seen = { frames: [], info: [], warnings: [], errors: [], disposes: 0, handler: undefined };
     let panel;
     function StubWebSocket() { throw new Error('these tests never open a real socket'); }
     StubWebSocket.OPEN = 1;
@@ -99,6 +99,7 @@ function withSettingsPage(settings, body) {
         window: {
             createOutputChannel: () => ({ appendLine() {}, dispose() {} }),
             showInformationMessage: message => { seen.info.push(message); return Promise.resolve(undefined); },
+            showWarningMessage: message => { seen.warnings.push(message); return Promise.resolve(undefined); },
             showErrorMessage: message => { seen.errors.push(message); return Promise.resolve(undefined); },
             createWebviewPanel: () => {
                 let onDispose;
@@ -148,6 +149,7 @@ test('S1: an unedited save writes back exactly the stored form values and nothin
         const payload = savedPayload(seen);
         for (const key of FORM_KEYS) { assert.strictEqual(payload[key], STORED[key], key); }
         assert.deepEqual(seen.info, ['Settings saved.']);
+        assert.deepEqual(seen.warnings, []);
         assert.deepEqual(seen.errors, []);
         assert.equal(seen.disposes, 1);
     });
@@ -206,5 +208,39 @@ test('S6: profile and evidence settings are never sent and survive the SETTINGS_
         // The client parsed the frame in its own vm realm, so compare serialized values, not prototypes.
         const settings = client.currentState.project.settings;
         for (const key of Object.keys(kept)) { assert.equal(JSON.stringify(settings[key]), JSON.stringify(kept[key]), key); }
+    });
+});
+
+const NOT_SAVED = 'Not connected to Moe daemon — settings were not saved.';
+
+test('S7: a disconnected save warns, sends nothing, keeps the panel open, and a retry after reconnecting saves', () => {
+    withSettingsPage(STORED, (page, seen, client) => {
+        const socket = client['ws'];
+        client.disconnect();
+        page.click('saveBtn');
+        assert.deepEqual(seen.frames, [], 'no frame reaches the socket while disconnected');
+        assert.deepEqual(seen.warnings, [NOT_SAVED]);
+        assert.deepEqual(seen.info, []);
+        assert.deepEqual(seen.errors, []);
+        assert.equal(seen.disposes, 0, 'the panel stays open');
+        client['ws'] = socket;
+        client['_connectionState'] = 'connected';
+        page.click('saveBtn');
+        savedPayload(seen);
+        assert.deepEqual(seen.info, ['Settings saved.']);
+        assert.deepEqual(seen.warnings, [NOT_SAVED], 'the retry adds no warning');
+        assert.equal(seen.disposes, 1);
+    });
+});
+
+test('S8: a save whose socket send throws warns, never claims success, and keeps the panel open', () => {
+    withSettingsPage(STORED, (page, seen, client) => {
+        client['ws'] = { readyState: 1, send() { throw new Error('socket hang up'); }, close() {} };
+        page.click('saveBtn');
+        assert.deepEqual(seen.warnings, [NOT_SAVED]);
+        assert.deepEqual(seen.info, []);
+        assert.deepEqual(seen.errors, []);
+        assert.equal(seen.disposes, 0);
+        assert.equal(client.connectionState, 'disconnected');
     });
 });

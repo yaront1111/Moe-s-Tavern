@@ -899,8 +899,8 @@ export class MoeDaemonClient implements vscode.Disposable {
     // Outbound: Settings, proposals, activity, archive
     // =========================================================================
 
-    updateSettings(settings: Partial<ProjectSettings>): void {
-        this.sendMessage('UPDATE_SETTINGS', settings);
+    updateSettings(settings: Partial<ProjectSettings>): boolean {
+        return this.sendMessage('UPDATE_SETTINGS', settings);
     }
 
     archiveDoneTasks(epicId?: string): void {

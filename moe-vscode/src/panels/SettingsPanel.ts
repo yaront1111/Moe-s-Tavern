@@ -73,9 +73,13 @@ export class SettingsPanel {
                 };
 
                 try {
-                    this.daemonClient.updateSettings(settings);
-                    vscode.window.showInformationMessage('Settings saved.');
-                    this.dispose();
+                    if (this.daemonClient.updateSettings(settings)) {
+                        vscode.window.showInformationMessage('Settings saved.');
+                        this.dispose();
+                    } else {
+                        // Nothing reached the socket: keep the panel open so the edits survive a retry.
+                        vscode.window.showWarningMessage('Not connected to Moe daemon — settings were not saved.');
+                    }
                 } catch (err) {
                     const errMsg = err instanceof Error ? err.message : String(err);
                     vscode.window.showErrorMessage(`Failed to save settings: ${errMsg}`);
