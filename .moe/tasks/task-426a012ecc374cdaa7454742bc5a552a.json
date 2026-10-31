@@ -76,11 +76,17 @@
       "author": "governor-693b7073",
       "content": "Governor update, superseding comment-4de9f5ed (16:41Z): this row now dependsOn task-344a0acb, the JetBrains latestCheckRun.outcome fix, and runs after it. Your epic gate and whole-epic review therefore cover 344a0acb's landed Kotlin, so add it to the step-4 commit list. Because the order is now serial, a fix forward in Models.kt, MoeJson.kt, DeliveryPresentation.kt or MoeBundle.properties is allowed here again. That includes the stale PROVIDER_NOT_FOUND \"on PATH\" text (comment-ca3c8ccb on I06), if it is small and in its owning module.",
       "timestamp": "2026-10-31T16:38:54.490Z"
+    },
+    {
+      "id": "comment-e25bba1cdea14c2bbf83fc8b1c5c86a5",
+      "author": "architect-b58e1112",
+      "content": "Plan changes from the plan's author (architect-b58e1112), binding on rev 1. They fold in comment-3a40d182 (architect-8419009e), comment-f0bab630 (governor-693b7073) and comment-ca3c8ccb on I06 (task-4e412148). The plan text is unchanged only because the author's session was notification-only. Where these changes conflict with the step text, these changes win.\n\nStep 1, preflight:\n- Also require task-344a0acb's completion: `git log moe/work-2026-10-24 --format=%h --grep 'Moe-Task: task-344a0acb42744047a4cce259cc2717c4'` must be non-empty.\n- Add that commit to the ancestor list.\n\nStep 4, commit list: add 344a0acb's commit to the CQ-I diff you read.\n\nStep 4, new producer/consumer item:\n- Check the latestCheckRun.outcome values that V12b (task-6339299a) projects against how 344a0acb parses them in MoeJson and renders them in DeliveryPresentation.\n- An exit-0 check with a non-passed outcome must not render as passed.\n\nStep 4, residual correction:\n- Replace 'cleanup preserving everything below Node 22 and at bindHost 0.0.0.0' with 'cleanup preserving everything below Node 22, and under any non-loopback daemon bind'.\n- Why:\n  - loopbackDaemonHost (scripts/local-runner/guest-session.mjs:108, called at vm-control.mjs:115) admits only 127.0.0.1 and ::1.\n  - WSL agent mode records bindHost `wsl`.\n  - lifecycle.mjs holdReason (:350-359) returns attempt-unknown whenever the attempt phase cannot be read, so every VM is kept.\n- Re-verify those lines at $SHA and cite them.\n\nStep 4, new residual: the stale PROVIDER_NOT_FOUND text 'Install Multipass and make sure it is on PATH'.\n- Locations:\n  - moe-jetbrains/src/main/resources/messages/MoeBundle.properties:373;\n  - moe-vscode/src/util/ManagedVm.ts:47;\n  - the assertion that pins the full wording at moe-vscode/tests/managed-vm.test.cjs:46.\n- Since a97da8b5 (task-92307adc), vm-control runs only the pinned client at the default install path: the EXECUTABLE constants in scripts/local-runner/platform-{windows,linux,macos}.mjs. Adding a copy to PATH never helps.\n- A fix forward is allowed (TRIAGE 3; comment-f0bab630).\n  - Use identical wording in both clients, accurate on all three platforms. Example: 'Multipass was not found at its default install location. Install it to the default location (the official installer, or snap on Linux); a copy elsewhere, even on PATH, is not used.'\n  - Corpus row V02 pins only the code, so client-verdicts.json does not change.\n- Name all three files in modifiedFiles. Then apply step 4's fix-forward rule:\n  - copy them into $SNAP and $WIN and cmp;\n  - re-run A4;\n  - re-run B1 fresh under the lease.\n\nStep 4, new residual: VS Code renders no latestCheckRun at all. Record it as 'unowned: human decision', citing 344a0acb's DoD 5.\n\nScope: I06 (rev 4) no longer runs its rev-2 steps 1-4. This row's close-out comment on task-4e412148 is I06's input for three things:\n- its residual owners;\n- its freshness re-run;\n- its DoD 4 gate.\nKeep the re-run trigger line exactly as step 4 writes it.",
+      "timestamp": "2026-10-31T16:46:08.379Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T16:23:47.028Z",
-  "updatedAt": "2026-10-31T16:39:28.731Z",
+  "updatedAt": "2026-10-31T16:46:08.379Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T16:23:51.378Z",
     "plannedStepCount": 4,
@@ -181,5 +187,36 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-10-31T16:39:28.731Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "b82acc57887d78ced9f5fbf81e7de2e3e4fed898",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-b58e1112@2026-10-31T16:23:54Z",
+      "paths": [
+        ".moe/tasks/task-25d76cd54c274ff989f655f5743f730e.json",
+        ".moe/tasks/task-426a012ecc374cdaa7454742bc5a552a.json",
+        ".moe/tasks/task-45ce1ac033324959a6164399f2185a79.json"
+      ],
+      "recordedBy": "architect-b58e1112",
+      "recordedAt": "2026-10-31T16:40:25.508Z",
+      "treeId": "6d5224c8a1233bf7250d189e458c53e4555c0872",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-25d76cd54c274ff989f655f5743f730e.json",
+    ".moe/tasks/task-426a012ecc374cdaa7454742bc5a552a.json",
+    ".moe/tasks/task-45ce1ac033324959a6164399f2185a79.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-b58e1112@2026-10-31T16:23:54Z",
+    "at": "2026-10-31T16:40:25.508Z"
+  }
 }

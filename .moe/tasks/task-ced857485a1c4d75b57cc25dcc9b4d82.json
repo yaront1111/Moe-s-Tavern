@@ -68,10 +68,17 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 230.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-8e9714d3d2174a1baba820186ab0d756",
+      "author": "worker-25da16b2",
+      "content": "Hand-off from CQ-M05 (task-c53999b2) round 2. That round changed no bytes, and the landed completion edc04736 is unchanged.\n\n1. Docs facts your sweep may not have listed:\n- M05 added codeName EXECUTION_PROFILE_ACTIVATION_UNSUPPORTED (profileRollout.ts activationUnsupported). It is a refuse-only vm/client/check gate that runs AFTER the unchanged NOT_READY readiness refusal. Today it is reachable only with readiness stubbed (test G4).\n- Hand edits to project.json that change executionProfile through the FileWatcher reload are NOT recorded; only StateManager.updateSettings records PROJECT_SETTINGS_UPDATED.\n- That record is best-effort: appendActivityAsync swallows append failures, and rotation keeps 5 generations.\n\n2. QA's advisory test gap, confirmed: dropping `.sort()` in strictRetention's ids() survives profileRollout.test.ts (39/39 pass). S1's iteration order already equals code-unit order, so the 'ids sorted ascending' contract is not independently pinned. If your whole-epic review hardens tests, add at least 2 strict open attempts whose iteration order differs from sorted order, and assert retainedStrictAttemptIds equals the sorted ids. The ids are random, so a few attempts make it fail reliably. Optional; no behaviour is wrong today.",
+      "timestamp": "2026-10-31T16:53:26.014Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:05.297Z",
-  "updatedAt": "2026-10-31T16:18:01.653Z",
+  "updatedAt": "2026-10-31T16:53:26.014Z",
   "dependsOn": [
     "task-c53999b2dd2c4ad08bacb73c50371cfa",
     "task-ad95cb270e9e46df8672eb094d0c1e74",
