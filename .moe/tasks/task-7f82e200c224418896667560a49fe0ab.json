@@ -109,7 +109,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -142,16 +142,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:13:22.145Z",
-  "updatedAt": "2026-10-31T22:09:29.811Z",
+  "updatedAt": "2026-10-31T22:36:50.205Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:17:55.701Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-10-31T22:36:50.205Z",
+    "wallClockMs": 188334504
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-1ec18131"
+    "worker-1ec18131",
+    "qa-1f1f912c"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -285,5 +288,9 @@
     "kind": "completion",
     "sessionId": "worker-1ec18131@2026-10-31T20:19:04Z",
     "at": "2026-10-31T22:09:29.811Z"
-  }
+  },
+  "completedAt": "2026-10-31T22:36:50.205Z",
+  "reviewCompletedAt": "2026-10-31T22:36:50.205Z",
+  "reviewSummary": "APPROVED. Reviewed 03deb05c (tree 46f62a19) on moe/work-2026-10-24, also on origin: 337+/39- in 4 wrapper/harness files, net 298 LOC, plus 2 wrapper board JSONs; no daemon or .moe edits.\nRe-run on a git-archive snapshot of 03deb05c:\n- MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh: exit 0, PASS. Frozen 92/92 incl. the 7 new modes; owner guard 16; worktree 36; commit-scope 45.\n- Wall-clock 14m43s (22:16:24Z-22:31:10Z). 9 live seats at start and end; gradle leases free, no queue. tasklist (contention proxy): java/node/powershell 2/7/3 at start, 1/6/2 at end.\n- parity-check.sh and parity-check.ps1 (pwsh): PASS.\n- postflight.ps1, 7 new modes: PASS under pwsh 7.6.9 and PS 5.1.26100.\n- Suite JS byte-identical in both harnesses; BOM kept.\n- node --test trio: 48 pass, 0 fail, 2 skip.\n- RED: all 7 modes fail against the parent moe-agent.sh, for the intended reason.\nDoD:\n1. strong-checkpoint-held (-env, -forged, -journal) and strong-recovery-held-gate: MOE_COMMIT_REFUSED_STRONG_CHECKPOINT; branch, reflog and rescue refs unmoved; bytes, index and baseline identical.\n2. reconcile-strong-finalize-lost: journal kept after ack; the replay re-sends the receipt, then finalizes landed once; one completion commit.\n3. ps1 suite identical; parity PASS.\n4. Existing receipt/intent/reconcile-strong modes pass; only fixture regexes widened.\n5. Fresh run green.\nCode: one gate after the owner guard, before any baseline, peel or CAS write. Strong comes from the pin, the newest attempt record (tie fails closed) or the journal, never env. Legacy deletion on ack is still pinned by receipt-replay.\nNon-blocking, for V12: +1 .moe/attempts scan per checkpoint (~3s on drvfs); worktree checkpoints ungated (target unmoved); pre-existing CONFLICT+lost-finalize wedge.\nPonytail: ps1 duplicates the branch lookup; landing_refuse_strong repeats refuse_owner. net: -9 lines possible.",
+  "requiredCheckAtDone": null
 }
