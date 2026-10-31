@@ -80,7 +80,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -124,14 +124,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T10:58:35.132Z",
-  "updatedAt": "2026-10-31T08:34:45.070Z",
+  "updatedAt": "2026-10-31T08:39:39.024Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T11:05:08.867Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-31T08:39:39.024Z",
+    "wallClockMs": 77670157
   },
   "contextFetchedBy": [
     "worker-88af1437",
@@ -191,7 +193,8 @@
   "filesModified": [
     "packages/moe-daemon/src/tools/recordCommit.test.ts",
     "packages/moe-daemon/src/tools/recordCommit.ts",
-    "docs/TROUBLESHOOTING.md"
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json"
   ],
   "completionSummary": "Reopen-1 rework for QA's narrow reject: docs/TROUBLESHOOTING.md had been held from 8372d311 because its earlier edits were a python3 shell write, which leaves no TOOL witness.\n\nThis session made one Edit-tool call in the main one-shot Claude session (no Bash write, no subagent) on docs/TROUBLESHOOTING.md. It re-wrapped this row's 'Current witness limit' paragraph (L612-623). A whitespace-normalized token diff against the pre-edit text shows the words are identical; max line is 93 cols.\n\nEvery existing hunk is kept:\n- this row's MOE_ATTR_CONTESTED_UNTOUCHED/EDITING rows (L596-597) naming `codex exec`;\n- CQ-R13's TOC renumber and 'Local Runner Issues' section (peer 2359daf0). Not this row's content; it rides along in the whole-file landing and should get a Moe-Contested trailer.\n\nFile vs HEAD b25af61c: +35/-15 (this row +14/-13, R13 +21/-2), LF only.\n\nUntouched per QA FIX 1: recordCommit.ts (3 constants), recordCommit.test.ts, CONFIGURATION.md, MCP_SERVER.md. All landed in 8372d311. Task total non-board LOC: +36/-29, net 7.\n\nSelf-review:\n- The HELD_REMEDY_WITNESS literal, eval'd, is contained in both wrappers. The sentence is verbatim in recordCommit.test.ts and both harnesses.\n- No stale 'only Claude' claim remains. The one grep hit, L612, goes on to name `codex exec --json` events.\n- The docs match prompt-cache-witness.mjs rules.\n\nGate (cheap legs per QA FIX 4): recordCommit.test.ts 73/73 in a git-archive /tmp snapshot; parity-check.sh PASS; node --test prompt-cache-witness + prompt-cache 39/0; exit 0.\n\nPostflight legs were not repeated because no script changed. The prior run stands: postflight.sh AM ok with 45 scope scenarios; powershell.exe postflight.ps1 AM ok with 44.\n\nChain: task-4b0609d1 (helper harvest) -> task-7db14e2d (wrapper wiring plus the postflight rows that carry DoD 1/2) -> this task (daemon text and docs).\n\nLanding check for QA: `git show --stat <new completion>` lists docs/TROUBLESHOOTING.md, and the session-ended line has no held=.",
   "commits": [
@@ -251,16 +254,38 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "7b818c9af3eb8fba50a7c9ae6cd3c537e6fd3aa7",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-88af1437@2026-10-31T08:29:02Z",
+      "paths": [
+        ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "recordedBy": "worker-88af1437",
+      "recordedAt": "2026-10-31T08:35:05.343Z",
+      "treeId": "326d510b0465e5daea02332beda88a4dc9824a90",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/TROUBLESHOOTING.md",
+          "taskId": "task-2359daf0dc5241c3a160be293bbd5877"
+        }
+      ],
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
+    "kind": "completion",
     "sessionId": "worker-88af1437@2026-10-31T08:29:02Z",
-    "at": "2026-10-31T08:29:17.461Z"
+    "at": "2026-10-31T08:35:05.343Z"
   },
-  "reviewCompletedAt": "2026-10-31T08:28:42.068Z",
+  "reviewCompletedAt": "2026-10-31T08:39:39.024Z",
   "rejectionDetails": {
     "failedDodItems": [
       "The MOE_CONTESTED_HELD witness sentence (both wrappers and recordCommit.ts), docs/CONFIGURATION.md 'Session touch evidence' and docs/TROUBLESHOOTING.md 'Current witness limit' count `codex exec` seats. recordCommit.test.ts and `bash scripts/tests/parity-check.sh` pass."
@@ -301,5 +326,11 @@
         }
       ]
     }
-  ]
+  ],
+  "touchedFiles": [
+    "docs/TROUBLESHOOTING.md"
+  ],
+  "completedAt": "2026-10-31T08:39:39.024Z",
+  "reviewSummary": "Reopen-1 rework approved. The reject (DoD 3: docs/TROUBLESHOOTING.md not landed) is resolved.\n\nLanding: completion 7b818c9a is on moe/work-2026-10-24 and origin.\n- `git show --stat` lists docs/TROUBLESHOOTING.md, trailer Moe-Contested 2359daf0.\n- The session-ended line (msg-36fe3f00) is \"paths=2 unattributed=0\", with no held=.\n- docs/ and recordCommit.* are clean in the tree.\n\nDoD 3, TROUBLESHOOTING.md:\n- The UNTOUCHED/EDITING rows (L596-597) name \"one-shot Claude or `codex exec`\". The no-witness list is Codex TUI, Gemini, Grok, interactive Claude.\n- \"Current witness limit\" (L612-623) adds codex exec --json events (completed file_change, successful Serena edit). Failed, result-less and shell writes give no witness.\n- No stale \"only Claude\" claim remains (git grep).\n- recordCommit.ts (3 constants), HELD_REMEDY_WITNESS (byte-identical across 6 files), CONFIGURATION.md and MCP_SERVER.md landed in 8372d311. I verified them in my reopen-1 review.\n- R13's \"Local Runner Issues\" hunk rides along under Moe-Contested and was not judged here.\n\nRe-run by QA (git-archive snapshots of 7b818c9a, env scrubbed, no in-place npm):\n- recordCommit.test.ts (npm ci in /tmp): 73/73.\n- parity-check.sh: PASS.\n- node --test prompt-cache-witness + prompt-cache: 39/0, EXIT=0.\n\nDoD 1, 2, 4: no script changed. The codex witness postflight rows and the unchanged Claude-stream and codex TUI scenarios are task-7db14e2d's (a9acf890, DONE, QA-approved). The harvest is 4b0609d1's (DONE). I did not re-run the ~1h postflight legs. The worker's prior HEAD run stands: postflight.sh 45 scope scenarios, ps1 44.\n\nSize: own non-board +36/-29, net 7 (rework +14/-13). Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
