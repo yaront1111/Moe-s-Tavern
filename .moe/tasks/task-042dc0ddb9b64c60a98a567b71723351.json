@@ -129,7 +129,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -161,7 +161,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:50:38.545Z",
-  "updatedAt": "2026-10-31T10:11:07.755Z",
+  "updatedAt": "2026-10-31T10:36:44.747Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:02.150Z",
@@ -171,12 +171,15 @@
     "firstClaimAt": "2026-10-30T13:18:53.738Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-31T10:36:44.747Z",
+    "wallClockMs": 76671009
   },
   "contextFetchedBy": [
     "architect-eb7de546",
     "architect-bc59d28a",
-    "worker-3a9b4568"
+    "worker-3a9b4568",
+    "qa-b29f7b3d"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -228,19 +231,40 @@
       "treeId": "ef9d48638f7d742c6355ceecaa2bc3cdf33cf1f5",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "397fac23ef9128b8b179e9c14a34435bd143876a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3a9b4568@2026-10-31T09:02:30Z",
+      "paths": [
+        ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+        ".moe/tasks/task-adbab50d16f048bd9e55fa43d8870927.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-3a9b4568",
+      "recordedAt": "2026-10-31T10:11:25.735Z",
+      "treeId": "27e27ffe262ef8cefeef016c6a327c4bb67e47f2",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
-    "scripts/tests/postflight-worktree.cjs"
+    "scripts/tests/postflight-worktree.cjs",
+    ".moe/tasks/task-042dc0ddb9b64c60a98a567b71723351.json",
+    ".moe/tasks/task-adbab50d16f048bd9e55fa43d8870927.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
+    "kind": "completion",
     "sessionId": "worker-3a9b4568@2026-10-31T09:02:30Z",
-    "at": "2026-10-31T09:02:43.722Z"
+    "at": "2026-10-31T10:11:25.735Z"
   },
   "workStartedAt": "2026-10-31T09:17:12.621Z",
   "reviewStartedAt": "2026-10-31T10:11:07.753Z",
@@ -251,5 +275,14 @@
     "reportedAt": "2026-10-31T10:11:07.753Z",
     "source": "agent-reported"
   },
-  "completionSummary": "WT-06: worktree tooling in both wrappers, using one byte-identical node program: sh prepare_worktree_launch (heredoc MOE_WT_TOOLING_JS) and ps1 Initialize-MoeWorktreeLaunch([ref]$Context).\n\nWhat it does:\n- Serena root: the control maps to W. An override is kept, and one outside the control warns MOE_WORKTREE_SERENA_OUTSIDE.\n- Links: W/.serena/memories and W/.claude/skills point to the control's (a symlink, or a junction on win32). Each is recorded in <git-common-dir>/moe/worktree/<taskId>.links before it is made.\n- MOE_WORKTREE_LINK_FAILED leaves existing bytes alone and the seat still launches with Moe. A memories failure turns Serena off: it is dropped from every config, stale entries included, and the memory preload is replaced.\n- project.yml: the control's .serena/project.yml is copied to W with project_name set to <name>@<taskId> (quote styles and CRLF kept). A non-scalar name refuses the seat with MOE_WORKTREE_CREATE_FAILED.\n- Dependencies: MOE_WORKTREE_DEPS_MISSING <dir> for each tracked package-lock.json dir without node_modules, plus one prompt line. Nothing is installed or linked.\n- ps1 claude: the temp --mcp-config is rewritten per worktree launch and restored at the loop top.\n\nTests are in scripts/tests/postflight-worktree.cjs, the suite shared by postflight.sh and postflight.ps1; this is a scope addition, as in WT-05. New cases: tooling, link-fail, link-partial, project-yml, serena-outside, codes. launch-* now check Serena roots. The shared-landed shim was fixed: it forwarded no argv, so its context check passed without testing anything.\n\nResults: the bash gate and the Windows PowerShell 5.1 gate both passed (failureClass NONE). Net diff is 323 lines.\n\nQA notes:\n- The MOE_SERENA_PROJECT_ROOT witness env still names the control (WT-07).\n- A repo that tracks .serena/project.yml or .claude/skills would see W-side effects; details in the Serena handoff task-task-042dc0ddb9b64c60a98a567b71723351-handoff."
+  "completionSummary": "WT-06: worktree tooling in both wrappers, using one byte-identical node program: sh prepare_worktree_launch (heredoc MOE_WT_TOOLING_JS) and ps1 Initialize-MoeWorktreeLaunch([ref]$Context).\n\nWhat it does:\n- Serena root: the control maps to W. An override is kept, and one outside the control warns MOE_WORKTREE_SERENA_OUTSIDE.\n- Links: W/.serena/memories and W/.claude/skills point to the control's (a symlink, or a junction on win32). Each is recorded in <git-common-dir>/moe/worktree/<taskId>.links before it is made.\n- MOE_WORKTREE_LINK_FAILED leaves existing bytes alone and the seat still launches with Moe. A memories failure turns Serena off: it is dropped from every config, stale entries included, and the memory preload is replaced.\n- project.yml: the control's .serena/project.yml is copied to W with project_name set to <name>@<taskId> (quote styles and CRLF kept). A non-scalar name refuses the seat with MOE_WORKTREE_CREATE_FAILED.\n- Dependencies: MOE_WORKTREE_DEPS_MISSING <dir> for each tracked package-lock.json dir without node_modules, plus one prompt line. Nothing is installed or linked.\n- ps1 claude: the temp --mcp-config is rewritten per worktree launch and restored at the loop top.\n\nTests are in scripts/tests/postflight-worktree.cjs, the suite shared by postflight.sh and postflight.ps1; this is a scope addition, as in WT-05. New cases: tooling, link-fail, link-partial, project-yml, serena-outside, codes. launch-* now check Serena roots. The shared-landed shim was fixed: it forwarded no argv, so its context check passed without testing anything.\n\nResults: the bash gate and the Windows PowerShell 5.1 gate both passed (failureClass NONE). Net diff is 323 lines.\n\nQA notes:\n- The MOE_SERENA_PROJECT_ROOT witness env still names the control (WT-07).\n- A repo that tracks .serena/project.yml or .claude/skills would see W-side effects; details in the Serena handoff task-task-042dc0ddb9b64c60a98a567b71723351-handoff.",
+  "touchedFiles": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "completedAt": "2026-10-31T10:36:44.747Z",
+  "reviewCompletedAt": "2026-10-31T10:36:44.747Z",
+  "reviewSummary": "WT-06 approved.\n\nWhat I reviewed: completion 397fac23 on origin/moe/work-2026-10-24. Net diff is 323 lines (sh +85/-3, ps1 +93/-2, postflight-worktree.cjs +169/-19), under the 400 cap. The working tree matches the commit.\n\nCommands I re-ran myself:\n- `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh`: exit 0, failureClass NONE, lastScenario Z, then PASS parity-check.sh.\n- Windows PowerShell 5.1, run through Windows node.exe: `postflight-safe.mjs powershell`, exit 0, failureClass NONE.\n- Both harnesses fail hard on a worktree-suite failure (sh `set -e`; ps1 throws on `$LASTEXITCODE`), and MOE_WORKTREE_ONLY was unset, so every case ran.\n- The `grep -oE` diff of the code families across the two wrappers is empty.\n- The twin node programs are byte-identical and ASCII-only, and ps1 keeps its BOM.\n\nDoD:\n1. Serena at W: covered by launch-* and serena-outside (config beats env, a trailing separator maps to W, an outside override is kept with one warning).\n2. Links and the exact two-line manifest: tooling, including a rerun.\n3. Exact project_name values and LINK_FAILED with a launch with Moe: project-yml, link-fail and link-partial. Serena goes off only on a memories failure, and a manifest failure leaves no link.\n4. Exact DEPS_MISSING set, one prompt line, no node_modules made: tooling.\n5. Empty grep diff and the codes case.\n6. Both gates green.\n\nNotes:\n- An override inside the control but not equal to it stays at the control's bytes with no warning. That follows the plan, but §5.3 does not cover it; worth noting in WT-18.\n- The MOE_SERENA_PROJECT_ROOT witness still names the control (WT-07).\n\nPonytail: the ~60-line node program is duplicated across the twins; one scripts/*.cjs helper would remove that (the plan limited the task to 4 files). net: -60 lines possible.\n\nHost: PID 411049, a 14-hour-old node.exe postflight run from another session, was left alone per the no-kill rail.",
+  "requiredCheckAtDone": null
 }
