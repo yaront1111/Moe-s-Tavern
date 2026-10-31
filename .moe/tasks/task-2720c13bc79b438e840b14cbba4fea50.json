@@ -97,7 +97,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -110,7 +110,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:01.857Z",
-  "updatedAt": "2026-10-31T14:43:46.117Z",
+  "updatedAt": "2026-10-31T15:02:20.685Z",
   "dependsOn": [
     "task-16bbf8ff071d485aa27ab5b92049c600",
     "task-b319b263fada419d9d7de279682dc5f4"
@@ -119,11 +119,14 @@
     "firstClaimAt": "2026-10-29T16:55:31.535Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-31T15:02:20.685Z",
+    "wallClockMs": 166009150
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-25da16b2"
+    "worker-25da16b2",
+    "qa-4398294e"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -173,7 +176,54 @@
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
     "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    ".moe/tasks/task-2720c13bc79b438e840b14cbba4fea50.json",
+    ".moe/tasks/task-a46b60e6aa63422fbd63934d17238396.json",
+    ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json",
+    ".moe/tasks/task-f622843305224cf49ca24478b26c3351.json",
+    ".moe/tasks/task-fa7fece51d0045edb7871beef40e0d93.json"
+  ],
+  "completionSummary": "CQ-V08, strong (verified-local) profile only; legacy is unchanged. Both wrappers twinned:\n(a) a task's unreconciled receipt journal refuses the next completion before freeze/update-ref (MOE_COMMIT_REFUSED_UNRECONCILED_INTENT): no ref move, no rescue, the journal is never overwritten;\n(b) a landed finalize is deferred while the journal stays or the proof did not transfer (MOE_FINALIZE_DEFERRED_RECEIPT); the pre-flight replay sends the receipt, then finalizes;\n(c) Record block and (d) replay adopt a trailer copy only when its ^{tree} equals the verified tree, else MOE_DELIVERY_PROOF_NOT_TRANSFERRED (journal kept, nothing sent or finalized);\n(e) MOE_PUSH_REBASE is ignored under strong.\nDoD2: the CAS loop's tree+base re-freeze is pinned by a new arm.\nSix reconcile-strong-* arms, byte-identical in postflight.sh/.ps1.\nResults:\n- full postflight.sh PASS (frozen 85/85);\n- postflight.ps1 on PS 5.1 PASS (85/85); pwsh 7 not installed, not run;\n- parity-check PASS.\nMutants on /tmp copies, all red on their arms: sh a/b/d/e/f2, (c) via (e) vs (c)+(e), f1 red on V07's same-tree arms; ps1 a/b/d/e.\nNet diff 241.\nFiled bug task-f6228433 (ps1 File.Replace $null).\nResiduals for V09/V12:\n- deregister ends the finalizing hold on wrapper exit;\n- crash between receipt ack and finalize;\n- a different-tree or permanently refused journal needs an operator.\nDeviation: step 1 used sed -i on 2 lines (disclosed).",
+  "commits": [
+    {
+      "sha": "d868190054fc25da4574ae744581caa7fef587a6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-31T13:44:48Z",
+      "paths": [
+        ".moe/tasks/task-2720c13bc79b438e840b14cbba4fea50.json",
+        ".moe/tasks/task-a46b60e6aa63422fbd63934d17238396.json",
+        ".moe/tasks/task-f58c7c75e2f7401fbd8648817d343a6b.json",
+        ".moe/tasks/task-f622843305224cf49ca24478b26c3351.json",
+        ".moe/tasks/task-fa7fece51d0045edb7871beef40e0d93.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-31T14:44:09.261Z",
+      "treeId": "4696c8e3c2e82db2bafa5d7d32aeeace8d713322",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1"
   ],
-  "completionSummary": "CQ-V08, strong (verified-local) profile only; legacy is unchanged. Both wrappers twinned:\n(a) a task's unreconciled receipt journal refuses the next completion before freeze/update-ref (MOE_COMMIT_REFUSED_UNRECONCILED_INTENT): no ref move, no rescue, the journal is never overwritten;\n(b) a landed finalize is deferred while the journal stays or the proof did not transfer (MOE_FINALIZE_DEFERRED_RECEIPT); the pre-flight replay sends the receipt, then finalizes;\n(c) Record block and (d) replay adopt a trailer copy only when its ^{tree} equals the verified tree, else MOE_DELIVERY_PROOF_NOT_TRANSFERRED (journal kept, nothing sent or finalized);\n(e) MOE_PUSH_REBASE is ignored under strong.\nDoD2: the CAS loop's tree+base re-freeze is pinned by a new arm.\nSix reconcile-strong-* arms, byte-identical in postflight.sh/.ps1.\nResults:\n- full postflight.sh PASS (frozen 85/85);\n- postflight.ps1 on PS 5.1 PASS (85/85); pwsh 7 not installed, not run;\n- parity-check PASS.\nMutants on /tmp copies, all red on their arms: sh a/b/d/e/f2, (c) via (e) vs (c)+(e), f1 red on V07's same-tree arms; ps1 a/b/d/e.\nNet diff 241.\nFiled bug task-f6228433 (ps1 File.Replace $null).\nResiduals for V09/V12:\n- deregister ends the finalizing hold on wrapper exit;\n- crash between receipt ack and finalize;\n- a different-tree or permanently refused journal needs an operator.\nDeviation: step 1 used sed -i on 2 lines (disclosed)."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-25da16b2@2026-10-31T13:44:48Z",
+    "at": "2026-10-31T14:44:09.261Z"
+  },
+  "completedAt": "2026-10-31T15:02:20.685Z",
+  "reviewCompletedAt": "2026-10-31T15:02:20.685Z",
+  "reviewSummary": "Reviewed completion d8681900 (tree 4696c8e3) on moe/work-2026-10-24 == HEAD. Non-board diff +274/-33, net 241.\nDoD4: node --test prompt-cache-launcher/agent-runtime/resume-progress exit 0, 48 pass/0 fail/2 skip (PS parse on linux).\nFull postflight.sh in place: PASS rc=0, frozen 85/85. parity-check.sh PASS; parity-check.ps1 on pwsh 7.6.9 PASS.\npostflight.ps1: PS 5.1, 6 reconcile-strong arms PASS. pwsh 7.6.9 IS reachable as pwsh.exe (the worker said it was not): 6 new + 7 legacy/V07 neighbours PASS 13.\nsh/ps1 test hunks byte-identical; BOMs kept, 0 CR.\nMutants on scratch snapshots, each red for the right reason: sh a/b/d/e; ps1 b/d on PS 5.1.\nDoD1: (a) refuses before freeze/CAS while the journal exists; (b) defers finalize while the journal stays or the proof is untransferred.\nDoD2: target-moved pins the re-freeze and recheck.\nDoD3: (c)+(d) adopt a copy only on the verified ^{tree}; (e) no rebase under strong; the same-tree control transfers.\nEvery new path is gated on verified-local; legacy receipt-* arms are green.\nResiduals: the deregister lapse is backstopped by V09; the ack->finalize crash and operator steps go to V12.\nNit: the sh [info] line prints before the push, ps1 only after a failed one.",
+  "requiredCheckAtDone": null
 }
