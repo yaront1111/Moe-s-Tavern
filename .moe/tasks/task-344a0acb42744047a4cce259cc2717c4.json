@@ -76,7 +76,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -89,7 +89,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T16:37:23.224Z",
-  "updatedAt": "2026-10-31T17:00:08.694Z",
+  "updatedAt": "2026-10-31T17:03:23.811Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T16:37:28.526Z",
@@ -99,11 +99,14 @@
     "firstClaimAt": "2026-10-31T16:37:34.736Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T17:03:23.811Z",
+    "wallClockMs": 1549075
   },
   "contextFetchedBy": [
     "architect-8419009e",
-    "worker-c0a1ac70"
+    "worker-c0a1ac70",
+    "qa-4398294e"
   ],
   "dependsOn": [],
   "tier": "heavy",
@@ -208,7 +211,50 @@
     "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
     "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
-    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+    ".moe/tasks/task-344a0acb42744047a4cce259cc2717c4.json"
   ],
-  "completionSummary": "JetBrains now reads latestCheckRun.outcome, so an exit-0 check whose recorded outcome is not 'passed' no longer displays as passed.\n- Models.kt: DeliveryCheckRun gains a trailing `outcome: String? = null`, so the positional 3-arg calls still compile.\n- MoeJson.parseDelivery: reads the outcome via getStrictStringOrNull. The value is kept verbatim with no whitelist. Absent, null or non-string gives null, so an older daemon still parses with command/exitCode/source intact.\n- DeliveryPresentation verdict rule: passed only when exitCode == 0 AND outcome is null, \"\" or exactly \"passed\" (case-sensitive, mirroring the daemon's recordCheckRun gate rule). A nonzero exit gives moe.delivery.checkFailed (FAIL), as today. Exit 0 with any other outcome gives the NEW moe.delivery.checkNotPassed (FAIL). The NEW moe.delivery.checkOutcome row shows the raw token after the verdict and before checkSource. With no outcome, rows are unchanged. requiredCheckSatisfied rows are untouched.\n- Tests: TDD red then green. MoeJsonTest 32 (2 new tests, 2 fixtures updated because of serializeNulls). DeliveryPresentationTest 14 (5 new tests, bundle-key count 12->14).\n- Gate: the full JetBrains suite, run as the Windows equivalent under the jetbrains-gradle lease in a fresh HEAD snapshot: GATE_EXIT=0, 28 suites, 512 tests, 0 failures.\nVS Code: no change. VS Code renders no latestCheckRun view at all, so this change gives it nothing. Whether VS Code should get a delivery-check view is a parity decision for the human (unowned: human decision).\nNo daemon, docs or VS Code files were touched. Peer-dirty docs/roles/qa*.md and scripts/* were left alone."
+  "completionSummary": "JetBrains now reads latestCheckRun.outcome, so an exit-0 check whose recorded outcome is not 'passed' no longer displays as passed.\n- Models.kt: DeliveryCheckRun gains a trailing `outcome: String? = null`, so the positional 3-arg calls still compile.\n- MoeJson.parseDelivery: reads the outcome via getStrictStringOrNull. The value is kept verbatim with no whitelist. Absent, null or non-string gives null, so an older daemon still parses with command/exitCode/source intact.\n- DeliveryPresentation verdict rule: passed only when exitCode == 0 AND outcome is null, \"\" or exactly \"passed\" (case-sensitive, mirroring the daemon's recordCheckRun gate rule). A nonzero exit gives moe.delivery.checkFailed (FAIL), as today. Exit 0 with any other outcome gives the NEW moe.delivery.checkNotPassed (FAIL). The NEW moe.delivery.checkOutcome row shows the raw token after the verdict and before checkSource. With no outcome, rows are unchanged. requiredCheckSatisfied rows are untouched.\n- Tests: TDD red then green. MoeJsonTest 32 (2 new tests, 2 fixtures updated because of serializeNulls). DeliveryPresentationTest 14 (5 new tests, bundle-key count 12->14).\n- Gate: the full JetBrains suite, run as the Windows equivalent under the jetbrains-gradle lease in a fresh HEAD snapshot: GATE_EXIT=0, 28 suites, 512 tests, 0 failures.\nVS Code: no change. VS Code renders no latestCheckRun view at all, so this change gives it nothing. Whether VS Code should get a delivery-check view is a parity decision for the human (unowned: human decision).\nNo daemon, docs or VS Code files were touched. Peer-dirty docs/roles/qa*.md and scripts/* were left alone.",
+  "commits": [
+    {
+      "sha": "a0ba55f700d7fbcf9bf7e1c2a517cf6b5dae183b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c0a1ac70@2026-10-31T16:51:39Z",
+      "paths": [
+        ".moe/tasks/task-344a0acb42744047a4cce259cc2717c4.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "recordedBy": "worker-c0a1ac70",
+      "recordedAt": "2026-10-31T17:00:29.003Z",
+      "treeId": "8f267c744700efa01809c6fed90cd78fe797ecb9",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c0a1ac70@2026-10-31T16:51:39Z",
+    "at": "2026-10-31T17:00:29.003Z"
+  },
+  "completedAt": "2026-10-31T17:03:23.811Z",
+  "reviewCompletedAt": "2026-10-31T17:03:23.811Z",
+  "reviewSummary": "Reviewed completion commit a0ba55f7, on moe/work-2026-10-24. HEAD is a0ba55f7 and moe-jetbrains is clean. The diff is 6 moe-jetbrains files, about 130 net LOC, plus the task JSON. No VS Code, daemon or docs path.\n\nI re-ran task.verification exactly: a fresh HEAD snapshot plus the overlay, with gradlew.bat test --rerun via cmd.exe (the Windows equivalent) under the jetbrains-gradle lease, now released. Result: GATE_EXIT=0, 28 suite XMLs, no failing suite, 512 tests in total. DeliveryPresentationTest ran 14 tests and MoeJsonTest 32, with 0 failures and 0 errors.\n\nDoD:\n1. outcome is a trailing String? = null. It is parsed through getStrictStringOrNull, verbatim, with no whitelist; absent or a non-string gives null.\n2. A run counts as passed only when the exit is 0 and outcome is null, empty or exactly \"passed\". A nonzero exit gives checkFailed. Any other exit-0 outcome gives the new checkNotPassed (FAIL). The new checkOutcome row comes before checkSource. The requiredCheckSatisfied rows are untouched. Both new keys are in the bundle.\n3. The tests assert exact row lists across the not-passed matrix (including Passed and \" passed\"), passed, nonzero x outcome, the null/\"\" fallback, outcome-only, and the bundle-key count going from 12 to 14. MoeJson tests cover wrong kinds and an older-daemon payload. They fail under the old exit-code-only verdict.\n4. The gate is green on QA's re-run.\n5. There is no VS Code change, and the summary states the parity decision is the human's.\n\ndeliveryProjection.ts:70 projects outcome, and DeliveryPresentation is the only consumer of the verdict. No test was weakened: only the 2 fixtures that serializeNulls forced changed. The complexity pass found nothing to cut.",
+  "requiredCheckAtDone": null
 }
