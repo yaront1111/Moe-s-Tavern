@@ -88,7 +88,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -101,16 +101,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T18:22:24.560Z",
-  "updatedAt": "2026-10-31T18:48:05.790Z",
+  "updatedAt": "2026-10-31T19:03:36.460Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T18:22:37.281Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-31T19:03:36.460Z",
+    "wallClockMs": 2459179
   },
   "contextFetchedBy": [
     "architect-66fd8127",
-    "worker-88af1437"
+    "worker-88af1437",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -261,5 +264,9 @@
     "reportedAt": "2026-10-31T18:47:48.385Z",
     "source": "agent-reported"
   },
-  "completionSummary": "get_commit_scope no longer keeps excluding a dependent's planned paths after the scoped task is terminal or while the dependent is live. waitsOnThis is now !thisTerminal && !dependentMayRun(...) && findDependencyPath(...) !== null. dependentMayRun is true when the dependent's assignee is active (isPeerActive) or it has any non-closed attempt. It is deliberately narrower than peerTaskActive: no fail-closed shortcut without `since`, and no recent-phase-change clause, so a serialized chain's idle links still contribute asserted paths only (the ~:203 and ~:240 tests are unchanged and green). The new peerDeclared is a superset of the old one, so the fix only adds landing holds. The reply shape is unchanged. Tool description PEER clause, code comment and docs/MCP_SERVER.md (get_commit_scope Returns block) state the new rule. Tests: the ~:745 test inverted, plus describe('waits-on-this exclusion (task-44a07f00)') with T-A (DONE/ARCHIVED, live and idle dependents), T-B (non-terminal, unassigned/dead/missing/stale/just-closed-planning dependents stay asserted-only, with and without since), T-C (open attempt counted) and an extra T-D (fail-closed on junk data). Deviations from the plan: (1) dependentMayRun has an extra arm: a non-string assignedWorkerId counts the peer, to honour the contract line that malformed assignee data fails closed; (2) T-D is an extra test, so the narrow file is 65 tests, not 64 (full run 6435 passed vs the plan's about 6434); (3) plan step 5(c) said an unknown worker is counted, but that contradicts T-B and DoD 2, so only a non-string assignee and an unknown attempt phase fail closed. Adversarial mutants M1-M9 are all killed by real assertion failures. parity-check.sh passed. The running daemon gets the fix only after a human-coordinated staging-build swap and restart."
+  "completionSummary": "get_commit_scope no longer keeps excluding a dependent's planned paths after the scoped task is terminal or while the dependent is live. waitsOnThis is now !thisTerminal && !dependentMayRun(...) && findDependencyPath(...) !== null. dependentMayRun is true when the dependent's assignee is active (isPeerActive) or it has any non-closed attempt. It is deliberately narrower than peerTaskActive: no fail-closed shortcut without `since`, and no recent-phase-change clause, so a serialized chain's idle links still contribute asserted paths only (the ~:203 and ~:240 tests are unchanged and green). The new peerDeclared is a superset of the old one, so the fix only adds landing holds. The reply shape is unchanged. Tool description PEER clause, code comment and docs/MCP_SERVER.md (get_commit_scope Returns block) state the new rule. Tests: the ~:745 test inverted, plus describe('waits-on-this exclusion (task-44a07f00)') with T-A (DONE/ARCHIVED, live and idle dependents), T-B (non-terminal, unassigned/dead/missing/stale/just-closed-planning dependents stay asserted-only, with and without since), T-C (open attempt counted) and an extra T-D (fail-closed on junk data). Deviations from the plan: (1) dependentMayRun has an extra arm: a non-string assignedWorkerId counts the peer, to honour the contract line that malformed assignee data fails closed; (2) T-D is an extra test, so the narrow file is 65 tests, not 64 (full run 6435 passed vs the plan's about 6434); (3) plan step 5(c) said an unknown worker is counted, but that contradicts T-B and DoD 2, so only a non-string assignee and an unknown attempt phase fail closed. Adversarial mutants M1-M9 are all killed by real assertion failures. parity-check.sh passed. The running daemon gets the fix only after a human-coordinated staging-build swap and restart.",
+  "completedAt": "2026-10-31T19:03:36.460Z",
+  "reviewCompletedAt": "2026-10-31T19:03:36.460Z",
+  "reviewSummary": "Approved. Reviewed the recorded commits, not the dirty tree. Code is in checkpoint c51b780b (recorded, pushed); completion 5237db25 adds board JSON only. Both are on moe/work-2026-10-24, and the owned files in HEAD match c51b780b. Non-board diff is +185/-14 (171 net) over getCommitScope.ts, its test and docs/MCP_SERVER.md, inside approvedScope.\n\nRe-ran the verification command in my own snapshot (git archive of 5237db25, owned files cmp-equal, native npm ci, node v24.21.0, env -i): narrow file then full suite, exit 0. Full suite: 218 files passed, 6435 passed | 20 skipped. I tailed the output, so I did not read the narrow-file count; my mutant runs show 65 tests there. `bash scripts/tests/parity-check.sh` in place: PASS. No build or install in the shared checkout.\n\nDoD:\n1. With the scoped task DONE or ARCHIVED, dependents' planned and IN_PROGRESS paths are counted, with editingTaskIds while active. T-A covers both statuses with whole-entry asserts. waitsOnThis starts with `!thisTerminal` on the raw status.\n2. With the scoped task non-terminal, an idle dependent contributes asserted paths only (T-B: unassigned, DEAD, missing, stale, just-closed planning attempt, with and without since). The ~:203 and ~:240 chain tests are untouched and green.\n3. Tests: inverted ~:745 test, T-A, T-B, T-C, plus extra T-D (fail-closed junk data).\n4. Tool description, code comment and MCP_SERVER.md state the same rule as the code.\n5. Suite output supplied.\n\nMy mutants, each reverted and cmp-checked: dropping `!thisTerminal` fails T-A (1 failed); dropping `!dependentMayRun` fails the ~:745 test, T-C and T-D (3 failed). Real assertion failures.\n\nInvariants hold: the new waitsOnThis is the old one plus two conjuncts, so peerDeclared is a superset, the reply shape is unchanged and there is no new throw path. The worker's disclosed deviations are sound.\n\nNot verified: the running daemon gets the fix only after a human-coordinated staging-build swap and restart.",
+  "requiredCheckAtDone": null
 }
