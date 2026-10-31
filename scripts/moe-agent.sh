@@ -4220,6 +4220,25 @@ with open(os.path.join(out_dir, 'own'), 'w', encoding='utf-8', errors='surrogate
     fh.write(''.join(rec + '\0' for rec in own))
 if mode == 'carry':
     sys.exit(0)
+if mode == 'worktree':
+    # A task worktree holds this task's bytes only (design §3.2): no baseline,
+    # no tiers. Every dirty path lands except DENY = denied() plus
+    # .claude/skills/** (the link the launch makes), .moe/** with no BOARD
+    # exception. Ps1 twin: Test-MoeDenyPathWorktree.
+    def denied_wt(p, xy):
+        pk = key(p)
+        return denied(p, xy) or any(pk == pre + '.claude/skills' or pk.startswith(pre + '.claude/skills/') for pre in roots)
+    held = set(pk for pk in S if denied_wt(S[pk][0], S[pk][2]))
+    recs = {'candidates': [('WORKTREE', S[pk][1], S[pk][0]) for pk in sorted(S) if pk not in held],
+            'skipped': [('MOE_ATTR_EXCLUDED', S[pk][0]) for pk in sorted(held)],
+            'unattributed': [], 'contested': [], 'missing': []}
+    for name, rows in recs.items():
+        with open(os.path.join(out_dir, name), 'w', encoding='utf-8', errors='surrogateescape', newline='') as fh:
+            fh.write(''.join('\t'.join(r) + '\0' for r in rows))
+    with open(os.path.join(out_dir, 'summary'), 'w', newline='') as fh:
+        n = len(recs['candidates'])
+        fh.write('N_CANDIDATES=%d\nN_NON_BOARD=%d\nN_SKIPPED=%d\nN_EXCLUDED=%d\n' % (n, n, len(held), len(held)))
+    sys.exit(0)
 cands, skipped, unattributed, contested, missing = [], [], [], [], []
 n_pre = n_exc = n_inf = n_foreign = 0
 for pk in sorted(S):
@@ -5209,9 +5228,11 @@ land_commit() {
 }
 
 land_plumbing() {
-    local msgfile="$1" ref="refs/heads/$LAND_BRANCH" attempt old="" tree="" new="" rc err
+    local msgfile="$1" ref="refs/heads/$LAND_BRANCH" attempt old="" tree="" new="" rc err attempts="1 2 3"
     err="$(create_secure_temp)/land-err-$$.txt"
-    for attempt in 1 2 3; do
+    # A task branch gets ONE CAS (design §2.2 L2): a moved tip is contention, never a rebuild.
+    [ "${LAND_ONE_CAS:-}" != true ] || attempts=1
+    for attempt in $attempts; do
         old=$(git -C "$MOE_TOP" rev-parse -q --verify "$ref" 2>/dev/null) || old=""
         if ! moe_temp_index_build "$old" "$ATTR_DIR/candidates" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE"; then
             moe_temp_index_drop
@@ -5338,7 +5359,7 @@ land_plumbing() {
             return 0
         fi
         # FROZEN_* stay: the next attempt compares its rebuilt tree and base to them.
-        echo -e "${YELLOW}[branch]${NC} $ref moved while landing task $LAND_TASK_ID (attempt $attempt/3); rebuilding on the new tip."
+        [ "${LAND_ONE_CAS:-}" = true ] || echo -e "${YELLOW}[branch]${NC} $ref moved while landing task $LAND_TASK_ID (attempt $attempt/3); rebuilding on the new tip."
     done
     LAND_OUTCOME="failed"
     LAND_CODE="MOE_COMMIT_FAILED_REF_CONTENTION"
@@ -5372,7 +5393,9 @@ finalize_postflight() {
     MOE_FINALIZE_DONE=true
     local outcome=failed
     case "${LAND_OUTCOME:-nothing}" in
-        committed) outcome=landed ;;
+        # A worktree completion's checkpoint is not a landing (WT-08 lands the
+        # target), even when an interrupt skipped worktree_postflight's tail.
+        committed) [ "${MOE_WT_COMPLETION:-}" = true ] || outcome=landed ;;
         nothing) outcome=nothing-to-commit ;;
         *) [ -z "${LAND_RESCUE_SHA:-}" ] || outcome=rescued ;;
     esac
@@ -5579,7 +5602,7 @@ record_commit_rpc() {
            MOE_RC_SKIPPED="${ATTR_DIR:-}/skipped" MOE_RC_UNATTR="${ATTR_DIR:-}/unattributed" MOE_RC_CONTESTED="${ATTR_DIR:-}/contested" \
            MOE_RC_TOOL="${LAND_TOOL_FILE_EFFECTIVE:-}" MOE_RC_STATUS="${LAND_STATUS:-}" MOE_RC_ROLE="$ROLE" MOE_RC_WORKER="$WORKER_ID" \
            MOE_RC_SID="${MOE_SID:-}" MOE_RC_CLI_EXIT="${LAND_CLI_EXIT:-}" MOE_RC_TREE="${LAND_TREE:-}" MOE_GIT_REL="${MOE_REL:-}" \
-           $PYTHON_CMD - <<'PYEOF' 2>/dev/null
+           MOE_RC_WT="${MOE_WT_MODE:-}" $PYTHON_CMD - <<'PYEOF' 2>/dev/null
 import json, os, sys
 e = os.environ
 rel = e.get('MOE_GIT_REL') or ''
@@ -5645,7 +5668,8 @@ paths = dedupe([root_rel('\t'.join(r[2:])) for r in staged if len(r) >= 3])
 inferred = dedupe([root_rel('\t'.join(r[2:])) for r in staged if len(r) >= 3 and r[0] == 'MEASURED'])
 if paths:
     d['paths'] = paths[:500]
-if inferred:
+# A worktree landing infers nothing, and says so with an explicit [].
+if inferred or e.get('MOE_RC_WT') == 'worktree':
     d['inferredPaths'] = inferred[:500]
 touched = dedupe([root_rel(p) for p in lines(e.get('MOE_RC_TOOL'))])
 if touched:
@@ -6250,6 +6274,216 @@ run_landing() {
     return 0
 }
 
+# ---- worktree landing (design §2.2 L0-L2, §2.4, §3) ----------------------------
+# control_worktree_mode -- 0 when this checkout is a worktree-mode control
+# checkout: its HEAD is refs/heads/moe/control (design §7.2). HEAD only, so
+# WT-13 can reuse it. Twin: Test-MoeControlWorktreeMode.
+control_worktree_mode() {
+    local head
+    [ -n "${MOE_TOP:-}" ] || git_top || return 1
+    head=$(git -C "$MOE_TOP" symbolic-ref -q HEAD 2>/dev/null) || return 1
+    [ "$head" = refs/heads/moe/control ]
+}
+
+# push_task_branch W BRANCH -- push refs/heads/BRANCH to the same name on
+# origin: no force, no upstream, no rebase (design §2.4). 0 = pushed. A missing
+# remote is said once; a rejected or unreachable push is CHECKPOINT-UNPUSHED
+# and moves no ref. Twin: Push-MoeTaskBranch.
+push_task_branch() {
+    local out
+    if no_git_remote; then
+        echo -e "${BLUE}[info]${NC} no git remote configured; push skipped, the checkpoint stays local on $2."
+        return 1
+    fi
+    if out=$(git -C "$1" push --porcelain origin "refs/heads/$2:refs/heads/$2" 2>&1); then
+        echo -e "${GREEN}[OK]${NC} Pushed task $LAND_TASK_ID to $2."
+        return 0
+    fi
+    printf '%s\n' "$out" | tail -3
+    announce_checkpoint_unpushed "$LAND_TASK_ID" "$2"
+    return 1
+}
+
+# land_worktree_checkpoint W BRANCH -- commit every dirty path of the task
+# worktree W except DENY to refs/heads/BRANCH as a checkpoint (design §2.2
+# L0-L2): owner guard, W's snapshot through resolve_attribution's worktree
+# mode, then land_plumbing (temp index from the tip T, commit-tree -p T, ONE
+# CAS update-ref, W's index refresh, a rescue ref on lost contention), the
+# push when settings.checkpointPush, and the ledger row with the full ref. No
+# baseline, tier, peel or shared push: the target and the control checkout are
+# never touched. MOE_TOP/MOE_GITDIR are shadowed, so every helper runs on W.
+# Callers set LAND_TASK_ID/TITLE/STATUS/REOPEN/CLI_EXIT/RECOVERED; a recovery
+# with nothing to land records nothing and never marks this session's landing
+# done. Returns 1 on a failed landing. Twin: Invoke-MoeWorktreeCheckpoint.
+land_worktree_checkpoint() {
+    local w="$1" branch="$2" work rc=0
+    local MOE_TOP="$1" MOE_GITDIR LAND_ONE_CAS=true
+    MOE_GITDIR=$(git -C "$w" rev-parse --absolute-git-dir 2>/dev/null) || MOE_GITDIR=""
+    LAND_KIND=checkpoint; LAND_OUTCOME=failed; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""
+    LAND_BRANCH="$branch"; LAND_PUSHED=""; LAND_RECORDED=""; LAND_N_PATHS=0; LAND_N_INFERRED=0
+    LAND_RESCUE_REF=""; LAND_RESCUE_SHA=""; LAND_TOOL_FILE_EFFECTIVE=""; FROZEN_TREE=""; FROZEN_BASE=""; RECEIPT_LANDED=""
+    work="$(create_secure_temp)/wt-landing-$$"
+    rm -rf "$work" 2>/dev/null || true
+    mkdir -p "$work/attr" || return 1
+    ATTR_DIR="$work/attr"; LAND_STAGED_FILE="$work/staged.z"; LAND_DROPPED_FILE="$work/dropped.z"
+    : > "$LAND_STAGED_FILE"; : > "$LAND_DROPPED_FILE"
+    commit_scope postflight "$LAND_TASK_ID" "$work/scope.json"
+    if ! landing_owner_guard "$LAND_TASK_ID" "$work/scope.json"; then
+        landing_refuse_owner checkpoint
+        return 0
+    fi
+    if [ -z "$MOE_GITDIR" ] || ! git_dirty_snapshot "$work/S.tsv"; then
+        LAND_CODE=MOE_COMMIT_FAILED_ATTRIBUTION; rc=1
+        echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: git status failed in $w; nothing committed for task $LAND_TASK_ID, its bytes stay in the worktree."
+    elif ! resolve_attribution worktree "$LAND_TASK_ID" "$work/S.tsv" "" "" "" "$work/scope.json" "$ATTR_DIR" "" \
+        || ! attr_summary_load "$ATTR_DIR"; then
+        LAND_CODE=MOE_COMMIT_FAILED_ATTRIBUTION; rc=1
+        echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: attribution failed for task $LAND_TASK_ID ($(tail -n1 "$ATTR_DIR/attr.err" 2>/dev/null)); its bytes stay in the worktree."
+    elif [ "${LAND_RECOVERED:-false}" = true ] && [ "${ATTR_N_CANDIDATES:-0}" -eq 0 ]; then
+        LAND_OUTCOME=nothing
+        return 0
+    else
+        attr_print_skips "$ATTR_DIR"
+        [ "${ATTR_N_EXCLUDED:-0}" -eq 0 ] || echo -e "${BLUE}[attribution]${NC} $ATTR_N_EXCLUDED excluded path(s) untouched (MOE_ATTR_EXCLUDED: .moe/, tool config, worktrees)"
+        LAND_OUTCOME=nothing
+        if [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ] && ! git -C "$w" rev-parse -q --verify "refs/heads/$branch" >/dev/null 2>&1; then
+            # No tip T to build on: never an orphan commit from an empty tree.
+            LAND_OUTCOME=failed; LAND_CODE=MOE_COMMIT_FAILED_REF_CONTENTION; rc=1
+            echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: refs/heads/$branch does not resolve; nothing committed for task $LAND_TASK_ID, its bytes stay in $w."
+        elif [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ]; then
+            if land_plumbing "$work/msg.txt"; then rc=0; else rc=$?; fi
+        fi
+        [ "$rc" -ne 2 ] || rc=0
+    fi
+    [ "$LAND_OUTCOME" != nothing ] || LAND_CODE=MOE_COMMIT_NOTHING_TO_COMMIT
+    [ "${LAND_RECOVERED:-false}" = true ] || MOE_LANDING_DONE=true
+    if [ "$LAND_OUTCOME" = committed ]; then
+        echo -e "${GREEN}[OK]${NC} Committed checkpoint for task $LAND_TASK_ID on $branch: $LAND_SHA ($LAND_N_PATHS paths)"
+        LAND_PUSHED=false
+        if [ "$CS_CHECKPOINT_PUSH" != true ]; then
+            echo -e "${BLUE}[info]${NC} settings.checkpointPush=false -- checkpoint kept local on $branch."
+        elif push_task_branch "$w" "$branch"; then
+            LAND_PUSHED=true
+        fi
+        record_commit_rpc committed checkpoint "$LAND_SHA" "refs/heads/$branch" "" "" "$LAND_PUSHED" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE" || true
+        LAND_RECORDED=true
+    else
+        [ "$LAND_OUTCOME" != nothing ] || echo -e "${BLUE}[info]${NC} $LAND_CODE: task $LAND_TASK_ID -- nothing to land from $w."
+        record_commit_rpc "$LAND_OUTCOME" checkpoint "" "refs/heads/$branch" "${LAND_CODE:-MOE_COMMIT_FAILED}" "${LAND_MESSAGE:-}" "" "" "$LAND_DROPPED_FILE" || true
+    fi
+    LAND_SUMMARY_SHA="${LAND_SHA:-${LAND_RESCUE_SHA:-none}}"; LAND_SUMMARY_KIND=checkpoint; LAND_SUMMARY_PATHS="$LAND_N_PATHS"
+    LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""; LAND_SUMMARY_OUTCOME="$LAND_OUTCOME"; LAND_SUMMARY_CODE="${LAND_CODE:-}"
+    return "$rc"
+}
+
+# worktree_control_dirt OUT -- the control checkout's dirty paths minus
+# denied_wt (so never .moe/), NUL-terminated, written OUT.tmp then mv.
+worktree_control_dirt() {
+    local d rec
+    d="$(create_secure_temp)/wt-dirt-$$"
+    rm -rf "$d" 2>/dev/null || true
+    mkdir -p "$d" && git_dirty_snapshot "$d/S.tsv" || return 1
+    resolve_attribution worktree "$PREFLIGHT_TASK_ID" "$d/S.tsv" "" "" "" "" "$d/attr" "" || return 1
+    { while IFS= read -r -d '' rec; do printf '%s\0' "${rec##*"$MOE_TAB"}"; done < "$d/attr/candidates"; } > "$1.tmp" 2>/dev/null \
+        && mv -f "$1.tmp" "$1"
+}
+
+# worktree_preflight TASKID TITLE STATUS -- a worktree worker's pre-flight
+# after provision_worktree's W/.moe guard (design §3.3, §3.7): dirt a crashed
+# session left in W becomes a recovery checkpoint on the task branch
+# (MOE_CHECKPOINT_RECOVERED; a failure leaves it in W), then the control
+# checkout's dirt is listed in <common gitdir>/moe/worktree/<id>.control-dirt
+# for the stray-edit check. No baseline, rescue replay or notice.
+worktree_preflight() {
+    local list
+    if [ "$CS_AUTO_COMMIT" = true ] && [ "$CS_CHECKPOINT_COMMITS" = true ] && [ "${MOE_DISABLE_CHECKPOINT:-0}" != 1 ]; then
+        LAND_TASK_ID="$1"; LAND_TITLE="$2"; LAND_STATUS="${3:-UNKNOWN}"; LAND_REOPEN=0; LAND_CLI_EXIT=0; LAND_RECOVERED=true
+        if land_worktree_checkpoint "$MOE_WT_PATH" "$MOE_WT_BRANCH" && [ "$LAND_OUTCOME" = committed ]; then
+            echo -e "${GREEN}[OK]${NC} MOE_CHECKPOINT_RECOVERED task=$1 sha=$LAND_SHA"
+        elif [ "$LAND_OUTCOME" = failed ]; then
+            echo -e "${YELLOW}[WARN]${NC} recovery checkpoint for $1 did not complete (${LAND_CODE:-?}); its bytes stay in $MOE_WT_PATH."
+        fi
+        LAND_OUTCOME=nothing; LAND_SHA=""; LAND_CODE=""; LAND_RECOVERED=false; MOE_LANDING_DONE=""
+    fi
+    list=$(git -C "$MOE_TOP" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && list="$list/moe/worktree/$1.control-dirt" || list=""
+    if [ -n "$list" ] && mkdir -p "${list%/*}" 2>/dev/null && worktree_control_dirt "$list"; then
+        MOE_WT_DIRT_LIST="$list"
+    else
+        echo -e "${YELLOW}[WARN]${NC} could not write the control-checkout dirt list ${list:-<no git dir>}; the stray-edit check is off for this session."
+    fi
+}
+
+# worktree_stray_check -- design §3.7: a control-checkout path dirty now but
+# absent from the pre-flight list prints MOE_WORKTREE_STRAY_EDIT and becomes
+# ONE task comment naming up to 20 paths. Never landed, never reverted. Any
+# failure is one [WARN] and leaves the landing outcome alone.
+worktree_stray_check() {
+    local tid="$PREFLIGHT_TASK_ID" now stray n more="" content args
+    [ -n "${MOE_WT_DIRT_LIST:-}" ] || return 0
+    now="$(create_secure_temp)/wt-dirt-post-$$"
+    if [ ! -r "$MOE_WT_DIRT_LIST" ] || ! worktree_control_dirt "$now" \
+        || ! stray=$($PYTHON_CMD -c 'import sys
+load = lambda f: [p for p in open(f, "rb").read().split(b"\0") if p]
+pre = set(load(sys.argv[1]))
+sys.stdout.buffer.write(b"\n".join(p for p in load(sys.argv[2]) if p not in pre))' "$MOE_WT_DIRT_LIST" "$now" 2>/dev/null); then
+        echo -e "${YELLOW}[WARN]${NC} the stray-edit check for task $tid could not run (control-dirt list or git status unreadable)."
+        return 0
+    fi
+    [ -n "$stray" ] || return 0
+    n=$(printf '%s\n' "$stray" | wc -l | tr -d '[:space:]')
+    [ "$n" -le 20 ] || more="
++$((n - 20)) more"
+    echo -e "${YELLOW}[WARN]${NC} MOE_WORKTREE_STRAY_EDIT count=$n task=$tid: written into the control checkout $MOE_TOP, not $MOE_WT_PATH; never landed or reverted, a human decides: $(printf '%s\n' "$stray" | head -n 5 | tr '\n' ' ')"
+    content="MOE_WORKTREE_STRAY_EDIT: this session wrote $n path(s) into the control checkout instead of its worktree $MOE_WT_PATH. They were neither landed nor reverted; a human decides.
+$(printf '%s\n' "$stray" | head -n 20 | sed 's/^/- /')$more"
+    if ! args=$($PYTHON_CMD -c 'import json,sys; t,w,c=sys.argv[1:]; print(json.dumps({"taskId":t,"workerId":w,"content":c}))' "$tid" "$WORKER_ID" "$content" 2>/dev/null) \
+        || ! moe_rpc add_comment "$args" > /dev/null 2>&1; then
+        echo -e "${YELLOW}[WARN]${NC} moe.add_comment failed for the MOE_WORKTREE_STRAY_EDIT note on $tid."
+    fi
+    return 0
+}
+
+# worktree_postflight -- a worktree worker's exit (design §2.4, §3): its W
+# bytes go to the task branch only, then the stray-edit check. Never
+# run_landing, the peel, the shared push or a baseline. A completion has no
+# target landing here yet (WT-08): its bytes are checkpointed and the outcome
+# stays failed, so the attempt never finalizes as landed.
+worktree_postflight() {
+    local status="${FINAL_STATUS:-UNKNOWN}" completion=false
+    [ -z "${STATUS_LOOKUP_ERROR:-}" ] || status=UNKNOWN
+    case "$status" in REVIEW|DONE) completion=true ;; esac
+    MOE_WT_COMPLETION="$completion"
+    if [ "$CS_AUTO_COMMIT" != true ]; then
+        echo -e "${BLUE}[info]${NC} settings.autoCommit=false -- no git activity for task $PREFLIGHT_TASK_ID; its bytes stay in $MOE_WT_PATH."
+    elif [ "$completion" = true ] || { [ "$CS_CHECKPOINT_COMMITS" = true ] && [ "${MOE_DISABLE_CHECKPOINT:-0}" != 1 ]; }; then
+        LAND_TASK_ID="$PREFLIGHT_TASK_ID"; LAND_TITLE="$PREFLIGHT_TASK_TITLE"; LAND_STATUS="$status"
+        LAND_REOPEN="${FINAL_REOPEN_COUNT:-0}"; LAND_CLI_EXIT="${CLI_EXIT_CODE:-0}"; LAND_RECOVERED=false
+        land_worktree_checkpoint "$MOE_WT_PATH" "$MOE_WT_BRANCH" || true
+    else
+        echo -e "${BLUE}[info]${NC} no landing for task $PREFLIGHT_TASK_ID (checkpointCommits=$CS_CHECKPOINT_COMMITS MOE_DISABLE_CHECKPOINT=${MOE_DISABLE_CHECKPOINT:-0}); its bytes stay in $MOE_WT_PATH."
+    fi
+    if [ "$completion" = true ]; then
+        echo -e "${YELLOW}[WARN]${NC} worktree completion landing to the target is not available in this wrapper; the bytes are on $MOE_WT_BRANCH and nothing reached $MOE_WT_TARGET"
+        LAND_OUTCOME=failed
+    fi
+    worktree_stray_check
+}
+
+# control_seat_postflight -- design §3.6: an architect or QA seat in a
+# worktree-mode control checkout lands nothing (it carries daemon and human
+# bytes only) and records MOE_COMMIT_NOTHING_TO_COMMIT; no ref moves.
+control_seat_postflight() {
+    ATTR_DIR="$(create_secure_temp)/ctl-$$"
+    rm -rf "$ATTR_DIR" 2>/dev/null || true
+    mkdir -p "$ATTR_DIR" 2>/dev/null || true
+    LAND_TASK_ID="$PREFLIGHT_TASK_ID"; LAND_STATUS="${FINAL_STATUS:-UNKNOWN}"; LAND_CLI_EXIT="${CLI_EXIT_CODE:-0}"
+    LAND_TREE=""; LAND_TOOL_FILE_EFFECTIVE=""; LAND_OUTCOME=nothing; LAND_CODE=MOE_COMMIT_NOTHING_TO_COMMIT
+    echo -e "${BLUE}[info]${NC} $LAND_CODE: task $LAND_TASK_ID -- a $ROLE seat in the worktree-mode control checkout lands nothing."
+    record_commit_rpc nothing checkpoint "" "" "$LAND_CODE" "" "" "" "" || true
+    LAND_SUMMARY_SHA=none; LAND_SUMMARY_KIND=checkpoint; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0
+    LAND_SUMMARY_HELD=""; LAND_SUMMARY_OUTCOME=nothing; LAND_SUMMARY_CODE="$LAND_CODE"
+}
+
 # ---- pre-flight --------------------------------------------------------------
 # preflight_landing TASKID TITLE STATUS_HINT launch|idle
 #   1. scope (preflight)  2. DONE/ARCHIVED/notFound -> drop baseline  3. lingering
@@ -6262,6 +6496,10 @@ preflight_landing() {
     MOE_BASELINE_PATH=""
     [ "$CS_AUTO_COMMIT" = "true" ] || return 0
     git_top || return 0
+    # Worktree mode keeps no baseline (design §3): a worktree worker's
+    # pre-flight is worktree_preflight, and a control seat lands nothing.
+    [ "${MOE_WT_MODE:-}" != worktree ] || return 0
+    if [ "$ROLE" != worker ] && control_worktree_mode; then return 0; fi
     local work parsed scope_status="" scope_title="" scope_notfound="0" rc=0 known_mine bp
     work="$(create_secure_temp)/preflight-$$"
     rm -rf "$work" 2>/dev/null || true
@@ -6539,7 +6777,9 @@ teardown_rescue() {
         # row is re-sent only when it did not get out; record_commit is
         # idempotent by sha either way. Checked before MOE_LANDING_DONE, which
         # run_landing sets ahead of its push and ledger record.
-        [ "${LAND_RECORDED:-}" = "true" ] || record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "${LAND_PUSHED:-}" "${LAND_STAGED_FILE:-}" "${LAND_DROPPED_FILE:-}" || true
+        local ref="$LAND_BRANCH"
+        [ "${MOE_WT_MODE:-}" != worktree ] || ref="refs/heads/$LAND_BRANCH"
+        [ "${LAND_RECORDED:-}" = "true" ] || record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$ref" "" "" "${LAND_PUSHED:-}" "${LAND_STAGED_FILE:-}" "${LAND_DROPPED_FILE:-}" || true
         MOE_LANDING_DONE=true
         return 0
     fi
@@ -6552,6 +6792,10 @@ teardown_rescue() {
     [ -n "${MOE_TOP:-}" ] || (git_top) || return 0
     LAND_OUTCOME=failed
     [ -n "${MOE_TOP:-}" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    if [ "${MOE_WT_MODE:-}" = worktree ] || { [ "$ROLE" != worker ] && control_worktree_mode; }; then
+        echo -e "${BLUE}[rescue]${NC} worktree mode: bytes stay in ${MOE_WT_PATH:-$MOE_TOP} for the next pre-flight; no rescue ref for task $tid."
+        return 0
+    fi
     [ -f "$(baseline_path "$tid")" ] || return 0
     [ "$(type -t run_landing)" = "function" ] || return 0
     local work
@@ -7202,7 +7446,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     # and the attempt pair onto the last three.
     export MOE_SESSION_ID="$MOE_SID"
     MOE_TOP=""
-    MOE_WT_MODE=shared; MOE_WT_PATH=""; MOE_WT_BRANCH=""; MOE_WT_TARGET=""
+    MOE_WT_MODE=shared; MOE_WT_PATH=""; MOE_WT_BRANCH=""; MOE_WT_TARGET=""; MOE_WT_DIRT_LIST=""; MOE_WT_COMPLETION=""
     CLI_ROOT=""; unset MOE_WORKTREE_PATH MOE_TASK_BRANCH MOE_LAND_TARGET
     MOE_REL=""
     MOE_GITDIR=""
@@ -8218,6 +8462,7 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
     # Before the pre-flight landing, so a refusal leaves no fresh baseline; not
     # gated on autoCommit. Provisions W or stops the seat (provision_worktree).
     if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ] && [ "$ROLE" = worker ]; then provision_worktree; fi
+    if [ "${MOE_WT_MODE:-}" = worktree ]; then worktree_preflight "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" "${RESUME_TASK_STATUS:-}"; fi
 
     # -------- Pre-flight landing: recovery, baseline, rescue-ref discovery --------
     # Runs once the task id is known and before the CLI starts (fresh claim
@@ -9392,7 +9637,12 @@ except Exception:
         # and parks the bytes on a rescue ref, it never aborts the loop.
         LANDING_MODE="none"
         LANDING_STATUS=""
-        if [ "$CS_AUTO_COMMIT" != "true" ]; then
+        # Worktree mode (design §3) never reaches the shared landing below.
+        if [ "${MOE_WT_MODE:-}" = worktree ]; then
+            worktree_postflight
+        elif { [ "$ROLE" = architect ] || [ "$ROLE" = qa ]; } && control_worktree_mode; then
+            control_seat_postflight
+        elif [ "$CS_AUTO_COMMIT" != "true" ]; then
             echo -e "${BLUE}[info]${NC} settings.autoCommit=false -- no git activity for task $PREFLIGHT_TASK_ID (no completion, checkpoint or rescue); baseline deleted."
             baseline_delete "$PREFLIGHT_TASK_ID"
         elif [ -n "$STATUS_LOOKUP_ERROR" ]; then
