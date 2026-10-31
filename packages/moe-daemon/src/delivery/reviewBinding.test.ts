@@ -77,6 +77,9 @@ async function toReview(): Promise<{ w: Ids; q: Ids }> {
   for (const [id, tree] of [['cand-old', 'a'], ['cand-new', 'b']]) {
     await recordCandidateTool(h.state).handler({ id, taskId: TASK, attemptId: w.attemptId, generation: w.generation, workerId: w.workerId,
       baseRevision: '0'.repeat(40), treeSha: tree.repeat(40), deliveryTarget: 'refs/heads/moe/work' }, h.state);
+    // createdAt has millisecond resolution and a tie sorts by id, which puts 'cand-new' first: keep the two on different milliseconds.
+    const createdAt = Date.parse(getCandidate(h.state, id)!.createdAt);
+    while (Date.now() <= createdAt) await new Promise((resolve) => setTimeout(resolve, 1));
   }
   await completeTaskTool(h.state).handler({ taskId: TASK, verification: { command: 'npm test', exitCode: 0 }, ...w }, h.state);
   await finalizeAttemptTool(h.state).handler({ taskId: TASK, workerId: w.workerId, runnerId: w.workerId, attemptId: w.attemptId,
