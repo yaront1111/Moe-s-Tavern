@@ -53,7 +53,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -73,7 +73,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T17:35:16.666Z",
-  "updatedAt": "2026-10-31T17:53:42.844Z",
+  "updatedAt": "2026-10-31T17:55:26.935Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T17:42:18.817Z",
@@ -83,11 +83,14 @@
     "firstClaimAt": "2026-10-31T17:42:26.854Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-31T17:55:26.935Z",
+    "wallClockMs": 780081
   },
   "contextFetchedBy": [
     "architect-b58e1112",
-    "worker-3a9b4568"
+    "worker-3a9b4568",
+    "qa-4398294e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -178,7 +181,44 @@
   "filesModified": [
     "moe-vscode/tests/settings-wire.test.cjs",
     "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-vscode/src/panels/SettingsPanel.ts",
+    ".moe/tasks/task-f2048cbfbf824af0b8072cb7c1e08bc4.json"
+  ],
+  "completionSummary": "VS Code SettingsPanel no longer claims 'Settings saved.' on a failed send. MoeDaemonClient.updateSettings now returns sendMessage's boolean. SettingsPanel 'save' disposes and shows 'Settings saved.' only on true. On false it shows the warning 'Not connected to Moe daemon — settings were not saved.' and keeps the panel open for a retry. The thrown-error path is unchanged. settings-wire.test.cjs gained a showWarningMessage stub and a warnings [] assertion in S1. S7 covers a disconnected save and a retry after reconnect on the same page. S8 covers a ws.send throw. Snapshot gate (git archive HEAD + overlay of the 3 files, native npm ci under env -i): lint, compile and npm test exit 0 with 350 tests, 346 pass, 0 fail, 4 skipped. Parity note: JetBrains MoeSettingsDialog.kt closes the dialog after a refused disconnected save, so the edits are lost, but it never claims success. That is out of scope and untouched.",
+  "commits": [
+    {
+      "sha": "330b035b12e1bd9b9939fa55c6f315ca1cc190a4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3a9b4568@2026-10-31T17:52:26Z",
+      "paths": [
+        ".moe/tasks/task-f2048cbfbf824af0b8072cb7c1e08bc4.json",
+        "moe-vscode/src/panels/SettingsPanel.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/settings-wire.test.cjs"
+      ],
+      "recordedBy": "worker-3a9b4568",
+      "recordedAt": "2026-10-31T17:54:02.383Z",
+      "treeId": "59b5e4a7a843eab5610f65df2034d7aa6a9be465",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/settings-wire.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
     "moe-vscode/src/panels/SettingsPanel.ts"
   ],
-  "completionSummary": "VS Code SettingsPanel no longer claims 'Settings saved.' on a failed send. MoeDaemonClient.updateSettings now returns sendMessage's boolean. SettingsPanel 'save' disposes and shows 'Settings saved.' only on true. On false it shows the warning 'Not connected to Moe daemon — settings were not saved.' and keeps the panel open for a retry. The thrown-error path is unchanged. settings-wire.test.cjs gained a showWarningMessage stub and a warnings [] assertion in S1. S7 covers a disconnected save and a retry after reconnect on the same page. S8 covers a ws.send throw. Snapshot gate (git archive HEAD + overlay of the 3 files, native npm ci under env -i): lint, compile and npm test exit 0 with 350 tests, 346 pass, 0 fail, 4 skipped. Parity note: JetBrains MoeSettingsDialog.kt closes the dialog after a refused disconnected save, so the edits are lost, but it never claims success. That is out of scope and untouched."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3a9b4568@2026-10-31T17:52:26Z",
+    "at": "2026-10-31T17:54:02.383Z"
+  },
+  "completedAt": "2026-10-31T17:55:26.935Z",
+  "reviewCompletedAt": "2026-10-31T17:55:26.935Z",
+  "reviewSummary": "Approved. Reviewed completion commit 330b035b (on moe/work-2026-10-24) via git show: 3 moe-vscode files plus the task's own .moe board JSON, ~+50/-10 LOC.\n\nRe-ran the plan's step-2 gate myself in a fresh Linux-native snapshot of `git archive 330b035b` (env -i, native npm ci): lint and compile clean, npm test 350 tests / 346 pass / 0 fail / 4 skipped (Windows-only). Matches worker evidence. Snapshot removed.\n\nDoD1: updateSettings returns sendMessage's boolean (sole caller SettingsPanel.ts:76, grep-confirmed). Panel says 'Settings saved.' and disposes only on true; on false it shows the exact warning 'Not connected to Moe daemon — settings were not saved.' (U+2014), no dispose, no info. The thrown-error path is unchanged. sendMessage returns false for no ws, state not connected, readyState not OPEN, and send throw (which also tears down to 'disconnected').\n\nDoD2: settings-wire S7 (disconnected save: no frame, one warning, no info/error/dispose; then retry on the same page after reconnect: one six-key frame, 'Settings saved.', one dispose) and S8 (ws.send throws: warning, no success, no dispose, client 'disconnected'). S1 gained warnings []. S1-S6 are otherwise unchanged.\n\nMutation check in the snapshot: the panel ignoring the result failed S7 and S8 (10 pass, 2 fail). dispose() kept on the false branch also failed S7 and S8. Restored: 12/12.\n\nDoD3: gate green. No daemon, proxy or moe-jetbrains change.\n\nNot verified, out of scope: JetBrains MoeSettingsDialog close-on-refused-save sibling bug (governor routing a separate row). Peer-dirty ManagedVm.ts and managed-vm.test.cjs are not in this commit.",
+  "requiredCheckAtDone": null
 }
