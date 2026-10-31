@@ -9,23 +9,162 @@
     "cd moe-vscode && npm test passes in a snapshot."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD RED. Create moe-vscode/tests/managed-vm-runtime.test.cjs (node:test; `npm test` already globs tests/*.test.cjs).\n\nLOADER: transpile src/services/MoeDaemonClient.ts, src/util/ManagedVm.ts and src/providers/ManagedVmTreeProvider.ts with ts.transpileModule (CommonJS, ES2020, esModuleInterop). Give every fixture fresh module instances, so runtimeProfile's session pin cannot leak. Use managed-vm.test.cjs's same-realm wrapper, `vm.runInThisContext('(function (exports, module, require, process) {...})')`, and inject `process: { ...process, env }`. Objects built under vm.runInNewContext carry another realm's prototype and fail deepStrictEqual (protected-daemon-spawn.test.cjs works around that with JSON plain(), which would drop the AbortSignal).\n\nREQUIRE MAP:\n- 'vscode': a stub with an EventEmitter class (event/fire/dispose), window.createOutputChannel returning { appendLine }, window.showErrorMessage, workspace.workspaceFolders = [{ uri: { fsPath: project } }], and workspace.getConfiguration returning get(_, fallback).\n- 'child_process': { execFile: a recorder that pushes {file, args, options} and answers via setImmediate(callback(null, one valid moe-vm-status-v1 line + '\\n')) }.\n- '../services/MoeDaemonClient' and '../util/ManagedVm': the loaded modules.\n- Anything else: the real require.\n\nFIXTURE (copy fixture() in protected-daemon-spawn.test.cjs):\n- root = fs.realpathSync.native(mkdtemp), removed in t.after; under it project/, extension/, home/, outside/ and state/;\n- an optional project/.moe/project.json;\n- extension/bundled/scripts/local-runner/vm-control.mjs (an empty file);\n- a node file at root/node-bin/node (node.exe on win32);\n- env = { HOME: home, MOE_NODE_COMMAND: node, MOE_RUNNER_STATE_DIR: state, NODE_OPTIONS: '--require=bad', NODE_PATH: project, PATH: ['rel/bin', project/bin, outside].join(path.delimiter) };\n- client stub = { onStateChanged: () => ({ dispose() {} }), resolveDaemonRuntime: counts its calls and returns { node: 'legacy-node', env: {} } };\n- provider = new ManagedVmTreeProvider(extension, client). Call the TS-private provider.execute('status', signal) directly.\n\nTESTS. Assert exact deepStrictEqual values, never truthiness.\n- R1 protected. Run with project.json {\"settings\":{\"executionProfile\":\"verified-local\"}}, and again with \"bogus\" (runtimeProfile fails closed to protected). Expect:\n  - report.kind === 'status';\n  - exactly one execFile call: file === fs.realpathSync.native(node), args [script, 'status', '--project', project], options deepStrictEqual { timeout: 120000, maxBuffer: 65537, windowsHide: true, signal, env: { HOME: home, MOE_NODE_COMMAND: node, MOE_RUNNER_STATE_DIR: state, PATH: outside } }. So NODE_OPTIONS and NODE_PATH are gone, relative and project PATH entries are gone, nothing is prepended, and MOE_RUNNER_STATE_DIR is kept;\n  - resolveDaemonRuntime is never called;\n  - the fixture env deepStrictEquals its pre-run copy.\n- R2 legacy and observe. Run with no project.json, then with executionProfile \"legacy\" and \"observe\". Expect one call, file 'legacy-node', options deepStrictEqual { timeout: 120000, maxBuffer: 65537, windowsHide: true, signal }, and Object.hasOwn(options, 'env') === false: the child inherits the extension-host env, as today. resolveDaemonRuntime is called once.\n- R3 (error handling) protected with a refused node: MOE_NODE_COMMAND is a file under project/. Expect a resolve to { kind: 'unreadable', reason: 'node-missing' }, zero execFile calls and zero resolveDaemonRuntime calls. It never falls back to the legacy node, as JetBrains nodeCommand returns null and gives NODE_MISSING.\n- R4 helper protectedVmControlRuntime(project, env, windows, home), for windows false and true (D6 style, runs on any host):\n  - windows=false: create home/.local/share/moe/node/current/bin and .../npm/bin; PATH is ['rel/bin', project/bin, outside, outside]. Expect { node: real(node), env: { HOME, MOE_NODE_COMMAND, MOE_RUNNER_STATE_DIR, PATH: [outside, outside].join(delimiter) } }: no dirname(node), no bootstrap dirs, no dedupe;\n  - windows=true: input { Path: project, PATH: the fixture PATH, node_options: 'bad', Node_Path: 'bad', HOME, MOE_NODE_COMMAND, MOE_RUNNER_STATE_DIR }. Expect exactly one PATH-like key, 'PATH' = outside, no NODE_OPTIONS or NODE_PATH in any case, and every other key kept;\n  - an env without PATH gets no PATH key;\n  - a refused node gives undefined;\n  - inputs are never mutated.\n\nRun the file alone and confirm it is RED for the right reason (protectedVmControlRuntime is not a function; R1's options lack env). Either run it in place under Windows node, `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && node --test tests\\managed-vm-runtime.test.cjs\"` (node --test only, never npm ci/install/build in the shared tree), or in a snapshot as in step 3.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/managed-vm-runtime.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN: three edits, with JetBrains ManagedVmPanel.execute and nodeCommand (moe-jetbrains/.../toolwindow/ManagedVmPanel.kt) as the reference.\n\n(a) src/util/ManagedVm.ts. Task-01020adf's CODE_TEXT edits may already be in the file; leave them and everything else alone.\n- Add `env?: NodeJS.ProcessEnv` to ExecFileLike's options type, and a trailing optional `env?: NodeJS.ProcessEnv` parameter to runVmControl.\n- Spread env into options only when it is given, `...(env ? { env } : {})`, so a legacy call builds exactly today's options object: no env key, not even env: undefined.\n- Doc comment: without env the child inherits the extension host's environment (legacy, observe); a protected run passes protectedVmControlRuntime's env.\n- The module stays require-free, because managed-vm.test.cjs throws on any require.\n\n(b) src/services/MoeDaemonClient.ts: after protectedDaemonEnvironment, and WITHOUT changing it, add `export function protectedVmControlRuntime(basePath: string, env: NodeJS.ProcessEnv = process.env, windows = process.platform === 'win32', home = env.HOME || env.USERPROFILE): { node: string; env: NodeJS.ProcessEnv } | undefined`.\n- node = installedExecutable(protectedNodeCandidate(env, home, windows, basePath), basePath). On 'rejected', return undefined; selectInstalledFile already logs the reason, and no UI text is added.\n- The env is a copy of env:\n  - every NODE_OPTIONS or NODE_PATH key is removed, case-insensitively on Windows and exactly elsewhere (the predicate protectedDaemonEnvironment uses);\n  - on Windows, only the first of pathNames(copy, windows) is kept and the other PATH-like keys are deleted;\n  - when that key holds a value, it becomes protectedPathEntries(value, basePath).join(path.delimiter).\n- Nothing is added (no dirname(node), no ~/.local/share/moe dirs) and nothing is deduplicated. An absent PATH stays absent. Every other variable is kept, MOE_RUNNER_STATE_DIR included: vm-control.mjs ownedLedgerDir uses it to find the runner's ledger, and JetBrains keeps it.\n- Doc comment: this is the VS Code mirror of ManagedVmPanel's protected run, nodeCommand plus MoeDaemonSupervisor.protectedDaemonEnvironment without applyDaemonPath. It is stricter only where VS Code already is (Windows case variants, duplicate PATH keys).\n\n(c) src/providers/ManagedVmTreeProvider.ts execute:\n- Keep the no-project and script-missing checks first.\n- Then `if (runtimeProfile(root) !== 'protected') { return runVmControl(execFile, this.client.resolveDaemonRuntime().node, script, command, root, signal); }`, which is today's call byte for byte.\n- Otherwise `const runtime = protectedVmControlRuntime(root); return runtime ? runVmControl(execFile, runtime.node, script, command, root, signal, runtime.env) : Promise.resolve(unreadable('node-missing'));`.\n- Import runtimeProfile and protectedVmControlRuntime from '../services/MoeDaemonClient'. Today only the MoeDaemonClient type is imported.\n- Add one comment line naming the JetBrains counterpart.\n\nERROR HANDLING: add no new throw or reject path.\n- A refused protected node is the fixed unreadable('node-missing'): no process, no legacy fallback, no path in UI text.\n- runtimeProfile never throws; it fails closed to protected.\n- protectedVmControlRuntime catches nothing new, because installedExecutable and protectedPathEntries never throw.\n- runVmControl keeps its try/catch and callback mapping, so execute still always resolves.\n- run()'s `.catch(() => unreadable('failed'))` stays.\n\nRe-run the step-1 file: GREEN.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/util/ManagedVm.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/providers/ManagedVmTreeProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFICATION GATE (DoD 3), run once from the repo root as a Linux snapshot, per Serena memory gotcha-vscode-gate-from-wsl. The shared tree's moe-vscode node_modules is Windows-native: never run npm ci, install or build there. The command:\n\ncd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-d4c4-gate.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && for f in moe-vscode/src/util/ManagedVm.ts moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/src/providers/ManagedVmTreeProvider.ts moe-vscode/tests/managed-vm-runtime.test.cjs; do cp \"$f\" \"$S/$f\"; done && echo \"SNAPSHOT=$S\" && env -i HOME=\"$HOME\" S=\"$S\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && cd \"$S/moe-vscode\" && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'\n\nRun it only after task-01020adf has landed, so HEAD carries its ManagedVm.ts. The overlay copies the working ManagedVm.ts as a whole.\n\nExpect exit 0, clean lint and compile (compile is the only typecheck; the tests transpile without one), 0 failures, and R1-R4 passing. The 4 Windows-only skips are pre-existing.\n\nThis fresh output tail is the complete_task verification evidence. Afterwards, delete the snapshot by its literal SNAPSHOT= path; the harness refuses an rm -rf \"$(cat …)\" form.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's diff only, the 4 files. Do not re-review the JetBrains side or task-01020adf's CODE_TEXT lines.\n\nChecklist:\n1. Is the legacy/observe execFile call byte-identical to HEAD's: the same node from resolveDaemonRuntime and the same options object, with no env key?\n2. Can any protected path reach execFile without the scrubbed env, or with the legacy node?\n3. Is the input env mutated anywhere?\n4. Windows: Path/PATH duplicates, node_options case variants, and PATH entries with edge quotes or inside the project through an alias. protectedPathEntries owns those; do not re-implement it.\n5. Are MOE_RUNNER_STATE_DIR and every other variable kept? Never scrub what JetBrains keeps.\n6. Error handling: does every path still resolve, with no new reject or throw?\n7. Is ManagedVm.ts still require-free?\n8. Are protectedDaemonEnvironment, startProtectedDaemon and resolveDaemonRuntime untouched?\n\nPROVE THE TESTS BITE. In a fresh scratch snapshot outside the checkout, apply each mutant, run `node --test tests/managed-vm-runtime.test.cjs`, confirm it fails, then discard it:\n- M1: drop runtime.env from the protected runVmControl call;\n- M2: pass an env on the legacy branch;\n- M3: build the protected env with protectedDaemonEnvironment(...);\n- M4: fall back to resolveDaemonRuntime().node when the protected node is refused.\n\nOptional win32 evidence: `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && node --test tests\\managed-vm-runtime.test.cjs\"`.\n\nRecord the mutant results in the step note. If anything changes, re-run the step-3 command and submit that fresh output.\n\nNON-GOALS, do not 'fix' these:\n- cwd: JetBrains sets the script directory in both profiles and VS Code sets none. Legacy must not change and the DoD covers env only.\n- JetBrains' own exact-case NODE_OPTIONS removal.\n- Any docs or CHANGELOG edit: no doc describes this env, and verified-local stays unavailable.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/tests/managed-vm-runtime.test.cjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote under the human's standing delegation. This is an I06f review follow-up (LOW, off-lane), and I06f is DONE. governor-693b7073 added dependsOn 01020adf at 18:19Z, so its coding waits for that row's ManagedVm.ts edit. Planning can start now.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
-    "task-426a012ecc374cdaa7454742bc5a552a"
+    "task-426a012ecc374cdaa7454742bc5a552a",
+    "task-01020adf7b0f4dc3bdd72734eb07be3c"
   ],
   "priority": "LOW",
   "order": 267.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-f61e928272ff471db52d2b4781d71f7a",
+      "author": "governor-4764040b",
+      "content": "Governor start guard (governor-4764040b, 18:28Z), for whoever claims this row after task-01020adf is DONE. It applies until task-44a07f00 (the get_commit_scope fix) is live in the daemon.\n\n01020adf also edits moe-vscode/src/util/ManagedVm.ts. Its QA session lands its exit checkpoint up to a minute or two after approval, and today that landing would commit any ManagedVm.ts change made since its pre-flight under 01020adf's id.\n\nSo before your FIRST edit of ManagedVm.ts, or any file 01020adf declared:\n1. Run `git log -5 --format=%s` and confirm a `wip(task-01020adf…) … [status=DONE role=qa …]` line is there.\n2. If it isn't, re-check every 20 s for up to 5 minutes. Read-only work is fine meanwhile.\n3. If it still hasn't landed, post in #governors and keep waiting. Don't edit.",
+      "timestamp": "2026-10-31T18:23:23.233Z"
+    },
+    {
+      "id": "comment-9e1ca1a1bbb143e5a802a0d170c03797",
+      "author": "governor-4764040b",
+      "content": "Amendment to the start guard (comment-f61e9282), agreed with governor-693b7073: if 5 minutes pass with no `[status=DONE role=qa]` checkpoint for 01020adf, post one line in #governors and START anyway. A dead QA seat never lands one. A governor will watch the late landing and fix attribution if needed.",
+      "timestamp": "2026-10-31T18:23:35.435Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T17:35:27.653Z",
-  "updatedAt": "2026-10-31T17:35:27.653Z"
+  "updatedAt": "2026-10-31T18:38:32.147Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T18:21:37.974Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T18:21:49.935Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-b58e1112"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T18:38:32.119Z",
+  "executionContract": {
+    "intendedBehavior": "Under a protected read (runtimeProfile(root) === 'protected', meaning verified-local, a session pin or a fail-closed project.json), the VS Code Managed VMs view runs vm-control.mjs as JetBrains ManagedVmPanel.execute does. The executable is the protected node selection: protectedNodeCandidate validated by installedExecutable. When that selection is refused, the view returns unreadable 'node-missing' and starts no process. The environment is a copy of the extension-host env without NODE_OPTIONS and NODE_PATH, whose PATH keeps only protectedPathEntries; nothing is added and every other variable, MOE_RUNNER_STATE_DIR included, is kept. Legacy, observe and an absent profile keep today's call exactly: resolveDaemonRuntime().node, with execFile options that have no env key, so the child inherits the extension-host env.",
+    "acceptanceCriteria": [
+      "Protected read: execFile receives the installedExecutable-accepted real node path, and options.env equals the extension-host env minus NODE_OPTIONS and NODE_PATH, with PATH filtered by protectedPathEntries, nothing added and all other variables kept.",
+      "Protected read with a refused node: resolves {kind:'unreadable', reason:'node-missing'}, starts no process and never consults resolveDaemonRuntime.",
+      "Legacy, observe and an absent project.json: execFile receives resolveDaemonRuntime().node and options {timeout, maxBuffer, windowsHide, signal?} with no own env key, as at HEAD.",
+      "The extension-host env object is never mutated, and execute never rejects.",
+      "moe-vscode/tests/managed-vm-runtime.test.cjs pins all of the above with exact values (R1-R3 through ManagedVmTreeProvider.execute; R4 covers the helper's Windows and POSIX branches).",
+      "The step-3 snapshot gate (npm ci, lint, compile, test) exits 0."
+    ],
+    "invariants": [
+      "A protected read never runs vm-control with the legacy node or with the unscrubbed environment.",
+      "Every variable JetBrains keeps for vm-control is kept, MOE_RUNNER_STATE_DIR in particular.",
+      "The caller's env object is never mutated, and the view's run still always resolves to a report."
+    ],
+    "compatibility": [
+      "Legacy and observe vm-control runs are unchanged: the same node source and the same options object, with no env key.",
+      "protectedDaemonEnvironment, startProtectedDaemon and resolveDaemonRuntime are unchanged; protected-daemon-spawn.test.cjs passes untouched.",
+      "ManagedVm.ts stays require-free. CODE_TEXT, decode and the rendered texts (including task-01020adf's additions) are untouched, and no new UI text is added.",
+      "verified-local stays unavailable: the daemon refuses it with EXECUTION_PROFILE_NOT_READY."
+    ],
+    "approvedScope": [
+      "ManagedVm.ts: the ExecFileLike options type (env?) and a trailing optional env parameter on runVmControl.",
+      "MoeDaemonClient.ts: one new export, protectedVmControlRuntime(basePath, env?, windows?, home?).",
+      "ManagedVmTreeProvider.ts: the profile branch in execute, plus imports of runtimeProfile and protectedVmControlRuntime.",
+      "New test file moe-vscode/tests/managed-vm-runtime.test.cjs."
+    ],
+    "reuse": [
+      "Reused: runtimeProfile, protectedNodeCandidate, installedExecutable, pathNames and protectedPathEntries (MoeDaemonClient.ts); runVmControl and unreadable (ManagedVm.ts); the fixture shape of protected-daemon-spawn.test.cjs and the same-realm loader of managed-vm.test.cjs.",
+      "New: protectedVmControlRuntime. protectedDaemonEnvironment also applies applyDaemonPath (it prepends dirname(node), appends the bootstrap dirs and dedupes), which JetBrains' vm-control run does not."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt execute: isProtected = RuntimeSelectionPolicy.profile(basePath) == PROTECTED; node = nodeCommand(supervisor, isProtected), else NODE_MISSING; if isProtected, supervisor.protectedDaemonEnvironment(builder.environment(), basePath), with no applyDaemonPath.",
+      "MoeDaemonSupervisor.kt protectedDaemonEnvironment removes NODE_OPTIONS and NODE_PATH and filters PATH through protectedPathEntries; every other variable is kept.",
+      "moe-vscode/src/providers/ManagedVmTreeProvider.ts execute calls runVmControl(execFile, this.client.resolveDaemonRuntime().node, script, command, root, signal) for every profile.",
+      "moe-vscode/src/util/ManagedVm.ts runVmControl builds options {timeout, maxBuffer: 65537, windowsHide, signal?} with no env.",
+      "MoeDaemonClient.ts exports runtimeProfile, protectedNodeCandidate, installedExecutable, protectedPathEntries and protectedDaemonEnvironment (= applyDaemonPath + scrub); pathNames is module-private.",
+      "scripts/local-runner/vm-control.mjs ownedLedgerDir reads MOE_RUNNER_STATE_DIR. No local-runner module spawns node, npm, git or multipass by bare name."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes && S=$(mktemp -d /tmp/moe-d4c4-gate.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && for f in moe-vscode/src/util/ManagedVm.ts moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/src/providers/ManagedVmTreeProvider.ts moe-vscode/tests/managed-vm-runtime.test.cjs; do cp \"$f\" \"$S/$f\"; done && echo \"SNAPSHOT=$S\" && env -i HOME=\"$HOME\" S=\"$S\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'umask 022 && cd \"$S/moe-vscode\" && npm ci --no-audit --no-fund && npm run lint && npm run compile && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Reuse VS Code protectedDaemonEnvironment as-is: REJECTED. It is JetBrains applyDaemonPath plus the scrub, so PATH gains dirname(node), the ~/.local/share/moe bootstrap dirs and a dedupe. JetBrains ManagedVmPanel applies the scrub alone, so that would not be the same environment JetBrains uses (DoD 1).\n2. Scrub the env but keep resolveDaemonRuntime().node under protected: REJECTED. An unvalidated MOE_NODE_COMMAND, or a bare 'node', would defeat the scrub and diverge from JetBrains nodeCommand, which validates with installedExecutable and returns NODE_MISSING.\n3. Also scrub MOE_RUNNER_STATE_DIR (the description names it): REJECTED. JetBrains keeps it, and vm-control.mjs ownedLedgerDir must read the same ledger the runner writes.\n4. Refactor protectedDaemonEnvironment to share the new scrub: REJECTED. It touches the certified daemon-spawn path (tests D1, D6, D7) for no behaviour gain.\n5. Test only the helper plus runVmControl: REJECTED as the only test. The defect sits in the provider's wiring, so R1-R3 drive ManagedVmTreeProvider.execute through a recording execFile, and R4 covers the Windows branch on any host.",
+    "codebaseInsights": "- MoeDaemonClient.ts holds the VS Code mirror of JetBrains RuntimeSelectionPolicy: runtimeProfile (fails closed to protected, session pin), protectedNodeCandidate, installedExecutable (selectInstalledFile logs each refusal with detail), pathNames (private), protectedPathEntries and protectedDaemonEnvironment.\n- ManagedVm.ts must stay pure: managed-vm.test.cjs throws on any require.\n- Tests load TS through ts.transpileModule and node:vm with stubbed requires (managed-vm.test.cjs, protected-daemon-spawn.test.cjs, metrics-view.test.cjs).\n- In the provider, MoeDaemonClient is a type-only import today; transpile elides it. The new value imports make it a real require.\n- No scripts/local-runner module spawns node, npm, git or multipass by bare name, so dropping the PATH additions cannot break vm-control.",
+    "risks": "- Coding waits for task-01020adf. Its uncommitted CODE_TEXT export and additions to ManagedVm.ts and managed-vm.test.cjs were on disk at planning time. Edit only ExecFileLike and runVmControl, use symbols rather than line numbers, and do not touch managed-vm.test.cjs.\n- Cross-realm trap: objects from vm.runInNewContext fail deepStrictEqual against literals. Use the same-realm wrapper with an injected process.\n- The legacy options must have no env key at all. deepStrictEqual distinguishes a missing key from env: undefined.\n- Windows: keep the case-insensitive NODE_* removal and the duplicate-PATH-key collapse. R4 exercises them on Linux.\n- Run the gate in a Linux snapshot only. In place, compile fails under WSL (Windows-native node_modules).\n- Latent: verified-local stays refused by the daemon (EXECUTION_PROFILE_NOT_READY), so there is no user-visible change today.\n- JetBrains residual, not this row and unverified: per the MoeDaemonSupervisor.kt:754 comment, ProcessBuilder env keys are case-sensitive on Windows, so its env.remove(\"NODE_OPTIONS\") may miss a 'node_options' spelling.",
+    "keyFiles": [
+      "moe-vscode/src/providers/ManagedVmTreeProvider.ts",
+      "moe-vscode/src/util/ManagedVm.ts",
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/protected-daemon-spawn.test.cjs",
+      "moe-vscode/tests/managed-vm.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "scripts/local-runner/vm-control.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d40c284779cf3fb832718de9ba6de55e2a53d810",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T18:38:32.147Z",
+  "approvedPlanRevision": 1
 }

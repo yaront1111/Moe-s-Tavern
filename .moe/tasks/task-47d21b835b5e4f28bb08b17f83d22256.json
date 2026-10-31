@@ -10,9 +10,39 @@
     "`node --test scripts/tests/local-runner.test.mjs` exits 0 in a snapshot, never in the shared checkout, and its output is supplied to complete_task."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED), in scripts/tests/local-runner.test.mjs only. This row depends on R13 (task-f4811a72), which held this file and docs/CERTIFICATION.md. Start from the landed bytes and keep every peer/pre-existing byte.\n(a) The test 'only the strictly confined Canonical-verified Multipass 1.17.0 snap satisfies multipass-snap' (~:2354): add held-combined notes to `rejected`: 'disabled,held', 'devmode,held' and 'held,jailmode' (both orders, so the test does not depend on snapd's note order). Keep every existing rejected note ('devmode', 'classic', 'jailmode', 'disabled', 'try', 'broken', 'devmode,disabled') and every U row unchanged. Strengthen the loop's assertion to the full items, so the action text is pinned too: assert.deepEqual([result.ready, result.prerequisites], [false, linuxItems(only(1, expected))]). linuxItems already carries the existing multipass-snap action 'Install the Multipass 1.17.0 snap from the verified Canonical publisher with strict confinement (requires sudo).'\n(b) In the same test, add the satisfied case: a `held` row, the operator's real one, snapRow({ notes: 'held' }), must give assert.deepEqual([result.ready, result.prerequisites], [true, LINUX_READY]). Add one line comment citing the R13 evidence: `multipass  1.17.0  19760  latest/stable  canonical**  held` after `snap refresh --hold multipass`.\n(c) Update the snapRow comment (~:2284) so it also says `held` is snapd's refresh hold, not a confinement mode.\nRun the focused RED in a SNAPSHOT, never in the shared checkout (DoD 4). Create one with `git archive HEAD` of the whole repo into /tmp, overlay the changed files, then: env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test --test-name-pattern 'multipass-snap' scripts/tests/local-runner.test.mjs. Expected RED: only the `held` satisfied assertion fails; the held-combined rows already fail closed. Re-overlay and re-run the same snapshot for GREEN after step 2.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Minimum implementation (GREEN) and docs.\n(a) scripts/local-runner/platform-linux.mjs probeSnap (:58-66): accept exactly `-` or exactly `held`. For example, keep the existing return and replace `notes === '-'` with `(notes === '-' || notes === 'held')`; a frozen two-entry Set is fine too. Do NOT split on commas: `held` combined with any other note (devmode, classic, jailmode, try, disabled, broken) stays false, as does any unknown note. Rewrite the comment above it: `-` is a plain strictly confined snap; `held` is only snapd's refresh hold (`snap refresh --hold multipass`), which keeps the certified 1.17.0 and changes no confinement or activation; every other note, alone or with `held`, is weaker confinement or an inactive snap.\nError handling is unchanged and fails closed. A missing snap is still false. An unreadable, oversized or misshapen table, or zero or several rows, is still null (unknown). Any other note is still false with the existing SNAP_ACTION text. Nothing else in platform-linux.mjs changes (the snapTable parser, the item order, the actions, missingPlugs).\n(b) docs/CERTIFICATION.md '## How to run it' step 1 (:37-40): add one or two sentences. On Linux a refresh hold (`sudo snap refresh --hold multipass`) is allowed and keeps the certified 1.17.0 when a newer Multipass reaches the stable channel; `snap list multipass` then shows the note `held`. Any other note, alone or with `held` (devmode, classic, jailmode, try, disabled, broken), fails the `multipass-snap` item. Keep the existing wording and R13's Certified platforms table untouched.\nRe-run the focused snapshot test from step 1 and record GREEN.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/platform-linux.mjs",
+        "docs/CERTIFICATION.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate (DoD 4): run ONCE, fresh, verbatim from any cwd. Its output is the moe.complete_task verification evidence. It takes a whole-repo `git archive HEAD` snapshot in /tmp, overlays and cmp-verifies this task's three files, and runs the full suite under env -i with Linux node 24.21. No npm install is needed. Pass means EXIT=0 and 'fail 0'. The R13 baseline was 351 tests, 350 pass, 1 skip (the opt-in macOS smoke); expect the same skip and the same or a higher pass count. Delete the printed SNAP dir after recording.\nCommand:\nset -o pipefail; R=/mnt/d/projexts/moes; S=$(mktemp -d /tmp/47d21b83-lr-XXXXXX) && git -C $R archive HEAD | tar -x -C $S || exit 9; for f in scripts/local-runner/platform-linux.mjs scripts/tests/local-runner.test.mjs docs/CERTIFICATION.md; do cp $R/$f $S/$f && cmp $R/$f $S/$f || exit 9; done; (cd $S && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin bash -c 'umask 022 && node --test scripts/tests/local-runner.test.mjs' 2>&1 | tail -n 12); E=$?; echo EXIT=$E SNAP=$S; [ $E -eq 0 ]",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff (final step; load adversarial-self-review). Check: (1) a `held` combined with any other note in any order is rejected. No split or substring logic, so `held` inside another token cannot pass; `held,held` is not accepted either, and snapd never emits it. (2) Version, publisher and row-count checks are untouched: a held 1.16.1 or an unverified publisher still fails. (3) The R13 operator scenario passes end to end through linuxPlatform.prerequisites: ready true with every item satisfied. (4) Certify inherits the fix through platform.prerequisites (certify.mjs:116), with no certify change. (5) The docs sentence matches the code exactly. (6) The diff touches only the three planned files; local-runner.test.mjs changes stay inside the multipass-snap test and the snapRow comment. Report every touched path in complete_step.modifiedFiles. If anything changes here, re-run the step-3 command fresh before moe.complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,9 +54,75 @@
     "task-f4811a729f9e436ba129a65c12d348c1"
   ],
   "priority": "LOW",
-  "order": 317.6,
+  "order": 268.5,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T18:18:42.785Z",
-  "updatedAt": "2026-10-31T18:18:42.785Z"
+  "updatedAt": "2026-10-31T18:38:37.483Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T18:22:23.277Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T18:35:46.470Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-8419009e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T18:38:37.456Z",
+  "executionContract": {
+    "intendedBehavior": "On Linux, the multipass-snap prerequisite accepts the certified Canonical-verified Multipass 1.17.0 snap when its snap list Notes column is exactly '-' or exactly 'held' (snapd's refresh hold), so an operator can pin 1.17.0 with `snap refresh --hold multipass` and still pass prerequisites and certify. Every other note, alone or combined with held, still fails closed with the existing action text.",
+    "acceptanceCriteria": [
+      "snapRow notes 'held' yields linuxPlatform.prerequisites ready true with every item satisfied.",
+      "Notes 'disabled,held', 'devmode,held' and 'held,jailmode', plus every previously rejected note, yield multipass-snap false with the unchanged SNAP_ACTION text.",
+      "docs/CERTIFICATION.md 'How to run it' step 1 says a refresh hold is allowed and keeps 1.17.0.",
+      "The step-3 snapshot command exits 0."
+    ],
+    "invariants": [
+      "Version, publisher, row-count and table-shape checks are unchanged; unknown output stays null.",
+      "No change outside probeSnap's notes condition and its comment in platform-linux.mjs.",
+      "Never run local-runner tests in the shared checkout."
+    ],
+    "compatibility": [
+      "Existing rejected-note and unknown-output test rows keep their verdicts.",
+      "Certify uses platform.prerequisites (certify.mjs:116) and needs no change."
+    ],
+    "sourceAssumptions": [
+      "platform-linux.mjs:58-66 probeSnap requires notes === '-'; snapTable (:45-55) splits rows on whitespace into exactly 6 columns.",
+      "snapd joins Notes with commas and shows 'held' for a refresh hold (R13 evidence: `multipass  1.17.0  19760  latest/stable  canonical**  held`).",
+      "local-runner.test.mjs:2284-2286 snapRow/snapList, :2312-2331 LINUX_ITEMS/linuxItems/only/LINUX_READY/linuxPrerequisites, :2354 the multipass-snap test."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Split Notes on commas and accept when every entry is 'held'. Rejected: snapd never emits a duplicate held, and exact equality is the smallest fail-closed rule. Accepting more snapd notes (in-cohort, ignore-validation): out of scope; they stay rejected (fail closed), as the DoD says.",
+    "codebaseInsights": "probeSnap feeds the multipass-snap item (index 1 of LINUX_ITEMS). The tests drive linuxPlatform.prerequisites through linuxTransport, an answers map keyed by argv, plus ROOMY stubs. only(1, F) and linuxItems() pin the satisfied states and actions. certify reaches the same code through platform.prerequisites. Dependency: R13 (task-f4811a72, BLOCKED on operator certify reports) holds local-runner.test.mjs and CERTIFICATION.md, so this row is claimable only after R13 is DONE. Until then the Linux operator workaround is `sudo snap refresh --unhold multipass` while 1.17.0 is still the stable release.",
+    "risks": "- local-runner.test.mjs is ~5k lines and shared with many CQ-R rows. Edit only the multipass-snap test and the snapRow comment, and verify `git diff` shows nothing else.\n- Run every local-runner test in a snapshot, never in place (DoD 4).\n- docs/CERTIFICATION.md is R13's; do not touch its Certified platforms table.",
+    "keyFiles": [
+      "scripts/local-runner/platform-linux.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "docs/CERTIFICATION.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d40c284779cf3fb832718de9ba6de55e2a53d810",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T18:38:37.482Z",
+  "approvedPlanRevision": 1
 }

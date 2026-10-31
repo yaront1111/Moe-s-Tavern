@@ -40,7 +40,7 @@ const UNREADABLE: Record<UnreadableReason, string> = {
     'no-project': 'Managed VM control unavailable: open the Moe project folder first.'
 };
 /** Producer codes and preserve reasons; a Map, so a token such as `constructor` never reads a prototype member. */
-const CODE_TEXT = new Map(Object.entries({
+export const CODE_TEXT: ReadonlyMap<string, string> = new Map(Object.entries({
     PLATFORM_UNSUPPORTED: 'This host platform is not supported for Moe-managed VMs.',
     PREREQUISITES_UNAVAILABLE: 'Host prerequisites could not be checked; run the local-runner doctor.',
     PROVIDER_PREREQUISITES_READY: 'Multipass is ready, but another host prerequisite is not (on Windows, Hyper-V).',
@@ -54,6 +54,23 @@ const CODE_TEXT = new Map(Object.entries({
     VM_CONTROL_REPORT_TOO_LARGE: 'The VM report was too large to send. Reconcile, then refresh.',
     LEDGER_UNREADABLE: 'The owned VM ledger could not be read, so nothing was listed or changed.',
     LIFECYCLE_STATE_UNKNOWN: 'The VM state is unknown; reconcile, then try again.',
+    MANIFEST_INVALID: 'The bundled Multipass provider manifest is missing or invalid; reinstall Moe.',
+    VERSION_MISMATCH: 'The Multipass client and daemon versions differ; restart Multipass, or reinstall it, so both run the same approved version.',
+    PROVIDER_OUTPUT_INVALID: 'Multipass returned output Moe could not read; install an approved Multipass version, then refresh.',
+    DOCTOR_INPUT_INVALID: 'Moe called the prerequisite check with invalid options; update or reinstall Moe.',
+    PROVIDER_COMMAND_FAILED: 'A Multipass command failed; check that the Multipass service is running, then refresh.',
+    PROVIDER_OUTPUT_LIMIT: 'Multipass output was larger than Moe accepts; check the Multipass installation, then refresh.',
+    PROVIDER_INPUT_INVALID: 'The Multipass executable path was empty or invalid, so Multipass was not run; update or reinstall Moe.',
+    LIFECYCLE_INPUT_INVALID: 'Moe passed invalid input to the VM lifecycle, so nothing was changed; update or reinstall Moe.',
+    LIFECYCLE_NAME_COLLISION: 'A VM that Moe did not launch already held this reserved name, so Moe leaves it untouched; remove it in Multipass only if it is yours.',
+    LIFECYCLE_RETRY_EXHAUSTED: 'Every allowed launch try for this VM failed; reconcile, then clean up.',
+    LIFECYCLE_NOT_OWNER: 'This VM record belongs to another task attempt, so Moe left it untouched; reconcile, then refresh.',
+    LIFECYCLE_PHASE_INVALID: 'The VM record is in a phase that does not allow this action; reconcile, then try again.',
+    LEDGER_INPUT_INVALID: 'Its ledger update was invalid and was not written; the VM may already be gone. Reconcile, then clean up again.',
+    LEDGER_RECORD_INVALID: 'Its ledger record is missing or unreadable; the VM may already be gone. Reconcile, then clean up again.',
+    LEDGER_CONFLICT: 'Its ledger record changed during the update; the VM may already be gone. Reconcile, then clean up again.',
+    LEDGER_WRITE_FAILED: 'Its ledger record could not be written; the VM may already be gone. Check free space and permissions under ~/.moe/runner-state (or MOE_RUNNER_STATE_DIR), then clean up again.',
+    IMAGE_IDENTITY_CHANGED: 'The VM image no longer matches its recorded identity; Moe never overwrites it, so new image evidence is required.',
     'attempt-active': 'Its agent attempt is still running.',
     'attempt-unknown': 'The daemon could not confirm that its attempt is closed (it must be reachable on loopback).',
     'job-lease-held': 'Its job lease is still held.',
