@@ -1,0 +1,31 @@
+{
+  "id": "task-d4c4a758ad304ec3a6d294d9307b06f1",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "bug: VS Code runs vm-control with the full extension-host env, while JetBrains scrubs it under the protected profile",
+  "description": "Found in the CQ-I06f whole-epic review at 96f7bdd4 (I05 residual). JetBrains ManagedVmPanel.execute applies supervisor.protectedDaemonEnvironment(builder.environment()) when RuntimeSelectionPolicy.profile is PROTECTED (ManagedVmPanel.kt:117-122). VS Code ManagedVmTreeProvider.execute (:75-80) calls runVmControl(execFile, ...), whose options (ManagedVm.ts:96) carry no env. The child therefore inherits every extension-host variable, including MOE_RUNNER_STATE_DIR, which picks the VM ledger dir (vm-control.mjs ownedLedgerDir).\nThis is latent while verified-local is unavailable (the daemon refuses with EXECUTION_PROFILE_NOT_READY). It must be at parity before strong-profile activation.",
+  "definitionOfDone": [
+    "Under a protected (verified-local) read, VS Code runs vm-control with the same scrubbed environment JetBrains uses; legacy/observe stays unchanged.",
+    "A moe-vscode node:test pins the env passed to execFile for both profiles.",
+    "cd moe-vscode && npm test passes in a snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-426a012ecc374cdaa7454742bc5a552a"
+  ],
+  "priority": "LOW",
+  "order": 267.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T17:35:27.653Z",
+  "updatedAt": "2026-10-31T17:35:27.653Z"
+}

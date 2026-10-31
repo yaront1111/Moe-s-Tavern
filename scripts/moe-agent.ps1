@@ -1952,6 +1952,7 @@ function Test-MoeReceiptJournal([string]$GitDir, [string]$Name, $J) {
         [string]$J.targetAfter -notmatch $rev -or [string]$J.landedRevision -notmatch $rev -or -not (Test-MoeOwedLedger $l) -or
         ($J.profile -ceq 'verified-local' -and -not ($J.treeSha -is [string] -and $J.treeSha -match $rev)) -or
         ($wt -and -not ($l.pushed -is [bool] -and -not $l.pushed -and [string]$l.sha -ceq [string]$J.targetAfter -and [string]$l.ref -ceq [string]$J.target -and
+            [string]$l.taskId -ceq [string]$J.taskId -and $l.outcome -ceq 'committed' -and $l.kind -ceq 'completion' -and
             $l.paths -is [array] -and $l.inferredPaths -is [array] -and $l.unattributedPaths -is [array])))
 }
 # Where a journal's target shows its landing: targetAfter itself, or the copy a
@@ -1990,7 +1991,9 @@ function Find-MoeJournaledLanding([string]$Top, $Journal) {
 function Send-MoeOwedLedgerRow($Journal, [string]$Sha) {
     $l = $Journal.ledger; $push = $Journal.pushResult
     if (Test-MoeWorktreeJournal $Journal) {
+        # The exact row, but for workerId: the seat that records it, as for every replayed row.
         $row = @{}; foreach ($p in $l.PSObject.Properties) { $row[$p.Name] = $p.Value }
+        $row.workerId = $WorkerId
         $reply = Send-MoeRecordCommit $row
         return ($null -ne $reply -and (Get-MoeProp $reply 'success') -eq $true)
     }
@@ -6129,7 +6132,8 @@ function Invoke-MoeWorktreeCompletion([hashtable]$Settings, [hashtable]$M) {
             Send-MoeRecordCommit ($row + @{ outcome = 'nothing'; code = $res.Code }) | Out-Null
         } else {
             Write-Host "[WARN] $($res.Code): task $tid -- $($L.Msg); $target did not move and the task's bytes stay on $branch." -ForegroundColor Yellow
-            if ($rescue) {
+            # A refusal (an owed journal row) moves nothing, a rescue ref included.
+            if ($rescue -and $res.Outcome -ne 'refused') {
                 $why = if ($res.Code -eq 'MOE_COMMIT_FAILED_REF_CONTENTION') { 'ref-contention' } else { 'commit-failed' }
                 $r = Invoke-MoeRescueRef -Git $git -TaskId $tid -Reason $why -Title $M.Title -Status $M.Status -Sid $M.Sid -Sha $L.T
                 if ($r) { $res.Ref = $r.Ref; $res.Sha = $r.Sha }
@@ -6161,15 +6165,19 @@ function Get-MoeWorktreeControlDirt([hashtable]$Git, [hashtable]$Settings) {
 # <common gitdir>/moe/worktree/<id>.control-dirt for the stray-edit check. No
 # baseline, rescue replay or notice. First of all, L11's retry (WT-08): the
 # task's last recorded completion that its branch lacks is synced in; git
-# refuses over W's dirt, which then stays. Twin: worktree_preflight.
+# refuses over W's dirt, which then stays. Only a C on the target that the
+# branch adds nothing to: a C^{tree} sync over newer work would drop it, and
+# that work lands from the older base instead. Twin: worktree_preflight.
 function Invoke-MoeWorktreePreflight([string]$TaskId, [string]$Title, [string]$Status, [string]$Sid) {
     $settings = Read-MoeCommitSettings
     $git = Get-MoeGitTop
     $done = @(@(Get-MoeProp (Get-MoeProp $preflightContext 'task') 'commits') | Where-Object { $_ -and $_.kind -ceq 'completion' -and
         ($null -eq $_.outcome -or $_.outcome -ceq 'committed') -and [string]$_.sha -cmatch '^[0-9a-f]{40}$' } | ForEach-Object { [string]$_.sha })
     if ($settings.autoCommit -and $git -and $done.Count -gt 0 -and (Invoke-MoeGit -Top $git.Top -GitArgs @('cat-file', '-e', "$($done[-1])^{commit}")).Rc -eq 0 -and
-        (Invoke-MoeGit -Top $git.Top -GitArgs @('merge-base', '--is-ancestor', $done[-1], "refs/heads/$($script:MoeWtBranch)")).Rc -ne 0) {
-        Sync-MoeTaskBranch $script:MoeWtPath $script:MoeWtBranch $done[-1] $TaskId | Out-Null
+        (Invoke-MoeGit -Top $git.Top -GitArgs @('merge-base', '--is-ancestor', $done[-1], "refs/heads/$($script:MoeWtBranch)")).Rc -ne 0 -and
+        (Invoke-MoeGit -Top $git.Top -GitArgs @('merge-base', '--is-ancestor', $done[-1], "refs/heads/$($script:MoeWtTarget)")).Rc -eq 0) {
+        if (Test-MoeTaskBranchLanded $git.Top $done[-1] $TaskId) { Sync-MoeTaskBranch $script:MoeWtPath $script:MoeWtBranch $done[-1] $TaskId | Out-Null }
+        else { Write-Host "[WARN] MOE_WORKTREE_SYNC_FAILED: task $TaskId -- $($script:MoeWtBranch) holds work its landed $($done[-1]) lacks; not synced, the next landing merges it from the older base." -ForegroundColor Yellow }
     }
     if ($settings.autoCommit -and $settings.checkpointCommits) {
         $st = if ($Status) { $Status } else { 'UNKNOWN' }

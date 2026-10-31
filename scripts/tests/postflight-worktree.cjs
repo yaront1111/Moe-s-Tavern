@@ -622,48 +622,69 @@ async function wtCompletion(){
     'finalize, the task branch lacks C, or the journal stayed'+tail(r.log));
   controlSame(p,before);
 }
-// commitHooks: the hook runs on the merged tree (peer and task bytes, no .moe); a staged or
-// unstaged hook edit is refused (failed, T rescued, main unmoved); a no-op hook lands C.
+// commitHooks: the hook runs on the merged tree (peer and task bytes, no .moe); a staged or unstaged
+// hook edit, or a hook that moves HEAD, is refused (failed, T rescued, main unmoved); a no-op hook
+// lands C; no hook worktree is left behind and the control checkout is untouched.
 async function wtHooks(){
   const p=repo('wt-hooks',{settings:{...LANDS,commitHooks:true}}),out=path.join(root,'wt-hooks.out'),hook=path.join(p.top,'.git','hooks','pre-commit');
   write(hook,`#!/bin/sh\n{ [ -e .moe ] && echo moe; cat src/a.txt src/peer.txt; } > "${out.replace(/\\/g,'/')}"\n`+
-    'case "$WT_HOOK_MODE" in staged) echo hooked > src/a.txt && git add src/a.txt ;; unstaged) echo hooked > src/a.txt ;; esac\n');
+    'case "$WT_HOOK_MODE" in staged) echo hooked > src/a.txt && git add src/a.txt ;; unstaged) echo hooked > src/a.txt ;; parent) git reset -q --soft HEAD~1 ;; esac\n');
   fs.chmodSync(hook,0o755);
   await landRun(p,'wt-hooks-0',{'src/a.txt':'task\n'});
-  const peer=commitOn(p,'refs/heads/main',{'src/peer.txt':'peer\n'}),t=revOf(p.top,p.branch);
-  for(const mode of ['staged','unstaged','']){
+  const peer=commitOn(p,'refs/heads/main',{'src/peer.txt':'peer\n'}),t=revOf(p.top,p.branch),before=control(p.top);
+  for(const mode of ['staged','unstaged','parent','']){
     fs.rmSync(out,{force:true});
     const r=await landRun(p,'wt-hooks-'+(mode||'ok'),{},{...REVIEW,WT_HOOK_MODE:mode}),c=mainOf(p);
     const m=/MOE_RESCUE_REF task=\S+ ref=\S+ sha=([0-9a-f]{40}) reason=commit-failed/.exec(r.log);
     assert.deepEqual([readOr(out),mode?[c,m&&m[1],done(p).map(x=>x.outcome)]:[parents(p.top,c),git(p.top,'show',c+':src/a.txt')]],
       ['task\npeer\n',mode?[peer,t,['failed']]:[[peer],'task\n']],`hook ${mode||'no-op'}: its view, main, the rescue or the row`+tail(r.log));
   }
+  assert.equal(git(p.top,'worktree','list','--porcelain').match(/^worktree /gm).length,2,'a hook worktree was left behind');
+  controlSame(p,before);
 }
-// A finalize_attempt refusal keeps the journal; the next pre-flight re-sends its exact row and drops it, with no second CAS.
+// A finalize_attempt refusal keeps the journal; the next pre-flight re-sends its exact row, closes the
+// still-finalizing attempt landed and drops the journal, with no second CAS.
 async function wtReplay(){
   const p=repo('wt-replay',{settings:LANDS}),main=mainOf(p);
   let r=await landRun(p,'wt-replay-1',{'src/a.txt':'done\n'},{...REVIEW,FAKE_EVIDENCE_MODE:'finalize_attempt-refuse'});
   const c=mainOf(p),row=done(p);
   assert.ok(c!==main&&row.length===1&&row[0].sha===c&&present(journal(p)),'no landing, no row, or no kept journal'+tail(r.log));
-  r=await landRun(p,'wt-replay-2',{});
-  assert.deepEqual([mainOf(p),parents(p.top,c),present(journal(p)),done(p)],[c,[main],false,row],'main moved again, the journal stayed, or the replayed row differs'+tail(r.log));
+  // While the journal stays, newer task work is refused (it still owes C's row): no CAS, no rescue ref.
+  r=await landRun(p,'wt-replay-owed',{'src/b.txt':'newer\n'},{...REVIEW,FAKE_ATTEMPT_PHASE:'finalizing',FAKE_EVIDENCE_MODE:'finalize_attempt-refuse'});
+  assert.deepEqual([mainOf(p),present(journal(p)),done(p).map(x=>[x.outcome,x.code]),/MOE_RESCUE_REF/.test(r.log)],
+    [c,true,[['committed',undefined],['refused','MOE_COMMIT_REFUSED_UNRECONCILED_INTENT']],false],'main, the journal, the rows or a rescue ref'+tail(r.log));
+  r=await landRun(p,'wt-replay-2',{},{FAKE_ATTEMPT_PHASE:'finalizing'});
+  assert.deepEqual([mainOf(p),parents(p.top,c),present(journal(p)),done(p),finals(p)],[c,[main],false,row,[['landed',c]]],
+    'main moved again, the journal stayed, the replayed row differs, or no landed finalize'+tail(r.log));
 }
-// A failed sync (MOE_WORKTREE_SYNC_FAILED) leaves the landing standing; the next pre-flight syncs the recorded C in.
+// A failed sync (MOE_WORKTREE_SYNC_FAILED) leaves the landing standing; the next pre-flight syncs the recorded C in,
+// but never a C the target lacks (even one T adds nothing to), nor over newer task work (a C^{tree} sync drops it).
 async function wtSync(){
   const p=repo('wt-sync',{settings:LANDS});
+  const ctx=sha=>({FAKE_CTX_COMMITS:JSON.stringify([{kind:'completion',outcome:'committed',sha,ref:'refs/heads/main'}])});
   let r=await landRun(p,'wt-sync-1',{'src/a.txt':'done\n'},{...REVIEW,WT_GIT_FAIL:'--ff-only'});
   const c=mainOf(p),t=revOf(p.top,p.branch);
   assert.deepEqual([r.log.includes('MOE_WORKTREE_SYNC_FAILED'),probe(p.top,'merge-base','--is-ancestor',c,p.branch),finals(p)],[true,'1:',[['landed',c]]],
     'no sync failure, or the landing did not stand'+tail(r.log));
-  r=await landRun(p,'wt-sync-2',{},{FAKE_CTX_COMMITS:JSON.stringify([{kind:'completion',outcome:'committed',sha:c,ref:'refs/heads/main'}])});
+  const off=commitOn(p,'refs/heads/moe/work-x',{'src/a.txt':'done\n','src/x.txt':'shared\n'});
+  r=await landRun(p,'wt-sync-off',{},ctx(off));
+  assert.deepEqual([revOf(p.top,p.branch),r.log.includes('MOE_WORKTREE_SYNC_FAILED')],[t,false],'the pre-flight synced a C off the target'+tail(r.log));
+  write(path.join(p.W,'src','b.txt'),'newer\n');git(p.W,'add','--','src/b.txt');git(p.W,'commit','-qm','newer task work');
+  const n=revOf(p.top,p.branch);
+  r=await landRun(p,'wt-sync-newer',{},ctx(c));
+  assert.deepEqual([revOf(p.top,p.branch),r.log.includes('holds work its landed')],[n,true],'the pre-flight synced over newer work, or no warning'+tail(r.log));
+  git(p.W,'reset','-q','--hard',t);
+  r=await landRun(p,'wt-sync-2',{},ctx(c));
   const s=revOf(p.top,p.branch);
   assert.deepEqual([parents(p.top,s),revOf(p.W,'HEAD')],[[t,c],s],'the pre-flight did not sync C into the task branch'+tail(r.log));
 }
-// Fail closed, main unmoved: a qualityGate or a remote (WT-09/WT-10), an unwritable journal, three lost CAS rounds.
+// Fail closed, main unmoved: a qualityGate or a remote (WT-09/WT-10), a merge-tree failure that is no conflict
+// (exit 1 without a tree), an unwritable journal, three lost CAS rounds.
 async function wtFails(){
   const bare=n=>{const b=path.join(root,n+'.git');git(root,'init','-q','--bare',b);return b;};
   for(const [n,settings,knobs,setup,code,why] of [
     ['wt-gate',{qualityGate:'node -e 0'},{},null,'MOE_COMMIT_FAILED',/qualityGate/],
+    ['wt-merge-tree',{},{WT_GIT_FAIL:'merge-tree'},null,'MOE_COMMIT_FAILED',/merge-tree exited/],
     ['wt-remote',{},{},p=>git(p.top,'remote','add','origin',bare('wt-remote')),'MOE_COMMIT_FAILED',/remote/],
     ['wt-journal',{},{},p=>write(path.dirname(journal(p)),'x\n'),'MOE_COMMIT_FAILED',/receipt journal .* could not be written/],
     ['wt-exhausted',{},{WT_GIT_FAIL:'update-ref'},p=>landRun(p,'wt-exhausted-0',{'src/a.txt':'done\n'}),'MOE_COMMIT_FAILED_REF_CONTENTION',/all 3 rounds/]]){

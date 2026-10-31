@@ -1,0 +1,31 @@
+{
+  "id": "task-01020adf7b0f4dc3bdd72734eb07be3c",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "bug: both Managed VM clients have no text for reachable vm-control codes (VERSION_MISMATCH, PROVIDER_OUTPUT_INVALID, cleanup LIFECYCLE_*/LEDGER_* errors), so they render the unknown-code fallback",
+  "description": "Found in the CQ-I06f whole-epic review at 96f7bdd4. The status provider.code comes from cli.mjs prerequisites/doctor, which can emit VERSION_MISMATCH (platform-linux.mjs:27, platform-windows.mjs:27, platform-macos.mjs:17), PROVIDER_OUTPUT_INVALID, MANIFEST_INVALID and DOCTOR_INPUT_INVALID (doctor.mjs:12-20). Cleanup errors[].code takes lifecycle.mjs REPORTABLE (:54): LIFECYCLE_*, LEDGER_*, IMAGE_IDENTITY_CHANGED, PROVIDER_OUTPUT_LIMIT, PROVIDER_INPUT_INVALID.\nJetBrains MoeBundle.properties (moe.managedVm.code.*) and VS Code ManagedVm.ts CODE_TEXT (:43-56) both know only 13 codes. Everything else renders 'Refusal code X; no description' (JetBrains, MoeBundle:347) or 'Unknown code X: ...' (VS Code, ManagedVm.ts:62).\nFix: add identical text for the reachable codes in both clients, with a test per client. client-verdicts.json pins only codes, so it does not change.",
+  "definitionOfDone": [
+    "Every code that vm-control status/cleanup can emit has identical actionable text in MoeBundle.properties and ManagedVm.ts CODE_TEXT.",
+    "JetBrains ManagedVmPresentationTest and VS Code managed-vm.test.cjs assert at least VERSION_MISMATCH and one cleanup LIFECYCLE_* code render their text, not the unknown fallback.",
+    "cd moe-jetbrains && ./gradlew test (or the labelled Windows equivalent) and cd moe-vscode && npm test pass in a snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-426a012ecc374cdaa7454742bc5a552a"
+  ],
+  "priority": "LOW",
+  "order": 264.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T17:35:11.968Z",
+  "updatedAt": "2026-10-31T17:35:11.968Z"
+}

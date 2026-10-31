@@ -1,0 +1,28 @@
+{
+  "id": "task-5c8c22d77fbf46008229d092ad84e1c4",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "bug: npm moe-proxy package ships 21 compiled *.test.js files in dist",
+  "description": "Found in the CQ-I06f whole-epic review at 96f7bdd4. packages/moe-proxy/package.json has files ['dist'], and tsconfig.json includes all of src (:15), so `npm run build` emits 21 dist/*.test.js files. That was counted in a fresh snapshot build. The release publishes them to npm. CQ-I06c fixed the daemon the same way (packages/moe-daemon/tsconfig.json excludes tests; its dist has 0). The IDE bundles already strip them: the onboarding test-artifact find over moe-vscode/bundled and the built JetBrains zip printed nothing.\nFix: exclude src/**/*.test.ts from the proxy build, keeping vitest's own type coverage, and add a guard test.",
+  "definitionOfDone": [
+    "A fresh moe-proxy npm run build emits no *.test.js in dist, and `npm pack --dry-run` lists none.",
+    "A test fails if a test file reaches the proxy's dist again.",
+    "cd packages/moe-proxy && npm test passes in a snapshot (never in the shared checkout)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 266.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T17:35:21.867Z",
+  "updatedAt": "2026-10-31T17:35:21.867Z"
+}

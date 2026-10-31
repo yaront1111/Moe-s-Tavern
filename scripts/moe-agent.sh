@@ -5924,6 +5924,7 @@ f=sys.argv[1]; d=json.load(open(f,encoding='utf-8'))
 rev=re.compile(r'[0-9a-fA-F]{40}'); ids=re.compile(r'[A-Za-z0-9_-]{1,128}'); g=d.get('generation'); l=d.get('ledger')
 wt=d.get('workspaceMode')=='worktree' and d.get('publicationMode')=='local'
 if wt and not (isinstance(l,dict) and l.get('pushed') is False and l.get('sha')==d.get('targetAfter') and l.get('ref')==d.get('target')
+    and l.get('taskId')==d.get('taskId') and l.get('outcome')=='committed' and l.get('kind')=='completion'
     and all(isinstance(l.get(k),list) for k in ('paths','inferredPaths','unattributedPaths'))): sys.exit(1)
 ok=(os.path.basename(f)==str(d.get('taskId'))+'.json' and re.fullmatch(r'[A-Za-z0-9_.-]+',str(d.get('taskId')))
     and all(isinstance(d.get(k),str) and ids.fullmatch(d[k]) for k in (('attemptId',) if wt else ('candidateId','attemptId')))
@@ -5968,14 +5969,15 @@ receipt_landed_as() {
 # receipt_ledger_send JOURNAL SHA -- the committed ledger row a journal still
 # owes, recorded for the commit git shows on the target (the daemon merges a
 # repeated sha). pushed follows the journaled push result and is omitted while
-# that is unknown. A worktree journal's ledger is the exact row, sent as it is.
+# that is unknown. A worktree journal's ledger is the exact row, sent as it is
+# but for workerId: the seat that records it, as for every replayed row.
 # 0 once moe.record_commit answered. Twin: Send-MoeOwedLedgerRow.
 receipt_ledger_send() {
     local row
     row=$($PYTHON_CMD - "$1" "$2" "$WORKER_ID" <<'PY' 2>/dev/null
 import json,sys
 f,sha,worker=sys.argv[1:]; d=json.load(open(f,encoding='utf-8')); l=d['ledger']; push=d.get('pushResult')
-if d.get('workspaceMode')=='worktree': print(json.dumps(l)); sys.exit(0)
+if d.get('workspaceMode')=='worktree': print(json.dumps(dict(l,workerId=worker))); sys.exit(0)
 t=d['target']; p='refs/heads/'; ref=t[len(p):] if t.startswith(p) and len(t)>len(p) else t
 row=dict(taskId=d['taskId'],outcome='committed',kind='completion',sha=sha,ref=ref,role=l['role'],sessionId=l['sessionId'],workerId=worker)
 if l.get('status'): row['status']=l['status']
@@ -6672,7 +6674,8 @@ land_worktree_completion() {
     else
         echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $LAND_MESSAGE; $target did not move and the task's bytes stay on $branch."
         [ "$LAND_CODE" != MOE_COMMIT_FAILED_REF_CONTENTION ] || reason=ref-contention
-        [ "$rescue" != true ] || rescue_ref_from_commit "$LAND_WT_T" "$reason" || true
+        # A refusal (an owed journal row) moves nothing, a rescue ref included.
+        [ "$rescue" != true ] || [ "$LAND_OUTCOME" = refused ] || rescue_ref_from_commit "$LAND_WT_T" "$reason" || true
         record_commit_rpc "$LAND_OUTCOME" completion "" "refs/heads/$target" "$LAND_CODE" "$LAND_MESSAGE" "" "" "" || true
     fi
     LAND_SUMMARY_SHA="${LAND_SHA:-${LAND_RESCUE_SHA:-none}}"; LAND_SUMMARY_KIND=completion; LAND_SUMMARY_PATHS="$LAND_N_PATHS"
@@ -6698,7 +6701,9 @@ worktree_control_dirt() {
 # checkout's dirt is listed in <common gitdir>/moe/worktree/<id>.control-dirt
 # for the stray-edit check. No baseline, rescue replay or notice. First of all,
 # L11's retry (WT-08): the task's last recorded completion that its branch
-# lacks is synced in; git refuses over W's dirt, which then stays.
+# lacks is synced in; git refuses over W's dirt, which then stays. Only a C on
+# the target that the branch adds nothing to: a C^{tree} sync over newer work
+# would drop it, and that work lands from the older base instead.
 worktree_preflight() {
     local list c
     c=$(printf '%s' "${PREFLIGHT_CONTEXT:-}" | $PYTHON_CMD -c 'import json,re,sys
@@ -6707,8 +6712,11 @@ except Exception: cs=[]
 cs=[x["sha"] for x in cs if isinstance(x,dict) and x.get("kind")=="completion" and x.get("outcome","committed")=="committed" and re.fullmatch(r"[0-9a-f]{40}",str(x.get("sha")))]
 print(cs[-1] if cs else "")' 2>/dev/null) || c=""
     if [ "$CS_AUTO_COMMIT" = true ] && [ -n "$c" ] && git -C "$MOE_TOP" cat-file -e "$c^{commit}" 2>/dev/null \
-        && ! git -C "$MOE_TOP" merge-base --is-ancestor "$c" "refs/heads/$MOE_WT_BRANCH" 2>/dev/null; then
-        LAND_TASK_ID="$1"; worktree_sync_branch "$MOE_WT_PATH" "$MOE_WT_BRANCH" "$c" || true
+        && ! git -C "$MOE_TOP" merge-base --is-ancestor "$c" "refs/heads/$MOE_WT_BRANCH" 2>/dev/null \
+        && git -C "$MOE_TOP" merge-base --is-ancestor "$c" "refs/heads/$MOE_WT_TARGET" 2>/dev/null; then
+        LAND_TASK_ID="$1"
+        if task_branch_landed "$c" "$1"; then worktree_sync_branch "$MOE_WT_PATH" "$MOE_WT_BRANCH" "$c" || true
+        else echo -e "${YELLOW}[WARN]${NC} MOE_WORKTREE_SYNC_FAILED: task $1 -- $MOE_WT_BRANCH holds work its landed $c lacks; not synced, the next landing merges it from the older base."; fi
     fi
     if [ "$CS_AUTO_COMMIT" = true ] && [ "$CS_CHECKPOINT_COMMITS" = true ] && [ "${MOE_DISABLE_CHECKPOINT:-0}" != 1 ]; then
         LAND_TASK_ID="$1"; LAND_TITLE="$2"; LAND_STATUS="${3:-UNKNOWN}"; LAND_REOPEN=0; LAND_CLI_EXIT=0; LAND_RECOVERED=true

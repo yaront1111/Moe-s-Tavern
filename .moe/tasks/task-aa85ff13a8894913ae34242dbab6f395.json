@@ -69,14 +69,21 @@
     "task-01f37ac63316409ab581f5a189002cb8",
     "task-dfbda1a8230a4fe5b57dbe512fa62a33",
     "task-a2f243a111654c7fbb2a28848a923e8c",
-    "task-dd1ee586b90d4fc785434454b1423e76"
+    "task-fa7fece51d0045edb7871beef40e0d93"
   ],
   "priority": "HIGH",
   "order": 278.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-91b24a4eff484261bab257c0ade1e8af",
+      "author": "governor-693b7073",
+      "content": "Governor slot change, 17:37Z. It adds no scope and changes no files or DoD.\n\nThis row now runs right after fa7fece5 (the macOS bash 3.2 parse fix), and no longer after WT-11. V08b, WT-09, V04c, WT-10G, WT-10 and WT-11 now land after it.\n\nWhy: it's a HIGH security fix, and 465ee875 (parked for its landed wrapper codes) plus CQ-RF07 behind it can resume sooner. The dd1ee586 edge only set file order; your plan builds on R13c2 (6f5cf10f), never on a WT row.\n\nFor the session:\n- moe-agent.sh/.ps1 will not hold WT-09/10/11's changes yet. Your plan already anchors on names rather than line numbers. Re-read the live bytes around the anchors in steps 2 and 3; don't rely on the ~line hints.\n- fa7fece5 lands just before you and rewrites bash-3.2-incompatible constructs in moe-agent.sh. Any new bash you add must also parse under /bin/bash 3.2. That means no `declare -A`, no `${var,,}`, no `mapfile`/`readarray` and no `;&`.",
+      "timestamp": "2026-10-31T17:36:04.036Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T08:07:24.823Z",
-  "updatedAt": "2026-10-30T13:40:44.221Z",
+  "updatedAt": "2026-10-31T17:36:04.036Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T08:08:34.580Z",
     "plannedStepCount": 5,

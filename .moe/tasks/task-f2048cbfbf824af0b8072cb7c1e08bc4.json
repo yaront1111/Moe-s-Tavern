@@ -1,0 +1,28 @@
+{
+  "id": "task-f2048cbfbf824af0b8072cb7c1e08bc4",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "bug: VS Code SettingsPanel says 'Settings saved.' when the UPDATE_SETTINGS send failed",
+  "description": "Found in the CQ-I06f whole-epic review at 96f7bdd4 (I04 residual). MoeDaemonClient.sendMessage returns false when nothing was sent (MoeDaemonClient.ts:767). updateSettings (:902-904) discards that result and returns void, so SettingsPanel.handleMessage (:75-78) always shows 'Settings saved.' and disposes the panel, even while disconnected. Other routes already warn 'Not connected to Moe daemon' (e.g. TaskDetailPanel reopen).\nFix: return the boolean, and on false show a warning and keep the panel open. Add a settings-wire test.",
+  "definitionOfDone": [
+    "A disconnected save shows a not-connected warning, does not say 'Settings saved.', and keeps the panel open; a connected save is unchanged.",
+    "A moe-vscode node:test covers both branches.",
+    "cd moe-vscode && npm run lint && npm run compile && npm test pass in a snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 265.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T17:35:16.666Z",
+  "updatedAt": "2026-10-31T17:35:16.666Z"
+}
