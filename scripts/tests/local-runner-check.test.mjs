@@ -1460,20 +1460,30 @@ const REGISTRY = ['', '*', 'latest', '1.0.0', '^1.2.3', '~1.2.3', '>=1 <2', '1.2
 // The labels are JSON, never a bare spec: a secret such as '.' or 'a' occurs in the fixed message itself.
 const unsupported = (packages, label) => refused(() => admit([{ dir: 'secret-dir', bytes: lock(packages) }]), 'DEPENDENCY_SOURCE_UNSUPPORTED',
   JSON.stringify(label), 'secret-dir');
+// Where DA6 and DA7 put one dependency map, beside the registry entries a and b: the root, a fetched entry, a bundled entry
+// (nested, and bundled by the root) and an optional entry skipped for its os or for its cpu. npm re-resolves an unmet edge
+// from any node, bundled and skipped ones included, so admission checks every entry's maps before it skips the entry.
+const PLACES = {
+  '': { name: 'fixture' }, 'node_modules/a': ok('a'), 'node_modules/a/node_modules/e': { version: '1.0.0', inBundle: true },
+  'node_modules/e': { version: '1.0.0', inBundle: true }, 'node_modules/o': ok('o', { optional: true, os: ['darwin'] }),
+  'node_modules/p': ok('p', { optional: true, cpu: ['arm64'] }),
+};
+const placed = (where, map, value) => ({ 'node_modules/a': ok('a'), 'node_modules/b': ok('b'), [where]: { ...PLACES[where], [map]: value } });
 
-test('DA6 a non-registry or malformed dependency spec in any entry, the root included, refuses with DEPENDENCY_SOURCE_UNSUPPORTED', () => {
-  const at = (where, map, value) => (where === ''
-    ? { '': { name: 'fixture', [map]: value }, 'node_modules/a': ok('a') } : { 'node_modules/a': ok('a', { [map]: value }), 'node_modules/b': ok('b') });
-  for (const where of ['', 'node_modules/a']) {
+test('DA6 a non-registry or malformed dependency spec in any entry, the root, bundled and platform-skipped ones included, refuses with DEPENDENCY_SOURCE_UNSUPPORTED', () => {
+  for (const where of Object.keys(PLACES)) {
     for (const map of DEPENDENCY_MAPS) {
-      for (const spec of NON_REGISTRY) unsupported(at(where, map, { b: spec }), [where, map, spec]);
-      for (const value of [null, [], 'b', 5, { b: 5 }, { b: null }, { b: ['1.0.0'] }, { b: {} }]) unsupported(at(where, map, value), [where, map, value]);
+      // One bad value refuses the whole map, in either key order beside a registry spec.
+      for (const bad of [...NON_REGISTRY, 5, true, null, ['1.0.0'], {}]) {
+        for (const value of [{ b: bad }, { a: '1.0.0', b: bad }, { b: bad, a: '1.0.0' }]) unsupported(placed(where, map, value), [where, map, value]);
+      }
+      for (const value of [null, [], 'b', 5]) unsupported(placed(where, map, value), [where, map, value]);
     }
   }
   for (const root of [5, null, [], 'x']) refused(() => admit([{ dir: '.', bytes: lock({ '': root }) }]), 'DEPENDENCY_LOCKFILE_INVALID', JSON.stringify(root));
 });
 
-test('DA7 registry specs, bundled entries with no resolved and a registry name@version, and falsy shrinkwrap flags are admitted, with the same packages', () => {
+test('DA7 registry-only or empty dependency maps on any entry, bundled entries with no resolved and a registry name@version, and falsy shrinkwrap flags are admitted, with the same packages', () => {
   const plain = { 'node_modules/a': ok('a'), 'node_modules/b': ok('b'),
     'node_modules/a/node_modules/c': { version: '1.0.0', inBundle: true, integrity: sri('c'), dependencies: { d: '^1.0.0' } } };
   const want = admit([{ dir: '.', bytes: lock(plain) }]);
@@ -1482,6 +1492,15 @@ test('DA7 registry specs, bundled entries with no resolved and a registry name@v
     for (const spec of REGISTRY) {
       const packages = { ...plain, '': { name: 'fixture', [map]: { a: spec } }, 'node_modules/a': ok('a', { [map]: { b: spec } }) };
       assert.deepEqual(admit([{ dir: '.', bytes: lock(packages) }]), want, JSON.stringify([map, spec]));
+    }
+  }
+  // Every DA6 placement admits as before with no map, an empty map or a multi-key map of registry specs only.
+  const all = Object.fromEntries(REGISTRY.map((spec, i) => [`k${i}`, spec]));
+  for (const where of Object.keys(PLACES)) {
+    for (const map of DEPENDENCY_MAPS) {
+      for (const value of [undefined, {}, { a: '^1.0.0', b: 'latest', c: 'npm:x@1.0.0' }, all]) {
+        assert.deepEqual(admit([{ dir: '.', bytes: lock(placed(where, map, value)) }]), want, JSON.stringify([where, map, value]));
+      }
     }
   }
   for (const key of ['hasShrinkwrap', '_hasShrinkwrap']) {
@@ -1540,6 +1559,35 @@ test('DA11 a bundled entry whose name@version is no registry spec, or an optiona
   }
   for (const extra of [{ os: '' }, { cpu: '' }, { os: '', cpu: ['x64'] }, { os: ['linux'], cpu: '' }]) {
     unsupported({ 'node_modules/o': ok('o', { optional: true, resolved: 'file:stub/o-1.0.0.tgz', ...extra }) }, extra);
+  }
+});
+
+// task-adbab50d review: three routes the earlier rows missed. With the pinned npm, each installed workspace bytes over a
+// hoisted registry f once a mutant admission let it through: a file: spec beside a registry spec in the root's map, and one
+// on a bundled entry or on a platform-skipped optional entry. Each must refuse before any fetch or cache write, though every
+// registry tarball is served and the same lockfile with a registry spec there builds a tree.
+test('DA12 a file: spec beside a registry spec, or on a bundled or platform-skipped entry, refuses before any fetch or cache write', async t => {
+  const tarballs = Object.fromEntries(['a', 'f', 'o', 'x'].map(name => [name, tarball(name)]));
+  const reg = (name, extra) => entryOf(name, tarballs[name], extra);
+  const routes = [
+    ['a mixed root map', 2, { '': { name: 'moe-mixed', version: '1.0.0', dependencies: { f: 'file:stub/f-1.0.0.tgz', x: '1.0.0' } },
+      'node_modules/f': reg('f'), 'node_modules/x': reg('x') }],
+    ['a bundled entry', 2, { '': { name: 'moe-bundled', version: '1.0.0', dependencies: { a: '1.0.0', f: '1.0.0' } },
+      'node_modules/a': reg('a', { dependencies: { e: '1.0.0' }, bundleDependencies: ['e'] }), 'node_modules/f': reg('f'),
+      'node_modules/a/node_modules/e': { version: '1.0.0', inBundle: true, dependencies: { f: 'file:../../../../stub/f-1.0.0.tgz' } } }],
+    ['a platform-skipped entry', 1, { '': { name: 'moe-skipped', version: '1.0.0', dependencies: { f: '1.0.0' }, optionalDependencies: { o: '1.0.0' } },
+      'node_modules/f': reg('f'), 'node_modules/o': reg('o', { optional: true, os: ['darwin'], dependencies: { f: 'file:../../stub/f-1.0.0.tgz' } }) }],
+  ];
+  for (const [label, fetched, packages] of routes) {
+    unsupported(packages, label);
+    const server = fixtureFetch(servedBy(tarballs));
+    const cacheDir = join(scratchDir(t), 'cache');
+    await assert.rejects(buildDependencyCache({ lockfiles: [{ dir: '.', bytes: lock(packages) }], cpu: 'x64', cacheDir }, { fetch: server.fetch }),
+      dependencyRefusal('DEPENDENCY_SOURCE_UNSUPPORTED'), label);
+    assert.deepEqual([server.calls, existsSync(cacheDir)], [[], false], label);
+    const honest = JSON.parse(JSON.stringify(packages).replace(/"file:[^"]*"/, '"1.0.0"'));
+    const built = await buildDependencyCache({ lockfiles: [{ dir: '.', bytes: lock(honest) }], cpu: 'x64', cacheDir }, { fetch: server.fetch });
+    assert.deepEqual([built.packages, server.calls.length], [fetched, fetched], label);
   }
 });
 

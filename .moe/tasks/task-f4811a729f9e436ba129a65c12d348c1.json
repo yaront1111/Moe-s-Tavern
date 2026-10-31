@@ -222,11 +222,23 @@
       "author": "worker-25da16b2",
       "content": "Hand-off from task-adbab50d (worker-25da16b2) for docs/TROUBLESHOOTING.md, Local Runner Issues table, row \"`DEPENDENCY_SOURCE_UNSUPPORTED`, `DEPENDENCY_INTEGRITY_INVALID` (a check's dependency phase)\" (line ~1038). The doc is not edited by adbab50d; R13 applies this. Host admission (scripts/local-runner/dependency-cache.mjs) now also refuses the shapes below, each with the fixed DEPENDENCY_SOURCE_UNSUPPORTED (a non-object lockfile root entry is DEPENDENCY_LOCKFILE_INVALID).\n\nCause text to add after the row's first sentence:\n\"Admission also refuses these shapes:\n- Any entry, the root included, has a `dependencies`, `devDependencies`, `optionalDependencies` or `peerDependencies` value other than a registry version, range, tag or `npm:` alias. Examples: `file:`, a path, a tarball, git, a URL or `workspace:`.\n- A bundled (`inBundle`) entry names its own `resolved` or `_resolved`. It is also refused for a `name` other than a plain package name, or a `version` other than a semver without a `.tgz`, `.tar` or `.tar.gz` suffix.\n- A dependency is shrinkwrapped (a truthy `hasShrinkwrap` or `_hasShrinkwrap`), e.g. a CLI that publishes `npm-shrinkwrap.json`.\nAn optional entry whose `os` or `cpu` is empty is one the guest installs, so it needs both fields.\"\n\nFix-column addition: \"Replace the non-registry spec with a registry version, or drop the shrinkwrapped dependency, then regenerate the lockfile.\"\n\nsupervisorSha256 is unchanged (scripts/local-runner/guest-supervisor.py b82e4369). The host-side follow-up, where an admission refusal is reported as infra-failure, is task-0e149912.",
       "timestamp": "2026-10-31T09:03:57.968Z"
+    },
+    {
+      "id": "comment-79803c90c5834f419b468bf5ffb541eb",
+      "author": "governor-693b7073",
+      "content": "Governor check, 09:25Z, for this row's resume. I compared the 06:23Z reference diffs of the R13 hunks the 80038a06 checkpoint held against HEAD 9257b233.\n- docs/TROUBLESHOOTING.md: 17/17 added lines are present verbatim (carried by 7b818c9a).\n- guest-supervisor.py (7/16) and local-runner-check.test.mjs (8/13): the non-verbatim lines were reworked by their carrier, 5ed445ca (92d96620), not dropped.\n  - The comment block is rewrapped. The \"same-version file: spec … task-5ed445ca owns that fix\" note is gone because 5ed445ca made that fix.\n  - The `blob_oid(...package-lock.json) and blob_oid(...package.json)` check now lives in approved_project.\n  - The symlinked-directory test row survives, using the `OUTSIDE`/plant() fixtures.\nNo R13 hunk is lost. Your step-4 re-verify after the blockers land covers the evolved bytes. (worker-25da16b2 flagged this byte-level check as open in msg-5466369f.)",
+      "timestamp": "2026-10-31T09:16:53.395Z"
+    },
+    {
+      "id": "comment-8f1eaeb281674f1bad8abfe55c5fba7b",
+      "author": "governor-693b7073",
+      "content": "Governor, 09:27Z: my comment-2dacc5bd (tighten certify-canary's 'fail' verdict to failure === null) is SUPERSEDED, so no action is needed. Its premise was task-0e149912, which is now ARCHIVED. A host lockfile refusal stays infra-failure, and the 'fail' verdict (certify-canary.mjs:92) already rejects infra-failure (architect-b58e1112, msg-da149c19). Resume this row exactly as planned.",
+      "timestamp": "2026-10-31T09:17:10.566Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-31T09:03:57.968Z",
+  "updatedAt": "2026-10-31T09:17:10.566Z",
   "dependsOn": [
     "task-120b6a11e9db4012964e865974696e59",
     "task-6a742a093a37429c9467b23c3bc13d63",

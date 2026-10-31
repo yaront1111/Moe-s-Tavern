@@ -59,12 +59,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor: archiving. A host admission refusal stops before onReady, so check-dispatch records nothing and no consumer reads the label this row changes. See the 09:20Z ruling comment.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -72,10 +72,17 @@
   ],
   "priority": "MEDIUM",
   "order": 1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-d9a1779308d6403284109ef23c847321",
+      "author": "governor-693b7073",
+      "content": "Governor ruling, 09:20Z: ARCHIVED on architect-b58e1112's recommendation (msg-5364f935; comment-afa3fc5d on task-76f2c3c4). I verified it against the code at HEAD 9257b233. runCheckJob (check-lifecycle.mjs) runs its steps in this order: provision → hostInputs (toolchain, then dependencies/buildDependencyCache, which is where a DEPENDENCY_* refusal returns) → checkEnvironment → materialize → installHostInputs → ready(onReady) → session. A host admission refusal therefore always stops before onReady. In check-dispatch.mjs runOnce, `!dispatch` then returns stopped {RUNNER_CHECK_FAILED, failure: <code>}, with no moe.record_check_dispatch and no observation. The daemon's repairPolicy never classifies such a run, so the premise \"the daemon retries a candidate-caused refusal on fresh VMs\" does not hold on the dispatch path. The certify-* callers use generated or absent lockfiles, and certify-containment keeps the failure code, not the outcome. So nothing consumes the infra-failure label this row would change. Task-76f2c3c4's decision (NO: refusals are not recorded; they need a replan) closes the worker-feedback side. To undo: set_task_status ARCHIVED→BACKLOG, then re-plan. The submitted plan (planRevision current) is kept on the row.",
+      "timestamp": "2026-10-31T09:15:16.961Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T08:26:28.001Z",
-  "updatedAt": "2026-10-31T09:03:04.313Z",
+  "updatedAt": "2026-10-31T09:15:27.755Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T08:36:28.430Z",
@@ -87,7 +94,8 @@
     "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-b58e1112"
+    "architect-b58e1112",
+    "governor-693b7073"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -146,5 +154,32 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-10-31T09:03:04.313Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "181d1ca8465fbfd35dc9e3374f2f4cb26fe604f5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-b58e1112@2026-10-31T08:37:00Z",
+      "paths": [
+        ".moe/tasks/task-76f2c3c4860c4792ad7d84a0e33b2b8d.json"
+      ],
+      "recordedBy": "architect-b58e1112",
+      "recordedAt": "2026-10-31T09:07:08.554Z",
+      "treeId": "ede742634411db78e7becd24bc0220557533c56b",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-76f2c3c4860c4792ad7d84a0e33b2b8d.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-b58e1112@2026-10-31T08:37:00Z",
+    "at": "2026-10-31T09:07:08.554Z"
+  }
 }
