@@ -133,6 +133,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
 'receipt-replay','receipt-cached-check','receipt-same-tree-race','receipt-push','receipt-push-failed','receipt-refused','receipt-conflict',
 'receipt-ledger-replay','receipt-rebase-replay','receipt-push-rejected','receipt-foreign-replay',
+'intent-strong','intent-strong-cas','intent-strong-unwritable','intent-strong-nocandidate','intent-legacy-unwritable',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none','reattach-session',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
 'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running','teardown-protected'];
@@ -222,7 +223,7 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
 `;
   write(path.join(nested,'gate.cjs'),gateSource);write(owned,'base\n');write(path.join(repo,'seed.txt'),'seed\n');
   const settings={qualityGate:'node gate.cjs',qualityGateScope:'everyTask',commitBoardState:false,attribution:{undeclared:'never'}};
-  if(mode==='disabled'||mode==='nogate-qa-claimed')settings.qualityGate='';
+  if(mode==='disabled'||mode==='nogate-qa-claimed'||mode==='intent-strong-nocandidate')settings.qualityGate='';
   if(mode==='deferred')settings.qualityGateScope='epicFinal';
   // Padding is not part of the command: '   ' is no gate, and a padded one runs trimmed.
   if(mode==='gate-blank')settings.qualityGate='   ';
@@ -268,6 +269,20 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
     if(mode==='receipt-cached-check'){const hook=path.join(repo,'.git','hooks','reference-transaction');
       write(hook,'#!/bin/sh\n[ "$1" = prepared ] || exit 0\ngrep -q " refs/heads/moe/frozen$" || exit 0\n'+
         'm="$(git rev-parse --git-dir)/moe-cas-refused"\n[ -e "$m" ] && exit 0\n: > "$m"\nexit 1\n');fs.chmodSync(hook,0o755);}
+    // CQ-V07: the claim's attempt is pinned on a strong (verified-local) or a legacy
+    // execution policy. The hook logs every prepared ref update -- old is the
+    // expected-old git was handed, so the CAS -- with the receipt journal as it
+    // stood at that instant. A regular file where the journal dir goes makes the
+    // journal unwritable.
+    if(mode.startsWith('intent-')){const stamp=new Date().toISOString(),hook=path.join(repo,'.git','hooks','reference-transaction');
+      write(path.join(nested,'.moe','attempts','attempt-postflight.json'),JSON.stringify({id:'attempt-postflight',generation:7,taskId:'task-postflight',
+        workerId:'worker-frozen',runnerId:'worker-frozen',phase:'running',workspace:nested,startedAt:stamp,lastPhaseAt:stamp,
+        executionPolicySnapshot:{version:2,profile:mode.startsWith('intent-strong')?'verified-local':'legacy',planRevision:3,deliveryPolicy:'local-branch'}}));
+      write(hook,['#!/bin/sh','[ "$1" = prepared ] || exit 0','d="$(git rev-parse --git-common-dir)"; j="$d/moe/receipt/task-postflight.json"',
+        'while read -r old new ref; do','  if [ -f "$j" ]; then c="$(tr -d \'\\r\\n\' < "$j")"; else c=null; fi',
+        '  printf \'{"ref":"%s","old":"%s","new":"%s","journal":%s}\\n\' "$ref" "$old" "$new" "$c" >> "$d/moe-intent-events.jsonl"','done',''].join('\n'));
+      fs.chmodSync(hook,0o755);
+      if(mode.endsWith('-unwritable'))write(path.join(repo,'.git','moe','receipt'),'not a directory\n');}
   }
   write(path.join(nested,'helper.txt'),'dirty helper\n');write(path.join(nested,'peer.txt'),'peer bytes\n');
   write(path.join(nested,'.codex','dirty.txt'),'denied bytes\n');
@@ -340,7 +355,7 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|pro
     FAKE_EVIDENCE_MODE:mode,FAKE_CTX_IS_EPIC_FINAL:mode==='deferred'?'false':'true'};
   if(mode.startsWith('race-'))env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';
   // A peer lands an EMPTY commit before the CAS: new base, identical rebuilt tree.
-  if(mode==='receipt-same-tree-race'){write(race,"require('child_process').execFileSync('git',['commit','--allow-empty','-qm','peer-empty']);");
+  if(mode==='receipt-same-tree-race'||mode==='intent-strong-cas'){write(race,"require('child_process').execFileSync('git',['commit','--allow-empty','-qm','peer-empty']);");
     env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';}
   // The pull --rebase retry is opt-in; only receipt-rebase-replay exercises it.
   if(mode==='receipt-rebase-replay')env.MOE_PUSH_REBASE='1';
@@ -718,6 +733,50 @@ exit "$rc"
       finals:finals.map(f=>f.args.outcome),owned:read(owned),committed:git(repo,'show','HEAD:nested project é/owned.txt')},
       {refused:1,named:true,head:true,rescue:'',evidence:0,commits:[],finals:['nothing-to-commit'],owned:'frozen owned\n',committed:'base'},log);
     count++;continue;
+  }
+  if(mode.startsWith('intent-')){
+    const moves=rows(path.join(repo,'.git','moe-intent-events.jsonl')),moved=moves.filter(e=>e.ref==='refs/heads/moe/frozen'),
+      blocker=path.join(repo,'.git','moe','receipt');
+    if(mode==='intent-strong-unwritable'||mode==='intent-strong-nocandidate'){
+      // Refused before the effect: no ref moves, nothing is parked or pushed, and the
+      // bytes, the index and the baseline stay as the session left them.
+      const code=mode==='intent-strong-unwritable'?'MOE_COMMIT_REFUSED_INTENT_UNWRITABLE':'MOE_COMMIT_REFUSED_INTENT_INCOMPLETE';
+      assert.deepEqual({commits:rpc.filter(r=>r.tool==='record_commit').map(r=>[r.args.outcome,r.args.kind,r.args.code]),warned:said(code+': task task-postflight --'),
+        head:after,reflog:reflogOf(),moved:moves.filter(e=>e.ref==='refs/heads/moe/frozen'||e.ref.startsWith('refs/moe/rescue/')),
+        rescue:git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/'),owned:read(owned),index:fs.readFileSync(index).equals(beforeIndex),
+        baseline:fs.existsSync(baselineFile),finals:finals.map(f=>[f.args.outcome,f.args.landedRevision]),
+        evidence:[candidates.length,checks.map(r=>r.args.exitCode)],receipts:rpc.filter(r=>r.tool==='record_delivery_receipt').length,pushBlocked},
+        {commits:[['refused','completion',code]],warned:1,head:before,reflog:before,moved:[],rescue:'',owned:'frozen owned\n',index:true,
+        baseline:true,finals:[['failed',undefined]],evidence:mode==='intent-strong-unwritable'?[1,[0]]:[0,[]],receipts:0,pushBlocked:false},log);
+      if(mode==='intent-strong-unwritable'){assert.equal(read(blocker),'not a directory\n',log);
+        assert.deepEqual(fs.readdirSync(path.join(repo,'.git','moe')).filter(f=>f.includes('.tmp.')),[],'a failed write leaves no journal behind\n'+log);
+        assert.equal(log.includes('receipt journal not written'),false,'the strong profile never falls back to the best-effort journal\n'+log);}
+      count++;continue;
+    }
+    if(mode==='intent-legacy-unwritable'){
+      // Legacy stays best-effort: it warns, and lands with no journal at all.
+      assert.ok(log.includes('receipt journal not written'),log);
+      assert.deepEqual(moved.map(e=>[e.old,e.journal]),[[before,null]],log);
+      fs.rmSync(blocker);
+    }else{
+      // The intent is on disk before the target moves. It names this candidate, its
+      // tree, the CAS base and the plan revision, and the CAS git ran is that same base.
+      const c=candidates.at(-1).args,last=moved.at(-1)||{};
+      assert.equal(moved.length,mode==='intent-strong-cas'?2:1,log);
+      assert.deepEqual([last.old,last.new],[c.baseRevision,after],'the expected-old CAS is kept\n'+log);
+      assert.deepEqual(last.journal,{taskId:'task-postflight',workerId:'worker-frozen',attemptId:'attempt-postflight',generation:7,candidateId:c.id,
+        target:'refs/heads/moe/frozen',targetBefore:c.baseRevision,targetAfter:after,landedRevision:after,pushResult:null,
+        ledger:{sessionId:sid(after),role:'worker',status:'REVIEW'},treeSha:c.treeSha,baseRevision:c.baseRevision,planRevision:3,profile:'verified-local'},
+        'the intent is durable before the effect\n'+log);
+      assert.equal(c.treeSha,git(repo,'rev-parse',after+'^{tree}'),log);
+      if(mode==='intent-strong')assert.equal(c.baseRevision,before,log);
+      else{
+        // A peer moved the target first: the failed CAS left no intent behind, and
+        // the retry journaled the rebuilt candidate on the peer's commit.
+        assert.equal(candidates.length,2,log);assert.notEqual(candidates[0].args.id,c.id,log);
+        assert.deepEqual([moved[0].old,moved[0].new,moved[0].journal],[before,c.baseRevision,null],log);
+        assert.equal(git(repo,'rev-parse',after+'~1'),c.baseRevision,log);}
+    }
   }
   if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','record_candidate-refuse'].includes(mode))
     assert.equal(pushBlocked,true,'a real gate or evidence persistence failure stays PUSH-BLOCKED\n'+log);
