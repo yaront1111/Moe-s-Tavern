@@ -439,6 +439,10 @@ for (const [ext, engine] of engines) {
 // Worker type: the launcher exports the CLI it starts (never the role or model)
 // as MOE_WORKER_TYPE, replacing an inherited value; moe-proxy forwards it on
 // claim_next_task/join_team. An unknown command keeps claude's CLAUDE.
+// The sh cut starts below the launcher's top-of-file RUNTIME_PROTECTED, which the
+// cut's protected-command gate reads under set -u; the fixture sets 0, the value
+// the launcher has when MOE_RUNTIME_PROTECTED is unset. Refusals under protected
+// are covered by protected-agent-command.test.mjs.
 const typeCases = [['claude', 'CLAUDE'], ['bin/codex', 'CODEX'], ['C:/tools/gemini.cmd', 'GEMINI'], ['grok.exe', 'GROK'], ['aider', 'CLAUDE']];
 for (const [ext, engine] of engines) {
   for (const [command, expected] of typeCases) {
@@ -450,7 +454,7 @@ for (const [ext, engine] of engines) {
       const probe = `"process.stdout.write('MOE_WORKER_TYPE=' + process.env.MOE_WORKER_TYPE)"`;
       const result = ext === 'ps1'
         ? runPs(engine, dir, 'type.ps1', `$Command='${command}'\n${between(read('ps1'), '# Detect CLI type from command name', '\n# Shared policy applies')}\n& $env:MOE_TEST_NODE -e ${probe}`, env)
-        : runSh(engine, dir, 'type.sh', `COMMAND=${quote(command)}\n${between(read('sh'), 'parse_command_into_argv() {', '\n# Codex is interactive (TUI)')}\n"$MOE_TEST_NODE" -e ${probe}`, env);
+        : runSh(engine, dir, 'type.sh', `RUNTIME_PROTECTED=0\nCOMMAND=${quote(command)}\n${between(read('sh'), 'parse_command_into_argv() {', '\n# Codex is interactive (TUI)')}\n"$MOE_TEST_NODE" -e ${probe}`, env);
       assert.equal(result.status, 0, result.stdout + result.stderr);
       assert.equal(result.stdout, `MOE_WORKER_TYPE=${expected}`, 'the CLI child and every proxy RPC inherit the detected type');
     });
