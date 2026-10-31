@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=9a404246e6ed -->
+<!-- moe-generated: sha=b613fb62e997 -->
 
 # Governor — Reference
 
@@ -23,12 +23,12 @@ Leases over exclusive-use infrastructure (benchmark box, staging DB) are daemon-
 
 - **Visibility**: `moe.list_resources` shows every resource — resolved capacity/lease cap, current holders (note/ETA/expiry) and the wait queue in grant order. Use it to spot convoys (a long queue behind one holder) and stale leases nearing expiry.
 - **Stuck lease**: `moe.release_resource { resourceId, workerId: <you>, taskId: <holder's task>, force: true }` force-releases another holder's lease and grants the queue onward. Omitting `taskId` with `force: true` clears ALL leases and queue entries — scope it unless you mean that. The reaper already force-releases past `maxLeaseMs` (default 24h) and posts a ⏱️ line to `#governors`, so force is for when the queue can't wait for the cap.
-- **Declaration**: tune capacity/lease caps in `.moe/project.json` `settings.resources` — `{ "<id>": { capacity, maxLeaseMs, description } }` (defaults capacity 1, 24h; undeclared ids auto-create with those). A settings update replaces the whole map.
+- **Declaration**: tune capacity/lease caps in `.moe/project.json` `settings.resources` — `{ "<id>": { capacity, maxLeaseMs, releaseOnDeregister, description } }` (defaults capacity 1, 24h, `releaseOnDeregister: false`; undeclared ids auto-create with those). A settings update replaces the whole map. `releaseOnDeregister: true` drops a deregistered seat's lease and queue entries on that resource: use it for build slots, never for a stateful host a dead holder may have left dirty.
 - **Leave resource-blocked tasks alone**: a task BLOCKED with `blockedResourceId` set is waiting legitimately and auto-unblocks on grant — the blocked-timeout sweep deliberately skips parking it. Human-blocked tasks (no resourceId) are the ones your triage playbook applies to.
 
 ## Unblocking: seat vs task
 
-Most seats free themselves now: a non-resource `moe.report_blocked` releases the seat at report time (worker → IDLE, task BLOCKED-unassigned), and blocks with `blockedOnTaskIds` or `blockedResourceId` auto-unblock without you. `moe.unblock_worker` is for the leftovers, and it is **seat-only by default**: the worker goes IDLE (and, without `retryTask`, drops the assignment) but its BLOCKED task stays BLOCKED with `blockedReason` intact — the response lists it in `stillBlockedTaskIds`. Freeing a seat is not evidence that the blocker is gone, and the old wipe-the-block behaviour produced RE-BLOCKs: the next claimant walked into the same wall minutes later.
+Most seats free themselves: a non-resource `moe.report_blocked` releases the seat at report time (worker → IDLE, task BLOCKED-unassigned), and blocks with `blockedOnTaskIds` or `blockedResourceId` auto-unblock without you. `moe.unblock_worker` is for the leftovers, and it is **seat-only by default**: the worker goes IDLE (and, without `retryTask`, drops the assignment) but its BLOCKED task stays BLOCKED with `blockedReason` intact — the response lists it in `stillBlockedTaskIds`. Freeing a seat is not evidence that the blocker is gone; clearing the block with the seat sends the next claimant into the same wall minutes later (a RE-BLOCK).
 
 - **Blocker actually resolved** → `moe.unblock_worker { workerId, resolution, resolveBlocks: true }` (restores `blockedFromStatus`, clears every `blocked*` field, returns `unblockedTaskIds`) or, task-only, `moe.set_task_status { taskId, status: <blockedFromStatus> }`.
 - **Seat stuck, blocker still real** → bare `unblock_worker`. The task stays BLOCKED-unassigned and is not auto-parked — sweep `moe.list_tasks { status: "BLOCKED" }` each tick and route each one: resource-blocked (leave alone), human-blocked (get the answer, then resolve), or misused as a terminal.
@@ -38,16 +38,26 @@ Most seats free themselves now: a non-resource `moe.report_blocked` releases the
 
 ## Task dependencies: gating, auto-unblock, and the escape hatch
 
-Two structured fields replaced free-text "BUILD-ORDER BLOCK on task-X" prose:
+Two structured fields carry build-order dependencies (instead of free-text "BUILD-ORDER BLOCK on task-X" prose):
 
 - **`dependsOn`** (set at `create_task`, prevention): gates **WORKING-status claims only** — `claim_next_task`/`wait_for_task` withhold the row until every target is DONE/ARCHIVED. Planning proceeds regardless; a missing/deleted id counts as satisfied, so a deleted prerequisite can never wedge its dependents. `moe.list_tasks` rows carry `dependsOnUnmet` — that is why a row "isn't being offered".
-- **`blockedOnTaskIds`** (set at `report_blocked`, cure): parks an already-claimed task; the daemon auto-unblocks it (status → `blockedFromStatus`, unassigned, claimable by anyone — a still-assigned hold returns to its worker only while that worker exists, is not DEAD and still points at the task) the moment every listed task is DONE/ARCHIVED — event-driven, with a sweep backstop for rows blocked before the upgrade. `report_blocked` also auto-parses `task-…` ids out of the free-text reason, so legacy-style blocks become structured with zero agent effort. Ids that are ALL already DONE/ARCHIVED at report time do **not** block (`dependenciesSatisfied:true`, the worker is told to continue — no claim-thrash), and an id that would close a dependency cycle (over `dependsOn ∪ blockedOnTaskIds`) is dropped with a warning and a `#governors` alert.
+- **`blockedOnTaskIds`** (set at `report_blocked`, cure): parks an already-claimed task; the daemon auto-unblocks it (status → `blockedFromStatus`, unassigned, claimable by anyone — a still-assigned hold returns to its worker only while that worker exists, is not DEAD and still points at the task) the moment every listed task is DONE/ARCHIVED — event-driven, with a sweep backstop. `report_blocked` also auto-parses `task-…` ids out of the free-text reason, so free-text blocks become structured with zero agent effort. Ids that are ALL already DONE/ARCHIVED at report time do **not** block (`dependenciesSatisfied:true`, the worker is told to continue — no claim-thrash), and an id that would close a dependency cycle (over `dependsOn ∪ blockedOnTaskIds`) is dropped with a warning and a `#governors` alert.
 
 Your levers:
 
 - **`moe.set_task_dependencies { taskId, dependsOn }`** — the escape hatch (architect/governor-gated). Full replacement, `[]` clears. Use it when a mis-declared `dependsOn` is withholding a row that should run, or to add the dependency an architect forgot. Gating without this tool would let one typo permanently stick a row — that is why it exists; never work around it by deleting the prerequisite task. It **rejects a cycle** (an id from which the edited task is already reachable over `dependsOn ∪ blockedOnTaskIds`), naming the path — two rows waiting on each other would sit claim-gated forever with nothing looking at them.
 - **Stale-block alert triage** (`blockedAt`-age line in `#governors`, from the sweep — visibility, not auto-park). Three shapes: (1) no deps and no resource — nothing will auto-clear it: a human question → get the answer, then `unblock_worker { resolveBlocks: true }` / `set_task_status`; actually waiting on another task → have the reason re-filed with the task id (auto-parse structures it) so the auto-unblock takes over; every step COMPLETED → BLOCKED misused as "done", the worker should `complete_task`. (2) dep-waiting, but an unmet prerequisite is itself BLOCKED/BACKLOG (the line shows each dep's status) — the auto-unblock cannot fire until you move the prerequisite: promote the BACKLOG one, unblock the BLOCKED one, or, if it waits back on this row (a cycle), re-plan one side and fix the graph with `set_task_dependencies`. (3) dep-waiting past 2× the blocked timeout with prerequisites still in flight — check they are actually moving.
 - Do **not** sweep dependency-blocked or resource-blocked rows into BACKLOG or `resolveBlocks` them "to tidy up" — both auto-clear, and clearing block state by hand throws away the `blockedFromStatus` restore. The exception is the stuck-prerequisite alert above: that row will never auto-clear without a human move.
+
+## Re-prioritizing the queue
+
+`moe.set_task_priority { taskId, priority }` (`CRITICAL`/`HIGH`/`MEDIUM`/`LOW`, governor-only) changes which row the fleet claims next: `claim_next_task` and `wait_for_task` rank by priority before epic or order, and resource queues grant by it. Use it on a signal, not as routine tidying:
+
+- A prerequisite that other rows wait on (`dependsOn`, `blockedOnTaskIds`) sits behind lower-value work: raise it so the chain clears sooner.
+- The human asks for something to go first, or a worker files a `bug:` card that breaks other work.
+- A row filed `CRITICAL`/`HIGH` by mistake keeps jumping the queue: lower it.
+
+It never preempts: an assigned task keeps its seat, so raising a row stops no one mid-task. Post why in `#governors` (one sentence). Reordering several rows at once gets the human's nod first.
 
 ## Rail proposal patterns
 
@@ -78,10 +88,10 @@ Do NOT loop between `propose_rail` and other actions on the same task — propos
 |---|---|---|
 | Second-guess the architect's plan when the worker hasn't actually stalled | You don't own planning. Workers sometimes look slow but are working. | Wait for a self-reported block or a real death signal. |
 | Release a worker because it looks idle | Quiet ≠ dead — long builds/tests are silent, and you'll discard the worker's local edits. | Ping first; release only on a confirmed crash with the human's nod. |
-| Flip to PLANNING on every QA rejection | First rejection is usually a worker-side fix. Re-plan is for systemic issues. | Re-plan only after the same DoD item gets rejected twice. |
+| Flip to PLANNING on every QA rejection | First rejection is usually a worker-side fix. Re-plan is for systemic issues. | Let the daemon handle it: it auto-flips to PLANNING when the same DoD item fails twice or at the reopen cap. Re-plan by hand only for a systemic issue across different DoD items. |
 | Reply to every drift signal with a tool call | The chat log is a tool too. Sometimes the right action is "watch and wait." | Post an acknowledgement; let the worker self-correct first. |
 | Use `moe.chat_send` to brainstorm with the architect mid-plan | Architects in PLANNING are in a TUI conversation with the human. Cross-talk derails them. | Wait until the architect submits or use `#general` for non-urgent observations. |
-| Call `unblock_worker` to free a seat and expect the task's block to be resolved | The default is seat-only now; the task stays BLOCKED with `blockedReason` — the pre-fix wipe caused RE-BLOCKs. | Pass `resolveBlocks: true` only when the blocker is actually gone; otherwise triage the BLOCKED task separately. |
+| Call `unblock_worker` to free a seat and expect the task's block to be resolved | The default is seat-only; the task stays BLOCKED with `blockedReason`, because clearing it with the seat causes RE-BLOCKs. | Pass `resolveBlocks: true` only when the blocker is actually gone; otherwise triage the BLOCKED task separately. |
 | Hand-commit a task's stranded sources under your own identity (a `chore(...)` sweep) | Hides attribution, the task record never learns of the commit, and the wrapper already checkpoints every exit. | Read `task.commits` / `refs/moe/rescue/`; `declare_files` the paths onto the task and let its next session land them. |
 | Accept BLOCKED as a finished state ("done, blocked by design") | BLOCKED is a wait state; delivered work exists for the fleet only once it goes through `complete_task` and lands. | Ask the worker to `complete_task` with verification, or `set_task_status` → REVIEW when the evidence is on the task. |
 
@@ -96,6 +106,23 @@ The wrapper — never the daemon — lands every session's files (completion com
 - **Foreign-WIP debris** — dirty paths whose only owner is a DONE task — is `MOE_ATTR_PREEXISTING` for every later task and never swept. Runbook in `docs/TROUBLESHOOTING.md` ("Dirty paths owned only by DONE tasks"): declare onto a live task, or a human `chore(debris:<taskId>)` pathspec commit. Never land it under your own identity as a fleet-wide `chore` commit.
 - **`NO-COMPLETION-COMMIT`** from `qa_approve`: usually the post-flight race (the commit lands seconds after REVIEW). Re-check `task.commits` a minute later; if still empty, `lastCommitOutcome` says why. A DONE task with no completion commit is a merge with no reviewed diff — flag it.
 - `PUSH FAILED` / `CHECKPOINT-UNPUSHED` are visibility problems (the commit exists locally; `pull --rebase` refuses in a dirty shared checkout), not losses.
+
+## Claude account switch
+
+Some machines run claude seats across several Claude subscription accounts. The wrapper picks the account before every launch. An interactive seat whose wrapper loop relaunches it also loads the `moe-account-switch` mod, which lets the daemon move it between accounts mid-run. Once a usage window on your account reaches the switch percent (90% by default), or the account hits its limit, is signed out or is removed:
+
+- `moe.chat_wait` returns `{ hasMessage: false, accountSwitch: { from, to, fromPeakPercent, switchAtPercent, reason, instruction } }`. It returns at once, or, while parked, as soon as a usage report makes the switch due.
+- Nothing was read: every message stays unread for the next session.
+- End the turn. Do not call `chat_wait` again: it is refused, and the turn is ended for you.
+- The session exits by itself about 10 s later. The wrapper relaunches you on the next account, and you re-enter governance as on any launch.
+
+A switch is not a failure; post nothing about it. You will also see it on other seats:
+
+- the 🔁 `ACCOUNT_SWITCHED` line in #governors;
+- a worker session ending after `complete_step` and coming back on the same task;
+- an architect session ending after `submit_plan` and coming back on the next PLANNING task.
+
+All of these are rotation working, not a crash: never release a task over one.
 
 ## Mention reply examples
 

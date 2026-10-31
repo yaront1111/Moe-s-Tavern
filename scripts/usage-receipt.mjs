@@ -1,22 +1,60 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { normalizeUsage } from './prompt-cache-usage.mjs';
 
 // Only bounded identifiers/configuration are persisted. Provider text, tool
 // arguments, prompts, environment values and nominal API costs are excluded.
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value) ? value : null;
 const oneOf = (value, allowed) => allowed.includes(value) ? value : null;
-function readContext(raw) {
-  let context;
-  try { context = typeof raw === 'string' && raw.length <= 16384 ? JSON.parse(raw) : {}; }
-  catch { context = {}; }
-  if (!context || typeof context !== 'object' || Array.isArray(context)) context = {};
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+// The one context allowlist shared by usage-session.mjs, this writer and
+// usage-report.mjs; nothing outside it is ever persisted. The CQ-M02 additions
+// (planRevision .. workKind) are optional diagnostic correlation, never trusted
+// runner, approval, check or delivery evidence. planRevision and runnerId are
+// the canonical Task/ExecutionAttempt values usage-session.mjs snapshots at
+// launch preparation; packet, source retrieval, planner, candidate, delivery
+// receipt and workKind are observations a producer supplied. Missing or
+// invalid values are null (unknown), never 0 or a fabricated id, so receipts
+// written before these fields existed remain valid version-1 receipts.
+export function normalizeUsageContext(raw) {
+  const context = object(raw) ? raw : {};
   return {
     taskId: identifier(context.taskId), workerId: identifier(context.workerId),
     role: oneOf(context.role, ['architect', 'worker', 'qa', 'governor']),
     attemptId: identifier(context.attemptId), launchId: identifier(context.launchId),
     requestedModel: identifier(context.requestedModel), requestedEffort: identifier(context.requestedEffort),
     launchMode: oneOf(context.launchMode, ['headless', 'interactive']),
+    planRevision: Number.isSafeInteger(context.planRevision) && context.planRevision >= 0 ? context.planRevision : null,
+    packetId: identifier(context.packetId), sourceRetrievalId: identifier(context.sourceRetrievalId),
+    plannerInvocationId: identifier(context.plannerInvocationId), runnerId: identifier(context.runnerId),
+    candidateId: identifier(context.candidateId), deliveryReceiptId: identifier(context.deliveryReceiptId),
+    workKind: oneOf(context.workKind, ['planning', 'context', 'implementation', 'repair', 'qa']),
   };
+}
+
+function readContext(raw) {
+  let context;
+  try { context = typeof raw === 'string' && raw.length <= 16384 ? JSON.parse(raw) : {}; }
+  catch { context = {}; }
+  return normalizeUsageContext(context);
+}
+
+// Read-only diagnostic lookup of one daemon-owned .moe/<kind>/<id>.json. The id
+// must be a plain file name (no dot, slash or drive colon, so no traversal) and
+// the record a bounded regular file whose own id matches; anything else,
+// including any read or parse error, is null and never reported with its path.
+const recordId = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const MAX_RECORD_BYTES = 1024 * 1024;
+export function readMoeRecord(project, kind, id) {
+  if (typeof id !== 'string' || !recordId.test(id)) return null;
+  try {
+    const file = path.join(project, '.moe', kind, `${id}.json`);
+    const stats = statSync(file);
+    if (!stats.isFile() || stats.size > MAX_RECORD_BYTES) return null;
+    const record = JSON.parse(readFileSync(file, 'utf8'));
+    return object(record) && record.id === id ? record : null;
+  } catch { return null; }
 }
 
 function outcome(provider, event) {

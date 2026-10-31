@@ -1,0 +1,242 @@
+{
+  "id": "task-874aa17c4016492689f24138d04b71d0",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11d] Check environment identity and evidence freshness",
+  "description": "Objective: every isolated check observation carries an exact environment identity, and a changed environment needs new evidence (CQ-R11 DoD 3). The check boundaries the runner enforces are reported (the \"reported\" half of CQ-R11 DoD 2).\n\nSplit from CQ-R11 (task-0795112597cb453f93aaa5106e92d023) on 2026-10-29. The human chose in the architect REPL: one fresh owned VM per check run, deleted after it. This slice is pure and has no unlanded dependency.\n\nContract: a new scripts/local-runner/check-evidence.mjs, with pure functions only and no provider call.\n- CHECK_BOUNDARIES: a deeply frozen descriptor of what the CQ-R11a/R11b guest check mode enforces:\n  - identity: moe-check (JOB_IDENTITIES[1]), with no supplementary groups, NoNewPrivs and umask 077;\n  - network: a private network namespace, loopback only;\n  - resources: the guest VM size (GUEST_RESOURCES) plus named rlimits, whose values this task fixes. CQ-R11a enforces the same values, and its drift test pins them;\n  - process: a session group killed and reaped, and the VM deleted after the run;\n  - filesystem: a fresh owned VM per run and a fresh 0700 session home; protected paths root-owned and verified before and after the run; the supervisor credential root 0400 and readiness-denied to job identities (CQ-R07);\n  - time: the budget is enforced by the host.\n- checkEnvironment({sourceImageSha256, providerImageHash, supervisorSha256, resources}):\n  - returns 'moe-local-vm-v1:' + the sha256 hex of a canonical JSON of the inputs and CHECK_BOUNDARIES;\n  - inputs have exact keys; hashes are 64 lowercase hex; resources has the GUEST_RESOURCES shape;\n  - a refusal is CHECK_INPUT_INVALID, with fixed text;\n  - the result fits CheckRun.environment, an opaque value the daemon compares exactly.\n- evidenceStatus(observation, current): 'fresh' only when environment, treeSha, definitionDigest and planRevision are all present and exactly equal; otherwise 'stale', meaning new evidence is required.\n- Tests go in a NEW scripts/tests/local-runner-check.test.mjs, which every later CQ-R11 slice extends. Add it to the explicit file list of the CI local-runner step in .github/workflows/ci.yml.\n\nOut of scope: running anything, the guest supervisor, sessions, VM lifecycle, the daemon's ingestion (CQ-V03), dispatch (CQ-V04), and any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-check.test.mjs (on WSL: env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "checkEnvironment returns the same identity for the same inputs and a different one when any input or CHECK_BOUNDARIES field changes. Invalid or extra-key input refuses with CHECK_INPUT_INVALID and fixed text. All shown by tests.",
+    "CHECK_BOUNDARIES is deeply frozen and names the identity, network, process, filesystem, resource and time boundaries with fixed rlimit values; a test pins its exact content.",
+    "evidenceStatus returns 'fresh' only for an exact match of environment, treeSha, definitionDigest and planRevision, and 'stale' for any change or missing field. Shown by tests.",
+    "The CI local-runner step in .github/workflows/ci.yml runs scripts/tests/local-runner-check.test.mjs, and the verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create scripts/local-runner/check-evidence.mjs with CHECK_BOUNDARIES and checkEnvironment, plus rows E1-E5 in the new scripts/tests/local-runner-check.test.mjs. Write the rows first (test-driven-development).\n\nThe module is pure: no provider call, no file read, no clock.\n- Header comment in the local-runner style: CHECK_BOUNDARIES is the contract that CQ-R11a/R11b implement, a descriptor and not a measurement. Nothing here claims isolation: executionReady stays false and verified-local stays unavailable.\n- Import only createHash from node:crypto, plus GUEST_LAYOUT, GUEST_RESOURCES and JOB_IDENTITIES from ./guest-bootstrap.mjs. Derive values from those constants; never retype them.\n- Add a private deep-freeze helper that mirrors doctor.mjs's private freeze(). Do not export doctor's.\n- CHECK_BOUNDARIES = deepFreeze({\n  identity: { user: JOB_IDENTITIES[1], supplementaryGroups: [], noNewPrivileges: true, umask: '077' },\n  network: { namespace: 'private', interfaces: ['lo'] },\n  resources: { vm: { ...GUEST_RESOURCES }, rlimits: { RLIMIT_CORE: 0, RLIMIT_FSIZE: 1073741824, RLIMIT_NOFILE: 4096, RLIMIT_NPROC: 2048 } },\n  process: { group: 'session', teardown: 'killed-and-reaped', vm: 'deleted-after-run' },\n  filesystem: { vm: 'fresh-owned-per-run', home: { fresh: true, mode: '0700' }, protectedPaths: { owner: 'root', verified: ['before-run', 'after-run'] }, supervisorCredential: { path: GUEST_LAYOUT.credential, owner: 'root', mode: '0400', jobIdentities: 'readiness-denied' } },\n  time: { budget: 'host-enforced' },\n}).\n  One comment on rlimits: each value is both the soft and the hard limit, and CQ-R11a applies exactly these through Python's resource module; its drift test pins them. There is no RLIMIT_AS, because V8 reserves large virtual ranges and the VM's memory size already bounds RAM. There is no RLIMIT_CPU, because the host enforces the wall-clock budget.\n- checkEnvironment(inputs):\n  - inputs must be a record (non-null object, not an array). Its Object.keys set must be exactly providerImageHash, resources, sourceImageSha256 and supervisorSha256. Compare the length and the membership of Object.keys, never count + hasOwn (Serena memory gotcha-strict-decoder-key-set).\n  - Read each value exactly once into a local, and validate and hash only those locals.\n  - Each of the three hashes: typeof string AND /^[0-9a-f]{64}$/. The typeof check matters, because the regex coerces a String object.\n  - resources: a record whose key set is exactly Object.keys(GUEST_RESOURCES) (cpus, memoryBytes, diskBytes), each value a safe integer >= 1. This is shape only: the values need not equal GUEST_RESOURCES, since the R11 orchestrator may pass the observed size.\n  - Any failure throws Object.assign(new Error('Check environment input was invalid.'), { code: 'CHECK_INPUT_INVALID' }). The text is fixed and never carries a value, key or type.\n  - Return 'moe-local-vm-v1:' + the sha256 hex of canonicalJson({ boundaries: CHECK_BOUNDARIES, inputs: { providerImageHash, resources: { cpus, diskBytes, memoryBytes }, sourceImageSha256, supervisorSha256 } }).\n  - canonicalJson is private. Arrays keep their order. Record keys are sorted by code unit at every depth. Strings, numbers and booleans go through JSON.stringify, with no whitespace. The 80-character result fits CheckRun.environment's rule (255 characters at most, no control characters; readEnvironment in packages/moe-daemon/src/state/checkRunStore.ts).\n\nRows use node:test and node:assert/strict, named 'E1 ...'. VALID is a deep-frozen fixture of three distinct 64-hex values plus the GUEST_RESOURCES numbers; frozen, so an implementation that mutates its input throws.\n- E1 (DoD 2): CHECK_BOUNDARIES deepStrictEqual a LITERAL copy in the test. Retype 'moe-check', 2, 4294967296, 21474836480, '/etc/moe/supervisor.credential' and the rlimits there; do not import them back. Every object and array reachable from it is Object.isFrozen, and a strict-mode write and an array push both throw TypeError.\n- E2: checkEnvironment(VALID) equals 'moe-local-vm-v1:' + the sha256 of the TEST's own independent sorted-key canonical encoder over { boundaries: CHECK_BOUNDARIES, inputs: VALID }. Follow the framedDigest pattern in local-runner-snapshot.test.mjs. The result matches /^moe-local-vm-v1:[0-9a-f]{64}$/. A fresh copy with every key order reversed (top level and resources) gives the same value, and repeated calls agree.\n- E3: any input change gives a different identity: one hex character in each hash field, +1 in each resources field, and two hashes swapped.\n- E4: any CHECK_BOUNDARIES change gives a different identity. Walk a structuredClone and mutate every leaf (string, number, boolean, array element), every array (append) and every object (delete each key, add one key). For each mutant clone, the oracle digest differs from checkEnvironment(VALID). Together with E2's equality, this proves every boundary field is in the preimage.\n- E5 refusals, each asserting instanceof Error, code CHECK_INPUT_INVALID and the exact message:\n  - no argument, null, 'x', 42, [], and Object.assign([], VALID), which pins the array exclusion;\n  - each key missing, and an extra key;\n  - a required key redefined as non-enumerable, plus an enumerable extra added by assignment AFTER defineProperty (a spread would drop it);\n  - per hash field: uppercase, 63 and 65 characters, a non-hex character, a trailing '\\n', undefined, null, 42, and new String(valid hex);\n  - resources null or [], a missing key and an extra key;\n  - per resources field: 0, -1, 1.5, NaN, Infinity, '2', 2n, null, and Number.MAX_SAFE_INTEGER + 1.\n\nError handling: the refusal is the only failure path. The function never logs or echoes its input.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Created check-evidence.mjs (CHECK_BOUNDARIES, checkEnvironment) and local-runner-check.test.mjs rows E1-E5 (6 tests, all green under env -i Node 24). 611 peer dirty paths untouched.",
+      "startedAt": "2026-10-29T13:41:02.949Z",
+      "completedAt": "2026-10-29T13:42:37.807Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add evidenceStatus(observation, current) to scripts/local-runner/check-evidence.mjs, plus rows E6-E7 (DoD 3).\n- The fields are environment, treeSha, definitionDigest and planRevision. Read each at most once per record, and only as an OWN property (Object.hasOwn, after a null/undefined guard, since Object.hasOwn(null) throws).\n- A field counts as missing when:\n  - the record is null or undefined;\n  - the key is absent or inherited;\n  - a string field is not a non-empty string;\n  - planRevision is not a safe integer >= 1 (the daemon's readPlanRevision rule).\n- Return 'fresh' only when all four are present on both sides and strictly equal (===, with no trimming or case folding); otherwise return 'stale'. It never throws, and it ignores extra keys such as outcome or exitCode. A JSDoc says that 'stale' means new evidence is required.\n- Do not validate treeSha or definitionDigest formats. They are compared exactly, like CheckRun's opaque fields, and `current` comes from trusted computation.\n\nE6: two distinct objects with equal fields give 'fresh', and extra unrelated keys on either side still give 'fresh'.\n\nE7 gives 'stale' for each of these:\n- each field changed on either side (one character; planRevision 2 vs 3);\n- each field missing on the observation, on current, and on BOTH (the last row pins the presence check, since undefined === undefined);\n- '', null or 7 on both sides for a string field;\n- 0, -1, 1.5, NaN or '1' on both sides for planRevision, and 1 vs '1';\n- a treeSha that differs only in case;\n- fields inherited through Object.create;\n- an observation or current of null, undefined, 'x' or 42, with no throw.\nAssert every result with strict equality to 'stale' or 'fresh'.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Added evidenceStatus (own-property, read-once, fail-closed on throwing accessors) plus rows E6-E7 written first (confirmed failing on the missing export, then 9/9 green).",
+      "startedAt": "2026-10-29T13:42:39.707Z",
+      "completedAt": "2026-10-29T13:43:11.396Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Register the file in CI, plus row E8 (DoD 4, first half).\n- In .github/workflows/ci.yml's 'Test local runner prerequisite bundles' step, append ' scripts/tests/local-runner-check.test.mjs' at the END of the run line. Do not reorder that line: scripts/tests/local-runner-bundle.test.mjs asserts its prefix 'run: node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs'.\n- E8 reads .github/workflows/ci.yml, resolved from import.meta.url two directories up. It asserts that the run line starting with 'run: node --test scripts/tests/local-runner.test.mjs' also lists scripts/tests/local-runner-check.test.mjs: one regex over that single line, like the bundle test's CI row.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".github/workflows/ci.yml",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "modifiedFiles": [
+        ".github/workflows/ci.yml",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Appended local-runner-check.test.mjs at the END of the CI local-runner run line (prefix the bundle test pins is unchanged). Row E8 was written first and failed, then passed after the ci.yml edit. ci.yml diff is +1/-1.",
+      "startedAt": "2026-10-29T13:43:12.423Z",
+      "completedAt": "2026-10-29T13:43:25.733Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run this once, fresh, from the repo root: `node --test scripts/tests/local-runner-check.test.mjs`.\n\nOn WSL, run `env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-check.test.mjs`, so neither the Windows PATH nor any MOE_* variable gets in. Exit 0 is required, and its output tail is the complete_task verification evidence (DoD 4).\n\nAlso confirm the following. They are not evidence.\n- `node --test --test-name-pattern='cross-platform CI' scripts/tests/local-runner-bundle.test.mjs` passes.\n- The total diff is at most 400 changed lines, comments and blank lines included: git diff --numstat for ci.yml plus wc -l for the two new files. That is QA's default limit, and no size rail covers this task.\n- No peer's dirty path was touched.\n\nIf a row fails, fix the cause with a test, never by weakening a row, then re-run the whole command.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh env -i Node 24 run: exit 0, 10/10 pass. Bundle 'cross-platform CI' test passes. Diff size 375 lines (ci.yml +1/-1, check-evidence.mjs 107, test 266), under the 400 limit. Only the three task paths touched; the 611 peer dirty paths were left alone.",
+      "startedAt": "2026-10-29T13:43:26.763Z",
+      "completedAt": "2026-10-29T13:43:35.619Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff. Load the adversarial-self-review skill first.\n\nCheck each of these:\n- A hostile input (accessors, non-enumerable keys, a Proxy, an array, a String object, a BigInt) cannot get past checkEnvironment or make the hashed value differ from the validated one.\n- No message carries input.\n- evidenceStatus cannot return 'fresh' when a field is missing on both sides, inherited, blank or malformed.\n- No nested object of CHECK_BOUNDARIES can be mutated.\n- The identity depends on every boundary leaf and every input.\n\nMutation-probe each guard in a scratch copy, never the shared tree (recipe in the Serena memory gotcha-local-runner-tests). Record which row kills each mutant, and judge equivalence before calling a survivor a gap. Fix any gap with a row, then re-run step 4's command fresh before complete_task.\n\nConfirm that nothing anywhere claims verified-local, isolation or executionReady.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Adversarial review found one real gap: a throwing accessor or Proxy trap escaped checkEnvironment as the caller's own error instead of the fixed CHECK_INPUT_INVALID. Fixed with a failing row first, plus a validatedInputs()/try-catch split. 43 mutants probed in /tmp/r11d-mut (scratch copy only): 40 killed, 3 equivalent survivors. (1) record() null check: Object.keys(null) throws, and the catch turns that into the same refusal. (2) freshnessFields null guard: Object.hasOwn(null) throws inside the try and returns stale. (3) === to ==: both sides are already type-checked in the same slot. Diff is 397 lines, under the 400 limit. No forbidden patterns; the only isolation/verified-local/executionReady mentions are the header's negations.",
+      "startedAt": "2026-10-29T13:43:36.685Z",
+      "completedAt": "2026-10-29T13:45:25.157Z"
+    }
+  ],
+  "planRevision": 11,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 105.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T13:26:31.537Z",
+  "updatedAt": "2026-10-29T17:49:43.810Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T13:30:37.641Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-29T13:47:44.984Z",
+    "wallClockMs": 1027343
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-fe18a9a9",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T13:40:32.343Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected these options:\n- A boundaries parameter on checkEnvironment, or exporting canonicalJson for the tests. Either widens the public surface; E2's independent oracle plus E4's mutated clones prove boundary sensitivity without an export.\n- A golden identity literal. It is redundant with E1 + E2.\n- Format validation of treeSha and definitionDigest in evidenceStatus. CheckRun fields are opaque and compared exactly.\n- RLIMIT_AS, which breaks V8, and RLIMIT_CPU, since the host owns time.\n- A prototype guard on inputs. Own reads into fresh literals make it unnecessary.",
+    "codebaseInsights": "- GUEST_RESOURCES {cpus 2, memoryBytes 4 GiB, diskBytes 20 GiB}, JOB_IDENTITIES ['moe-agent','moe-check'] and GUEST_LAYOUT.credential '/etc/moe/supervisor.credential' (root:root '0400' via cloud-init) are all in guest-bootstrap.mjs.\n- waitForGuestReady (guest-readiness.mjs) returns image.source.sha256, image.provider.imageHash (lowercased 64-hex; lifecycle.mjs isSha256) and supervisorSha256. Those are the R11-final inputs.\n- CheckRun.environment is non-blank, at most 255 characters and free of control characters.\n- CheckRun has no definitionDigest field (CQ-V03's concern), so legacy rows are always stale.\n- Both bundlers copy scripts/local-runner wholesale, so the new module needs no bundler change. scripts/tests is not bundled.\n- CQ-R11e will later add a toolchain digest input to checkEnvironment.",
+    "risks": "- Object.hasOwn(null) throws.\n- The regex coerces String objects.\n- In tests, a spread drops non-enumerable keys.\n- The global forbiddenPatterns (__proto__, eval(, innerHTML) apply to test strings too: use 'constructor' or 'valueOf' instead.\n- Keep the diff at or under 400 changed lines.\n- Append the CI entry at the end of the run line; the bundle test regex pins its prefix.\n- The target paths were clean at planning time, but 611 peer dirty paths exist in the checkout. Never touch them.",
+    "keyFiles": [
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/local-runner/doctor.mjs",
+      "packages/moe-daemon/src/state/checkRunStore.ts",
+      "scripts/tests/local-runner-snapshot.test.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "planApprovedAt": "2026-10-29T13:40:32.431Z",
+  "workStartedAt": "2026-10-29T13:41:02.949Z",
+  "reviewStartedAt": "2026-10-29T13:45:48.290Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-check.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ E3 any input change gives a different identity (0.758425ms)\n✔ E4 every CHECK_BOUNDARIES leaf, array and object is part of the identity (3.853059ms)\n✔ E5 invalid or extra-key input refuses with CHECK_INPUT_INVALID and fixed text (1.29792ms)\n✔ E5 the hashed value is the validated value: each field is read exactly once (0.221404ms)\n✔ E6 evidenceStatus is fresh only for an exact match of environment, treeSha, definitionDigest and planRevision (0.211104ms)\n✔ E7 evidenceStatus is stale for any change, missing, blank, malformed or inherited field (0.323856ms)\n✔ E7 evidenceStatus never throws and reads each field at most once per record (0.307275ms)\n✔ E8 the CI local-runner step runs this file (3.359395ms)\n✔ E5 a throwing accessor or Proxy trap refuses with the fixed refusal and carries no input text (0.293225ms)\nℹ tests 11\nℹ suites 0\nℹ pass 11\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 88.782268",
+    "reportedAt": "2026-10-29T13:45:48.290Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/check-evidence.mjs",
+    "scripts/tests/local-runner-check.test.mjs",
+    ".github/workflows/ci.yml",
+    ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+    ".moe/tasks/task-874aa17c4016492689f24138d04b71d0.json",
+    ".moe/tasks/task-6971d6897bc24817b72ad673dfd68a67.json",
+    ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+    ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
+    ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json"
+  ],
+  "completionSummary": "Added scripts/local-runner/check-evidence.mjs (pure, no provider call). CHECK_BOUNDARIES is deep-frozen and pins identity moe-check, a loopback-only private network namespace, VM size from GUEST_RESOURCES, rlimits CORE 0 / FSIZE 1073741824 / NOFILE 4096 / NPROC 2048, session-group teardown, a fresh VM per run, a fresh 0700 home, protected paths verified before and after the run, a 0400 supervisor credential that job identities are denied, and a host-enforced budget. checkEnvironment({sourceImageSha256, providerImageHash, supervisorSha256, resources}) returns 'moe-local-vm-v1:' + the sha256 of a sorted-key canonical JSON of boundaries and inputs (80 characters). It uses an exact enumerable key set, a typeof string check plus a lowercase 64-hex regex, a safe integer >= 1 for each resource, and one read per value. Any invalid input, extra key, or throwing accessor/Proxy trap refuses with CHECK_INPUT_INVALID and the fixed text. evidenceStatus(observation, current) returns 'fresh' only when environment, treeSha, definitionDigest and planRevision are all own, valid and strictly equal on both sides; otherwise 'stale', and it never throws. New scripts/tests/local-runner-check.test.mjs has 11 tests (E1-E8) and is appended at the end of the CI local-runner run line in .github/workflows/ci.yml, which the bundle test's prefix check still accepts. Mutation probes: 43 mutants in a scratch copy, 40 killed and 3 equivalent survivors judged. Diff is 397 changed lines. executionReady stays false and verified-local stays unavailable; nothing claims isolation.",
+  "commits": [
+    {
+      "sha": "fdaf5ff4ce0fb60d0fac56da795375ebd26c6618",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T13:40:31Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+        ".moe/tasks/task-874aa17c4016492689f24138d04b71d0.json",
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T13:46:20.605Z",
+      "treeId": "3cc6e3ada703b2a830f43540ba61b30128ccfc72",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "4de578b3245953e4339f431cf39dabd89b192adc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T13:46:25Z",
+      "paths": [
+        ".moe/tasks/task-6971d6897bc24817b72ad673dfd68a67.json",
+        ".moe/tasks/task-874aa17c4016492689f24138d04b71d0.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T13:48:09.184Z",
+      "treeId": "e66f3804e2111107450324ba949c22dfe16d1005",
+      "status": "DONE",
+      "pushed": true
+    },
+    {
+      "sha": "ba49cb3cbaf3156fd820dca8eb9d30027f2e8f94",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-bd1eb82d@2026-10-29T13:30:35Z",
+      "paths": [
+        ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+        ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
+        ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json"
+      ],
+      "recordedBy": "architect-bd1eb82d",
+      "recordedAt": "2026-10-29T17:49:43.810Z",
+      "treeId": "01d5c8dc24fefb762c54fce7a4e45a216ea728e0",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner-check.test.mjs",
+          "taskId": "task-37dd3edb921c42eca56efefb36832992"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/check-evidence.mjs",
+    ".github/workflows/ci.yml"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-bd1eb82d@2026-10-29T13:30:35Z",
+    "at": "2026-10-29T17:49:43.810Z"
+  },
+  "completedAt": "2026-10-29T13:47:44.984Z",
+  "reviewCompletedAt": "2026-10-29T13:47:44.984Z",
+  "reviewSummary": "Approved. Reviewed recorded completion commit fdaf5ff (on moe/work-2026-10-24, pushed); the owned paths match the working tree.\n\nRe-ran verification fresh: env -i + nvm Node 24, `node --test scripts/tests/local-runner-check.test.mjs` -> exit 0, 11/11 (E1-E8). Bundle test 'cross-platform CI' passes, so the CI run-line prefix pin holds. Size 397 changed lines (112 + 283 + ci.yml 1/1), under 400.\n\nDoD 1: checkEnvironment is deterministic and changes with any input or boundary change (E2 independent oracle, E3 per-input, E4 60+ boundary mutants all distinct). E5 pins CHECK_INPUT_INVALID with fixed text for bad types, array/String/BigInt, missing/extra/non-enumerable keys, throwing accessors and Proxy traps; one read per value.\n\nDoD 2: CHECK_BOUNDARIES deep-frozen; E1 deepStrictEquals a retyped literal incl. rlimits and checks every node frozen.\n\nDoD 3: evidenceStatus 'fresh' only for four own, valid, strictly equal fields; E6/E7 cover changed, missing, blank, inherited, malformed, hostile and throwing inputs.\n\nDoD 4: ci.yml appends the file at the end of the local-runner line; E8 asserts it.\n\nRails: forbidden-pattern grep clean; module pure; no isolation or verified-local claim; no tests weakened.\n\nNotes: CheckRun lacks definitionDigest until CQ-V03; R11a drift test must pin the rlimits. I did not re-run the worker's mutation probe.",
+  "requiredCheckAtDone": null
+}

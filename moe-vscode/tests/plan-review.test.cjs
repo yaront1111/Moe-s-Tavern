@@ -794,6 +794,139 @@ test('I: WORKING without a pending approval never announces an approval', async 
 });
 
 // ===========================================================================
+// (I2) success is bound to the reviewed revision
+// ===========================================================================
+
+/** Open on revision 4, approve it, then deliver `workingTask` as the daemon's answer. */
+async function approveAt4ThenDeliver(workingTask) {
+    const { h, panel } = openOn(makeTask({ planRevision: 4 }));
+    h.webview.click('approveBtn');
+    await h.settle();
+    assert.deepEqual(h.approveCalls, [[TASK_ID, 4]]);
+    pushUpdate(h, workingTask);
+    await h.settle();
+    return { h, panel };
+}
+
+/** The approval is invalidated: warned once, latched, and no later update can announce success. */
+async function assertInvalidated(h) {
+    assert.deepEqual(h.infoMessages, [], 'never "Plan approved"');
+    assert.equal(h.panelDisposeCount, 0);
+    assert.equal(h.warnMessages.length, 1);
+    assert.match(h.warnMessages[0], /not confirmed/i);
+    assert.match(String(h.webview.notice()), /reopen/i);
+    assert.equal(h.webview.approveDisabled(), true);
+
+    h.webview.click('approveBtn');
+    await h.settle();
+    assert.equal(h.approveCalls.length, 1, 'a latched page cannot retry');
+
+    pushUpdate(h, makeTask({ planRevision: 4, status: 'WORKING' }));
+    await h.settle();
+    assert.deepEqual(h.infoMessages, [], 'no late success after invalidation');
+    assert.equal(h.panelDisposeCount, 0);
+}
+
+for (const [label, planRevision, current] of [
+    ['newer', 5, 5], ['older', 3, 3], ['zero after nonzero', 0, 0], ['legacy-missing after nonzero', undefined, 0]
+]) {
+    test(`I2: WORKING at a different revision (${label}) is not an approval`, async () => {
+        const { h, panel } = await approveAt4ThenDeliver(makeTask({ planRevision, status: 'WORKING' }));
+        try {
+            assert.match(h.warnMessages[0], new RegExp(`\\b${current}\\b`), 'names the revision work started on');
+            assert.match(h.warnMessages[0], /\b4\b/, 'names the revision that was reviewed');
+            await assertInvalidated(h);
+        } finally { panel.dispose(); }
+    });
+}
+
+for (const [label, planRevision] of [
+    ['negative', -1], ['fractional', 1.5], ['a string', '4'], ['null', null], ['NaN', Number.NaN],
+    ['past MAX_SAFE_INTEGER', Number.MAX_SAFE_INTEGER + 1]
+]) {
+    test(`I2: WORKING at an unusable revision (${label}) is not an approval and is never coerced`, async () => {
+        const { h, panel } = await approveAt4ThenDeliver(makeTask({ planRevision, status: 'WORKING' }));
+        try { await assertInvalidated(h); } finally { panel.dispose(); }
+    });
+}
+
+for (const [label, planRevision] of [
+    ['zero', 0], ['four', 4], ['MAX_SAFE_INTEGER', Number.MAX_SAFE_INTEGER], ['legacy-missing on both sides', undefined]
+]) {
+    test(`I2: WORKING at the reviewed revision (${label}) is the approval`, async () => {
+        const { h, panel } = openOn(makeTask({ planRevision }));
+        try {
+            h.webview.click('approveBtn');
+            await h.settle();
+            assert.equal(h.approveCalls[0][1], planRevision ?? 0);
+
+            pushUpdate(h, makeTask({ planRevision, status: 'WORKING' }));
+            await h.settle();
+            assert.deepEqual(h.infoMessages, ['Plan approved']);
+            assert.deepEqual(h.warnMessages, []);
+            assert.equal(h.panelDisposeCount, 1);
+        } finally { panel.dispose(); }
+    });
+}
+
+test('I2: a step start that bumps the revision inside the debounce cannot hide a confirmed approval', async () => {
+    const { h, panel } = openOn(makeTask({ planRevision: 4 }));
+    try {
+        h.webview.click('approveBtn');
+        await h.settle();
+
+        h.setTasks(makeTask({ planRevision: 4, status: 'WORKING' }));
+        h.emitState();
+        h.setTasks(makeTask({ planRevision: 5, status: 'WORKING' }));
+        h.emitState();
+        h.flushTimers();
+        await h.settle();
+
+        assert.deepEqual(h.infoMessages, ['Plan approved']);
+        assert.deepEqual(h.warnMessages, []);
+        assert.equal(h.panelDisposeCount, 1);
+    } finally { panel.dispose(); }
+});
+
+test('I2: a refusal that arrives before WORKING stays a refusal', async () => {
+    const { h, panel } = openOn(makeTask({ planRevision: 4 }));
+    try {
+        h.webview.click('approveBtn');
+        await h.settle();
+        h.emitError({
+            operation: 'APPROVE_TASK', message: 'plan revision mismatch', codeName: 'PLAN_REVISION_MISMATCH',
+            context: { taskId: TASK_ID, expectedPlanRevision: 4, currentPlanRevision: 5 }
+        });
+        await h.settle();
+        pushUpdate(h, makeTask({ planRevision: 5, status: 'WORKING' }));
+        await h.settle();
+
+        assert.equal(h.errorMessages.length, 1);
+        assert.deepEqual(h.warnMessages, []);
+        assert.deepEqual(h.infoMessages, []);
+        assert.equal(h.panelDisposeCount, 0);
+        assert.equal(h.webview.approveDisabled(), true);
+    } finally { panel.dispose(); }
+});
+
+test('I2: a late error after a mismatched WORKING never releases the latch', async () => {
+    const { h, panel } = await approveAt4ThenDeliver(makeTask({ planRevision: 5, status: 'WORKING' }));
+    try {
+        h.emitError({
+            operation: 'APPROVE_TASK', message: 'Cannot approve task in WORKING status', context: { taskId: TASK_ID }
+        });
+        await h.settle();
+
+        assert.deepEqual(h.infoMessages, []);
+        assert.equal(h.panelDisposeCount, 0);
+        assert.equal(h.webview.approveDisabled(), true);
+        h.webview.click('approveBtn');
+        await h.settle();
+        assert.equal(h.approveCalls.length, 1, 'the forced click sends nothing');
+    } finally { panel.dispose(); }
+});
+
+// ===========================================================================
 // (J) disposal
 // ===========================================================================
 
@@ -862,3 +995,92 @@ test('K: a second createOrShow while the panel is open reveals it instead of reb
         assert.equal(h.htmlWrites.length, 1);
     } finally { panel.dispose(); }
 });
+
+// ===========================================================================
+// (L) shared client verdict corpus (CQ-I06b)
+// ===========================================================================
+// The same bytes JetBrains ClientVerdictCorpusTest runs. Verdicts and probes are
+// the corpus's own: a row the two clients disagree on is fixed or filed, never
+// given an expectation of this client's.
+
+const CORPUS = JSON.parse(fs.readFileSync(path.join(__dirname, '../../moe-jetbrains/src/test/resources/client-verdicts.json'), 'utf8'));
+if (!Array.isArray(CORPUS.approval) || CORPUS.approval.length === 0) { throw new Error('client-verdicts.json has no approval rows'); }
+
+/** A daemon task frame: the corpus holds the raw planRevision literal, absent when the field is. */
+const corpusTask = (status, literal) =>
+    makeTask({ id: CORPUS.taskId, status, planRevision: literal == null ? undefined : JSON.parse(literal) });
+
+async function playCorpusEvent(h, event) {
+    if (event.task === null) {
+        h.setTasks(); h.emitState(); h.flushTimers();
+    } else if (event.task) {
+        pushUpdate(h, corpusTask(event.task.status, event.task.planRevision));
+    } else if (event.error) {
+        const { operation, task, codeName } = event.error;
+        if (task !== null && task !== 'self' && task !== 'other') { throw new Error('unknown error task ' + task); }
+        h.emitError({
+            message: 'refused',
+            ...(operation === null ? {} : { operation }),
+            ...(codeName === null ? {} : { codeName }),
+            ...(task === null ? {} : { context: { taskId: task === 'self' ? CORPUS.taskId : 'task-other' } })
+        });
+    } else if (event.connection === 'lost') {
+        h.emitConnection('disconnected');
+    } else {
+        throw new Error('unknown corpus event ' + JSON.stringify(event));
+    }
+    await h.settle();
+}
+
+async function checkCorpusVerdict(h, row, send) {
+    const probe = async status => { pushUpdate(h, corpusTask(status, row.rendered)); await h.settle(); };
+    switch (row.verdict) {
+        case 'confirmed':
+            assert.deepEqual(h.infoMessages, ['Plan approved']);
+            assert.equal(h.panelDisposeCount, 1);
+            return;
+        case 'pending':
+            assert.deepEqual(h.infoMessages, []);
+            await probe('WORKING');
+            assert.deepEqual(h.infoMessages, ['Plan approved'], 'a WORKING probe at the rendered revision confirms');
+            return;
+        case 'latched':
+            assert.deepEqual(h.infoMessages, []);
+            assert.equal(h.webview.approveDisabled(), true);
+            // Before the WORKING probe, which ends the review in both clients.
+            await probe('AWAITING_APPROVAL');
+            assert.equal(h.webview.approveDisabled(), true, 'an AWAITING_APPROVAL probe at the rendered revision must not re-arm');
+            h.webview.click('approveBtn');
+            await h.settle();
+            assert.deepEqual(h.approveCalls, [send], 'a latched page sends nothing more');
+            await probe('WORKING');
+            assert.deepEqual(h.infoMessages, [], 'a WORKING probe at the rendered revision must not confirm');
+            return;
+        case 'rearmed':
+            assert.deepEqual(h.infoMessages, []);
+            await probe('AWAITING_APPROVAL');
+            assert.equal(h.webview.approveDisabled(), false);
+            h.webview.click('approveBtn');
+            await h.settle();
+            assert.deepEqual(h.approveCalls, [send, send], 'the probe click resends exactly the rendered revision');
+            return;
+        default:
+            throw new Error('unknown corpus verdict ' + row.verdict);
+    }
+}
+
+for (const row of CORPUS.approval) {
+    test(`L ${row.id}: ${row.verdict}`, async () => {
+        const h = createHarness();
+        h.setTasks(corpusTask('AWAITING_APPROVAL', row.rendered));
+        const panel = h.open(CORPUS.taskId);
+        try {
+            const send = [CORPUS.taskId, row.rendered === null ? 0 : JSON.parse(row.rendered)];
+            h.webview.click('approveBtn');
+            await h.settle();
+            assert.deepEqual(h.approveCalls, [send]);
+            for (const event of row.events) { await playCorpusEvent(h, event); }
+            await checkCorpusVerdict(h, row, send);
+        } finally { panel.dispose(); }
+    });
+}

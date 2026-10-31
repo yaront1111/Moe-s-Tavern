@@ -149,29 +149,38 @@ test('the largest safe revision is forwarded unchanged', () => {
 });
 
 // =============================================================================
-// C / D / E — an omitted token keeps the exact legacy frame
+// C / D / E — an omitted token is refused locally, never sent token-free
 // =============================================================================
 
-test('a legacy one-argument approval omits the property entirely', () => {
-    withHarness(h => {
-        const sent = h.connectSocket();
-        assert.equal(h.client.approveTask('task-1'), true);
-        const frame = onlyFrame(sent);
-        assert.deepEqual(frame, { type: 'APPROVE_TASK', payload: { taskId: 'task-1' } });
-        // Key absence, not an undefined comparison: a serialized null would pass the latter.
-        assert.deepEqual(Object.keys(frame.payload), ['taskId']);
-        assert.equal(Object.prototype.hasOwnProperty.call(frame.payload, 'expectedPlanRevision'), false);
+// CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25) deleted revision-less
+// human approval: the former legacy one-argument and explicit-undefined frames
+// are gone, so both now take the same local refusal as a malformed token.
+for (const [label, args] of [['an omitted token', ['task-1']], ['an explicit undefined token', ['task-1', undefined]]]) {
+    test(`${label} is refused locally and sends no frame`, () => {
+        withHarness(h => {
+            const sent = h.connectSocket();
+            assert.equal(h.client.approveTask(...args), false);
+            assert.deepEqual(sent, []);
+            assert.equal(h.errors.length, 1, 'the refusal must be reported once');
+            assert.equal(h.errors[0].operation, 'APPROVE_TASK');
+            assert.match(h.errors[0].message, /expectedPlanRevision/);
+            // taskId lets a subscriber tell which approval was refused.
+            assert.deepEqual(Object.keys(h.errors[0].context), ['taskId']);
+            assert.equal(h.errors[0].context.taskId, 'task-1');
+            assert.ok(h.logs.some(line => line.includes('APPROVE_TASK')), 'the refusal must be logged');
+        });
     });
-});
+}
 
 test('an omitted token is never inferred from the cached revision of that task', () => {
     withHarness(h => {
         const sent = h.connectSocket();
         h.client['state'] = { tasks: [{ id: 'task-1', title: 'cached', planRevision: 9 }] };
-        assert.equal(h.client.approveTask('task-1'), true);
-        const frame = onlyFrame(sent);
-        assert.deepEqual(Object.keys(frame.payload), ['taskId']);
-        assert.equal(Object.prototype.hasOwnProperty.call(frame.payload, 'expectedPlanRevision'), false);
+        assert.equal(h.client.approveTask('task-1'), false);
+        // Refused, not repaired: the cached 9 is the newest revision, not the reviewed one.
+        assert.deepEqual(sent, []);
+        assert.equal(h.errors.length, 1);
+        assert.equal(h.errors[0].operation, 'APPROVE_TASK');
     });
 });
 
@@ -184,16 +193,6 @@ test('a supplied token wins over a newer cached revision', () => {
             type: 'APPROVE_TASK',
             payload: { taskId: 'task-1', expectedPlanRevision: 4 }
         });
-    });
-});
-
-test('an explicit undefined token behaves exactly like an omitted argument', () => {
-    withHarness(h => {
-        const sent = h.connectSocket();
-        assert.equal(h.client.approveTask('task-1', undefined), true);
-        const frame = onlyFrame(sent);
-        assert.deepEqual(frame, { type: 'APPROVE_TASK', payload: { taskId: 'task-1' } });
-        assert.deepEqual(Object.keys(frame.payload), ['taskId']);
     });
 });
 

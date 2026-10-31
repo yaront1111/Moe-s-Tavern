@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=7ff6711d0f28
+# moe-generated: sha=f5b965bd9d2f
 name: moe-planning
 description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Provides the canonical 8-phase template (plan, explore, tests, minimum impl, verify, document, adversarial review, QA loop), rules for when to skip phases on trivial tasks, and where the verification gate belongs — once at the end of a task, and at full scope only on the epic's final task.
 when_to_use: After moe.get_context returns a PLANNING task, before drafting implementationPlan.steps for moe.submit_plan.
@@ -14,7 +14,7 @@ Your job: turn the task in front of you into an implementation plan that a worke
 
 Count before you draft. If an honest plan needs **more than 8 steps or more than 5 distinct `affectedFiles`**, the *task* is too big — no plan fixes that. Do not pad several actions into one step to duck the cap: the step still executes at its real size, and the daemon counts distinct files regardless. `moe.submit_plan` returns `warnings` past 8 steps / 5 distinct files and hard-rejects past 12 steps / 10 distinct files with `CONSTRAINT_VIOLATION` (thresholds: `project.json` `settings.taskSizing`). Right-sized is ≤60 min human-equivalent, 1–3 files, one deliverable.
 
-Oversized means go back to breakdown, not to a denser plan: create smaller sibling tasks via `moe-epic-breakdown` (SPIDR split) and narrow this task to the first slice — or `moe.report_blocked` with the proposed split if the task isn't yours to split.
+Oversized means go back to breakdown, not to a denser plan: create smaller sibling tasks via `moe-epic-breakdown` (SPIDR split) and narrow this task to the first slice — or `moe.report_blocked` with the proposed split if the task isn't yours to split. A project or epic rail that forbids splitting wins over this: plan the work as ONE task within the daemon's `taskSizing` limits instead.
 
 Then shrink what survives. Load `ponytail` before drafting: a step that reuses an existing helper, a stdlib call, or a native platform feature is one step where a hand-rolled equivalent is four — the ladder is the cheapest route under the size cap. It shortens the solution, never the reading, and it never trims a DoD item, a rail, or a verification step: those are requested work.
 
@@ -42,7 +42,7 @@ If you can't tell where the task sits, `moe.list_tasks {epicId}` and compare `or
 ## The 8 phases
 
 ### Phase 1 — Plan before you touch anything
-Read `task.description`, `task.definitionOfDone`, the linked epic rails, and any `KNOWN_ISSUES.md`. Build a structured todo list before referencing a single line of code. Size the work: how many files? Cross-cutting? Architectural impact? Use the answer to decide which later phases apply.
+Read `task.description`, `task.definitionOfDone`, the linked epic rails, and any `KNOWN_ISSUES.md`. Size the work: how many files? Cross-cutting? Architectural impact? Use the answer to decide which later phases apply.
 
 ### Phase 2 — Explore before you assume
 Don't reference a function, model, method, relationship, or constant you haven't grepped for. Hallucinated `user.clientProfile.accounts`-style chains are the #1 source of plan-time errors. If the skill `explore-before-assume` is available, invoke it now.

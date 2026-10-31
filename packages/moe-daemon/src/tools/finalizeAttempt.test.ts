@@ -22,6 +22,9 @@ import { claimNextTaskTool } from './claimNextTask.js';
 import { getTools } from './index.js';
 import { openAttempt, setAttemptPhase, listAttempts } from '../state/attemptStore.js';
 import { MoeError } from '../util/errors.js';
+import { UNLANDED_REASONS, type ExecutionWorkspaceMode } from '../types/schema.js';
+import { vi } from 'vitest';
+import { getContextTool } from './getContext.js';
 
 /** A deterministic 40-hex revision; no randomness in any assertion. */
 const LANDED = 'b2'.repeat(20);
@@ -397,5 +400,208 @@ describe('moe.qa_approve — finalizing hold', () => {
     const result = await approve() as { status: string };
 
     expect(result.status).toBe('DONE');
+  });
+});
+
+describe('moe.finalize_attempt — unlanded worktree landings', () => {
+  const h = new ToolTestHarness();
+  const rescueRef = 'refs/moe/rescue/task-1/20261030T120000Z';
+  const targetTip = 'c3'.repeat(20);
+  const taskBytes = () => fs.readFileSync(path.join(h.moePath, 'tasks/task-1.json'), 'utf8');
+  const task = () => h.state.getTask('task-1')!;
+  const finalize = (args: Record<string, unknown>) =>
+    finalizeAttemptTool(h.state).handler(args, h.state) as Promise<Record<string, unknown>>;
+
+  beforeEach(async () => {
+    h.init(); h.setupMoeFolder(); h.createEpic();
+    h.createTask({ status: 'REVIEW', assignedWorkerId: null, reopenCount: 1,
+      implementationPlan: ['step-1', 'step-2'].map(stepId => ({ stepId, description: stepId, status: 'COMPLETED' })),
+      stepsCompleted: ['step-1', 'step-2'] });
+    await h.state.load();
+  });
+  afterEach(() => h.cleanup());
+
+  async function worktreeAttempt(workspaceMode: ExecutionWorkspaceMode | 'legacy' = 'worktree') {
+    const opened = await openAttempt(h.state, { taskId: 'task-1', workerId: 'worker-1',
+      runnerId: 'runner-pilot', workspace: path.join(h.testDir, '.worktrees/task-1'),
+      ...(workspaceMode === 'legacy' ? {} : { workspaceMode }) });
+    return setAttemptPhase(h.state, opened.id, 'finalizing');
+  }
+  function payload(attempt: { id: string; generation: number }, over: Record<string, unknown> = {}) {
+    return { taskId: 'task-1', workerId: 'worker-1', runnerId: 'runner-pilot',
+      attemptId: attempt.id, generation: attempt.generation, outcome: 'unlanded',
+      unlandedReason: 'conflict', conflictPaths: ['src/a.ts', 'docs/b.md'], rescueRef, targetTip, ...over };
+  }
+
+  it.each([
+    ['unlandedReason', 'bogus', 'INVALID_INPUT'], ['unlandedReason', undefined, 'MISSING_REQUIRED'],
+    ['rescueRef', undefined, 'MISSING_REQUIRED'], ['rescueRef', 'refs/heads/main', 'INVALID_INPUT'],
+    ['rescueRef', 'refs/moe/rescue/task-2/x', 'INVALID_INPUT'],
+    ['rescueRef', `${rescueRef}/extra`, 'INVALID_INPUT'], ['rescueRef', `${rescueRef}${'a'.repeat(256)}`, 'INVALID_INPUT'],
+    ['targetTip', 'HEAD', 'INVALID_INPUT'], ['conflictPaths', 'src/a.ts', 'INVALID_INPUT'],
+    ['landedRevision', LANDED, 'INVALID_INPUT'],
+  ])('refuses malformed %s=%s before any write', async (field, value, codeName) => {
+    const held = await worktreeAttempt(); const before = taskBytes();
+    const err = await refusal(finalize(payload(held, { [field as string]: value })));
+    expect(err).toMatchObject({ code: -32602, codeName, context: { field } });
+    expect(h.state.attempts.get(held.id)!.phase).toBe('finalizing');
+    expect(taskBytes()).toBe(before);
+  });
+
+  it.each(['legacy', 'shared'] as const)('refuses unlanded on a %s attempt', async mode => {
+    const held = await worktreeAttempt(mode);
+    const before = taskBytes();
+    const err = await refusal(finalize(payload(held)));
+    expect(err).toMatchObject({ code: -32602, codeName: 'INVALID_INPUT', context: { field: 'outcome' } });
+    expect(h.state.attempts.get(held.id)!.phase).toBe('finalizing');
+    expect(taskBytes()).toBe(before);
+  });
+
+  it('advertises the unlanded input contract', () => {
+    const properties = finalizeAttemptTool(h.state).inputSchema.properties as Record<string, { enum?: string[] }>;
+    expect(properties.outcome.enum).toContain('unlanded');
+    expect(properties.unlandedReason.enum).toEqual(UNLANDED_REASONS);
+  });
+
+  it('routes conflict once without resetting completed work and persists the retry', async () => {
+    const held = await worktreeAttempt(); const plan = task().implementationPlan;
+    const result = await finalize(payload(held));
+    expect(result).toMatchObject({ phase: 'closed', taskStatus: 'WORKING', landingRetry: task().landingRetry });
+    expect(task()).toMatchObject({ status: 'WORKING', assignedWorkerId: null, reopenCount: 1,
+      implementationPlan: plan, stepsCompleted: ['step-1', 'step-2'] });
+    expect(task().landingRetry).toEqual({ reason: 'conflict', paths: ['src/a.ts', 'docs/b.md'],
+      rescueRef, targetTip, count: 1, at: expect.any(String) });
+    expect(Number.isNaN(Date.parse(task().landingRetry!.at))).toBe(false);
+    expect(JSON.parse(taskBytes()).landingRetry).toEqual(task().landingRetry);
+    expect(task().comments).toHaveLength(1);
+    expect(task().comments[0].author).toBe('moe-daemon');
+    for (const text of ['conflict', 'src/a.ts', 'docs/b.md', rescueRef, held.id, String(held.generation), targetTip, 'WORKING']) {
+      expect(task().comments[0].content).toContain(text);
+    }
+  });
+
+  it.each(['contention', 'gate', 'remote'])('routes %s to WORKING', async unlandedReason => {
+    await finalize(payload(await worktreeAttempt(), { unlandedReason }));
+    expect(task()).toMatchObject({ status: 'WORKING', landingRetry: { reason: unlandedReason, count: 1 } });
+  });
+
+  it('blocks diverged immediately with WORKING unblock provenance', async () => {
+    await finalize(payload(await worktreeAttempt(), { unlandedReason: 'diverged' }));
+    expect(task()).toMatchObject({ status: 'BLOCKED', assignedWorkerId: null, blockedFromStatus: 'WORKING',
+      blockedResourceId: null, blockedOnTaskIds: null, blockedAt: expect.any(String),
+      blockedReason: expect.stringContaining('diverged'), landingRetry: { count: 1 } });
+  });
+
+  it('blocks the third consecutive landing, but not the second', async () => {
+    for (const [i, unlandedReason] of ['conflict', 'contention', 'gate'].entries()) {
+      if (i > 0) await h.state.updateTask('task-1', { status: 'REVIEW' });
+      const held = await worktreeAttempt(); expect(held.generation).toBe(i + 1);
+      await finalize(payload(held, { unlandedReason }));
+      expect(task().landingRetry!.count).toBe(i + 1);
+      expect(task().status).toBe(i < 2 ? 'WORKING' : 'BLOCKED');
+    }
+    expect(task()).toMatchObject({ blockedFromStatus: 'WORKING', blockedReason: expect.stringContaining('gate') });
+  });
+
+  it.each(['landed', 'nothing-to-commit'])('%s clears the retry and resets the next count', async outcome => {
+    await finalize(payload(await worktreeAttempt()));
+    await h.state.updateTask('task-1', { status: 'REVIEW' });
+    await finalize(payload(await worktreeAttempt(), { outcome, landedRevision: outcome === 'landed' ? LANDED : null }));
+    expect(task().landingRetry).toBeNull(); expect(JSON.parse(taskBytes()).landingRetry).toBeNull();
+    expect(task().status).toBe('REVIEW');
+    await finalize(payload(await worktreeAttempt()));
+    expect(task().landingRetry!.count).toBe(1);
+  });
+
+  it('concurrent and sequential replays never re-route, double-count or comment', async () => {
+    const args = payload(await worktreeAttempt());
+    const [first, second] = await Promise.all([finalize(args), finalize(args)]);
+    expect(second).toEqual(first); const bytes = taskBytes();
+    expect(await finalize(args)).toEqual(first); expect(taskBytes()).toBe(bytes);
+    expect(task().landingRetry!.count).toBe(1); expect(task().comments).toHaveLength(1);
+  });
+
+  it('records but never moves a row no longer in REVIEW', async () => {
+    const held = await worktreeAttempt();
+    await h.state.updateTask('task-1', { status: 'PLANNING' });
+    await finalize(payload(held));
+    expect(task()).toMatchObject({ status: 'PLANNING', landingRetry: { count: 1 } });
+    expect(task().comments).toHaveLength(1);
+  });
+
+  it('normalizes paths leniently and bounds the record and comment preview', async () => {
+    const conflictPaths = ['src/a.ts', 'src/a.ts', '/etc/passwd', '../x', null, 12,
+      ...Array.from({ length: 600 }, (_, i) => `src/p${i}.ts`)];
+    await finalize(payload(await worktreeAttempt(), { conflictPaths }));
+    expect(task().landingRetry!.paths).toEqual(['src/a.ts', ...Array.from({ length: 499 }, (_, i) => `src/p${i}.ts`)]);
+    expect(task().comments[0].content).toContain('(+480 more)');
+    expect(task().comments[0].content).not.toContain('src/p19.ts');
+  });
+
+  it.each([undefined, null])('defaults omitted/null optional metadata (%s)', async value => {
+    await finalize(payload(await worktreeAttempt(), { targetTip: value, conflictPaths: value, landedRevision: value }));
+    expect(task().landingRetry).toMatchObject({ targetTip: null, paths: [] });
+    expect(task().comments[0].content).toContain('(none reported)');
+    expect(task().comments[0].content).toContain('unknown');
+  });
+
+  it.each([0, -1, 1.5, 'bad', Number.MAX_SAFE_INTEGER + 1])('tolerates a garbage stored count (%s)', async count => {
+    await h.state.updateTask('task-1', { landingRetry: { reason: 'conflict', paths: [], rescueRef, targetTip,
+      count: count as number, at: new Date().toISOString() } });
+    await finalize(payload(await worktreeAttempt()));
+    expect(task().landingRetry!.count).toBe(1);
+  });
+
+  it.each(['landed', 'nothing-to-commit', 'rescued', 'failed'])('shared %s ignores unlanded-only fields without task writes', async outcome => {
+    const held = await worktreeAttempt('shared'); const before = taskBytes();
+    await finalize(payload(held, { outcome, landedRevision: outcome === 'landed' ? LANDED : null,
+      unlandedReason: 'bogus', conflictPaths: 1, rescueRef: false, targetTip: 'HEAD' }));
+    expect(taskBytes()).toBe(before);
+  });
+
+  it('accepts another runner but still refuses a superseded generation before any write', async () => {
+    const held = await worktreeAttempt(); const before = taskBytes();
+    const err = await refusal(finalize(payload(held, { generation: held.generation + 1, runnerId: 'runner-replay' })));
+    expect(err.codeName).toBe('ATTEMPT_SUPERSEDED'); expect(taskBytes()).toBe(before);
+    expect(h.state.attempts.get(held.id)!.phase).toBe('finalizing');
+    expect(await finalize(payload(held, { runnerId: 'runner-replay' }))).toMatchObject({ taskStatus: 'WORKING' });
+  });
+
+  it('closes first, writes the task once and fails safe if task persistence fails', async () => {
+    const held = await worktreeAttempt(); const before = taskBytes(); const args = payload(held);
+    const update = vi.spyOn(h.state, 'updateTask');
+    const persist = h.state.writeEntity.bind(h.state);
+    const write = vi.spyOn(h.state, 'writeEntity').mockImplementation(async (kind, id, entity) => {
+      if (kind === 'tasks') {
+        expect(h.state.attempts.get(held.id)!.phase).toBe('closed');
+        throw new Error('task write failed');
+      }
+      return persist(kind, id, entity);
+    });
+    try {
+      await expect(finalize(args)).rejects.toThrow('task write failed');
+      expect(update).toHaveBeenCalledTimes(1); expect(taskBytes()).toBe(before);
+      expect(task().status).toBe('REVIEW');
+      expect(await finalize(args)).toMatchObject({ phase: 'closed', taskStatus: 'REVIEW', landingRetry: null });
+      expect(update).toHaveBeenCalledTimes(1); expect(taskBytes()).toBe(before);
+    } finally { write.mockRestore(); update.mockRestore(); }
+  });
+
+  it.each(['rescued', 'failed'])('%s preserves an existing retry without task writes', async outcome => {
+    await finalize(payload(await worktreeAttempt()));
+    const held = await worktreeAttempt(); const before = taskBytes();
+    await finalize(payload(held, { outcome }));
+    expect(taskBytes()).toBe(before); expect(task().landingRetry!.count).toBe(1);
+  });
+
+  it('exposes landingRetry in get_context only while it is set', async () => {
+    const contextTask = async () => (await getContextTool(h.state).handler({ taskId: 'task-1' }, h.state) as {
+      task: Record<string, unknown> }).task;
+    expect('landingRetry' in await contextTask()).toBe(false);
+    await finalize(payload(await worktreeAttempt()));
+    expect((await contextTask()).landingRetry).toEqual(task().landingRetry);
+    await h.state.updateTask('task-1', { status: 'REVIEW' });
+    await finalize(payload(await worktreeAttempt(), { outcome: 'landed', landedRevision: LANDED }));
+    expect('landingRetry' in await contextTask()).toBe(false);
   });
 });

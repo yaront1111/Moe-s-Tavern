@@ -1,0 +1,208 @@
+{
+  "id": "task-0921d6d76a6b40a685077245b19ac639",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-09] Wrappers: completion landing with a remote: fetch, push first, retry",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §2.2 (L4 with a remote, L9), §2.3 and §2.4 (no-remote behaviour).\n\nObjective: with an origin, the remote's target is updated before the local one by a plain (never forced) push of a commit whose only parent is B, so a lander that lost the race retries instead of diverging.\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins:\n- sync_land_target / Sync-MoeLandTarget:\n  - `git fetch origin refs/heads/<target>`;\n  - local equal to or ahead of the fetched tip: B = local;\n  - local behind: a CAS fast-forward of the local target, then B = fetched;\n  - neither: MOE_LAND_TARGET_DIVERGED and nothing moves (record failed for now; WT-11 adds the route);\n  - a fetch failure prints MOE_LAND_FETCH_FAILED and B = local;\n  - it is also called before WT-04's W creation, so W is cut from a fresh target.\n- L9: `git push --porcelain origin C:refs/heads/<target>` with no force flag of any kind.\n  - A '!' (rejected) line retries from L4 (3 attempts total).\n  - A transport failure prints the existing PUSH FAILED banner with code MOE_PUSH_FAILED and continues to the local CAS.\n  - MOE_PUSH_REBASE is ignored in worktree mode.\n- With no remote, the fetch and push are skipped.\n- Register scripts/tests/worktree-landing.sh in the Linux postflight job and worktree-landing.ps1 in the Windows jobs of .github/workflows/ci.yml.\n\nThe WT-08T files (task-c12f9463b68c44a18cc460a7e9460247) are held out: ALL their cases, local and remote, must pass with no edit to them. Depends on WT-08 (task-7a4aab5e0bfa48e0978eb76506edfd57).\n\nNOT in scope: the gate and lease (WT-10); the unlanded route (WT-11); checkpoint pushes (WT-07); board ref pushes (WT-12); docs (WT-18).\n\nVerification: bash scripts/tests/worktree-landing.sh && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh (and on a Windows seat: powershell -NoProfile -File scripts/tests/worktree-landing.ps1)",
+  "definitionOfDone": [
+    "bash scripts/tests/worktree-landing.sh (all cases) exits 0 with scripts/tests/worktree-landing.{sh,ps1} byte-identical to WT-08T's landed version.",
+    "The ps1 twin passes all cases on a Windows seat.",
+    "grep over the worktree arm of both wrappers finds no `--force`, `-f ` or `--force-with-lease` on any push; MOE_PUSH_REBASE has no effect in worktree mode (a case or grep proves it).",
+    ".github/workflows/ci.yml runs worktree-landing.sh on Linux and worktree-landing.ps1 on Windows.",
+    "node scripts/tests/postflight-safe.mjs bash and bash scripts/tests/parity-check.sh exit 0; both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "PREREQUISITES, then the sh L4 remote arm, the mirror helper and the remote W base.\n\ndependsOn gates the claim, not the bytes. Confirm that WT-08 (task-7a4aab5e), WT-08T (task-c12f9463) and WT-04..WT-07 have landed: epicSiblings landing.merged, or `git log --grep 'Moe-Task: <id>'`.\n\nRead before editing:\n- the revised docs/plans/2026-10-30-per-task-worktrees.md §1.2, §2.2 (L4, L9, L10, L12), §2.3 and §2.6;\n- this row's two contract comments. They override the description: in remote mode B is never local, there is no local-CAS fallback, and a transport failure never publishes;\n- WT-08's landed worktree arm of run_landing / Invoke-MoeLanding: its round loop, how it computes B, its interim failure path for MOE_COMMIT_FAILED_CONFLICT, its L8 journal and its L12;\n- WT-04's W creation arm;\n- the held-out scripts/tests/worktree-landing.{sh,ps1}: the remote cases and their git shim (MOE_TEST_GIT_FAIL).\nThen run `bash scripts/tests/worktree-landing.sh --only remote` on a HEAD snapshot and keep the red baseline. Never edit the held-out files.\n\nscripts/moe-agent.sh:\n\nsync_land_target TARGET (doc L4). If WT-08 inlined its local B computation, move it in here.\n- Local mode (no_git_remote): B = the local target, as WT-08 does.\n- Remote mode is anything else, including a failed probe:\n  - Read L, the local target's tip, BEFORE fetching. L may be absent.\n  - Fetch: `git -C \"$MOE_TOP\" fetch --no-write-fetch-head origin \"refs/heads/$target:refs/remotes/origin/$target\"`. No '+' and no --force.\n  - Up to 3 tries, sleeping MOE_LAND_NET_BACKOFF_SEC between them (default 5; a non-integer or negative value means 5).\n  - Call git by name through PATH: WT-08T's shim intercepts it.\n  - B = refs/remotes/origin/<target>, never the local target.\n  - All 3 tries fail (a refused non-fast-forward counts as a try): print MOE_LAND_FETCH_FAILED with git's last stderr line, then end the landing through WT-08's interim failure path (record_commit failed, reason remote). Nothing is published and no ref moves.\n  - L is present and not an ancestor of B (merge-base --is-ancestor exits 1): MOE_LAND_TARGET_DIVERGED, through the same interim path (reason diverged). Nothing moves. Any exit code other than 0 or 1 is a failure, never 'diverged'.\n  - Otherwise mirror the local target to B.\n\nmirror_land_target NEW (doc L10's rule; L4, L10 and replay all reuse it):\n- `git update-ref refs/heads/<target> NEW <old>`, only while <old> is absent or an ancestor of NEW.\n- After a lost CAS, re-read <old> and retry, at most 3 times.\n- A target that already contains NEW needs nothing.\n- A target that cannot fast-forward prints MOE_LAND_MIRROR_SKIPPED and returns 0. It is never a landing failure.\n- WT-08's MOE_LAND_TARGET_CHECKED_OUT check still runs first.\n\nW base (§1.2, in WT-04's creation arm):\n- Remote mode: run sync_land_target's fetch part once, with no mirror and no divergence check, then cut W from refs/remotes/origin/<target>.\n- If that fetch fails, cut from the ref as last fetched.\n- If no such ref exists: MOE_WORKTREE_CREATE_FAILED through WT-04's failure path (no CLI, report_blocked).\n- Local mode keeps WT-04's local-target base.\n\nError handling: check every git exit code, keep stderr to one bounded log line, and never move a ref after a failed or ambiguous answer.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The sh remote publication, inside WT-08's round (L9-L12) and the replay.\n\nL9:\n- Push with `git -C \"$MOE_TOP\" push --porcelain origin \"$C:refs/heads/$target\"`.\n- Never use --force, -f, --force-with-lease or a '+' refspec.\n- Never call push_branch, so neither MOE_PUSH_REBASE nor the pull --rebase retry can run in worktree mode.\n- Parse the porcelain line whose destination is refs/heads/<target>, whatever git's exit code:\n  - flag ' ', '*' or '=': published;\n  - '!': rejected. The round ends and the next round starts again at L4 on the fresh tip;\n  - anything else (another flag, no line, a transport error): reconcile_push.\n\nreconcile_push C (doc §2.6):\n- Sleep MOE_LAND_NET_BACKOFF_SEC, then repeat L4's fetch (3 tries).\n- refs/remotes/origin/<target> contains C: published; continue at L10.\n- Fetched without C: MOE_PUSH_FAILED, and the round ends.\n- Fetch failed: the outcome is unknown.\n  - Print MOE_PUSH_OUTCOME_UNKNOWN and move no ref.\n  - Rewrite the L8 journal with pushResult 'push unknown: <one-line detail>'.\n  - Put C on a rescue ref with reason push-unknown (rescue_ref).\n  - Send no completion record_commit and no finalize_attempt, so the attempt stays finalizing.\n  - End the landing; no further rounds.\n\nAfter a confirmed publication:\n- L10: mirror_land_target C.\n- Then WT-08's L11 and L12, with pushed: true and a journal and receipt pushResult that starts with 'pushed ' (receipt_ledger_send's vocabulary).\n- Local mode keeps WT-08's pushed: false.\n\nRounds (doc §2.3):\n- Running out of rounds prints MOE_COMMIT_FAILED_REF_CONTENTION and takes WT-08's interim failure path.\n- Reason contention, or remote when the last round ended on MOE_PUSH_FAILED.\n- WT-11 replaces the interim path with the unlanded route. Do not call finalize_attempt unlanded here.\n\nreceipt_replay worktree arm (doc §2.6):\n- Mark a journal written by a worktree-mode remote landing at L8 with one optional field (e.g. landMode). receipt_journal_fields must tolerate its absence, and a journal without it keeps today's arm byte for byte (rail 4).\n- For a marked journal, fetch first (L4's fetch, 3 tries). A failed fetch keeps the journal.\n- Then run the unchanged receipt_landed_as against refs/remotes/origin/<target>.\n- Contained: mirror_land_target to the found commit, then today's owed-row, receipt and finalize-landed steps.\n- Fetched but absent: drop the journal as today and log the still-finalizing attempt id. Re-landing it in W belongs to WT-11 (comment-c2d608e0 on task-dd1ee586).\n\nError handling: an ambiguous push or fetch answer never publishes, never mirrors and never finalizes. Only a confirmed publication sends pushed: true.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "The ps1 twin of step 1, in scripts/moe-agent.ps1:\n- Sync-MoeLandTarget.\n- The mirror helper, named Update-MoeLandTargetMirror (or the Verb-Moe name WT-08 already uses).\n- The remote W base in WT-04's ps1 creation arm.\n\nUse the same codes, strings, tries and backoff (MOE_LAND_NET_BACKOFF_SEC, default 5). Run git through Invoke-MoeGit and PATH so WT-08T's shim intercepts it. Compare strings ordinally ([string]::Equals with Ordinal, -ceq for literal refs; mem:gotcha-powershell-path-comparison-culture). Keep the file UTF-8 with a BOM.\n\nError handling, as in step 1: check every exit code, keep stderr to one bounded line, and move no ref on a failed or ambiguous answer.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "The ps1 twin of step 2, in scripts/moe-agent.ps1:\n- the remote L9 arm and its porcelain classification;\n- Resolve-MoePushOutcome;\n- the unknown-outcome handling: journal pushResult 'push unknown: …', a push-unknown rescue through Invoke-MoeRescueRef, no completion row, no finalize;\n- L10 after a confirmed publication, and pushed: true only then;\n- the round-ending reasons;\n- the Invoke-MoeReceiptReplay worktree arm: fetch first, and receipt_landed_as's twin run against refs/remotes/origin/<target>.\n\nNever call Push-MoeBranch for a worktree completion, and never read MOE_PUSH_REBASE on that path. Use the same codes and the same optional journal field as the sh twin.\n\nError handling, as in step 2: an ambiguous push or fetch answer never publishes, never mirrors and never finalizes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Tests and CI.\n\nscripts/tests/postflight.sh and scripts/tests/postflight.ps1: add one remote-base arm to each. Reuse WT-04's worktree-arm setup (the fake proxy's workspace, worktreeMode on) and add a bare origin. Cases:\n- origin's target is one commit ahead of the local target: W's task branch starts at refs/remotes/origin/<target>. Assert the branch's base commit equals origin's tip, not the local one.\n- a remote is configured but unreachable and refs/remotes/origin/<target> does not exist: MOE_WORKTREE_CREATE_FAILED, no CLI launched, report_blocked sent, and no W registered.\n\n.github/workflows/ci.yml:\n- add `bash scripts/tests/worktree-landing.sh` to 'Test Bash wrapper postflight and parity' (Linux);\n- add `powershell -NoProfile -File scripts/tests/worktree-landing.ps1` to 'Test Windows PowerShell wrapper postflight';\n- add `pwsh -NoProfile -File scripts/tests/worktree-landing.ps1` to 'Test PowerShell 7 wrapper postflight and parity';\n- on Windows, follow each new command with the existing `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }` pattern.\n\nDo not edit scripts/tests/worktree-landing.{sh,ps1}.\n\nBudget for the whole task: at most 380 net non-board LOC. Each wrapper gets at most +150, each postflight harness at most +35, and ci.yml at most +10. The 400 review cap counts tests. If honest twins cannot fit, stop and ask the governor for a size waiver before going over (mem:governor-hold-pending-size-waiver). Never cut a case to fit.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        ".github/workflows/ci.yml"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "VERIFY ONCE (load verification-before-completion).\n\nRun on a snapshot of HEAD plus this task's files, never against the shared checkout's live wrappers, which peers edit (mem:gotcha-shared-tree-long-harness-needs-snapshot, mem:gotcha-gate-hermetic-snapshot-from-wsl).\n\n1. GATE: this is complete_task's verification. Run fresh; it must exit 0:\n   bash scripts/tests/worktree-landing.sh && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh\n2. Windows seat (DoD 2), per mem:gotcha-qa-windows-launcher-tests-from-wsl:\n   - `powershell -NoProfile -File scripts/tests/worktree-landing.ps1` and `pwsh -NoProfile -File scripts/tests/worktree-landing.ps1` pass every case;\n   - `node scripts/tests/postflight-safe.mjs powershell` and `node scripts/tests/postflight-safe.mjs pwsh` pass.\n3. Held-out check: `git diff --quiet <WT-08T landed sha> -- scripts/tests/worktree-landing.sh scripts/tests/worktree-landing.ps1`.\n4. DoD 3 grep over the worktree arm of both wrappers:\n   - no --force, '-f ', --force-with-lease or '+' refspec on any push;\n   - neither MOE_PUSH_REBASE nor push_branch / Push-MoeBranch is reachable from it.\n5. Code parity: this diff must be empty:\n   diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|PUSH)_[A-Z_]+' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|PUSH)_[A-Z_]+' scripts/moe-agent.ps1 | sort -u)\n6. Size: git diff --numstat over the five owned paths totals at most 380 net. Every other dirty path belongs to a peer; name it and leave it untouched.\n\nRecord the per-case pass lists for bash, PS5.1 and PS7 in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW, once (load adversarial-self-review). Replay QA's race and the doc's error table against the code.\n\nRef safety:\n- Can any path move the local target to a commit the remote is not known to hold: a failed or unknown push, a fetch failure, a rejected push?\n- Can any path push with force or call push_branch?\n\nRace: two seats land in remote mode at once, with no gate.\n- Does exactly one of them publish per round?\n- Does the loser start a new round on '!'?\n- Does a seat whose fetches all fail publish nothing, and never report DIVERGED?\n\nUnknown outcome:\n- No completion row and no finalize.\n- The journal is kept with 'push unknown:', and a push-unknown rescue ref exists.\n- The next pre-flight's replay fetches first and closes landed only when C is contained.\n\nDivergence: L is read before the fetch, so a peer's mirror between your L read and your fetch cannot fake DIVERGED.\n\nEdge inputs:\n- MOE_LAND_NET_BACKOFF_SEC set to garbage;\n- a target name with unusual characters;\n- origin missing while another remote exists: remote mode, and the fetch fails closed;\n- a porcelain line for another ref;\n- a '+' flag;\n- a failing pre-push hook.\n\nShared mode stays byte-identical (rail 4): postflight-safe passes unchanged.\n\nRails: error handling on every git call, tests present, no force push, sh/ps1 parity, and nothing under .moe written from W.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-7a4aab5e0bfa48e0978eb76506edfd57",
+    "task-7f82e200c224418896667560a49fe0ab",
+    "task-92307adc30884fc4861348ed3c8ead4a"
+  ],
+  "priority": "HIGH",
+  "order": 16,
+  "comments": [
+    {
+      "id": "comment-6def920eccbf4583b78525ec9f19bd2f",
+      "author": "worker-0062feec",
+      "content": "Contract correction from the WT-S revision after QA reject 1. Where this comment and the row's description differ, the revised docs/plans/2026-10-30-per-task-worktrees.md and this comment win.\n\nWITHDRAWN, because QA reproduced a local/remote fork with them:\n- \"local equal to or ahead: B = local\";\n- \"a fetch failure prints MOE_LAND_FETCH_FAILED and B = local\";\n- \"a transport failure … continues to the local CAS\".\n\nPlan against revised §1.2, §2.2 (L4/L9/L10), §2.3 and §2.6:\n- L4 (sync_land_target / Sync-MoeLandTarget):\n  - Fetch with `git fetch --no-write-fetch-head origin refs/heads/<target>:refs/remotes/origin/<target>` (no `+`), up to 3 tries, MOE_LAND_NET_BACKOFF_SEC apart (default 5).\n  - B = refs/remotes/origin/<target>, never the local target.\n  - If all 3 fetches fail, nothing lands: MOE_LAND_FETCH_FAILED, unlanded `remote`.\n  - A local target that is not an ancestor of B gives MOE_LAND_TARGET_DIVERGED. Otherwise fast-forward the local target to B.\n  - W creation (WT-04) cuts from refs/remotes/origin/<target> after this fetch. If the fetch fails it uses the ref as last fetched; with no such ref at all it gives MOE_WORKTREE_CREATE_FAILED.\n- L9: `git push --porcelain origin C:refs/heads/<target>`, with no force flag of any kind.\n  - Flag ' ', '*' or '=': published.\n  - Flag '!': the round ends.\n  - Anything else goes to reconcile_push / Resolve-MoePushOutcome. It waits the backoff, then repeats the fetch:\n    - C contained: published.\n    - fetched without C: MOE_PUSH_FAILED, and the round ends.\n    - the fetch fails: the outcome is unknown.\n- Unknown outcome:\n  - MOE_PUSH_OUTCOME_UNKNOWN, and no ref moves;\n  - keep the journal, with pushResult `push unknown: <detail>`;\n  - put a `push-unknown` rescue ref on C;\n  - send no completion row and no finalize.\n- L10 mirror: an ff-only CAS of the local target to C. A refusal is MOE_LAND_MIRROR_SKIPPED and never a landing failure.\n- Worktree arm of receipt_replay / Invoke-MoeReceiptReplay: fetch first, then run the unchanged receipt_landed_as against refs/remotes/origin/<target>. A failed fetch keeps the journal; it never drops it.\n- `pushed: true` only after a confirmed publication.\n- Exhausted rounds end as `contention`, or as `remote` when the last round ended on a transport failure.\n\nWT-08T's `remote` cases, including the race and the unknown outcome, must pass unchanged.",
+      "timestamp": "2026-10-30T13:02:08.080Z"
+    },
+    {
+      "id": "comment-c837807a391341d5b53701f006f996fa",
+      "author": "worker-0062feec",
+      "content": "Follow-up to the WT-S revision comment above. Two additions from revised §2.2 L4 and its error handling:\n\n1. Read the local target as L BEFORE the fetch.\n   - Report MOE_LAND_TARGET_DIVERGED only when that L is not an ancestor of B.\n   - Why: mirrors only ever move the local target to commits the remote already held. Read this way, a peer's mirror that lands between your fetch and your check cannot fake a divergence. That matters because no lease runs when no qualityGate is set.\n   - A fetch refused as non-fast-forward counts as one failed try. When a peer moved the tracking ref mid-fetch, the next try clears it.\n\n2. Test the remote-mode W base in scripts/tests/postflight.{sh,ps1}, since the WT-08T files stay held out.\n   - W is cut from refs/remotes/origin/<target>.\n   - With no such ref, expect MOE_WORKTREE_CREATE_FAILED.\n   - This row's files become 5: the two wrappers, both postflight harnesses and .github/workflows/ci.yml.\n\nAlso extend your parity grep to cover `MOE_PUSH_`.",
+      "timestamp": "2026-10-30T13:12:04.233Z"
+    },
+    {
+      "id": "comment-cf86ae90c63441709f468cd078ef3c91",
+      "author": "architect-6fc3dd5c",
+      "content": "Seams WT-08T's held-out suite relies on (task-c12f9463, plan rev 1). WT-09 must pass that suite's `remote` cases unchanged, so please plan these in:\n- S1. MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF fires once per landing, after L8's journal and before L9's push. push-rejected-retry uses it to push a peer commit first, so the first push gets `!`.\n- S2. L8 writes the journal on every worktree completion, at <git common dir>/moe/receipt/<taskId>.json, with receipt_report's fields. While the outcome is unknown, pushResult is `push unknown: <detail>`.\n- S3. Fetch and push must resolve `git` through PATH. In ps1 that means bare `git` via PowerShell command resolution: never git.exe by absolute path, and never via cmd or node. The suite puts a shim first on PATH: a bash `git`, or `git.ps1` on Windows, which PS 5.1 resolves ahead of git.exe, verified 2026-10-30. The shim can fail fetch, fail push, or apply a push and then report failure. It logs every argv, which is how the force-flag check and the \"push before the local main moves\" order check work.\n- The suite sets MOE_LAND_NET_BACKOFF_SEC=0, so please honour that env (§2.2 L4/§2.6).\n- S4. pushed:true only on remote proof. A completion row is committed with sha C and ref refs/heads/main. finalize_attempt is landed with C.\n- The unknown case expects no completion row and no finalize at all. A second run with an idle claim lets receipt_replay fetch, find C, mirror local main and close the attempt landed, which matches your msg-b6ea9c97 scope.\n- S5. Log codes: MOE_LAND_FETCH_FAILED, MOE_PUSH_FAILED, MOE_PUSH_OUTCOME_UNKNOWN, MOE_LAND_TARGET_DIVERGED, and `MOE_RESCUE_REF ... sha=<C> reason=push-unknown`. The suite never asserts the finalize `unlanded` call (WT-11).\nThe six cases follow this row's WT-S comment cases 1-6, plus push-first-no-force.",
+      "timestamp": "2026-10-30T13:45:35.005Z"
+    },
+    {
+      "id": "comment-b5e44191a9534dc59f9cdd92db2636b2",
+      "author": "worker-0062feec",
+      "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L9, §2.3, §2.6; section numbers unchanged). Where this differs from the description or comment c837807a, this comment wins.\n\n1. L9 classification, on the target's porcelain line:\n   - ` `, `*` or `=`: published.\n   - `!` with `[rejected]`: the round ends.\n   - `!` with `[remote rejected]`: MOE_PUSH_FAILED, unlanded `remote`, no more rounds.\n   - Anything else (`[remote failure]`, a transport error, no line): reconcile_push.\n2. reconcile_push / Resolve-MoePushOutcome: wait MOE_LAND_NET_BACKOFF_SEC, then repeat L4's fetch.\n   - The tip contains C: published; continue at L10.\n   - The tip is neither B nor contains C: C can never apply, because the remote takes C only as a fast-forward from B and the target never moves backwards (rail 1). MOE_PUSH_FAILED, and the round ends.\n   - The tip is still B: push the SAME C again, then fetch again, up to 3 pushes in all. A repeat's refusal decides nothing; only the fetch does.\n   - The fetch fails, or the tip is still B after the third push: unknown. Print MOE_PUSH_OUTCOME_UNKNOWN, keep the journal, put C on a `push-unknown` rescue ref, and leave the attempt finalizing.\n3. receipt_replay's worktree arm, in remote mode, never merges, gates or builds a commit. \"Re-run L4-L12\" is dropped. It settles the journaled C with reconcile_push:\n   - Published: the L10 mirror, then the landed rows as today.\n   - Never applies: hand off to the unlanded route with reason `remote`, through WT-11's take_unlanded_route. Until WT-11 lands, print MOE_PUSH_FAILED and drop the journal, as today's \"ref never moved\" path does.\n   - Unknown: keep the journal for the next pre-flight.\n4. Journals now exist for every completion, with `candidateId: null` when there is no gate (WT-08), so the remote arm must accept them too.",
+      "timestamp": "2026-10-30T13:52:57.934Z"
+    },
+    {
+      "id": "comment-09cc50e674a5484281997ec19a815fb3",
+      "author": "worker-0062feec",
+      "content": "Clarification of my comment b5e44191, point 4. The gate-less journal is WT-08's candidate-less worktree variant, under the discriminator WT-08's plan defines (Serena decision-worktree-ungated-receipt-journal), not a literal `candidateId: null`. The remote replay arm must accept that variant.",
+      "timestamp": "2026-10-30T13:56:04.162Z"
+    },
+    {
+      "id": "comment-c537e72bd3924d08b4afa064a6021c9b",
+      "author": "architect-bd1eb82d",
+      "content": "Planner note from architect-bd1eb82d, who wrote plan rev 1 (13:32Z). comment-b5e44191 and comment-09cc50e6 (13:52Z and 13:56Z) came after the plan and match the landed doc 6285adf7. Where they differ from S2/S4, they and §2.2 L9 / §2.6 win. Files, DoD and the gate command are unchanged, so there is no re-plan.\n\n1. L9: split the `!` flag. `[rejected]` ends the round. `[remote rejected]` is MOE_PUSH_FAILED, unlanded `remote` at once, with no more rounds (until WT-11, through WT-08's interim failure path with reason remote).\n2. reconcile_push / Resolve-MoePushOutcome: a fetched tip still at B pushes the SAME C again and fetches again, up to 3 pushes in all. A repeat's refusal decides nothing; only the fetch does. S2's \"fetched without C: MOE_PUSH_FAILED\" applies only to a tip that is neither B nor contains C. A failed fetch, or a tip still at B after the third push, is the unknown outcome, handled as S2 says. Never build a new C while an earlier push may still apply.\n3. The replay worktree arm (remote mode) never merges, gates or builds a commit. It runs reconcile_push on the journaled C:\n   - published: mirror_land_target, then today's landed rows;\n   - never applies: the unlanded route `remote` through WT-11's take_unlanded_route (until WT-11 lands, print MOE_PUSH_FAILED and drop the journal);\n   - unknown: keep the journal.\n   This replaces S2's \"fetched but absent: drop the journal\".\n4. Accept WT-08's candidate-less worktree journal, under WT-08's discriminator rather than a literal `candidateId: null`: no delivery receipt, only the owed ledger row and finalize_attempt.\n\nS4 twins 1-4 with the same codes. S7 also checks that a tip still at B never ends a round with a fresh C.",
+      "timestamp": "2026-10-30T14:24:01.897Z"
+    },
+    {
+      "id": "comment-82fe62b24ac74938839e292e8d98290c",
+      "author": "architect-bd1eb82d",
+      "content": "Planner note 2 from architect-bd1eb82d, the plan rev 1 author. Read it with c537e72b. It only clarifies: files, DoD, the 380-LOC budget and the gate command are unchanged. Source: msg-aeff4cb7 in #general.\n\n1. MOE_LAND_NET_BACKOFF_SEC parsing (steps 1, 3 and 7). Use one rule in both twins: digits only, no floor. 0 means no wait; WT-08T's suite sets 0 on every remote case. Any other value (empty, -1, 1.5, garbage) means 5.\n   - sh: the sh:2038 form, `case \"$v\" in ''|*[!0-9]*) v=5 ;; esac`.\n   - ps1: `-cmatch '^[0-9]+\\z'`, then `[int]::TryParse(...)`. Fall back to 5 when either check fails, so no value can throw, including an Int32 overflow.\n   - Not the `-match '^\\d+$'` + `[int]` cast at ps1:5596: `\\d` accepts non-ASCII digits, and that cast can throw.\n   - Do NOT copy the account-retry parsers' floor: sh:6415/6427 `-ge 1`, ps1:5899/5911/6846 `-lt 1`. It would turn the suite's 0 into 5. The cases would only run slower, so no held-out assertion would catch it.\n   - Step 7 edge inputs: add =0, -1 and empty next to garbage. With =0, confirm that neither the fetch retries nor reconcile_push / Resolve-MoePushOutcome sleeps, in either shell.\n\n2. Replay's \"published\" branch (step 2 and c537e72b point 3) sends today's owed row from the journal as kept, with pushResult \"push unknown: …\".\n   - receipt_ledger_send (sh:5453-5454) and Send-MoeOwedLedgerRow (ps1:1935) therefore omit `pushed`, which is what §2.6 means by \"a replayed row omits pushed\".\n   - On the replay path, do not rewrite the journal's pushResult.\n   - Do not reuse the live landing's post-publication tail there either (step 2's L11/L12 with \"pushed …\" and pushed: true). That tail is only for a publication proven within the same landing.\n   - WT-08T's planner may make case 5 phase 2 assert that the key is absent.",
+      "timestamp": "2026-10-30T15:54:47.324Z"
+    },
+    {
+      "id": "comment-5000e41a709943b9874fe3a77890ea38",
+      "author": "qa-b29f7b3d",
+      "content": "QA note from qa-b29f7b3d, 2026-10-31, from the review of WT-08T (task-c12f9463). Under PowerShell 7 the held-out suite cannot pass until task-44b817f973374dffb578308278050497 lands, whatever this row does.\n\nEvidence: `pwsh -NoProfile -File scripts/tests/worktree-landing.ps1` on a snapshot of 8ad04de7 (pwsh 7.6.9, Windows node 24) exits 1 with 18 FAIL and 0 ERROR. But every seat stops at pre-flight with MOE_AGENT_GIT_GUARD_FAILED (moe-agent.ps1:6166), so no CLI ever launches. race-fetch-fails gives it away: its C1 is null.\n\nRoot cause, reproduced in isolation: Initialize-MoeAgentGitGuard's node program spawns powershell.exe (5.1) for Get-Acl/Set-Acl. Under a pwsh 7 parent that child inherits pwsh's PSModulePath, and Get-Acl cannot load Microsoft.PowerShell.Security. PS 5.1 runs reach the CLI normally, and there the suite is red only on landing expectations. That is bug task-44b817f9 (BACKLOG).\n\nThis row's acceptance asks for PS7 green, and step 5 adds a pwsh CI job, so plan for that fix landing first. Whether to add a dependsOn edge is the architect's call. No edit to the held-out files is needed: the harness cannot work around the bug, because pwsh re-adds its own module paths at startup.",
+      "timestamp": "2026-10-30T22:16:00.133Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:53:21.112Z",
+  "updatedAt": "2026-10-31T06:16:29.892Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T12:56:06.410Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:26:40.758Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "qa-b29f7b3d"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:32:42.685Z",
+  "executionContract": {
+    "intendedBehavior": "In worktree remote mode, a completion lands only by a non-forced `git push --porcelain origin C:refs/heads/<target>` of a commit whose only parent is B = refs/remotes/origin/<target>, freshly fetched.\n- The local target is a mirror. It moves only to commits the remote is known to hold.\n- A rejected push starts a new round.\n- An ambiguous push is reconciled by a fetch. If that fetch fails, the outcome is unknown: no ref moves, there is no completion row and no finalize, the journal is kept and a push-unknown rescue ref is made, and replay closes it later.\n- W is cut from the remote-tracking target.\n- Local mode and shared mode are unchanged.",
+    "acceptanceCriteria": [
+      "All WT-08T worktree-landing cases, local and remote, pass on bash, PS5.1 and PS7 with the held-out files unchanged.",
+      "Only a confirmed publication sends pushed: true, and local mode sends pushed: false.",
+      "No push in the worktree arm carries a force flag or a '+' refspec, and MOE_PUSH_REBASE and push_branch / Push-MoeBranch are unreachable from it.",
+      "The W base in remote mode is refs/remotes/origin/<target>. With no such ref, creation fails with MOE_WORKTREE_CREATE_FAILED. Both cases are proven in postflight.{sh,ps1}.",
+      "ci.yml runs worktree-landing.sh on Linux and worktree-landing.ps1 on both Windows PowerShell engines. postflight-safe and parity-check pass, and the MOE_WORKTREE_, MOE_LAND_, MOE_CONTROL_, MOE_BOARD_ and MOE_PUSH_ code sets are equal across the twins."
+    ],
+    "invariants": [
+      "main (the target) moves only by an update-ref CAS or a non-forced push, never by a force push or a history rewrite (epic rail 1).",
+      "No failed, rejected or unknown push ever moves the local target.",
+      "Shared-checkout mode and its push_branch behaviour are byte-for-byte unchanged (rail 4).",
+      "W never contains or writes .moe runtime (rail 3)."
+    ],
+    "compatibility": [
+      "An existing receipt journal without the new optional field replays exactly as today.",
+      "finalize_attempt outcomes are not extended here; the unlanded route is WT-11's."
+    ],
+    "checkRefs": [
+      "bash scripts/tests/worktree-landing.sh && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh",
+      "powershell -NoProfile -File scripts/tests/worktree-landing.ps1; pwsh -NoProfile -File scripts/tests/worktree-landing.ps1 (Windows seat)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Planned now, ahead of WT-08 (the human moved the row to PLANNING). Every predecessor interface comes from the revised doc's Assumed interfaces. The worker reads WT-08's landed bytes first and extends that round loop; it does not rebuild one.\n- The §2.6 re-run of L4-L12, for a still-finalizing attempt whose C is absent, goes to WT-11 (comment-c2d608e0 on task-dd1ee586). It is a resume-in-W landing that hits the owner guard and the finalizing holds, which WT-11 already designs.\n- MOE_PUSH_REBASE: proven inert by a grep (DoD 3 allows a case or a grep), which saves LOC.\n- Journal marker: one optional field instead of inferring the mode from the target. A journal without the field keeps today's replay arm (rail 4).",
+    "codebaseInsights": "- Existing helpers to reuse:\n  - no_git_remote (sh:5004) / Test-MoeNoRemote (ps1:4307) for the mode test;\n  - receipt_journal_write, receipt_landed_as and receipt_replay (sh around 5307-5480);\n  - Invoke-MoeReceiptReplay (ps1:1955);\n  - rescue_ref (sh:4930) / Invoke-MoeRescueRef (ps1:4204).\n- push_branch (sh:5035) / Push-MoeBranch (ps1:4317) hold the MOE_PUSH_REBASE retry. They must stay out of the worktree arm.\n- GIT_TERMINAL_PROMPT=0 is already exported globally (sh:9, ps1:403).\n- CI's Linux postflight step and the two Windows postflight steps sit around ci.yml lines 268-283.",
+    "risks": "- WT-08's shape is unknown at plan time. If its round loop or interim failure path differs from the doc, the worker must call moe.request_replan rather than invent around it.\n- Size: two language twins against a 400-net cap that counts tests. The budget is 380.\n- WT-08T's shim intercepts git through PATH, so an absolute git path breaks the tests.\n- A porcelain line must be matched on its destination ref, and git's exit code ignored for classification.\n- An unknown outcome must leave the attempt finalizing, with no finalize at all, before and after WT-11.",
+    "keyFiles": [
+      "docs/plans/2026-10-30-per-task-worktrees.md",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/worktree-landing.sh",
+      "scripts/tests/worktree-landing.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:32:42.732Z",
+  "approvedPlanRevision": 1
+}

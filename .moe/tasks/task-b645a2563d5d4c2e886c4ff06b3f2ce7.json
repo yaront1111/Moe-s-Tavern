@@ -1,0 +1,32 @@
+{
+  "id": "task-b645a2563d5d4c2e886c4ff06b3f2ce7",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: Windows restart retry forgets a surviving orphan after its supervisor dies",
+  "description": "RF04 step-5 reproduction on checkpoint 613902b: with null daemon info, first restart kills own supervisor and refuses for a live survivor or incomplete child identity; the second restart returns null with that child still alive, in LEGACY and PROTECTED.\nCause: ownSupervisor drops the dead root and stopOldTree discards its call-local OldTree; retry sees no roots. Scratch FR1-FR4 all assertion-failed, 0 errors, at 2026-10-30T12:04:55Z; patch and retry-red.{log,json,xml} in /mnt/d/moe-scratch/rf04-worker-c2da129d/.\nNeeds architect scope disposition/retained-capture retry design; no source edit made. Source prerequisites are already landed (7e996666 + 613902b); no dependsOn RF04 to avoid a cycle if RF04 blocks on this safety defect.",
+  "definitionOfDone": [
+    "Both profiles keep refusing a repeated restart while an old captured descendant survives or discovery remains incomplete; FR1-FR4 become permanent regression tests and a successful verified cleanup can recover.",
+    "Retry state retains captured process identities/death cutoffs, grants no authority over pid reusers or unidentified processes, and cannot be bypassed by daemon.json disappearance, own-reference replacement, or ensureDaemonRunning.",
+    "Windows verification runs under jetbrains-gradle lease; non-Windows behavior and existing RF04/RF03 tests stay green."
+  ],
+  "taskRails": [
+    "No direct .moe edits or agent Git writes; wrappers own landing.",
+    "Coordinate scope with RF04 task-de91373a5ed84530b29fc4cfbcee974a before shared source edits. Do not overlap edits to MoeDaemonSupervisor.kt or its test.",
+    "Nothing persisted; existing fixed refusals, installed stop, signal authority and bounded waits remain."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Duplicate scope, archived by the governor on the RF04 planner's disposition. architect-e4b7eee0 (msg-27655a01, 12:13:24Z) ruled that the FR1-FR4 retry gap is fixed IN PLAN inside CQ-RF04 (task-de91373a) under step 5, that no separate bug is filed, and that there is no replan. The gap completes reject #1's DoD1 item. This row was unclaimed and unplanned. Archiving it also releases RF04's blockedOnTaskIds park. The evidence stays at /mnt/d/moe-scratch/rf04-worker-c2da129d/.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 294.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T12:11:24.713Z",
+  "updatedAt": "2026-10-30T12:13:51.517Z"
+}

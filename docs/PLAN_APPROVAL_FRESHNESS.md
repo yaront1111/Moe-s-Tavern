@@ -14,8 +14,8 @@ Now every approval carries the revision it reviewed:
 
 | Layer | What it does | Where |
 |---|---|---|
-| **Stamp** | `task.planRevision` — a daemon-owned monotonic counter over the approval-relevant surface (`implementationPlan` + `definitionOfDone`), bumped inside `taskStore.updateTask`, so every writer is covered: `submit_plan`, `amend_plan_step`, reopen/step resets, `request_replan`, the plugin `UPDATE_TASK` edit | `docs/SCHEMA.md` → `planRevision` |
-| **Fence** | An optional `expectedPlanRevision` on both approval routes, compared under the state mutex *before* any timer cancellation or write; non-equal is refused with `PLAN_REVISION_MISMATCH` | `docs/MCP_SERVER.md` → "Plan approval — `expectedPlanRevision` compare-and-swap" |
+| **Stamp** | `task.planRevision` — a daemon-owned monotonic counter over the approval-relevant surface (ordered step ids, instructions, approved file scope, `definitionOfDone` and `executionContract`), bumped inside `taskStore.updateTask`, so every writer is covered: `submit_plan`, `amend_plan_step`, reopen/step resets, `request_replan`, the plugin `UPDATE_TASK` edit | `docs/SCHEMA.md` → `planRevision` |
+| **Fence** | A required `expectedPlanRevision` on both approval routes, compared under the state mutex *before* any timer cancellation or write; non-equal is refused with `PLAN_REVISION_MISMATCH` | `docs/MCP_SERVER.md` → "Plan approval — `expectedPlanRevision` compare-and-swap" |
 | **Client binding** | Each IDE sends the revision it **rendered**, not the newest one it knows: JetBrains freezes it in `PlanReviewApprovalState`, VS Code seeds it into the review page's `data-plan-revision` and reads it back from the page | `PlanReviewDialog.kt` / `PlanReviewPanel.ts` + `media/planReview.js` |
 
 The three layers are independent on purpose. The stamp alone documents staleness; the fence alone can still be
@@ -43,8 +43,7 @@ Both checklists are deterministic — no timing luck required. Use any project w
    the point. Nothing was sent to the daemon.
 4. Close and reopen the review. It renders revision *N+1*, Approve is live again, and approving succeeds.
 
-To see the daemon side of the same refusal, skip step 3's latch by approving from an older client (or by
-sending `{"type":"APPROVE_TASK","payload":{"taskId":"<T>","expectedPlanRevision":<N>}}` over `/ws` yourself):
+To see the daemon side of the same refusal, skip step 3's latch by sending `{"type":"APPROVE_TASK","payload":{"taskId":"<T>","expectedPlanRevision":<N>}}` over `/ws` yourself):
 the daemon answers with the `PLAN_REVISION_MISMATCH` `ERROR` frame below and the task stays
 `AWAITING_APPROVAL`.
 
@@ -75,21 +74,35 @@ the daemon answers with the `PLAN_REVISION_MISMATCH` `ERROR` frame below and the
 
 Stated plainly so the feature is not read as universal:
 
-- **An omitted `expectedPlanRevision` is still a legal approval.** Omission is the only token-free path and it
-  is what keeps old plugin builds working. The fence protects clients that opt in; it cannot protect one that
-  says nothing.
-- **The other approval entry points deliberately stay token-free.** JetBrains `ApproveTaskAction`,
-  `MoeToolWindowPanel` (board approve) and `TaskDetailDialog`, and VS Code `TaskDetailPanel` /
-  `BoardViewProvider`, all still send `{taskId}` only. Only the *plan review* surfaces — the ones that show a
-  human the plan — are bound to what they rendered.
-- **SPEED / TURBO automatic approval policy is unchanged** and token-free by design. An auto-approval is not a
-  human reading a plan, so there is nothing to fence.
-- **A SPEED callback already queued behind the state mutex can still fire after a human refusal.** The
-  compare-and-swap governs the approval *command*; it does not cancel a timer that has already entered the
-  queue. Known, accepted, out of scope for Wave 0.
-- **`moe.set_task_status` relaxed-mode approval** keeps its existing role/policy and takes the legacy path.
+- **Omission is refused.** An omitted `expectedPlanRevision` is refused `INVALID_INPUT` (`-32602`) on both `/ws`
+  routes before any write (CQ-F04b); an explicit `0` still approves a stamp-less row, and approvals already
+  recorded without a stamp stay as history, never upgraded or inferred as checked. The `verified-local` omission
+  guard on a `PLAN_APPROVED` write sits behind `EXECUTION_PROFILE_NOT_READY`.
+- **Every client entry point sends the rendered revision.** JetBrains: the plan review dialog (also opened by
+  `ApproveTaskAction`) and the board, task-detail and board-drop approvals through `BoardApproval`
+  (`MoeToolWindowPanel`, `TaskDetailDialog`). VS Code: `PlanReviewPanel`, `TaskDetailPanel` and
+  `BoardViewProvider`, from the revision their page rendered (CQ-F04c, CQ-F04d).
+- **SPEED / TURBO approve the revision their own submission committed.** TURBO stamps it with the approval. A
+  SPEED timer approves only the revision it was armed for, and the approval write re-checks it; if the plan, DoD
+  or contract has changed it **withholds** (no task write, one `#general` notice naming both revisions) and the
+  row waits for a human approval of the current revision or a resubmission. A daemon restart re-arms the row
+  bound to its snapshot's revision, so it never approves a newer one.
+- **A human approval cancels a pending SPEED timer only after its own write lands.** A refused or failed approval
+  leaves the timer armed. A callback already queued behind the state mutex can approve only the revision it was
+  armed for, and the approval write re-checks it.
+- **`moe.set_task_status` relaxed-mode approval** keeps its existing role/policy, is token-free and records no
+  `approvedPlanRevision` stamp.
 - **There is no `moe.approve_task` MCP tool**, and none was added — approval reaches the daemon only over
   `/ws`.
+
+## Consumption under `verified-local`
+
+A stamped approval is consumed, not just recorded: under an effective `verified-local` profile,
+`moe.start_step`, `moe.complete_step` and `moe.complete_task` require `Task.approvedPlanRevision` to equal the
+current `planRevision` (`PLAN_REVISION_NOT_APPROVED`). An `amend_plan_step`, or a DoD or contract edit, on a
+`WORKING` strict task therefore blocks further step entry and completion until a human re-approves the current
+revision. Execution progress never changes the revision. A served-context receipt never grants approval, and
+`verified-local` itself stays unavailable (`EXECUTION_PROFILE_NOT_READY`); legacy and observe tasks are unchanged.
 
 ## Error contract
 
@@ -125,10 +138,13 @@ The parent's five Definition-of-Done items and the test that proves each:
 | Definition of Done | Proven by |
 |---|---|
 | `task.planRevision` exists in `docs/SCHEMA.md` and is bumped by `submit_plan` | `packages/moe-daemon/src/tools/submitPlan.test.ts` — the 36-test `planRevision` group; `docs/SCHEMA.md` → `### planRevision` |
-| A stale `expectedPlanRevision` returns a structured error and leaves the task `AWAITING_APPROVAL`; approval without the field still works | `packages/moe-daemon/src/server/planApproval.test.ts` (30 tests, both routes, malformed/legacy/forgery/SPEED-timer) |
+| A stale `expectedPlanRevision` returns a structured error and leaves the task `AWAITING_APPROVAL`; omission is refused `INVALID_INPUT` | `packages/moe-daemon/src/server/planApproval.test.ts` (both routes, malformed/forgery/SPEED-timer) |
 | JetBrains sends `expectedPlanRevision` and cannot approve a plan it has not rendered | `moe-jetbrains/src/test/kotlin/com/moe/…/PlanApprovalContractTest.kt` (18) + `PlanReviewApprovalStateTest.kt` (32) |
 | The VS Code approve command sends `expectedPlanRevision` | `moe-vscode/tests/plan-approval-client.test.cjs` (28) + `moe-vscode/tests/plan-review.test.cjs` (33) |
 | `./gradlew test` and daemon `npm test` green | The full-feature gate recorded on the parent task's `verification` |
+| SPEED/TURBO stamp and withhold the revision their submission committed | `packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts` |
+| Strict step entry consumes the approval and a served-context receipt | `packages/moe-daemon/src/tools/startStepAuthorization.test.ts` |
+| Strict step and task completion need the approval, a receipt and current-attempt evidence | `packages/moe-daemon/src/tools/completionAuthorization.test.ts` |
 
 Cases no single slice could own — two live sockets, all three revision writers, the one-bump rule end to end,
 durability across a daemon restart, and a legacy stamp-less row invalidated by a wire edit — live in

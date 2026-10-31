@@ -111,7 +111,7 @@
       "completedAt": "2026-09-11T16:10:15.395Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -137,7 +137,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-11T10:31:29.268Z",
-  "updatedAt": "2026-09-11T16:39:49.246Z",
+  "updatedAt": "2026-10-24T15:19:02.068Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T12:12:37.625Z",
     "plannedStepCount": 6,
@@ -256,5 +256,6 @@
   },
   "completedAt": "2026-09-11T16:39:03.721Z",
   "reviewCompletedAt": "2026-09-11T16:39:03.721Z",
-  "reviewSummary": "APPROVED. Verified the diff (4e80c35: the 5 declared files + 2 board JSONs, 1059 ins), not the summary.\n\nGATES RE-RUN MYSELF, quiet box: parity-check.sh exit 0 PASS; parity-check.ps1 exit 0 PASS; MOE_POSTFLIGHT_TIMEOUT_SEC=180 SEQUENTIALLY postflight.sh exit 0 \"scenarios run: 26\" PASS and postflight.ps1 exit 0 26 PASS ([scenario M2] ok in both); npm run lint exit 0 (qa.md 25/40; note landed in the lint-exempt qa.reference.md).\n\nRED PROVED BY MUTATION, not taken on trust: ran the new harness in a temp tree over the PRE-FIX wrapper (4e80c35^, zero MOE_CHECKPOINT_SKIPPED_LIVE_OWNER) -> exit 1, \"SCENARIO M2 FAILED: (a) the second seat recovered a LIVE owner's baseline\". A-M still passed there, so M2 isolates the new behaviour.\n\nDoD: (1) red above. (2) M2-a/b assert no MOE_CHECKPOINT_RECOVERED, the exact skip line, decision BEFORE CLI launch, impl.txt still present+unstaged, baseline left landed=0, owner marker neither deleted nor overwritten; this task's own completion commit is self-contained, no role=qa theft. (3) crash unchanged - M2-c spawns/kills/REAPS a real child and asserts the recovery carries exactly [.moe/tasks/..json impl.txt] plus stale-marker deletion; M2-d pid reuse recovers; M2-e no-marker recovers; scenario M green. (4) both wrappers lockstep, skip code inside the MOE_CHECKPOINT_ family parity-check diffs across them. (5)(6) recorded/documented.\n\nRAILS: grepped the diff - no git add -A/-u, no bare commit; crash path strengthened not weakened (unanswerable probe returns 'live', the safe side); removal is byte-identical-ours-only and covers bash cleanup_temp (EXIT+INT union) and the ps1 outer finally.\n\nNOT BLOCKING (worker's residual #3): a seat that stands down writes no marker of its own, so a third seat claiming after the owner exits sees none. Loses no bytes; superseded by Wave 1 finalize."
+  "reviewSummary": "APPROVED. Verified the diff (4e80c35: the 5 declared files + 2 board JSONs, 1059 ins), not the summary.\n\nGATES RE-RUN MYSELF, quiet box: parity-check.sh exit 0 PASS; parity-check.ps1 exit 0 PASS; MOE_POSTFLIGHT_TIMEOUT_SEC=180 SEQUENTIALLY postflight.sh exit 0 \"scenarios run: 26\" PASS and postflight.ps1 exit 0 26 PASS ([scenario M2] ok in both); npm run lint exit 0 (qa.md 25/40; note landed in the lint-exempt qa.reference.md).\n\nRED PROVED BY MUTATION, not taken on trust: ran the new harness in a temp tree over the PRE-FIX wrapper (4e80c35^, zero MOE_CHECKPOINT_SKIPPED_LIVE_OWNER) -> exit 1, \"SCENARIO M2 FAILED: (a) the second seat recovered a LIVE owner's baseline\". A-M still passed there, so M2 isolates the new behaviour.\n\nDoD: (1) red above. (2) M2-a/b assert no MOE_CHECKPOINT_RECOVERED, the exact skip line, decision BEFORE CLI launch, impl.txt still present+unstaged, baseline left landed=0, owner marker neither deleted nor overwritten; this task's own completion commit is self-contained, no role=qa theft. (3) crash unchanged - M2-c spawns/kills/REAPS a real child and asserts the recovery carries exactly [.moe/tasks/..json impl.txt] plus stale-marker deletion; M2-d pid reuse recovers; M2-e no-marker recovers; scenario M green. (4) both wrappers lockstep, skip code inside the MOE_CHECKPOINT_ family parity-check diffs across them. (5)(6) recorded/documented.\n\nRAILS: grepped the diff - no git add -A/-u, no bare commit; crash path strengthened not weakened (unanswerable probe returns 'live', the safe side); removal is byte-identical-ours-only and covers bash cleanup_temp (EXIT+INT union) and the ps1 outer finally.\n\nNOT BLOCKING (worker's residual #3): a seat that stands down writes no marker of its own, so a third seat claiming after the owner exits sees none. Loses no bytes; superseded by Wave 1 finalize.",
+  "planRevision": 0
 }

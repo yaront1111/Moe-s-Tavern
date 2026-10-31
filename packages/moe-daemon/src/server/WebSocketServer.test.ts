@@ -9,6 +9,9 @@ import { StateManager } from '../state/StateManager.js';
 import { McpAdapter } from './McpAdapter.js';
 import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
+import * as speedMode from '../tools/submitPlan.js';
+import { decodeClientHello } from './clientCapabilities.js';
+import type { LandingRetry, RailProposal, TaskExecutionContract } from '../types/schema.js';
 
 describe('MoeWebSocketServer Integration', () => {
   let testDir: string;
@@ -162,13 +165,416 @@ describe('MoeWebSocketServer Integration', () => {
           return Promise.resolve(messages.shift()!);
         }
         return new Promise<string>((resolve, reject) => {
-          waiting = resolve;
-          setTimeout(() => { waiting = null; reject(new Error('Timeout')); }, timeoutMs);
+          const timer = setTimeout(() => { waiting = null; reject(new Error('Timeout')); }, timeoutMs);
+          waiting = message => { clearTimeout(timer); resolve(message); };
         });
       }
 
       return { ws, ready, nextMessage };
     }
+
+    describe('rail-proposal resolution', () => {
+      type Command = 'APPROVE_PROPOSAL' | 'REJECT_PROPOSAL';
+      type Client = ReturnType<typeof connectAndCollect>;
+      type Frame = { type: string; payload?: RailProposal; operation?: Command };
+      let clients: Client[];
+      const conflict = {
+        type: 'ERROR', code: -32003, codeName: 'NOT_ALLOWED',
+        message: '[NOT_ALLOWED] resolve proposal not allowed: proposal already resolved',
+      };
+      beforeEach(() => { clients = []; });
+      afterEach(async () => {
+        for (const client of clients) client.ws.close();
+        await state.flushActivityLog();
+      });
+      async function connect(): Promise<Client> {
+        const client = connectAndCollect();
+        clients.push(client);
+        await client.ready;
+        expect(JSON.parse(await client.nextMessage()).type).toBe('STATE_SNAPSHOT');
+        return client;
+      }
+      async function seed(): Promise<RailProposal> {
+        const proposal: RailProposal = {
+          id: 'proposal-resolution', workerId: 'worker-test', taskId: 'task-1',
+          proposalType: 'ADD_RAIL', targetScope: 'EPIC', currentValue: null,
+          proposedValue: 'Keep resolved decisions stable', reason: 'regression',
+          status: 'PENDING', resolvedAt: null, resolvedBy: null, createdAt: new Date().toISOString(),
+        };
+        return state.createProposal(proposal);
+      }
+      function snapshot(id: string) {
+        const files = ['project.json', 'epics/epic-1.json', 'tasks/task-1.json',
+          `proposals/${id}.json`, 'activity.log'];
+        return {
+          bytes: files.map(file => fs.readFileSync(path.join(moePath, file))),
+          memory: structuredClone({ project: state.project, epic: state.getEpic('epic-1'),
+            task: state.getTask('task-1'), proposal: state.proposals.get(id) }),
+        };
+      }
+      function send(client: Client, type: Command, proposalId: string) {
+        client.ws.send(JSON.stringify({ type, payload: { proposalId } }));
+      }
+
+      it.each((['APPROVED', 'REJECTED'] as const).flatMap(status =>
+        (['replay', 'conflict'] as const).map(decision => ({ status, decision }))))(
+        '$status $decision preserves resolved state at /ws', async ({ status, decision }) => {
+          const proposal = await seed();
+          const resolved = status === 'APPROVED'
+            ? await state.approveProposal(proposal.id) : await state.rejectProposal(proposal.id);
+          const approve = (status === 'APPROVED') === (decision === 'replay');
+          const command: Command = approve ? 'APPROVE_PROPOSAL' : 'REJECT_PROPOSAL';
+          const client = await connect();
+          await state.flushActivityLog();
+          const before = snapshot(proposal.id);
+          const events = vi.fn();
+          const unsubscribe = state.subscribe(events);
+          try {
+            send(client, command, proposal.id);
+            const reply: Frame = JSON.parse(await client.nextMessage());
+            if (decision === 'replay') expect(reply).toEqual({ type: 'PROPOSAL_UPDATED', payload: resolved });
+            else expect(reply).toMatchObject({ ...conflict, operation: command });
+            await state.flushActivityLog();
+            expect(snapshot(proposal.id)).toEqual(before);
+            expect(events).not.toHaveBeenCalled();
+          } finally { unsubscribe(); }
+        },
+      );
+
+      it.each(['APPROVE_PROPOSAL', 'REJECT_PROPOSAL'] as const)(
+        'serializes two clients approving vs %s', async secondCommand => {
+          const proposal = await seed();
+          const pair = await Promise.all([connect(), connect()]);
+          const events: string[] = [];
+          const unsubscribe = state.subscribe(event => events.push(event.type));
+          try {
+            send(pair[0], 'APPROVE_PROPOSAL', proposal.id);
+            send(pair[1], secondCommand, proposal.id);
+            const replies: Frame[] = await Promise.all(pair.map(async client => JSON.parse(await client.nextMessage())));
+            await state.flushActivityLog();
+            const resolved = state.proposals.get(proposal.id)!;
+            expect(resolved).toMatchObject({ resolvedAt: expect.any(String), resolvedBy: 'HUMAN' });
+            const successes = replies.filter(reply => reply.type === 'PROPOSAL_UPDATED');
+            if (secondCommand === 'APPROVE_PROPOSAL') {
+              expect(resolved.status).toBe('APPROVED');
+              expect(successes).toHaveLength(2);
+            } else {
+              expect(['APPROVED', 'REJECTED']).toContain(resolved.status);
+              expect(successes).toHaveLength(1);
+              expect(replies.filter(reply => reply.type === 'ERROR')).toEqual([expect.objectContaining({
+                ...conflict, operation: resolved.status === 'APPROVED' ? 'REJECT_PROPOSAL' : 'APPROVE_PROPOSAL',
+              })]);
+            }
+            for (const reply of successes) expect(reply.payload).toEqual(resolved);
+            expect(state.getEpic('epic-1')!.epicRails)
+              .toEqual(resolved.status === 'APPROVED' ? [proposal.proposedValue] : []);
+            expect(state.project!.globalRails.customRules).toEqual([]);
+            expect(state.getTask('task-1')!.taskRails).toEqual([]);
+            expect(state.getActivityLog(100).filter(entry =>
+              entry.event === 'PROPOSAL_APPROVED' || entry.event === 'PROPOSAL_REJECTED'))
+              .toEqual([expect.objectContaining({ event: `PROPOSAL_${resolved.status}` })]);
+            expect(events.filter(type => type === 'PROPOSAL_UPDATED')).toEqual(['PROPOSAL_UPDATED']);
+            expect(JSON.parse(fs.readFileSync(path.join(moePath, 'proposals', `${proposal.id}.json`), 'utf8')))
+              .toEqual(resolved);
+          } finally { unsubscribe(); }
+        },
+      );
+    });
+
+    describe('capability negotiation v1', () => {
+      afterEach(() => { vi.restoreAllMocks(); state.clearEmitter(); });
+      const serverCapabilities = {
+        executionProfiles: true, planRevisions: true, approvalRevisions: true,
+        executionContracts: true, deliveryReceipts: true, requiredChecks: true,
+        runnerStatus: false, modelReceipts: false, verifiedLocal: false,
+      };
+      const allClaimed = Object.fromEntries(Object.keys(serverCapabilities).map(key => [key, true]));
+      const hello = (capabilities: Record<string, unknown> = allClaimed) => ({
+        type: 'CLIENT_HELLO', payload: { protocolVersion: 1, capabilities },
+      });
+      const approval = (type: string, expectedPlanRevision?: unknown) => ({
+        type, payload: { taskId: 'task-1', expectedPlanRevision,
+          ...(type === 'UPDATE_TASK' ? { updates: { status: 'WORKING' } } : {}) },
+      });
+      type Client = ReturnType<typeof connectAndCollect>;
+      type Frame = { type: string; payload: Record<string, unknown>; code?: number; codeName?: string };
+      const next = async (client: Client): Promise<Frame> => JSON.parse(await client.nextMessage());
+      async function request(client: Client, frame: unknown): Promise<Frame> {
+        client.ws.send(JSON.stringify(frame));
+        return next(client);
+      }
+      async function connect(): Promise<Client> {
+        const client = connectAndCollect();
+        await client.ready;
+        expect((await next(client)).type).toBe('STATE_SNAPSHOT');
+        return client;
+      }
+      async function seed(row: Record<string, unknown> = {}, profile = 'legacy'): Promise<string> {
+        const file = path.join(moePath, 'tasks', 'task-1.json');
+        fs.writeFileSync(file, JSON.stringify({ ...state.getTask('task-1'),
+          status: 'AWAITING_APPROVAL', planRevision: 4, ...row }));
+        const projectFile = path.join(moePath, 'project.json');
+        const project = JSON.parse(fs.readFileSync(projectFile, 'utf8'));
+        project.settings.executionProfile = profile;
+        fs.writeFileSync(projectFile, JSON.stringify(project));
+        await state.load();
+        return file;
+      }
+      async function refused(client: Client, frame: unknown, codeName: string): Promise<void> {
+        await state.flushActivityLog();
+        const file = path.join(moePath, 'tasks', 'task-1.json');
+        const bytes = fs.readFileSync(file, 'utf8');
+        const before = structuredClone(state.getTask('task-1'));
+        const activity = state.getActivityLog(500);
+        const cancel = vi.spyOn(speedMode, 'cancelSpeedModeTimeout');
+        const events: string[] = [];
+        const unsubscribe = state.subscribe(event => events.push(event.type));
+        expect(await request(client, frame)).toMatchObject({ type: 'ERROR', codeName });
+        unsubscribe();
+        await state.flushActivityLog();
+        expect(fs.readFileSync(file, 'utf8')).toBe(bytes);
+        expect(state.getTask('task-1')).toEqual(before);
+        expect(state.getActivityLog(500)).toEqual(activity);
+        expect(events).toEqual([]);
+        expect(cancel).not.toHaveBeenCalled();
+        cancel.mockRestore();
+        // PONG is a barrier: no hidden TASK_UPDATED was sent on refusal.
+        expect(await request(client, { type: 'PING' })).toEqual({ type: 'PONG' });
+      }
+
+      it('replies only on demand with exact maps, ignoring unknown optional keys', async () => {
+        const client = await connect();
+        const peer = await connect();
+        expect((await request(client, { type: 'GET_STATE' })).type).toBe('STATE_SNAPSHOT');
+        const frame = hello({ ...allClaimed, future: { nested: true } });
+        const reply = await request(client, { ...frame, future: 1, payload: { ...frame.payload, extra: [] } });
+        expect(reply).toEqual({ type: 'SERVER_CAPABILITIES', payload: {
+          protocolVersion: 1, capabilities: serverCapabilities, negotiatedCapabilities: serverCapabilities,
+        } });
+        expect(await request(peer, { type: 'PING' })).toEqual({ type: 'PONG' });
+      });
+
+      it.each([{}, { planRevisions: true }, { planRevisions: false }])('intersects client claims %j', async claims => {
+        const client = await connect();
+        const negotiated = Object.fromEntries(Object.entries(serverCapabilities).map(([key, value]) =>
+          [key, value && (claims as Record<string, unknown>)[key] === true]));
+        expect(await request(client, hello(claims))).toEqual({ type: 'SERVER_CAPABILITIES', payload: {
+          protocolVersion: 1, capabilities: serverCapabilities, negotiatedCapabilities: negotiated,
+        } });
+      });
+
+      const invalidPayloads = [undefined, null, [], true, 'hello', {},
+        ...[undefined, null, [], true, 'caps'].map(capabilities => ({ protocolVersion: 1, capabilities })),
+        ...[undefined, null, '1', true, -0.5, Number.MAX_SAFE_INTEGER + 1].map(protocolVersion =>
+          ({ protocolVersion, capabilities: {} })),
+        ...Object.keys(serverCapabilities).map(key => ({ protocolVersion: 1, capabilities: { [key]: 1 } })),
+        ...[null, 'true', [], {}].map(planRevisions => ({ protocolVersion: 1, capabilities: { planRevisions } })),
+      ];
+      it('decodes the pure v1 contract without retaining caller fields', () => {
+        for (const payload of invalidPayloads) {
+          expect(() => decodeClientHello(payload)).toThrow(expect.objectContaining({ codeName: 'INVALID_INPUT' }));
+        }
+        expect(() => decodeClientHello({ protocolVersion: 2, capabilities: {} }))
+          .toThrow(expect.objectContaining({ codeName: 'UNSUPPORTED_CLIENT_PROTOCOL' }));
+        const payload = hello({ ...allClaimed, future: 'ignored' }).payload;
+        const before = structuredClone(payload);
+        expect(decodeClientHello(payload)).toEqual({ protocolVersion: 1,
+          capabilities: serverCapabilities, negotiatedCapabilities: serverCapabilities });
+        expect(payload).toEqual(before);
+      });
+      it.each(invalidPayloads)('rejects malformed hello %j without legacy fallback', async payload => {
+        await seed();
+        const client = await connect();
+        await refused(client, { type: 'CLIENT_HELLO', payload }, 'INVALID_INPUT');
+        for (const route of ['APPROVE_TASK', 'UPDATE_TASK']) {
+          await refused(client, approval(route, 4), 'UNSUPPORTED_CLIENT_CAPABILITY');
+        }
+        expect((await request(client, hello())).type).toBe('SERVER_CAPABILITIES');
+        expect((await request(client, approval('APPROVE_TASK', 4))).type).toBe('TASK_UPDATED');
+      });
+
+      it.each([0, -1, 2, Number.MAX_SAFE_INTEGER])('rejects unsupported integer version %s', async protocolVersion => {
+        const client = await connect();
+        expect(await request(client, { type: 'CLIENT_HELLO', payload: { protocolVersion, capabilities: {} } }))
+          .toMatchObject({ type: 'ERROR', code: -32003, codeName: 'UNSUPPORTED_CLIENT_PROTOCOL' });
+      });
+
+      it('locks a successful intersection across repeats and malformed retries', async () => {
+        await seed();
+        const client = await connect();
+        const first = await request(client, hello());
+        // Raw order, optional keys and unsupported claims do not change the intersection.
+        expect(await request(client, hello(Object.fromEntries(Object.entries({ ...serverCapabilities, future: null }).reverse())))).toEqual(first);
+        await refused(client, hello({}), 'CLIENT_CAPABILITIES_LOCKED');
+        await refused(client, { type: 'CLIENT_HELLO', payload: null }, 'INVALID_INPUT');
+        await refused(client, approval('APPROVE_TASK'), 'INVALID_INPUT');
+        expect((await request(client, approval('APPROVE_TASK', 4))).type).toBe('TASK_UPDATED');
+      });
+
+      it('keeps incapable sockets isolated, locked, and reset only by reconnect', async () => {
+        await seed();
+        const client = await connect();
+        const peer = await connect();
+        await request(client, hello({}));
+        await request(peer, hello());
+        await refused(client, hello(), 'CLIENT_CAPABILITIES_LOCKED');
+        await refused(client, approval('APPROVE_TASK', 4), 'UNSUPPORTED_CLIENT_CAPABILITY');
+        await refused(peer, approval('APPROVE_TASK'), 'INVALID_INPUT');
+        client.ws.close();
+        const reconnected = await connect();
+        // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
+        expect((await request(reconnected, approval('APPROVE_TASK', 4))).type).toBe('TASK_UPDATED');
+      });
+
+      for (const route of ['APPROVE_TASK', 'UPDATE_TASK']) {
+        // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
+        it.each(['legacy', 'observe'])(`${route} refuses unnegotiated %s omission without side effects`, async profile => {
+          await seed({}, profile);
+          const client = await connect();
+          await refused(client, approval(route), 'INVALID_INPUT');
+          expect(state.getTask('task-1')).toMatchObject({ status: 'AWAITING_APPROVAL' });
+          expect(state.getTask('task-1')).not.toHaveProperty('approvedPlanRevision');
+        });
+        it.each([undefined, null, '4', true, -1, 4.5, Number.MAX_SAFE_INTEGER + 1, 3, 5])(
+          `${route} refuses negotiated token %j without side effects`, async token => {
+            await seed();
+            const client = await connect();
+            await request(client, hello());
+            await refused(client, approval(route, token), token === 3 || token === 5 ? 'PLAN_REVISION_MISMATCH' : 'INVALID_INPUT');
+          });
+        it.each([{}, { planRevisions: false }])(`${route} requires revision capability %j even with a token`, async claims => {
+          await seed();
+          const client = await connect();
+          await request(client, hello(claims));
+          await refused(client, approval(route, 4), 'UNSUPPORTED_CLIENT_CAPABILITY');
+        });
+        it(`${route} persists only the reviewed revision`, async () => {
+          const file = await seed();
+          const client = await connect();
+          await request(client, hello());
+          expect(await request(client, approval(route, 4))).toMatchObject({ type: 'TASK_UPDATED',
+            payload: { status: 'WORKING', planRevision: 4, approvedPlanRevision: 4 } });
+          expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toMatchObject({ approvedPlanRevision: 4 });
+        });
+        it(`${route} rechecks a token queued behind a material edit under the mutex`, async () => {
+          const file = await seed();
+          const client = await connect();
+          expect((await request(client, hello())).type).toBe('SERVER_CAPABILITIES');
+          const exclusive = vi.spyOn(state, 'runExclusive');
+          let release!: () => void;
+          const hold = new Promise<void>(resolve => { release = resolve; });
+          let bytes: string, activity: unknown;
+          const published: string[] = [];
+          const cancel = vi.spyOn(speedMode, 'cancelSpeedModeTimeout');
+          const unsubscribe = state.subscribe(event => published.push(event.type));
+          const edit = state.runExclusive(async () => {
+            await hold;
+            await state.updateTask('task-1', { executionContract: { intendedBehavior: 'New contract' } });
+            await state.flushActivityLog();
+            bytes = fs.readFileSync(file, 'utf8');
+            activity = state.getActivityLog(500);
+          });
+          const reply = request(client, approval(route, 4));
+          try { await vi.waitFor(() => expect(exclusive).toHaveBeenCalledTimes(2)); }
+          finally { release(); }
+          await edit;
+          expect(await reply).toMatchObject({ type: 'ERROR', codeName: 'PLAN_REVISION_MISMATCH',
+            context: { expectedPlanRevision: 4, currentPlanRevision: 5 } });
+          await state.flushActivityLog();
+          unsubscribe();
+          expect(fs.readFileSync(file, 'utf8')).toBe(bytes!);
+          expect(state.getActivityLog(500)).toEqual(activity);
+          expect(published).toEqual(['TASK_UPDATED']);
+          expect(cancel).not.toHaveBeenCalled();
+          expect(await request(client, { type: 'PING' })).toEqual({ type: 'PONG' });
+        });
+        it(`${route} cannot activate verified-local by claiming every capability`, async () => {
+          await seed({}, 'verified-local');
+          const client = await connect();
+          await request(client, hello());
+          await refused(client, approval(route, 4), 'EXECUTION_PROFILE_NOT_READY');
+        });
+      }
+
+      it('serializes a failed hello before an immediately following approval', async () => {
+        await seed();
+        const client = await connect();
+        const exclusive = vi.spyOn(state, 'runExclusive');
+        let release!: () => void;
+        const hold = new Promise<void>(resolve => { release = resolve; });
+        const busy = state.runExclusive(() => hold);
+        client.ws.send(JSON.stringify({ type: 'CLIENT_HELLO', payload: null }));
+        client.ws.send(JSON.stringify(approval('APPROVE_TASK')));
+        try { await vi.waitFor(() => expect(exclusive).toHaveBeenCalledTimes(3)); }
+        finally { release(); }
+        await busy;
+        expect(await next(client)).toMatchObject({ type: 'ERROR', codeName: 'INVALID_INPUT' });
+        expect(await next(client)).toMatchObject({ type: 'ERROR', codeName: 'UNSUPPORTED_CLIENT_CAPABILITY' });
+        expect(state.getTask('task-1')!.status).toBe('AWAITING_APPROVAL');
+      });
+
+      it('serializes competing negotiated approvals to one durable stamp', async () => {
+        await seed();
+        const clients = await Promise.all([connect(), connect()]);
+        await Promise.all(clients.map(client => request(client, hello())));
+        const write = vi.spyOn(state, 'writeEntity');
+        const replies = await Promise.all(clients.map(client => request(client, approval('APPROVE_TASK', 4))));
+        expect(replies.map(reply => reply.type).sort()).toEqual(['ERROR', 'TASK_UPDATED']);
+        expect(write.mock.calls.filter(([kind]) => kind === 'tasks')).toHaveLength(1);
+        expect(state.getTask('task-1')).toMatchObject({ planRevision: 4, approvedPlanRevision: 4 });
+      });
+
+      it('does not use a token hidden in updates or restrict ordinary edits', async () => {
+        await seed();
+        const client = await connect();
+        await request(client, hello());
+        await refused(client, { type: 'UPDATE_TASK', payload: { taskId: 'task-1',
+          updates: { status: 'WORKING', expectedPlanRevision: 4 } } }, 'INVALID_INPUT');
+        expect(await request(client, { type: 'UPDATE_TASK', payload: { taskId: 'task-1', updates: { title: 'Rename' } } }))
+          .toMatchObject({ type: 'TASK_UPDATED', payload: { title: 'Rename' } });
+      });
+
+      it('roundtrips profile, revisions, contract, evidence and unknown task fields without reshaping snapshots', async () => {
+        const contract: TaskExecutionContract = { intendedBehavior: 'Preserve exact JSON', requiredChecks: [{ id: 'gate', command: 'node gate.cjs' }] };
+        const snapshot = { version: 2, profile: 'observe', planRevision: 4, deliveryPolicy: 'local-branch' };
+        const row = { executionContract: contract, executionPolicySnapshot: snapshot,
+          approvedPlanRevision: 3, futureField: { nested: ['unchanged'] } };
+        await seed(row, 'observe');
+        state.project!.settings = { ...state.project!.settings, deliveryPolicy: 'local-branch', autoCommit: true };
+        const sha = 'ab'.repeat(20), base = 'cd'.repeat(20), timestamp = '2026-10-01T00:00:00Z';
+        state.attempts.set('a', { id: 'a', taskId: 'task-1', workerId: 'w', runnerId: 'r', generation: 1,
+          workspace: testDir, phase: 'finalizing', startedAt: timestamp, lastPhaseAt: timestamp });
+        state.candidates.set('c', { id: 'c', taskId: 'task-1', attemptId: 'a', treeSha: sha,
+          baseRevision: base, deliveryTarget: 'refs/heads/test', createdAt: timestamp });
+        state.checkRuns.set('k', { id: 'k', candidateId: 'c', treeSha: sha, command: 'node gate.cjs',
+          exitCode: 0, outputTail: '', runnerId: 'r', source: 'runner-observed', createdAt: timestamp });
+        state.receipts.set('d', { id: 'd', candidateId: 'c', target: 'refs/heads/test', targetBefore: base,
+          targetAfter: sha, landedRevision: sha, pushResult: null });
+        const expected = { ...state.getTask('task-1'), ...row, delivery: {
+          currentCandidate: { id: 'c', treeSha: sha, shortSha: sha.slice(0, 8), baseRevision: base },
+          latestCheckRun: { command: 'node gate.cjs', exitCode: 0, source: 'runner-observed' },
+          requiredCheckSatisfied: false, deliveryReceipt: { target: 'refs/heads/test', landedRevision: sha },
+          attemptPhase: 'finalizing',
+        } };
+        const client = connectAndCollect();
+        const initial = await next(client);
+        expect(initial.payload.tasks).toEqual([expected]);
+        expect(initial.payload.project).toMatchObject({ settings: { executionProfile: 'observe' } });
+        await request(client, hello());
+        expect(await request(client, { type: 'GET_STATE' })).toEqual(initial);
+        const peer = await connect();
+        state.setEmitter(event => wsServer.broadcast(event));
+        client.ws.send(JSON.stringify({ type: 'UPDATE_TASK', payload: { taskId: 'task-1', updates: { title: 'Wire' } } }));
+        const broadcast = await next(peer), ownBroadcast = await next(client), reply = await next(client);
+        const updated = { ...expected, title: 'Wire', updatedAt: state.getTask('task-1')!.updatedAt };
+        for (const frame of [broadcast, ownBroadcast, reply]) {
+          expect(frame).toMatchObject({ type: 'TASK_UPDATED', payload: updated });
+          expect(frame.payload).toEqual(updated);
+        }
+        expect(state.getTask('task-1')).not.toHaveProperty('delivery');
+        state.clearEmitter();
+      });
+    });
 
     it('sends STATE_SNAPSHOT on connection', async () => {
       const { ws, nextMessage } = connectAndCollect();
@@ -412,6 +818,44 @@ describe('MoeWebSocketServer Integration', () => {
       ws.close();
     });
 
+    const landingRetry: LandingRetry = {
+      reason: 'conflict', paths: ['src/a.ts'],
+      rescueRef: 'refs/moe/rescue/task-1/20261030T120000Z', targetTip: null,
+      count: 1, at: '2026-10-30T12:00:00.000Z',
+    };
+    const forgedRetry: LandingRetry = { ...landingRetry, reason: 'diverged', count: 99 };
+
+    it.each([
+      { name: 'forge a pending retry', stored: landingRetry, incoming: forgedRetry },
+      { name: 'clear a pending retry', stored: landingRetry, incoming: null },
+      { name: 'restore a cleared retry', stored: null, incoming: landingRetry },
+    ])('UPDATE_TASK cannot $name through landingRetry', async ({ stored, incoming }) => {
+      await state.updateTask('task-1', { landingRetry: stored });
+      const update = vi.spyOn(state, 'updateTask');
+      const { ws, ready, nextMessage } = connectAndCollect();
+      try {
+        await ready;
+        expect(JSON.parse(await nextMessage()).type).toBe('STATE_SNAPSHOT');
+        ws.send(JSON.stringify({
+          type: 'UPDATE_TASK',
+          payload: { taskId: 'task-1', updates: { title: 'Allowed edit', landingRetry: incoming } },
+        }));
+
+        const reply = await nextTaskUpdated(nextMessage);
+        expect(reply.payload.title).toBe('Allowed edit');
+        const forwarded = update.mock.calls.filter(([id]) => id === 'task-1');
+        expect(forwarded).toHaveLength(1);
+        expect(forwarded[0][1]).not.toHaveProperty('landingRetry');
+        expect(state.getTask('task-1')?.title).toBe('Allowed edit');
+        expect(state.getTask('task-1')?.landingRetry).toEqual(stored);
+        const disk = JSON.parse(fs.readFileSync(path.join(moePath, 'tasks', 'task-1.json'), 'utf8'));
+        expect(disk.landingRetry).toEqual(stored);
+      } finally {
+        ws.close();
+        update.mockRestore();
+      }
+    });
+
     it('UPDATE_TASK strips requiredCheckAtDone, so a board client cannot wipe the check a DONE task owes', async () => {
       await state.updateTask('task-1', { requiredCheckAtDone: 'node gate.cjs' });
 
@@ -428,6 +872,25 @@ describe('MoeWebSocketServer Integration', () => {
       expect(parsed.payload.title).toBe('Renamed Yet Again');
       expect(state.getTask('task-1')!.requiredCheckAtDone).toBe('node gate.cjs');
 
+      ws.close();
+    });
+
+    it('UPDATE_TASK drops forged plan-reuse state before it reaches state.updateTask', async () => {
+      const spy = vi.spyOn(state, 'updateTask');
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage(); // STATE_SNAPSHOT
+      ws.send(JSON.stringify({ type: 'UPDATE_TASK', payload: { taskId: 'task-1', updates: { title: 'Renamed',
+        planSourceBasis: { version: 1, commit: 'a'.repeat(40), planRevision: 0 },
+        planningEntry: { from: 'BACKLOG', at: '2026-10-27T10:00:00.000Z', seq: 1 }, planReuse: null } } }));
+
+      expect((await nextTaskUpdated(nextMessage)).payload.title).toBe('Renamed');
+      expect(spy).toHaveBeenCalled();
+      for (const [, updates] of spy.mock.calls) {
+        for (const key of ['planSourceBasis', 'planningEntry', 'planReuse']) expect(Object.hasOwn(updates, key)).toBe(false);
+      }
+      const stored = state.getTask('task-1')!;
+      expect([stored.planSourceBasis, stored.planningEntry, stored.planReuse]).toEqual([undefined, undefined, undefined]);
       ws.close();
     });
 

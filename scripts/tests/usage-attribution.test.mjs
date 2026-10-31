@@ -31,7 +31,7 @@ $WorkerId = 'worker-test'
 $root = $env:MOE_TEST_ROOT
 $scopeJson = Get-Content -Raw -LiteralPath $env:MOE_TEST_SCOPE | ConvertFrom-Json
 $scope = @{ Asserted=@($scopeJson.asserted); Planned=@(); PeerDeclared=@{}; PeersActive=$false; ForceNever=$false }
-$settings = @{ undeclared=$env:MOE_LAND_UNDECLARED; contested='skip-untouched'; commitBoardState=$false; exclude=@() }
+$settings = @{ undeclared=$env:MOE_PY_UNDECLARED; contested='skip-untouched'; commitBoardState=$false; exclude=@() }
 $gitInfo = @{ Top=$root; Rel=$env:MOE_GIT_REL; GitDir=(Join-Path $root '.git') }
 $toolWrites = @{}
 foreach ($p in @(Get-Content -LiteralPath $env:MOE_TEST_TOOLS)) { $toolWrites[(Get-MoePathKey $p)] = $p }
@@ -79,8 +79,8 @@ function fixture(t, rel, declared) {
 function attribute(engine, f, rel, declared) {
   const env = {
     ...fixtureEnvironment, MOE_GIT_TOP: f.root, MOE_GIT_REL: rel,
-    MOE_LAND_UNDECLARED: declared ? 'never' : 'solo', MOE_LAND_CONTESTED: 'skip-untouched',
-    MOE_LAND_BOARD_STATE: 'false', MOE_LAND_EXCLUDE: '', MOE_LAND_POLICY_OVERRIDE: '',
+    MOE_PY_UNDECLARED: declared ? 'never' : 'solo', MOE_PY_CONTESTED: 'skip-untouched',
+    MOE_PY_BOARD_STATE: 'false', MOE_PY_EXCLUDE: '', MOE_PY_POLICY_OVERRIDE: '',
   };
   if (engine.startsWith('python')) {
     const result = spawnSync(engine, ['-c', algorithm, 'completion', 'task-usage',

@@ -32,6 +32,7 @@ val bundledCallScriptSh = repoRoot.resolve("scripts/moe-call.sh")
 val bundledRoleDocs = repoRoot.resolve("docs/roles")
 val bundledAgentContext = repoRoot.resolve("docs/agent-context.md")
 val bundledSkillsDir = repoRoot.resolve("docs/skills")
+val bundledLocalRunnerDir = repoRoot.resolve("scripts/local-runner")
 
 // Newest mtime of any non-test source file under src. Guards against bundling
 // a dist that predates the sources — an old dist ships silently and resurrects
@@ -79,6 +80,11 @@ fun requireBundledAssets() {
     check(bundledCallScriptSh.exists()) {
         "Bundled moe-call.sh not found at ${bundledCallScriptSh}."
     }
+    listOf("certified-provider.json", "multipass.mjs", "doctor.mjs", "cli.mjs", "vm-control.mjs").forEach { name ->
+        check(bundledLocalRunnerDir.resolve(name).isFile) {
+            "Bundled local-runner/$name not found at $bundledLocalRunnerDir."
+        }
+    }
 }
 
 dependencies {
@@ -124,6 +130,18 @@ tasks {
                 it.contains("java.system.class.loader")
             }
             setJvmArgs(filteredJvmArgs)
+            // Plain JUnit has no IDE launcher to point JNA at the SDK's native library, which protected runtime
+            // selection reads drive mappings through on Windows. Without it every protected Windows test would refuse.
+            if (System.getProperty("os.name").startsWith("Windows")) {
+                val arch = when (System.getProperty("os.arch").lowercase()) {
+                    "amd64", "x86_64" -> "amd64"
+                    "aarch64", "arm64" -> "aarch64"
+                    else -> error("The IntelliJ SDK ships no JNA library for Windows on ${System.getProperty("os.arch")}.")
+                }
+                val jna = classpath.files.firstOrNull { it.name == "util-8.jar" }?.resolveSibling("jna/$arch")
+                check(jna != null && jna.resolve("jnidispatch.dll").isFile) { "The IntelliJ SDK's JNA native library is not at $jna." }
+                systemProperty("jna.boot.library.path", jna.absolutePath)
+            }
         }
     }
 }
@@ -135,8 +153,10 @@ val pluginContentRoot = "${rootProject.name}"
 
 tasks.named<PrepareSandboxTask>("prepareSandbox") {
     doFirst { requireBundledAssets() }
+    // moe-proxy's tsconfig compiles src/*.test.ts, and compiled tests never ship.
     from(bundledDaemonDir) {
         into("$pluginContentRoot/daemon")
+        exclude("**/*.test.*", "**/*.spec.*")
     }
     from(bundledDaemonModules) {
         into("$pluginContentRoot/daemon/node_modules")
@@ -144,6 +164,7 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
     }
     from(bundledProxyDir) {
         into("$pluginContentRoot/proxy")
+        exclude("**/*.test.*", "**/*.spec.*")
     }
     from(bundledProxyModules) {
         into("$pluginContentRoot/proxy/node_modules")
@@ -167,6 +188,11 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
         include("usage-receipt.mjs", "usage-session.mjs", "usage-report.mjs", "analyze-usage.mjs")
         // Claude account rotation: the wrappers lease an account through it before every claude launch.
         include("moe-account-lease.mjs")
+        // Provider prerequisite assets only; shipping them does not enable isolated execution.
+        include("local-runner/**")
+        exclude("local-runner/**/*.test.*", "local-runner/**/*.spec.*")
+        exclude("local-runner/**/tests/**", "local-runner/**/__tests__/**")
+        exclude("local-runner/**/fixtures/**", "local-runner/**/__fixtures__/**")
         // Claude Code mods the wrappers load into claude seats (CLAUDE_CODE_PLUGIN_DIRS).
         include("mods/**")
         exclude("mods/**/*.test.ts", "mods/*/.claude-plugin/types/**")

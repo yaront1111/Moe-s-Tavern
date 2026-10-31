@@ -86,7 +86,7 @@
       "completedAt": "2026-07-30T22:15:28.031Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:27.299Z",
-  "updatedAt": "2026-07-30T22:20:38.519Z",
+  "updatedAt": "2026-10-24T15:18:56.362Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:02:43.832Z",
     "plannedStepCount": 5,
@@ -161,5 +161,6 @@
   ],
   "completedAt": "2026-07-30T22:20:38.519Z",
   "reviewCompletedAt": "2026-07-30T22:20:38.519Z",
-  "reviewSummary": "Re-ran the task verification command myself: `npx vitest run src/tools/submitPlan.test.ts` -> 29/29 pass; also `npx vitest run src/state/StateManager.test.ts` -> 118/118 pass; `npx tsc --noEmit` exit 0. Diff read in full (7 files, +302/-3, two of which belong to other in-flight tasks). DoD1: submitPlan.ts:337-343 seeds budget = implementationPlan.length * resolvePacePerStepMs(project.settings); tests assert persisted 4 * PACE_PER_STEP_MS_DEFAULT and configured 3*60000=180000, plus the response budget field. DoD2: explicit block (submitPlan.ts:352-360) runs first and still throws INVALID_INPUT for 0/-5 without falling through to seeding (test asserts MoeError code + budget stays undefined); guard keys on `typeof params.budget.wallClockMs === 'number'` so `budget: {}` still seeds; an existing positive budget + warnedAt survives resubmit (toEqual on whole object), so set_task_budget cannot be clobbered; hand-edited pacePerStepMs:0 falls back to default. DoD3: pacePerStepMs added to ProjectSettings, to the rejectUnknownFields allowlist, and validated via validateIntegerValue(1000, 86400000); StateManager tests cover 0/-1/999/900000.5/86400001 rejects, a 600000 accept asserted on disk in project.json, and preservation across an unrelated update; documented in docs/SCHEMA.md and the docs/CONFIGURATION.md settings table with default, range and precedence. Epic rails met (type + validation + both docs, no new MCP tool, O(1) work under the mutex, tests next to touched files); no forbidden patterns; util/budget.ts untouched as scoped. Not attributable to this task: full daemon suite is currently red (30 failed / 689 passed) in lifecycle.e2e, tools.test, governanceFeatures.test and affectedFiles.test — every failure traces to two other WORKING tasks' uncommitted work in the shared tree (task-a006fed8 newFiles existence gate at submitPlan.ts:333 rejecting old fixtures, task-019421 appendOnlyFiles test landing before its allowlist entry). None touch budget seeding."
+  "reviewSummary": "Re-ran the task verification command myself: `npx vitest run src/tools/submitPlan.test.ts` -> 29/29 pass; also `npx vitest run src/state/StateManager.test.ts` -> 118/118 pass; `npx tsc --noEmit` exit 0. Diff read in full (7 files, +302/-3, two of which belong to other in-flight tasks). DoD1: submitPlan.ts:337-343 seeds budget = implementationPlan.length * resolvePacePerStepMs(project.settings); tests assert persisted 4 * PACE_PER_STEP_MS_DEFAULT and configured 3*60000=180000, plus the response budget field. DoD2: explicit block (submitPlan.ts:352-360) runs first and still throws INVALID_INPUT for 0/-5 without falling through to seeding (test asserts MoeError code + budget stays undefined); guard keys on `typeof params.budget.wallClockMs === 'number'` so `budget: {}` still seeds; an existing positive budget + warnedAt survives resubmit (toEqual on whole object), so set_task_budget cannot be clobbered; hand-edited pacePerStepMs:0 falls back to default. DoD3: pacePerStepMs added to ProjectSettings, to the rejectUnknownFields allowlist, and validated via validateIntegerValue(1000, 86400000); StateManager tests cover 0/-1/999/900000.5/86400001 rejects, a 600000 accept asserted on disk in project.json, and preservation across an unrelated update; documented in docs/SCHEMA.md and the docs/CONFIGURATION.md settings table with default, range and precedence. Epic rails met (type + validation + both docs, no new MCP tool, O(1) work under the mutex, tests next to touched files); no forbidden patterns; util/budget.ts untouched as scoped. Not attributable to this task: full daemon suite is currently red (30 failed / 689 passed) in lifecycle.e2e, tools.test, governanceFeatures.test and affectedFiles.test — every failure traces to two other WORKING tasks' uncommitted work in the shared tree (task-a006fed8 newFiles existence gate at submitPlan.ts:333 rejecting old fixtures, task-019421 appendOnlyFiles test landing before its allowlist entry). None touch budget seeding.",
+  "planRevision": 0
 }

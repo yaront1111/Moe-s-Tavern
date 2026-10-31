@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=93edf3a81a9e
+# moe-generated: sha=ad8f5eeab200
 name: ponytail
 description: >
   Forces the laziest solution that actually works, simplest, shortest, most
@@ -132,8 +132,8 @@ rails are the "explicitly requested" tier — never YAGNI them away.
   mid-plan steps (`nextAction.recommendedSkill` on `moe.start_step` /
   `moe.get_context`). Climb the ladder inside the step's `affectedFiles`, not
   across the plan. Rung 2 (already in this codebase?) is the one that pays
-  here: grep with Serena before writing a helper — this repo already has
-  `util/` equivalents for most of what a worker is tempted to write.
+  here: search the project (Serena, or grep) for an existing helper before
+  writing one.
 - **Architect, while sizing steps.** `moe.submit_plan` warns past 8 steps / 5
   distinct `affectedFiles` and hard-rejects past 12 / 10. The ladder is the
   cheapest way under the cap: a rung-3 step (stdlib does it) is one step, a

@@ -1,10 +1,12 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { ExecutionAttempt } from '../types/schema.js';
+import { UNLANDED_REASONS, type ExecutionAttempt, type LandingRetry, type Task, type UnlandedReason } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired, notFound } from '../util/errors.js';
 import { announceAttemptClosed, getAttempt, setAttemptPhase } from '../state/attemptStore.js';
 import { REVISION_RE } from '../state/candidateStore.js';
 import { assertAttemptCurrent } from '../util/enforcement.js';
+import { PathSet } from '../util/attributionTiers.js';
+import { generateId } from '../util/ids.js';
 
 // =============================================================================
 // moe.finalize_attempt — the runner closes the artifact boundary
@@ -29,8 +31,8 @@ import { assertAttemptCurrent } from '../util/enforcement.js';
 // the attempt would make the idempotent repeat below produce different bytes.
 // =============================================================================
 
-/** The four real endings of a wrapper's landing attempt. */
-const OUTCOMES = ['landed', 'nothing-to-commit', 'rescued', 'failed'] as const;
+/** The reported endings of a wrapper's landing attempt. */
+const OUTCOMES = ['landed', 'nothing-to-commit', 'rescued', 'failed', 'unlanded'] as const;
 type FinalizeOutcome = (typeof OUTCOMES)[number];
 
 interface FinalizeParams {
@@ -41,6 +43,7 @@ interface FinalizeParams {
   landedRevision: string | null;
   workerId?: string;
   runnerId?: string;
+  unlanded: Omit<LandingRetry, 'count' | 'at'> | null;
 }
 
 interface FinalizeArgs {
@@ -51,6 +54,10 @@ interface FinalizeArgs {
   landedRevision?: unknown;
   workerId?: unknown;
   runnerId?: unknown;
+  unlandedReason?: unknown;
+  conflictPaths?: unknown;
+  rescueRef?: unknown;
+  targetTip?: unknown;
 }
 
 function requireNonBlank(field: string, value: unknown): string {
@@ -83,6 +90,31 @@ function validateRevision(outcome: FinalizeOutcome, value: unknown): string | nu
   return revision;
 }
 
+function validateUnlanded(taskId: string, args: FinalizeArgs): FinalizeParams['unlanded'] {
+  if (args.landedRevision != null) {
+    throw invalidInput('landedRevision', 'must be null when outcome is "unlanded": nothing reached the target');
+  }
+  const reason = requireNonBlank('unlandedReason', args.unlandedReason);
+  if (!(UNLANDED_REASONS as readonly string[]).includes(reason)) {
+    throw invalidInput('unlandedReason', `must be one of ${UNLANDED_REASONS.join(', ')}`);
+  }
+  const rescueRef = requireNonBlank('rescueRef', args.rescueRef);
+  const prefix = `refs/moe/rescue/${taskId}/`;
+  if (rescueRef.length > 255 || !rescueRef.startsWith(prefix) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(rescueRef.slice(prefix.length))) {
+    throw invalidInput('rescueRef', `must be a task-scoped rescue ref under ${prefix} (at most 255 characters)`);
+  }
+  const targetTip = args.targetTip == null ? null : requireNonBlank('targetTip', args.targetTip);
+  if (targetTip !== null && !REVISION_RE.test(targetTip)) {
+    throw invalidInput('targetTip', 'must be 40 hex characters');
+  }
+  if (args.conflictPaths != null && !Array.isArray(args.conflictPaths)) {
+    throw invalidInput('conflictPaths', 'must be an array of strings');
+  }
+  return { reason: reason as UnlandedReason, rescueRef, targetTip,
+    paths: new PathSet().addAll(args.conflictPaths).values().slice(0, 500) };
+}
+
 function validate(args: FinalizeArgs): FinalizeParams {
   // Order matters only for which field a caller omitting several is told about
   // first: the two ids, then the outcome the revision check depends on.
@@ -104,6 +136,7 @@ function validate(args: FinalizeArgs): FinalizeParams {
     attemptId,
     generation,
     outcome: outcome as FinalizeOutcome,
+    unlanded: outcome === 'unlanded' ? validateUnlanded(taskId, args) : null,
     landedRevision: validateRevision(outcome as FinalizeOutcome, args.landedRevision),
     workerId: optionalNonBlank('workerId', args.workerId),
     runnerId: optionalNonBlank('runnerId', args.runnerId),
@@ -114,8 +147,37 @@ function conflict(message: string, context: Record<string, unknown>, codeName: s
   return new MoeError(MoeErrorCode.STATE_CONFLICT, message, context, codeName);
 }
 
+async function applyTaskOutcome(state: StateManager, attempt: ExecutionAttempt, params: FinalizeParams): Promise<Task> {
+  const task = state.getTask(params.taskId)!;
+  const actor = params.workerId ?? attempt.workerId;
+  if (params.unlanded) {
+    const prior = task.landingRetry?.count;
+    const count = (typeof prior === 'number' && Number.isSafeInteger(prior) && prior > 0 ? prior : 0) + 1;
+    const at = new Date().toISOString();
+    const landingRetry = { ...params.unlanded, count, at };
+    const { reason, paths, rescueRef, targetTip } = landingRetry;
+    const status = task.status !== 'REVIEW' ? task.status : reason === 'diverged' || count >= 3 ? 'BLOCKED' : 'WORKING';
+    const preview = paths.slice(0, 20).join(', ') || '(none reported)';
+    const comment = { id: generateId('comment'), author: 'moe-daemon', timestamp: at,
+      content: `Landing unlanded (${reason}) ${count} time(s) in a row; attempt ${attempt.id} ` +
+        `(generation ${attempt.generation}); paths: ${preview}${paths.length > 20 ? ` (+${paths.length - 20} more)` : ''}; ` +
+        `rescue ref: ${rescueRef}; target tip: ${targetTip ?? 'unknown'}; task ${status}.` };
+    const routing: Partial<Task> = task.status !== 'REVIEW' ? {} : { status, assignedWorkerId: null,
+      ...(status === 'BLOCKED' ? {
+        blockedReason: `Landing unlanded (${reason}) ${count} time(s) in a row; ${rescueRef}; reconcile, then move the task to WORKING`,
+        blockedResourceId: null, blockedOnTaskIds: null, blockedFromStatus: 'WORKING' as const, blockedAt: at,
+      } : {}) };
+    return state.updateTask(task.id, { ...routing, landingRetry, comments: [...task.comments, comment] },
+      routing.status === 'BLOCKED' ? 'TASK_BLOCKED' : undefined, actor);
+  }
+  if ((params.outcome === 'landed' || params.outcome === 'nothing-to-commit') && task.landingRetry != null) {
+    return state.updateTask(task.id, { landingRetry: null }, undefined, actor);
+  }
+  return task;
+}
+
 /** The response, built the same way on the first call and on every repeat. */
-function response(attempt: ExecutionAttempt, params: FinalizeParams) {
+function response(attempt: ExecutionAttempt, params: FinalizeParams, task: Task) {
   return {
     success: true,
     attemptId: attempt.id,
@@ -124,6 +186,8 @@ function response(attempt: ExecutionAttempt, params: FinalizeParams) {
     phase: 'closed',
     outcome: params.outcome,
     landedRevision: params.landedRevision,
+    taskStatus: task.status,
+    landingRetry: task.landingRetry ?? null,
     message:
       `Attempt ${attempt.id} (generation ${attempt.generation}) on task ${attempt.taskId} is closed ` +
       `with outcome ${params.outcome}. The finalizing holds on the worker's next claim, on every ` +
@@ -135,7 +199,7 @@ export function finalizeAttemptTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.finalize_attempt',
     description:
-      'Close a task\'s execution attempt after the runner has reported its landing outcome, moving the attempt from `finalizing` to `closed`. This is what lifts the finalizing holds on the worker\'s next claim, on every other seat\'s claim of the task and on qa_approve — the runner declares the bytes final, not the CLI\'s exit, so an interactive seat that stays open can still finalize. Fenced by attempt id + generation, and idempotent: repeating a call after a lost response writes nothing.',
+      'Close a task\'s execution attempt after the runner has reported its landing outcome, moving the attempt from `finalizing` to `closed`. This is what lifts the finalizing holds on the worker\'s next claim, on every other seat\'s claim of the task and on qa_approve — the runner declares the bytes final, not the CLI\'s exit, so an interactive seat that stays open can still finalize. Fenced by attempt id + generation, and idempotent: repeating a call after a lost response writes nothing. An unlanded worktree outcome routes the task back for a landing retry.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -151,8 +215,12 @@ export function finalizeAttemptTool(_state: StateManager): ToolDefinition {
         },
         landedRevision: {
           type: 'string',
-          description: 'The 40-hex commit the bytes landed as. Required when outcome is "landed".'
-        }
+          description: 'The 40-hex commit the bytes landed as. Required when outcome is "landed"; must be omitted or null for "unlanded".'
+        },
+        unlandedReason: { type: 'string', enum: [...UNLANDED_REASONS], description: 'Read only when outcome is "unlanded": why nothing reached the target.' },
+        conflictPaths: { type: 'array', items: { type: 'string' }, description: 'Read only when outcome is "unlanded": project-relative conflict paths.' },
+        rescueRef: { type: 'string', description: 'Read only when outcome is "unlanded": task-scoped refs/moe/rescue/<taskId>/<segment>.' },
+        targetTip: { type: 'string', description: 'Read only when outcome is "unlanded": attempted 40-hex target tip, if known.' }
       },
       required: ['taskId', 'attemptId', 'outcome'],
       additionalProperties: false
@@ -180,19 +248,16 @@ export function finalizeAttemptTool(_state: StateManager): ToolDefinition {
             'ATTEMPT_ID_TASK_MISMATCH'
           );
         }
+        if (params.outcome === 'unlanded' && attempt.workspaceMode !== 'worktree') {
+          throw invalidInput('outcome', `"unlanded" is only valid for a worktree attempt; attempt ${attempt.id} is ${attempt.workspaceMode ?? 'shared'}`);
+        }
 
-        // IDEMPOTENCY, AND IT MUST COME BEFORE THE FENCING CALL. A retry after a
-        // lost response is the normal case for an exit trap, so it answers with
-        // the first call's response and writes nothing at all.
-        //
-        // DO NOT "TIDY" THIS BELOW assertAttemptCurrent. That guard resolves the
-        // current attempt through currentAttempt(), which only ever returns a
-        // NON-closed attempt — so on the second call it would see 'none (all
-        // closed)' and refuse with ATTEMPT_SUPERSEDED. The repeat would fail and
-        // look correct in review. This is not a fencing bypass either: closing
-        // an already-closed attempt changes nothing, and every OPEN case below
-        // still goes through the guard.
-        if (attempt.phase === 'closed') return response(attempt, params);
+        // IDEMPOTENCY MUST PRECEDE assertAttemptCurrent: its currentAttempt()
+        // only returns NON-closed attempts, so fencing a lost-response retry
+        // would see 'none (all closed)' and refuse with ATTEMPT_SUPERSEDED.
+        // Closed replay writes nothing, including task routing; every OPEN
+        // attempt still goes through the fence below.
+        if (attempt.phase === 'closed') return response(attempt, params, task);
 
         assertAttemptCurrent(
           state,
@@ -213,7 +278,7 @@ export function finalizeAttemptTool(_state: StateManager): ToolDefinition {
           );
         }
 
-        // The single write. setAttemptPhase persists before publishing, and
+        // Close the attempt first. setAttemptPhase persists before publishing, and
         // re-asserting a phase is a no-op there, so lastPhaseAt records when the
         // phase actually changed.
         const closed = await setAttemptPhase(state, attempt.id, 'closed');
@@ -224,7 +289,10 @@ export function finalizeAttemptTool(_state: StateManager): ToolDefinition {
         // can observe the attempt still open; state.emit isolates a throwing
         // subscriber, so the announcement never fails this call.
         announceAttemptClosed(state, closed.taskId);
-        return response(closed, params);
+        // Fail safe: these writes are not transactional. A failed task write
+        // lifts the hold but leaves REVIEW untouched; closed replay never routes again.
+        const updated = await applyTaskOutcome(state, closed, params);
+        return response(closed, params, updated);
       });
     }
   };

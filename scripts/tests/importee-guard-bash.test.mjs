@@ -48,8 +48,8 @@ function fixture(t, sources, { head = {}, selected = Object.keys(sources), peers
     const result = spawnSync(python, ['-c', algorithm, 'completion', 'task-importee',
         ...['snapshot', 'baseline', 'unattributed', 'tools', 'scope.json'].map(name => join(scratch, name)), scratch], {
         encoding: 'utf8', windowsHide: true, timeout: 30_000,
-        env: { ...fixtureEnvironment, MOE_GIT_TOP: root, MOE_GIT_REL: '', MOE_LAND_UNDECLARED: 'never',
-            MOE_LAND_CONTESTED: 'skip-untouched', MOE_LAND_BOARD_STATE: 'false' },
+        env: { ...fixtureEnvironment, MOE_GIT_TOP: root, MOE_GIT_REL: '', MOE_PY_UNDECLARED: 'never',
+            MOE_PY_CONTESTED: 'skip-untouched', MOE_PY_BOARD_STATE: 'false' },
     });
     assert.equal(result.status, 0, result.stderr);
     const records = name => readFileSync(join(scratch, name), 'utf8').split('\0').filter(Boolean).map(row => row.split('\t'));
@@ -166,7 +166,7 @@ test('Bash final index drops newly dangling importers while keeping independent 
         'a.mjs': 'export { value } from "./b.mjs";', 'b.mjs': 'export const value = 1;', 'independent.txt': 'keep\n',
     });
     writeFileSync(join(result.root, 'b.mjs'), 'export const value = 2;\n');
-    const script = `${bashFunction('resolve_attribution')}\n${bashFunction('moe_temp_index_build')}\n
+    const script = `${bashFunction('resolve_attribution')}\n${bashFunction('moe_snapshot_hash')}\n${bashFunction('moe_temp_index_build')}\n
 create_secure_temp() { mktemp -d "$FIXTURE_SCRATCH/helper.XXXXXX"; }
 MOE_TOP="$FIXTURE_ROOT"; MOE_REL=""; MOE_TAB=$'\\t'
 MOE_GITDIR="$(git -C "$MOE_TOP" rev-parse --absolute-git-dir)"
@@ -203,7 +203,7 @@ for (const stagedMissing of [false, true]) {
         const run = spawnSync(python, ['-c', algorithm, 'index', 'task-importee', staged, '', '', '', '', output], {
             encoding: 'utf8', windowsHide: true, timeout: 30_000,
             env: { ...fixtureEnvironment, MOE_GIT_TOP: result.root, MOE_GIT_REL: '',
-                MOE_LAND_BASE: result.git('rev-parse', 'HEAD').trim(), MOE_LAND_INDEX: join(result.root, '.git', 'index') },
+                MOE_PY_BASE: result.git('rev-parse', 'HEAD').trim(), MOE_PY_INDEX: join(result.root, '.git', 'index') },
         });
         assert.equal(run.status, 0, run.stderr);
         const selected = readFileSync(join(output, 'candidates'), 'utf8').split('\0').filter(Boolean).map(row => row.split('\t')[2]);

@@ -44,7 +44,9 @@ export type ReleaseContext = 'requeue' | 'park';
  *   - PLANNING          → PLANNING          (next architect picks it up)
  *   - AWAITING_APPROVAL → AWAITING_APPROVAL (human still owns approval)
  *   - REVIEW            → REVIEW            (next QA picks it up)
- *   - WORKING           → REVIEW if every step is already COMPLETED (don't
+ *   - WORKING           → WORKING while landingRetry is set (nothing landed
+ *                         yet, even if every step is already COMPLETED);
+ *                         otherwise REVIEW if every step is COMPLETED (don't
  *                         discard a dead worker's finished work — hand to QA);
  *                         otherwise stay WORKING so the next worker claims it
  *                         and resumes from the plan's step statuses (plus any
@@ -75,7 +77,7 @@ export type ReleaseContext = 'requeue' | 'park';
  * (checkBlockedTimeouts, deregister, manual release) routes through here.
  */
 export function nextStatusForRelease(
-  task: Pick<Task, 'status' | 'implementationPlan'>,
+  task: Pick<Task, 'status' | 'implementationPlan' | 'landingRetry'>,
   context: ReleaseContext = 'requeue'
 ): TaskStatus {
   switch (task.status) {
@@ -87,6 +89,7 @@ export function nextStatusForRelease(
       return context === 'park' ? 'BACKLOG' : 'REVIEW';
     case 'WORKING':
       if (context === 'park') return 'BACKLOG';
+      if (task.landingRetry != null) return 'WORKING';
       return allStepsCompleted(task) ? 'REVIEW' : 'WORKING';
     case 'BLOCKED':
       // A release (restart purge, deregister, manual release_task) must NOT

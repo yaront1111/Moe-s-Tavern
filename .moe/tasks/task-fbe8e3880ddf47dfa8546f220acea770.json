@@ -1,0 +1,158 @@
+{
+  "id": "task-fbe8e3880ddf47dfa8546f220acea770",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-13] Wrappers: control checkout follows the target; QA reviews landed bytes",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §6.\n\nObjective: seats keep running the wrapper from committed main bytes. The control checkout sits on its own branch, moe/control, and fast-forwards to the target after every landing, so HEAD and the working files always move together and task-5998f871's committed-bytes reload is never deferred forever. QA only reviews a task whose landed commit the control checkout contains.\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins:\n- follow_control_checkout / Invoke-MoeControlFollow runs `git -C <control> -c core.hooksPath=<empty dir> merge --ff-only refs/heads/<target>`:\n  - after L12 (L13);\n  - at every loop top BEFORE the hot-reload check (wrapper_reload_deferred / Test-MoeWrapperReloadDeferred from task-5998f871e03d4ed5ab21f214073d85b2);\n  - in the QA pre-flight after the claim.\n- Branch states:\n  - On the target or detached at the same commit: switch to moe/control, created at that commit if missing.\n  - On another branch: MOE_CONTROL_NOT_FOLLOWING, no follow, one #general alert per hour.\n  - A refused ff (local edits): MOE_CONTROL_CHECKOUT_BEHIND, with git's file list and an hourly alert.\n  - moe/control ahead of the target: MOE_CONTROL_CHECKOUT_DIVERGED, alert; it is never reset.\n  - Success: MOE_CONTROL_ADVANCED.\n  - A follow failure never fails a landing.\n- QA pre-flight: if the task's completion sha is not an ancestor of the control's HEAD after the follow, print MOE_CONTROL_CHECKOUT_BEHIND, launch no CLI and call report_blocked.\n- A wrapper whose own path is under <git top>/.worktrees/ refuses to start with MOE_WRAPPER_IN_WORKTREE.\n- Cases in scripts/tests/postflight.sh and postflight.ps1. Depends on WT-12 (task-06910296f63b4868849dc46cbb38a731) and task-5998f871.\n\nNOT in scope: daemon dist rebuilds or restarts; worktree removal (WT-14); the §7.3 runbook text (WT-16); docs (WT-18).\n\nVerification: node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh (and on a Windows seat: node scripts/tests/postflight-safe.mjs powershell)",
+  "definitionOfDone": [
+    "postflight case (both harnesses): after a worktree landing, the control checkout on moe/control has HEAD == target and a clean `git status -- scripts/` (the wrapper file on disk equals HEAD's blob), and MOE_CONTROL_ADVANCED is printed.",
+    "postflight case: with a changed scripts/moe-agent.sh landed on the target, the next loop top follows first and the hot-reload check sees no uncommitted wrapper edit (no deferral line).",
+    "postflight cases: control on main at the target commit switches to moe/control; on another branch prints MOE_CONTROL_NOT_FOLLOWING; a local edit to a landed file prints MOE_CONTROL_CHECKOUT_BEHIND; a local commit on moe/control prints MOE_CONTROL_CHECKOUT_DIVERGED and is not reset.",
+    "postflight case: a QA claim whose completion sha is not in the control HEAD prints MOE_CONTROL_CHECKOUT_BEHIND, launches no CLI and calls report_blocked; a wrapper started from .worktrees/<id>/scripts/ prints MOE_WRAPPER_IN_WORKTREE and exits non-zero.",
+    "Existing postflight and worktree-landing cases pass unchanged; both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes; the verification command exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Reject execution of wrappers from task worktrees (tests first). Goal: seats use committed control-checkout wrapper bytes; normal shared launches and bundled non-Git wrappers remain unchanged. Architecture: startup guard on wrapper identity; control-follow only in worktree operation; QA checks the served completion after follow. Tech: Git/Bash/Python and PS5.1. Read revised design §6 and landed WT-12/WT-04 mode/target seams; do not reimplement them. Add a guard before daemon/config/claim side effects using the actual wrapper source path (BASH_SOURCE / PSCommandPath), not current cwd, --project or MOE_WORKTREE_PATH. Canonicalize source and its own Git checkout/common repository location; if the source is inside that repository's reserved .worktrees/<id>/ subtree, including a linked-worktree root or symlink/junction alias, print MOE_WRAPPER_IN_WORKTREE and exit nonzero. Distinguish a real path-component descendant from names like .worktrees-other; do not reject an unrelated project merely because an ancestor elsewhere has that spelling. Non-Git bundled wrapper is not falsely treated as a task worktree. Use argument arrays/literal paths and the existing Windows/WSL normalization with ordinal comparisons, preserving POSIX case. Twin cases: actual registered task worktree wrapper refuses even with --project control or cwd outside W; symlink alias where supported; control and non-Git bundled wrapper still launch; path with spaces; assert zero claim/daemon-start/CLI calls on refusal.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Implement follow_control_checkout / Invoke-MoeControlFollow with non-destructive branch handling and error handling. These are NEW twin helpers. Use explicit control root/target and local Git variables so worktree landing globals are not overwritten. Enable from the effective worktree mode (project mode for control seats, pinned mode for a worker attempt); shared attempts stay on their existing path. Resolve target using the landed literal consolidationBranch-or-main rule. Read HEAD and target as commits and symbolic branch. On refs/heads/moe/control proceed. On the target branch, or detached HEAD exactly at target, create moe/control at that same HEAD using hooks-off git switch -c if absent, or switch to it only if its existing tip equals current HEAD; never -C/-f, never reuse a different existing tip. On another branch or switch failure print MOE_CONTROL_NOT_FOLLOWING and leave every ref/file unchanged. For moe/control, require `git merge-base --is-ancestor HEAD refs/heads/<target>`: exit 1 (ahead OR diverged) gives MOE_CONTROL_CHECKOUT_DIVERGED, other errors refuse without guessing. Equal tips are an idempotent no-op. Before advancing ensure the proposed ff does not change .moe paths; runtime state must remain daemon-owned. Run exactly `git -C <control> -c core.hooksPath=<owned empty dir> merge --ff-only refs/heads/<target>`. Success with HEAD movement prints MOE_CONTROL_ADVANCED; failure prints MOE_CONTROL_CHECKOUT_BEHIND plus bounded Git stderr/file list. Never reset, stash, force, delete a lock, stage board files or clean human dirt. Re-read HEAD after contention so a peer's completed follow can count as an already-current no-op, not false divergence. Twin tests: main->new/existing-same moe/control, detached-at-target, ordinary ff with HEAD==target and disk script==HEAD blob, already-current, unrelated branch, mismatched existing moe/control, ahead/diverged control, conflicting local edit/untracked file, Git-lock/refusal and dirty .moe sentinels preserved. A failure must not modify the published target.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Wire all follow sites and bounded operator alerts. Invoke the helper (a) after successful completion L12 as L13, (b) at every loop top after polling and BEFORE wrapper hash/committed-byte reload checks, including first iteration, (c) after a QA claim/context fetch before launch. Ensure initial loop follow/auto-switch happens before WT-04's worker moe/control prerequisite check; a human feature branch remains WT-04's report_blocked/no-W path. Preserve wrapper_reload_deferred/Test-MoeWrapperReloadDeferred, syntax checks, deferred-hash logic and reload/deregister flow unchanged, including Bash's grouped-loop exit fence. L13 failure is warning-only and cannot alter C's committed/landed outcome or re-finalize it as failed. For NOT_FOLLOWING/BEHIND/DIVERGED, send one #general alert per hour across seats of this control checkout, naming root/target/code and preserving Git's useful path list without unbounded output. Keep shared throttle state under the common Git directory, not .moe; a small exclusive-create/mkdir guard around read/update of a UTC-epoch timestamp is sufficient. Concurrent callers skip a held alert lock; notification/metadata failure never blocks follow or landing, and cleanup is in finally. No sleeping/spinning on another seat. Test the L13 result stays landed under follow refusal; two callers/repeated loop warnings generate at most one chat row inside an hour, then another after a fixture-adjusted timestamp (no real hour sleep); hooks never run during switch/ff. Add a committed target-only wrapper change to the existing reload scratch fixture: next loop follows before hash comparison, source equals HEAD and no MOE_WRAPPER_RELOAD_DEFERRED appears; unchanged shared reload cases still pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Gate QA launch on the actual recorded completion's ancestry. Read `task.landing.lastCompletion.sha` from the claimed task's served context (verified getContext.ts buildLanding field), not a checkpoint, rescue SHA, task branch tip or arbitrary HEAD. After control follow, validate it as a commit and run `git -C <control> merge-base --is-ancestor <completionSha> HEAD`. Exit 0 permits QA, including a later target containing C; absent/invalid/unavailable SHA or nonzero Git result prints MOE_CONTROL_CHECKOUT_BEHIND with the task/SHA/reason, launches no CLI and calls report_blocked for that claimed task. Use the existing preflight-block path and identity; on RPC failure still do not launch or fall through to taskless QA, and report the failed acknowledgement. Leave actual task status/ownership changes to Moe. In the worktree QA prompt name the review commit and `git diff <sha>^ <sha>` so a later HEAD is not mistaken for this task's diff. Do not change shared-mode QA behavior. Add a conditional lastCompletion projection to the ONE shared postflight-fake-proxy.js using explicit test fixture input/task record; unset remains today's payload and no production daemon edit is needed. Twin tests: C absent while follow is refused -> code, exactly one report_blocked and no fake CLI; C becomes ancestor after ff -> launch; C is an ancestor of later HEAD -> launch; malformed/missing SHA and Git error -> no launch; task checkpoint must not satisfy the check; shared fixture unchanged.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "5. Run the one focused verification gate. Exact root command: `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh`. Expect exit 0, safe-harness failureClass NONE, all existing/added postflight cases and unchanged held-out worktree-landing local/remote cases passing, parity PASS. On the native Windows seat run `node scripts/tests/postflight-safe.mjs powershell` and `powershell -NoProfile -File scripts/tests/worktree-landing.ps1` against the same bytes; preserve PS5.1 coverage and do not label missing-engine/skipped checks as passed. Compare held-out tests to WT-08T landed SHA with git diff --quiet and compare sorted code-family tokens MOE_(WORKTREE|LAND|CONTROL|BOARD)_ across both wrappers. Assert git status -- scripts/ clean in the successful scratch-control fixture, script disk bytes equal the HEAD blob, original control dirt unchanged in refusal fixtures, and no .moe runtime file written through W. Save fresh command/exitCode/outputTail for complete_task. No daemon rebuild/restart, cleanup/sweep, migration runbook, IDE or whole-system regression work in this slice.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "6. Final adversarial self-review then QA handoff. Load adversarial-self-review and review this diff once for two seats following concurrently, a human switching branches or editing while follow runs, ahead versus diverged ancestry, target checked out elsewhere, control branch name collision, alias/case/path-boundary bypass of the wrapper guard, clock/alert-lock failures, and QA checking a rescue/checkpoint rather than the recorded completion. Confirm only moe/control HEAD/worktree advance by ff; target/main is never updated here; human dirt and daemon .moe are never discarded; a landing already recorded cannot become failed; follow precedes hot-reload and WT-04 checks. Preserve existing loop/parser/reload behavior and held-out tests. Keep ≤400 net non-board LOC through small helpers and table-driven cases. Correct defects within five declared files and rerun the named gate if bytes change. Record all actual modifiedFiles, complete via moe.complete_task with fresh evidence, write handoff; no agent Git staging/commit. WT-14 owns removal, WT-16/18 docs, WT-19 whole-epic hardening.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-06910296f63b4868849dc46cbb38a731",
+    "task-5998f871e03d4ed5ab21f214073d85b2"
+  ],
+  "priority": "HIGH",
+  "order": 21,
+  "comments": [
+    {
+      "id": "comment-e6073e9db590403984ec88531bcc6ae9",
+      "author": "worker-0062feec",
+      "content": "Spike self-review correction for rail 4 (docs/plans/2026-10-30-per-task-worktrees.md §6.1, §6.2, §6.4, §6.5; section numbers unchanged). Where this differs from the description, this comment wins.\n\n1. The follow runs in three places only:\n   - at L13;\n   - in a worker or QA pre-flight, after a claim whose workspace.mode is `worktree`;\n   - at the loop top, but ONLY while HEAD is refs/heads/moe/control.\n   A loop top on any other branch does nothing: no follow, no switch, no MOE_CONTROL_NOT_FOLLOWING alert. In shared mode that branch is moe/work-<date>, or main in a main-direct project. Add a case: a loop top on moe/work-<date> prints no MOE_CONTROL_ code and leaves HEAD alone.\n2. So the auto-switch and the NOT_FOLLOWING alert happen only after a worktree-mode claim or at L13. Your DoD cases \"control on main switches\" and \"another branch prints NOT_FOLLOWING\" run after such a claim.\n3. MOE_CONTROL_ADVANCED <old>..<new> is printed when the follow moves HEAD.\n4. In remote mode, the QA pre-flight runs sync_land_target (L4's fetch and mirror) before the follow, so a commit landed from another clone is in the control checkout's HEAD.\n5. MOE_WRAPPER_IN_WORKTREE fires only inside <git top>/.worktrees/task-*. The using-git-worktrees skill and humans keep their own worktrees under .worktrees/, and two such directories exist today.",
+      "timestamp": "2026-10-30T13:53:12.588Z"
+    },
+    {
+      "id": "comment-1e3e602ad3a943dca9ce83ca2842e068",
+      "author": "worker-0062feec",
+      "content": "Correction to my comment e6073e9d, points 1 and 2 (design doc §6.2/§6.5/§7.2 updated to match). A QA or architect claim always records workspace.mode 'shared' (WT-01's contract), so the QA pre-flight cannot gate on its claim.\n\n- The follow runs:\n  - at L13;\n  - in a WORKER pre-flight after a claim whose workspace.mode is 'worktree' (the only place the auto-switch and MOE_CONTROL_NOT_FOLLOWING can fire);\n  - in the QA pre-flight and at every loop top, only while the control checkout is in worktree mode, i.e. HEAD is exactly refs/heads/moe/control.\n- Reuse WT-07's predicate, sh control_worktree_mode / ps1 Test-MoeControlWorktreeMode (Serena decision-worktree-control-seat-mode-signal, #general msg-46da6ff7). Any git failure counts as shared.\n- For a control seat, a HEAD off moe/control means shared mode: nothing runs and nothing alerts (rail 4).\n- Points 3-5 stand.",
+      "timestamp": "2026-10-30T13:55:59.514Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:55:52.700Z",
+  "updatedAt": "2026-10-31T06:11:12.147Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T13:03:18.168Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:34:43.888Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-eb7de546"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:38:54.856Z",
+  "planningNotes": {
+    "approachesConsidered": "Use native hooks-off git switch and merge --ff-only on moe/control, no ref-only writes/reset/stash/index surgery. Keep the landed committed-bytes hot reload implementation unchanged and invoke follow immediately before it. Reuse common-gitdir metadata for cross-seat alert throttling and the existing shared fake proxy for QA context.",
+    "codebaseInsights": "Verified wrapper_reload_deferred/Test-MoeWrapperReloadDeferred and their loop-top hash checks; Bash now groups its loop and exit to prevent stale-offset parsing (f31d415d in-flight bytes visible). Preserve that structure and hot-reload deregistration/parse logic. getContext.ts buildLanding exposes task.landing.lastCompletion.sha; current fake get_context omits it, so tests need a conditional fixture projection (fifth file). No existing control-follow or hourly-alert helper was found.",
+    "risks": "Simultaneous control follows may lose Git locks; treat refusal as warning without retry spins or index.lock deletion. Never switch to an existing moe/control at a different commit, force a branch, overwrite human dirt or change target refs. Canonicalize the wrapper's OWN path independently of the supplied project/cwd, including Windows/WSL spellings and symlink aliases. QA ancestry proves the landed commit is contained, not that current HEAD equals it; the review diff remains C^..C.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/postflight-fake-proxy.js"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:38:54.878Z",
+  "approvedPlanRevision": 1
+}

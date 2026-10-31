@@ -1,0 +1,242 @@
+{
+  "id": "task-9cfaacf11e194062bc1ca5f77388ec90",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M04b] Baseline workload run driver",
+  "description": "Objective: drive ONE frozen CQ-M03 workload through the ORIGINAL Moe workflow and emit one outcome record in the CQ-M04 baseline record contract (task-0ece1a3552944298af911356f149e150, scripts/baseline-report.mjs). Use the human-approved baseline configuration from comment-700a6a5111ad4a57a3340a2dac0ab586 on task-0ece1a3552944298af911356f149e150:\n- today's defaults: no settings.models pins; claude seats on claude-opus-5-5; plan-routing launch hints apply;\n- one run per workload;\n- a 60-minute wall-clock cap per workload; a capped run is recorded as capped with partial counters, never dropped or silently retried.\nSplit from CQ-M04 by size (SPIDR interface seam): M04 owns the record contract and report builder; this task owns producing records; CQ-M04c executes the 20 real runs.\n\nDeliverable: packages/moe-daemon/src/benchmarks/baselineRun.ts plus its vitest file. The driver is TypeScript because the M03 corpus/materializer is. It provides a CLI entry runnable with tsx. For one workload id the driver:\n1. creates the coding snapshot with the landed M03a materializer (fresh temp dir only);\n2. makes it a throwaway Moe project: git init plus one initial commit inside that temp dir, daemon init with TURBO approval, effective settings recorded;\n3. creates the task from the workload intendedBehavior, with DoD items derived from rubric criterion DESCRIPTIONS only (assessment code stays held out);\n4. launches the existing wrapper seats (architect, worker, qa) with today's defaults;\n5. enforces the cap by terminating the whole process tree, then stops the daemon;\n6. reads the task record (status, QA approvals/rejections, reopenCount) and logs/moe-usage receipts as record-only data;\n7. runs the held-out assessment from a separate M03a assessment snapshot with MOE_WORKLOAD_CANDIDATE_ROOT pointing at the final project tree;\n8. writes the outcome record: actual per-role model/effort, Moe commit under test, cap, timings, status (completed/capped/failed/aborted), per-criterion assessment, and null for every unobserved counter.\nTests use a fake agent CLI only (no paid model calls).\n\nNOT in scope: executing the 20 real workloads (CQ-M04c); the aggregate report (CQ-M04); new profiles or verified-local; VM/isolation claims; edits to moe-agent.{sh,ps1}, daemon tools, the M03 corpus or the M03a contract (read-only use).\n\nVerification: cd packages/moe-daemon && npx vitest run src/benchmarks/baselineRun.test.ts (fresh, exit 0, in the synchronized native-Linux copy with unchanged lockfiles), plus npx tsc --noEmit for the source.",
+  "definitionOfDone": [
+    "Fake-CLI vitest cases show a completed run writes an outcome record accepted by the CQ-M04 validator in scripts/baseline-report.mjs, carrying actual per-role model/effort, the Moe commit under test, the 60-minute cap and null for every unobserved counter.",
+    "A run exceeding the cap (short test cap) has its whole process tree terminated and is recorded as capped with partial counters, never retried or dropped.",
+    "The held-out assessment runs against the final project tree from a separate assessment snapshot; coding inputs never contain assessment files; assessment pass/fail/not-run is recorded separately from the Moe task status.",
+    "All writes stay inside newly created temp directories (user-tree sentinel unchanged); the only Git writes are inside the throwaway project; wrapper/daemon failures are recorded as failed/aborted with bounded diagnostics.",
+    "Fresh `cd packages/moe-daemon && npx vitest run src/benchmarks/baselineRun.test.ts` exits 0 with output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No paid model calls in tests: a fake agent CLI only.",
+    "The driver's only Git writes are git init plus an initial commit inside its own throwaway temp project; never touch the user checkout, its .moe or its refs.",
+    "Read-only use of moe-agent.{sh,ps1}, daemon tools, the M03 corpus and the M03a contract; do not enable verified-local or claim isolation."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Preconditions, then TDD red, part 1: the unit groups that need no wrapper. Load test-driven-development first.\n\n**Preconditions**\n- Confirm CQ-M04 (task-0ece1a35…) and CQ-M03 (task-cfa74f1b…) are DONE and landed.\n- Read these landed contracts by name before using them:\n  - **scripts/baseline-report.mjs:** readBaselineRecord, BASELINE_RECORD_VERSION, BASELINE_STATUSES, BASELINE_ROLES and ASSESSMENT_RESULTS. This is the exact record this driver must emit.\n  - **The M03 corpus module** (planned as src/benchmarks/matchedCorpus.ts): its frozen corpus export, corpus version and lookup.\n  - **src/benchmarks/workloadSnapshot.ts:** validateWorkload, digestFiles, digestWorkload (the caseDigest), createCodingSnapshot, createAssessmentSnapshot and WORKLOAD_CANDIDATE_ROOT_ENV.\n  - **scripts/moe-agent.sh:**\n    - its flags: --role, --project, --worker-id, --command, --no-interactive, --no-start-daemon, --poll-interval;\n    - its usage receipts: logs/moe-usage/*.jsonl rows with version 1, provider, taskId, role, launchId, requestedModel, requestedEffort and reportedModels;\n    - which CLI stream events fill reportedModels.\n  - **The daemon activity log:** its event names for QA approval and rejection.\n- Where a landed name differs from this plan, use the landed one and say so in the completion summary.\n- Read-only for this task: moe-agent.{sh,ps1}, every daemon tool and state module, and the M03, M03a and M04 modules and their tests.\n\n**Create packages/moe-daemon/src/benchmarks/baselineRun.test.ts (LF).** Its unit groups:\n\n**U1. Receipts to roles.** `rolesFromReceipts(rows, taskId, cli)` reads receipt rows for the run's task.\n- Decoys must be ignored: another taskId, version 2, malformed lines and an unknown role.\n- It returns exactly architect, worker and qa, in that order. cli is the configured command.\n- model is the single reported model across that role's launches; null when there is none or several.\n- effort is the single requestedEffort; null when there is none or several.\n- launches is the count of distinct launchIds; null when the role has no rows.\n- A mixed value adds one bounded note.\n\n**U2. TAP to criteria.** `criteriaFromTap(output, rubricIds)`:\n- 'ok N - <id>: ...' lines, including nested subtest lines, mean pass.\n- Any 'not ok' for an id means fail.\n- An id with no reported test is not-run.\n- A test name matching no rubric id is ignored.\n- Oversized output is truncated safely.\n\n**U3. Assessment runner.** Use a synthetic workload built with validateWorkload and digestFiles: one initial .mjs file, plus one node:test assessment file whose test names start with the criterion id and import the candidate via WORKLOAD_CANDIDATE_ROOT_ENV.\n- Against a candidate root holding the fixed file: ran true, exitCode 0, and every criterion pass.\n- Against the unfixed coding snapshot: a fail.\n- With a tiny timeout and a hanging assessment: ran true, exitCode null, reason 'assessment timed out', and unreported criteria not-run.\n- The coding snapshot never contains an assessment file name.\n\n**U4. Record assembly.** `buildOutcomeRecord(...)` output must be accepted unchanged by M04's readBaselineRecord, through a dynamic import from scripts/baseline-report.mjs, in four shapes:\n- completed, with wallClockMs at or below the cap;\n- capped, with wallClockMs at or above the cap;\n- failed;\n- aborted, with the assessment ran false and a reason.\n\nUnobserved counters stay null: latency.firstCodeChangeMs, retrieval.* and repairAttempts.\n\n`decideStop` is the stop rule:\n- DONE with task.completedAt within the cap is 'completed', with wallClockMs = completedAt - start, even when the poll noticed it after the cap.\n- Otherwise, reaching the cap is 'capped', with wallClockMs at or above the cap.\n- endedAt is always startedAt + wallClockMs. Teardown is never counted.\n\n**U5. Process-tree termination.** Spawn, detached, a bash script that starts a sleeping child and grandchild and writes their pids.\n- `terminateTree(child, graceMs)` leaves no pid alive within the bound: `process.kill(pid, 0)` must throw ESRCH.\n- A group that ignores SIGTERM is SIGKILLed after the grace.\n- Skip on win32.\n\n**U6. Preconditions.** Each of these is refused with a bounded Error before any directory is created:\n- a missing daemon or proxy dist;\n- a missing wrapper;\n- a moeCommit that is not 40 lowercase hex;\n- process.platform win32;\n- an invalid workload.\n\nCount new os.tmpdir() entries carrying the driver's prefix to confirm nothing was created.\n\n**Red run.** Run the file in the scratch copy (recipe in step 5). The red must be the missing module and exports.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "note": "Read landed M03/M04 contracts and wrapper receipt protocol. M04 contract now resides in baseline-record.mjs, re-exported by baseline-report.mjs. Added U1-U6; native archive /tmp/moe-m04b-dev.xZUPsr red-unit.log exits 1 solely for missing baselineRun.js, as planned. Lockfile JSON equality and proxy ws 8.22.0 checked. Shared pre-existing dirty paths untouched.",
+      "startedAt": "2026-10-24T16:11:54.855Z",
+      "completedAt": "2026-10-24T16:14:20.159Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "TDD red, part 2: the end-to-end group, with the real wrapper and daemon plus a fake agent CLI.\n\n**Gating.** Guard the group with describe.runIf on: a POSIX platform; bash, python3 and git on PATH; and <moeRoot>/packages/moe-daemon/dist/index.js plus packages/moe-proxy/dist/index.js present. The step-5 gate builds both dists, and its evidence must show these cases RUN, never skipped.\n\n**Fake agent CLI.** Never make a paid call. The test writes an executable Node script named `claude` into a temp bin dir and puts that dir first on PATH through the driver's seatEnv option.\n- `--version` prints a fixed version.\n- `auth status --json` prints a signed-in JSON.\n- A launch:\n  1. parses its own --model and --effort;\n  2. appends {role, model, effort} to FAKE_CLAUDE_LOG, taking role from the prefix of MOE_WORKER_ID;\n  3. emits the stream events the wrapper's usage parser reads for reportedModels (match what step 1 found);\n  4. acts through `bash <moeRoot>/scripts/moe-call.sh`:\n     - architect: get_context, then submit_plan with one step on the workload's file;\n     - worker: get_context, then start_step and complete_step with modifiedFiles after editing the file (mode 'fix' writes the corrected value), then complete_task with a verification block. Mode 'hang' writes its own pid and a grandchild `sleep` pid to FAKE_PID_DIR, then sleeps;\n     - qa: get_context, then qa_approve with the currentCandidate id.\n\nUse the U3 synthetic workload, with short cap and poll knobs. Each test's timeout is at most 240 s, and the whole file should finish in about four minutes.\n\n**E1. Completed.** runBaselineWorkload in mode 'fix' returns a record that readBaselineRecord accepts unchanged (deep-equal), written at <runRoot>/records/<workloadId>.json.\n- **run:**\n  - status 'completed', with wallClockMs at or below wallClockCapMs;\n  - moeCommit equals the option value; repetition is 1 of 1; platform and nodeVersion are set; cliVersion is the fake's version;\n  - roles are architect, worker and qa, each with cli 'claude'. model and effort EXACTLY equal what FAKE_CLAUDE_LOG recorded for that role's launches, and launches equals that role's launch count;\n  - usageTaskId is the throwaway task id.\n- **moeOutcome:** finalStatus 'DONE', qaApprovals 1, qaRejections 0, reopenCount 0, and plannerSessions equal to the architect's logged launches. repairAttempts is null.\n- **assessment:** ran true, exitCode 0 and every criterion pass, recorded separately from moeOutcome.\n- **Nulls and notes:** retrieval and latency.firstCodeChangeMs are null. notes name the effective settings (approvalMode TURBO) and the test's seat-env override keys.\n- **Usage:** <runRoot>/usage/<workloadId>/logs/moe-usage holds the receipts, and M04's buildBaselineReport joins that usage project.\n- **Boundaries:**\n  - the project's git log has the driver's single initial commit as its root, and there is no remote;\n  - a sentinel directory used as process cwd and <moeRoot>/scripts are byte-unchanged;\n  - the wrapper's HOME writes landed under <runRoot>/home.\n\n**E2. Capped.** Mode 'hang', with a cap that is short but long enough for planning (tune it to at most 90 s).\n- status is 'capped', with wallClockMs at or above the cap.\n- After the call returns, every pid the fake recorded (the CLI and the grandchild) and every seat wrapper are dead.\n- moeOutcome.finalStatus equals the task file's status, and the partial counters are kept (plannerSessions at least 1).\n- There is exactly one record, and the worker seat was launched once: nothing is retried.\n- The assessment still runs against the partial tree and reports a fail.\n\n**E3. Failed.** A daemonCommand test seam that exits at once.\n- status is 'failed', with a bounded failureReason naming the daemon.\n- roles carry null model, effort and launches.\n- assessment ran is false, with a reason.\n- No seat was launched.\n\n**E4. Aborted.** An AbortSignal fired just after the seats start.\n- status is 'aborted', every process tree is dead, and the record is written.\n\nConfirm these cases go red only because the driver does not exist yet.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "note": "Added E1-E4 real-daemon/wrapper tests with an executable fake claude and no paid calls. Second red exits 1 for missing baselineRun.js only. Fake uses landed submit_plan.steps and top-level currentCandidate. Test file exceeds default size due to the expressly mandated two-file fixture+harness scope.",
+      "startedAt": "2026-10-24T16:14:20.258Z",
+      "completedAt": "2026-10-24T16:15:57.658Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create packages/moe-daemon/src/benchmarks/baselineRun.ts (LF) with the pure, unit-tested pieces.\n\n**Module doc comment.** CQ-M04b. It drives ONE frozen workload through the original Moe workflow and emits one CQ-M04 record. Observations are record-only. It makes no model calls of its own, and it is POSIX only.\n\n**Exports**\n- **Types:** BaselineRole, RoleObservation and OutcomeRecord. OutcomeRecord is a structural copy of M04's record; M04's readBaselineRecord stays the only validator.\n- **`readUsageReceipts(dir)`:**\n  - reads only regular *.jsonl files: at most 64 files, 16 MiB in total and 256 KiB per line;\n  - counts and skips a malformed line;\n  - never echoes content.\n- **`rolesFromReceipts(rows, taskId, cli)`:** as tested in U1.\n- **`criteriaFromTap(output, rubricIds)`:** as tested in U2.\n- **`runAssessment(workload, candidateRoot, {timeoutMs})`:**\n  1. creates a fresh createAssessmentSnapshot;\n  2. runs `process.execPath --test --test-reporter=tap <sorted *.test.mjs>` with cwd = the snapshot root and an env of only PATH, NODE_OPTIONS='' and WORKLOAD_CANDIDATE_ROOT_ENV = candidateRoot;\n  3. captures at most 1 MiB and kills the process on timeout;\n  4. disposes the snapshot;\n  5. returns {ran, exitCode, criteria, reason}.\n- **`decideStop(...)`** and **`buildOutcomeRecord(...)`:** as tested in U4.\n- **`terminateTree(child, graceMs)`:** acts on the POSIX process group:\n  1. sends SIGTERM to -pid;\n  2. polls `process.kill(-pid, 0)` until ESRCH or the grace ends;\n  3. then sends SIGKILL;\n  4. returns whether it had to escalate.\n- **`checkPreconditions(opts)`:** as tested in U6.\n- **`validateRecord(record, moeRoot)`:** a dynamic import of pathToFileURL(<moeRoot>/scripts/baseline-report.mjs), then readBaselineRecord. The module lies outside tsconfig's rootDir, so it is never imported statically.\n\n**Error handling**\n- Every helper fails closed with a bounded message: at most 200 chars, and never file contents or env values.\n- IO errors are caught at the boundary and become null observations plus a note, never zeros.\n\n**Green:** U1-U6.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.ts",
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "note": "Implemented bounded observation readers, exact receipt role aggregation, TAP criteria, separate assessment snapshots, process-group teardown, stop/record helpers and preflight/validator. Native unit run 13 passed; E group intentionally not run until orchestration/builds. Corrected synthetic workload to carry the landed required nonempty coverageTags. No read-only module changed.",
+      "startedAt": "2026-10-24T16:15:57.763Z",
+      "completedAt": "2026-10-24T16:18:03.770Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Orchestration and CLI in baselineRun.ts.\n\n**Signature.** `runBaselineWorkload(opts)` returns {runRoot, recordPath, record}. Its options:\n- workload, corpusVersion, moeCommit;\n- moeRoot, defaulting to the repo root resolved from import.meta.url;\n- capMs, defaulting to 60 min;\n- parentDir, defaulting to os.tmpdir();\n- command, defaulting to 'claude';\n- seatEnv, defaulting to {};\n- pollMs and killGraceMs;\n- signal (optional);\n- daemonCommand (optional, a test seam only).\n\n**Sequence**\n\n**1. Setup.** Run checkPreconditions. Create runRoot = mkdtemp(<parent>/moe-baseline-<id>-) with the subdirectories home, logs, records and usage.\n\n**2. Throwaway project.** `createCodingSnapshot(workload)` gives the project root. Inside it, run `git init` and make one initial commit with `git -C <project> -c user.name=moe-baseline -c user.email=baseline@moe.invalid -c commit.gpgsign=false -c core.hooksPath=<an empty dir in runRoot>`. These are the driver's only Git writes. Add no remote and write no config files.\n\n**3. Daemon.**\n1. Spawn `process.execPath <moeRoot>/packages/moe-daemon/dist/index.js init --project <project>` detached.\n2. Wait, at most 60 s, for .moe/daemon.json and a GET /health 200.\n3. Set approvalMode TURBO through the plugin WebSocket's UPDATE_SETTINGS; no MCP settings tool exists.\n4. Read .moe/project.json settings back as the effective settings. Write them to <runRoot>/effective-settings.json and summarize them in notes.\n\n**4. Task.** Use `bash <moeRoot>/scripts/moe-call.sh`, with no worker identity:\n1. create_epic;\n2. create_task with title `[baseline] <id>`, description = intendedBehavior, and definitionOfDone = the rubric criterion descriptions only (never assessment files or code);\n3. set_task_status PLANNING.\n\nRecord the task id.\n\n**5. Seats.** For architect, worker and qa, spawn detached `bash <moeRoot>/scripts/moe-agent.sh --role <r> --project <project> --worker-id <r>-baseline --command <command> --no-interactive --no-start-daemon`.\n- stdout and stderr go to <runRoot>/logs/<role>.log, capped at 10 MiB each; anything beyond is dropped with a note.\n- The seat env is built as follows:\n  - start from the caller's env with every MOE_* variable removed;\n  - set HOME and XDG_CONFIG_HOME to <runRoot>/home;\n  - set MOE_SERENA_PATH to the caller's real ~/.local/bin/serena when present;\n  - pass MOE_ACCOUNTS_FILE and CLAUDE_CONFIG_DIR through when set;\n  - then apply opts.seatEnv, recorded in notes by key only.\n- Note that the architect runs headless (--no-interactive).\n\n**6. Poll.** Every pollMs, read .moe/tasks/<taskId>.json, tolerating a transient parse error. Stop on any of:\n- DONE (decideStop, using completedAt);\n- the cap;\n- every seat having exited;\n- the daemon having died;\n- the abort signal.\n\nNever relaunch a seat and never retry a run.\n\n**7. Teardown, in order:**\n1. terminateTree every seat (graceMs);\n2. `node dist/index.js stop --project`, bounded;\n3. terminateTree the daemon group.\n\n**8. Observations**\n- From the task record: finalStatus, reopenCount and completedAt.\n- From .moe/activity.log: the QA approval and rejection counts for the task.\n- From the receipts: rolesFromReceipts, with plannerSessions = architect launches.\n- Copy logs/moe-usage into <runRoot>/usage/<id>/logs/moe-usage.\n- cliVersion from `<command> --version`, bounded at 10 s and 128 chars.\n\n**9. Assessment.** runAssessment against the project. The exception: if the run aborted before any seat ran, or no project exists, record ran false with a reason.\n\n**10. Record.** buildOutcomeRecord, then validateRecord, then write <runRoot>/records/<id>.json (pretty JSON, LF). Return it.\n\n**CLI entry.** Only the CLI installs SIGINT and SIGTERM handlers, wired to the AbortSignal.\n- The entry runs only when the file is executed directly, never on import: `npx tsx packages/moe-daemon/src/benchmarks/baselineRun.ts --workload <id> [--cap-minutes 60] [--parent <dir>] [--moe-commit <sha>] [--command claude]`.\n- It resolves the workload and corpus version from the landed M03 corpus.\n- moeCommit comes from --moe-commit, else `git -C <moeRoot> rev-parse HEAD` (read-only). A dirty tracked tree adds a note.\n- It refuses win32.\n- It prints the run root and record path.\n- Exit 0 once a record is written; exit 1 when no run happened.\n\n**Error handling**\n- Every external step has a bound and a recorded outcome.\n- A failure during the run becomes a 'failed' record with a bounded failureReason.\n- Nothing is retried.\n- Nothing is written outside runRoot and the two snapshot roots.\n\n**Green:** E1-E4 and the whole file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.ts",
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.ts",
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "note": "Implemented original daemon/WS/MCP/wrapper orchestration and tsx CLI; cap/abort teardown, separate assessment, effective settings, bounded logs and retained run audit. Real fake-CLI E1-E4 passed in full 17-test run; added supervisor-child crash E5 and wrapper PID/early-exit assertions (17/18 passed; corrected an incorrect test assumption that TaskCommit carries outcome, targeted E1 then passed). Init actually supervises _run; health validates project not supervisor PID. Added ephemeral Git identity because relocated HOME otherwise hides identity, and bounded post-DONE receipt drain excluded from timings. Source dirty state noted. The mandated two-file plan requires runtime >300 lines; no scope expansion/read-only source edits. Fresh synchronized gate follows.",
+      "startedAt": "2026-10-24T16:18:03.864Z",
+      "completedAt": "2026-10-24T16:30:18.251Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "The one verification gate, run in a fresh synchronized native-Linux copy. Never use or modify the Windows node_modules, and change no lockfile.\n\n**1. Build the copy:**\n```\nD=$(mktemp -d /tmp/moe-m04b-gate.XXXXXX)\ngit -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon packages/moe-proxy docs scripts CLAUDE.md .gitignore package.json | tar -x -C \"$D\"\nfor f in packages/moe-daemon/src/benchmarks/baselineRun.ts packages/moe-daemon/src/benchmarks/baselineRun.test.ts; do cp \"/mnt/d/projexts/moes/$f\" \"$D/$f\"; done\nNM=\"$(cat /tmp/moe-linux-test-root.latest)/repo/packages/moe-daemon\"\nLPATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nPATH=$LPATH node -e 'const [a,b]=process.argv.slice(1).map(p=>JSON.stringify(require(p)));process.exit(a===b?0:1)' \"$NM/package-lock.json\" \"$D/packages/moe-daemon/package-lock.json\" && ln -s \"$NM/node_modules\" \"$D/packages/moe-daemon/node_modules\"\n```\n\n**2. The proxy's dependencies.** Its only runtime dependency is ws.\n- Confirm that the ws version pinned by $D/packages/moe-proxy/package-lock.json equals `$NM/node_modules/ws/package.json`'s version.\n- Then `ln -s \"$NM/node_modules\" \"$D/packages/moe-proxy/node_modules\"`.\n- If they differ, run `npm ci` in $D/packages/moe-proxy with the same env instead.\n\n**3. Build both dists** without regenerating sources: `(cd \"$D/packages/moe-daemon\" && PATH=$LPATH npx tsc)` and `(cd \"$D/packages/moe-proxy\" && PATH=$LPATH ../moe-daemon/node_modules/.bin/tsc)`.\n\n**4. Run the gate:**\n```\ncd \"$D/packages/moe-daemon\" && UNSET=$(env | grep -oE '^MOE_[A-Z_]+' | sed 's/^/-u /' | tr '\\n' ' ') && env $UNSET PATH=$LPATH npx vitest run src/benchmarks/baselineRun.test.ts --reporter=verbose\n```\n- It must exit 0, and every E case must appear as run, not skipped.\n- Then run `npx tsc --noEmit --incremental false` with the same env, which must exit 0.\n- Type-check the test file once: `npx tsc --noEmit --ignoreConfig --target ES2022 --module ESNext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --resolveJsonModule src/benchmarks/baselineRun.test.ts`.\n\n**5. Check and record.**\n- Count leftover temp entries with the driver's and snapshot prefixes; 0 are expected.\n- Confirm that no daemon or seat process from the run is still alive.\n- Keep the command line, exit code and verbose output tail for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh archive gate /tmp/moe-m04b-gate (path recorded in /tmp/moe-m04b-gate.latest): rebuilt daemon and proxy without prebuild/source regeneration; lockfiles unchanged, native dependency lock JSON equal and ws 8.22.0 pinned. Full named file: 18/18 passed, zero skipped including E1-E5, 57.46s. Source tsc --noEmit --incremental false and strict isolated test-file tsc both exit 0. No snapshot/driver prefix temp leftovers; tests assert all wrapper/supervisor leaders dead.",
+      "startedAt": "2026-10-24T16:30:18.349Z",
+      "completedAt": "2026-10-24T16:31:58.836Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Exactly one adversarial self-review of the two-file diff. Load adversarial-self-review.\n\n**Mutation probes.** Run each alone in $D and record its red count.\n1. Kill only the direct child instead of the process group. U5 and E2 go red.\n2. Relaunch a seat that exited early. E2's single-launch assertion goes red.\n3. Coerce a null counter to 0. U4 and E1's null assertions go red.\n4. Copy assessmentFiles into the project. U3's leakage assertion goes red.\n5. Leave HOME unsandboxed. E1's HOME assertion goes red.\n6. Measure wallClockMs after teardown. U4's completed-at-cap case goes red.\n7. Take model from requestedModel when nothing was reported. U1 goes red.\n8. Pass inherited MOE_* variables through to the seats. A test that sets MOE_WORKER_ID in the caller env goes red.\n\n**Then challenge:**\n- error handling: teardown runs on every path, including a thrown error (try/finally);\n- a crash of the driver itself mid-run: document that its runRoot keeps the logs, and that any orphaned process group is visible;\n- a daemon port collision with the operator's own daemon (auto-scan);\n- symlinks or hostile names in receipts and logs;\n- huge or binary seat output;\n- assessment output that impersonates a criterion id;\n- a workload id containing path characters (it must be validated before any path use);\n- clock skew between task.completedAt and the driver clock;\n- secrets in env never reaching notes, logs or the record;\n- Windows refused up front.\n\n**Confirm:**\n- The only Git writes are the throwaway project's init and initial commit, plus the wrappers' own landing inside it.\n- No .moe edits are made in any real project.\n- No paid calls are made in tests.\n- moe-agent.{sh,ps1}, the daemon tools, and the M03, M03a and M04 modules are byte-unchanged.\n- No source contains a substring from the project's global forbiddenPatterns.\n\nFix findings with tests. If any byte changed after step 5, rerun the step-5 command fresh and use that output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.ts",
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.ts",
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "note": "One adversarial review completed over the owned new-file diff. All 8 required mutation probes killed: red counts 2/1/5/1/1/1/1/1; additional Git-identity and supervisor-restart probes each 1 red. Found/fixed caller mutation TOCTOU (E3 red->green) and synchronous spawn log-fd leak (E6 red->green); close drains capture output, cap checked before WebSocket allocation. Fresh final gate /tmp/moe-m04b-gate.QKXLci/verification.log: 19/19 passed, zero skipped, 63.23s; both typechecks exit 0; unchanged locks and cmp-identical owned sources; zero owned driver/snapshot prefix leftovers and no surviving gate processes. Invalid CLI smoke exits 1 before a run. HOME/cwd sentinel and all archived scripts unchanged; no forbidden substrings; no paid calls or isolation claims. Explicit credential env passthrough remains per plan and requires temp-scoped provisioning for real execution. Handoff and lifecycle gotcha memories written. Shared peer bytes untouched.",
+      "startedAt": "2026-10-24T16:31:58.928Z",
+      "completedAt": "2026-10-24T16:44:43.122Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-0ece1a3552944298af911356f149e150",
+  "dependsOn": [
+    "task-0ece1a3552944298af911356f149e150",
+    "task-cfa74f1b01df4647b57a923bdd961b2a"
+  ],
+  "priority": "HIGH",
+  "order": 223.5,
+  "comments": [
+    {
+      "id": "comment-2dcbaa0f29164842974bb6910955f2c8",
+      "author": "worker-e8965f51",
+      "content": "Correction to step-5 cleanup note: the global /tmp prefix scan overlapped another session's live corpus snapshots, so it did not establish a global zero count. No task-owned driver dirs or gate processes remained. Final verification will use a dedicated TMPDIR to prove zero owned leftovers without touching peers. Gate itself was 18/18, zero skipped, and both typechecks exited 0.",
+      "timestamp": "2026-10-24T16:33:56.313Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T13:13:36.465Z",
+  "updatedAt": "2026-10-24T16:53:11.357Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T14:27:14.512Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-24T16:52:36.661Z",
+    "wallClockMs": 8722149
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "worker-e8965f51",
+    "qa-b0c1741e"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T14:39:28.012Z",
+  "planningNotes": {
+    "approachesConsidered": "**Chosen: the real original workflow, with a fake agent CLI only.**\n- The driver starts the daemon with `init`, sets TURBO through WS UPDATE_SETTINGS, and creates the epic and task through moe-call.sh.\n- It launches the three real moe-agent.sh seats, headless with --no-start-daemon, in their own process groups.\n- It polls the task file read-only, tears everything down by process group, then runs the held-out assessment from a separate assessment snapshot created only after the seats are gone.\n- Per-role model and effort come from the wrappers' own usage receipts:\n  - model is reportedModels, the observed model. It never falls back to requestedModel, so a model is never fabricated.\n  - effort is requestedEffort, which is the launch argument itself.\n\n**Rejected.**\n- **Injecting a fake seat launcher instead of the wrapper.** The test would then be circular and would not prove the driver captures what the wrapper really launched.\n- **Static imports of scripts/*.mjs.** They are outside tsconfig's rootDir, so use a dynamic import.\n- **Writing records into a caller directory.** The DoD keeps every write in fresh temp dirs, so the driver always mkdtemps its own runRoot under an existing parent.\n- **Retrying a capped or failed run.** The human decision forbids it.\n- **Supporting Windows.** That would need bash plus process groups. It is refused up front; M04c runs on the Linux host and VMs the user chose.\n- **SPIDR-splitting this row again.** It is already the run-driver slice of M04 with an exact two-file deliverable. It stays one task, with pure pieces tested before orchestration.",
+    "codebaseInsights": "**M04 record contract** (from its plan, not yet landed; verify it).\n- Strict exact-key record: version, workload, run, moeOutcome, assessment, latency, retrieval, notes.\n- capped requires wallClockMs >= cap, and completed requires wallClockMs <= cap.\n- ran=false requires exitCode null, every criterion not-run, and a reason.\n- roles has 1-3 entries.\n- Acceptance comes from the assessment only.\n- analyze-baseline joins usage from `--project DIR` holding `<workloadId>/logs/moe-usage`.\n\n**M03a materializer.** createCodingSnapshot and createAssessmentSnapshot make fresh mkdtemp roots and return handles {kind, workloadId, root, digest, dispose()}. digestWorkload gives 'sha256:<hex>', which is caseDigest.\n\n**Corpus assessments.** These are node:test *.test.mjs files whose names start with '<criterion-id>: '. They import the candidate through MOE_WORKLOAD_CANDIDATE_ROOT. The category tests run them with spawnSync and parse TAP (`mem:decision-workload-corpus-conventions`).\n\n**moe-agent.sh.**\n- Flags: --role, --project, --worker-id, --command, --no-interactive, --no-start-daemon, --poll-interval; loop mode is on by default.\n- It needs packages/moe-proxy/dist and packages/moe-daemon/dist.\n- It writes ~/.config/claude/mcp_servers.json, so HOME must be sandboxed. It also writes .mcp.json and the .claude/agents mirror into the project, and makes landing commits there.\n- Its account rotation needs MOE_ACCOUNTS_FILE or CLAUDE_CONFIG_DIR passed through for real runs.\n- Its Serena path resolves from HOME.\n\n**Usage receipts.** Rows carry role, requestedModel, requestedEffort, reportedModels and launchId (scripts/usage-receipt.mjs and usage-report.mjs).\n\n**Daemon.** `init` creates .moe with approvalMode CONTROL and runs supervised. There is no settings MCP tool; UPDATE_SETTINGS goes over /ws. `stop --project` exists.\n\n**Isolated copy.** The daemon's Linux node_modules has ws 8.22.0, @types/ws, typescript and tsx, so both dists build in the isolated copy. A git-archive copy has no .git, so moeCommit must be injectable.",
+    "risks": "**Planned against unlanded contracts.** M04 (scripts/baseline-report.mjs) and M03 (matchedCorpus.ts) are unlanded, so verify names first.\n\n**Flaky real-process tests.** Bound every wait, and tune the poll and cap knobs through test-only seatEnv overrides, which the driver records in notes. Keep the file around four minutes.\n\n**CI cost.** CI builds both dists, so the E group will run there too. The added minutes are for M06 to judge.\n\n**The fake CLI's stream output.** It must match what the wrapper's usage parser reads. Otherwise reportedModels stays empty and model is null, which is honest but fails E1. Read the parser rather than guessing.\n\n**Real runs (M04c) need a signed-in Claude.** Use MOE_ACCOUNTS_FILE or CLAUDE_CONFIG_DIR, because HOME is sandboxed. Serena is passed through via MOE_SERENA_PATH so seats keep today's MCP servers. The architect runs headless, which is a disclosed deviation from its interactive default.\n\n**Process groups.** A seat child that calls setsid escapes the group. The seats are started with --no-start-daemon so no wrapper spawns a daemon; the driver owns the only one.\n\n**Lingering processes.** Never leave the operator's machine with stray daemons. Teardown must run on every path, including thrown errors (use try/finally).\n\n**Forbidden substrings.** The project's forbiddenPatterns are raw substring matches over the source and fixture strings.",
+    "keyFiles": [
+      "packages/moe-daemon/src/benchmarks/workloadSnapshot.ts",
+      "scripts/baseline-report.mjs",
+      "scripts/moe-agent.sh",
+      "scripts/moe-call.sh",
+      "scripts/usage-receipt.mjs",
+      "scripts/usage-report.mjs",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T14:39:28.110Z",
+  "workStartedAt": "2026-10-24T16:11:54.855Z",
+  "reviewStartedAt": "2026-10-24T16:45:11.443Z",
+  "verification": {
+    "command": "D=/tmp/moe-m04b-gate.QKXLci; export PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd \"$D/packages/moe-daemon\"; UNSET=$(env | grep -oE '^MOE_[A-Z_]+' | sed 's/^/-u /' | tr '\\n' ' '); env $UNSET TMPDIR=\"$D/test-tmp\" npx vitest run src/benchmarks/baselineRun.test.ts --reporter=verbose",
+    "exitCode": 0,
+    "outputTail": "E1 completed + actual roles + usage join + boundaries: passed (19075ms)\nE2 capped + full tree termination + no replacement + partial counters: passed (26004ms)\nE3 daemon failure + caller-input mutation safety: passed (407ms)\nE4 abort + teardown: passed (7954ms)\nE5 daemon child death rejects supervisor restart: passed (9006ms)\nE6 synchronous launch refusal closes log fd: passed (100ms)\nTest Files 1 passed (1)\nTests 19 passed (19), zero skipped\nStart at 19:41:15\nDuration 63.23s\nnpx tsc --noEmit --incremental false: exit 0\nStrict isolated test-file tsc: exit 0\nDaemon/proxy package-lock SHA256: OK\nVerification exit 0; driver/snapshot leftovers 0",
+    "reportedAt": "2026-10-24T16:45:11.443Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/benchmarks/baselineRun.test.ts",
+    "packages/moe-daemon/src/benchmarks/baselineRun.ts",
+    ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+    ".moe/tasks/task-9cfaacf11e194062bc1ca5f77388ec90.json",
+    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json",
+    ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json"
+  ],
+  "completionSummary": "Delivered baselineRun.ts and baselineRun.test.ts only (LF). One frozen workload runs through original daemon/WS/MCP tools and architect/worker/QA wrappers; TURBO, no model pins, 60-minute default cap, no driver retries. Separate held-out assessment, bounded logs/receipts, reported role models/requested effort, null unknown counters and M04-validated record plus usage join. CLI and retained project/process/settings audit artifacts included. M04's landed validator lives in baseline-record.mjs and is re-exported by baseline-report.mjs.\n\nFresh native-Linux archive gate: 19/19 tests passed, zero skipped (E1-E6 use real wrappers/daemon and fake claude only), 63.23s; source and strict test-file typechecks passed. Locks unchanged; source hashes match checkout. Zero owned driver/snapshot leftovers or live gate processes. Ten mutation probes killed, including all eight planned probes. Self-review fixed mutable-input path TOCTOU and synchronous-spawn fd leakage with red/green regressions.\n\nTwo-file scope requires 421 runtime + 330 test lines. No read-only contract/wrapper edits, no shared-tree Git writes, no paid model calls, no 20-workload execution or isolation certification. Credential config passthrough follows the plan; real execution needs deliberately temp-scoped credential/config provisioning. Handoff and lifecycle gotcha saved in Serena. Evidence: /tmp/moe-m04b-gate.QKXLci/verification.log and mutation-results.json.",
+  "commits": [
+    {
+      "sha": "01fb5f7dcd0f113dc2c7c80c5b9b0d056e16480a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e8965f51@2026-10-24T16:10:50Z",
+      "paths": [
+        ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+        ".moe/tasks/task-9cfaacf11e194062bc1ca5f77388ec90.json",
+        ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json",
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts",
+        "packages/moe-daemon/src/benchmarks/baselineRun.ts"
+      ],
+      "recordedBy": "worker-e8965f51",
+      "recordedAt": "2026-10-24T16:45:34.444Z",
+      "treeId": "21788aa6e613c73cedf5ac7139721017abc4a8aa",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "6eb56809b4038945cfc09f95c3b9138f107dc62f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T16:45:43Z",
+      "paths": [
+        ".moe/tasks/task-9cfaacf11e194062bc1ca5f77388ec90.json",
+        ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T16:53:11.357Z",
+      "treeId": "5ed2a223d44185ae0558669dce3e461766dd9721",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T16:45:43Z",
+    "at": "2026-10-24T16:53:11.357Z"
+  },
+  "completedAt": "2026-10-24T16:52:36.661Z",
+  "reviewCompletedAt": "2026-10-24T16:52:36.661Z",
+  "reviewSummary": "Reviewed completion commit 01fb5f7 (tree 21788aa, on moe/work-2026-10-24): only baselineRun.ts (421) + baselineRun.test.ts (330) + 3 wrapper-staged .moe board files; owned files cmp-identical to worktree, LF, no forbidden patterns, no read-only module edits.\n\nRe-ran in fresh `git archive 01fb5f7` native-Linux copy (/tmp/moe-qa-m04b.ztWm6S, locks equal, dists rebuilt via tsc): MOE_*-scrubbed `npx vitest run src/benchmarks/baselineRun.test.ts --reporter=verbose` -> 19/19 passed, 0 skipped (E1-E6 real daemon+wrappers, fake claude), exit 0. `tsc --noEmit --incremental false` exit 0; strict test-file tsc exit 0; lock sha256 unchanged; no leftover processes/temp entries.\n\nDoD: (1) E1 record deep-equals M04 readBaselineRecord, roles match fake-logged model/effort/launches, moeCommit, default cap 3.6M ms (U4), unobserved counters null. (2) E2 group kill of CLI+grandchild+wrappers (supervisor _run child is in-group), capped with partial counters, one launch, one record. (3) U3 separate assessment snapshot, coding root has no assessment files, assessment separate from moeOutcome. (4) E1 HOME/cwd sentinel + scripts digest unchanged, driver root commit, no remote, GIT_* scrubbed; E3/E5/E6 failures bounded. (5) gate above.\n\nCLI smoke: bogus id exits 1 pre-run; real workload maintenance-truncation-helper-reuse with fake claude, 1-min cap -> exit 0, valid capped record, architect model null (no requested fallback).\n\nSize 751 LOC > 400, no waiver rail; not rejected per CQ-M precedent for plan-mandated two-file slices. Non-blocking for M04c: notes silently capped at 10; the driver is not a sandbox (live checkout with held-out corpus source reachable, credential passthrough), so it makes no isolation claim.",
+  "requiredCheckAtDone": null
+}

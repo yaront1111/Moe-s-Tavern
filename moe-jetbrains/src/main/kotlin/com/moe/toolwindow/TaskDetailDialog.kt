@@ -704,7 +704,7 @@ class TaskDetailDialog(
         if (task.status == "AWAITING_APPROVAL") {
             actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.approve")) {
                 override fun doAction(e: java.awt.event.ActionEvent) {
-                    service.approveTask(task.id)
+                    BoardApproval.approveRendered(project, service, task)
                     close(OK_EXIT_CODE)
                 }
             })

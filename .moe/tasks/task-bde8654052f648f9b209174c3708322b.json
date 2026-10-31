@@ -1,0 +1,335 @@
+{
+  "id": "task-bde8654052f648f9b209174c3708322b",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V01] Protected required check definitions",
+  "description": "Objective: Define approved check references/digests covering commands, configs, scripts and protected assertion roots.\n\nDeliverable: Protected required check definitions. This is task V01 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test\n\nDependency aliases (wired by Moe task ids after import): F03.",
+  "definitionOfDone": [
+    "Candidate changes to protected definitions require new approval revision.",
+    "Required acceptance overlay is loaded from approved snapshot.",
+    "Candidate-added tests cannot silently replace protected required checks.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Phase 0: address rejectionDetails and confirm the review scope. Expect NO edits.\n- Item 1 (oversized) is resolved by the review-scope split recorded in this task's comment.\n  - This row owns 4 files of dc13b0e plus d8f2d6e, +320/-13, 307 net: delivery/policy.ts, state/deliveryProjection.ts, tools/getContext.ts and delivery/requiredChecks.delivery.test.ts.\n  - CQ-V01c (task-a00f45d35beb4a1b94ea65909723e69e) owns the other 5 files, 141 net: schema.ts, candidateStore.ts and its test, recordCandidate.ts and its test. Never touch V01c's files.\n- Item 2 (the test (e) assertion) landed in d8f2d6e. Confirm that `expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBe(false)` follows `expect(missing()).toEqual(['protected-checks-unmeasured'])` in test (e) at HEAD (around line 147).\n- Confirm the 4 files carry no uncommitted bytes: `git diff --quiet HEAD -- <the 4 files>`.\n- List the commits since d8f2d6e that touched them (`git log --oneline d8f2d6e..HEAD -- <files>`; C01 changed getContext.ts). Step 2 proves the behaviour still holds on HEAD.\n- Do NOT re-implement, revert or re-land. Edit only if a V01 test is red at HEAD. Then make the minimal fix inside these 4 files (error handling and test intent unchanged) and keep the row at 400 net or less.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts"
+      ],
+      "note": "Phase 0 confirmed. No edits.\n- Item 2: QA's assertion `expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBe(false)` is at requiredChecks.delivery.test.ts:147 at HEAD 15a272a, right after the line-146 `expect(missing()).toEqual(['protected-checks-unmeasured'])` in test (e).\n- The 4 V01 files are clean: `git diff --quiet HEAD` exits 0 and porcelain is empty. dc13b0e and d8f2d6e are both ancestors of HEAD.\n- Commits since d8f2d6e on the 4 files touch only getContext.ts: 9a2c257 (F06, +71/-3), cf3e866 (C01, +29/-10) and 06520da (C01, +2/-1). V01's getContext lines are intact at HEAD: the import at :16, the snapshot read at :468-470 and the conditional spread at :503.\n- Item 1 (size) is resolved by the review-scope split. Numstat for dc13b0e+d8f2d6e on the 4 files: policy.ts +103/-8, deliveryProjection.ts +14/-5, getContext.ts +5/-0, requiredChecks.delivery.test.ts +197 (+1 in d8f2d6e). That is +320/-13, 307 net.\n- The other 5 dc13b0e files belong to CQ-V01c, +147/-6 = 141 net: schema.ts +6, candidateStore.ts +53/-5, candidateStore.test.ts +60/-1, recordCandidate.ts +11, recordCandidate.test.ts +17. d8f2d6e touched only the test file under packages/.\n- The shared tree's dirty paths belong to peers or predate this task, so I left them alone.",
+      "startedAt": "2026-10-26T08:35:33.424Z",
+      "completedAt": "2026-10-26T08:36:29.722Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Prove DoD 1-3 on HEAD with focused tests and mutation probes, before the full gate.\n- Work in an isolated Linux snapshot of HEAD: native Linux node_modules symlinked (memory gotcha-linux-vitest-reuse-native-node-modules) and every MOE_* variable unset (memory gotcha-seat-env-leaks-into-daemon-tests). Never run vitest in /mnt/d.\n- Run `npx vitest run src/delivery/requiredChecks.delivery.test.ts src/state/deliveryProjection.test.ts src/tools/qaApprove.test.ts`.\n- Map each DoD item to its test:\n  - DoD1: (b), where changed or removed protected files are held until a NEW approval revision re-measures them;\n  - DoD2: (d), where the overlay is read only from a snapshot still bound to the current definitions and is served only while valid;\n  - DoD3: (c), where a candidate-added test under an assertion root is flagged, exactly and case-sensitively;\n  - (e): unmeasured candidates fail closed.\n- Run four mutation probes on a scratch copy of the HEAD bytes, never the shared tree. Each must fail a named test:\n  (i) QA's surviving mutant: drop the protectedChecksUnmeasured clause in requiredCheckSatisfiedFor (state/deliveryProjection.ts, about line 89). Expect test (e) to fail.\n  (ii) Ignore candidate-ADDED paths in protectedDrift (policy.ts). Expect (c) to fail.\n  (iii) Read the definitions from the live contract instead of readRequiredCheckSnapshot. Expect (d) to fail.\n  (iv) Let one approved command's pass satisfy another in protectedCheckShortfall. Expect its test to fail.\n- Record each probe's result in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "DoD 1-3 hold on HEAD 15a272a. No project bytes changed.\nSetup: a full-repo `git archive HEAD` in /tmp/moe-v01s-gate.Gho0Jz. The 4 V01 files cmp-equal the shared tree. node_modules is a symlink to the native Linux install (lock JSON equal). Every run used env -i with a Linux-only PATH, so no MOE_* variables were set.\n\nFocused run: `npx vitest run src/delivery/requiredChecks.delivery.test.ts src/state/deliveryProjection.test.ts src/tools/qaApprove.test.ts` exit 0, 3 files, 206/206 passed.\n\nDoD to test mapping (requiredChecks.delivery.test.ts):\n- DoD1 is (b) :89. Changed or removed protected files are tokenized until approve({requiredCheckRevision}) bumps planRevision by 1 and re-measures; after that, missing is [].\n- DoD2 is (d) :123 and :130. After a definition edit, policy gives protected-checks-unapproved and the projection is false. get_context serves the snapshot only while it is bound to the current definitions; a forged digest or a definition edit omits it for both worker and QA.\n- DoD3 is (c) :103 and :113-121. A candidate-added test under the assertion root is flagged exactly and case-sensitively. Four cases each get required-check:UNIT and cannot satisfy it: a candidate-added command, an agent-reported run, another tree, and exit 1.\n- (e) :143 and :152: a missing or garbled protectedEntries, or a throwing lookup, fails closed.\n\nMutation probes, on scratch copies via /tmp/moe-v01s-bin/{probe.sh,probes.json}. Each needle was asserted to occur exactly once. The baseline passed 206/206, and every probe was killed:\n(i) Dropping the unmeasured clause in deliveryProjection was killed by (e) :147, \"expected true to be false\". This is QA's survivor.\n(ii) Ignoring candidate-added paths in protectedDrift was killed by (c) :107 and (g) :191.\n(iii-a) Having the policy use the raw task.requiredCheckSnapshot was killed by (d) :126.\n(iii-b) Having getContext serve the raw snapshot was killed by (d) :137.\n(iv) Letting any approved command's pass satisfy all of them was killed by all four (c) cases at :120.\nResults: /tmp/moe-v01s-bin/*.json and *.log.",
+      "startedAt": "2026-10-26T08:36:39.631Z",
+      "completedAt": "2026-10-26T08:39:02.513Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run once. The shared delivery predicate is in scope, so run the full suite.\n- Exact command: `cd packages/moe-daemon && npm test`, plus `npx tsc --noEmit`. Run both in the isolated Linux snapshot with MOE_* unset.\n- Both must exit 0, and the fresh test output tail is the complete_task verification evidence.\n- SIZE: record `git show --numstat --format= dc13b0e d8f2d6e -- <the 4 files>`. The expected total is +320/-13, 307 net, which is at most 400. Note that the other 5 files of dc13b0e belong to CQ-V01c.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate is green on HEAD 8cabb0c. No project bytes changed.\n- HEAD moved from 15a272a to 8cabb0c: d258861 (R08c, scripts plus board JSON), e7f31ce (my checkpoint, board JSON) and 8cabb0c (V01c board JSON). None of them touch packages/moe-daemon: the daemon tree e1bfdc6e is identical at both commits.\n- The gate still ran on a FRESH full-repo `git archive 8cabb0c` in /tmp/moe-v01g-gate.ZVEQHV. node_modules is a symlink to the native Linux install (lock JSON equal). The 4 V01 files cmp-equal the shared tree; the test file's sha256 is 1bc0ace6…7e8a in both places.\n- Run under env -i with a Linux-only PATH: 0 MOE_* vars, node v24.21.0.\n\nResults:\n- `cd packages/moe-daemon && npm test` exit 0: 167 files passed, 4219 tests passed | 16 skipped (4235). Log: /tmp/moe-v01g-npmtest.log.\n  - Skips are all pre-existing and outside V01: heartbeatStop 3, baselineRun 6, accounts/cli 1, claudeHook 4, gitExecutable 2.\n  - V01 files: requiredChecks.delivery 16/16, deliveryProjection 56/56, qaApprove 134/134, getContext 37/37.\n  - The logged \"boom\" trace at requiredChecks.delivery.test.ts:154 is intentional: test (e) has the lookup throw, then the policy WARNs and reports the evidence missing.\n- `npx tsc --noEmit` exit 0, no diagnostics.\n\nSize, from `git show --numstat --format= dc13b0e d8f2d6e`:\n- V01's 4 files: policy.ts +103/-8, requiredChecks.delivery.test.ts +197 (+1 in d8f2d6e), deliveryProjection.ts +14/-5, getContext.ts +5. Total +320/-13 = 307 net, within the 400 cap.\n- The other 5 files, +147/-6 = 141 net, belong to CQ-V01c: schema.ts +6, candidateStore.ts +53/-5, candidateStore.test.ts +60/-1, recordCandidate.ts +11, recordCandidate.test.ts +17.\n- All of packages/ comes to +467/-19 = 448, which equals 307 + 141.",
+      "startedAt": "2026-10-26T08:42:31.238Z",
+      "completedAt": "2026-10-26T08:43:58.436Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the 4 files at HEAD. Load adversarial-self-review first.\n\nAttack the code:\n- Can a candidate change, delete or add a protected file and still pass?\n- Can a run of another command, on another tree, or an agent-reported run satisfy an approved command?\n- Does a missing, garbled or stale snapshot fail closed in policy.ts, deliveryProjection.ts and getContext.ts alike?\n- Does any consumer read live definitions instead of the approved snapshot?\n- Error handling: does every lookup failure report the evidence missing rather than satisfied?\n\nThen call complete_task with a summary under 2000 chars that:\n(a) maps all 9 dc13b0e files to V01 (4) or V01c (5);\n(b) gives the numstat, 307 net;\n(c) lists DoD to test and the four mutation results;\n(d) states that no bytes changed, or names the minimal fix.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "I loaded adversarial-self-review and attacked the V01 diff (dc13b0e+d8f2d6e) on the 4 files at HEAD. No defects, so no bytes changed.\n\n- Change, delete or add a protected file:\n  - protectedDrift compares the union of approved and candidate paths. A changed oid, a missing path or an added path under a root each produce a token.\n  - Duplicate, non-string or non-array entries return null, which yields protected-checks-unmeasured.\n  - Paths that are not normalized get filtered out, which makes the approved path look missing, so they fail closed too.\n  - Roots are always normalized: normalizeAffectedFile plus the validator's `entry === normalized` reject a trailing '/', '', '..' and absolute paths. That keeps the `${root}/` boundary exact.\n- Another command, another tree, or an agent-reported run: passedOn requires the same candidateId, the same treeSha, a trimmed exact command match, exit 0 and source runner-observed. owed() checks each approved command separately.\n- Missing, garbled or stale snapshot:\n  - The policy reports protected-checks-unapproved, and a validator throw reports the same.\n  - The projection returns false; protected tokens are checked before checkOwed.\n  - getContext omits the overlay. readRequiredCheckSnapshot wraps everything in try/catch, so it never throws.\n- Live versus approved definitions: the policy reads the live requiredChecks only after the snapshot's digest check passes. definitionDigest covers id, command, configs, scripts and assertionRoots, and both reads are synchronous on one task object, so the result equals the approved definitions. getContext serves only the decoded snapshot.\n- Error handling: the lookup try/catch returns unmeasured plus every owed command, and test (e) proves it. There are no writes, no awaits and no shared mutation, so no race. Maps are used, not plain objects, so a '__proto__' path is safe. Both entry lists are capped at 2000.\n\nTheoretical, out of V01 scope:\n(1) record_check_run's source is caller-declared (audience W/Q). That predates V01, and CQ-V03 owns authenticating it. record_candidate is wrapper-only.\n(2) The legacy policy skips protected checks, by design.\n(3) An IDE UPDATE_TASK edit to executionContract (it is not on the denylist) makes the snapshot stale. The policy then fails closed. C01's packet manifest lists the conditional overlay only when it is served, so the omission is not flagged; requiredChecks is still served. Candidate for V12/C11.",
+      "startedAt": "2026-10-26T08:44:03.152Z",
+      "completedAt": "2026-10-26T08:47:40.379Z"
+    }
+  ],
+  "planRevision": 41,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 2,
+  "reopenReason": "The human REJECTED the V01 size exception twice: prop-3f2fd69a at 07:43:46Z, then the identical re-file prop-162240df at 10:17:20Z, after approving R03's and C02's. So V01 must meet the 400-net-LOC cap without a waiver. QA has passed V01 on substance; its bytes (dc13b0e + d8f2d6e, net 448 across 9 daemon files) are landed and correct. Cheapest compliant re-slice, which I suggest but leave to you: split REVIEW SCOPE, not bytes. V01 keeps a file subset of 400 net lines or fewer, and a new follow-up row (e.g. CQ-V01c) owns the remaining already-landed files, each QA'd separately against its own DoD. Avoid reverting or re-landing working code unless the split truly needs it. Explain the split in planningNotes so QA can map the 9 files.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 227.5,
+  "comments": [
+    {
+      "id": "comment-0da4b0a21a364fccb6ac52498ca454a9",
+      "author": "architect-4c57a52b",
+      "content": "Serialization note from CQ-F08 (task-bf14bb1e, plan rev 1, now WORKING).\n\nF08 makes an additive edit to packages/moe-daemon/src/types/schema.ts: it adds a StepCompletionEvidence interface and an optional ExecutionAttempt.stepCompletions field. This V01 row's stale plan also lists schema.ts (step-2). Per the CQ-F rail \"serialize overlapping affectedFiles through explicit dependencies\", I added F08 to this task's dependsOn. Its existing three deps are kept, and dependsOn only gates WORKING claims, so planning is unaffected.\n\nIf V01's re-plan no longer touches schema.ts, the next architect may drop the F08 edge with moe.set_task_dependencies. If it does touch schema.ts, keep the edge and rebase on F08's landed bytes.",
+      "timestamp": "2026-10-25T22:52:46.847Z"
+    },
+    {
+      "id": "comment-3516efbd5db842f28e93260c98c809f0",
+      "author": "architect-4c57a52b",
+      "content": "Second serialization edge, from CQ-C01 (task-fef5ca57, plan rev 1, now WORKING). C01 edits packages/moe-daemon/src/tools/getContext.ts:\n- it adds an additive `packetManifest` key and a `packetBudgetChars` input;\n- it exports ROLE_OMITTED;\n- it renames the assembled payload local to `body`.\n\nThis row's stale plan lists getContext.ts in step-4, so per the CQ serialize rail I added C01 to dependsOn. The earlier edges (F03, db57e014, F06, F08) stay. If V01's replan leaves getContext.ts alone, the next architect may drop the C01 edge. If it does touch getContext.ts, rebase on C01's landed bytes and keep `requiredCheckSnapshot` listed as a conditional served section in packetManifest.",
+      "timestamp": "2026-10-25T22:58:57.253Z"
+    },
+    {
+      "id": "comment-907e9fb4de62473f9f8ee3c1eff25bdd",
+      "author": "architect-4c57a52b",
+      "content": "Re-plan after the size-only reopen #2. The human rejected both waivers (prop-3f2fd69a, prop-162240df), so this splits REVIEW SCOPE, not bytes. Nothing is reverted or re-landed.\n\nMeasure V01 with `git show --numstat --format= dc13b0e d8f2d6e -- packages/` restricted to the files below.\n- CQ-V01 (this row) keeps 4 files, 307 net:\n  - delivery/policy.ts +103/-8\n  - state/deliveryProjection.ts +14/-5\n  - tools/getContext.ts +5\n  - delivery/requiredChecks.delivery.test.ts +197, plus +1 in d8f2d6e\n- CQ-V01c (task-a00f45d35beb4a1b94ea65909723e69e, new, parentTaskId = this row) owns the other 5 files of dc13b0e, 141 net:\n  - types/schema.ts +6\n  - state/candidateStore.ts +53/-5\n  - state/candidateStore.test.ts +60/-1\n  - tools/recordCandidate.ts +11\n  - tools/recordCandidate.test.ts +17\n  It has its own record-level DoD.\n- The original V01's dependents now also depend on V01c, so a released dependent still means the whole contract was reviewed: CQ-V02, CQ-V12 and CQ-C08.\n- QA round-1 item 2 (the test (e) requiredCheckSatisfied assertion) is landed in d8f2d6e and present at HEAD (requiredChecks.delivery.test.ts:147).\n- This row's DoD 1-3 stay end-to-end: they exercise V01c's record through requiredChecks.delivery.test.ts.",
+      "timestamp": "2026-10-26T08:33:17.925Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:52.496Z",
+  "updatedAt": "2026-10-26T09:02:09.156Z",
+  "dependsOn": [
+    "task-bf86954dc6bc43279d96d77cf0ebff88",
+    "task-db57e0148a9d47839c4159aab8a8c16d",
+    "task-b03c0c7744e84955a7a069255a124ef7",
+    "task-bf14bb1e39494eba83158a26e36ddb20",
+    "task-fef5ca575850416ea1052ee1a7b8e22e"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-24T21:24:28.979Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 18,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-26T09:01:21.581Z",
+    "wallClockMs": 128212602
+  },
+  "contextFetchedBy": [
+    "architect-4c57a52b",
+    "worker-3729a0d6",
+    "qa-7c627d35"
+  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T08:34:25.935Z",
+  "planningNotes": {
+    "approachesConsidered": "- Third waiver proposal: rejected. The human refused prop-3f2fd69a and prop-162240df.\n- Re-slicing or reverting landed bytes: rejected. QA passed the substance, and re-landing working code adds risk and churn.\n- Review-scope split, as the reopenReason suggested: chosen.\n  - V01 keeps the predicate, its consumers and the DoD-level test file (4 files, 307 net).\n  - The new CQ-V01c (task-a00f45d3, parentTaskId V01) owns the candidate-record half (5 files, 141 net), with its own record-level DoD.\n  - The two are file-disjoint, so they can be reviewed in parallel.",
+    "codebaseInsights": "Per-file numstat, dc13b0e plus d8f2d6e:\n- policy.ts +103/-8\n- requiredChecks.delivery.test.ts +197, plus +1 in d8f2d6e\n- deliveryProjection.ts +14/-5\n- getContext.ts +5\n- candidateStore.ts +53/-5\n- candidateStore.test.ts +60/-1\n- recordCandidate.ts +11\n- recordCandidate.test.ts +17\n- schema.ts +6\n- Total 448 net.\n\nOther notes:\n- QA's round-1 assertion is at requiredChecks.delivery.test.ts:147.\n- Later commits touched getContext.ts (C01) and schema.ts (F08). V01's own bytes are intact, and the 4 files are clean against HEAD.\n- Dependents of the original V01 now also depend on V01c: CQ-V02 task-23a5563c, CQ-V12 task-b621ddc9 and CQ-C08 task-f12b03e8.",
+    "risks": "- QA must measure only V01's 4 files. The task comment and the planningNotes map all 9 files.\n- qa_approve will warn NO-COMPLETION-COMMIT because this round lands no bytes. That warning is advisory; point QA at dc13b0e/d8f2d6e.\n- If a later commit has broken a V01 test, fix it minimally within the 4 files and re-measure.\n- Never run vitest in the shared /mnt/d tree: its node_modules is a Windows install.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/state/deliveryProjection.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T08:34:26.072Z",
+  "workStartedAt": "2026-10-25T00:14:56.068Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Run fresh this session on a full-repo `git archive` of HEAD cdb4f16eb32c. Its daemon tree e1bfdc6e is the same as at 15a272a/8cabb0c. The 4 V01 files cmp-equal the shared tree; the test file's sha256 is 1bc0ace6...7e8a. node_modules is a symlink to the native Linux install (lock JSON equal). env -i with a Linux-only PATH, 0 MOE_* vars, node v24.21.0. Log: /tmp/moe-v01h-npmtest.log\n\n ✓ src/util/qaCommitPolicy.test.ts (8 tests) 5ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n Test Files  167 passed (167)\n      Tests  4219 passed | 16 skipped (4235)\n   Start at  10:47:58\n   Duration  26.43s (tests 90%, transform 5%, import 4%)\n\nV01 files: requiredChecks.delivery 16/16, deliveryProjection 56/56, qaApprove 134/134, getContext 37/37. The 16 skips are pre-existing: heartbeatStop 3, baselineRun 6, accounts/cli 1, claudeHook 4, gitExecutable 2. Also npx tsc --noEmit exit 0 with no diagnostics. An earlier identical run on 8cabb0c gave 167 files and 4219 passed / 16 skipped, exit 0.",
+    "reportedAt": "2026-10-26T08:48:45.322Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/state/deliveryProjection.ts",
+    "packages/moe-daemon/src/tools/getContext.ts",
+    "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
+    ".moe/tasks/task-10e201f9cdec49578c71981cd4799551.json",
+    ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json",
+    ".moe/tasks/task-a00f45d35beb4a1b94ea65909723e69e.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json"
+  ],
+  "completionSummary": "CQ-V01 reopen #2 (size-only). This round changes NO bytes. It splits REVIEW SCOPE over the landed dc13b0e + d8f2d6e; nothing is reverted or re-landed.\n\n(a) The 9 daemon files:\n- V01 (this row, 4 files): delivery/policy.ts, state/deliveryProjection.ts, tools/getContext.ts, delivery/requiredChecks.delivery.test.ts.\n- CQ-V01c (task-a00f45d3, 5 files): types/schema.ts, state/candidateStore.ts and its test, tools/recordCandidate.ts and its test.\n\n(b) git show --numstat dc13b0e d8f2d6e: policy.ts +103/-8, requiredChecks.delivery.test.ts +197 (+1 in d8f2d6e), deliveryProjection.ts +14/-5, getContext.ts +5. Total +320/-13 = 307 net. V01c is 141 net; the two sum to 448.\n\n(c) DoD to test, in requiredChecks.delivery.test.ts:\n- DoD1: (b) :89\n- DoD2: (d) :123 and :130\n- DoD3: (c) :103 and :113-121\n- Fail-closed unmeasured: (e) :143 and :152; QA's assertion is at :147.\nMutation probes on HEAD bytes, all killed:\n- (i) drop the unmeasured clause: (e) :147\n- (ii) ignore candidate-added paths: (c) :107 and (g) :191\n- (iii) raw snapshot in policy: (d) :126; in getContext: (d) :137\n- (iv) cross-command pass: (c) :120, x4\n\n(d) Gate, re-run fresh on a full-repo archive of HEAD cdb4f16. Its daemon tree e1bfdc6e is the same as at 15a272a. Native Linux deps, env -i, 0 MOE_* vars. npm test exit 0: 167 files, 4219 passed, 16 skipped (all pre-existing, none in V01 files). tsc --noEmit exit 0.\n\nSelf-review: no defects. Out-of-scope notes:\n- record_check_run's source is caller-declared. This predates V01, and CQ-V03 owns authenticating it.\n- The legacy policy skips protected checks, by design.\n- An IDE executionContract edit makes the snapshot stale. The policy then fails closed (protected-checks-unapproved) and get_context omits the overlay, but C01's manifest doesn't flag the omission. Candidate for V12/C11.\n\nQA: qa_approve will warn NO-COMPLETION-COMMIT. That warning is advisory; review dc13b0e and d8f2d6e.",
+  "commits": [
+    {
+      "sha": "dc13b0e09d425452835ead9fdbac98aee39674bc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T00:14:24Z",
+      "paths": [
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json",
+        ".moe/tasks/task-db57e0148a9d47839c4159aab8a8c16d.json",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
+        "packages/moe-daemon/src/state/candidateStore.test.ts",
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.test.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T00:32:35.640Z",
+      "treeId": "79d701510acfe32e0475248a866242563cd248b7",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/state/candidateStore.ts",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "d8f2d6e64590149acdc61b2f4e70d550c994c742",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T00:37:48Z",
+      "paths": [
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json",
+        "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T00:47:27.778Z",
+      "treeId": "2a860ae060d323c039eb04b1dcd2889b0002c8ec",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "5a30de9be36762169f57b3b7103d9e18bbed0627",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T00:47:42Z",
+      "paths": [
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T00:52:33.833Z",
+      "treeId": "56e438e4b635f0073f0cba68a92e039a7d75dc14",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "e7f31cef9f124b4db313f3605b39501f5bb92ffc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T08:34:34Z",
+      "paths": [
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-a103c2f4c9984b7481dbefca4d52fdf0.json",
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T08:39:58.757Z",
+      "treeId": "a37b427fe47e741aae05f1bf09bb8af446b84c91",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "23901841952824d15120d1c35fbd020358af1cea",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T08:40:31Z",
+      "paths": [
+        ".moe/tasks/task-10e201f9cdec49578c71981cd4799551.json",
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T08:49:36.279Z",
+      "treeId": "745aceb3b1bec7a2558e942daaa00c37c8fa81b5",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "ac84f3e000735fa8a6ba91ba69bdf0a59799ee55",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T08:50:36Z",
+      "paths": [
+        ".moe/tasks/task-a00f45d35beb4a1b94ea65909723e69e.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T09:02:09.156Z",
+      "treeId": "cbdbe18ceeaa9d46783d0e36a21817dd2453b211",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/candidateStore.test.ts",
+    "packages/moe-daemon/src/tools/recordCandidate.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/candidateStore.ts",
+    "packages/moe-daemon/src/tools/recordCandidate.ts",
+    "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/state/deliveryProjection.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T08:50:36Z",
+    "at": "2026-10-26T09:02:09.156Z"
+  },
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "file": "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
+        "description": "Oversized: dc13b0e is 447 net LOC (+466/-19) across 9 daemon files, over the 400 cap, and no rail waives it. The bytes have landed, so do not re-slice. The architect files an epic rail-exception proposal naming dc13b0e and its counts, allowing growth only from QA fixes (the R06/R07 precedent), and gates the follow-up plan on it."
+      },
+      {
+        "type": "missing_feature",
+        "file": "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
+        "line": 146,
+        "description": "In test (e), after expect(missing()).toEqual(['protected-checks-unmeasured']), add expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBe(false). QA verified that it passes on dc13b0e and kills the surviving mutant that drops the protectedChecksUnmeasured clause at src/state/deliveryProjection.ts:89. Then re-run cd packages/moe-daemon && npm test fresh."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "REJECT for two reasons: the diff is oversized, and one planned behaviour is untested. No DoD behaviour failed.\n\n1) SIZE: completion dc13b0e changes +466/-19 = 447 net LOC under packages/ (about 190 production, the rest tests). That is over the 400 cap, and no project, epic or task rail waives size-based rejection. CQ-V01b (net 422) was approved without a waiver, which is not a rail, so the inconsistency should be settled by a rail.\n\n2) TEST GAP: step 4 promised that deliveryProjection.requiredCheckSatisfied reads false on protected-checks-unmeasured, and no test pins this. A QA mutant that drops that clause (deliveryProjection.ts:89) passes the whole suite, so a client would show \"satisfied\" while the protected files were never measured.\n\nEverything else was verified and is sound:\n- dc13b0e is on moe/work-2026-10-24.\n- A fresh full-repo git archive (native Linux deps, env -i) gives npm test exit 0 (159 files, 3750 passed / 15 skipped) and tsc --noEmit exit 0.\n- DoD 1-3 each have exact toEqual tests on real submit_plan measurement.\n- QA's own mutants: 6 of 7 were killed (ignore-added, any-command, no '/' boundary, missing-as-match, no-snapshot-ok, replay compare). The survivor is #2 above.\n\nROUTE: the bytes have already landed, so do NOT re-slice. Follow the R06/R07 precedent:\n- The architect proposes an epic rail exception naming dc13b0e (+466/-19, net 447) that may grow only by the QA fix below.\n- The worker adds the single assertion, then re-runs `cd packages/moe-daemon && npm test` fresh.",
+      "rejectedAt": "2026-10-25T00:37:46.712Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "file": "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
+          "description": "Oversized: dc13b0e is 447 net LOC (+466/-19) across 9 daemon files, over the 400 cap, and no rail waives it. The bytes have landed, so do not re-slice. The architect files an epic rail-exception proposal naming dc13b0e and its counts, allowing growth only from QA fixes (the R06/R07 precedent), and gates the follow-up plan on it."
+        },
+        {
+          "type": "missing_feature",
+          "file": "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
+          "line": 146,
+          "description": "In test (e), after expect(missing()).toEqual(['protected-checks-unmeasured']), add expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBe(false). QA verified that it passes on dc13b0e and kills the surviving mutant that drops the protectedChecksUnmeasured clause at src/state/deliveryProjection.ts:89. Then re-run cd packages/moe-daemon && npm test fresh."
+        }
+      ]
+    }
+  ],
+  "priorBlockedReason": "QA substance review PASSED. The only open gate is the human decision on rail proposal prop-3f2fd69af5374943af7870804d03d6db (EPIC ADD_RAIL), which is PENDING with resolvedAt null. The cumulative diff is +467/-19 = net 448 under packages/ (dc13b0e +466/-19, then d8f2d6e +1), over the 400 cap. None of the epic's 7 rails waives size. So QA can neither approve nor usefully reject again: the worker already filed the exception, and landed bytes are not to be re-sliced. Same pattern as CQ-R07.\n\nQA evidence (qa-b0c1741e, 2026-10-25):\n- d8f2d6e is HEAD on moe/work-2026-10-24. It adds exactly the one assertion QA asked for, in test (e) at requiredChecks.delivery.test.ts:147, with LF endings. Its sha256 1bc0ace6… matches the shared tree.\n- On a fresh full-repo git archive of d8f2d6e (native Linux deps, lockfile equal, env -i):\n  - `cd packages/moe-daemon && npm test`: exit 0, 159 files, 3750 passed / 15 skipped.\n  - `npx tsc --noEmit`: exit 0.\n- QA's surviving mutant (drop the protectedChecksUnmeasured clause at deliveryProjection.ts:89) is now killed by (e): 1 failed / 71 passed. The original passes 72/72.\n- DoD 1-3 are unchanged since the reopen-1 review, and (b), (d) and (c) are green.\n\nGovernor/human:\n- When the proposal is APPROVED, return this task to REVIEW with unblock_worker resolveBlocks:true or set_task_status REVIEW. The next QA only confirms that the rail text covers dc13b0e + d8f2d6e (net 448), then approves.\n- If it is REJECTED, set PLANNING so the architect re-slices per QA's option (a).",
+  "reviewStartedAt": "2026-10-26T08:48:45.322Z",
+  "completedAt": "2026-10-26T09:01:21.581Z",
+  "reviewCompletedAt": "2026-10-26T09:01:21.581Z",
+  "reviewSummary": "CQ-V01 APPROVED. This round is a review slice: 4 files of dc13b0e+d8f2d6e; no bytes changed.\n\nSIZE: `git show --numstat dc13b0e d8f2d6e`:\n- policy.ts +103/-8\n- deliveryProjection.ts +14/-5\n- getContext.ts +5\n- requiredChecks.delivery.test.ts +197+1\nTotal +320/-13 = 307 net, within 400. The other 5 files (141 net) are CQ-V01c, now DONE; 307+141 = 448.\n\nCOMMITS: dc13b0e, d8f2d6e and 2390184 are all on moe/work-2026-10-24. The 4 files are clean vs HEAD 8eec4a2 and cmp-equal to a fresh archive. getContext.ts was later edited by F06/C01; V01's lines at :16, :468-470 and :503 are intact.\n\nGATE: fresh full-repo git archive of 8eec4a2, native Linux deps (lock JSON equal), env -i, 0 MOE_*.\n- npm test run 1 exit 1: one unrelated timing flake, waitForTask.test.ts:344 (50ms waiter wait), at load 22 on 16 cores. Alone that file passed 10/10, 3 times.\n- Run 2 exit 0: 167 files, 4219 passed / 16 skipped.\n- tsc --noEmit exit 0.\n\nDoD: 1 = (b) :89; 2 = (d) :123 and :130; 3 = (c) :103 and :113; 4 = gate above.\n\nQA MUTANTS: 13, on a scratch copy, sha-verified after restore. 11 killed:\n- a removed file passes: (b):94\n- a stale snapshot fails open: (d):126\n- agent-reported runs count: (c):120\n- case-insensitive roots: (c):107\n- the lookup catch fails open: (e):155\n- DONE skips protected checks: (g):191\n- checkOwed ignores declared checks: (a):86\n- the projection drops changed / unapproved: (g):193, (d):127\n- getContext sends a null key: (d):137\n- no dedupe: :161\n\n2 SURVIVED, both defensive fail-closed branches for corrupted persisted state:\n- the validator-throw catch, which reports unapproved;\n- the protectedDrift duplicate-path guard, which reports unmeasured.\nAt runtime the real code fails closed on both, and 2 scratch tests kill both mutants. That is not a DoD gap; the tests are handed forward to CQ-V12 in a comment.",
+  "requiredCheckAtDone": null
+}

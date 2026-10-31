@@ -1,0 +1,340 @@
+{
+  "id": "task-f3485ac9d4384664870d88db876ddd54",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "[CQ-RF02] Persistent downgrade pin with confirmation",
+  "description": "Objective: if a repository edit of .moe/project.json switches a protected project to the legacy profile, the switch no longer takes effect silently on the next IDE start. It needs an explicit human confirmation in the IDE, and the confirmation persists across restarts. This is CQ-R01 follow-up 2; today the downgrade pin lives only for one JVM session.\n\nCreated by architect-e4b7eee0 on 2026-10-30, when the human moved the non-gating R01 follow-ups out of CQ-R13. It edits RuntimeSelectionPolicy.kt after CQ-RF01.\n\nDeliverable:\n- RuntimeSelectionPolicy.kt records the last confirmed profile per project, in IDE-system-directory state with owner-only access.\n- When it reads a weaker profile than the confirmed one, it keeps the stronger profile and asks the human once:\n  - confirm persists the downgrade;\n  - decline or dismiss keeps the project protected.\n- The confirmation goes through an injectable confirmer, so the tests stay headless. A minimal dialog is its production implementation.\n- Tests go in RuntimeSelectionPolicyTest.\n\nOut of scope:\n- provenance (CQ-RF01) and daemon replacement (CQ-RF03);\n- VS Code;\n- .moe edits;\n- enabling verified-local.\n\nVerification command (fresh, exit 0 required): cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+  "definitionOfDone": [
+    "Once a protected profile is confirmed, a repository change to legacy keeps the project protected across IDE restarts until a human confirms the downgrade. Shown by tests with an injected confirmer.",
+    "A declined or dismissed confirmation keeps the protected profile. The confirmed state is stored outside the repository with owner-only access, and an unreadable store fails closed to protected. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. CQ-RF01 (task-fd653cfb) lands first. It changes RuntimeSelectionPolicy.kt, MoeDaemonSupervisor.kt and their tests, and adds owner-only persistence in the IDE system directory. Re-read RuntimeSelectionPolicy.kt, RF01's store and the P and V rows of RuntimeSelectionPolicyTest.kt first.\n\nTHE STORE. This is an assumed interface, proposed to RF01's architect in #architects on 2026-10-30: an owner-only store in the IDE system directory with:\n- read(name): ByteArray?. It returns null only when the file is confirmed absent. It throws when the file is unreadable, a link, not a regular file, over its size cap, or not owner-only.\n- write(name, bytes): atomic and owner-only.\n- a test root that resetForTest() points at a fresh temp dir.\nUse what RF01 actually landed, under its names. Never write a second owner-only implementation.\n\nSEAMS. The tests use these; step 2 adds them:\n- RuntimeSelectionPolicy.confirmer: an internal, volatile DowngradeConfirmer. resetForTest() sets one that never answers.\n- RuntimeSelectionPolicy.restartForTest(): clears the session state (pins and the asked-once state) but keeps the store and the confirmer. It simulates an IDE restart.\n- RuntimeSelectionPolicy.profileRecordFor(basePath): the record's path in the store, for assertions.\n- A RecordingConfirmer in the test file. It records every basePath it is asked about and keeps each answer callback, so a row can answer true, false, or never.\n\nROWS (new, prefix D):\n- D1, persistence across restarts (DoD 1). For one project:\n  1. verified-local gives PROTECTED. The record exists outside the project (isOutsideProject) and parses to exactly {\"version\":1,\"project\":<the key>,\"profile\":\"protected\"}. Nothing was asked.\n  2. Rewrite project.json to legacy, then restartForTest(). The answer is PROTECTED, and the confirmer was asked exactly once, with this basePath. Eight more calls, run in parallel, stay PROTECTED and ask nothing more.\n  3. Never answer (a dismiss). After restartForTest(): PROTECTED, asked once more.\n  4. Answer false (a decline). After restartForTest(): PROTECTED, asked once more. The record still says protected.\n  5. Answer true (a confirm). The record now says legacy, but this session stays PROTECTED. After restartForTest(): LEGACY, and nothing was asked.\n  Then for a second project: verified-local, then observe after a restart, gives PROTECTED with an ask. The same holds for settings {}, where executionProfile is absent.\n- D2, upgrades need no confirmation:\n  - A 'legacy' record plus a verified-local read gives PROTECTED, the record goes back to 'protected', and nothing is asked.\n  - A project with no record and a legacy read gives LEGACY. Nothing is asked and no record is written.\n- D3, an untrusted record fails closed (DoD 2). Each record below, with project.json legacy and after a restart, gives PROTECTED and one ask:\n  - not JSON;\n  - lenient JSON;\n  - a byte order mark;\n  - an extra key, or a missing key;\n  - version 2, or version \"1\" as a string;\n  - the project of another key;\n  - profile 'verified-local', 'PROTECTED' or null;\n  - a directory at the record path;\n  - a record the store refuses as not owner-only: on POSIX, permissions 0644; on Windows, an added Everyone read entry through AclFileAttributeView. assumeTrue skips this row when the host supports neither view.\n  In the first case, answering true replaces the record with a valid 'legacy' one, and a restart then gives LEGACY.\n- D4, failures never escape:\n  - A confirmer that throws gives PROTECTED, and the record is unchanged.\n  - With a confirmer that answers twice (true then false, or false then true), only the first answer counts.\n  - With the store unwritable (its root replaced by a regular file), a verified-local read still gives PROTECTED for the session, and profile never throws.\n  - A failed project.json read (malformed) writes no record and asks nothing.\n- D5, the production confirmer:\n  - ProfileDowngradeDialog.confirmed(choice) is true only for 1 (Allow Downgrade); 0, -1 and 2 are false.\n  - With no IntelliJ Application (plain JUnit), ask answers false at once and shows nothing.\n\nThe existing P, N, V, S, L, G and R rows stay unchanged and green, because resetForTest() isolates the store.\n\nRED proof: run the step-5 command. The D rows fail to compile, or fail for the expected reason; every other row passes. Record it.\n\nSize budget: 200 test lines or fewer, table-driven where possible.\n\nError handling in the tests:\n- No row touches the real IDE system directory; each uses the temp store.\n- The permissions and ACL row restores access in a finally block, so TemporaryFolder can delete it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        ".serena/memories/task-task-f3485ac9d4384664870d88db876ddd54-handoff.md"
+      ],
+      "note": "Added D1–D5 (7 test methods, 183 lines <=200). Fresh required Windows command cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" under jetbrains-gradle exited 1: expected compileTestKotlin unresolved profileRecordName, confirmer, DowngradeConfirmer, ProfileDowngradeDialog. RED proof /tmp/rf02-red.log; existing tests unchanged but not executed because compilation stopped (not claimed passing). Diff-check clean. Shared peer/pre-existing bytes preserved; no Git writes. Resource report_blocked granted lease instead of blocking, then released. Handoff currently pre-RED and will be refreshed.",
+      "startedAt": "2026-10-30T08:15:45.586Z",
+      "completedAt": "2026-10-30T08:20:28.181Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. CQ-RF01 (task-fd653cfb) lands first. Re-read RuntimeSelectionPolicy.kt, ProtectedStateStore.kt and RF01's P and S6 rows in RuntimeSelectionPolicyTest.kt before writing anything.\n\nRF01's API, as its approved plan defines it. Use the landed names if they differ, and never write a second owner-only implementation:\n- `class ProtectedStateStore internal constructor(val root: Path)`, with:\n  - `forIde()`, which returns null when there is no Application, as in plain JUnit;\n  - `usableFor(basePath)`, which is false for a root inside the project;\n  - `read(name): String?`: null when the file is absent; throws Untrusted when the file or its root is not owner-only, is not a regular file (links included), or is over 64 KiB;\n  - `write(name, text)`: atomic and owner-only;\n  - `delete(name)`.\n  - Every name must match `[0-9a-f]{64}\\.json`.\n- `RuntimeSelectionPolicy.store: () -> ProtectedStateStore?` is the seam. resetForTest() restores its default, which is null in JUnit, so every existing row keeps running without a store.\n- `RuntimeSelectionPolicy.forgetSessionForTest()` clears only pinned and spawns. It simulates an IDE restart; use it, and add no second restart hook.\n\nSEAMS this step's rows need, added in step 2:\n- `RuntimeSelectionPolicy.confirmer`: an internal, volatile DowngradeConfirmer. resetForTest() sets one that never answers.\n- `RuntimeSelectionPolicy.profileRecordName(basePath)`: the record's file name, for assertions through `ProtectedStateStore(root).read(name)`.\n- A RecordingConfirmer in the test file. It records every basePath it is asked about and keeps each answer callback, so a row can answer true, false, or never.\n\nEach D row sets `RuntimeSelectionPolicy.store = { ProtectedStateStore(<a TemporaryFolder dir outside the project>) }`.\n\nROWS (new, prefix D):\n- D1, persistence across restarts (DoD 1). For one project:\n  1. verified-local gives PROTECTED. The record, read through the store, parses to exactly {\"version\":1,\"project\":<the key>,\"profile\":\"protected\"}. Its name is not RF01's spawn file name for the same project. Nothing was asked.\n  2. Rewrite project.json to legacy, then call forgetSessionForTest(). The answer is PROTECTED, and the confirmer was asked exactly once, with this basePath. Eight more calls, run in parallel, stay PROTECTED and ask nothing more.\n  3. Never answer (a dismiss). After forgetSessionForTest(): PROTECTED, asked once more.\n  4. Answer false (a decline). After forgetSessionForTest(): PROTECTED, asked once more. The record still says protected.\n  5. Answer true (a confirm). The record now says legacy, but this session stays PROTECTED. After forgetSessionForTest(): LEGACY, and nothing was asked.\n  Then for a second project: verified-local, then observe after a restart, gives PROTECTED with an ask. The same holds for settings {}, where executionProfile is absent.\n- D2, upgrades need no confirmation, and there is no store:\n  - A 'legacy' record plus a verified-local read gives PROTECTED, the record goes back to 'protected', and nothing is asked.\n  - A project with no record and a legacy read gives LEGACY. Nothing is asked and no record is written.\n  - With store answering null (the plain-JUnit default), and with a store whose root is inside the project, the sequence verified-local, forgetSessionForTest(), legacy gives LEGACY. Nothing is asked and nothing is written. That is R01's session-only behaviour: such a store is unavailable, not untrusted.\n- D3, an untrusted record fails closed (DoD 2). Each record below, with project.json legacy and after a restart, gives PROTECTED and one ask:\n  - not JSON;\n  - lenient JSON;\n  - a byte order mark;\n  - an extra key, or a missing key;\n  - version 2, or version \"1\" as a string;\n  - the project of another key;\n  - profile 'verified-local', 'PROTECTED' or null;\n  - a directory at the record path;\n  - a record loosened the way RF01's step 1 (b) does it: on POSIX, chmod 644; on Windows, an extra ALLOW entry for Everyone, with assumeTrue when lookup fails.\n  In the first case, answering true replaces the record with a valid 'legacy' one, and a restart then gives LEGACY.\n- D4, failures never escape:\n  - A confirmer that throws gives PROTECTED, and the record is unchanged.\n  - With a confirmer that answers twice (true then false, or false then true), only the first answer counts.\n  - With the store unwritable (its root replaced by a regular file), a verified-local read still gives PROTECTED for the session, and profile never throws.\n  - A failed project.json read (malformed) writes no record and asks nothing.\n- D5, the production confirmer:\n  - ProfileDowngradeDialog.confirmed(choice) is true only for 1 (Allow Downgrade); 0, -1 and 2 are false.\n  - With no IntelliJ Application (plain JUnit), ask answers false at once and shows nothing.\n\nThe existing rows, RF01's included, stay unchanged and green.\n\nRED proof: run the step-5 command. The D rows fail to compile, or fail for the expected reason; every other row passes. Record it.\n\nSize budget: 200 test lines or fewer, table-driven where possible.\n\nError handling in the tests:\n- No row touches the real IDE system directory.\n- Every row that sets store restores it with resetForTest() in a finally block (resetForTest also runs in @After).\n- The loosened row restores access in a finally block, so TemporaryFolder can delete it.",
+          "reason": "CQ-RF01's approved plan (task-fd653cfb, submitted 07:02Z) fixed the shared store API: ProtectedStateStore, the RuntimeSelectionPolicy.store seam, forgetSessionForTest(), and names matching [0-9a-f]{64}\\.json. This step now uses those names instead of the ones proposed before RF01 was planned.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-30T07:05:55.273Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-2",
+      "description": "RuntimeSelectionPolicy.kt: the persisted profile record and the confirmer seam. EDIT the bytes CQ-R01 and CQ-RF01 landed.\n\n1. Add `fun interface DowngradeConfirmer { fun ask(basePath: String, answer: (Boolean) -> Unit) }`. Its KDoc says that it never blocks the caller, and that only an explicit human confirmation answers true. Add `@Volatile internal var confirmer: DowngradeConfirmer = ProfileDowngradeDialog`.\n2. The record is the store file named by the sha256 hex of projectKey(basePath) plus '.profile.json'. If RF01's naming differs, follow it, with a 'profile' suffix.\n   - Its content is exactly {\"version\":1,\"project\":<key>,\"profile\":\"protected\"|\"legacy\"}.\n   - Write it with Gson from a fixed-order map.\n3. storedProfile(key) answers ABSENT, LEGACY, PROTECTED or UNTRUSTED:\n   - The store answers null: ABSENT.\n   - Each of these is UNTRUSTED:\n     - the store throws;\n     - the bytes fail parseStrict;\n     - the root is not an object with exactly the keys version, project and profile;\n     - version is not the number 1;\n     - project is not exactly key;\n     - profile is not 'protected' or 'legacy'.\n   - Each UNTRUSTED answer logs a warning that names the broken rule, never the contents.\n   - Generalize parseStrict with a label, so its messages do not claim project.json for the record.\n4. persist(key, value) writes the record through the store. It never throws: a failure logs a warning, and the caller's answer stands.\n5. Test seams:\n   - profileRecordFor(basePath), for tests.\n   - restartForTest() clears the pins and the asked-once state, and keeps the store and the confirmer.\n   - resetForTest() also resets confirmer to one that never answers. If RF01 did not already do it, resetForTest() also points the store root at a fresh temp dir.\n\nIf RF01's store is specific to spawn records, generalize its read and write to take the file name, in the file where RF01 landed it. Do not change RF01's file names, formats or tests, and declare that file with moe.declare_files.\n\nError handling: every store or parse failure becomes UNTRUSTED or a logged write failure, never an exception from profile().",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "note": "Added DowngradeConfirmer + volatile seam/reset, strict four-state profile record loader, domain-separated profileRecordName and non-throwing atomic persistence through RF01 ProtectedStateStore. Actual landed helper is recordsFile(key), not assumed sha256Hex: reused recordsFile(\"profile:\" + key), plus existing strict parser/field/type helpers. Warning messages omit record contents. RuntimeProfile-typed persistence prevents arbitrary values. D tests already RED; gate batched at planned step 5 after dialog exists (no passing claim yet). Existing >300-line policy retained per scoped plan.",
+      "startedAt": "2026-10-30T08:20:28.207Z",
+      "completedAt": "2026-10-30T08:21:08.348Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "RuntimeSelectionPolicy.kt: the persisted profile record and the confirmer seam. EDIT the bytes CQ-R01 and CQ-RF01 landed. Reuse RF01's ProtectedStateStore, its `store` seam, its sha256Hex helper and its labelled parseStrict.\n\n1. Add `fun interface DowngradeConfirmer { fun ask(basePath: String, answer: (Boolean) -> Unit) }`. Its KDoc says that it never blocks the caller, and that only an explicit human confirmation answers true. Add `@Volatile internal var confirmer: DowngradeConfirmer = ProfileDowngradeDialog`.\n2. The record name is `sha256Hex(\"profile:\" + projectKey(basePath)) + \".json\"`. That matches the store's `[0-9a-f]{64}\\.json` rule, and it never equals RF01's spawn file name for the same project, which is sha256Hex(projectKey) + \".json\". Expose it as `internal fun profileRecordName(basePath)`.\n   - Its content is exactly {\"version\":1,\"project\":<key>,\"profile\":\"protected\"|\"legacy\"}.\n   - Write it with Gson from a fixed-order map.\n3. storedProfile(basePath, key) answers ABSENT, LEGACY, PROTECTED or UNTRUSTED:\n   - store() is null, or the store is not usableFor(basePath): ABSENT. That is R01's session-only behaviour: the store is unavailable (plain JUnit, or a system dir inside the project), not untrusted, and nothing is ever written there.\n   - The store's read answers null: ABSENT.\n   - Each of these is UNTRUSTED:\n     - read throws;\n     - the text fails parseStrict (labelled for the profile record);\n     - the root is not an object with exactly the keys version, project and profile;\n     - version is not the number 1;\n     - project is not exactly key;\n     - profile is not 'protected' or 'legacy'.\n   - Each UNTRUSTED answer logs a warning that names the broken rule, never the contents.\n4. persist(basePath, key, value) writes the record through the store only when the store is non-null and usableFor(basePath). It never throws: a failure logs a warning, and the caller's answer stands.\n5. resetForTest() also resets confirmer to one that never answers. forgetSessionForTest() needs no change, because the asked-once state is pinned itself (see step 3).\n\nError handling: every store or parse failure becomes UNTRUSTED or a logged write failure, never an exception from profile().",
+          "reason": "This step is aligned to CQ-RF01's approved store API. Store names must match [0-9a-f]{64}\\.json, so the record name is now a sha-256 that differs from RF01's spawn file. A null or unusable store means R01's session-only behaviour. forgetSessionForTest() replaces the proposed restartForTest().",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-30T07:05:55.338Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-3",
+      "description": "RuntimeSelectionPolicy.kt: profile(basePath) honours the record.\n\n1. A blank path gives LEGACY, and a project pinned this session gives PROTECTED. Both are unchanged.\n2. A failed project.json read gives PROTECTED, also unchanged. It never pins, never writes a record and never asks.\n3. A verified-local read pins the project for the session. It persists 'protected' unless storedProfile already says PROTECTED, so an UNTRUSTED record gets repaired. An upgrade never asks.\n4. A weaker read (absent, legacy or observe):\n   - ABSENT or LEGACY gives LEGACY, exactly as today.\n   - PROTECTED or UNTRUSTED keeps the stronger profile. When pinned.add(key) is true, which happens only for the first caller this session, call askDowngrade(basePath, key). Return PROTECTED.\n5. askDowngrade calls confirmer.ask outside any lock, inside try/catch. A throw is logged and leaves the project protected.\n   - Its answer callback acts on the FIRST answer only, through an AtomicBoolean. true persists 'legacy'; false does nothing.\n   - Either way the session stays pinned, so a confirmed downgrade takes effect at the next IDE start. This keeps R01's rule that a project protected in a session stays protected for that session.\n6. Update the KDoc of pinned and of the class:\n   - the confirmed profile persists outside the repository;\n   - a weaker repository read never downgrades a confirmed-protected project without a human confirmation;\n   - the downgrade applies after a restart.\n\nError handling: profile() still never throws. Only an explicit true from the confirmer writes 'legacy'. A missing-but-unreadable, unreadable or mismatched record keeps the project protected.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+      ],
+      "note": "Profile now reads persisted confirmation after successful project.json parsing: upgrades pin and persist protected, weaker reads of protected/untrusted records stay protected and use pinned.add for exactly one ask. AtomicBoolean consumes only the first callback; only explicit true writes legacy, session stays pinned. Existing malformed-read/no-pin behavior untouched. Confirmer runs outside locks and failures log safely. Reused existing set/store and JDK AtomicBoolean (ponytail loaded). Updated KDoc. GREEN verification deferred to named step 5 after dialog step.",
+      "startedAt": "2026-10-30T08:21:08.380Z",
+      "completedAt": "2026-10-30T08:21:42.038Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Create moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt: the production DowngradeConfirmer, as an object.\n\n- OPTIONS = arrayOf(\"Keep Protected\", \"Allow Downgrade\"). KEEP = 0 is the default; ALLOW = 1.\n- internal fun confirmed(choice: Int): Boolean = choice == ALLOW.\n- ask(basePath, answer):\n  - When ApplicationManager.getApplication() is null, or the application is in unit-test mode or headless, call answer(false) at once and show nothing.\n  - Otherwise invokeLater on the EDT: choice = Messages.showDialog(message, \"Moe: Execution Profile Downgrade\", OPTIONS, KEEP, Messages.getWarningIcon()). Then run answer(confirmed(choice)) through executeOnPooledThread, so the record write stays off the EDT.\n  - The message names the project directory's name, never the full path: \"<name> now declares the legacy execution profile, but it was confirmed protected. Moe keeps it protected until you allow the downgrade. An allowed downgrade takes effect after you restart the IDE.\"\n- Escape or closing the dialog returns -1, which is a decline. The safe option is the default button.\n\nError handling: any exception before the answer is delivered is caught, logged, and answers false.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt"
+      ],
+      "note": "Created production asynchronous confirmer (43 lines): Keep Protected default, only index 1 permits; null/unit-test/headless app declines immediately. UI is invoked later on EDT; actual confirmation/persistence callback runs on pooled thread. Dialog names directory basename only. Scheduling/UI exceptions log class only and decline. Path added as explicitly described by step though affectedFiles was empty. D5 is the tests-first headless/index coverage; full gate next.",
+      "startedAt": "2026-10-30T08:21:42.064Z",
+      "completedAt": "2026-10-30T08:22:35.035Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE, fresh.\n\n1. Hold the jetbrains-gradle shared resource while Gradle runs. Take it with moe.acquire_resource {resourceId: 'jetbrains-gradle'}; when it is busy, queue with moe.report_blocked and that resourceId. Release it afterwards.\n2. Run the task's command from WSL: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\".\n   - This WSL host has no Linux JDK, and this Windows run is the accepted gate. Report it as Windows evidence.\n   - It must exit 0. Its fresh command, exit code and output tail are complete_task's verification evidence.\n3. `git diff --check` over the three files is clean.\n4. A read-only `git status --short` shows only those files changed by this task. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code, never by weakening an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Resumed IN_PROGRESS step; both child fixes present and task comments confirm landed/DONE. Ran exact cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" fresh under jetbrains-gradle: exit 0, BUILD SUCCESSFUL in 9s, 26 fresh XML classes / 382 tests, 0 failures/errors/skips; policy 48/48. Windows-clock start 09:07:11.834693Z, XML timestamps checked against it. Evidence D:\\moe-scratch\\rf02-worker-55e6716a\\baseline.log and XML copies. Scoped git diff --check clean; three source files clean against checkpoint. No files changed this step; pre-existing/peer dirty paths preserved. Retaining lease briefly for final review reproduction and any required rerun.",
+      "startedAt": "2026-10-30T08:22:35.068Z",
+      "completedAt": "2026-10-30T09:08:10.865Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the three-file diff as an attacker:\n- Can a repository edit alone ever turn a confirmed-protected project legacy? Try a weaker read, a deleted project.json, a crafted record, a record of another project, a link, and a file that is not owner-only.\n- Can anything but an explicit true write 'legacy'? Try a dismiss, Escape, a throw, a second answer and a headless IDE.\n- Can the dialog appear twice for one project in a session, with parallel callers?\n- Can it block a thread or deadlock? profile() runs on the EDT (ManagedVmPanel) and off it (the supervisor).\n- Does a failed project.json read still never pin, write or ask? Does profile() still never throw?\n- Is the record outside the repository and owner-only on every path, including a repair write?\n- Does any test touch the real IDE system directory?\n- Would I be embarrassed if this shipped?\n\nFix any finding, then re-run step 5's command fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        ".serena/memories/task-task-f3485ac9d4384664870d88db876ddd54-handoff.md",
+        ".serena/memories/gotcha-protected-profile-concurrent-pin.md"
+      ],
+      "note": "Adversarial review of original checkpoint three-file diff and current diff found one in-scope race: delayed weaker reader could pass the initial pin check, then consume a newly confirmed legacy record while session was pinned. Added deterministic D6 using existing store seam/latches: required full Windows gate RED 383 tests / exactly 1 failure, expected PROTECTED but was LEGACY. Minimal fix rechecks pinned on legacy return after IO; no locks/extra state. +17 test lines keeps RF02 tests at 200. Fresh exact cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" GREEN exit 0, BUILD SUCCESSFUL in 9s, 26 fresh XML classes, 383 tests / 0 failures/errors/skips, policy 49/49. Windows start 09:09:45.284441Z; timestamp+mtime freshness checked, evidence D:\\moe-scratch\\rf02-worker-55e6716a\\final.log and final-xml/. Lease released. Reviewed malformed/foreign/weak/deleted input, link/ACL refusal, repairs, first-answer handling, headless defaults, nonblocking confirmation, no-pin read failures; no further findings. POSIX branches not locally exercised. Scoped diff-check clean; source changes confined to two planned files, peer dirty bytes preserved. Required handoff/gotcha written and declared, wrapper-excluded metadata. No Git writes/direct .moe edits.",
+      "startedAt": "2026-10-30T09:08:10.885Z",
+      "completedAt": "2026-10-30T09:12:05.475Z"
+    }
+  ],
+  "planRevision": 3,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 275.5,
+  "comments": [
+    {
+      "id": "comment-c890f4939c2d4ac59f0126ff1d64095b",
+      "author": "worker-c2da129d",
+      "content": "Step 1 tests written (+183/-0, seven D1–D5 methods), diff-check clean. Required RED not run: jetbrains-gradle busy, queued #1 behind worker-73c29a03. Production untouched, step stays IN_PROGRESS. Tests intentionally reference not-yet-created confirmer/profileRecordName/dialog; shared checkout will not compile until implementation, so peer gate runners should use their landed snapshot. All peer/pre-existing bytes preserved. Serena handoff and exact modified path declared for checkpoint. Resume with the required RED run, then complete step 1 and execute amended steps 2–6.",
+      "timestamp": "2026-10-30T08:20:00.736Z"
+    },
+    {
+      "id": "comment-2f154bbe46974469abefc2755f8ac412",
+      "author": "worker-c2da129d",
+      "content": "Steps 1–4 implemented, step 5 gate FAILED (not passing), step 6 not started. Exact required cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" ran fresh under jetbrains-gradle and exited 1, BUILD FAILED in 17s, 380 tests / 2 failures. Failures: supervisor legacy no-store test expected 0 provider calls but got 3 (profile now necessarily consults persistent state); D4 root-as-file after restart expected PROTECTED but got LEGACY (ProtectedStateStore.read converts child NoSuchFileException to null before root checks on Windows). Filed out-of-scope blockers task-bf4debb34a0241d2be0f764a2a68158b (store) and task-f23c4464c8f24efeb8d62973111839ce (fixture). No assertions weakened or overlapping files edited. Lease released. Main implementation/test diff is 297 changed lines (+293/-4 including 43-line new dialog). Proposed follow-up verification can be focused per bug to avoid each waiting on the other's red; this parent owns required final full gate.",
+      "timestamp": "2026-10-30T08:27:18.625Z"
+    },
+    {
+      "id": "comment-fdcb4de67c8e43f6b44fc02897b54457",
+      "author": "qa-ba3f4f35",
+      "content": "QA approved child task-f23c4464c8f24efeb8d62973111839ce (completion 8183aaf5 on moe/work-2026-10-24), warnings=[]; bf4debb3 is also DONE. Independent exact focused Windows gate 21/21, plus fresh completion-archive GREEN/MA write kill/MB read-only kill/restored GREEN. All other supervisor rows/helper and RF02 policy/tests unchanged. Both child fixes are landed, so RF02 still owes its exact full Windows `gradlew.bat test --rerun` gate under jetbrains-gradle plus its remaining adversarial step; child-focused evidence is not a full-suite pass. QA evidence /mnt/d/moe-scratch/f23c4464/qa/; reusable note mem:gotcha-legacy-supervisor-provenance-test-vacuity.",
+      "timestamp": "2026-10-30T09:00:54.378Z"
+    },
+    {
+      "id": "comment-4fbaaa768c284f7b9e3f152e7a64a009",
+      "author": "worker-55e6716a",
+      "content": "Resumed steps 5–6; checkpoint 91eb0d14 source/test diff re-read and scoped diff-check clean; no source changes. Current source has both child fixes. Full gate not run yet: queued #1 for jetbrains-gradle behind worker-262588d0/task-90664db1. Potential in-scope adversarial finding to reproduce in step 6: profile() checks pinned only before store IO; a delayed weaker-profile reader could read the newly confirmed legacy record after a concurrent caller pins and confirms, then return LEGACY within the still-pinned session. Use existing store-provider seam/latches to prove the interleaving before fixing; do not treat this static suspicion as a tested failure.",
+      "timestamp": "2026-10-30T09:04:14.752Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:06:25.972Z",
+  "updatedAt": "2026-10-30T09:30:10.665Z",
+  "dependsOn": [
+    "task-fd653cfbaea541c39569dfed9452cf5c"
+  ],
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T06:52:07.155Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:56:52.610Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T09:29:40.673Z",
+    "wallClockMs": 9168063
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-c2da129d",
+    "qa-ba3f4f35",
+    "worker-55e6716a",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:04:02.804Z",
+  "planningNotes": {
+    "approachesConsidered": "- A blocking confirmation inside profile(). Rejected: profile() runs on the EDT (ManagedVmPanel) and on supervisor threads, so a modal wait there can deadlock or freeze project open. Instead the confirmer is asynchronous, and the session stays protected while it waits.\n- Applying a confirmed downgrade mid-session. Rejected: it breaks R01's rule that a project protected in a session stays protected for that session, and it would switch selection under a running protected daemon. The downgrade applies at the next IDE start, and the dialog says so.\n- Deleting the record on confirm instead of writing 'legacy'. The behaviour is equivalent, but the deliverable asks for the last confirmed profile, so 'legacy' is written explicitly.\n- A Yes/No dialog. Rejected: Messages.showYesNoDialog makes the downgrade the default button. showDialog makes 'Keep Protected' the default, and only an explicit 'Allow Downgrade' confirms, so Escape and closing stay safe.\n- A second owner-only file implementation. Rejected: RF01's store is reused, because the epic rail requires owner-only state that fails closed.\n- Asking on every profile() call. Rejected: pinned.add makes the first caller in a session the only one that asks.",
+    "codebaseInsights": "- profile() (RuntimeSelectionPolicy.kt:52) never throws, and only an explicit verified-local read pins. Its callers:\n  - MoeDaemonSupervisor, through its injectable `profile` lambda;\n  - TerminalAgentLauncher.kt:116;\n  - ManagedVmPanel.kt:117 (UI).\n- projectKey() is the comparable real path, case-folded on Windows and macOS. Pins and spawn records share it.\n- parseStrict reads with Gson's STRICT reader through the JsonElement adapter. JsonParser would relax the reader to lenient.\n- RuntimeSelectionPolicyTest resets the singleton with resetForTest() in @Before and @After. The helpers project(), writeProjectJson(), profileOf() and symlink() are at the bottom of the file.\n- The plugin targets sinceBuild 231. InitMoeAction.kt already uses Messages dialogs.",
+    "risks": "- Assumed interface: RF01's owner-only store, proposed to architect-32ff5555 in #architects on 2026-10-30 as ProtectedStateStore.read/write/delete plus a test root. Adapt to the names RF01 actually lands.\n- If the 'protected' record cannot be written (an unwritable system dir), only R01's session pin is left, and the next start cannot know the project was protected. This is logged as a warning; nothing better is possible without storage.\n- An unreadable store root makes a legacy project read PROTECTED with an ask, as the DoD requires (fail closed). A confirm then fails to persist, so the project stays protected until the store is repaired.\n- The dialog appears during project open, when the first profile() call detects a downgrade (invokeLater with the default modality).\n- Windows ACL handling belongs to RF01's store. D3's Windows variant depends on that store refusing an Everyone entry.\n- RF03 (task-ec64165c) also depends only on RF01, and will likely edit RuntimeSelectionPolicyTest.kt. RF02 is added to its dependsOn to serialize them.\n- Kotlin gate: Windows gradlew.bat through cmd.exe, under the jetbrains-gradle lease.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/actions/InitMoeAction.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:04:02.826Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T08:15:45.586Z",
+  "declaredFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    ".serena/memories/task-task-f3485ac9d4384664870d88db876ddd54-handoff.md",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt",
+    ".serena/memories/gotcha-protected-state-absent-root.md"
+  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "91eb0d14ebb34d521930f5f2a3a2ee6252584444",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T08:14:40Z",
+      "paths": [
+        ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
+        ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T08:27:54.930Z",
+      "treeId": "dac3495a73b3e74f3a5c522e585f9d45d9cf9031",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "3bfeab89497444af0e105aab7d8ada7c46f75ccf",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T09:00:38Z",
+      "paths": [
+        ".moe/tasks/task-6fc0096b9fff4c45904cfbce7833ad2d.json",
+        ".moe/tasks/task-c61311dc98424120be5775ce91c50ed0.json",
+        ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T09:04:47.857Z",
+      "treeId": "9abc3c79968aca7bde24b4678b0edcbb86173caa",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "e936c4f97c69660afb732978ea37b973834379f9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T09:05:56Z",
+      "paths": [
+        ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+        ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T09:12:43.337Z",
+      "treeId": "9f35eb49167f1484bcac0d14255e6b3343d7fbb2",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "37bfa08e517a70f21f17564c2d39eab883961f2d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T09:23:54Z",
+      "paths": [
+        ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+        ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json",
+        ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T09:30:10.664Z",
+      "treeId": "665a460e7e5ad61c4bc0af1c0f2aa7eaa6b14f7e",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    ".serena/memories/task-task-f3485ac9d4384664870d88db876ddd54-handoff.md",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt",
+    ".serena/memories/gotcha-protected-profile-concurrent-pin.md",
+    ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+    ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
+    ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T09:23:54Z",
+    "at": "2026-10-30T09:30:10.664Z"
+  },
+  "reviewStartedAt": "2026-10-30T09:12:26.469Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :compileKotlin\n> Task :compileJava NO-SOURCE\n> Task :classes UP-TO-DATE\n> Task :jar\n> Task :compileTestKotlin UP-TO-DATE\n> Task :compileTestJava NO-SOURCE\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :composedJar\n> Task :prepareTestSandbox\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 9s\n11 actionable tasks: 6 executed, 5 up-to-date\nFresh XML validation: 26 classes, 383 tests, 0 failures/errors/skips; policy 49 including D6. Windows start 2026-10-30T09:09:45.284441Z; policy timestamp 2026-10-30T09:09:47.882Z.",
+    "reportedAt": "2026-10-30T09:12:26.469Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Persistent protected-profile confirmation is implemented in JetBrains using RF01's external owner-only store, strict project-bound records and an injected async safe-default dialog. Decline/dismiss/throw stays protected; only the first explicit true persists legacy, effective after restart. Original three-file checkpoint retained; landed store-root and supervisor-test fixes verified. Final adversarial review reproduced and fixed a delayed-reader race: recheck the session pin after store IO before returning legacy. D6 was RED (expected PROTECTED, got LEGACY), then GREEN; RF02 test additions total 200 lines. Fresh exact Windows full gate under jetbrains-gradle exited 0: 26 XML classes, 383 tests, zero failures/errors/skips; RuntimeSelectionPolicyTest 49/49. XML timestamps and mtimes verified against Windows-clock start 09:09:45.284441Z. Evidence D:\\moe-scratch\\rf02-worker-55e6716a\\final.log and final-xml/; race-red proof alongside. Lease released. Scoped diff-check clean, required Serena handoff/gotcha updated and declared. All peer/pre-existing bytes preserved, no direct .moe edits or Git writes. Windows evidence only; POSIX branches not locally exercised. Verified-local remains disabled; no isolation claim.",
+  "completedAt": "2026-10-30T09:29:40.673Z",
+  "reviewCompletedAt": "2026-10-30T09:29:40.673Z",
+  "reviewSummary": "APPROVED. Reviewed checkpoint 91eb0d14 (policy +67/-4, ProfileDowngradeDialog +43, tests +183) and completion e936c4f9 (policy +4/-1 pin recheck, test +17 D6), both on moe/work-2026-10-24, pushed; RF02 net ~309 LOC. moe-jetbrains clean vs HEAD.\n\nQA gate under jetbrains-gradle lease: exact `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` EXIT 0, BUILD SUCCESSFUL. Fresh XML (earliest 09:27:19.9Z Windows > start, clock skew measured 2.6s): 26 classes, 383 tests, 0 fail/err/skip; RuntimeSelectionPolicyTest 49/49 incl D1-D6, D3 ACL row not skipped. Evidence /mnt/d/moe-scratch/rf02-qa-952969be/. Scoped diff --check clean.\n\nDoD1: verified-local pins+persists protected; weaker read with PROTECTED/UNTRUSTED record asks once (atomic pinned.add), first answer only, only explicit true persists legacy, effective after restart (D1, D6 race). DoD2: dismiss/decline/throw stay protected; record outside project + owner-only (D1 asserts); untrusted docs/dir/loosened ACL/root-as-file fail closed (D3, D4); failures never escape. DoD3 reproduced. Dialog: safe default, headless declines, non-blocking, basename only. Rails: no .moe edits, no agent Git writes, verified-local not enabled.\n\nNotes (non-blocking): Windows-only evidence, POSIX branches unexercised. Per plan step 3.1 the pinned early return means a verified-local read in the same session after a confirmed downgrade does not re-record protected; a flip back to legacy before restart then gives LEGACY without asking (narrow, human had allowed legacy) - candidate for epic-final hardening. A failed protected persist degrades to session-only by design (warn logged).",
+  "requiredCheckAtDone": null
+}

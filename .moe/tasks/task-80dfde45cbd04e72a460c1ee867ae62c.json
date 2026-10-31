@@ -1,0 +1,258 @@
+{
+  "id": "task-80dfde45cbd04e72a460c1ee867ae62c",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M01d] Attempt policy snapshot capture",
+  "description": "Objective: Bind each real execution attempt to a durable detached policy configuration identity without rewriting historical attempts.\n\nDeliverable: Have openAttempt derive policy data from daemon task/project state, never a new caller-controlled MCP snapshot argument. New claims capture the effective configuration; strict task requirements cannot weaken after project rollback. Repair/resume keeps the original attempt identity and snapshot unchanged, while a successor generation records a fresh configuration identity. Preserve the existing pure attempt-store legacy behavior for historical/no-task records. Return detached snapshot copies without exposing mutable stored policy objects, and preserve persist-before-publish plus claim compensation on failure.\n\nExisting implementation surfaces / proposed focused tests (maximum five files): packages/moe-daemon/src/state/attemptStore.ts (openAttempt/repairExisting/getAttempt/listAttempts/currentAttempt); packages/moe-daemon/src/state/attemptStore.test.ts; packages/moe-daemon/src/tools/claimNextTask.ts (openClaimAttempt/handBackUnrecordedClaim); packages/moe-daemon/src/tools/claimNextTask.contract.test.ts.\n\nNOT in scope: Session/context receipts, stale-attempt fencing expansion, QA candidate binding, trusted runner evidence, approving the captured revision, or profile activation. Verification (fresh, exit 0): cd packages/moe-daemon && npm test -- --maxWorkers=4. Run in a synchronized isolated copy with native Linux dependencies and Linux-only PATH; preserve the original Windows node_modules and unchanged package-lock.json. Each slice owns its behavior tests, one final verification/adversarial review, and no production activation. This breakdown defines deliverables, not per-task implementation steps.",
+  "definitionOfDone": [
+    "Real open/claim tests persist the derived configuration snapshot and reload it unchanged after daemon restart.",
+    "Same-id repair and own-seat resume retain original generation/snapshot despite project changes; a legitimate successor gets a new generation and configuration record.",
+    "Returned/opened/listed snapshot objects cannot mutate stored snapshot state through aliasing.",
+    "Injected/forged policy inputs are not adopted; strict policy cannot downgrade through a resumed/replaced attempt or current project rollback.",
+    "Failed attempt persistence leaves no published attempt and existing claim compensation remains correct; pre-snapshot historical/no-task store behavior stays compatible.",
+    "Fresh `cd packages/moe-daemon && npm test -- --maxWorkers=4` exits 0 in the synchronized native-Linux copy, with actual pass/skip counts and output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Do not enable verified-local or claim approval, runner trust, hardware/isolation certification, or verified completion from a configuration snapshot.",
+    "Do not edit packages/moe-daemon/src/delivery/acceptance.test.ts or weaken existing held-out delivery assertions; add focused tests for new behavior.",
+    "No direct .moe edits or Git writes; wrappers own landing. Keep each implementation plan within five source/test files and normal sizing limits."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Preconditions, then TDD red for the store half. Load test-driven-development.\n\n**Preconditions:**\n- Confirm CQ-M01c (task-0f7df75fa8e44a75bf8547e53f48d5d5) is DONE.\n- Read the capture helper it exported from packages/moe-daemon/src/state/taskStore.ts. Its planned name and signature are planSubmissionSnapshot(settings, stored, planRevision):\n  - a stored verified-local snapshot is kept whole with only planRevision advanced;\n  - anything else becomes captureExecutionPolicySnapshot(settings, planRevision);\n  - malformed input throws INVALID_INPUT.\n- Reuse that helper; never re-implement the floor rule. If the landed name or signature differs, use the landed one and say so in the completion summary.\n- Do NOT edit delivery/acceptance.test.ts, delivery/executionProfile.ts, delivery/policy.ts or state/taskStore.ts.\n\n**Append a separate describe block to packages/moe-daemon/src/state/attemptStore.test.ts** (LF). Use the file's ToolTestHarness/StateManager setup and the real attemptStore functions. Let `SNAP = {version:2, profile:'observe', planRevision:4, deliveryPolicy:'local-branch'}` and `STRICT = {version:2, profile:'verified-local', planRevision:1, deliveryPolicy:'local-branch'}`.\n\n- **S1.** `openAttempt` with `executionPolicySnapshot: SNAP`:\n  - Persists exactly SNAP, in the attempt file and in `state.attempts`.\n  - Mutating the input object afterwards leaves the map record and the file unchanged.\n  - So does mutating the returned record's snapshot, and so does replacing `returned.executionPolicySnapshot` outright.\n- **S2.** A malformed param (null, an extra key, version 3, v2 without deliveryPolicy, planRevision -1) is refused with INVALID_INPUT naming executionPolicySnapshot, before any write:\n  - no file and no map entry;\n  - no generation consumed: the next valid open is generation 1.\n- **S3.** `openAttempt` WITHOUT the param, on a task id that does not exist:\n  - The record is the legacy shape. The file keys equal ['generation','id','lastPhaseAt','phase','runnerId','startedAt','taskId','workerId','workspace'] exactly, and the in-memory record has no own executionPolicySnapshot key.\n  - Historical and no-task behaviour is unchanged.\n- **S4.** Same-id repair: open with SNAP, then re-open the same id with STRICT.\n  - The call returns the persisted record: SNAP, same generation, file bytes unchanged.\n  - Repair never adopts a new snapshot.\n- **S5.** Detachment across every exported returner. Covers `openAttempt`, `getAttempt`, `listAttempts` (scoped and unscoped), `currentAttempt`, `setAttemptPhase`, `recordAttemptPresence`, `closeOpenAttempts`, `closeHandedBackAttempts` and `reconcileRunningAttempts`.\n  - Mutating a returned snapshot changes neither the stored record nor the file.\n  - Two reads return distinct snapshot objects.\n  - Phase, presence and close writes carry the snapshot deep-equal into the new record and persist it.\n  - A record without a snapshot is still returned exactly as before.\n- **S6.** Restart:\n  - A fresh StateManager plus `load()` returns a deep-equal snapshot.\n  - `reconcileRunningAttempts` parks the attempt and keeps the snapshot unchanged.\n  - A hand-edited malformed snapshot in an attempt file does not make `getAttempt`, `listAttempts` or `currentAttempt` throw: reads stay usable and return a detached copy of the raw value.\n- **S7.** `vi.spyOn(state, 'writeEntity').mockRejectedValueOnce` on an open with SNAP:\n  - It rejects and leaves no attempt in the map or on disk.\n  - The retry gets generation 1 with SNAP.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.test.ts"
+      ],
+      "note": "Preconditions OK: M01c DONE/landed (803a38d). Landed helper is taskStore.planSubmissionSnapshot(settings, stored, planRevision), same name and signature as planned. Appended describe 'attemptStore execution policy snapshot' (S1-S7, LF), plus imports for the returners. RED in the isolated Linux copy /tmp/moe-m01d-test.*: 22 new cases fail on the missing behaviour (undefined snapshot, promise resolved instead of rejecting); 42 pass, which is 30 pre-existing plus 12 legacy pins (S3 and the S5 no-snapshot table). Plan note: updateSettings has no deliveryPolicy key, so the claim tests hand-edit project.settings.deliveryPolicy, following the M01c A2 precedent. The 1172 pre-existing dirty paths were left untouched.",
+      "startedAt": "2026-10-24T14:39:02.593Z",
+      "completedAt": "2026-10-24T14:43:39.297Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "TDD red for the claim half. Append a separate describe block to packages/moe-daemon/src/tools/claimNextTask.contract.test.ts. Its working copy is CRLF over an LF index: append in CRLF and leave existing tests byte-identical. That file's header promises it mocks nothing, so use no vi.mock, no spies and no mock calls there. Failure injection lives in S7 (attemptStore.test.ts) and in C7 below, which uses a real malformed record.\n\nUse the file's ToolTestHarness fixtures and the real `claimNextTaskTool(h.state).handler`. Seed tasks as raw JSON with an explicit planRevision (for example 2). Change settings through `h.state.updateSettings`.\n\n- **C1.** A real claim persists the DERIVED snapshot in the attempt file.\n  - Default settings, task with no snapshot: `{version:2, profile:'legacy', planRevision:2, deliveryPolicy:'legacy'}`.\n  - Settings `{executionProfile:'observe', deliveryPolicy:'local-branch'}`: `{2,'observe',2,'local-branch'}`.\n  - A fresh StateManager plus `load()` returns it unchanged.\n- **C2.** Own-seat resume:\n  1. Worker A claims, getting generation 1 and S1.\n  2. Change settings to `{observe, remote-push}`.\n  3. A claims again.\n  - Same attemptId, generation 1, snapshot S1; the attempt file bytes are unchanged.\n- **C3.** Successor:\n  1. A claims (generation 1, legacy).\n  2. Change settings to `{observe, local-branch}`.\n  3. A's seat is released (`state.updateTask` with assignedWorkerId null), then worker B claims.\n  - B gets generation 2 with `{2,'observe',2,'local-branch'}`.\n  - The generation-1 record is unchanged; history is never rewritten.\n- **C4.** A seeded historical open attempt with no snapshot, on a row assigned to A. A resumes:\n  - The same record comes back with no snapshot key: no backfill, file bytes unchanged.\n- **C5.** A claim carrying injected arguments: `executionPolicySnapshot` (a forged STRICT and a forged legacy one), `profile:'legacy'`, `deliveryPolicy:'remote-push'`.\n  - The recorded snapshot is the derived one, and the claim response shape is unchanged (the existing `Object.keys(result.task)` contract stays as is).\n- **C6.** The exported pure-ish `deriveAttemptPolicySnapshot(state, task)`. Strict cases stay at this level, because real claims of strict tasks become refusals in CQ-M01e.\n  - A task holding STRICT v2 under rolled-back legacy settings, at planRevision 3, gives `{2,'verified-local',3,'local-branch'}`.\n  - A v1 verified-local task snapshot stays v1 at the task's revision.\n  - An absent, legacy or observe task snapshot gives the live settings.\n  - An absent planRevision reads as 0.\n  - These throw INVALID_INPUT: a null, -1 or '3' planRevision; a malformed task snapshot; a malformed setting.\n- **C7.** A fresh claim of a WORKING row whose stored task snapshot is malformed, for example `{version:3}`:\n  - The claim rejects with INVALID_INPUT.\n  - No attempt record exists.\n  - The row's assignedWorkerId is null again: the existing compensation hands the seat back.\n\n**Scratch runner** (used by every later step). The shared node_modules is a Windows install: never touch it or package-lock.json.\n1. `D=$(mktemp -d /tmp/moe-m01d-test.XXXXXX)`\n2. `git -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json | tar -x -C \"$D\"`\n3. `ln -s \"$(cat /tmp/moe-linux-test-root.latest)/repo/packages/moe-daemon/node_modules\" \"$D/packages/moe-daemon/node_modules\"`\n4. Copy the owned files' working-tree bytes in before each run.\n5. Run vitest from `$D/packages/moe-daemon` with every MOE_* var unset and the Linux-only PATH (step 5 has the exact env).\n\nRun both test files and confirm every failure is the missing behaviour, not a typo or a harness error.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts"
+      ],
+      "note": "Appended describe 'moe.claim_next_task attempt policy snapshot' in CRLF: C1-C7, 25 cases, no mocks or spies. Two extras beyond the plan: a C3 historical-leftover successor (arm 3: closeOpenAttempts then the second openAttempt) and a C2 resume under a malformed deliveryPolicy, so deriving on resume would go red. Existing tests are byte-identical; only the import block grew (fs, path, attemptStore, StateManager, types, MoeError). Deviation: settings change through updateSettings({executionProfile}) plus a hand edit of settings.deliveryPolicy, because update_settings has no deliveryPolicy key (M01c A2 precedent). RED in the scratch copy: 24 failed (missing export or behaviour), 25 passed (24 pre-existing plus the C4 legacy pin). Scratch runner: /tmp/moe-m01d-run.sh syncs the 5 owned files into /tmp/moe-m01d-test.Blm2WL (git archive HEAD, lockfile JSON-equal, Linux node_modules symlinked, MOE_* unset, Linux-only PATH).",
+      "startedAt": "2026-10-24T14:43:42.571Z",
+      "completedAt": "2026-10-24T14:46:11.117Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Store half in packages/moe-daemon/src/state/attemptStore.ts. Its working copy is CRLF over an LF index (EOL-only churn): edit in place, keep CRLF, and check with `git diff --ignore-cr-at-eol --stat`.\n\n1. Import readExecutionPolicySnapshot from '../delivery/executionProfile.js'.\n   - This is the leaf; per the layering decision it is the only policy import attemptStore may have. Never import delivery/policy.ts or state/taskStore.ts here: both would close a cycle.\n   - Type-import ExecutionPolicySnapshot.\n2. Add `OpenAttemptParams.executionPolicySnapshot?: ExecutionPolicySnapshot`. Doc comment:\n   - It is internal: the claim path derives it from daemon task and project state.\n   - It is never an MCP argument and never approval, readiness or runner trust.\n3. In openAttempt, after the repair and exclusivity checks and before nextGeneration:\n   - When the param is present, decode it with readExecutionPolicySnapshot. That yields a fresh validated copy; a malformed value throws INVALID_INPUT before any write.\n   - Store the copy in the new record.\n   - When the param is absent, write no key at all, so legacy, no-task and historical records stay byte-for-byte as before.\n   - The repair path keeps returning the persisted record unchanged. It never adopts a new snapshot.\n4. Detachment.\n   - Add a private `detached(attempt)` helper:\n     - a record with `executionPolicySnapshot === undefined` is returned as-is (the existing behaviour);\n     - otherwise return `{ ...attempt, executionPolicySnapshot: structuredClone(attempt.executionPolicySnapshot) }`. This copies the raw stored value without validating it, so a hand-edited bad record can never make a read throw.\n   - Apply it at every exported return site: openAttempt (new and repaired), getAttempt, listAttempts, currentAttempt, setAttemptPhase, recordAttemptPresence, closeOpenAttempts, closeHandedBackAttempts and reconcileRunningAttempts.\n   - Internal bookkeeping (nextGeneration, exclusivity, close loops) may keep reading the live map.\n   - The stored object is never handed out.\n5. The header comment gains one line: attempts may carry a configuration identity captured once at open, never rewritten, and returned only as detached copies.\n\nError handling: a decode failure throws before writeEntity or map.set, and the write-then-publish order is unchanged.\n\nGreen in $D: `src/state/attemptStore.test.ts`, plus the existing attempt neighbours `src/state/attemptHandback.test.ts`, `src/tools/finalizeAttempt.test.ts` and `src/tools/reattachAttempt.test.ts`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/attemptStore.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts"
+      ],
+      "note": "attemptStore.ts (CRLF kept; +55/-12 ignoring EOL). It imports only the leaf, readExecutionPolicySnapshot, and type-imports ExecutionPolicySnapshot. Added an internal OpenAttemptParams.executionPolicySnapshot. openAttempt runs repair, then exclusivity, then readExecutionPolicySnapshot (a fresh validated copy; malformed throws INVALID_INPUT before nextGeneration or any write). The key is spread in only when present, so legacy records keep the exact key set. A private detached() returns the record as-is without a snapshot, otherwise {...a, executionPolicySnapshot: structuredClone(raw)}. It runs at every exported returner, including setAttemptPhase's no-op return. A private storedAttempts() keeps the live map for internal bookkeeping (nextGeneration, currentAttempt's filter, the close and reconcile loops), so only handed-out records are cloned. The header gains the identity line. GREEN in the scratch copy: attemptStore, attemptHandback, finalizeAttempt and reattachAttempt tests, 4 files, 154 passed.",
+      "startedAt": "2026-10-24T14:46:11.931Z",
+      "completedAt": "2026-10-24T14:47:03.031Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Claim half in packages/moe-daemon/src/tools/claimNextTask.ts (CRLF working copy over an LF index; keep CRLF). Also a comment in packages/moe-daemon/src/types/schema.ts (CRLF).\n\n1. **Export `deriveAttemptPolicySnapshot(state, task)`.**\n   - It returns the M01c helper applied to `(state.project?.settings, task.executionPolicySnapshot, task.planRevision === undefined ? 0 : task.planRevision)`.\n   - Absent means 0. A null or other malformed revision falls through to the decoder's INVALID_INPUT; never `??`, which would coerce null to 0.\n   - Doc comment:\n     - the identity a NEW attempt records comes only from daemon state;\n     - a stored verified-local task snapshot is a floor a project rollback cannot lower;\n     - a successor records a FRESH identity (per the deliverable), so a predecessor's strict identity that came only from live settings is history, not a task requirement;\n     - never from claim arguments;\n     - never approval or readiness.\n2. **openClaimAttempt.**\n   1. First adopt an own-seat resume without deriving anything: if `currentAttempt(state, taskId)` is open, `resumingOwnSeat` is true and the attempt belongs to the same worker, return it unchanged. The original identity, generation and snapshot stand, and a historical attempt without a snapshot gets no backfill.\n   2. Otherwise derive the snapshot from `state.getTask(taskId)`. A missing task is not found, as today.\n   3. Pass it as the internal `executionPolicySnapshot` param to both openAttempt calls (the first open, and the successor after `closeOpenAttempts`).\n   - Keep the existing ATTEMPT_ALREADY_OPEN arms, the foreign-finalizing refusal and the comment block, so the outcomes are identical to today.\n   - Never spread MCP params into openAttempt.\n   - Do not add the snapshot to the claim response, and do not add any claim_next_task input-schema field.\n3. **Compensation stays as it is.** A derivation or persistence failure propagates out of openClaimAttempt, and the caller's `handBackUnrecordedClaim` undoes a fresh assignment; a resume took nothing.\n4. **schema.ts comments only.**\n   - The ExecutionAttempt.executionPolicySnapshot doc now says:\n     - it is captured once by the claim path (deriveAttemptPolicySnapshot) when a NEW attempt opens;\n     - repair and own-seat resume keep the original;\n     - a successor records a fresh identity;\n     - it is never rewritten or backfilled;\n     - readers get detached copies;\n     - it is never approval or readiness.\n   - In the ExecutionPolicySnapshot type comment, change 'attempt capture and admission are later rollout work' to 'attempt capture is the claim path's; admission is later rollout work'.\n\nError handling: every failure path throws before an attempt is published, and the existing hand-back keeps a failed fresh claim from holding the row.\n\nGreen in $D:\n- src/tools/claimNextTask.contract.test.ts\n- src/tools/claimNextTask.test.ts\n- src/tools/claimNextTask.race.test.ts\n- src/state/attemptHandback.test.ts\n- src/tools/waitForTask.test.ts\n- src/state/stateModules.test.ts",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts"
+      ],
+      "note": "claimNextTask.ts (CRLF kept; +31/-1 ignoring EOL) exports deriveAttemptPolicySnapshot(state, task) = planSubmissionSnapshot(settings, task.executionPolicySnapshot, planRevision === undefined ? 0 : planRevision). There is no ?? and null falls through to INVALID_INPUT. openClaimAttempt adopts an own-seat resume (currentAttempt, resumingOwnSeat, same worker) before deriving. Otherwise it reads getTask (notFound if gone), derives, and passes the snapshot to both openAttempt calls through the shared params object. The ALREADY_OPEN arms, the foreign-finalizing refusal, compensation, response shape and input schema are unchanged. schema.ts (CRLF): comments only, as planned.\n\nSCOPE GREW BY ONE FILE: src/tools/claimNextTask.test.ts (LF), one expectation. Its 'writes a claim that sends no identity byte for byte as before' case pins the full attempt JSON a real claim writes. The DoD requires every real claim to persist the derived snapshot, so that pin must gain the key. I added `executionPolicySnapshot: {2,'legacy',0,'legacy'}` as the last key plus one comment line, and its no-identity-keys and no-null assertions are intact. The plan's risk list caught finalizeAttempt.test.ts:127 (openAttempt without param, unaffected) but missed this one. No alternative exists inside five files: dropping the schema.ts comment edit would leave 'no daemon path writes it' false.\n\nGREEN in the scratch copy: contract, claimNextTask, race, attemptHandback, waitForTask, stateModules and attemptStore tests, 7 files, 241 passed.",
+      "startedAt": "2026-10-24T14:47:03.861Z",
+      "completedAt": "2026-10-24T14:48:56.833Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "The one verification gate. Run it in a fresh synchronized native-Linux copy. Never use the Windows node_modules, and keep package-lock.json unchanged.\n\nSet up the copy:\n```\nD=$(mktemp -d /tmp/moe-m01d-gate.XXXXXX)\ngit -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json | tar -x -C \"$D\"\nfor f in packages/moe-daemon/src/state/attemptStore.ts packages/moe-daemon/src/state/attemptStore.test.ts packages/moe-daemon/src/tools/claimNextTask.ts packages/moe-daemon/src/tools/claimNextTask.contract.test.ts packages/moe-daemon/src/types/schema.ts; do cp \"/mnt/d/projexts/moes/$f\" \"$D/$f\"; done\nNM=\"$(cat /tmp/moe-linux-test-root.latest)/repo/packages/moe-daemon\"\nLPATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nPATH=$LPATH node -e 'const [a,b]=process.argv.slice(1).map(p=>JSON.stringify(require(p)));process.exit(a===b?0:1)' \"$NM/package-lock.json\" \"$D/packages/moe-daemon/package-lock.json\" && ln -s \"$NM/node_modules\" \"$D/packages/moe-daemon/node_modules\"\n```\nIf the lockfiles differ, run `npm ci` in `$D/packages/moe-daemon` with the same env instead of linking.\n\nRun the suite:\n```\ncd \"$D/packages/moe-daemon\" && UNSET=$(env | grep -oE '^MOE_[A-Z_]+' | sed 's/^/-u /' | tr '\\n' ' ') && env $UNSET PATH=$LPATH npm test -- --maxWorkers=4\n```\nThen run `npx tsc --noEmit --incremental false` with the same env. Both must exit 0.\n\nAfter the run:\n- Record files, passed and skipped. The baseline is the full count CQ-M01c reported in its completion, plus the new cases.\n- If anything goes red outside the owned files, re-run this recipe on a pristine HEAD copy to classify it before touching anything. Never weaken or skip a test.\n- Type-check the touched test files once, because tsconfig excludes tests: `npx tsc --noEmit --ignoreConfig --target ES2022 --module ESNext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --resolveJsonModule <file>`.\n- Keep the npm test command line, exit code and output tail for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate in a fresh copy /tmp/moe-m01d-gate.7MbuNa: git archive HEAD f6b3d21 plus the 6 owned files (cmp-verified). Peer commits since f96bb8c touched none of the owned files. Lockfile JSON-equal; Linux node_modules symlinked; MOE_* unset; Linux-only PATH.\n\nRun 1: exit 1, one failure. waitForTask.test.ts 'does NOT offer a WORKING task with unmet dependsOn' failed at line 344, a 50ms setTimeout followed by activeWaiters.has(...). That is a wall-clock race in the parked wait path, which never reaches openClaimAttempt. Classified as a load flake: the same file passes 3/3 alone in the gate copy and on a pristine HEAD copy.\n\nRun 2 (fresh, full): `npm test -- --maxWorkers=4` exit 0, 148 files passed, 3169 passed / 9 skipped (3178). Baseline: M01c's 3082/147 plus the later M03c file plus 49 new cases.\n\n`tsc --noEmit --incremental false`: exit 0. Strict standalone tsc: attemptStore.test.ts exit 0, claimNextTask.contract.test.ts exit 0. claimNextTask.test.ts has 5 standalone errors (fixture typing at lines 150 and 278), identical on pristine HEAD, so they predate this task and none come from the edited line.",
+      "startedAt": "2026-10-24T14:48:57.749Z",
+      "completedAt": "2026-10-24T14:52:41.037Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Exactly one adversarial self-review of the five-file diff. Load adversarial-self-review and use `git diff --ignore-cr-at-eol`.\n\n**Mutation probes.** Run each alone in $D and record its red count:\n1. Store the caller's object without decoding: S1 input-mutation goes red.\n2. Drop `detached` at each returner separately (getAttempt, listAttempts, currentAttempt, openAttempt, setAttemptPhase, recordAttemptPresence, closeOpenAttempts): the matching S5 case goes red.\n3. Let repair adopt the new snapshot: S4 goes red.\n4. Derive or overwrite on an own-seat resume: C2 and C4 go red.\n5. Read the snapshot from claim params: C5 goes red.\n6. Capture live only, with no task floor: the C6 strict cases go red.\n7. Coerce a null planRevision with `??`: the C6 null case goes red.\n8. Write the key when the param is absent: S3 goes red.\n9. Skip the hand-back after a derivation failure: C7 goes red.\n\n**Then challenge:**\n- twice-concurrent claims (the race file must stay green);\n- a restart between the assignment write and the attempt write;\n- hostile or huge snapshot params;\n- that no path exposes the stored object, writes approval or trust, or adds MCP surface;\n- that legacy, no-task and historical records keep their exact bytes;\n- that error handling leaks nothing beyond the existing INVALID_INPUT text;\n- the cost of `structuredClone` on unscoped `listAttempts` (claim eligibility). The values are small and flat, so record the decision.\n\n**Confirm:**\n- CRLF is preserved in every edited file;\n- acceptance.test.ts, the leaf, policy.ts and taskStore.ts are byte-unchanged;\n- no .moe or Git writes;\n- no substring from the project's global forbiddenPatterns (project.globalRails).\n\nFix findings with tests. If any byte changed after step 5, rerun the step-5 command fresh and use that output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/attemptStore.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/attemptStore.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts"
+      ],
+      "note": "Adversarial review of the 6-file diff (--ignore-cr-at-eol). Production +98/-22; tests +498/-3. 18 single mutation probes, all killed (red counts):\n- (1) storing the caller's object: 1\n- (2) dropping detached: getAttempt 3, listAttempts 3, currentAttempt 2, openAttempt new 1, openAttempt repair 1, setAttemptPhase change 4 (also covers closeOpenAttempts, closeHandedBackAttempts, reconcile), setAttemptPhase no-op 1, recordAttemptPresence 1\n- (3) repair adopting: 1\n- (4a) deriving before resume: 1; (4b) overwriting on resume: 2\n- (5) reading claim args: 2\n- (6) live only, no floor: 4\n- (7) `??`: 2\n- (8) key written when absent: 12\n- (9) skipping hand-back: 2\n- (10) successor without snapshot: 1\nAll probes ran in the scratch copy and were restored byte-equal.\n\nChallenges:\n- Concurrency: everything stays under state.mutex, and the derive-to-exclusivity checks are synchronous up to writeEntity. The race file is green in the gate.\n- Restart between assignment and attempt write: the resume opens a fresh generation with a derived snapshot. If derivation fails there, the resume keeps the seat; that is pre-existing resume semantics, and only a hand-edited malformed record can trigger it.\n- MCP surface: none. C5 pins that the inputSchema has no such key, and the handler never reads it.\n- Only the claim path calls openAttempt; benchmarks/ is unrelated.\n- Error text: the existing decoder INVALID_INPUT only.\n- structuredClone cost: about 1us per snapshotted record (10k records measured at ~10ms; today's .moe has 160 attempts, ~0.16ms). Legacy records are not cloned, and internal loops use storedAttempts. Kept, because a shallow spread would alias hand-edited nested values.\n\nConfirmed: CRLF preserved (4 CRLF files, 2 LF test files). acceptance.test.ts, executionProfile.ts, policy.ts and taskStore.ts are unchanged. No forbiddenPatterns. ASCII-only additions. No .moe or Git writes. No bytes changed since the step-5 gate (cmp against the gate copy), so its output stands.",
+      "startedAt": "2026-10-24T14:52:41.988Z",
+      "completedAt": "2026-10-24T14:55:43.137Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-ad95cb270e9e46df8672eb094d0c1e74",
+  "dependsOn": [
+    "task-0f7df75fa8e44a75bf8547e53f48d5d5"
+  ],
+  "priority": "HIGH",
+  "order": 216.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T00:01:36.722Z",
+  "updatedAt": "2026-10-24T15:19:09.627Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T13:40:15.349Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-24T15:14:24.661Z",
+    "wallClockMs": 5649312
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "worker-07cd2c56",
+    "qa-b0c1741e"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T13:48:06.075Z",
+  "planningNotes": {
+    "approachesConsidered": "- **Where to derive the snapshot.** It is derived in claimNextTask (the tools layer) and passed to openAttempt as an internal param. It is not derived inside attemptStore:\n  - attemptStore must stay pure, keeping legacy behaviour for no-task and historical records.\n  - It may import only the leaf. Importing policy.ts or taskStore.ts would close a cycle: policy -> candidateStore -> attemptStore, and taskStore -> attemptStore.\n- **Reuse the M01c helper (planSubmissionSnapshot)** for the floor rule instead of duplicating it. Tasks and attempts then share one rule: verified-local is kept whole and only planRevision advances; otherwise the live settings are captured.\n- **Floor source is the task snapshot only.** The deliverable says a successor records a FRESH configuration identity, and \"strict task requirements\" come from the task. A predecessor attempt's strict identity that came only from live settings stays history. This matches M01c's backstop and M01e's admission, both of which read the task snapshot.\n- **Own-seat resume is adopted before deriving.** A resume never re-derives, so it stays unchanged even when state is malformed, and historical attempts are never backfilled.\n- **Detachment via structuredClone at every exported returner.** Rejected alternatives:\n  - Freezing the snapshot: a returned record could still have its property reassigned.\n  - Copying every record: needless churn of legacy identity.\n  - Validating on read: a single bad file would brick reads.\n- **Strict cases are tested at the helper level.** CQ-M01e will turn real claims of strict tasks into refusals.\n- **No mocks in the contract file**, per its header. Failure injection lives in attemptStore.test.ts and in a real malformed record.",
+    "codebaseInsights": "- **attemptStore.ts** (LF index, CRLF working copy):\n  - Exports getAttempt, listAttempts and currentAttempt, which return live map objects.\n  - openAttempt runs repairExisting (same id: persisted record unchanged), then assertNoOpenAttempt, then nextGeneration (max+1), then `writeEntity` followed by `map.set`.\n  - setAttemptPhase and recordAttemptPresence spread `{...existing}`, so a snapshot reference carries over.\n  - reconcileRunningAttempts parks running attempts at restart.\n- **claimNextTask.ts:**\n  - The assignment write (~573) runs first, then openClaimAttempt (~113-143).\n  - On ATTEMPT_ALREADY_OPEN there are three outcomes: own-seat adopt, refuse a foreign finalizing attempt, or `closeOpenAttempts` plus successor.\n  - On failure, `handBackUnrecordedClaim` runs unless the claim is a resume.\n  - The claim response carries only attemptId and generation.\n- **Test constraints:**\n  - finalizeAttempt.test.ts:127 pins the exact stored-attempt key set for openAttempt without a snapshot, so the legacy shape must hold.\n  - acceptance.test.ts projects attempt keys, so a new key is safe.\n  - claimNextTask.contract.test.ts must stay mock-free.\n  - attemptStore.test.ts is LF.\n- **schema.ts:** the ExecutionAttempt.executionPolicySnapshot comment still says nothing writes the field.\n- **Existing pattern:** several tools (createTask, reportBlocked, archiveEpic, setTaskDependencies) already import state/taskStore.js.",
+    "risks": "- **Dependency on CQ-M01c's helper.** The worker must read the landed name and signature first; dependsOn gates the claim.\n- **Claim hot path.** Derivation adds one decode per fresh claim. A malformed task snapshot or setting now fails a fresh claim with INVALID_INPUT, and the claim is compensated. This is fail-closed by design, and M01e will move the refusal before assignment.\n- **Cost.** `structuredClone` runs on unscoped listAttempts for snapshotted records. The values are small and flat, so the cost is microseconds.\n- **Line endings.** Three files are CRLF working copies over an LF index; landing will flip their blobs. Measure the diff with `--ignore-cr-at-eol`.\n- **Test environment.** Use the isolated Linux copy, and unset MOE_* variables before running.\n- **Out of bounds.**\n  - No edits to acceptance.test.ts, the leaf, policy.ts or taskStore.ts.\n  - No MCP surface.\n  - No activation, approval or trust claims.\n  - No .moe or Git writes.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/delivery/executionProfile.ts",
+      "packages/moe-daemon/src/types/schema.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T13:48:06.173Z",
+  "workStartedAt": "2026-10-24T14:39:02.593Z",
+  "reviewStartedAt": "2026-10-24T14:56:22.755Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test -- --maxWorkers=4 (fresh isolated native-Linux copy /tmp/moe-m01d-gate.7MbuNa: git archive HEAD f6b3d21 + the 6 owned files, cmp-verified; lockfile JSON-equal, Linux node_modules symlinked; every MOE_* unset; Linux-only PATH)",
+    "exitCode": 0,
+    "outputTail": " Test Files  148 passed (148)\n      Tests  3169 passed | 9 skipped (3178)\n   Start at  17:51:22\n   Duration  53.99s (tests 92%, import 5%, transform 2%)\n\nAlso: npx tsc --noEmit --incremental false -> exit 0; strict standalone tsc of attemptStore.test.ts and claimNextTask.contract.test.ts -> exit 0. (An earlier full run had 1 load flake, waitForTask.test.ts:344 50ms setTimeout race, green 3/3 alone and on pristine HEAD; this rerun is the evidence.)",
+    "reportedAt": "2026-10-24T14:56:22.755Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/attemptStore.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+    ".moe/tasks/task-80dfde45cbd04e72a460c1ee867ae62c.json",
+    ".moe/tasks/task-bfe4d1119f0d4a43b9fb9b087a332181.json",
+    ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+    ".moe/tasks/task-1bfea2defe6e4c698afd4ac0e24afdfb.json",
+    ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+    ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json"
+  ],
+  "completionSummary": "CQ-M01d: each new execution attempt records a detached policy-configuration identity, derived only from daemon state.\n\nattemptStore.ts:\n- openAttempt takes an internal executionPolicySnapshot and decodes it with the leaf readExecutionPolicySnapshot after the repair and exclusivity checks. A malformed value throws INVALID_INPUT before any allocation or write.\n- With no snapshot, no key is written, so historical and no-task records keep the exact legacy bytes.\n- Same-id repair returns the persisted record and never adopts a new snapshot.\n- detached() hands out structuredClone copies at every exported returner (get, list, current, open, setAttemptPhase including its no-op path, presence, close, reconcile). The stored object is never exposed, and a hand-edited bad record never makes a read throw.\n\nclaimNextTask.ts:\n- Exported deriveAttemptPolicySnapshot(state, task) applies M01c's planSubmissionSnapshot to the task snapshot, the live settings and planRevision (absent means 0; null throws, no ??). A stored verified-local task snapshot is a floor rollback cannot lower.\n- openClaimAttempt adopts an own-seat resume BEFORE deriving: the original id, generation and snapshot stand, and nothing is backfilled. Otherwise it derives and passes the snapshot to both openAttempt calls, so a successor gets a fresh identity.\n- Claim args are never read. The response shape and input schema are unchanged.\n- Compensation is unchanged: a derive or persist failure hands the fresh seat back.\n\nschema.ts: comments only.\n\nTests: 49 new (S1-S7, C1-C7). 18 single mutation probes all go red.\n\nSCOPE +1 FILE: claimNextTask.test.ts. Its byte-for-byte attempt-JSON pin gained the derived snapshot as its last key, because DoD 1 makes every claim record one. The plan's risk list missed this pin.\n\nTheoretical:\n- A resume with no open attempt and malformed state keeps its seat (pre-existing resume semantics).\n- structuredClone costs about 1us per snapshotted record.\n\nNo approval, trust or activation. Not t",
+  "commits": [
+    {
+      "sha": "71c7dbe8be920cfb5de723481be36b3895f88d21",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-24T14:38:03Z",
+      "paths": [
+        ".moe/tasks/task-80dfde45cbd04e72a460c1ee867ae62c.json",
+        ".moe/tasks/task-bfe4d1119f0d4a43b9fb9b087a332181.json",
+        "packages/moe-daemon/src/state/attemptStore.test.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-24T14:57:11.210Z",
+      "treeId": "e8c135762bd15cdcbb5087f146ee526f58770065",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "e2c1e89be0ed4ac228c790aadae20fee9534419b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T15:07:21Z",
+      "paths": [
+        ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+        ".moe/tasks/task-1bfea2defe6e4c698afd4ac0e24afdfb.json",
+        ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+        ".moe/tasks/task-80dfde45cbd04e72a460c1ee867ae62c.json",
+        ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T15:15:47.171Z",
+      "treeId": "05cd75e39a47b959b75c344d63a4e1112694f8d9",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [
+    "2026-10-24-ai-code-quality-and-context.md",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/tools/getContext.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts",
+    "packages/moe-daemon/src/util/claimEligibility.ts"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T15:07:21Z",
+    "at": "2026-10-24T15:15:47.171Z"
+  },
+  "completedAt": "2026-10-24T15:14:24.661Z",
+  "reviewCompletedAt": "2026-10-24T15:14:24.661Z",
+  "reviewSummary": "Reviewed the recorded completion 71c7dbe (on moe/work-2026-10-24), not the dirty tree.\nGate: fresh git archive of HEAD 3324b3b (owned files cmp-equal to 71c7dbe), lockfile JSON-equal, Linux node_modules, MOE_* unset, Linux-only PATH.\n- `npm test -- --maxWorkers=4`: exit 0, 150 files, 3223 passed / 9 skipped.\n- tsc --noEmit: exit 0.\n- Strict standalone tsc of both new test files: exit 0.\nMy 5 mutation probes were all caught:\n- derive-before-resume: C2 red;\n- no-detach: 14 red;\n- key-always: 12 red;\n- no-floor: 4 red;\n- store-raw-input: 6 red.\nDoD:\n1. C1 and S6: the derived snapshot is persisted and reloads unchanged after restart.\n2. C2 and C4: resume keeps the generation and snapshot, and a historical attempt gets no backfill. S4: repair never adopts. C3: a successor gets generation 2 with a fresh identity, and generation 1 bytes are unchanged.\n3. S1 and S5: every exported returner is detached via structuredClone.\n4. C5: forged args are ignored and the schema and response shape are unchanged. C6: a verified-local task floor survives a legacy rollback, and a null planRevision throws.\n5. S7: a write failure publishes nothing. C7: the seat is handed back. S3: a no-param record keeps the exact legacy key set.\n6. Re-ran green as above.\nLive .moe check: settings are absent (legacy), no task holds a snapshot, and no planRevision is null, so real claims derive legacy and do not fail.\nRails: no verified-local, approval or trust; acceptance.test.ts, executionProfile.ts, policy.ts and taskStore.ts untouched; no forbidden patterns.\nSize: production +89/-17, tests +498 (plan-mandated tables), reviewed in full per the M01c precedent. The +1 file (claimNextTask.test.ts) is a necessary strengthened byte pin.\nNon-blocking:\n- The schema.ts comment-only hunk (step 4) did NOT land in 71c7dbe and is still dirty in the shared tree. I preserved it and escalated in #governors. At HEAD its doc comments are stale. There is no behavior impact.",
+  "requiredCheckAtDone": null,
+  "declaredFiles": [
+    "packages/moe-daemon/src/types/schema.ts"
+  ]
+}

@@ -41,7 +41,7 @@ describe('Task timestamps', () => {
     ]});
     await h.state.load();
 
-    await h.state.approveTask('task-1');
+    await h.state.approveTask('task-1', 0);
 
     const task = h.state.getTask('task-1');
     expect(task?.planApprovedAt).toBeDefined();

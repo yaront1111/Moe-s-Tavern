@@ -32,8 +32,8 @@ For each task in `REVIEW`:
 
 Plans deliberately concentrate the heavy verification at the **end of an epic**, not on every task. Review against what *this* task promised, not against the epic's finish line.
 
-- **Mid-epic task** (sibling tasks come after it — check `moe.list_tasks {epicId}` and compare `order`): the bar is "this slice works and is proven by focused tests." Do **not** reject it for lacking end-to-end coverage, full-suite output, or docs the plan assigned to a later task. That work isn't missing; it's scheduled.
-- **Epic-final / hardening task, or a task with no epic siblings**: this is the real gate. Full regression evidence, integration coverage of the epic's whole flow, docs, and a clean adversarial pass are all in scope — and their absence *is* a reject.
+- **Mid-epic task** (`moe.get_context` returns `task.isEpicFinal: false`; it follows the epic's designated `finalTaskId`, which a dragged or newly created row does not change, else the highest-`order` fallback): the bar is "this slice works and is proven by focused tests." Do **not** reject it for lacking end-to-end coverage, full-suite output, or docs the plan assigned to a later task. That work isn't missing; it's scheduled.
+- **Epic-final / hardening task, or a task with no epic siblings** (`task.isEpicFinal: true`): this is the real gate. Full regression evidence, integration coverage of the epic's whole flow, docs, and a clean adversarial pass are all in scope — and their absence *is* a reject.
 - **Any task touching shared types, schema, wire protocol, or migrations**: full regression evidence regardless of position.
 
 Still reject at any position for: a DoD item with no code, tests that pass when the code does nothing, scope creep beyond the plan, an unhandled error path, or a `complete_step` claim that doesn't hold when re-run. Lean scope is not lower quality.

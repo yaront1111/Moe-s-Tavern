@@ -130,7 +130,7 @@
       "completedAt": "2026-07-31T14:51:51.145Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -143,7 +143,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:29.521Z",
-  "updatedAt": "2026-07-31T15:50:55.529Z",
+  "updatedAt": "2026-10-24T15:19:02.199Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:20:13.289Z",
     "plannedStepCount": 8,
@@ -212,5 +212,6 @@
   ],
   "completedAt": "2026-07-31T15:50:55.529Z",
   "reviewCompletedAt": "2026-07-31T15:50:55.529Z",
-  "reviewSummary": "Re-ran verification myself: `npx vitest run src/tools/amendPlanStep.test.ts src/tools/completeStep.test.ts` -> 2 files / 27 passed. Also full `npm test` (53 files / 823 passed, green) + `npx tsc --noEmit` (exit 0), since the plan sanitizer changed. DoD1: amendPlanStep.ts appends to amendments + sets activeAmendmentId; role gate copies submitPlanCritique (getTeamForWorker(workerId||'')?.role) so worker-role / missing / unknown workerId all fail closed NOT_ALLOWED (3 tests). DoD2: COMPLETED step -> INVALID_STATE naming moe.request_replan (tested); DONE task and the 10-amendment cap also rejected. DoD3: complete_step returns effectiveDescription always, `amended` only when active (key ABSENT otherwise, asserted via `'amended' in result === false`); nextStep.description, both nextAction.reason strings and isTestStep input are amendment-resolved; dangling activeAmendmentId degrades to the original, no throw (tested in both files). DoD4: registered in getTools() (tools/index.ts:131, plus a registration test) and documented in docs/MCP_SERVER.md + docs/SCHEMA.md. Persistence landmine handled: sanitizeImplementationPlan carries amendments (new sanitizeStepAmendments: drops malformed entries, never throws, caps at MAX_AMENDMENTS_PER_STEP, slices 5000/2000) and activeAmendmentId, spread conditionally so untouched task JSON is byte-identical; the regression test re-reads via state.getTask, not the tool return. Audited other implementationPlan writers (startStep, completeStep, util/reopen.resetPlanStepsToPending on the qa_reject path) — all spread ...step, so amendments survive reopen. No runExclusive (mutex rail OK); chat is per-call try/catch and a rejecting postToGeneral still persists the amendment (tested). No forbidden patterns. Scope matches plan."
+  "reviewSummary": "Re-ran verification myself: `npx vitest run src/tools/amendPlanStep.test.ts src/tools/completeStep.test.ts` -> 2 files / 27 passed. Also full `npm test` (53 files / 823 passed, green) + `npx tsc --noEmit` (exit 0), since the plan sanitizer changed. DoD1: amendPlanStep.ts appends to amendments + sets activeAmendmentId; role gate copies submitPlanCritique (getTeamForWorker(workerId||'')?.role) so worker-role / missing / unknown workerId all fail closed NOT_ALLOWED (3 tests). DoD2: COMPLETED step -> INVALID_STATE naming moe.request_replan (tested); DONE task and the 10-amendment cap also rejected. DoD3: complete_step returns effectiveDescription always, `amended` only when active (key ABSENT otherwise, asserted via `'amended' in result === false`); nextStep.description, both nextAction.reason strings and isTestStep input are amendment-resolved; dangling activeAmendmentId degrades to the original, no throw (tested in both files). DoD4: registered in getTools() (tools/index.ts:131, plus a registration test) and documented in docs/MCP_SERVER.md + docs/SCHEMA.md. Persistence landmine handled: sanitizeImplementationPlan carries amendments (new sanitizeStepAmendments: drops malformed entries, never throws, caps at MAX_AMENDMENTS_PER_STEP, slices 5000/2000) and activeAmendmentId, spread conditionally so untouched task JSON is byte-identical; the regression test re-reads via state.getTask, not the tool return. Audited other implementationPlan writers (startStep, completeStep, util/reopen.resetPlanStepsToPending on the qa_reject path) — all spread ...step, so amendments survive reopen. No runExclusive (mutex rail OK); chat is per-call try/catch and a rejecting postToGeneral still persists the amendment (tested). No forbidden patterns. Scope matches plan.",
+  "planRevision": 0
 }

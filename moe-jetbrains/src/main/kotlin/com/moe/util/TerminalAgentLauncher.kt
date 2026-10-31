@@ -44,22 +44,85 @@ object TerminalAgentLauncher {
     private val sendCommandMethodCache = boundedCache<Class<*>, Method?>()
     private val executeCommandMethodCache = boundedCache<Class<*>, Method?>()
 
-    private enum class ScriptSource {
+    internal enum class ScriptSource {
         PROJECT,
         BUNDLED,
         GLOBAL_CONFIG
     }
 
-    private enum class ScriptKind {
+    internal enum class ScriptKind {
         POWERSHELL,
         BASH
     }
 
-    private data class ResolvedScript(
+    internal data class ResolvedScript(
         val file: File,
         val source: ScriptSource,
         val kind: ScriptKind
     )
+
+    internal sealed interface ProtectedAgentRuntime {
+        data class Selected(val script: ResolvedScript, val env: Map<String, String>) : ProtectedAgentRuntime
+        data class Refused(val reason: String) : ProtectedAgentRuntime {
+            val message: String
+                get() = "Protected execution profile: $reason. " +
+                    "Agents only use the wrapper, daemon and proxy installed with the Moe plugin."
+        }
+    }
+
+    internal sealed interface AgentCommandChoice {
+        data class Run(val command: String) : AgentCommandChoice
+        data class Refused(val message: String) : AgentCommandChoice
+    }
+
+    /**
+     * Contract with scripts/moe-agent.{sh,ps1} (CQ-R13c2): exactly "1", set only by [selectProtectedAgentRuntime]
+     * under the PROTECTED profile, so the wrappers refuse to fall back from MOE_DAEMON_PATH/MOE_PROXY_PATH.
+     * A MOE_RUNTIME_PROTECTED already in the IDE's own environment would make a legacy wrapper refuse its
+     * fallback too; that fails closed, so it is not stripped.
+     */
+    internal const val PROTECTED_RUNTIME_MARKER = "MOE_RUNTIME_PROTECTED"
+
+    /**
+     * The strong profile's agent runtime: the wrapper, daemon and proxy installed with the plugin,
+     * each a real file inside [root] and outside the project. The wrapper keeps the legacy
+     * preference order; the project's scripts/ and the global install path are never consulted.
+     */
+    internal fun selectProtectedAgentRuntime(
+        basePath: String,
+        preferBash: Boolean,
+        root: File?,
+        windows: Boolean = SystemInfo.isWindows
+    ): ProtectedAgentRuntime {
+        val wrappers = listOf("scripts/moe-agent.ps1" to ScriptKind.POWERSHELL, "scripts/moe-agent.sh" to ScriptKind.BASH)
+        val reasons = mutableListOf<String>()
+        val script = (if (windows && !preferBash) wrappers else wrappers.reversed()).firstNotNullOfOrNull { (relative, kind) ->
+            when (val selection = RuntimeSelectionPolicy.installedArtifact(root, relative, basePath)) {
+                is RuntimeSelection.Accepted -> ResolvedScript(selection.file, ScriptSource.BUNDLED, kind)
+                is RuntimeSelection.Rejected -> { reasons += selection.reason; null }
+            }
+        } ?: return ProtectedAgentRuntime.Refused(reasons.first())
+        val env = linkedMapOf<String, String>()
+        for ((name, relative) in listOf("MOE_DAEMON_PATH" to "daemon/index.js", "MOE_PROXY_PATH" to "proxy/index.js")) {
+            when (val selection = RuntimeSelectionPolicy.installedArtifact(root, relative, basePath)) {
+                is RuntimeSelection.Accepted -> env[name] = selection.file.path
+                is RuntimeSelection.Rejected -> return ProtectedAgentRuntime.Refused(selection.reason)
+            }
+        }
+        env[PROTECTED_RUNTIME_MARKER] = "1"
+        return ProtectedAgentRuntime.Selected(script, env)
+    }
+
+    /** Null under the legacy profile, so the legacy resolution runs; otherwise the installed selection or its refusal. */
+    internal fun protectedAgentRuntime(
+        basePath: String,
+        preferBash: Boolean,
+        root: () -> File? = { RuntimeSelectionPolicy.installedRoot() }
+    ): ProtectedAgentRuntime? = if (RuntimeSelectionPolicy.profile(basePath) == RuntimeProfile.PROTECTED) {
+        selectProtectedAgentRuntime(basePath, preferBash, root())
+    } else {
+        null
+    }
 
     private data class AgentContext(
         val basePath: String,
@@ -95,6 +158,26 @@ object TerminalAgentLauncher {
                 return entries.firstOrNull { it != CUSTOM && it.command == command } ?: CUSTOM
             }
         }
+    }
+
+    // The protected profile runs these agent CLIs by exact name only; the wrappers accept the same set (task-aa85ff13).
+    private val PROTECTED_AGENT_COMMANDS = AgentProvider.entries.filter { it != AgentProvider.CUSTOM }.map { it.command }
+    private const val MAX_SHOWN_AGENT_COMMAND = 200
+
+    /**
+     * Under PROTECTED, repository content (.moe/project.json settings.agentCommand) and custom commands never choose
+     * the binary a seat runs: only an exact known CLI name passes. LEGACY keeps explicit, then the setting, then claude.
+     */
+    internal fun agentCommandFor(profile: RuntimeProfile, explicit: String?, projectSetting: String?): AgentCommandChoice {
+        if (profile == RuntimeProfile.LEGACY) return AgentCommandChoice.Run(explicit ?: projectSetting ?: "claude")
+        val candidate = (explicit ?: projectSetting)?.trim() ?: "claude"
+        if (candidate in PROTECTED_AGENT_COMMANDS) return AgentCommandChoice.Run(candidate)
+        val shown = candidate.take(MAX_SHOWN_AGENT_COMMAND).map { if (Character.isISOControl(it)) '?' else it }.joinToString("")
+        val source = if (explicit != null) "custom command" else "from .moe/project.json settings.agentCommand"
+        return AgentCommandChoice.Refused(
+            "Protected execution profile: the agent command '$shown' ($source) is not one of " +
+                "${PROTECTED_AGENT_COMMANDS.joinToString(", ")}, so no agent was started. Pick an agent from the Agents menu."
+        )
     }
 
     private const val LAST_PROVIDER_KEY = "moe.lastUsedProvider"
@@ -134,7 +217,7 @@ object TerminalAgentLauncher {
      * WSL agent mode (Windows IDE only): launch agents via moe-agent.sh with
      * /mnt/<drive>/ paths so they run as genuine Linux processes inside the
      * user's WSL terminal profile. Requires the daemon to listen beyond
-     * loopback (the daemon spawner passes --host 0.0.0.0 when this is on);
+     * loopback (the daemon spawner passes --host wsl when this is on: loopback plus the WSL adapter, not every interface);
      * moe-agent.sh discovers the reachable host and exports MOE_DAEMON_HOST.
      */
     fun isWslAgentsEnabled(project: Project): Boolean =
@@ -170,7 +253,15 @@ object TerminalAgentLauncher {
         }
 
         val wslAgents = isWslAgentsEnabled(project)
-        val script = resolveAgentScript(basePath, preferBash = wslAgents) ?: run {
+        val selected = when (val runtime = protectedAgentRuntime(basePath, wslAgents)) {
+            is ProtectedAgentRuntime.Refused -> {
+                Messages.showErrorDialog(project, runtime.message, "Moe")
+                return null
+            }
+            is ProtectedAgentRuntime.Selected -> runtime
+            null -> null
+        }
+        val script = selected?.script ?: resolveAgentScript(basePath, preferBash = wslAgents) ?: run {
             Messages.showErrorDialog(
                 project,
                 "Agent script not found. Install Moe and start the daemon once to register the install path.",
@@ -188,7 +279,7 @@ object TerminalAgentLauncher {
             return null
         }
 
-        val envOverrides = resolveAgentEnvOverrides(script.source)
+        val envOverrides = selected?.env ?: resolveAgentEnvOverrides(script.source)
         if (script.source != ScriptSource.PROJECT && envOverrides.isEmpty()) {
             Messages.showErrorDialog(
                 project,
@@ -198,8 +289,16 @@ object TerminalAgentLauncher {
             return null
         }
 
-        val resolvedCommand = agentCommand ?: MoeProjectService.getInstance(project)
-            .getState()?.project?.settings?.agentCommand ?: "claude"
+        // `selected` is non-null exactly under PROTECTED, so project.json is not read a second time.
+        val profile = if (selected != null) RuntimeProfile.PROTECTED else RuntimeProfile.LEGACY
+        val projectSetting = MoeProjectService.getInstance(project).getState()?.project?.settings?.agentCommand
+        val resolvedCommand = when (val choice = agentCommandFor(profile, agentCommand, projectSetting)) {
+            is AgentCommandChoice.Run -> choice.command
+            is AgentCommandChoice.Refused -> {
+                Messages.showErrorDialog(project, choice.message, "Moe")
+                return null
+            }
+        }
 
         return AgentContext(basePath, script, manager, envOverrides, resolvedCommand, wslAgents)
     }
@@ -707,7 +806,7 @@ object TerminalAgentLauncher {
         return null
     }
 
-    private fun resolveAgentEnvOverrides(source: ScriptSource): Map<String, String> {
+    internal fun resolveAgentEnvOverrides(source: ScriptSource): Map<String, String> {
         if (source == ScriptSource.BUNDLED) {
             val daemon = resolveBundledPath("daemon/index.js") ?: return emptyMap()
             val proxy = resolveBundledPath("proxy/index.js") ?: return emptyMap()
@@ -729,7 +828,7 @@ object TerminalAgentLauncher {
         return emptyMap()
     }
 
-    private fun resolveBundledPath(relative: String): File? {
+    internal fun resolveBundledPath(relative: String): File? {
         val root = resolveBundledRoot() ?: return null
         val candidate = File(root, relative)
         return if (candidate.exists()) candidate else null

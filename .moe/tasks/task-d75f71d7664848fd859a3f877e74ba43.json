@@ -1,0 +1,326 @@
+{
+  "id": "task-d75f71d7664848fd859a3f877e74ba43",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "[CQ-C06] Acknowledged context deltas",
+  "description": "Objective: Serve deltas only for the exact acknowledged base and receiver process incarnation.\n\nDeliverable: Acknowledged context deltas. This is task C06 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test\n\nDependency aliases (wired by Moe task ids after import): C05.",
+  "definitionOfDone": [
+    "Explicit removals are represented.",
+    "Wrong/missing base, compaction, VM replacement and restart receive full snapshots.",
+    "Attempt reattachment does not imply session base acknowledgement.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). C06 is the get_context wiring of the LANDED C06a module, packages/moe-daemon/src/context/contextDelta.ts (task-7d0f7f08): diffPackets, applyDelta, DeltaBaseStore, deltaBaseKey and decideDelta. Adapt to its landed names.\n\nCreate tools/getContextDelta.test.ts.\n- Copy getContextReceipt.test.ts's fixture: ToolTestHarness, a worker that owns the task's RUNNING attempt, and get_context called with sessionId S.\n- Assert exact objects and reasons, never truthiness.\n\nCases:\n- D1, DoD1. Read 1 passes contextEpoch 0 and gets the full packet, with servedContext.contextDelta {served:'full', reason:'base-unavailable'}. Then change the task so that one served key disappears; pick a real present-then-absent key in the packet. Read 2 passes basePacketId = read 1's packetId and epoch 0.\n  - It returns `delta` (C06a ContextDelta) in place of the packet body, with servedContext.contextDelta {served:'delta'}.\n  - The vanished key's pointer is in `removed`.\n  - applyDelta(parse(read 1 packet), delta) deep-equals a full read taken right after.\n  - servedContext.packetId is that full result's packetId, and the receipt records it.\n- D2: a basePacketId of an older packet gives full, base-mismatch.\n- D3: a read with an epoch but no basePacketId gives full, no-base.\n- D4, restart: a new harness/StateManager over the same .moe, where the persisted receipt still names the base, gives full, base-unavailable.\n- D5, compaction: epoch 1 against a base stored under 0 gives full, epoch-changed. No epoch gives full, epoch-missing.\n- D6, VM replacement or re-claim: a new attempt generation gives attempt-mismatch. A different sessionId gives session-mismatch.\n- D7, DoD3: move the attempt to reconciling and back through moe.reattach_attempt in the SAME process. A basePacketId that the receipt and the stored base both name still gives full, phase-changed.\n- D8, legacy: a read with neither basePacketId nor contextEpoch is byte-identical to today's packet, with no contextDelta key.\n- D9: an unrecorded read (no sessionId, or a non-owner) that presents a base gives full, with the reason = its receiptStatus. Nothing is stored.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ],
+      "note": "Reopen round 1. The D1-D9 tests already landed in 19bc8c2 (blob a500cf4, equal to the worktree before this session). I added the one test QA marked optional: the 'diff-failed' fallback. It uses a pass-through vi.mock of context/contextDelta.js: diffPackets becomes vi.fn(actual.diffPackets), so every other case still diffs for real (D1 and D2's exact delta assertions prove that), and the new test overrides a single call with mockImplementationOnce. It checks full('diff-failed'), no delta, a full body whose sha is the packetId, and that the failed read's packet becomes the next base (the next read gets an empty delta against it). Focused run in a Linux snapshot of HEAD 19bc8c2 plus the 2 task files (cmp ok, native npm ci, env -i, node v24.21.0): getContextDelta.test.ts 20/20 passed. Edited with the Claude Edit tool.",
+      "startedAt": "2026-10-29T21:47:02.855Z",
+      "completedAt": "2026-10-29T21:50:45.155Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Wire deltas into packages/moe-daemon/src/tools/getContext.ts.\n\nError handling: caller-shape errors throw INVALID_INPUT, and everything else falls back to a full packet; a delta path never throws.\n\nInput schema:\n- `basePacketId`: string, pattern ^sha256:[0-9a-f]{64}$.\n- `contextEpoch`: integer, minimum 0. The receiving session's compaction counter; a seat must advance it on every compaction.\nValidate both before any read.\n\nIn servedContextIdentity, only on the 'recorded' path, after recordContextReceipt for the full result packet (text and packetId exactly as today):\n- current = {attemptId, generation, sessionId, lastPhaseAt: attempt.lastPhaseAt, runner: processStartedAt and host ? `${processStartedAt}@${host}` : null}.\n- stored = the store's get(deltaBaseKey(...)). The store comes from a module-level WeakMap<StateManager, DeltaBaseStore>, so a new StateManager (a restart) starts empty and tests stay isolated.\n- decision = decideDelta({basePacketId, contextEpoch}, current, stored).\n- When contextEpoch was presented, set the new base {packetId, text, ...current, contextEpoch}. Without an epoch, store nothing, so a later delta is impossible (fail closed).\n- On a delta: return {delta: diffPackets(basePacketId, stored.text, packetId, text), servedContext: {...identity, receiptStatus:'recorded', receiptId, packetId, contextDelta:{served:'delta'}}}.\n- Otherwise: return the full packet, with contextDelta {served:'full', reason} ONLY when the request presented basePacketId or contextEpoch. Unrecorded reads that present them get reason = receiptStatus.\n\nDo not change the receipt shape, F06's packetId rule, view:'status', or reads that present neither field. Add one sentence to the tool description. docs/MCP_SERVER.md is left to the epic final C11's docs sweep; note that in the completion summary.\n\nMake D1-D9 green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ],
+      "note": "Delivery fix for QA round 1; no code change. getContext.ts already held only C06's wiring: sha256 68f358a47f36edbc…, blob 0d36033, LF, and no planReuse lines (grep exit 1). It was held as MOE_ATTR_CONTESTED_UNTOUCHED against C07 task-93dee42f, whose step-2 modifiedFiles still names the path. To make it TOOL-tier, I did a Claude Edit round trip: one comment word changed, then reverted. The bytes are identical afterwards (same sha256 and hash-object, LF kept, cmp equal to the snapshot copy). The wrapper's harvest file for this session (/tmp/tmp.VBxQDLF2I3/tool-writes-317710.txt, parent wrapper MOE_WORKER_ID=worker-b5749787) now lists packages/moe-daemon/src/tools/getContext.ts, so the completion landing should carry it. I used the built-in Edit tool rather than a Serena editor on purpose: it is the proven witnessed path for contested files (mem gotcha-contested-path-needs-edit-tool-to-land), and it is one of the fixes QA named. Other dirty paths in the shared tree belong to peers; I left them alone.",
+      "startedAt": "2026-10-29T21:50:51.815Z",
+      "completedAt": "2026-10-29T21:51:32.340Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify once. get_context is a shared wire contract, so run the FULL gate fresh, in an isolated Linux snapshot of HEAD:\n- whole-repo git archive, overlaying only this task's files plus the landed C06a module if it is not yet in HEAD;\n- native deps, MOE_* unset, Linux-only PATH (mem:gotcha-daemon-linux-snapshot-gate).\nThe gate is `cd packages/moe-daemon && npm test` plus `npx tsc --noEmit`, and both must exit 0. cmp the overlaid files first. Supply the npm test command, exit code and output tail to complete_task.\n\nMutants, on scratch copies, each restored and cmp'd afterwards:\n1. store a base without an epoch: D5;\n2. skip the lastPhaseAt check, by passing a stale current: D7;\n3. a process-global store instead of the WeakMap: D4;\n4. emit contextDelta on legacy reads: D8.\nKeep the diff at or under 400 net lines.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ],
+      "note": "Snapshot: /tmp/moe-c06r-gate.L74jOA. It is a whole-repo git archive of HEAD 19bc8c2 plus exactly the 2 task files (cmp ok before the run), with native npm ci from HEAD's package.json and lock (the shared index has a staged peer change to those; HEAD's copies were used). Run under env -i, node v24.21.0, MOE_* unset. That tree is exactly HEAD plus what this completion lands.\n\nResults:\n- `cd packages/moe-daemon && npm test`: exit 0. Test Files 186 passed (186); Tests 5193 passed, 16 skipped (5209); 29.70s. getContextDelta 20/20, getContext 47, getContextReceipt 48. QA's overlay run had 5192; the +1 is the new diff-failed test.\n- `npx tsc --noEmit`: exit 0.\n- Scratch-tsconfig typecheck of getContextDelta.test.ts: exit 0.\n\nMutants, on the snapshot copy of getContext.ts, each restored and cmp'd equal to the worktree file. All killed:\n- m1, an epoch-less read stores a base with epoch 0: D5.\n- m2, current.lastPhaseAt taken from the stored base: D7.\n- m3, a process-global store: D3, D4 and both D9 cases.\n- m4, contextDelta on legacy reads: D8.\n- m5, the catch rethrows: the new diff-failed test (RangeError surfaced).\n- m6, the old base restored on diff failure: the new diff-failed test.\n(m5's first try did not apply cleanly because of a quote typo in my substitution; it was re-run cleanly.)\n\nSize, task total vs 19bc8c2~: +328/-8, net 320, under the 400 cap. The forbidden-token grep is clean (exit 1).",
+      "startedAt": "2026-10-29T21:51:37.197Z",
+      "completedAt": "2026-10-29T21:55:07.630Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "One adversarial self-review of this task's diff, the last step (load adversarial-self-review). Check:\n- Can a delta be served when the session might not hold the base? Consider compaction without an epoch bump, a restart, a reattach, a re-claim, a VM replacement and a different session.\n- Could a delta's reconstruction differ from the full packet, for example through key order or an undefined value?\n- Do two concurrent reads by one session race the store? The last write wins, and a mismatch falls back to a full packet.\n- Does the memory bound hold?\n- Do legacy reads stay byte-identical?\n- Does any forbidden-pattern token appear, or any .moe edit or Git write happen?\nWrite the handoff memory, noting that seat-side epoch reporting (the compaction keeper mod plus the proxy) is activation, not part of C06.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ],
+      "note": "Adversarial self-review of the C06 diff (getContext.ts plus the test).\n\nFixed:\n- The contextEpoch schema description said any read without an epoch clears the stored base. A read presenting neither field leaves the base alone (the legacy path, D8). It now reads: \"A read without it never gets a delta; one presenting basePacketId also clears the stored base.\" That is the only byte change to getContext.ts since QA's sha 68f358a4.\n- D8 now also proves that a legacy read keeps the base. Mutant m7, where a legacy read clears the base, is killed by D8.\n\nChecked, theoretical, no change:\n- Delta without the base held:\n  - restart: a new StateManager has an empty store (D4);\n  - re-claim or VM replacement: a new attempt or generation (D6), or a different runner (D6);\n  - another session (D6);\n  - compaction: needs an epoch bump (D5); with no epoch, there is never a delta and the base is cleared;\n  - reattach: a reconcile moves lastPhaseAt (D7). A same-millisecond reconcile plus reattach is theoretical only: reconcileRunningAttempts runs only at startup, index.ts:539, on a fresh store. A running→running reattach is a no-op write, and only happens at session boundaries, where a new MOE_SESSION_ID gives session-mismatch.\n- Reconstruction is pointer-based and deep-equal to the full packet (D1). It is not byte-equal (key order); packetId names the daemon's serialization, and C11's docs should say so. JSON text has no undefined values.\n- Concurrency: tool dispatch holds the global mutex and deltaAgainstBase is synchronous, so the last write wins; a lost response leads to base-mismatch and then a full packet.\n- Memory: at most 256 LRU entries, one per task; nothing stores one until activation.\n- Legacy reads: response bytes unchanged (D8, plus getContext 47 and getContextReceipt 48 green).\n- deltaAgainstBase's only throwing call (diffPackets) is caught; DeltaBaseStore and decideDelta do not throw.\n- Forbidden-token grep: 0 hits. No .moe edits and no Git writes by me.\n\nFinal evidence, on the final bytes in the Linux snapshot of HEAD 19bc8c2 plus the 2 files (cmp ok):\n- npm test: exit 0, 186 files, 5193 passed, 16 skipped.\n- tsc --noEmit: exit 0.\n- Test-file tsc: exit 0.\n- Mutants m1-m7 re-run, all killed.\nSize: net 322. Handoff memory written.",
+      "startedAt": "2026-10-29T21:55:11.157Z",
+      "completedAt": "2026-10-29T22:00:59.550Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Delivery gap, not a code defect. Completion commit 19bc8c2 carries only the test file packages/moe-daemon/src/tools/getContextDelta.test.ts and 2 board records. The implementation, packages/moe-daemon/src/tools/getContext.ts (+98/-8), never landed. It is still uncommitted in the shared tree. The wrapper held it as MOE_ATTR_CONTESTED_UNTOUCHED: C07 (task-93dee42f) step-2 modifiedFiles still names the path, and no wrapper-observed editing tool wrote it in this session (touchedFiles lists only the test). See msg-6707f2d6 in #governors.\n\nThe delivered tree fails its own gate. QA re-ran `cd packages/moe-daemon && npm test` on a fresh Linux git-archive snapshot of 19bc8c2 (native deps with an equal lock, env -i, node v24.21.0). It exits 1: 18 failed | 5174 passed | 16 skipped, with every getContextDelta case failing except D8. The worker's evidence came from an overlay tree that was never delivered. The shared branch is red for peers until this lands.\n\nOn merit the code is good, and no code change is needed.\n- With the uncommitted getContext.ts overlaid (cmp ok): npm test exits 0 (5192 passed), tsc --noEmit exits 0, and the test-file typecheck exits 0.\n- QA mutants are killed: D5 catches a kept epoch-less base, and D6 catches a null runner.\n- 299 net lines. The forbidden-token grep is clean.\n\nFix, as the next assignee session:\n1. Confirm getContext.ts holds only C06's bytes (sha256 68f358a4…, no C07 planReuse lines).\n2. Write it with a wrapper-observed editing tool: the Claude Write tool with identical bytes (cmp after), an Edit, or a Serena editor. A shell write or declare_files does not release the hold, and do not change the attribution policy.\n3. Re-run the full gate on the tree that will land, then complete_task.\nQA will check that the new completion commit contains getContext.ts and that its npm test exits 0.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 241.5,
+  "comments": [
+    {
+      "id": "comment-32fc329e617b43689bd565d3cf781abf",
+      "author": "architect-4c57a52b",
+      "content": "Planning verdict (architect-4c57a52b, 2026-10-26): not plannable yet. I'm parking it on its real prerequisites with report_blocked, not writing a speculative plan.\n\nWhy:\n1. The declared dependency C05 (negative search provenance) is BLOCKED and unplanned. It extends C04's positive cache, which is blocked on C03 (blocked on R10) and C02b (blocked on R09). The rollout's delta contract (docs/plans/2026-10-24-ai-code-quality-and-context.md, \"Session deltas and context receipts\") puts \"updated source references\" and \"new evidence\" in every delta. Their change identity is the provenance and generation contract that C04 and C05 define.\n2. DoD2 needs a full snapshot on \"VM replacement\" and a delta bound to the \"receiver process incarnation\". The isolated session's fresh-session identity is an R10 deliverable (Isolated agent lifecycle), and R10 is BACKLOG behind R09.\n\nWhen it returns to PLANNING, plan against these landed pieces:\n- C01's compact packet;\n- F06's served-context identity (get_context sessionId, servedContext, receipts and packetId);\n- F09-F12a's proxy-stamped session and attempt identity;\n- R10's incarnation identity;\n- C04 and C05's provenance fields.\n\nOpen design questions for that plan:\n- How the daemon learns of a compaction. The moe-compaction-keeper mod's session.compact hook is the only seat-side signal today.\n- That reattach_attempt keeps the generation and must not count as a base acknowledgement (DoD3).",
+      "timestamp": "2026-10-26T09:55:42.445Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:35.608Z",
+  "updatedAt": "2026-10-29T22:12:41.273Z",
+  "dependsOn": [
+    "task-9ef257f58b7f4c4191f206f67bf3d865",
+    "task-7d0f7f082b6349cab75c62af3c8b1da4"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-26T09:52:21.677Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 8,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-29T22:11:49.654Z",
+    "wallClockMs": 303567977
+  },
+  "contextFetchedBy": [
+    "worker-b5749787",
+    "qa-952969be"
+  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Not plannable yet, because its contract inputs have not landed. This is not REPL silence.\n(1) The declared dependency CQ-C05 (negative search provenance) is BLOCKED and has no plan, behind C04, C03 and C02b and the R-chain. Under the rollout contract (docs/plans/2026-10-24-ai-code-quality-and-context.md, Session deltas and context receipts), each delta carries updated source references and new evidence, and their change identity comes from the C04/C05 provenance contract.\n(2) DoD2 binds deltas to the receiver process incarnation and requires full snapshots on VM replacement. The isolated fresh-session identity is a CQ-R10 deliverable, and R10 is still in BACKLOG.\nThe row auto-returns to PLANNING when both are DONE. Then plan against the landed C01 packet, F06 served-context receipts and packetId, F09-F12a proxy-stamped session and attempt identity, R10 incarnation identity and C04/C05 provenance fields. Open design points: the compaction signal (the moe-compaction-keeper session.compact hook is the only seat-side hook), and that attempt reattachment is never a base acknowledgement. Details are in the task comment and in this task's Serena handoff memory.",
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [
+    {
+      "item": "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task.",
+      "rejectedAt": "2026-10-29T21:45:00.824Z",
+      "rejectedBy": "qa-952969be"
+    },
+    {
+      "item": "Explicit removals are represented.",
+      "rejectedAt": "2026-10-29T21:45:00.824Z",
+      "rejectedBy": "qa-952969be"
+    },
+    {
+      "item": "Wrong/missing base, compaction, VM replacement and restart receive full snapshots.",
+      "rejectedAt": "2026-10-29T21:45:00.824Z",
+      "rejectedBy": "qa-952969be"
+    },
+    {
+      "item": "Attempt reattachment does not imply session base acknowledgement.",
+      "rejectedAt": "2026-10-29T21:45:00.824Z",
+      "rejectedBy": "qa-952969be"
+    }
+  ],
+  "planSubmittedAt": "2026-10-29T16:49:40.563Z",
+  "planningNotes": {
+    "approachesConsidered": "1. One task holding the pure module plus the wiring. About 400 lines over 4 files, right at the cap on a shared wire contract. Split: the pure module became C06a (task-7d0f7f08, with the exact interface in its description), and C06 is the wiring.\n2. Detecting compaction in the daemon. Impossible: compaction happens inside one CLI process, with the same MOE_SESSION_ID. So the contract requires an explicit contextEpoch that the seat advances on compaction, and the absence of an epoch never gives a delta (fail closed). Seat-side reporting (the moe-compaction-keeper session.compact hook plus proxy stamping) is activation and a client consumer, so it is out of scope.\n3. Persisting bases. Rejected: in memory means a restart naturally gives a full snapshot (DoD2), and there is no new store.\n4. Treating reattach as continuity. Rejected by DoD3. lastPhaseAt changes on every reconcile and reattach, so a base served before one never matches after it, without editing reattach_attempt.\n5. C05 is kept in dependsOn per the directive, but NOT consumed: deltas are generic JSON diffs, so source-reference and evidence changes appear as changed fields.",
+    "codebaseInsights": "Landed:\n- getContext.ts servedContextIdentity records a receipt only on the 'recorded' path (sessionId, a running attempt, owner = caller = assignee). packetId = sha256 of JSON.stringify(packet without servedContext).\n- The attemptStore receipt is attempt.contextReceipt (latest wins). It records attemptId, generation, workerId, sessionId, packetId and planRevision.\n- ExecutionAttempt.lastPhaseAt changes on every phase transition. processStartedAt and host are the runner identity.\n- The seat sessionId is MOE_SESSION_ID `<workerId>@<preflight-iso>`, one per CLI launch, and stays the same across compactions.\n\nAssumed: the C06a names in task-7d0f7f08's description.",
+    "risks": "- The epoch is client-asserted. Until a seat stamps it mechanically, nothing sends contextEpoch, so no delta is ever served: safe by construction.\n- Key order: diff and apply only by pointer, never by comparing text.\n- Receipt semantics: the receipt names the reconstructed full packet, which is what the session now holds (base + delta).\n- Size is at most 400 net lines.\n- Shared contract: run the full suite.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/getContextReceipt.test.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/types/schema.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T16:49:40.671Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T21:21:50.255Z",
+  "reviewStartedAt": "2026-10-29T22:01:43.726Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh Linux snapshot /tmp/moe-c06r-gate.L74jOA: whole-repo git archive of HEAD 19bc8c2 plus exactly the 2 task files at their final bytes (cmp ok before and after; getContext.ts blob f5c1c5d3, test blob c945672b). Native npm ci from HEAD's lock, env -i, node v24.21.0, MOE_* unset.\n ✓ src/tools/getContextDelta.test.ts (20 tests) 1514ms\n ✓ src/tools/getContextReceipt.test.ts (48 tests) 2845ms\n ✓ src/tools/getContext.test.ts (47 tests) 2145ms\n ✓ src/util/qaCommitPolicy.test.ts (8 tests) 5ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n\n Test Files  186 passed (186)\n      Tests  5193 passed | 16 skipped (5209)\n   Start at  23:59:32\n   Duration  21.62s (tests 92%, import 4%, transform 4%)\nAlso: npx tsc --noEmit exit 0; scratch-tsconfig typecheck of getContextDelta.test.ts exit 0.",
+    "reportedAt": "2026-10-29T22:01:43.726Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/getContextDelta.test.ts",
+    "packages/moe-daemon/src/tools/getContext.ts",
+    ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json"
+  ],
+  "completionSummary": "CQ-C06 reopen round 1. This round fixes the delivery gap: the wrapper never committed getContext.ts.\n\nDelivery:\n- getContext.ts held only C06 bytes (sha256 68f358a4…, no planReuse lines). It had been held as MOE_ATTR_CONTESTED_UNTOUCHED against C07 task-93dee42f.\n- I made it TOOL-tier with Claude Edit calls. The harvest file of this session's wrapper (tool-writes-317710.txt, worker-b5749787) lists the path, so this completion should carry it.\n- QA check: `git show --stat <sha>` should list it, and `<sha>:packages/moe-daemon/src/tools/getContext.ts` should be blob f5c1c5d3.\n\nChanges from the self-review:\n- The contextEpoch schema description said any read without an epoch clears the stored base. A read presenting neither field leaves the base alone (D8's legacy path), and the description now says so. This one line is the only byte change since 68f358a4.\n- New test: the diff-failed fallback (QA's optional note). A pass-through vi.mock, diffPackets = vi.fn(actual), throws once. The test checks full('diff-failed'), and that the served packet becomes the next base.\n- D8 now also proves that a legacy read keeps the stored base.\n\nFiles and size: getContext.ts +98/-8, getContextDelta.test.ts +232 (20 tests). Net 322, under 400.\n\nGate, on the final bytes, in a Linux snapshot of HEAD 19bc8c2 plus the 2 files:\n- npm test: exit 0, 186 files, 5193 passed, 16 skipped.\n- tsc --noEmit: exit 0.\n- Test-file tsc: exit 0.\n\nMutants, all killed:\n- m1, an epoch-less read stores a base: D5.\n- m2, stale lastPhaseAt: D7.\n- m3, a global store: D3, D4, D9.\n- m4, contextDelta on legacy reads: D8.\n- m5, the catch rethrows: diff-failed.\n- m6, the old base kept on diff failure: diff-failed.\n- m7, a legacy read clears the base: D8.\n\nDoD:\n1. Removals are explicit pointers (D1, round trip).\n2. A full packet is served on a wrong base (D2), a missing base (D3), compaction (D5), a VM replacement, re-claim or another session (D6), and a restart (D4).\n3. A reattach is not acknowledgement (D7).\n4. Gate gre",
+  "commits": [
+    {
+      "sha": "19bc8c297a4fc6697385e980c8b4f320a6377a09",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-29T21:19:09Z",
+      "paths": [
+        ".moe/tasks/task-93dee42f71db4a6a8e47a8de052ad411.json",
+        ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json",
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-29T21:36:46.949Z",
+      "treeId": "62df013316a5572160b6f34b7ea7b1e39aa83ca4",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/tools/getContext.ts",
+          "taskId": "task-93dee42f71db4a6a8e47a8de052ad411"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "b41494e70ca6556c78dff3d86d4600dcbc7aa96e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b5749787@2026-10-29T21:45:06Z",
+      "paths": [
+        ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ],
+      "recordedBy": "worker-b5749787",
+      "recordedAt": "2026-10-29T22:02:10.666Z",
+      "treeId": "70196097a7fa7f0e0ba64fce03ed465e4c4ad558",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/tools/getContext.ts",
+          "taskId": "task-93dee42f71db4a6a8e47a8de052ad411"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "5b8fb79cf29a8639910b19a3f9942b20adce0ada",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T22:02:13Z",
+      "paths": [
+        ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T22:12:41.273Z",
+      "treeId": "bb4fdae3199a119f2b84348ed601e018189ddf25",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/getContextDelta.test.ts",
+    "packages/moe-daemon/src/tools/getContext.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T22:02:13Z",
+    "at": "2026-10-29T22:12:41.273Z"
+  },
+  "reviewCompletedAt": "2026-10-29T22:11:49.654Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task.",
+      "Explicit removals are represented.",
+      "Wrong/missing base, compaction, VM replacement and restart receive full snapshots.",
+      "Attempt reattachment does not imply session base acknowledgement."
+    ],
+    "issues": [
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/tools/getContextDelta.test.ts",
+        "description": "At completion commit 19bc8c2, `cd packages/moe-daemon && npm test` exits 1 (18 failed | 5174 passed). Every getContextDelta case fails except D8, because the tree has the tests but not the getContext.ts wiring. QA ran it on a fresh Linux git-archive snapshot. The worker's evidence came from an overlay tree that was never delivered. Pass: a new completion commit whose tree exits 0."
+      },
+      {
+        "type": "missing_feature",
+        "file": "packages/moe-daemon/src/tools/getContext.ts",
+        "description": "The +98/-8 implementation is in no commit. It was held as MOE_ATTR_CONTESTED_UNTOUCHED against C07 task-93dee42f (its step-2 modifiedFiles names the path), and no wrapper-observed editing tool wrote it this session. Pass: as the next assignee session, write the file with the Claude Write/Edit tool or a Serena editor (same C06 bytes, sha256 68f358a4…, cmp after), so the landing carries it. A shell write or declare_files does not release the hold."
+      },
+      {
+        "type": "other",
+        "file": "packages/moe-daemon/src/tools/getContext.ts",
+        "description": "Non-blocking: the code is correct on merit. With the overlay, the full gate exits 0 (5192 passed) and tsc exits 0. QA mutants are killed: no store.delete on an epoch-less read fails D5, and a runner always null fails D6. Optional: the 'diff-failed' fallback in deltaAgainstBase has no test."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Delivery gap, not a code defect. Completion commit 19bc8c2 carries only the test file packages/moe-daemon/src/tools/getContextDelta.test.ts and 2 board records. The implementation, packages/moe-daemon/src/tools/getContext.ts (+98/-8), never landed. It is still uncommitted in the shared tree. The wrapper held it as MOE_ATTR_CONTESTED_UNTOUCHED: C07 (task-93dee42f) step-2 modifiedFiles still names the path, and no wrapper-observed editing tool wrote it in this session (touchedFiles lists only the test). See msg-6707f2d6 in #governors.\n\nThe delivered tree fails its own gate. QA re-ran `cd packages/moe-daemon && npm test` on a fresh Linux git-archive snapshot of 19bc8c2 (native deps with an equal lock, env -i, node v24.21.0). It exits 1: 18 failed | 5174 passed | 16 skipped, with every getContextDelta case failing except D8. The worker's evidence came from an overlay tree that was never delivered. The shared branch is red for peers until this lands.\n\nOn merit the code is good, and no code change is needed.\n- With the uncommitted getContext.ts overlaid (cmp ok): npm test exits 0 (5192 passed), tsc --noEmit exits 0, and the test-file typecheck exits 0.\n- QA mutants are killed: D5 catches a kept epoch-less base, and D6 catches a null runner.\n- 299 net lines. The forbidden-token grep is clean.\n\nFix, as the next assignee session:\n1. Confirm getContext.ts holds only C06's bytes (sha256 68f358a4…, no C07 planReuse lines).\n2. Write it with a wrapper-observed editing tool: the Claude Write tool with identical bytes (cmp after), an Edit, or a Serena editor. A shell write or declare_files does not release the hold, and do not change the attribution policy.\n3. Re-run the full gate on the tree that will land, then complete_task.\nQA will check that the new completion commit contains getContext.ts and that its npm test exits 0.",
+      "rejectedAt": "2026-10-29T21:45:00.824Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task.",
+        "Explicit removals are represented.",
+        "Wrong/missing base, compaction, VM replacement and restart receive full snapshots.",
+        "Attempt reattachment does not imply session base acknowledgement."
+      ],
+      "issues": [
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/tools/getContextDelta.test.ts",
+          "description": "At completion commit 19bc8c2, `cd packages/moe-daemon && npm test` exits 1 (18 failed | 5174 passed). Every getContextDelta case fails except D8, because the tree has the tests but not the getContext.ts wiring. QA ran it on a fresh Linux git-archive snapshot. The worker's evidence came from an overlay tree that was never delivered. Pass: a new completion commit whose tree exits 0."
+        },
+        {
+          "type": "missing_feature",
+          "file": "packages/moe-daemon/src/tools/getContext.ts",
+          "description": "The +98/-8 implementation is in no commit. It was held as MOE_ATTR_CONTESTED_UNTOUCHED against C07 task-93dee42f (its step-2 modifiedFiles names the path), and no wrapper-observed editing tool wrote it this session. Pass: as the next assignee session, write the file with the Claude Write/Edit tool or a Serena editor (same C06 bytes, sha256 68f358a4…, cmp after), so the landing carries it. A shell write or declare_files does not release the hold."
+        },
+        {
+          "type": "other",
+          "file": "packages/moe-daemon/src/tools/getContext.ts",
+          "description": "Non-blocking: the code is correct on merit. With the overlay, the full gate exits 0 (5192 passed) and tsc exits 0. QA mutants are killed: no store.delete on an epoch-less read fails D5, and a runner always null fails D6. Optional: the 'diff-failed' fallback in deltaAgainstBase has no test."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-10-29T22:11:49.654Z",
+  "reviewSummary": "Approve CQ-C06 round 2. The delivery gap is fixed.\n\nCommit: completion b41494e, tip of moe/work-2026-10-24 (--contains ok). It carries getContext.ts +98/-8, getContextDelta.test.ts and the task's board record, with blobs f5c1c5d3 and c945672b as claimed. The worktree's owned files equal the commit. Task size vs 19bc8c2~ is +330/-8, net 322.\n\nGate on a pure git archive of b41494e, no overlay (native npm ci, env -i, node v24.21.0):\n- `cd packages/moe-daemon && npm test`: exit 0, 186 files, 5193 passed, 16 skipped. Equals task.verification.\n- tsc --noEmit: exit 0. Test-file tsc: exit 0.\n\nDoD:\n1. Removals: D1 removed ['/task/priorBlockedReason'], and applyDelta(base) toStrictEqual the next full read.\n2. Full packet for a wrong base (D2), a missing base (D3), compaction (D5), VM, re-claim, runner or session (D6) and a restart (D4).\n3. Reattach: D7, an in-process reconcile and reattach gives phase-changed while the receipt still names the base. A no-op reattach needs the same runner, and the wrapper mints a new MOE_SESSION_ID per preflight.\n4. Verification present, exit 0, reproduced.\n\nQA mutants: q1 set-before-get, q3 full body on delta, q4 no pattern, q5 swapped ids, q6 runner without host and q8 late validation are all killed. q7, a constant generation, is equivalent: generation is assigned only in openAttempt.\n\nNon-blocking, for C11:\n- q2 survives the full suite. An unrecorded read presenting neither field could gain contextDelta and no test pins it. The presented guard is correct.\n- The store is keyed by taskId, not deltaBaseKey. That is safe, since decideDelta checks every identity field, and it matches the D6 reasons.\n- The MCP_SERVER.md docs are deferred to C11, which lists them. The forbidden-token grep is clean.",
+  "requiredCheckAtDone": null
+}

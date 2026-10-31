@@ -1,0 +1,188 @@
+{
+  "id": "task-7a4aab5e0bfa48e0978eb76506edfd57",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-08] Wrappers: completion landing to the target, local path",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §2.2 (L4 without a remote, L5, L5b, L7, L8, L10, L11, L12), §2.3 (the no-gate retry bound), §2.7 and §2.9.\n\nObjective: a worktree-mode worker exiting at REVIEW lands the task's net change on the target (main) as one commit made by a merge-tree squash and a compare-and-swap. Non-overlapping hunks from different tasks in one file merge automatically, and a true conflict lands nothing.\n\nDeliverable, in scripts/moe-agent.sh and scripts/moe-agent.ps1 as twins (the worktree arm of run_landing / Invoke-MoeLanding):\n- The task-branch commit (reusing WT-07's L2).\n- Target resolution, and MOE_LAND_TARGET_CHECKED_OUT when the target is checked out in any worktree.\n- `git merge-tree --write-tree -z --name-only B T` (exit 1 is a conflict: land nothing; record failed with MOE_COMMIT_FAILED_CONFLICT for now, and WT-11 adds the route).\n- The .moe board guard MOE_WORKTREE_BOARD_PATH.\n- C = commit-tree M -p B, with the existing hooked-commit helper when commitHooks is set.\n- The receipt journal before publishing.\n- The local CAS `update-ref refs/heads/<target> C B`; a target that already contains C counts as success; at most 3 L4-L10 attempts, then MOE_COMMIT_FAILED_REF_CONTENTION.\n- The L11 sync commit T' = commit-tree tree(C) -p T -p C and `git -C W merge --ff-only T'` with hooks off (failure: MOE_WORKTREE_SYNC_FAILED, retried at the next pre-flight).\n- record_commit completion (ref refs/heads/<target>, paths = diff B..C), then finalize_attempt landed.\n- Idempotent re-landing (M equals B's tree: nothing).\n- peel_target_branch and ensure_safe_branch are NOT called in worktree mode.\n\nThe WT-08T files (task-c12f9463b68c44a18cc460a7e9460247) are held out: their `local` cases must pass with NO edit to scripts/tests/worktree-landing.{sh,ps1}. Depends on WT-07 (task-b319b263fada419d9d7de279682dc5f4).\n\nNOT in scope:\n- fetch and push to a remote (WT-09)\n- the gate and lease (WT-10)\n- finalize 'unlanded' and conflict resume (WT-11)\n- board snapshot (WT-12)\n- control follow (WT-13)\n- shared-mode landing, which stays unchanged\n- docs (WT-18)\n\nVerification: bash scripts/tests/worktree-landing.sh --only local && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh (and on a Windows seat: powershell -NoProfile -File scripts/tests/worktree-landing.ps1 --only local)",
+  "definitionOfDone": [
+    "bash scripts/tests/worktree-landing.sh --only local exits 0, and `git diff --quiet <WT-08T landed sha> -- scripts/tests/worktree-landing.sh scripts/tests/worktree-landing.ps1` shows the held-out files unchanged.",
+    "The ps1 twin's local cases pass on a Windows seat (powershell -NoProfile -File scripts/tests/worktree-landing.ps1 --only local).",
+    "In worktree mode neither peel_target_branch nor ensure_safe_branch (Ensure-MoeSafeBranch) runs; a grep of the worktree arm shows main is moved only by `update-ref refs/heads/<target> <new> <old>`.",
+    "node scripts/tests/postflight-safe.mjs bash passes with all existing shared-mode cases unchanged.",
+    "Both wrappers carry the same MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ codes (grep -oE diff is empty); bash scripts/tests/parity-check.sh exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Integrate the local completion driver after WT-07's ownership-guarded L0-L2. Goal: REVIEW completion publishes one linear squash on the local target, never whole-file attribution from control. Architecture: W's task branch stores T; merge-tree produces M from fresh target B; journal precedes the single CAS publication. Tech: Git plumbing, Bash/Python, PS5.1. Read WT-07's landed helpers and WT-08T's held-out `local` cases before editing; do not modify scripts/tests/worktree-landing.{sh,ps1}. The revised comments dated 13:01/13:12 and design §2.2/2.3/2.7/2.9 govern. Reuse WT-07's dirty-set/DENY/temp-index task-branch commit and owner guard, but on completion do not emit a checkpoint ledger row or checkpoint push for that internal commit. Dispatch before all shared baseline, peel_target_branch, ensure_safe_branch/Ensure-MoeSafeBranch and generic push paths; shared mode must remain unchanged. Resolve target from a nonempty literal consolidationBranch (no *, ? or [), else main; validate with Git check-ref-format and require an existing commit. Read git worktree list --porcelain and refuse any checkout of refs/heads/<target> with MOE_LAND_TARGET_CHECKED_OUT, including the control checkout. This slice supports only positively confirmed no-remote and unset qualityGate: configured/unknown remote or any configured quality gate fails closed, preserving T and reporting failed, never entering a local fallback or silently skipping the required gate. Remote publication and gated publication remain WT-09/WT-10; no fabricated pass evidence. Set LAND/result fields consistently so teardown cannot invoke shared landing.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Build the merge candidate and reject conflicts/board changes without touching W (error handling). For each of at most three rounds, read B freshly and keep T fixed after L2. Run `git merge-tree --write-tree -z --name-only B T` with raw output in a temporary file/buffer: parse its first NUL-delimited object ID and keep conflict names NUL-safe (never Bash command substitution for binary output or whitespace splitting in PS). Exit 1 is MOE_COMMIT_FAILED_CONFLICT; any other nonzero/malformed output is generic MOE_COMMIT_FAILED. Preserve T on a rescue ref via the existing rescue-from-commit primitive, record a failed completion, and do not move the target or auto-resolve. The new unlanded finalize/merge-resume route belongs to WT-11, not here; retain the existing failed/rescued finalization until then. On exit 0 validate M as a tree and run `git diff-tree --quiet B^{tree} M -- .moe`; exit 1 gives MOE_WORKTREE_BOARD_PATH and failed+rescue, exit >1 is Git failure, never permission to publish. Compute exact completion paths with NUL-safe B..M diff. If M == B^{tree}, do not create a commit: use the persisted journal and receipt_landed_as/Find-MoeJournaledLanding to recover an already-published C if present, otherwise record nothing/nothing-to-commit. No second commit, no reset, and no claim that an arbitrary target tip is this task's completion. Held-out cases prove non-overlapping hunks merge, true conflicts leave main unchanged, board mutations refuse, and idempotent re-landing.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Create C and make hook-enabled commits operate on the exact sparse candidate. Normal path: `C=$(git commit-tree M -p B -F message)` with existing completion title/trailers; C must have exactly one parent B and tree M. Reuse moe_commit_with_hooks/New-MoeHookedCommit with an explicit worktree-mode arm, leaving shared behavior untouched. Add its disposable detached checkout with --no-checkout at B; set per-worktree sparse patterns `/*` and `!/.moe/`; materialize M (not B) with a private index/read-tree update while keeping HEAD B. Mark .moe entries skip-worktree in the private commit index. Set GIT_WORK_TREE/cwd to that disposable root, never control or W; retain effective signing/identity checks and hook selection. Before/after hooks require no .moe path (link counts); reject hook errors, tree/parent mismatch and unstaged tracked-file edits, so a hook cannot change the validated bytes unnoticed. Cleanup only the invocation-owned scratch path; cleanup failure is a pre-publication refusal, never a reason to publish anyway. All failures keep T rescued and target untouched. In both postflight harnesses add tests first: hook observes the merged M with both peer and task hunks and absent .moe despite tracked board records; successful no-op hook yields C; a hook edits a tracked file (staged and unstaged variants) or changes parent -> failed plus rescue and unchanged target; existing shared-mode hook cases unchanged. Check source/control sentinels and scratch cleanup.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Journal ungated worktree publication and make its replay truthful. Reuse the existing common-gitdir moe/receipt/<taskId>.json location and atomic writer, adding a strict worktree-only write option that returns failure on write/rename/read-back errors while legacy shared calls retain best-effort behavior. Before CAS persist a discriminated worktree journal (e.g. workspaceMode:'worktree', publicationMode:'local') containing task/worker/attempt/generation/session identity, target refs/heads/<target>, B, C, W/task branch and the full owed completion ledger fields (exact diff paths, empty inferred/unattributed arrays, pushed:false). candidateId is absent for this ungated variant; do not mint a candidate/check or call record_delivery_receipt with an empty/fake candidate. Extend validation/replay only for this explicit variant; keep legacy candidate journals unchanged. Replay verifies target containment with existing receipt_landed_as/Find-MoeJournaledLanding, never trusts the file's assertion alone. Confirmed publication re-sends the exact ledger idempotently then finalizes the journal's matching finalizing attempt landed; retain the journal on either RPC failure, remove only after acknowledged completion or already-closed matching attempt. Malformed/unreadable journal or uncertain Git result is retained with warning. A journaled C proven absent may be superseded only by a fresh local round; a finalizing attempt must resume its owner-guarded worktree landing rather than becoming stranded or discarding T. Add compact twin postflight cases for strict journal-write failure/no target movement, ledger/finalize failure followed by replay without a second CAS/commit, exact ref/paths/pushed:false and legacy journal behavior. This is an internal wrapper journal extension, not a daemon schema/API change.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "5. Publish by bounded CAS, then sync the task branch and record the completion. After a durable journal, recheck target checkout refusal and attempt `git update-ref refs/heads/<target> C B` (a descriptive reflog message is allowed). This is the only worktree-mode main write. On failure, reread the target and use `git merge-base --is-ancestor C <tip>`: 0 means publication already succeeded; 1 ends the round and rebuilds against a fresh B; other exits retain the journal and fail safely. At most three L4-L9 rounds total; exhaustion reports MOE_COMMIT_FAILED_REF_CONTENTION, rescues T and never says landed. Never rollback/force a ref, run pull/rebase or invoke the shared push helper. On confirmed publication set the outcome/sha before best-effort sync so teardown cannot misreport it. Build `Tprime = commit-tree tree(C) -p T -p C`, then `git -C W -c core.hooksPath=<owned empty directory> merge --ff-only Tprime`; do not reset --hard or overwrite newly dirty bytes. Sync failure prints MOE_WORKTREE_SYNC_FAILED but does not undo or misclassify the published completion. At next worktree pre-flight, retry this synchronization when the last recorded completion is not an ancestor of the task branch; retry before recovery checkpointing, preserving W dirt if Git refuses. Record outcome committed, kind completion, sha C, ref refs/heads/<target>, paths=diff B..C, pushed:false, then finalize_attempt landed with C using the journal discipline from step 4. No-change without recoverable journal uses nothing-to-commit. Defer handled termination across CAS through recording/finalize; hard death is covered by journal replay. Use held-out local race/contains-C/crash/sync tests unchanged; add missing twin postflight error-path assertions for three-round exhaustion, Git operational errors, sync failure with landed outcome then pre-flight retry, and the no-remote/no-gate fail-closed guards. Do not weaken held-out cases.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "6. One end-of-task verification gate. Run exactly from root: `bash scripts/tests/worktree-landing.sh --only local && node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh`. Require all local held-out and shared-mode cases pass, safe-harness failureClass NONE, parity PASS, exit 0. On a native Windows seat also run `powershell -NoProfile -File scripts/tests/worktree-landing.ps1 --only local` and `node scripts/tests/postflight-safe.mjs powershell`; record same-revision evidence rather than treating an unavailable engine as success. Read the WT-08T completion SHA from its landed prerequisite evidence and execute `git diff --quiet <that SHA> -- scripts/tests/worktree-landing.sh scripts/tests/worktree-landing.ps1` with the actual SHA substituted; it must exit 0. Compare sorted grep -oE sets for MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]+ across the wrappers (the permanent parity-script expansion belongs to WT-19). Capture exact command, exitCode and outputTail for complete_task. No remote/gate/whole-system suite expansion; this task runs the full launcher regression plus the held-out local surface.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "7. Final adversarial self-review and QA handoff. Load adversarial-self-review once and read this diff as a competing lander/crash: both seats read B; ref moves before CAS; target already contains C; signal after CAS but before sync/ledger/finalize; journal write or replay failure; hooks mutate staged/unstaged bytes or create .moe; paths include spaces/Unicode/newlines; target becomes checked out; malformed Git output; no-op re-landing. Confirm every failed/unconfirmed publication preserves T, never reports pushed:true or landed, and every confirmed publication remains recorded as landed even if sync fails. Confirm M and C are immutable and have no changed board paths; main has only CAS updates and linear completion parents; W/control indexes and peer dirt are untouched; no shared-mode regression or held-out test edit. Keep ≤400 net non-board lines by extending existing helpers, not duplicating the landing framework. If changes are required rerun the same gate on final bytes. Worker records modifiedFiles accurately, completes through moe.complete_task with fresh gate evidence and Windows results, and leaves a handoff. Wrappers own Git staging/commits; full-epic review, remote publication, gate/lease and docs remain their later slices.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-b319b263fada419d9d7de279682dc5f4",
+    "task-c12f9463b68c44a18cc460a7e9460247",
+    "task-2720c13bc79b438e840b14cbba4fea50"
+  ],
+  "priority": "HIGH",
+  "order": 15,
+  "comments": [
+    {
+      "id": "comment-a264ba6744624a62bc30fc1f70883b62",
+      "author": "worker-0062feec",
+      "content": "Contract correction from the WT-S revision after QA reject 1. Where this comment and the row's description differ, the revised docs/plans/2026-10-30-per-task-worktrees.md and this comment win. Plan against revised §2.2:\n1. The step names changed. L9 is now \"Publish\". In local mode that is `update-ref refs/heads/<target> C B`. After a lost CAS, a target that contains C is success, and anything else ends the round. A landing gets at most 3 rounds of L4-L9. L10 is now the remote-mode mirror and belongs to WT-09.\n2. L7, when commitHooks is true:\n   - moe_commit_with_hooks / New-MoeHookedCommit run the hooks with GIT_WORK_TREE set to a disposable detached worktree that materializes M under '/*' '!/.moe/'. They never use the shared checkout for this.\n   - The temp index marks `.moe/` skip-worktree.\n   - Keep their existing refusal when a hook changed the tree or the parent.\n   - Add a case: a hook edits a file → `failed` with rescue, and nothing is published.\n3. L12 sends `pushed: false` in local mode.\n4. §2.9: when M equals B's tree, L12 records whatever receipt_landed_as finds for the journaled C, and otherwise `nothing`.\nWT-08T's `local` cases must still pass unchanged.",
+      "timestamp": "2026-10-30T13:01:59.782Z"
+    },
+    {
+      "id": "comment-df0aa58252a54e158a5c5af93cd5af89",
+      "author": "worker-0062feec",
+      "content": "Follow-up to the WT-S revision comment above. Put the L7 hook cases in scripts/tests/postflight.{sh,ps1}, because the WT-08T files stay held out:\n- A hook that edits a file gives `failed` with rescue, and nothing is published.\n- The hook's work tree holds M and has no `.moe/`.\nThis row's files become 4: the two wrappers plus both postflight harnesses.",
+      "timestamp": "2026-10-30T13:12:09.074Z"
+    },
+    {
+      "id": "comment-84c895a0277647ffacf35f63ce53a6af",
+      "author": "architect-899a90d6",
+      "content": "From WT-07's plan (task-b319b263), the pieces WT-08 builds on:\n- L0-L2 helper: sh land_worktree_checkpoint W BRANCH / ps1 Invoke-MoeWorktreeCheckpoint. It runs:\n  - the owner guard;\n  - the W dirty set minus the DENY variant (sh resolve_attribution MODE worktree with denied_wt; ps1 Test-MoeDenyPathWorktree);\n  - a temp-index commit with parent T, then ONE update-ref CAS on refs/heads/moe/task/<id>;\n  - an index refresh of W.\n  It returns the usual LAND_* / result shape.\n- push_task_branch / Push-MoeTaskBranch: explicit refspec, no force, no MOE_PUSH_REBASE.\n- control_worktree_mode / Test-MoeControlWorktreeMode: the control HEAD is refs/heads/moe/control.\n- The interim tail that WT-08 must replace: a worktree completion exit (REVIEW/DONE) runs that L0-L2 and then sets LAND_OUTCOME=failed with \"[WARN] worktree completion landing to the target is not available in this wrapper…\", so finalize reports failed and never landed. WT-08 swaps that tail for L3-L12. A worktree-mode exit never reaches run_landing / ensure_safe_branch / push_branch / baseline_*. Keep it that way.\n- record_commit rows for worktree checkpoints use the full ref refs/heads/moe/task/<id>.",
+      "timestamp": "2026-10-30T13:42:40.113Z"
+    },
+    {
+      "id": "comment-d7fa3df7ed71486c9b3d71cb75c0fbfd",
+      "author": "architect-6fc3dd5c",
+      "content": "Seams WT-08T's held-out suite relies on (task-c12f9463, plan rev 1; scripts/tests/worktree-landing.{sh,ps1}). WT-08 must pass that suite's `local` cases unchanged, so please plan these in:\n- S1. The worktree completion arm runs MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF once per landing, then unsets it, the same one-shot seam the shared arm has today. It fires after L8's journal write and before L9's publication: the local CAS here, the push in WT-09. Keep today's cwd and shell: sh `(cd \"$MOE_TOP\" && bash -c)`, ps1 `cmd /c`. The cases use it to land a peer first: a non-overlapping hunk (a retry that lands on top), a conflicting one, and main moved to C plus one more commit (a lost CAS on a target that contains C counts as success).\n- S2. L8 writes the receipt journal on EVERY worktree completion landing, gated or not, at <git common dir>/moe/receipt/<taskId>.json, with receipt_report's field names: targetBefore = B, landedRevision = targetAfter = C, target. The cas-contains-c hook reads C and B from it.\n- S4. Ledger rows:\n  - success: a completion record_commit with outcome committed, sha C, ref refs/heads/main, pushed false in local mode;\n  - M == B^{tree}: outcome nothing with code MOE_COMMIT_NOTHING_TO_COMMIT (§2.9);\n  - finalize_attempt landed, with landedRevision C.\n- S5. Log codes as in the design: MOE_COMMIT_FAILED_CONFLICT, MOE_LAND_TARGET_CHECKED_OUT, MOE_WORKTREE_BOARD_PATH (failed, with a rescue ref under refs/moe/rescue/<taskId>/), and no MOE_COMMIT_FAILED_REF_CONTENTION when the lost CAS finds C contained.\n- The scratch control checkout is on moe/control, has no qualityGate, and runs everything under task-postflight. Main's reflog must gain exactly one entry per landing.\nAsk in #general if any seam conflicts with your plan.",
+      "timestamp": "2026-10-30T13:45:27.412Z"
+    },
+    {
+      "id": "comment-6ae5e215a5aa448f86246e518695a848",
+      "author": "worker-0062feec",
+      "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L7, L8, L11 error handling; section numbers unchanged). Where this differs from the description or my earlier comments, this comment wins.\n\n1. L8 journals EVERY completion landing before L9, gate-less ones included.\n   - Today the journal is written only for a gated completion (`LAND_KIND=completion` with QUALITY_GATE set), and sh receipt_journal_fields requires a candidate id.\n   - Without a gate there is no Candidate, so the journal carries `candidateId: null`. Only a worktree landing writes one, so shared mode is unchanged (rail 4).\n   - receipt_journal_fields and its ps1 twin accept null. Replay then skips receipt_send (record_delivery_receipt) and sends only the owed ledger row and finalize_attempt.\n   - In local mode, replay reads the local target as today.\n2. L7 hooks: set GIT_WORK_TREE to a disposable detached worktree of a temporary, never-published commit of M (`commit-tree M -p B`).\n   - Add it the way L6 adds the gate worktree: `--no-checkout`, sparse `'/*' '!/.moe/'`, then `read-tree -mu HEAD`.\n   - Apply the same `.moe` check: MOE_WORKTREE_GATE_INTEGRITY, then `failed` with rescue.\n3. The L11 retry runs at the next pre-flight AFTER receipt_replay, so a replayed C (now in task.commits) counts. Otherwise a reopened task merges from a base without C and can conflict with its own landed lines.",
+      "timestamp": "2026-10-30T13:52:51.989Z"
+    },
+    {
+      "id": "comment-94c257427f6d49c198b27b7d63359182",
+      "author": "worker-0062feec",
+      "content": "Clarification of my comment 6ae5e215, point 1. The `candidateId: null` spelling was illustrative. Keep your plan's validated worktree journal discriminator (Serena decision-worktree-ungated-receipt-journal): never a fake candidate id, and no record_delivery_receipt without a Candidate. Design doc L8 now says \"a candidate-less worktree journal variant (WT-08 names its discriminator)\".\n\nThe contract is unchanged:\n- Journal every completion landing before publication.\n- Replay accepts the variant and sends only the owed ledger row and finalize_attempt.\n- Shared journaling stays as it is.",
+      "timestamp": "2026-10-30T13:56:02.262Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:52:45.478Z",
+  "updatedAt": "2026-10-30T21:58:36.981Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T12:56:05.195Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:24:20.447Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-eb7de546",
+    "architect-76a2c8bb",
+    "qa-b29f7b3d"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:28:31.554Z",
+  "planningNotes": {
+    "approachesConsidered": "One local/no-gate worktree completion path extending WT-07 L0-L2, using merge-tree plus native compare-and-swap rather than rebase/cherry-pick/reset or shared-mode whole-file landing. Held-out WT-08T tests remain read-only. Revised WT-S comments override original step numbers; L9 publishes locally, L10 is remote-only.",
+    "codebaseInsights": "Verified run_landing/Invoke-MoeLanding, moe_commit_with_hooks/New-MoeHookedCommit, receipt_journal_write/Write-MoeReceiptJournal, receipt_landed_as/Find-MoeJournaledLanding, receipt_replay/Invoke-MoeReceiptReplay, record_commit_rpc/Send-MoeRecordCommit, finalize_postflight/Complete-MoePostflight. Current journals require candidateId and are best-effort: ungated worktree completion requires an explicit backward-compatible journal variant and strict write mode, not a fabricated frozen candidate. Current hook helper does not materialize its detached tree and points GIT_WORK_TREE at shared Top; worktree mode must change that while retaining shared behavior.",
+    "risks": "Main history and crash recovery are data-loss-critical; max effort justified. Treat native Git exits separately from PowerShell exceptions, preserve NUL output outside shell variables, keep .moe sparse in hook worktrees, and never mistake CAS failure for proof C was not published. WT-07 and WT-08T were still PLANNING, so their exact helper/test names must be read after landing; their task contracts are already structural prerequisites. Scope stays 4 edited files and ≤400 net LOC through reuse.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:28:31.580Z",
+  "approvedPlanRevision": 1
+}

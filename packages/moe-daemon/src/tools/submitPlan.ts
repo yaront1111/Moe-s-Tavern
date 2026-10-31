@@ -1,8 +1,12 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { Effort, ProjectSettings, TaskStatus } from '../types/schema.js';
+import type { Effort, ProjectSettings, RecipeInstance, TaskStatus } from '../types/schema.js';
 import { MAX_CRITIQUE_BLOCKS_DEFAULT } from '../types/schema.js';
-import { checkPlanRails } from '../util/rails.js';
+import { checkPlanRails, type RailsCheckResult } from '../util/rails.js';
+import {
+  validateExecutionContract, MAX_CONTRACT_BEHAVIOR_CHARS, MAX_CONTRACT_LIST_ITEMS, MAX_CONTRACT_ITEM_CHARS,
+  MAX_REQUIRED_CHECKS, MAX_REQUIRED_CHECK_PATHS, MAX_REQUIRED_CHECK_COMMAND_CHARS,
+} from '../state/validators.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { normalizeAffectedFiles, findMissingPaths, pathKey } from '../util/affectedFiles.js';
@@ -13,6 +17,10 @@ import {
   planSizeFloor, resolveLaunch,
 } from '../util/routing.js';
 import { ACCEPTS_ACCOUNT_SWITCH, accountSwitchFor, accountSwitchReply } from '../state/accountStore.js';
+import { decodeStoredPlanRevision, updateTask } from '../state/taskStore.js';
+import { definitionDigest, measureRequiredCheckSnapshot } from '../delivery/requiredChecks.js';
+import { readExecutionPolicySnapshot } from '../delivery/executionProfile.js';
+import { capturePlanSourceBasis } from '../context/planReuseState.js';
 
 /**
  * The affected-path refusal. `cachedRefMiss` says why the configured cached
@@ -49,6 +57,20 @@ function missingPathsError(projectRoot: string, missingPaths: string[], cachedRe
 // The cap lives with the sanitizer's bound (util/planSize) so they cannot drift;
 // re-exported here for callers/tests that import it from this module.
 export { MAX_STEP_DESCRIPTION_CHARS };
+/** The internal recipe adapter's identity (CQ-C08). Never an architect id; no wire caller may use it. */
+export const RECIPE_ACTOR = 'moe-recipe';
+// Keyed by the argument object submitRecipePlan creates, so no MCP or /ws payload can be a key.
+const recipeSubmissions = new WeakMap<object, Omit<RecipeInstance, 'version' | 'planRevision'>>();
+
+/** A recipe's plan through the unchanged submit_plan flow as RECIPE_ACTOR, bound in the PLAN_SUBMITTED write. Outside the mutex. */
+export async function submitRecipePlan(
+  state: StateManager, args: Record<string, unknown>, recipeInstance: Omit<RecipeInstance, 'version' | 'planRevision'>,
+): Promise<{ status: TaskStatus; planRevision: number }> {
+  const call = { ...args, workerId: RECIPE_ACTOR };
+  recipeSubmissions.set(call, recipeInstance);
+  return await submitPlanTool(state).handler(call, state) as { status: TaskStatus; planRevision: number };
+}
+
 /** Tracks SPEED mode auto-approval timeouts by taskId so they can be cancelled. */
 const speedModeTimeouts = new Map<string, NodeJS.Timeout>();
 
@@ -69,15 +91,27 @@ export function clearAllSpeedModeTimeouts(): void {
   speedModeTimeouts.clear();
 }
 
+/** Record a failed SPEED auto-approval in the activity log so the task doesn't get stuck silently. */
+function recordSpeedApprovalFailure(state: StateManager, taskId: string, error: unknown): void {
+  const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+  state.appendActivity('TASK_BLOCKED', {
+    error: errorMessage,
+    reason: 'SPEED mode auto-approval failed'
+  }, state.getTask(taskId) ?? undefined);
+}
+
 /**
  * Arm (or re-arm) the SPEED-mode delayed auto-approval for a task. Cancels any
  * prior pending timer for the task before scheduling so the old timer can't leak,
  * then approves inside the StateManager mutex with a re-check that the task is
  * still AWAITING_APPROVAL (TOCTOU-safe against concurrent manual approve/reject).
+ * The approval is bound to `revision`, the plan revision the timer was armed
+ * for: the store refuses it once the plan, DoD or contract has moved on, and the
+ * timer then withholds instead of approving (a human approves or resubmits).
  * A delayMs of 0 approves on the next tick. Shared by submit_plan and the
  * post-restart re-arm (rearmSpeedModeApprovals) so they can never diverge.
  */
-function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: number): void {
+function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: number, revision: number): void {
   // Cancel any prior pending auto-approval for this task before scheduling a
   // new one (e.g. a plan resubmitted after an AWAITING_APPROVAL→PLANNING bounce
   // that didn't cancel the timer) — otherwise the old timer leaks.
@@ -88,24 +122,26 @@ function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: numb
   // re-check + approval WITHOUT the lock, voiding the TOCTOU guarantee below.
   const timeoutId = state.detachFromMutexContext(() => setTimeout(async () => {
     try {
-      // approveTask path acquires the StateManager mutex and re-checks that
+      // Acquire the StateManager mutex and re-check that
       // status === 'AWAITING_APPROVAL' inside the locked section.
       await state.runExclusive(async () => {
         const currentTask = state.getTask(taskId);
         if (!currentTask || currentTask.status !== 'AWAITING_APPROVAL') return;
-        await state.updateTask(
-          taskId,
-          { status: 'WORKING', planApprovedAt: new Date().toISOString() },
-          'PLAN_AUTO_APPROVED'
-        );
+        try {
+          await updateTask(state, taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() },
+            'PLAN_AUTO_APPROVED', undefined, { approvedPlanRevision: revision });
+        } catch (error) {
+          if (!(error instanceof MoeError) || error.codeName !== 'PLAN_REVISION_MISMATCH') throw error;
+          // Withheld, not failed: nothing was written. Say why on the board.
+          try {
+            await state.postSystemMessage(taskId, `SPEED auto-approval withheld: it was armed for plan revision ${revision}, `
+              + `but the plan is now at revision ${String(error.context?.currentPlanRevision)}. `
+              + 'Approve the current revision from the board, or reject the plan and resubmit it.');
+          } catch { /* never throw from a timer */ }
+        }
       });
     } catch (error) {
-      // Log error via activity log so task doesn't get stuck silently
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      state.appendActivity('TASK_BLOCKED' as import('../types/schema.js').ActivityEventType, {
-        error: errorMessage,
-        reason: 'SPEED mode auto-approval failed'
-      }, state.getTask(taskId) ?? undefined);
+      recordSpeedApprovalFailure(state, taskId, error);
     } finally {
       // Only clear the map entry if it still points at THIS timer — a successor
       // timer scheduled in the meantime must not be deleted (which would leave
@@ -125,6 +161,11 @@ function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: numb
  * approving immediately (remaining delay 0) when its planSubmittedAt is already
  * older than the configured delay. No-op unless approvalMode === 'SPEED'. Skips
  * tasks that already have a live timer so it's safe to call more than once.
+ * Each timer is bound to the revision captured with the plan in its
+ * PLAN_SUBMITTED write (executionPolicySnapshot.planRevision), so a change made
+ * before the restart is never auto-approved; a row submitted before snapshots
+ * existed binds its current revision. Never throws: startup calls it unguarded,
+ * so a malformed row records a failure activity and is left for a human.
  */
 export function rearmSpeedModeApprovals(state: StateManager): void {
   const project = state.project;
@@ -134,11 +175,47 @@ export function rearmSpeedModeApprovals(state: StateManager): void {
   for (const task of state.tasks.values()) {
     if (task.status !== 'AWAITING_APPROVAL') continue;
     if (speedModeTimeouts.has(task.id)) continue; // already armed
+    let revision: number;
+    try {
+      revision = readExecutionPolicySnapshot(task.executionPolicySnapshot)?.planRevision ?? decodeStoredPlanRevision(task);
+    } catch (error) {
+      recordSpeedApprovalFailure(state, task.id, error);
+      continue;
+    }
     const submittedAt = task.planSubmittedAt ? Date.parse(task.planSubmittedAt) : NaN;
     const remaining = Number.isFinite(submittedAt)
       ? Math.max(0, delayMs - (now - submittedAt))
       : 0;
-    armSpeedModeApproval(state, task.id, remaining);
+    armSpeedModeApproval(state, task.id, remaining, revision);
+  }
+}
+
+/** Keep step and contract rail refusals identical, including the escape hatch. */
+function assertPlanRails(railsCheck: RailsCheckResult, taskId: string): void {
+  if (!railsCheck.ok) {
+    // Steer the agent toward the escape hatch when the rail is wrong for
+    // this task (rare but legitimate). The default path is still to fix
+    // the plan — propose_rail is only for when the rail itself is the
+    // bug, not when the plan skipped a required pattern.
+    const v = railsCheck.violation || {};
+    const message =
+      `Rail violation: ${JSON.stringify(v)}. ` +
+      `Default action: revise the plan to satisfy this rail and resubmit moe.submit_plan. ` +
+      `Escape hatch: if this rail is genuinely wrong for task ${taskId} (e.g., a forbidden pattern that's a false positive, or a required phrase that doesn't fit), call ` +
+      `moe.propose_rail { proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL", targetScope: "GLOBAL" | "EPIC" | "TASK", taskId: "${taskId}", currentValue, proposedValue, reason, workerId } ` +
+      `to request a human-approved rail change. Do NOT loop between resubmits if the rail is the real blocker — propose the change.`;
+    throw new MoeError(
+      MoeErrorCode.CONSTRAINT_VIOLATION,
+      message,
+      {
+        violation: v,
+        suggestedAction: {
+          tool: 'moe.propose_rail',
+          reason: 'Use this only if the rail itself is wrong for this task; otherwise fix the plan and resubmit.'
+        }
+      },
+      'CONSTRAINT_VIOLATION'
+    );
   }
 }
 
@@ -153,6 +230,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'The PLANNING task this plan is for' },
+        requiredCheckRevision: {
+          type: 'string', pattern: '^[0-9a-f]{40}$',
+          description: 'Commit or tree to measure the protected check snapshot at (default HEAD); use a candidate tree to approve changed protected definitions.',
+        },
         steps: {
           type: 'array',
           description: 'Ordered implementation steps; each has a description and the files it edits (affectedFiles) or creates (newFiles)',
@@ -170,6 +251,34 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             required: ['description'],
             additionalProperties: false
           }
+        },
+        executionContract: {
+          type: 'object', additionalProperties: false,
+          description: 'Optional execution intent: behavior <=2000 chars; lists <=50 items of <=1000 chars. File scope stays in steps. Resubmission replaces it (omitted = none, clears stored contract); changes advance planRevision.',
+          properties: {
+            intendedBehavior: { type: 'string', maxLength: MAX_CONTRACT_BEHAVIOR_CHARS, description: 'Observable behavior or outcome.' },
+            acceptanceCriteria: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Behavior-level criteria; definitionOfDone stays human-owned.' },
+            invariants: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Properties that must remain true.' },
+            compatibility: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Legacy data, wire shapes and callers to preserve.' },
+            approvedScope: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Symbols, interfaces and producer-consumer surfaces; no second file list.' },
+            reuse: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Existing implementations reused, or why a new one is needed.' },
+            sourceAssumptions: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Source facts with path and symbol references.' },
+            checkRefs: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Required verification commands, exactly as run.' },
+            requiredChecks: {
+              type: 'array', maxItems: MAX_REQUIRED_CHECKS,
+              description: 'Protected required checks: approved commands plus the config/script files and assertion roots whose content defines them; changes advance planRevision.',
+              items: {
+                type: 'object', additionalProperties: false, required: ['id', 'command'],
+                properties: {
+                  id: { type: 'string', maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' },
+                  command: { type: 'string', maxLength: MAX_REQUIRED_CHECK_COMMAND_CHARS },
+                  configs: { type: 'array', maxItems: MAX_REQUIRED_CHECK_PATHS, items: { type: 'string' } },
+                  scripts: { type: 'array', maxItems: MAX_REQUIRED_CHECK_PATHS, items: { type: 'string' } },
+                  assertionRoots: { type: 'array', maxItems: MAX_REQUIRED_CHECK_PATHS, items: { type: 'string' } },
+                },
+              },
+            },
+          },
         },
         workerId: { type: 'string' },
         tier: {
@@ -207,6 +316,26 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
+      const recipeInstance = args && typeof args === 'object' ? recipeSubmissions.get(args) : undefined;
+      if (!recipeInstance && (args as { workerId?: unknown } | null)?.workerId === RECIPE_ACTOR) {
+        throw new MoeError(MoeErrorCode.NOT_ALLOWED, `workerId ${RECIPE_ACTOR} is reserved for recipe instantiation`,
+          { workerId: RECIPE_ACTOR }, 'NOT_ALLOWED');
+      }
+      const input = args as { executionContract?: unknown; requiredCheckRevision?: unknown };
+      const measuredContract = validateExecutionContract(input.executionContract, 'executionContract');
+      const revision = input.requiredCheckRevision;
+      if (revision !== undefined && (typeof revision !== 'string' || !/^[0-9a-f]{40}$/.test(revision)
+          || !measuredContract?.requiredChecks)) {
+        throw invalidInput('requiredCheckRevision', 'must be a 40-hex commit or tree id supplied with requiredChecks');
+      }
+      // Bounded Git reads never hold the fleet mutex. The locked attempt below
+      // revalidates ownership/status/rails and binds exactly these definitions.
+      const snapshot = measuredContract?.requiredChecks
+        ? await measureRequiredCheckSnapshot(state.projectPath, measuredContract.requiredChecks, revision as string | undefined)
+        : undefined;
+      // The commit this plan is submitted against, once per call (the cached-path
+      // retry reuses it). Null never refuses or warns: it only removes an older basis.
+      const basis = await capturePlanSourceBasis(state.projectPath);
       let cachedPaths: CachedPlanPaths | undefined;
       let lookupBranch: unknown;
       const submit = () => state.runExclusive(async () => {
@@ -218,6 +347,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           model?: unknown;
           codexModel?: unknown;
           acceptsAccountSwitch?: unknown;
+          executionContract?: unknown;
           steps: { description: string; affectedFiles?: string[]; newFiles?: string[] }[];
           planningNotes?: {
             approachesConsidered?: string;
@@ -288,6 +418,12 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           });
         }
 
+        const executionContract = validateExecutionContract(params.executionContract, 'executionContract');
+        const digest = executionContract?.requiredChecks ? definitionDigest(executionContract.requiredChecks) : undefined;
+        if (digest !== snapshot?.definitionDigest) {
+          throw invalidInput('executionContract.requiredChecks', 'definitions changed during measurement; resubmit the plan');
+        }
+
         const epic = state.getEpic(task.epicId);
         const project = state.project;
         if (!project) throw notFound('Project', 'current');
@@ -299,30 +435,13 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           .join(' ');
 
         const railsCheck = checkPlanRails(planText, project.globalRails, epic, task);
-        if (!railsCheck.ok) {
-          // Steer the agent toward the escape hatch when the rail is wrong for
-          // this task (rare but legitimate). The default path is still to fix
-          // the plan — propose_rail is only for when the rail itself is the
-          // bug, not when the plan skipped a required pattern.
-          const v = railsCheck.violation || {};
-          const message =
-            `Rail violation: ${JSON.stringify(v)}. ` +
-            `Default action: revise the plan to satisfy this rail and resubmit moe.submit_plan. ` +
-            `Escape hatch: if this rail is genuinely wrong for task ${task.id} (e.g., a forbidden pattern that's a false positive, or a required phrase that doesn't fit), call ` +
-            `moe.propose_rail { proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL", targetScope: "GLOBAL" | "EPIC" | "TASK", taskId: "${task.id}", currentValue, proposedValue, reason, workerId } ` +
-            `to request a human-approved rail change. Do NOT loop between resubmits if the rail is the real blocker — propose the change.`;
-          throw new MoeError(
-            MoeErrorCode.CONSTRAINT_VIOLATION,
-            message,
-            {
-              violation: v,
-              suggestedAction: {
-                tool: 'moe.propose_rail',
-                reason: 'Use this only if the rail itself is wrong for this task; otherwise fix the plan and resubmit.'
-              }
-            },
-            'CONSTRAINT_VIOLATION'
-          );
+        assertPlanRails(railsCheck, task.id);
+        if (executionContract !== undefined) {
+          const { requiredChecks, ...textContract } = executionContract;
+          const contractText = [...Object.values(textContract).flat(), ...(requiredChecks ?? []).flatMap(check => [
+            check.id, check.command, ...(check.configs ?? []), ...(check.scripts ?? []), ...(check.assertionRoots ?? []),
+          ])].join(' ');
+          assertPlanRails(checkPlanRails(contractText, { ...project.globalRails, requiredPatterns: [] }, epic, task), task.id);
         }
 
         // Plan-size gate: oversized tasks fail at coin-flip rates and grind QA —
@@ -464,6 +583,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           planSubmittedAt: new Date().toISOString(),
           metrics: updatedMetrics,
         };
+        // Replace semantics, without adding an own undefined key to legacy tasks.
+        if (executionContract !== undefined || task.executionContract !== undefined) {
+          updatePayload.executionContract = executionContract ?? null;
+        }
         if (params.planningNotes) {
           updatePayload.planningNotes = {
             approachesConsidered: params.planningNotes.approachesConsidered?.slice(0, 5000),
@@ -475,11 +598,15 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         // Keep the Task this write returned: its planRevision is the value that
         // was actually committed with this plan. Reading the cache later would
         // report a stamp a concurrent write had already moved past.
-        const submitted = await state.updateTask(task.id, updatePayload, 'PLAN_SUBMITTED', params.workerId);
+        const submitted = await updateTask(state, task.id, updatePayload, 'PLAN_SUBMITTED', params.workerId,
+          { ...(snapshot ? { requiredCheckSnapshot: snapshot } : {}), ...(basis ? { planSourceBasis: basis } : {}),
+            ...(recipeInstance ? { recipeInstance } : {}) });
         // Use the captured assignee because updateTask clears assignedWorkerId on
         // PLANNING -> AWAITING_APPROVAL handoff. touchWorker skips missing worker
         // records and never blocks a successfully submitted plan.
         await state.touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null });
+        // The revision this submission committed: the only one an automatic approval may stamp.
+        const revision = decodeStoredPlanRevision(submitted);
 
         const approvalMode = project.settings.approvalMode;
         let finalStatus = 'AWAITING_APPROVAL';
@@ -487,15 +614,16 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
 
         if (approvalMode === 'TURBO') {
           // Instant auto-approval
-          await state.updateTask(task.id, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_AUTO_APPROVED');
+          await updateTask(state, task.id, { status: 'WORKING', planApprovedAt: new Date().toISOString() },
+            'PLAN_AUTO_APPROVED', undefined, { approvedPlanRevision: revision });
           finalStatus = 'WORKING';
           message = 'Plan auto-approved (TURBO mode). Ready to work.';
         } else if (approvalMode === 'SPEED') {
-          // Delayed auto-approval. Run the status re-check inside the state
-          // mutex (via approveTask) to avoid a TOCTOU race with concurrent
-          // manual approve/reject calls.
+          // Delayed auto-approval, bound to this submission's revision. The
+          // timer re-checks the status inside the state mutex to avoid a TOCTOU
+          // race with concurrent manual approve/reject calls.
           const delayMs = project.settings.speedModeDelayMs || 2000;
-          armSpeedModeApproval(state, task.id, delayMs);
+          armSpeedModeApproval(state, task.id, delayMs, revision);
           message = `Plan submitted. Auto-approval in ${delayMs}ms (SPEED mode).`;
         }
 

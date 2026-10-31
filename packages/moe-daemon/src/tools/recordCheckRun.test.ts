@@ -64,6 +64,7 @@ describe('moe.record_check_run', () => {
     await recordCandidate(h.state, { ...candidate, id: 'cand-P-old', treeSha: SHA.treeB });
     await recordCandidate(h.state, { ...candidate, id: 'cand-P-current', treeSha: SHA.treeA });
     await setAttemptPhase(h.state, 'attempt-P', 'closed');
+    await openAttempt(h.state, { id: 'attempt-Q', taskId: 'task-Q', workerId: 'worker-2', runnerId: 'runner-q', workspace: 'D:/wt/q' });
   });
 
   afterEach(() => {
@@ -135,7 +136,8 @@ describe('moe.record_check_run', () => {
       additionalProperties: unknown;
     };
     expect(Object.keys(schema.properties).sort()).toEqual([
-      'candidateId', 'command', 'exitCode', 'id', 'outputTail', 'runnerId', 'source', 'treeSha', 'workerId',
+      'attemptId', 'candidateId', 'command', 'dispatchId', 'environment', 'exitCode', 'id', 'outcome', 'outputTail',
+      'planRevision', 'runnerId', 'source', 'treeSha', 'workerId',
     ]);
     expect(schema.required).toEqual(['candidateId', 'treeSha', 'command', 'exitCode', 'runnerId', 'source']);
     expect(schema.additionalProperties).toBe(false);
@@ -143,7 +145,11 @@ describe('moe.record_check_run', () => {
     expect(schema.properties.source).not.toHaveProperty('default');
     expect(schema.properties.exitCode).toMatchObject({ type: 'integer' });
     expect(schema.properties.exitCode).not.toHaveProperty('minimum');
-    for (const name of ['id', 'candidateId', 'treeSha', 'command', 'outputTail', 'runnerId', 'workerId']) {
+    expect(schema.properties.outcome).toMatchObject({
+      type: 'string', enum: ['passed', 'code-failure', 'infra-failure', 'timeout', 'skipped', 'inconclusive'],
+    });
+    expect(schema.properties.planRevision).toMatchObject({ type: 'integer', minimum: 1 });
+    for (const name of ['id', 'candidateId', 'treeSha', 'command', 'outputTail', 'runnerId', 'workerId', 'environment', 'dispatchId', 'attemptId']) {
       expect(schema.properties[name], name).toMatchObject({ type: 'string' });
     }
   });
@@ -192,6 +198,7 @@ describe('moe.record_check_run', () => {
     ['a runner-observed failure', { source: 'runner-observed', exitCode: 1 }],
     ['an agent-reported negative exit code', { source: 'agent-reported', exitCode: -1 }],
     ['a runner-observed signal exit', { source: 'runner-observed', exitCode: 137 }],
+    ['a fully bound report', { outcome: 'passed', planRevision: 1, environment: 'node-22', dispatchId: 'dispatch-1', attemptId: 'attempt-P' }],
   ];
 
   it.each(acknowledged)('acknowledges %s as recorded exactly as reported, never as an approval', async (_label, report) => {
@@ -240,6 +247,12 @@ describe('moe.record_check_run', () => {
         'a check run must name the exact tree of the candidate it checked',
       context: { candidateId: 'cand-P-current', expectedTreeSha: SHA.treeA, actualTreeSha: SHA.treeB },
     }],
+    ["another task's attempt", { attemptId: 'attempt-Q' }, {
+      code: -32002,
+      codeName: 'ATTEMPT_ID_TASK_MISMATCH',
+      message: '[ATTEMPT_ID_TASK_MISMATCH] Attempt attempt-Q belongs to task task-Q, not task-P',
+      context: { attemptId: 'attempt-Q', existingTaskId: 'task-Q', requestedTaskId: 'task-P' },
+    }],
   ];
 
   it.each(bindingRefusals)('refuses %s by name, writing nothing', async (_label, report, expected) => {
@@ -259,8 +272,10 @@ describe('moe.record_check_run', () => {
     ['a short treeSha', 'INVALID_INPUT', { ...RUNNER_PASS, treeSha: 'abc123' }],
     ['a string exitCode', 'INVALID_INPUT', { ...RUNNER_PASS, exitCode: '0' }],
     ['a fractional exitCode', 'INVALID_INPUT', { ...RUNNER_PASS, exitCode: 0.5 }],
-    ['a 501-character command', 'INVALID_INPUT', { ...RUNNER_PASS, command: 'x'.repeat(501) }],
+    ['a 1001-character command', 'INVALID_INPUT', { ...RUNNER_PASS, command: 'x'.repeat(1001) }],
     ['a null outputTail', 'INVALID_INPUT', { ...RUNNER_PASS, outputTail: null }],
+    ['an outcome in another case', 'INVALID_INPUT', { ...RUNNER_PASS, outcome: 'PASSED' }],
+    ['a passed outcome at exit 1', 'INVALID_INPUT', { ...RUNNER_PASS, outcome: 'passed', exitCode: 1 }],
   ];
 
   it.each(malformed)('refuses %s as %s without coercing or writing', async (_label, codeName, args) => {

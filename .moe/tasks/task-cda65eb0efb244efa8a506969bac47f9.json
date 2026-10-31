@@ -1,0 +1,179 @@
+{
+  "id": "task-cda65eb0efb244efa8a506969bac47f9",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-17] Docs: worktree-mode contracts in MCP_SERVER, SCHEMA and CONFIGURATION",
+  "description": "Plan against docs/plans/2026-10-30-per-task-worktrees.md §2, §4 and §7 (every 'Assumed interfaces' list).\n\nObjective: every contract the epic added is documented exactly once, in the reference docs agents and humans read, with the spelling the code uses. This is half of the epic's docs sweep, split from WT-18 for the 5-file cap.\n\nDeliverable:\n- docs/MCP_SERVER.md:\n  - claim_next_task and get_context `workspace: { mode, path, branch, target }`;\n  - complete_task's worktree branch policy (moe/task/<taskId>);\n  - finalize_attempt outcome 'unlanded' with unlandedReason / conflictPaths / rescueRef, and the REVIEW to WORKING/BLOCKED routing.\n- docs/SCHEMA.md: ProjectSettings.worktreeMode, ExecutionAttempt.workspaceMode and workspace, Task.landingRetry.\n- docs/CONFIGURATION.md:\n  - settings.worktreeMode (default 'off'; WT-19 flips it) and commitBoardState's worktree meaning;\n  - the git-land-<target> resource declaration;\n  - env MOE_WORKTREE_PATH, MOE_TASK_BRANCH, MOE_LAND_TARGET, MOE_LAND_LEASE_WAIT_SEC, MOE_WORKTREE_SWEEP_INTERVAL_SEC;\n  - refs/moe/board and moe/control;\n  - the new log codes with one-line meanings;\n  - a pointer to the TROUBLESHOOTING runbook (WT-16).\nRead the landed code, not the design doc, for final spellings. Any drift between the two gets a moe.add_comment on the slice that drifted.\n\nNOT in scope: CLAUDE.md, scripts/CLAUDE.md, ARCHITECTURE.md and role docs (WT-18); code changes.\n\nVerification: npm run lint && for k in worktreeMode workspaceMode landingRetry unlanded MOE_WORKTREE_PATH MOE_LAND_LEASE_WAIT_SEC MOE_WORKTREE_SWEEP_INTERVAL_SEC refs/moe/board moe/control; do grep -q \"$k\" docs/MCP_SERVER.md docs/SCHEMA.md docs/CONFIGURATION.md || { echo \"missing $k\"; exit 1; }; done",
+  "definitionOfDone": [
+    "docs/MCP_SERVER.md documents `workspace` on claim_next_task and get_context, the complete_task worktree branch rule, and finalize_attempt 'unlanded' with its three params and routing.",
+    "docs/SCHEMA.md documents ProjectSettings.worktreeMode, ExecutionAttempt.workspaceMode/workspace and Task.landingRetry with field types matching types/schema.ts.",
+    "docs/CONFIGURATION.md documents worktreeMode (default off), the five env vars, the git-land-<target> resource, refs/moe/board, moe/control and every new MOE_WORKTREE_/MOE_LAND_/MOE_CONTROL_/MOE_BOARD_ code found by grep in scripts/moe-agent.sh.",
+    "Every name in those docs matches the landed code (a grep of each documented code in scripts/moe-agent.sh and moe-agent.ps1 finds it).",
+    "The verification command exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Inventory the landed contracts before writing; no doc edits in this step. Every dependency (WT-S, WT-14, WT-15, WT-16, and through them WT-01..WT-13) is DONE before this row can be claimed. Read the landed code at HEAD, not the design doc, for every spelling. Put the inventory in the step note; steps 2-4 work from it.\n\nLanding check first: run moe.get_commit_scope { taskId, phase: 'postflight' }. If another nonterminal row declares one of the three docs (CONTESTED), it lands without a wrapper-observed editing tool only if two conditions hold: each path was clean at THIS session's pre-flight, and every peerDeclared[].peerActive is false (mem:decision-contested-idle-peer-exception). If either fails, stop and comment on the task. Never hand-land.\n\nCollect:\n1. Wrapper tokens. Run `git show HEAD:scripts/moe-agent.sh | grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|PUSH|MIGRATION)_[A-Z0-9][A-Z0-9_]*' | sort -u`, and the same for moe-agent.ps1. For each token, find the line that prints or reads it, and classify it as one of:\n   - a log code (printed): note its trigger;\n   - an env var (read from the environment): note its default;\n   - an internal bridge name.\n   A token present in only one wrapper gets a moe.add_comment on the slice that added it (WT-19 enforces equality later).\n2. Daemon shapes, from packages/moe-daemon/src:\n   - types/schema.ts: ProjectSettings.worktreeMode, ExecutionAttempt.workspaceMode and any workspace field, the AttemptWorkspace type, Task.landingRetry and UnlandedReason, each with its exact TypeScript type.\n   - The worktreeMode default and validation (state/validators.ts, index.ts).\n   - tools/claimNextTask.ts and tools/getContext.ts: which replies carry `workspace` (per WT-01, the hasNext:true claim only, and only WORKING claims get worktree mode), and get_context's task.landingRetry.\n   - tools/completeTask.ts: the worktree branch rule and its refusal text.\n   - tools/finalizeAttempt.ts: the 'unlanded' outcome, its params, the routing and the response fields.\n3. Wrapper refs and leases:\n   - refs/moe/board and the moe/control branch;\n   - the git-land-<target> resource id and when it is taken;\n   - the receipt journal push results and the rescue ref reasons.\n4. Cross-check against this task's contract comments (c79c06a8, b70b6bb2, 002d020d) and the 'Assumed interfaces' lists in design docs/plans/2026-10-30-per-task-worktrees.md §2, §4 and §7.\n   - Where code and design differ, document the code and moe.add_comment the drift on the slice that landed it.\n   - A designed contract with no landed code is not documented. Comment on its slice instead.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "docs/MCP_SERVER.md: document each contract once, in the tool's existing section, using step 1's inventory.\n- `### moe.claim_next_task` (~1389): the top-level `workspace: { mode, path, branch, target }`. Say which replies carry it and which do not, that only WORKING claims get worktree mode, and that the mode is pinned per attempt, all exactly as the code does it.\n- `### moe.get_context` (~180): the top-level `workspace`, and `task.landingRetry` when it is set.\n- `### moe.complete_task` (~539): the worktree branch rule (the current branch must be `moe/task/<taskId>`).\n- `### moe.finalize_attempt` (~584):\n  - outcome 'unlanded', for worktree attempts only, with unlandedReason (every value the code accepts), conflictPaths, rescueRef and targetTip;\n  - the routing: REVIEW to WORKING, or to BLOCKED with blockedFromStatus WORKING in the cases the code blocks;\n  - the response fields taskStatus and landingRetry, and the outcomes that clear landingRetry ('landed', 'nothing-to-commit').\nError handling: for each refusal (complete_task's branch rule, an 'unlanded' outcome on a shared attempt, a bad unlandedReason), document the error code and message the code returns.\nMatch the surrounding format (parameter tables or lists). Elsewhere, link to these sections instead of repeating them.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/SCHEMA.md: match packages/moe-daemon/src/types/schema.ts exactly: names, optionality, unions and null.\n- `## Project` settings: worktreeMode, with its values and default.\n- `## ExecutionAttempt` (~1234): workspaceMode (absent means shared), and the workspace field or computed AttemptWorkspace, as the code defines it.\n- `## Task` (~395): landingRetry, documented as { reason, paths, rescueRef, targetTip, count, at } | null if that matches the landed type, and the UnlandedReason union.\nFollow the file's existing field-table format, and note which fields the daemon owns (agents never write them).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "docs/CONFIGURATION.md, using step 1's inventory:\n- Settings Reference table:\n  - a worktreeMode row: its values and default 'off' (WT-19 flips it), pinned per attempt. Worktree mode needs a qualityGate, and the doctor fails 'on' without one. qualityGateScope is ignored in worktree mode, because every completion landing runs the gate.\n  - commitBoardState's existing row: add its worktree meaning (board history on refs/moe/board; main never changes .moe), as landed.\n- resources row: the git-land-<target> resource. Say when the wrapper takes it, that it is auto-created, and that declaring it only overrides capacity/maxLeaseMs.\n- Agent Scripts env table:\n  - MOE_WORKTREE_PATH, MOE_TASK_BRANCH and MOE_LAND_TARGET, which the wrapper sets for the CLI in worktree mode;\n  - MOE_LAND_LEASE_WAIT_SEC, MOE_WORKTREE_SWEEP_INTERVAL_SEC and MOE_LAND_NET_BACKOFF_SEC, with the defaults the code uses.\n- A new `### Worktree mode` subsection under Project Configuration:\n  - W = <top>/.worktrees/<taskId> on moe/task/<taskId>;\n  - the control checkout on moe/control;\n  - refs/moe/board;\n  - a table of every code from step 1's inventory, one line each (log codes with their meaning, internal bridge names marked internal);\n  - a pointer to the TROUBLESHOOTING runbook section WT-16 added, by its real heading.\n- Where an existing sentence in these three docs states shared-mode-only behaviour as universal (for example, landing onto consolidationBranch / moe/work-<date>), add a short shared-mode qualifier that points to the new subsection. Do not rewrite those passages; the broader docs sweep is WT-18.\nBudget: at most 300 net added lines across the three docs.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification. Run ONE fresh command from the repo root. Its output is the complete_task evidence:\nnpm run lint && for k in worktreeMode workspaceMode landingRetry unlanded MOE_WORKTREE_PATH MOE_LAND_LEASE_WAIT_SEC MOE_WORKTREE_SWEEP_INTERVAL_SEC refs/moe/board moe/control; do grep -q -- \"$k\" docs/MCP_SERVER.md docs/SCHEMA.md docs/CONFIGURATION.md || { echo \"missing $k\"; exit 1; }; done && for k in unlandedReason conflictPaths targetTip landingRetry moe/task/; do grep -q -- \"$k\" docs/MCP_SERVER.md || { echo \"MCP_SERVER missing $k\"; exit 1; }; done && for k in worktreeMode workspaceMode landingRetry UnlandedReason; do grep -q -- \"$k\" docs/SCHEMA.md || { echo \"SCHEMA missing $k\"; exit 1; }; done && for k in worktreeMode MOE_TASK_BRANCH MOE_LAND_TARGET git-land- refs/moe/board moe/control; do grep -q -- \"$k\" docs/CONFIGURATION.md || { echo \"CONFIGURATION missing $k\"; exit 1; }; done && for c in $(git show HEAD:scripts/moe-agent.sh | grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|PUSH|MIGRATION)_[A-Z0-9][A-Z0-9_]*' | sort -u); do grep -qw -- \"$c\" docs/CONFIGURATION.md || { echo \"undocumented $c\"; exit 1; }; done && for c in $(grep -ohE 'MOE_(WORKTREE|LAND|CONTROL|BOARD|PUSH|MIGRATION)_[A-Z0-9][A-Z0-9_]*' docs/MCP_SERVER.md docs/SCHEMA.md docs/CONFIGURATION.md | sort -u); do git show HEAD:scripts/moe-agent.sh | grep -qw -- \"$c\" && git show HEAD:scripts/moe-agent.ps1 | grep -qw -- \"$c\" || { echo \"not in both wrappers: $c\"; exit 1; }; done && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh) && echo DOCS-OK\n\nWhat it covers:\n- the description's command (lint plus the key loop), the per-doc keys of DoD 1-3, and DoD 3/4's code families in both directions;\n- the families are read from HEAD's committed wrappers, so a peer's mid-edit bytes cannot move the result;\n- parity-check on a HEAD snapshot (epic rail 2), per the WT-S spike's comment on this task.\nOn a Windows seat, run it from Git Bash.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's own diff. Load the adversarial-self-review skill. Check each item, and fix anything that fails:\n1. Accuracy: re-read every documented field, type, param, default and code against the landed code. DoD 2: each SCHEMA type matches types/schema.ts, including optionality and null.\n2. Once: each contract is defined in exactly one place, and other mentions link to it.\n3. No contradiction:\n   - nothing says worktree mode is the default;\n   - shared-mode statements in the three docs carry the qualifier wherever worktree mode differs;\n   - the error handling text names the codes the code actually returns.\n4. Drift: a comment is posted on the slice for each code/design mismatch and each designed-but-unlanded contract, and none of those spellings is documented.\n5. Size: QA rejects more than 400 net changed LOC, and `git diff --numstat` over the three docs must be 300 net or less. If it is over, comment on the task with the numbers and ask the architect before complete_task.\n6. Landing: re-run moe.get_commit_scope { taskId, phase: 'postflight' } and apply step 1's rule.\nIf this step changed any byte, re-run step 5's command and submit THAT fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-befdddf7e1f047a0ba4f71dd900c9b8f",
+    "task-fad5ef971b0941b590621aa40702ad4b",
+    "task-48f0b3aaa82c4b938d3a15f3710a66e5",
+    "task-a4ca766a67184630842d4a6d12338cf8",
+    "task-2c95c5d1d2bd4dcc9d16fbff1fdb9654",
+    "task-d88bb99057b54b3bb02241557886aa85"
+  ],
+  "priority": "MEDIUM",
+  "order": 25,
+  "comments": [
+    {
+      "id": "comment-78829e6c369147ddb6f4560bcdb67cc2",
+      "author": "worker-0062feec",
+      "content": "Spike self-review correction (epic rail 2: parity-check must pass on every task). Append this to this task's verification command, run from the repo root: `&& S=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$S\" && (cd \"$S\" && bash scripts/tests/parity-check.sh)`. Running it on a HEAD snapshot keeps a peer's mid-edit wrapper bytes from failing a docs-only task.",
+      "timestamp": "2026-10-30T12:03:36.365Z"
+    },
+    {
+      "id": "comment-c79c06a83e6f4ee5a235a715e3735a08",
+      "author": "worker-0062feec",
+      "content": "Contract additions from the WT-S revision after QA reject 1. The source is the Assumed interfaces in revised §2 and §7 of docs/plans/2026-10-30-per-task-worktrees.md. Document each of these once:\n- finalize_attempt `unlandedReason` value `remote`;\n- env MOE_LAND_NET_BACKOFF_SEC (default 5);\n- the receipt journal push result `push unknown: <detail>`, with `pushed` omitted while the outcome is unknown;\n- the codes MOE_LAND_MIRROR_SKIPPED, MOE_PUSH_OUTCOME_UNKNOWN, MOE_WORKTREE_GATE_INTEGRITY and MOE_MIGRATION_NO_GATE;\n- the rescue reasons `remote` and `push-unknown`.",
+      "timestamp": "2026-10-30T13:02:28.733Z"
+    },
+    {
+      "id": "comment-b70b6bb25a9f49ba9bdee8ae6e40e30c",
+      "author": "architect-899a90d6",
+      "content": "Contract additions from WT-03 (task-9a39bf6a) to document once:\n- MCP_SERVER.md, finalize_attempt:\n  - outcome 'unlanded', with params unlandedReason (conflict|contention|gate|diverged|remote), conflictPaths, rescueRef (refs/moe/rescue/<taskId>/<ts>) and targetTip; worktree attempts only.\n  - Routing: REVIEW to WORKING, or to BLOCKED (blockedFromStatus WORKING) for 'diverged' or the 3rd consecutive unlanded.\n  - New response fields taskStatus and landingRetry. 'landed' and 'nothing-to-commit' clear landingRetry.\n- get_context: task.landingRetry, when set.\n- SCHEMA.md: Task.landingRetry {reason, paths, rescueRef, targetTip, count, at} | null, and UnlandedReason.",
+      "timestamp": "2026-10-30T13:15:24.429Z"
+    },
+    {
+      "id": "comment-002d020d1be44c30abb3382ae9d97b0b",
+      "author": "worker-0062feec",
+      "content": "Spike self-review note (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L6, §7.3). For docs/CONFIGURATION.md:\n\n- In worktree mode, qualityGateScope is ignored: every completion landing runs settings.qualityGate (rail 1).\n- Worktree mode needs a qualityGate; the doctor fails without one.\n- The git-land-main lease is taken on every landing while a gate is set.\n\nNo new MCP parameter or schema field came out of this round.",
+      "timestamp": "2026-10-30T13:53:27.640Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T11:57:50.521Z",
+  "updatedAt": "2026-10-31T06:12:40.709Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T13:03:23.102Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T14:04:11.177Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-bc59d28a"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T14:08:12.357Z",
+  "executionContract": {
+    "intendedBehavior": "docs/MCP_SERVER.md, docs/SCHEMA.md and docs/CONFIGURATION.md document every worktree-mode contract the epic landed, once each, with the code's spelling:\n- claim_next_task/get_context `workspace`;\n- the complete_task branch rule;\n- finalize_attempt 'unlanded' and its routing;\n- worktreeMode, workspaceMode, AttemptWorkspace, landingRetry and UnlandedReason;\n- the env vars, git-land-<target>, refs/moe/board and moe/control;\n- every wrapper log code in the MOE_WORKTREE_/LAND_/CONTROL_/BOARD_ (plus PUSH_/MIGRATION_) families.\nDrift between design and code is commented on the slice that landed it. No code changes.",
+    "acceptanceCriteria": [
+      "Every family token in HEAD's scripts/moe-agent.sh appears in docs/CONFIGURATION.md, and every family token in the three docs appears in both HEAD wrappers.",
+      "SCHEMA field types match packages/moe-daemon/src/types/schema.ts.",
+      "MCP_SERVER documents workspace on claim_next_task and get_context, the moe/task/<taskId> branch rule, and finalize_attempt 'unlanded' with unlandedReason, conflictPaths, rescueRef, targetTip and the routing.",
+      "The step-5 command exits 0."
+    ],
+    "invariants": [
+      "Docs only: no file outside the three docs changes.",
+      "Spellings come from landed code; a designed-but-unlanded contract is not documented."
+    ],
+    "compatibility": [
+      "Existing shared-mode text stays; it gains only a short qualifier where worktree mode differs. The broader sweep is WT-18."
+    ],
+    "approvedScope": [
+      "docs/MCP_SERVER.md sections claim_next_task, get_context, complete_task and finalize_attempt; docs/SCHEMA.md sections Project, ExecutionAttempt and Task; docs/CONFIGURATION.md: the Settings Reference rows, the resources row, the Agent Scripts env table and a new Worktree mode subsection."
+    ],
+    "sourceAssumptions": [
+      "At planning time (2026-10-30, HEAD 25b3e872) the docs held no worktree tokens. MOE_PUSH_REBASE is the only existing family token, and it is present in both wrappers. The sh MOE_LAND_* python-bridge names are renamed to MOE_PY_* by WT-04.",
+      "Doc anchors: MCP_SERVER.md `### moe.get_context` ~180, `### moe.complete_task` ~539, `### moe.finalize_attempt` ~584, `### moe.claim_next_task` ~1389; SCHEMA.md `## Project` ~49, `## Task` ~395, `## ExecutionAttempt` ~1234; CONFIGURATION.md Agent Scripts ~46, Settings Reference ~165, resources row ~209."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Documenting from the design doc: rejected. The description requires landed spellings, and several slices refine names while they are built. Instead, an inventory from HEAD's committed code drives the edits, and drift is commented. A separate new doc page: rejected, because the task names the three reference docs and 'documented exactly once'.",
+    "codebaseInsights": "- The wrapper families are read with `git show HEAD:` so a peer's live mid-edit does not count.\n- The daemon contracts live in types/schema.ts, state/validators.ts, tools/claimNextTask.ts, getContext.ts, completeTask.ts and finalizeAttempt.ts.\n- `npm run lint` is docs:lint, the role-doc linter.\n- The contract-addition comments on this row (c79c06a8, b70b6bb2, 002d020d) are the checklist of extras beyond the description: MOE_LAND_NET_BACKOFF_SEC; unlandedReason 'remote'; MOE_LAND_MIRROR_SKIPPED, MOE_PUSH_OUTCOME_UNKNOWN, MOE_WORKTREE_GATE_INTEGRITY and MOE_MIGRATION_NO_GATE; push unknown results; the response fields taskStatus and landingRetry.",
+    "risks": "- Contracts from slices outside this row's dependency chain (e.g. WT-10M's MOE_MIGRATION_NO_GATE) may not be landed yet. Document only what HEAD has, and comment the gap.\n- The three docs are long and shared: keep edits local to the named sections.\n- A codex seat lands contested docs only under the idle-peer exception.",
+    "keyFiles": [
+      "docs/MCP_SERVER.md",
+      "docs/SCHEMA.md",
+      "docs/CONFIGURATION.md",
+      "docs/TROUBLESHOOTING.md",
+      "docs/plans/2026-10-30-per-task-worktrees.md",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T14:08:12.381Z",
+  "approvedPlanRevision": 1
+}

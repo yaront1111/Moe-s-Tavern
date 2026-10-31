@@ -1,0 +1,259 @@
+{
+  "id": "task-c78916eaae5444f39c60ab84d6bde39c",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: moe-call.sh falls back past a vanished MOE_PROXY_PATH under MOE_RUNTIME_PROTECTED=1",
+  "description": "scripts/moe-call.sh resolves its proxy at lines 144-166: MOE_PROXY_PATH if -f, else the repo proxy, else the global install. It ignores MOE_RUNTIME_PROTECTED. CQ-R13c2 guards the two moe-agent.sh calls (the EXIT-trap and hot-reload deregister) with `moe_call_allowed` ([ -f \"$PROXY_PATH_OVERRIDE\" ]). If the file vanishes between that check and moe-call.sh:145, the deregister runs a non-protected proxy. Fix in moe-call.sh: when MOE_RUNTIME_PROTECTED is exactly 1, use only MOE_PROXY_PATH, and fail without falling back.",
+  "definitionOfDone": [
+    "With MOE_RUNTIME_PROTECTED=1 and MOE_PROXY_PATH missing or not a file, moe-call.sh exits non-zero and runs no repo or global proxy. Shown by a harness test with decoys.",
+    "Without the marker, or with any other value, moe-call.sh's resolution order is unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED: add the protected-runtime rows to scripts/tests/moe-call.test.mjs. Append them after the last existing (CQ-C00) row. Leave the 26 C00 rows byte-unchanged; the only edit above them is `existsSync` added to the node:fs import. A verified prototype of this step (+122/-1) is in Serena memory `task-task-c78916eaae5444f39c60ab84d6bde39c-handoff`; adopt it or match it.\n\nFixture: build a fresh one per row under mkdtemp(tmpdir()), with a space in the name, removed in t.after.\n- Copy the real helper bytes to <dir>/install/scripts/moe-call.sh, and run that copy. Never run the in-place helper for these rows: its repo fallback is the live packages/moe-proxy/dist/index.js, and in CI it is a freshly built real proxy.\n- Decoy proxies. Each appends its label to the file named by MOE_CALL_RAN_LOG, then writes one JSON-RPC result {ran:<label>, tool:params.name}:\n  - named: <dir>/named/proxy.mjs, the MOE_PROXY_PATH target.\n  - repo: <dir>/install/packages/moe-proxy/dist/index.js (fallback 2).\n  - global: <dir>/global/packages/moe-proxy/dist/index.js, with <home>/.moe/config.json installPath pointing at <dir>/global (fallback 3).\n  - plugin: <home>/Library/Application Support/JetBrains/IDE/moe-jetbrains/proxy/index.js (fallback 4).\n  - inherited: <dir>/inherited/proxy.mjs, exported as PROXY_PATH. It runs if a branch leaves the shell variable unassigned.\n- The .js decoys sit at fixed names with no package.json. Write them module-agnostic: dynamic import('node:fs'), no top-level await.\n- Write '{}' to <dir>/scratch project/.moe/daemon.json. Without it the helper stops before any proxy runs, and a leak stays invisible.\n- Call env: spread process.env, then set HOME=<dir>/home, MOE_CALL_RAN_LOG and PROXY_PATH. Delete MOE_RUNTIME_PROTECTED and MOE_PROXY_PATH, then set only what the row names, so a seat's own exported marker never decides a row. Delete the log before each call; `ran` is its lines.\n\nRows:\n- Protected refusal, marker '1'. MOE_PROXY_PATH is:\n  - unset;\n  - '';\n  - an absolute directory holding index.js (the repo decoy's dist directory, which a `-e` check would run);\n  - 'proxy.mjs' with cwd = its directory (the file exists, so only the absolute rule refuses it);\n  - the named file, deleted just before the call, in the two real call shapes. The first is moe-agent.sh's deregister after moe_call_allowed passed: deregister_worker '{\"workerId\":…,\"reason\":\"terminal_closed\"}'. The second is the agent's own MOE_FALLBACK_CLI call that QA flagged on CQ-R13c2: get_context '{\"taskId\":…}'.\n  Each asserts:\n  - status === 1;\n  - ran deepEqual [];\n  - stdout === '';\n  - stderr matches /^Error: MOE_RUNTIME_PROTECTED_PATH_MISSING: MOE_PROXY_PATH must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start\\.$/m;\n  - for a non-empty value, stderr does not include that value.\n- Protected positive: marker '1' with the named absolute file. Status 0, ran ['named'], and stdout parses to {ran:'named', tool:'moe.get_context'}.\n- Legacy order, marker unset, one fixture, MOE_PROXY_PATH = named. Expect named; delete it and expect repo; delete that and expect global, then plugin. With all four deleted: status 1, ran [], and stderr matches 'moe-proxy not found. Set MOE_PROXY_PATH or install Moe.'. On Windows, skip the global step: Git Bash hands Windows-native python a POSIX $HOME path it cannot open, so that fallback is unreachable there, before and after this change. Comment why.\n- Legacy relative: marker unset, MOE_PROXY_PATH 'proxy.mjs' with cwd = its directory. Expect ran ['named']; legacy step 1 stays `-f` only.\n- Other marker values '', '0', '01', 'true', ' 1', '1 ': with the named file deleted, expect status 0 and ran ['repo'].\n\nRED evidence: run the step-3 test command against the unmodified helper. Expected, and seen in planning: exactly the 6 protected-refusal rows fail (status 0, because a fallback proxy ran), and every other row passes. Name the failing rows in the step note.\n\nTest copies for RED or mutation work go in a mktemp directory outside the checkout, never in scripts/tests/.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "note": "RED on unmodified helper: 41 tests, 35 pass, 6 fail — exactly the protected-refusal rows (unset, empty, directory, relative, vanished-before-deregister, vanished-before-fallback-CLI), status 0 because a fallback ran. Test diff +122/-1.",
+      "startedAt": "2026-10-31T02:23:26.553Z",
+      "completedAt": "2026-10-31T02:24:03.791Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN: in scripts/moe-call.sh, replace the single line `PROXY_PATH=$(find_proxy)` (line 187) with a protected branch. Keep find_proxy and every other line byte-unchanged, so DoD 2 holds by construction:\n\n    if [ \"${MOE_RUNTIME_PROTECTED:-}\" = 1 ]; then\n        case \"${MOE_PROXY_PATH:-}\" in\n            /*|[A-Za-z]:[\\\\/]*) PROXY_PATH=\"$MOE_PROXY_PATH\" ;;\n            *) PROXY_PATH=\"\" ;;\n        esac\n        if [ -z \"$PROXY_PATH\" ] || [ ! -f \"$PROXY_PATH\" ]; then\n            echo \"Error: MOE_RUNTIME_PROTECTED_PATH_MISSING: MOE_PROXY_PATH must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start.\" >&2\n            exit 1\n        fi\n    else\n        PROXY_PATH=$(find_proxy)\n    fi\n\nAbove it, add a 3-line comment covering: CQ-R13c2; the marker counts only when it is exactly '1' and is inherited by every caller; only MOE_PROXY_PATH runs, with no fallback; the refusal names the variable, never its value.\n\nError handling, fail closed:\n- A missing, empty, relative or non-regular MOE_PROXY_PATH under the marker prints the one refusal line on stderr and exits 1 before any proxy, request or daemon contact.\n- A file that vanishes after the check makes node fail to load it, and the helper exits 1 through its existing 'no response from daemon' path. No fallback runs there either.\n- Every legacy error path (python, node, proxy not found, daemon not running, bad JSON) is unchanged.\n\nWhy this shape:\n(a) The exit is top-level. An exit inside find_proxy only leaves the $(…) subshell, and find_proxy's step 1 accepts relative paths.\n(b) Both case arms assign PROXY_PATH, so an inherited PROXY_PATH environment variable can never survive into the protected branch. The `inherited` decoy row kills that mutant.\n(c) Use `if … ||`, not `[ -f ] && …` inside the case, so set -e stays plain on macOS CI's /bin/bash 3.2.\n(d) Same absolute pattern and the same sentence as moe-agent.sh's require_protected_runtime_file and refuse_unprotected_runtime (R13c2, lines 716-725), behind this helper's existing 'Error: ' prefix. This is the governor's contract.\n\nLive-runtime save: every seat runs this file from this checkout (the EXIT-trap and hot-reload deregister), and bash reads a script incrementally, so never rewrite it in place:\n1. `cp -p scripts/moe-call.sh scripts/.moe-call.sh.new`.\n2. Edit the .new copy.\n3. `bash -n scripts/.moe-call.sh.new`.\n4. One `mv -f scripts/.moe-call.sh.new scripts/moe-call.sh`.\n5. `bash -n scripts/moe-call.sh`.\nKeep LF endings (.gitattributes: *.sh eol=lf) and mode 100755. Report only scripts/moe-call.sh in modifiedFiles. No build, clean or install anywhere in the shared checkout (GLOBAL rail).\n\nGREEN: the whole step-1 file passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-call.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-call.sh"
+      ],
+      "note": "GREEN: 41/41. Saved via temp copy + bash -n + single mv -f; git diff shows no mode change (100755), +15/-1, find_proxy untouched.",
+      "startedAt": "2026-10-31T02:24:04.042Z",
+      "completedAt": "2026-10-31T02:24:16.472Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY, once, fresh, in place. This is a scripts/tests harness that the GLOBAL rail allows in place: it builds nothing and writes only under tmpdir. The exact command, whose output is the complete_task evidence:\n\nbash -n scripts/moe-call.sh && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/moe-call.test.mjs\n\nenv -i keeps out the seat's exported MOE_RUNTIME_PROTECTED and MOE_PROXY_PATH, and the Windows interop PATH entries. Expected: exit 0, 0 failures, every C00 row and every new row passing. The planning prototype ran 41 tests in about 3.5 s on Linux. Record the pass and fail counts in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate in place: exit 0, 41 tests, 41 pass, 0 fail (3.5 s).",
+      "startedAt": "2026-10-31T02:24:16.885Z",
+      "completedAt": "2026-10-31T02:24:59.153Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff (final step).\n\nMutation probes: run them on a scratch copy outside the checkout, never on scripts/moe-call.sh in place. Each mutant of the step-2 branch must fail at least one step-1 row. Planning killed all seven (failing rows in parentheses):\n(1) `-n` instead of `= 1` (5);\n(2) no absolute pattern (2);\n(3) `-e` instead of `-f` (1, the directory row);\n(4) falling back to find_proxy on a miss (6);\n(5) leaving PROXY_PATH unassigned in the non-absolute arm (3);\n(6) printing the value (6);\n(7) exit 0 on refusal (6).\nPut the kill table in the step note.\n\nDiff checks:\n- In scripts/moe-call.sh, `git diff` touches only the block at line 187; find_proxy is unchanged.\n- The test file only gains appended rows and existsSync.\n- No mode change, LF only.\n- No bash-4-only syntax.\n- The legacy path prints nothing new.\n- No edit to scripts/moe-agent.{sh,ps1}, scripts/tests/postflight.*, or docs/ (wrapper lane and CQ-R13 files, per the governor). moe_call_allowed stays as defense in depth.\n\nCI also runs this file on windows-latest (Git Bash) and macos-latest (bash 3.2). If the test file differs from the prototype, run it once more with Windows node on a copy under %TEMP%. For example: copy scripts/moe-call.sh and scripts/tests/moe-call.test.mjs into C:\\Users\\<you>\\AppData\\Local\\Temp\\<dir>\\scripts\\…, then run `\"/mnt/c/Program Files/nodejs/node.exe\" --test 'C:\\…\\scripts\\tests\\moe-call.test.mjs'`. The prototype passed 41/41 there.\n\nIf any byte changes in this step, re-run the step-3 command and use that fresh output as the complete_task evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "note": "Mutants run on a scratch copy outside the checkout, each killed (failing rows): 1 -n marker (5); 2 no absolute pattern (2); 3 -e not -f (1); 4 fallback to find_proxy (6); 5 unassigned PROXY_PATH (3); 6 prints value (6); 7 exit 0 (6). Diff: moe-call.sh +15/-1 at the PROXY_PATH line only, find_proxy untouched, 100755, no CR; test file +122/-1 (appended rows + existsSync). No edits to moe-agent.*, postflight.* or docs. Windows-node rerun not done: the test file is byte-identical to the planning prototype that passed 41/41 there. The other dirty paths in the checkout are peers' and untouched.",
+      "startedAt": "2026-10-31T02:24:59.717Z",
+      "completedAt": "2026-10-31T02:25:04.093Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote (standing CQ-backlog delegation): CQ-R row, deps DONE (R13c2 6f5cf10f); off the wrapper lane, no open row declares scripts/moe-call.sh — runs in parallel on idle seats (2 coders + 2 architects idle).",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-6f5cf10f78184c38a46e6973cadda817"
+  ],
+  "priority": "LOW",
+  "order": 312.6,
+  "comments": [
+    {
+      "id": "comment-d3494d7cd3d9405b97a48cfdfdf88867",
+      "author": "qa-12f7cf2d",
+      "content": "QA note from the CQ-R13c2 review (qa-12f7cf2d): there is one more moe-call.sh route this fix should cover. With MOE_FALLBACK_CLI=1, moe-agent.sh (~line 7746) tells the agent itself to run `bash scripts/moe-call.sh <tool> ...`. Those agent-run calls skip moe_call_allowed entirely and use moe-call.sh's own fallback chain if MOE_PROXY_PATH has vanished. Making moe-call.sh honor MOE_RUNTIME_PROTECTED=1 (exact MOE_PROXY_PATH or fail) closes this route too. Please add a row for it beside the deregister rows.",
+      "timestamp": "2026-10-31T02:01:56.164Z"
+    },
+    {
+      "id": "comment-891e09baaf2f41bc90c1a652c76ed522",
+      "author": "governor-693b7073",
+      "content": "Governor, 02:05Z. Promoting under the standing CQ-backlog delegation: deps are DONE (R13c2), and the row is off-lane, so it runs in parallel. Placement notes for the planner:\n- No open row declares scripts/moe-call.sh or scripts/tests/moe-call.test.mjs. Keep the row to those two files (the latter for the regression test).\n- Stay off the wrapper lane files (scripts/moe-agent.{sh,ps1}, scripts/tests/postflight.{sh,ps1}, postflight-fake-proxy.js). Also stay off docs/TROUBLESHOOTING.md and docs/ARCHITECTURE.md: CQ-R13 (f4811a72, WORKING now) holds them. If a doc line is truly needed, name it in the plan and I'll order the pair.\n- Live-runtime hazard: moe-agent.sh calls scripts/moe-call.sh from the EXIT trap and the hot-reload deregister of every live seat. A broken save breaks every seat's deregistration, so edit with the Edit tool and run `bash -n scripts/moe-call.sh` before every save of a final version.\n- Gates: run them in a git-archive snapshot. No npm build/clean/install in the shared checkout (GLOBAL rail).\n- Contract: match R13c2's protected-runtime semantics. The marker counts only when it is exactly '1'. Use the same MOE_RUNTIME_PROTECTED_PATH_MISSING code/message shape if a refusal is printed, and never print the path.",
+      "timestamp": "2026-10-31T02:03:22.091Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T01:35:38.722Z",
+  "updatedAt": "2026-10-31T02:37:11.060Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T02:03:23.829Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T02:03:46.705Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T02:26:49.344Z",
+    "wallClockMs": 1382639
+  },
+  "contextFetchedBy": [
+    "architect-4ff0711c",
+    "worker-c75a6f39",
+    "qa-12f7cf2d"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T02:22:53.225Z",
+  "executionContract": {
+    "intendedBehavior": "With MOE_RUNTIME_PROTECTED exactly '1', scripts/moe-call.sh uses only MOE_PROXY_PATH, which must be an absolute path (/…, X:/… or X:\\…) to a regular file. Otherwise it prints one stderr line and exits 1 before any proxy runs, never naming the value. The line is: 'Error: MOE_RUNTIME_PROTECTED_PATH_MISSING: MOE_PROXY_PATH must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start.' With any other marker value, or none, the unchanged find_proxy order runs: MOE_PROXY_PATH if -f, then the repo dist proxy, then the ~/.moe/config.json installPath proxy, then the JetBrains plugin bundle.",
+    "acceptanceCriteria": [
+      "Marker '1' with MOE_PROXY_PATH unset, empty, a directory, relative, or vanished before the call, in both the deregister and the fallback-CLI call shapes: exit 1, stdout empty, the refusal line on stderr without the value, and no repo, global, plugin or inherited-PROXY_PATH decoy ran.",
+      "Marker '1' with an existing absolute MOE_PROXY_PATH: that exact proxy runs and its result is printed.",
+      "Marker unset: named, then repo, then global (non-Windows), then plugin, then 'moe-proxy not found', in that order; a relative MOE_PROXY_PATH still resolves from the caller's cwd.",
+      "Marker '', '0', '01', 'true', ' 1' or '1 ': legacy fallback (the repo decoy runs)."
+    ],
+    "invariants": [
+      "find_proxy's body is byte-unchanged; the legacy branch calls it exactly as before.",
+      "Under marker '1', no proxy other than MOE_PROXY_PATH ever runs, whatever the environment holds (PROXY_PATH included).",
+      "The refusal names the variable and never prints its value.",
+      "The existing CQ-C00 rows in scripts/tests/moe-call.test.mjs are unchanged and green.",
+      "scripts/moe-call.sh keeps LF endings and mode 100755, and is never left syntactically broken on disk."
+    ],
+    "compatibility": [
+      "Legacy callers without the marker are unchanged: humans, the docs/TROUBLESHOOTING.md examples, the MCP_SERVER.md gated-tool hook, and unprotected seats.",
+      "moe-agent.sh's moe_call_allowed guard and the postflight P9 row stay untouched (wrapper lane).",
+      "Runs under Linux bash 5, macOS /bin/bash 3.2 and Windows Git Bash (the CI matrix in .github/workflows/ci.yml:239)."
+    ],
+    "approvedScope": [
+      "scripts/moe-call.sh: the PROXY_PATH assignment at line 187 only.",
+      "scripts/tests/moe-call.test.mjs: appended protected-runtime and legacy-order rows, plus the existsSync import."
+    ],
+    "reuse": [
+      "R13c2's absolute-path case pattern and refusal sentence from moe-agent.sh require_protected_runtime_file and refuse_unprotected_runtime.",
+      "The bash, shellPath and nativePath helpers already in moe-call.test.mjs."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-call.sh:143-185 find_proxy: MOE_PROXY_PATH (-f), $script_dir/../packages/moe-proxy/dist/index.js, $HOME/.moe/config.json installPath (read with $PYTHON_CMD), $HOME/Library/Application Support/JetBrains find */moe-jetbrains/proxy/index.js.",
+      "scripts/moe-call.sh:187 `PROXY_PATH=$(find_proxy)` is the only proxy resolution; :194-198 refuses when $PROJECT/.moe/daemon.json is missing; :216 runs \"$NODE_CMD\" \"$PROXY_PATH\".",
+      "scripts/moe-agent.sh:23-26 sets RUNTIME_PROTECTED and moe_call_allowed; :716-725 refuse_unprotected_runtime and require_protected_runtime_file (the pattern and the sentence); :164-169 and :6907-6910 deregister via moe-call.sh; :7752-7759 MOE_FALLBACK_CLI prompt line.",
+      "scripts/tests/moe-call.test.mjs uses node:test; bash = Git Bash on Windows, else /bin/bash; it has shellPath and nativePath helpers."
+    ],
+    "checkRefs": [
+      "bash -n scripts/moe-call.sh && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/moe-call.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) Gate inside find_proxy: rejected. An exit there only leaves the $(…) subshell, and its step 1 accepts relative paths. (b) Drop the fallbacks unconditionally: rejected, because it breaks legacy callers (DoD 2). (c) Rows in postflight.sh beside P9, as QA's note on this row suggested: the governor put the wrapper-lane files off limits, and the behavior under test is moe-call.sh's own. So the rows live in moe-call.test.mjs, named after the deregister and MOE_FALLBACK_CLI call shapes. (d) Docs: no doc describes moe-call.sh's proxy order, and MOE_RUNTIME_PROTECTED is still undocumented. The epic-final CQ-R13 (f4811a72) owns the docs sweep, so this task has no doc line. (e) Removing moe-agent.sh's moe_call_allowed now that the helper guards itself: out of scope (wrapper lane), and harmless as defense in depth.",
+    "codebaseInsights": "- The architect prototyped the full change in a scratch copy of HEAD d063e3fe; the patch is in Serena memory task-task-c78916eaae5444f39c60ab84d6bde39c-handoff.\n- RED: exactly the 6 protected-refusal rows failed on HEAD, with status 0 because a fallback ran.\n- GREEN: 41/41 on Linux, about 3.5 s under env -i, and 41/41 on Windows node.exe with Git Bash.\n- Seven mutants were all killed.\n- Size: helper +15/-1, tests +122/-1.\n- On Windows, the legacy global-install fallback is unreachable, because Git Bash passes Windows python a POSIX $HOME path. This is pre-existing; the ladder skips that step there.\n- moe-call.sh needs $PROJECT/.moe/daemon.json before it runs any proxy, so every refusal row must create it, or a leak stays invisible.",
+    "risks": "- Live runtime: seats run scripts/moe-call.sh from this checkout. Save via a temp copy, bash -n, then mv -f, never an in-place rewrite. A torn or broken save breaks every seat's deregister.\n- Seat env leakage: a protected seat exports MOE_RUNTIME_PROTECTED=1 and MOE_PROXY_PATH. New rows must delete and set both explicitly, and the gate runs under env -i.\n- The fallback decoys are plain .js at fixed paths. Keep them CommonJS/ESM-agnostic.\n- Never run the in-place helper with the repo fallback reachable: the repo decoy is the live proxy.\n- macOS CI uses bash 3.2: no bash-4 syntax, and the set -e-sensitive pattern is avoided.\n- QA may ask why the MOE_FALLBACK_CLI row is not in postflight. The answer is the governor ruling in the 02:03Z comment on this row.",
+    "keyFiles": [
+      "scripts/moe-call.sh",
+      "scripts/tests/moe-call.test.mjs",
+      "scripts/moe-agent.sh",
+      "scripts/CLAUDE.md",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T02:22:53.244Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-31T02:23:26.553Z",
+  "reviewStartedAt": "2026-10-31T02:25:07.281Z",
+  "verification": {
+    "command": "bash -n scripts/moe-call.sh && env -i HOME=\"$HOME\" PATH=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/moe-call.test.mjs",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 41\nℹ suites 0\nℹ pass 41\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 3548.08692",
+    "reportedAt": "2026-10-31T02:25:07.281Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/moe-call.test.mjs",
+    "scripts/moe-call.sh",
+    ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+  ],
+  "completionSummary": "scripts/moe-call.sh now honors MOE_RUNTIME_PROTECTED. With the marker exactly '1' it runs only MOE_PROXY_PATH, which must be an absolute path to a regular file. Otherwise it prints one refusal line (MOE_RUNTIME_PROTECTED_PATH_MISSING, never the value) and exits 1 before any proxy runs. Any other marker value, or none, keeps the unchanged find_proxy order. Covers the deregister and MOE_FALLBACK_CLI call shapes. Tests: 15 appended rows in scripts/tests/moe-call.test.mjs with repo/global/plugin/inherited decoys. RED on the old helper: exactly the 6 refusal rows failed. GREEN: 41/41. Seven mutants all killed. Size: helper +15/-1, tests +122/-1.",
+  "commits": [
+    {
+      "sha": "c1f8f8c002ad4552b14481d3800cd776df86074f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c75a6f39@2026-10-31T02:23:07Z",
+      "paths": [
+        ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/moe-call.sh",
+        "scripts/tests/moe-call.test.mjs"
+      ],
+      "recordedBy": "worker-c75a6f39",
+      "recordedAt": "2026-10-31T02:25:26.326Z",
+      "treeId": "b507bce7c35ef647b3950238a372f5f3f45006d1",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "04a4a9a773ccf2f62a99d301d1cfd095178e548a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-12f7cf2d@2026-10-31T02:25:41Z",
+      "paths": [
+        ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json"
+      ],
+      "recordedBy": "qa-12f7cf2d",
+      "recordedAt": "2026-10-31T02:27:09.495Z",
+      "treeId": "d2e87a0b996588fffd5a0335441a3acc0cdb51ed",
+      "status": "DONE",
+      "pushed": true
+    },
+    {
+      "sha": "19544d050459be8d5094cc3e2141a93321c10000",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-4ff0711c@2026-10-31T02:03:48Z",
+      "paths": [
+        ".moe/tasks/task-c78916eaae5444f39c60ab84d6bde39c.json"
+      ],
+      "recordedBy": "architect-4ff0711c",
+      "recordedAt": "2026-10-31T02:37:11.060Z",
+      "treeId": "93309863d2289b0dc9db7d190231f02832cf69fa",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-4ff0711c@2026-10-31T02:03:48Z",
+    "at": "2026-10-31T02:37:11.060Z"
+  },
+  "completedAt": "2026-10-31T02:26:49.344Z",
+  "reviewCompletedAt": "2026-10-31T02:26:49.344Z",
+  "reviewSummary": "Reviewed completion commit c1f8f8c0 (on moe/work-2026-10-24; working tree matches it for both owned files). Diff: scripts/moe-call.sh +15/-1 at the PROXY_PATH=$(find_proxy) line only (find_proxy body untouched, mode 100755, LF, bash -n ok); scripts/tests/moe-call.test.mjs +122/-1 (appended rows plus existsSync import; the 26 CQ-C00 rows are untouched). About 137 changed LOC, under the 400 cap. No edits to moe-agent.*, postflight.* or docs.\n\nRe-ran the plan's verification command under env -i: bash -n scripts/moe-call.sh && node --test scripts/tests/moe-call.test.mjs gave exit 0, 41 tests, 41 pass, 0 fail. Both DoD items are covered:\n- DoD 1: marker exactly '1' refuses and runs no repo/global/plugin/inherited-PROXY_PATH decoy when MOE_PROXY_PATH is unset, empty, a directory, relative, or vanished before the deregister call or before the MOE_FALLBACK_CLI get_context call. Each row asserts status 1, ran [], empty stdout and the exact refusal line without the value. The positive row runs exactly the named absolute proxy.\n- DoD 2: marker unset keeps the order named, repo, global, plugin, then 'moe-proxy not found'; a relative MOE_PROXY_PATH still resolves from cwd; marker '', '0', '01', 'true', ' 1' and '1 ' fall back to the repo decoy.\n\nRan three independent mutants on a scratch copy outside the checkout; each was killed:\n- -e instead of -f: the directory row fails.\n- Fall back to find_proxy on a miss: 6 refusal rows fail.\n- Any non-empty marker counts: the '0', '01', 'true', ' 1' and '1 ' legacy rows fail.\nThe unmutated copy passes 41/41. The worker's seven-mutant table is consistent with this.\n\nNot run: the Windows-node/Git Bash rerun (the worker's note says the test file matches the planning prototype that passed 41/41 there; CI matrix covers it) and macOS bash 3.2; the branch uses only POSIX test/case syntax. No self-landing was needed because the completion commit was recorded.",
+  "requiredCheckAtDone": null
+}

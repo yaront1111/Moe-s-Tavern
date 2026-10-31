@@ -91,7 +91,7 @@ describe('lifecycle E2E', () => {
   async function approveAndClaimWorker(taskId: string, workerId: string): Promise<void> {
     // CONTROL mode plan stays in AWAITING_APPROVAL; approve via the board path
     // (state.approveTask). set_task_status no longer self-approves in CONTROL.
-    await state.approveTask(taskId);
+    await state.approveTask(taskId, state.getTask(taskId)?.planRevision ?? 0);
     const claim = claimNextTaskTool(state);
     await claim.handler({ workerId, statuses: ['WORKING'], taskId }, state);
     // Worker also needs to record contextFetchedBy before start_step can run.

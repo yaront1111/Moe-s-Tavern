@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { installedArtifact, installedRoot, runtimeProfile } from '../services/MoeDaemonClient';
 
 export type AgentProvider = 'claude' | 'codex' | 'gemini' | 'grok' | 'custom';
 export type AgentRole = 'architect' | 'worker' | 'qa' | 'governor';
@@ -83,6 +84,28 @@ function resolveAgentScript(
     }
 
     return null;
+}
+
+// Contract with scripts/moe-agent.{sh,ps1} (CQ-R13c2): exactly '1', set only after every installed
+// artifact is accepted. A marker VS Code itself inherited is not stripped; the wrapper then fails closed.
+export const PROTECTED_RUNTIME_MARKER = 'MOE_RUNTIME_PROTECTED';
+
+/** The platform wrapper, daemon and proxy installed under `root`; never the project's scripts/ or a global install. */
+export function selectProtectedAgentRuntime(
+    basePath: string,
+    root: string,
+    windows: boolean = process.platform === 'win32'
+): { scriptPath: string; envOverrides: Record<string, string> } | { refused: string } {
+    const wrapper = installedArtifact(root, windows ? 'scripts/moe-agent.ps1' : 'scripts/moe-agent.sh', basePath);
+    if ('rejected' in wrapper) { return { refused: wrapper.rejected }; }
+    const envOverrides: Record<string, string> = {};
+    for (const [name, relative] of [['MOE_DAEMON_PATH', 'daemon/index.js'], ['MOE_PROXY_PATH', 'proxy/index.js']]) {
+        const selection = installedArtifact(root, relative, basePath);
+        if ('rejected' in selection) { return { refused: selection.rejected }; }
+        envOverrides[name] = selection.accepted;
+    }
+    envOverrides[PROTECTED_RUNTIME_MARKER] = '1';
+    return { scriptPath: wrapper.accepted, envOverrides };
 }
 
 function randomHex8(): string {
@@ -201,7 +224,16 @@ export function launchAgent(
         }
         const workspacePath = workspaceFolders[0].uri.fsPath;
 
-        const resolved = resolveAgentScript(extensionPath, workspacePath);
+        const resolved = runtimeProfile(workspacePath) === 'protected'
+            ? selectProtectedAgentRuntime(workspacePath, installedRoot(extensionPath))
+            : resolveAgentScript(extensionPath, workspacePath);
+        if (resolved && 'refused' in resolved) {
+            vscode.window.showErrorMessage(
+                `Protected execution profile: ${resolved.refused}. ` +
+                'Agents only use the wrapper, daemon and proxy installed with the Moe extension.'
+            );
+            return;
+        }
         if (!resolved) {
             vscode.window.showErrorMessage(
                 'Moe agent script not found. Ensure scripts/moe-agent exists in the workspace, extension bundle, or global install.'

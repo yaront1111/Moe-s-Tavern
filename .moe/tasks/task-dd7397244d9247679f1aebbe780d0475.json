@@ -108,7 +108,7 @@
       "completedAt": "2026-09-11T12:47:26.572Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,7 +121,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:48.215Z",
-  "updatedAt": "2026-09-11T13:11:45.145Z",
+  "updatedAt": "2026-10-24T15:19:08.729Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:46:47.754Z",
     "plannedStepCount": 6,
@@ -507,5 +507,6 @@
     }
   ],
   "completedAt": "2026-09-11T13:11:38.052Z",
-  "reviewSummary": "APPROVED after reopen #1; all 9 issues re-verified by re-running evidence, not reading summaries.\n\nDoD #2 (was FAILED) passes. 16-mutation delete-the-emitter sweep in a throwaway worktree: all five previously-GREEN mutations now RED (sh:876/881/891/907/5303). Per-mode holds -- sh:5289 (exec) and sh:5303 (interactive) go red INDEPENDENTLY. PowerShell emitters red too (ps1 762/765/766/768/781/4416/4418/4506/4511), so the pin bites in EACH wrapper. CONTROL ps1:1037 (grok's copy of the header) stays GREEN, proving site scoping still does work and the sweep isn't trivially all-red.\n\nDoD #3 (was FAILED) passes; corrections checked at source. ps1 never ASSIGNS MOE_DAEMON_HOST (reads only, 752/1013), so the bash-only feature-asymmetry reframe is right and counts/recommendation/follow-ups track it. All 16 create_secure_temp calls are inside $(...), so cleanup_temp's rm -rf is a no-op; the note records the leak, not the false EXIT-trap comment. project_doc_fallback_filenames really diverges (bash exact-string replace sh:955-959 vs ps1 regex ps1:825) and is now divergent. json.dumps wording qualified.\n\nCounts reproduce: 30/14/3, 18 emitterEvidence blocks = \"18 of the 30\", 41 literals under the pinned prefixes, 6141+5214=11355, no dry-run mode (zero hits).\n\nGates I ran: contract test 23/23 exit 0; tsc --noEmit exit 0; vitest list = 1 of 110 collected (DoD #5, no new runner); parity-check.sh PASS exit 0; postflight.sh (TIMEOUT_SEC=300) PASS, 25 scenarios, exit 0, zero ^FAIL. DoD #4 direct: blobs f64bdb88 / f456b7d1 unchanged before, during and after every harness and mutation; scripts/ diff empty. DoD #1: eight facets populated, type-required. Rails: one provider (asserted), zero importers repo-wide, daemon state-only, no forbidden patterns. Completion commit 3f4220b; bytes in 032c1cb; tree clean.\n\nRecommendation stands: AGAINST a staged migration now, FOR a print-argv mode first."
+  "reviewSummary": "APPROVED after reopen #1; all 9 issues re-verified by re-running evidence, not reading summaries.\n\nDoD #2 (was FAILED) passes. 16-mutation delete-the-emitter sweep in a throwaway worktree: all five previously-GREEN mutations now RED (sh:876/881/891/907/5303). Per-mode holds -- sh:5289 (exec) and sh:5303 (interactive) go red INDEPENDENTLY. PowerShell emitters red too (ps1 762/765/766/768/781/4416/4418/4506/4511), so the pin bites in EACH wrapper. CONTROL ps1:1037 (grok's copy of the header) stays GREEN, proving site scoping still does work and the sweep isn't trivially all-red.\n\nDoD #3 (was FAILED) passes; corrections checked at source. ps1 never ASSIGNS MOE_DAEMON_HOST (reads only, 752/1013), so the bash-only feature-asymmetry reframe is right and counts/recommendation/follow-ups track it. All 16 create_secure_temp calls are inside $(...), so cleanup_temp's rm -rf is a no-op; the note records the leak, not the false EXIT-trap comment. project_doc_fallback_filenames really diverges (bash exact-string replace sh:955-959 vs ps1 regex ps1:825) and is now divergent. json.dumps wording qualified.\n\nCounts reproduce: 30/14/3, 18 emitterEvidence blocks = \"18 of the 30\", 41 literals under the pinned prefixes, 6141+5214=11355, no dry-run mode (zero hits).\n\nGates I ran: contract test 23/23 exit 0; tsc --noEmit exit 0; vitest list = 1 of 110 collected (DoD #5, no new runner); parity-check.sh PASS exit 0; postflight.sh (TIMEOUT_SEC=300) PASS, 25 scenarios, exit 0, zero ^FAIL. DoD #4 direct: blobs f64bdb88 / f456b7d1 unchanged before, during and after every harness and mutation; scripts/ diff empty. DoD #1: eight facets populated, type-required. Rails: one provider (asserted), zero importers repo-wide, daemon state-only, no forbidden patterns. Completion commit 3f4220b; bytes in 032c1cb; tree clean.\n\nRecommendation stands: AGAINST a staged migration now, FOR a print-argv mode first.",
+  "planRevision": 0
 }

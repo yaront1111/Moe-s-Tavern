@@ -184,7 +184,21 @@ find_proxy() {
     echo ""
 }
 
-PROXY_PATH=$(find_proxy)
+# CQ-R13c2: with MOE_RUNTIME_PROTECTED exactly '1' (set for a protected seat and
+# inherited by every caller of this helper) run only MOE_PROXY_PATH, an absolute
+# path to a regular file, never a fallback. Names the variable, never its value.
+if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then
+    case "${MOE_PROXY_PATH:-}" in
+        /*|[A-Za-z]:[\\/]*) PROXY_PATH="$MOE_PROXY_PATH" ;;
+        *) PROXY_PATH="" ;;
+    esac
+    if [ -z "$PROXY_PATH" ] || [ ! -f "$PROXY_PATH" ]; then
+        echo "Error: MOE_RUNTIME_PROTECTED_PATH_MISSING: MOE_PROXY_PATH must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start." >&2
+        exit 1
+    fi
+else
+    PROXY_PATH=$(find_proxy)
+fi
 if [ -z "$PROXY_PATH" ]; then
     echo "Error: moe-proxy not found. Set MOE_PROXY_PATH or install Moe." >&2
     exit 1
@@ -222,6 +236,7 @@ fi
 
 # Extract the result content from JSON-RPC response via stdin
 printf '%s' "$RESULT" | "$NODE_CMD" -e "
+process.stdin.setEncoding('utf8');
 let input = '';
 process.stdin.on('data', d => input += d);
 process.stdin.on('end', () => {
@@ -231,7 +246,8 @@ process.stdin.on('end', () => {
     try { resp = JSON.parse(line); } catch { continue; }
     if (resp.error) {
       process.stdout.write(JSON.stringify(resp.error, null, 2) + '\n');
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     if (resp.result) {
       const r = resp.result;
@@ -247,13 +263,15 @@ process.stdin.on('end', () => {
             }
           }
         }
-        process.exit(0);
+        process.exitCode = 0;
+        return;
       }
       process.stdout.write(JSON.stringify(r, null, 2) + '\n');
-      process.exit(0);
+      process.exitCode = 0;
+      return;
     }
   }
   process.stderr.write('Error: could not parse response\n');
-  process.exit(1);
+  process.exitCode = 1;
 });
 "

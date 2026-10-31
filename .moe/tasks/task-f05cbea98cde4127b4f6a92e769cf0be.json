@@ -106,7 +106,7 @@
       "completedAt": "2026-07-31T16:13:03.748Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -119,7 +119,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:30.241Z",
-  "updatedAt": "2026-07-31T16:16:06.733Z",
+  "updatedAt": "2026-10-24T15:19:03.273Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:25:31.809Z",
     "plannedStepCount": 6,
@@ -184,5 +184,6 @@
   ],
   "completedAt": "2026-07-31T16:16:06.732Z",
   "reviewCompletedAt": "2026-07-31T16:16:06.732Z",
-  "reviewSummary": "Re-ran verification myself: `npx vitest run src/tools/completeTask.test.ts src/util/branchPolicy.test.ts` -> 2 files / 28 passed; full daemon `npx vitest run` -> 55 files / 859 passed; `npx tsc --noEmit` exit 0. DoD 1: completeTask.test.ts:212 asserts matched:true on `moe/work-2026-07-31`; :231 asserts CONSTRAINT_VIOLATION + codeName + BRANCH-POLICY-FAIL naming both `main` and `moe/work-*`, AND task still WORKING with no verification persisted (throw sits at completeTask.ts:105, after assertVerificationEvidence, before updateTask). DoD 2: :258 missing branch -> postToRoleChannel('governors',...) called once with the pattern, status REVIEW; :271 whitespace branch same; :318 non-string branch same; :329 completion survives a rejected governors post. DoD 3: :285 unset setting -> no branchPolicy key, spy count 0; :298 hand-edited non-string setting also disables (typeof guard, not ?.trim()). Matcher audited line-by-line: escape-then-expand order is correct (naive replace would make branchPolicy.test.ts:38-39 `release/v1X0-a`/`v1+0-a` match — real red-green), anchored, case-sensitive, adjacent `.*` collapsed, ReDoS bounded (255 chars / 10 wildcards), never throws (try/catch returns false). Four-touch-point epic rail satisfied: ProjectSettings (schema.ts:100-108), validateSettingsUpdate allowlist + validateStringValue{maxLength:200,allowEmpty,trim} (StateManager.ts:896,961), docs/SCHEMA.md, docs/CONFIGURATION.md; docs/MCP_SERVER.md documents currentBranch + all three outcomes + wrappers-unchanged. No new MCP tool so no getTools() change needed; no forbidden patterns; scripts/ untouched (wrapper changes correctly out of scope). Doc-file collisions with siblings 5c824/aa44c coexist without clobbering."
+  "reviewSummary": "Re-ran verification myself: `npx vitest run src/tools/completeTask.test.ts src/util/branchPolicy.test.ts` -> 2 files / 28 passed; full daemon `npx vitest run` -> 55 files / 859 passed; `npx tsc --noEmit` exit 0. DoD 1: completeTask.test.ts:212 asserts matched:true on `moe/work-2026-07-31`; :231 asserts CONSTRAINT_VIOLATION + codeName + BRANCH-POLICY-FAIL naming both `main` and `moe/work-*`, AND task still WORKING with no verification persisted (throw sits at completeTask.ts:105, after assertVerificationEvidence, before updateTask). DoD 2: :258 missing branch -> postToRoleChannel('governors',...) called once with the pattern, status REVIEW; :271 whitespace branch same; :318 non-string branch same; :329 completion survives a rejected governors post. DoD 3: :285 unset setting -> no branchPolicy key, spy count 0; :298 hand-edited non-string setting also disables (typeof guard, not ?.trim()). Matcher audited line-by-line: escape-then-expand order is correct (naive replace would make branchPolicy.test.ts:38-39 `release/v1X0-a`/`v1+0-a` match — real red-green), anchored, case-sensitive, adjacent `.*` collapsed, ReDoS bounded (255 chars / 10 wildcards), never throws (try/catch returns false). Four-touch-point epic rail satisfied: ProjectSettings (schema.ts:100-108), validateSettingsUpdate allowlist + validateStringValue{maxLength:200,allowEmpty,trim} (StateManager.ts:896,961), docs/SCHEMA.md, docs/CONFIGURATION.md; docs/MCP_SERVER.md documents currentBranch + all three outcomes + wrappers-unchanged. No new MCP tool so no getTools() change needed; no forbidden patterns; scripts/ untouched (wrapper changes correctly out of scope). Doc-file collisions with siblings 5c824/aa44c coexist without clobbering.",
+  "planRevision": 0
 }

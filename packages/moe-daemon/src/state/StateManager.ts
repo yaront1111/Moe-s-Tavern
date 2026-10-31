@@ -64,7 +64,7 @@ import type {
   WorkerStatus
 } from '../types/schema.js';
 import { CURRENT_SCHEMA_VERSION, ACTIVITY_EVENT_TYPES } from '../types/schema.js';
-import { invalidInput } from '../util/errors.js';
+import { invalidInput, notAllowed } from '../util/errors.js';
 import { findRailIndex } from './railChange.js';
 import { generateId } from '../util/ids.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
@@ -78,7 +78,6 @@ import {
   sanitizeString,
   sanitizeNumber,
   sanitizePatternPreservingPlaceholders,
-  sanitizeStringArray,
   sanitizeBoolean,
   sanitizeEnum,
   sanitizeUrl,
@@ -1250,7 +1249,8 @@ export class StateManager {
     const title = sanitizeString(input.title, 'epicTitle', 500, 'Untitled epic');
     const description = sanitizeString(input.description, 'epicDescription', 10000, '');
     const architectureNotes = sanitizeString(input.architectureNotes, 'architectureNotes', 50000, '');
-    const epicRails = sanitizeStringArray(input.epicRails, 100, 1000);
+    // Same rule as updateEpic: refuse (INVALID_INPUT), never truncate or drop.
+    const epicRails = validateEpicUpdates({ epicRails: input.epicRails }).epicRails ?? [];
     const validStatuses = ['PLANNED', 'ACTIVE', 'COMPLETED'] as const;
     const status = sanitizeEnum(input.status, validStatuses, 'PLANNED');
 
@@ -1368,9 +1368,9 @@ export class StateManager {
 
   async approveProposal(proposalId: string): Promise<RailProposal> {
     const proposal = this.proposals.get(proposalId);
-    if (!proposal) {
-      throw new Error(`Proposal not found: ${proposalId}`);
-    }
+    if (!proposal) throw new Error(`Proposal not found: ${proposalId}`);
+    if (proposal.status === 'APPROVED') return proposal;
+    if (proposal.status !== 'PENDING') throw notAllowed('resolve proposal', 'proposal already resolved');
 
     await this.applyRailChange(proposal);
 
@@ -1465,9 +1465,9 @@ export class StateManager {
 
   async rejectProposal(proposalId: string): Promise<RailProposal> {
     const proposal = this.proposals.get(proposalId);
-    if (!proposal) {
-      throw new Error(`Proposal not found: ${proposalId}`);
-    }
+    if (!proposal) throw new Error(`Proposal not found: ${proposalId}`);
+    if (proposal.status === 'REJECTED') return proposal;
+    if (proposal.status !== 'PENDING') throw notAllowed('resolve proposal', 'proposal already resolved');
 
     const updated: RailProposal = {
       ...proposal,

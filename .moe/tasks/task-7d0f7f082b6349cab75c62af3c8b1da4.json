@@ -1,0 +1,200 @@
+{
+  "id": "task-7d0f7f082b6349cab75c62af3c8b1da4",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "[CQ-C06a] Pure context delta module",
+  "description": "Objective: the pure, IO-free core of CQ-C06 (acknowledged context deltas). Its job is to compute a delta between two served get_context packets, with explicit removals, and to decide whether a delta may be served at all. Split out of CQ-C06 (task-d75f71d7) by architect-4ae016fb on 2026-10-29 as a size split: C06 owns the get_context wiring and plans against these exact names.\n\nInterface, a new module packages/moe-daemon/src/context/contextDelta.ts:\n- `export type DeltaRefusal = 'no-base' | 'base-unavailable' | 'base-mismatch' | 'session-mismatch' | 'attempt-mismatch' | 'phase-changed' | 'runner-changed' | 'epoch-missing' | 'epoch-changed'`.\n- `export interface DeltaBase { readonly packetId: string; readonly text: string; readonly attemptId: string; readonly generation: number; readonly sessionId: string; readonly lastPhaseAt: string; readonly runner: string | null; readonly contextEpoch: number }`. Here runner is `<processStartedAt>@<host>` from the attempt, or null.\n- `export interface ContextDelta { readonly basePacketId: string; readonly packetId: string; readonly changed: readonly { readonly pointer: string; readonly value: unknown }[]; readonly removed: readonly string[] }`.\n  - Pointers are RFC 6901 JSON Pointers.\n  - Diffing recurses into plain objects only. Arrays and primitives are replaced wholesale.\n  - removed lists every pointer present in the base and absent from the result.\n  - Both lists are sorted by code unit.\n- `export function diffPackets(basePacketId: string, baseText: string, packetId: string, resultText: string): ContextDelta`. It parses both JSON texts, and throws invalidInput when either is not a JSON object.\n- `export function applyDelta(base: unknown, delta: ContextDelta): unknown`. It is pure; tests and clients use it to prove that a delta is complete.\n- `export class DeltaBaseStore { constructor(maxEntries?: number); get(key: string): DeltaBase | undefined; set(key: string, base: DeltaBase): void; delete(key: string): void }`.\n  - Bounded and in memory, with least-recently-set eviction (default 256).\n  - Never persisted, so after a daemon restart every lookup misses.\n  - `export function deltaBaseKey(attemptId: string, generation: number, sessionId: string): string`.\n- `export function decideDelta(request: { basePacketId?: string; contextEpoch?: number }, current: { attemptId: string; generation: number; sessionId: string; lastPhaseAt: string; runner: string | null }, stored: DeltaBase | undefined): { delta: true } | { delta: false; reason: DeltaRefusal }`. Rules, in this order:\n  1. no basePacketId gives no-base;\n  2. no stored base gives base-unavailable (restart, eviction, never served);\n  3. a different packetId gives base-mismatch;\n  4. a different sessionId gives session-mismatch;\n  5. a different attemptId or generation gives attempt-mismatch (a re-claim or VM replacement);\n  6. a different lastPhaseAt gives phase-changed. Any reconcile or reattach since the base was served changes it, so reattachment never acknowledges a base.\n  7. a different runner gives runner-changed;\n  8. an absent contextEpoch gives epoch-missing. A session that cannot report its compactions never gets a delta.\n  9. a different contextEpoch gives epoch-changed (compaction).\n\nScope boundaries: this module and its unit tests only. No get_context, store or schema change, and no persistence. Approved full CQ-01–CQ-08 rollout (2026-10-24). Never directly edit .moe.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "diffPackets represents every removed key as an explicit JSON-pointer removal, and applyDelta(base, diff) deep-equals the parsed result for every fixture: nested removal, array change, addition, a pointer-escaped key ('~' and '/'), and an unchanged packet, which gives empty lists.",
+    "decideDelta returns {delta:true} only for the exact base packetId with the same sessionId, attemptId, generation, lastPhaseAt, runner and contextEpoch. Every other case returns its named DeltaRefusal, in the documented order, with one test per reason.",
+    "DeltaBaseStore is in memory and bounded: an eviction test passes, and a fresh store (a restart) answers base-unavailable through decideDelta. Nothing is persisted.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Create packages/moe-daemon/src/context/contextDelta.test.ts against the exact interface in this task's description. Keep it table-driven (it.each) and assert exact objects, never truthiness.\n\nDoD1, diffPackets plus applyDelta. Each fixture is a JSON text pair. Assert the exact {changed, removed} lists, sorted by code unit, and that applyDelta(JSON.parse(base), delta) deep-equals JSON.parse(result):\n- (a) nested removal: '/task/rejectionDetails/reason' appears in removed;\n- (b) an array change is replaced wholesale at its pointer, never recursed into;\n- (c) an addition;\n- (d) escaped keys 'a/b' and 'c~d' become '/a~1b' and '/c~0d' (RFC 6901: escape '~' first);\n- (e) an unchanged packet gives empty lists;\n- (f) a key-order-only difference gives empty lists;\n- (g) a primitive replaced by an object, and the reverse, is replaced wholesale;\n- (h) a key named with the prototype accessor name, built in the test as '_'.repeat(2) + 'proto' + '_'.repeat(2) so the forbidden literal never appears. It is diffed and applied as an ordinary own key, and the result's prototype stays Object.prototype.\nAlso:\n- applyDelta must not mutate its input;\n- a delta whose parent pointer is missing makes applyDelta throw INVALID_INPUT;\n- non-object JSON roots (an array, null, a number) make diffPackets throw INVALID_INPUT.\n\nDoD2, decideDelta:\n- One matching row gives {delta:true}.\n- Nine rows each differ in exactly one input and give exactly: no-base, base-unavailable, base-mismatch, session-mismatch, attempt-mismatch (once for attemptId and once for generation), phase-changed, runner-changed (including null against a value), epoch-missing and epoch-changed.\n- A precedence row with several mismatches gives the earliest rule's reason.\n\nDoD3, DeltaBaseStore:\n- With maxEntries 2, set a, b, c: a is evicted. Setting b again moves it to newest.\n- A new store answers base-unavailable through decideDelta.\n- maxEntries 0, -1, 1.5 or NaN throws INVALID_INPUT.\n- deltaBaseKey is unambiguous: ('a', 1, 'b|c') differs from ('a|b', 1, 'c').\n\nRun npx vitest run src/context/contextDelta.test.ts. It must fail only because the module is missing.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/context/contextDelta.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/contextDelta.test.ts"
+      ],
+      "note": "Wrote table-driven tests; red run in Linux snapshot fails only on missing module. Shared tree has ~630 unrelated dirty paths, untouched.",
+      "startedAt": "2026-10-29T16:52:35.164Z",
+      "completedAt": "2026-10-29T16:53:24.602Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement packages/moe-daemon/src/context/contextDelta.ts exactly as the task description specifies. It is pure: it imports only util/errors.js (invalidInput).\n\nError handling: diffPackets and applyDelta throw invalidInput on malformed input. decideDelta and the store's get never throw.\n\n- diffPackets:\n  - JSON.parse both texts in try/catch. Each root must be a plain object.\n  - Walk the sorted union of keys. A key absent from the result is removed. A key absent from the base is changed with its value. Two plain objects recurse. Anything else is changed when a key-order-independent deep compare differs.\n  - Pointer segments escape '~' as '~0' first, then '/' as '~1'.\n  - Sort both lists by code unit.\n- applyDelta:\n  - Clone with JSON.parse(JSON.stringify(base)).\n  - Apply removals, then changes.\n  - Write every key with Object.defineProperty (value, writable, enumerable, configurable all true), never by plain assignment. A prototype-accessor key then stays an ordinary own data property. Never spell that key literally in code.\n  - A missing parent throws invalidInput.\n- DeltaBaseStore:\n  - A Map with delete-then-set to refresh order, evicting the first key past maxEntries (default 256).\n  - maxEntries must be a positive safe integer, else invalidInput.\n  - Return stored bases as frozen copies, so callers cannot mutate the store.\n- deltaBaseKey = JSON.stringify([attemptId, generation, sessionId]).\n- decideDelta applies rules 1-9 in the documented order.\n\nMake every test green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/contextDelta.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/context/contextDelta.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/contextDelta.ts",
+        "packages/moe-daemon/src/context/contextDelta.test.ts"
+      ],
+      "note": "Implemented module; 52 tests green in Linux snapshot.",
+      "startedAt": "2026-10-29T16:53:25.405Z",
+      "completedAt": "2026-10-29T16:54:04.685Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify once.\n- Iterate with `npx vitest run src/context/contextDelta.test.ts`.\n- Then run the gate fresh in an isolated Linux snapshot of HEAD, overlaying only the two files: native deps, MOE_* unset, Linux-only PATH (mem:gotcha-daemon-linux-snapshot-gate). The gate is `cd packages/moe-daemon && npm test` plus `npx tsc --noEmit`, and both must exit 0.\n- cmp the overlaid files first. Supply the npm test command, exit code and output tail to complete_task.\n\nMutants, on scratch copies, each restored and cmp'd afterwards:\n1. drop the removed list: fixture (a);\n2. recurse into arrays: fixture (b);\n3. skip pointer escaping: fixture (d);\n4. drop the lastPhaseAt rule: the phase-changed row;\n5. treat an absent epoch as 0: the epoch-missing row;\n6. no eviction: the eviction row;\n7. plain assignment in applyDelta: fixture (h).\nKeep the diff at or under 400 net lines.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/contextDelta.ts",
+        "packages/moe-daemon/src/context/contextDelta.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/contextDelta.ts",
+        "packages/moe-daemon/src/context/contextDelta.test.ts"
+      ],
+      "note": "Gate in Linux snapshot of HEAD with the two files overlaid (cmp-ok): npm test exit 0 (176 files, 4793 passed/16 skipped), tsc --noEmit exit 0. All 7 mutants killed and restored. Diff 396 lines (189 impl + 207 tests); trimmed tests to stay under the 400 cap.",
+      "startedAt": "2026-10-29T16:54:05.459Z",
+      "completedAt": "2026-10-29T16:56:24.420Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "One adversarial self-review of the two files, the last step. Check:\n- deep and wide JSON: recursion depth on hostile nesting is bounded by what JSON.parse accepts, and a RangeError becomes invalidInput;\n- duplicate keys in the JSON text (the last one wins, matching how get_context serializes);\n- '-0' and NaN cannot occur in parsed JSON;\n- the store hands out frozen copies;\n- no forbidden-pattern token appears, and no IO, .moe edit or Git write happens.\nWrite the handoff memory with the final names for C06 (task-d75f71d7).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/contextDelta.ts",
+        "packages/moe-daemon/src/context/contextDelta.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/contextDelta.ts",
+        "packages/moe-daemon/src/context/contextDelta.test.ts"
+      ],
+      "note": "Self-review: RangeError mapped to INVALID_INPUT (tested at 200k depth); hasOwn guards keep absent keys from resolving to Object.prototype; frozen copies in the store; duplicate keys follow JSON.parse last-wins; no forbidden tokens, IO, .moe or Git writes. Handoff memory written.",
+      "startedAt": "2026-10-29T16:56:25.434Z",
+      "completedAt": "2026-10-29T16:56:37.558Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 241,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T16:48:24.988Z",
+  "updatedAt": "2026-10-29T17:08:08.882Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T16:49:57.692Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T17:07:34.739Z",
+    "wallClockMs": 1057047
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-0062feec",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T16:50:51.545Z",
+  "planningNotes": {
+    "approachesConsidered": "1. A JSON Patch (RFC 6902) library. Rejected: a new dependency for about 40 lines, and RFC 6902 op lists are harder to review than {changed, removed}.\n2. Recursing into arrays. Rejected: indices shift on insert, and wholesale replacement is simpler and always correct.\n3. Persisting the store. Rejected: in memory means a restart gives a full snapshot, which is DoD2 of the parent C06.",
+    "codebaseInsights": "- util/errors.ts invalidInput(field, reason) returns a MoeError INVALID_INPUT.\n- The consumer is CQ-C06, tools/getContext.ts servedContextIdentity: packetId = sha256 of JSON.stringify(packet). It keys the store per StateManager through a WeakMap.\n- The project forbids the literal prototype-accessor token in code AND tests, so build it by concatenation in the test.\n- Rationale: Serena decision-cq-c06-context-deltas.",
+    "risks": "- Prototype pollution through applyDelta, if a plain assignment is used; mutant 7 guards it.\n- Pointer escape order: '~' before '/'.\n- Key-order-independent compare: never compare JSON text of objects whose key order may differ.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/errors.ts",
+      "packages/moe-daemon/src/tools/getContext.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T16:50:51.671Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T16:52:35.164Z",
+  "reviewStartedAt": "2026-10-29T16:56:41.809Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test (Linux snapshot of HEAD + 2 overlaid files, cmp-ok; plus npx tsc --noEmit exit 0)",
+    "exitCode": 0,
+    "outputTail": "Test Files  176 passed (176)\n Tests  4793 passed | 16 skipped (4809)\n Duration  26.84s\ntsc --noEmit exit=0",
+    "reportedAt": "2026-10-29T16:56:41.809Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/context/contextDelta.test.ts",
+    "packages/moe-daemon/src/context/contextDelta.ts",
+    ".moe/tasks/task-02fd5931f7274a6696ef84e7d3da4efb.json",
+    ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+    ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+    ".moe/tasks/task-7d0f7f082b6349cab75c62af3c8b1da4.json",
+    ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+    ".moe/tasks/task-95b610e3726c4e099c84eaedf098602a.json"
+  ],
+  "completionSummary": "Added the pure context delta module packages/moe-daemon/src/context/contextDelta.ts (diffPackets, applyDelta, DeltaBaseStore, deltaBaseKey, decideDelta) with 49 table-driven tests (396 lines in total). All DoD fixtures are covered: nested removal, array replaced wholesale, addition, escaped keys, unchanged and key-order-only packets, a prototype-accessor key, and one decideDelta test per refusal in rule order. The store is bounded, in memory only, and hands out frozen copies. 7 mutants (drop removed, recurse arrays, skip escaping, drop phase rule, absent epoch as 0, no eviction, plain assignment) were each killed by the tests. The gate ran in a Linux snapshot of HEAD with the two files overlaid: npm test exit 0 and tsc --noEmit exit 0.",
+  "commits": [
+    {
+      "sha": "e1708ceb546457fda654ef1b4300702ff0621278",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T16:51:58Z",
+      "paths": [
+        ".moe/tasks/task-02fd5931f7274a6696ef84e7d3da4efb.json",
+        ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-7d0f7f082b6349cab75c62af3c8b1da4.json",
+        ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+        ".moe/tasks/task-95b610e3726c4e099c84eaedf098602a.json",
+        "packages/moe-daemon/src/context/contextDelta.test.ts",
+        "packages/moe-daemon/src/context/contextDelta.ts"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T16:57:12.815Z",
+      "treeId": "a28b6af4fcac65d0cb143257d8a5b18d9cde2c7f",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/context/contextDelta.test.ts",
+    "packages/moe-daemon/src/context/contextDelta.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-952969be@2026-10-29T17:04:21Z",
+    "at": "2026-10-29T17:08:08.882Z"
+  },
+  "completedAt": "2026-10-29T17:07:34.739Z",
+  "reviewCompletedAt": "2026-10-29T17:07:34.739Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit e1708ce (on moe/work-2026-10-24): only contextDelta.ts (+189) and contextDelta.test.ts (+207), net 396 non-board LOC (<400), plus wrapper-landed .moe board JSON. No get_context/store/schema change, no IO/persistence; imports only util/errors.js. Forbidden-token grep clean.\n\nRe-ran verification in a fresh Linux-native snapshot of HEAD (native npm ci, env -i, node v24.21.0, MOE_* unset; both files cmp-identical): `cd packages/moe-daemon && npm test` exit 0 (176 files, 4793 passed, 16 skipped; contextDelta 49/49) and `npx tsc --noEmit` exit 0.\n\nDoD: (1) all fixtures present with exact toEqual + applyDelta round-trip: nested removal, array wholesale, addition, escaped keys, unchanged, key-order-only, prototype-accessor key as own key. (2) decideDelta: match row, one test per DeltaRefusal (attempt/generation, runner null), precedence test. (3) DeltaBaseStore bounded, eviction/recency tests, frozen copies, invalid maxEntries throws, fresh store gives base-unavailable; nothing persisted. (4) output supplied.\n\nMy mutants (scratch, restored, cmp'd): escape-order swap, base-mismatch dropped, generation dropped, runner dropped, freeze dropped: all killed.\n\nResidual test-strength gaps (not code defects): 3 extra mutants survived: (a) unescape order swapped (no literal '~1' key fixture); (b) `removed` never exercised out of discovery order, so its sort is unpinned (changed sort is pinned); (c) hasOwn->`in` (no key named constructor/toString). I probed the real code on all three in a scratch test: correct ('~1' round-trips via '/~01', removed sorts to ['/a','/z'], constructor/toString removed/added correctly). Suggest C06 or the epic's final hardening task add these rows. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

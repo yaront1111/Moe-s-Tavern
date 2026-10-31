@@ -121,7 +121,7 @@
       "completedAt": "2026-07-31T17:48:43.987Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -134,7 +134,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:30.592Z",
-  "updatedAt": "2026-07-31T17:55:03.430Z",
+  "updatedAt": "2026-10-24T15:19:03.613Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:25:00.240Z",
     "plannedStepCount": 7,
@@ -210,5 +210,6 @@
   ],
   "completedAt": "2026-07-31T17:55:03.430Z",
   "reviewCompletedAt": "2026-07-31T17:55:03.430Z",
-  "reviewSummary": "Re-ran gates myself: `cd packages/moe-daemon && npm test` -> exit 0, 55 files / 863 tests, 0 skipped (matches evidence); integration file alone 7/7; root `npm run lint` -> exit 0. Byte-freshness checked: sibling order-8 rewrote chatWait/chatBacklog/MCP_SERVER at 20:44-20:45; evidence run (20:48) and mine (20:49) postdate those mtimes, so green covers current bytes. Both compositions real + mutation-resistant: exact asserts (budget === 3*60000, newFiles equals, priorHandoffs[0].diskState === release sig, cascadeTriggered + BACKLOG, staleHandoffDiskState true) plus negatives (undefined signature -> no flag, unchanged -> no flag, chat failure cannot undo park, explicit budget not clobbered); real submitPlan/releaseTask/setTaskStatus/claimNextTask, only util/diskState mocked; tmp project per test, rmSync + restoreAllMocks + useRealTimers. Docs audited against code: pacePerStepMs/appendOnlyFiles/refusalCascadeAutoBacklog/consolidationBranch each in ProjectSettings + validateSettingsUpdate allowlist with validators; defaults match source (PACE_PER_STEP_MS_DEFAULT 15*60*1000 = documented 900000, bounds 1000-86400000); `!== false` and `??` match documented absence-enabled / explicit-[]-disables; newFiles, diskState, StepAmendment/amendments/activeAmendmentId in SCHEMA; amend_plan_step is the only new getTools() entry, documented, as are complete_task.currentBranch, report_blocked routing, claim/release additions; fixed omission (appendOnlyFiles missing from claim_next_task fileCollision) was real. submit_plan order by line: rails 252, size 287, path probe 329, ONE updateTask 417; seeding guarded so explicit arg and positive existing budget win. affectedFiles ReDoS collapse in scope, semantics-preserving, pathological pattern <1s. No deleted tests vs f785be3, no .only/.skip, no forbidden patterns, role docs untouched. Whole-epic review (45 files) in step-6 note. Disclosed gap accepted: chat_wait excluded (order-8 mid-rework, owns its own QA pass, now REVIEW)."
+  "reviewSummary": "Re-ran gates myself: `cd packages/moe-daemon && npm test` -> exit 0, 55 files / 863 tests, 0 skipped (matches evidence); integration file alone 7/7; root `npm run lint` -> exit 0. Byte-freshness checked: sibling order-8 rewrote chatWait/chatBacklog/MCP_SERVER at 20:44-20:45; evidence run (20:48) and mine (20:49) postdate those mtimes, so green covers current bytes. Both compositions real + mutation-resistant: exact asserts (budget === 3*60000, newFiles equals, priorHandoffs[0].diskState === release sig, cascadeTriggered + BACKLOG, staleHandoffDiskState true) plus negatives (undefined signature -> no flag, unchanged -> no flag, chat failure cannot undo park, explicit budget not clobbered); real submitPlan/releaseTask/setTaskStatus/claimNextTask, only util/diskState mocked; tmp project per test, rmSync + restoreAllMocks + useRealTimers. Docs audited against code: pacePerStepMs/appendOnlyFiles/refusalCascadeAutoBacklog/consolidationBranch each in ProjectSettings + validateSettingsUpdate allowlist with validators; defaults match source (PACE_PER_STEP_MS_DEFAULT 15*60*1000 = documented 900000, bounds 1000-86400000); `!== false` and `??` match documented absence-enabled / explicit-[]-disables; newFiles, diskState, StepAmendment/amendments/activeAmendmentId in SCHEMA; amend_plan_step is the only new getTools() entry, documented, as are complete_task.currentBranch, report_blocked routing, claim/release additions; fixed omission (appendOnlyFiles missing from claim_next_task fileCollision) was real. submit_plan order by line: rails 252, size 287, path probe 329, ONE updateTask 417; seeding guarded so explicit arg and positive existing budget win. affectedFiles ReDoS collapse in scope, semantics-preserving, pathological pattern <1s. No deleted tests vs f785be3, no .only/.skip, no forbidden patterns, role docs untouched. Whole-epic review (45 files) in step-6 note. Disclosed gap accepted: chat_wait excluded (order-8 mid-rework, owns its own QA pass, now REVIEW).",
+  "planRevision": 0
 }

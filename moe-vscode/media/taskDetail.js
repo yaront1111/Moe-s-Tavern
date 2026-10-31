@@ -2,6 +2,30 @@
     var initData = document.getElementById('initial-data');
     var currentTaskStatus = initData.dataset.taskStatus;
     var currentTaskId = initData.dataset.taskId;
+    // The plan revision this page rendered, sent with every approval. The panel
+    // seeds it with the Plan Review page's mapping and each rendered task update
+    // refreshes it. Undefined means no usable token: the host refuses that
+    // visibly instead of approving a plan nobody reviewed.
+    var renderedPlanRevision = parseSeededRevision(initData.dataset.planRevision);
+
+    function isRevision(value) {
+        return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+    }
+
+    // A string attribute, so parsed strictly: only digits, and 0 is a real token.
+    function parseSeededRevision(raw) {
+        if (typeof raw !== 'string' || !/^[0-9]+$/.test(raw)) { return undefined; }
+        var parsed = Number(raw);
+        return isRevision(parsed) ? parsed : undefined;
+    }
+
+    // Mirrors PlanReviewPanel's seedRevisionAttribute: an absent field is a legacy
+    // row (0); a malformed one, or a task not awaiting approval, yields no token.
+    function revisionForTask(task) {
+        if (task.status !== 'AWAITING_APPROVAL') { return undefined; }
+        if (task.planRevision === undefined) { return 0; }
+        return isRevision(task.planRevision) ? task.planRevision : undefined;
+    }
 
     function escapeHtml(text) {
         if (!text) { return ''; }
@@ -153,7 +177,7 @@
     var approveBtn = document.getElementById('approveBtn');
     if (approveBtn) {
         approveBtn.addEventListener('click', function() {
-            vscodeApi.postMessage({ type: 'approve' });
+            vscodeApi.postMessage({ type: 'approve', expectedPlanRevision: renderedPlanRevision });
         });
     }
 
@@ -180,7 +204,7 @@
         vscodeApi.postMessage({ type: 'prev', currentStatus: currentTaskStatus });
     });
     document.getElementById('nextBtn').addEventListener('click', function() {
-        vscodeApi.postMessage({ type: 'next', currentStatus: currentTaskStatus });
+        vscodeApi.postMessage({ type: 'next', currentStatus: currentTaskStatus, expectedPlanRevision: renderedPlanRevision });
     });
 
     // Delete
@@ -301,6 +325,8 @@
         var msg = event.data;
         if (msg.type === 'updateTask') {
             var task = msg.task;
+            // No token until the new plan is actually on screen.
+            renderedPlanRevision = undefined;
             // Update status badge
             var badge = document.getElementById('statusBadge');
             if (badge && task.status) {
@@ -314,6 +340,7 @@
             renderBlocker(task);
             // Update plan section
             renderSteps(task.implementationPlan);
+            renderedPlanRevision = revisionForTask(task);
             // Update comments section
             renderComments(task.comments);
         }

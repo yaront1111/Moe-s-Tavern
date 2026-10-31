@@ -131,6 +131,13 @@ Plugin → Server commands:
 - `APPROVE_PROPOSAL` / `REJECT_PROPOSAL`, `APPROVE_DECISION` / `REJECT_DECISION`
 - `UPDATE_SETTINGS`
 
+Rail proposals transition only from `PENDING`. Repeating the same approval or rejection
+returns the unchanged `PROPOSAL_UPDATED` acknowledgment without new persistence,
+activity entries or state events. The opposite decision on a resolved proposal returns
+`ERROR` with code `-32003`, codeName `NOT_ALLOWED` and the stable message
+`[NOT_ALLOWED] resolve proposal not allowed: proposal already resolved`, leaving
+the rails and proposal record untouched. These rules concern rail proposals, not chat decisions.
+
 ### CLI ↔ Proxy ↔ Daemon (MCP)
 
 MCP JSON-RPC 2.0 over stdio (proxy) → WebSocket `/mcp` (daemon).
@@ -150,6 +157,7 @@ See `docs/MCP_SERVER.md` for tool definitions.
 ├── attempts/  candidates/  checks/       # delivery records (gitignored; see Delivery Path below)
 ├── reviews/  receipts/                   # delivery records (gitignored)
 ├── resources/         # shared-resource leases (gitignored)
+├── pins/              # chat pins, one <channelId>.json each (gitignored: they reference message ids that live only in the gitignored messages/)
 ├── channels/  decisions/
 ├── roles/             # role guides (sha-stamped, auto-upgraded)
 ├── agents/            # Claude Code subagent defs (mirrored to .claude/agents/)
@@ -271,6 +279,50 @@ and the wrapper side (gate, rescue refs, receipts): `docs/CONFIGURATION.md`.
 
 ---
 
+## Local Runner Isolation
+
+`scripts/local-runner/` runs agent and check jobs in Moe-owned local Multipass VMs (Ubuntu 24.04). Each module's header
+comment is the reference; this is the map. Nothing here is active yet: every result carries `executionReady: false`,
+and `verified-local` stays refused until certification and the client gates pass.
+
+- **Protected control plane.** Under the protected profile the JetBrains plugin (`util/RuntimeSelectionPolicy.kt`)
+  runs only the daemon, proxy and wrapper installed with the plugin and an absolute node outside the project, never the
+  project's copies or a PATH lookup, and sets `MOE_RUNTIME_PROTECTED=1`: `moe-agent.{sh,ps1}` and `moe-call.sh` then
+  run exactly `MOE_DAEMON_PATH` and `MOE_PROXY_PATH` or refuse. Candidate source becomes Git objects only
+  (`admission.mjs`); branch writes stay in the wrappers' landing. A guest gets no daemon address: the host session
+  (`guest-session.mjs`) forwards its requests, and the runner client (`runner-client.mjs`) dials, only a daemon whose
+  own `/health` reports a loopback bind.
+- **Owned VM lifecycle** (`lifecycle.mjs`, `vm-control.mjs`). Multipass has no ownership labels, so ownership is an
+  owner-only ledger record (`~/.moe/runner-state/<project hash>/vms`, or under `MOE_RUNNER_STATE_DIR`), written before
+  launch under a random `moe-vm-<20 hex>` name. Reconcile and cleanup touch recorded names only, delete by exact name,
+  and preserve a record whose attempt or job lease is not proven closed. `vm-control.mjs status|reconcile|cleanup
+  --project <path>` is the IDE contract.
+- **Pinned bootstrap and readiness** (`guest-bootstrap.mjs`, `provision.mjs`, `guest-readiness.mjs`). The image is
+  verified against its sha256 pin and launched as a local file. The cloud-init user-data travels only on the launch's
+  stdin and installs the root-owned supervisor, the MCP shim and the locked job identities `moe-agent` and `moe-check`.
+  Readiness needs a clean cloud-init `done`, then zero mounts, the installed hashes, the credential denied to both
+  identities, locked unprivileged identities and bounded resources.
+- **Supervisor modes** (`guest-supervisor.py`, run as root through `multipass exec`; its header defines every code).
+  `bridge` runs one agent job, `check` one approved check, `materialize` copies a snapshot into the workspace, `export`
+  streams the workspace's changes back, `verify` compares the workspace with its manifest, and `agents`, `toolchain` and
+  `dependencies` install pinned bytes. Exit codes: 0 done, 64 usage, 65 malformed input, 66 no workspace, 71 the job
+  could not start, 73 already exists, 74 I/O failure or host EOF, 75 signal, 76 protocol violation, 77 not root. `check`
+  adds 79 (a protected path lacks its approved blob), 80 (the job changed one) and 81 (the dependency install failed).
+- **Check lifecycle** (`check-lifecycle.mjs`, `check-session.mjs`, `check-dispatch.mjs`). Each run gets a fresh VM:
+  provisioning and readiness; the pinned Node toolchain and an offline dependency tree, built on the host from the
+  approved definition's lockfiles (`toolchain-cache.mjs`, `dependency-cache.mjs`); a copy-only materialization; an
+  `npm ci --offline --ignore-scripts --workspaces=false` in the guest, refused (81) in a lockfile directory without a
+  `package.json` or with an `npm-shrinkwrap.json` or `.npmrc`; the check once, as `moe-check`; `verify` of a passed run's
+  workspace; then the VM deleted on every path. The outcome is `passed`, `code-failure`, `infra-failure`, `timeout`,
+  `skipped` or `inconclusive`, and it reaches the daemon only over the authenticated `/runner` channel.
+- **Environment identity and evidence freshness** (`check-evidence.mjs`). `checkEnvironment` hashes the declared
+  `CHECK_BOUNDARIES` with the observed image, supervisor, VM size, toolchain and dependency tree, so changing any of
+  them needs new evidence. `evidenceStatus` is `fresh` only when environment, tree, definition digest and plan revision
+  all match.
+- **Certification** (`certify.mjs`): the operator's native run on real hardware. See [CERTIFICATION.md](CERTIFICATION.md).
+
+---
+
 ## Data Flow Examples
 
 ### Task Status Change (Plugin Drag/Drop)
@@ -288,6 +340,26 @@ and the wrapper side (gate, rescue refs, receipts): `docs/CONFIGURATION.md`.
 3. User clicks Approve.
 4. Plugin sends `APPROVE_TASK`.
 5. Daemon updates task status → WORKING and broadcasts.
+
+---
+
+## Security Notes
+
+- The protected profile's threat model is in [design/protected-profile-threat-model.md](design/protected-profile-threat-model.md).
+  Inside it: repository content (including ignored `.moe/` runtime files that a pull can overwrite), guest
+  code, browser pages and network peers. Outside it: same-user host processes, host-launched agent seats and
+  other local users. A single-user host is assumed.
+- On the live daemon, a file under the project, `.moe/daemon.json` included, may add a refusal but never an
+  admission. Trust in the live daemon comes from the daemon itself, or from owner-only state outside the
+  repository.
+- Accepted gaps: the daemon.json port↔pid binding, and the CQ-R08 per-request re-check window. The record
+  lists the open follow-ups.
+- Plain HTTP `GET /health` answers only a request with no Host header, or one whose Host (port optional) is
+  `localhost`, a loopback IP literal, or the IP literal of the address the connection arrived on (for example
+  the WSL gateway, or an explicit bind address). Any other Host, every DNS name included, gets 403 with no
+  body fields, so a page that points a name at the daemon cannot read it (`server/healthHost.ts`). WebSocket
+  upgrades rely on the Origin rule instead. Clients that reach `/health` (`MOE_DAEMON_HOST`, curl) must use an
+  IP literal or `localhost`.
 
 ---
 

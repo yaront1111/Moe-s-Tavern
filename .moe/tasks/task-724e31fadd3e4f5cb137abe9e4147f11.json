@@ -1,0 +1,302 @@
+{
+  "id": "task-724e31fadd3e4f5cb137abe9e4147f11",
+  "epicId": "epic-be924fb8",
+  "title": "security: daemon /ws and /mcp accept browser-origin WebSocket upgrades, and WSL agent mode binds them on every interface",
+  "description": "Filed at the human's direction on 2026-10-30 (governor REPL, priority HIGH), from worker-0062feec's finding on CQ-RF05 (task-b439d7fb, comment-4bef8984). Confirmed by the governor against the live daemon.\n\nProblem class: an unauthenticated local control channel that is reachable from untrusted origins.\n1. packages/moe-daemon/src/server/WebSocketServer.ts builds its WebSocket server with no verifyClient, and the daemon source has no Origin handling at all. A WebSocket upgrade that a browser makes on behalf of any web page is accepted on /ws and /mcp; only /runner authenticates. Browsers do not apply CORS to WebSocket upgrades. The server must check Origin itself.\n2. In WSL agent mode (JetBrains \"Run Agents in WSL\"), MoeDaemonSupervisor spawns the daemon with --host 0.0.0.0. The live daemon was confirmed listening on 0.0.0.0:9876 on 2026-10-30. That puts the same unauthenticated endpoints on every host interface, not just the WSL virtual network, and only Windows Firewall stands between them and the LAN.\n\nWhy it matters: /mcp drives the board (create tasks, set status, chat), and agents act on task contents. Keep this row's own text at the level of the problem class. Do not write exploit steps into task fields or chat, because .moe/tasks is committed and pushed.\n\nWanted:\n- Refuse browser-originated upgrades on /ws and /mcp: a present Origin header that is not explicitly allowed is rejected. The Moe clients (moe-proxy, the JetBrains plugin, the VS Code extension, the wrapper RPC helper) must keep working; check which of them send an Origin header, if any.\n- In WSL agent mode, bind only to the interface WSL agents actually use (the WSL virtual adapter or its gateway address), not 0.0.0.0, while WSL agents still reach the daemon the way moe-agent.sh discovers it (loopback, then the WSL gateway).\n- JetBrains first (MoeDaemonSupervisor.kt), then VS Code parity.\n- Coordinate with CQ-RF05's re-decision (task-b439d7fb), which owns the threat-model write-up. This row owns the code fix.",
+  "definitionOfDone": [
+    "A WebSocket upgrade to /ws or /mcp that carries a browser Origin header outside the allowed set is refused before any message is processed. moe-proxy, the JetBrains plugin client, the VS Code extension and the wrapper RPC path still connect. Daemon tests cover a refused browser origin, an absent Origin, and each real client's actual handshake.",
+    "In WSL agent mode the daemon no longer listens on 0.0.0.0. It binds the WSL-facing interface (or another bound host that a test pins), and a WSL seat still reaches /health and /mcp through moe-agent.sh's discovery. Tests cover both the JetBrains supervisor argv and the daemon's bind.",
+    "docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md describe the Origin rule and the WSL bind, task fields carry no exploit walkthrough, and `cd moe-jetbrains && ./gradlew test` plus `cd packages/moe-daemon && npm test` exit 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "CONSISTENCY SWEEP, after the code siblings land. This row was split on 2026-10-30, and it dependsOn three siblings:\n- task-801272c4: the Origin rule in WebSocketServer.ts, plus its docs;\n- task-2f2484b4: the daemon's `--host wsl`, i.e. loopback plus the WSL adapter, plus its docs;\n- task-0c72d59a: the JetBrains argv `--host wsl`.\nRead their landed bytes and handoff memories first. This row adds no new behavior. It aligns every remaining mention with the landed code and owns DoD 3.\n\nEdit only the lines named below. Peers edit moe-agent.sh, CLAUDE.md and the two docs concurrently: preserve their bytes and report every path in modifiedFiles.\n- scripts/moe-agent.sh (the foreign-daemon probe):\n  - The candidate comment 'then the WSL default gateway (NAT mode, daemon bound to 0.0.0.0)' should name the WSL adapter that `--host wsl` binds.\n  - The fix-options hint 'Restart the daemon listening beyond loopback: --host 0.0.0.0 (or MOE_BIND_HOST=0.0.0.0)' becomes `--host wsl (or MOE_BIND_HOST=wsl)`.\n  - moe-agent.ps1 has no equivalent text; confirm it with a grep.\n- packages/moe-proxy/src/utils.ts: the getDaemonHost JSDoc should say a Windows daemon started with --host wsl, not one bound to 0.0.0.0.\n- packages/moe-daemon/src/types/schema.ts: the DaemonInfo.bindHost comment example becomes 'wsl' for WSL agents (loopback plus the WSL adapter).\n- docs/PLUGIN_SPEC.md:76: the WSL agent mode line says `--host wsl`.\n- CLAUDE.md, the WSL agent mode sentence in the Run section:\n  - it says `--host wsl` (loopback plus the WSL adapter, never every interface);\n  - add one clause: the daemon refuses WebSocket upgrades that carry a non-allowed Origin header.\n- docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md: edit them ONLY if the siblings' landed text misses or misstates either rule. Check the Origin rule with its 403 symptom, the MOE_BIND_HOST 'wsl' value, and WSL reachability.\n\nThen run a residual grep: `grep -rn '0\\.0\\.0\\.0' CLAUDE.md docs scripts moe-jetbrains/src/main moe-vscode/src packages/*/src --include=*.md --include=*.kt --include=*.ts --include=*.sh --include=*.ps1 --include=*.mjs`, excluding tests, generated files and docs/plans.\n- Every remaining hit must be an explicit operator choice or a port-probe comment.\n- Put the grep output in the step note.\n\nAlso read this row's and the siblings' task text: none may carry an exploit walkthrough (DoD 3).\n\nError handling: comments and docs only. A sibling that left a behavior gap is reported in the step note and to #architects as a new bug row, not patched here.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "docs/PLUGIN_SPEC.md",
+        "CLAUDE.md",
+        "docs/CONFIGURATION.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "docs/PLUGIN_SPEC.md",
+        "CLAUDE.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Sweep done. Changes are comments and docs only, +8/-7 across 6 files. None of the 6 was dirty before this session. The peer dirt is untouched: .moe/tasks/*, moe-jetbrains build.gradle.kts and RuntimeSelectionPolicy*, codexDescriptor.ts, and the scripts/tests launcher tests.\n\n- moe-agent.sh: the probe comment now names the WSL adapter that --host wsl binds. The fix hint now reads `--host wsl (or MOE_BIND_HOST=wsl)`. bash -n OK. MOE_DAEMON_FOREIGN_PROJECT is intact. moe-agent.ps1 has no equivalent text (grep is empty).\n- proxy utils.ts getDaemonHost JSDoc and schema.ts DaemonInfo.bindHost comment now give the 'wsl' example.\n- PLUGIN_SPEC.md:76 now says `--host wsl`.\n- CLAUDE.md:\n  - the WSL sentence now says `--host wsl` (loopback plus the WSL adapter, never every interface);\n  - the Endpoints sentence gains one clause: a 403 refusal of an upgrade whose Origin is not allowed.\n- CONFIGURATION.md:28 fixes a sibling gap. 801272c4's Origin paragraph sits between the MOE_BIND_HOST row and 2f2484b4's \"`--host wsl` selects the same mode\" sentence, so \"same mode\" read as the Origin rule. It now says \"same mode as MOE_BIND_HOST=wsl; any --host value takes precedence\". The stale \"once the launcher update is installed\" became \"passes --host wsl; older plugin builds passed 0.0.0.0, and a daemon they started keeps that bind until it restarts\".\n- TROUBLESHOOTING.md needed no edit. It already covers the 403 Origin symptom, MOE_BIND_HOST=wsl and WSL reachability.\n\nResidual grep (tests, docs/plans and generated files excluded):\n- CONFIGURATION.md:28: an explicit operator choice, plus older-plugin compatibility.\n- docs/design/protected-profile-threat-model.md:113: a dated decision record of the DONE row task-b439d7fb, under \"As of the commit read\". It already says neither fix row had landed. Left alone: that is history, not guidance, and it is outside approved scope.\n- scripts/local-runner/certify-bridge.mjs:104: a port-probe comment.\n- daemon index.ts:80: compatibility mapping of an old 0.0.0.0 bindHost to loopback.\n- daemon index.ts:537: a port-probe comment.\n- bindHosts.ts:16: the exclusion guard.\n\nTask text: this row and the three siblings were scanned. Their only handshake mentions are the defensive 403/101 test rows, with no exploit walkthrough. Gaps in sibling behavior: none found.",
+      "startedAt": "2026-10-30T18:22:13.178Z",
+      "completedAt": "2026-10-30T18:26:00.910Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "LIVE WSL CHECK, end to end, in scratch only, for DoD 1 and DoD 2 on a real Windows host. Never touch the live daemon (port 9876), the repo's .moe/ or the shared node_modules.\n\n1. Snapshot.\n   - `git archive HEAD` of the whole repo into a fresh scratch dir on D: (Windows-visible), e.g. /mnt/d/projexts/moe-wslcheck-<utc>/repo.\n   - Through cmd.exe and the Windows node, run `npm ci --no-audit --no-fund` then `npm run build` in its packages/moe-daemon.\n2. Scratch project: an empty directory beside it, initialised with that dist's init or start. Start it with PowerShell `Start-Process -WindowStyle Hidden`, so it outlives the interop console:\n   `<Windows node> <snap>\\packages\\moe-daemon\\dist\\index.js start --project <scratch project> --port 9990 --host wsl`\n   Wait for its daemon.json to appear.\n3. Bind proof (Windows): `cmd.exe /d /c \"netstat -ano -p TCP | findstr :9990\"` lists 127.0.0.1:9990, plus the WSL adapter address when one exists, and NEVER 0.0.0.0:9990. The scratch daemon.json records bindHost 'wsl'.\n4. Discovery proof (from WSL). Use moe-agent.sh's own candidate order and probe commands: read probe_daemon_health and wsl_gateway_host, and reuse their exact commands. MOE_DAEMON_HOST must be unset, then try 127.0.0.1, then the WSL gateway.\n   - The first candidate that answers serves /health with status healthy.\n   - On that same host, a curl WebSocket upgrade to /mcp (HTTP/1.1, Upgrade, Connection, Sec-WebSocket-Version 13, a random Sec-WebSocket-Key) gets 101.\n   - The same upgrade with an Origin header gets 403.\n   - Record which candidate answered (mirrored or NAT).\n5. Teardown, always, even on failure:\n   - run `<snap>\\packages\\moe-daemon\\dist\\index.js stop --project <scratch project>`;\n   - confirm netstat no longer lists :9990;\n   - delete the scratch directories.\n\nError handling:\n- If the Windows node or npm is missing, or the firewall blocks every candidate, record the exact command, exit code and output in the step note, and report it in complete_task as not proven. Never claim it passed.\n- Use a fixed port 9990, and refuse to start if :9990 is already listening.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "LIVE CHECK PROVEN on this Windows host (NAT-mode WSL2), against HEAD c6c5d6c7, scratch only.\n- Snapshot: `git archive HEAD` to D:\\projexts\\moe-wslcheck-20261030T182626Z\\repo. Windows node v24.16.0 ran `npm ci` and `npm run build` with exit 0.\n- Start: Start-Process -WindowStyle Hidden ran `node dist\\index.js init --project <scratch>\\project --port 9990 --host wsl`, with USERPROFILE/HOME pointed at a scratch home so init's writeGlobalConfig could not rewrite the real ~/.moe/config.json. :9990 was checked free first.\n\nBind:\n- netstat LISTENING showed exactly `127.0.0.1:9990` and `172.26.208.1:9990`, the latter being vEthernet (WSL (Hyper-V firewall)). It showed no 0.0.0.0:9990 and no TCPv6 listener.\n- daemon.json held {port 9990, bindHost \"wsl\"}, and /health also reported bindHost \"wsl\".\n\nDiscovery: moe-agent.sh's is_wsl, probe_daemon_health and wsl_gateway_host were extracted byte-equal to HEAD and run in its candidate loop, with MOE_DAEMON_HOST unset.\n- The candidates were \" 127.0.0.1 172.26.208.1\".\n- 127.0.0.1 gave rc=1, because loopback is not mirrored. 172.26.208.1 gave rc=0, so the NAT gateway (the WSL adapter) answered.\n- /health there returned status healthy, with the scratch projectPath.\n\nUpgrade on 172.26.208.1:9990/mcp (curl, HTTP/1.1, version 13, random key):\n- with no Origin, `HTTP/1.1 101 Switching Protocols` and a Sec-WebSocket-Accept;\n- with `Origin: http://example.invalid`, `HTTP/1.1 403 Forbidden`, body \"Forbidden\";\n- /ws with `Origin: null` also gave 403.\n\nWindows-side loopback, raw http upgrade with Windows node: /ws absent 101, /ws \"null\" 403, /mcp absent 101, /mcp origin 403.\n\nReal client: moe-proxy built in the snapshot, run under Linux node 24.21.0 in env -i with MOE_PROJECT_PATH=/mnt/d/... and MOE_DAEMON_HOST=172.26.208.1, as discovery exports it. It connected; initialize returned moe-daemon 0.8.0 and tools/list returned 71 tools.\n\nTeardown:\n- My first `stop` hit a cmd quoting error (exit 1). The fallback force-stopped the two scratch node processes (supervisor 49460, _run 49980).\n- A re-run of `stop` exited 0 and removed the stale daemon.json.\n- 0 scratch node processes remain, and :9990 has no LISTENING row.\n- The scratch directory was deleted. Evidence is copied to /tmp/moe-wslcheck-evidence.\n- The live daemon :9876, the repo .moe and the shared node_modules were not touched.\n\nSide finding, not caused by this run (the file's mtime is 14:43Z, before it): the real C:\\Users\\Yaron\\.moe\\config.json installPath points at a deleted QA temp dir (qa952-25ba-win.vDD8GF). Some earlier scratch `init` overwrote it.",
+      "startedAt": "2026-10-30T18:26:04.067Z",
+      "completedAt": "2026-10-30T18:31:38.484Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, full regression across every package this security change touched. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Daemon and proxy, in a Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate):\n   - `git archive HEAD` of the whole repo, then overlay ONLY this row's own edited files, cmp-verified;\n   - `npm ci` in packages/moe-daemon and in packages/moe-proxy, under env -i with nvm node v24.21.0;\n   - in moe-daemon, `npx tsc --noEmit && npm test`;\n   - in moe-proxy, `npm test`.\n2. JetBrains, under the jetbrains-gradle lease (moe.acquire_resource {resourceId: 'jetbrains-gradle'}; on busy, moe.report_blocked with that resourceId; release it even on failure):\n   cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n   - Count tests from build/test-results XML, not from the console.\n3. Scripts:\n   - `bash scripts/tests/parity-check.sh`;\n   - `npm run lint` at the repo root.\n4. complete_task verification:\n   - the chained command: (snapshot daemon tsc + test) && (snapshot proxy test) && the gradlew line above;\n   - exitCode 0 and the output tail, reported truthfully as Linux-snapshot plus Windows evidence;\n   - the summary maps DoD 1 to task-801272c4's rows plus step 2's 101/403, DoD 2 to task-2f2484b4's and task-0c72d59a's rows plus step 2's netstat and discovery, and DoD 3 to step 1 plus these runs.\n\nError handling: a failing suite is fixed at its cause. If the cause is in a sibling's code, file a bug row and report it; never weaken a test.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Every suite is green. No edits were needed in this step. Snapshot: `git archive d93418e6` (5b0e90fe's codexDescriptor fix is already landed in it). Only the 6 step-1 files were overlaid, each cmp-equal, and they stay cmp-equal to the worktree after the runs.\n\n1. Linux-native snapshot /tmp/moe-724e-gate.4ULjKS: env -i, nvm node v24.21.0, NO_COLOR=1, fresh `npm ci` in daemon and proxy.\n   - daemon `npx tsc --noEmit && npm test`: TSC_OK, then Test Files 211 passed (211) and Tests 6116 passed | 20 skipped. Exit 0.\n   - proxy `npm test`: Test Files 6 passed and Tests 290 passed. Exit 0.\n2. JetBrains, under the jetbrains-gradle lease (acquired 18:34:15Z, released after).\n   - DEVIATION: the run used a Windows-visible snapshot D:\\projexts\\moe-724e-gradle-20261030T183428Z (the same archive plus overlay), not the shared tree. The shared moe-jetbrains carries peer task-1c2bfeca's in-flight RuntimeSelectionPolicy.kt/Test.kt and build.gradle.kts edits (its step-5 is IN_PROGRESS). This row changes no Kotlin, so the snapshot is exactly this row's JetBrains bytes.\n   - `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <snap>\\repo\\moe-jetbrains && .\\gradlew.bat test --rerun\"`: BUILD SUCCESSFUL, 11 executed.\n   - From the XML: 28 files, tests=482, failures=0, errors=0, skipped=0, timestamps 18:34-18:35Z.\n   - MoeDaemonSupervisorTest has 79 tests; W1 and W2 (`--host wsl` only in WSL mode) ran. RuntimeSelectionPolicyTest has 56; S1 (the --host wsl pin) ran.\n3. In the snapshot, `bash scripts/tests/parity-check.sh` printed PASS (exit 0), and `npm run lint` / docs:lint gave OK for all three role docs (exit 0).\n\nThe final chained verification will be re-run fresh after step 4, as the plan requires.",
+      "startedAt": "2026-10-30T18:31:43.070Z",
+      "completedAt": "2026-10-30T18:35:49.663Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL REVIEW, once, as the final step, over the WHOLE security change: the three siblings' diffs plus this row. Load adversarial-self-review, and read it as an attacker on the same machine, the LAN, or a malicious web page:\n- Origin rule. Can an upgrade with any Origin reach a handler? Try:\n  - an empty value, 'null', mixed-case header names, two Origin headers;\n  - an unknown path, /runner;\n  - an extra (WSL adapter) listener whose 'upgrade' might bypass the WSS verifyClient.\n  Is the refusal before any snapshot or tool dispatch, and does the 403 body echo nothing?\n- Bind. Can WSL mode still end up on 0.0.0.0 or '::'? Try:\n  - an adapter enumeration that throws;\n  - one address failing to listen while others succeed;\n  - IPv6 or link-local adapter entries;\n  - MOE_BIND_HOST overriding --host.\n  Does the local runner still refuse a 'wsl' bindHost as non-loopback?\n- Clients. Do moe-proxy, VS Code, the claude-plugin hook, the wrapper RPC path, vm-control and JetBrains each still connect? Use the siblings' handshake rows plus step 2's live 101.\n- Docs and task fields: problem-class level only, with no exploit walkthrough.\n- Rails:\n  - no .moe edits;\n  - no Git writes;\n  - no breaking MCP tool contract;\n  - daemon.json stays backward-compatible: an older 0.0.0.0 file still probes loopback;\n  - none of the global rails' forbidden patterns.\n- Would I be embarrassed if this shipped?\n\nFile any finding outside this row's files as a new bug row and name it in complete_task. Fix in-row findings and re-run step 3 fresh.\n\nThen write the Serena memory 'task-task-724e31fadd3e4f5cb137abe9e4147f11-handoff' with the evidence summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "The adversarial review covered the whole split: three siblings plus this row. I fixed two findings in this row and re-ran step 3 fresh.\n\nFixes:\n- schema.ts bindHost comment: \"present only when the bind host is not '127.0.0.1'\". The old \"beyond loopback\" was wrong for 'wsl' with no adapter, and for '::1'.\n- CONFIGURATION.md: the old 0.0.0.0 bind survives supervised crash restarts, because superviseDaemon re-passes --host. It lasts until the updated plugin restarts the daemon. I verified this at index.ts:990.\n\nOrigin rule:\n- Probed with raw sockets against the real MoeWebSocketServer: two Origin headers, an uppercase ORIGIN, Sec-WebSocket-Origin on v13, and a space-only Origin.\n  - Each got 403 Forbidden, a fixed body with no echo, and no 'connection' event.\n  - The absent-Origin control got 101.\n- Sibling rows cover '', 'null', mixed case, /runner, unknown paths and v8. The verifier lives in the WSS options, and the only other 'upgrade' listener is bindHosts' forward to the primary.\n- Live: the extra 172.26.208.1 listener refused Origin with 403.\n- The HTTP handler serves only GET /health, behind the DNS-rebinding Host guard; everything else gets 426.\n\nBind:\n- resolveBindHosts with hostile entries gives [\"127.0.0.1\",\"172.26.208.1\"]. The entries tried were '::', fe80::1, 0.0.0.0, an internal entry, malformed '1.2.3', other adapters and undefined entries.\n- No adapter gives loopback only. 'WSL' stays a literal that fails to bind, so it never widens.\n- Enumeration throwing gives loopback: index.ts try/catch, sibling D rows.\n- A partial listen failure rolls back: sibling L-fail.\n- --host beats MOE_BIND_HOST: index.ts:67.\n- The local runner's guest-session LOOPBACK set is {127.0.0.1, ::1}, so it refuses 'wsl' both in daemon.json and in /health.\n\nClients:\n- moe-proxy live from WSL: 71 tools.\n- JetBrains (Java-WebSocket), VS Code and the hook raw handshake are covered by the siblings' handshake rows and the gradle suite. So are vm-control (Node WebSocket) and the wrapper RPC, which goes through the proxy.\n\nDocs and task fields: problem-class level only.\n\nRails:\n- No manual .moe edits and no Git writes.\n- No MCP contract change.\n- An older daemon.json with 0.0.0.0 still probes loopback (index.ts:80).\n- My added lines contain none of the forbidden patterns (count 0).\n\nEmbarrassment check: none left. Two theoretical notes are covered by RF05's threat model, not here:\n- A WSL-adapter listener is reachable from every WSL2 VM on that switch.\n- A link-local IPv4 on the WSL adapter would be bound.\n\nFresh final gate /tmp/moe-724e-probe/final-gate.sh, at HEAD 35971a84, exit 0:\n- daemon tsc OK, 211 files / 6116 passed / 20 skipped;\n- proxy 290 passed;\n- parity PASS, lint OK;\n- gradle snapshot under the lease: XML 482 tests, 0 failures, errors or skips.\n\nLease released. Handoff memory written, plus gotcha-live-windows-scratch-daemon-from-wsl.",
+      "startedAt": "2026-10-30T18:35:53.169Z",
+      "completedAt": "2026-10-30T18:40:35.990Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 285.5,
+  "comments": [
+    {
+      "id": "comment-4c5860ad89d34ad684019d7881ca50f3",
+      "author": "architect-bd1eb82d",
+      "content": "Dependency added by architect-bd1eb82d: this row now also dependsOn task-e7f4026a (the wrapper pre-flight refuses a daemon whose /health projectPath is another project) and task-86093c3e (the moe-proxy identity probe). task-e7f4026a edits the same foreign-daemon probe block of scripts/moe-agent.sh that your step-1 sweep rewords, and the root CLAUDE.md pre-flight sentence. Read its landed bytes and keep its MOE_DAEMON_FOREIGN_PROJECT refusal intact.",
+      "timestamp": "2026-10-30T07:57:39.630Z"
+    },
+    {
+      "id": "comment-6f392d1a593a4d7e89acc0b8f5efcfb7",
+      "author": "governor-693b7073",
+      "content": "Governor lane edge (11:39Z): this row now also dependsOn task-01f37ac6. That puts it after 5998f871 as well, since 01f37ac6 already waits on 5998f871.\n\nWhy: step 1 edits scripts/moe-agent.sh. Until the worktree epic (epic-dce3a64f) ships, rows that edit the wrappers run one at a time. The lane is e7f4026a → 5998f871 → 01f37ac6 → 9d277494 → 4fdc7590.\n- Without this edge, e7f4026a reaching DONE (it's in QA now) would make this row claimable together with 5998f871. 5998f871 fixes the self-restart that hot-loads a peer's uncommitted moe-agent.sh into every idle seat.\n- 01f37ac6 (CRITICAL) rewrites contested landing itself.\n- This row is a docs and wording sweep with no dependents: its siblings 801272c4, 2f2484b4 and 0c72d59a already landed the security behavior. So waiting costs little.\n\nBefore 01f37ac6 lands, the governor re-checks this row against 9d277494, which also edits moe-agent.sh.\nUndo: moe.set_task_dependencies { taskId: \"task-724e31fadd3e4f5cb137abe9e4147f11\", removeDependsOn: [\"task-01f37ac63316409ab581f5a189002cb8\"] }.",
+      "timestamp": "2026-10-30T11:39:24.103Z"
+    },
+    {
+      "id": "comment-395442b86a0642908a6e69c3c71276c0",
+      "author": "governor-693b7073",
+      "content": "Governor edge, 13:27Z: this row now dependsOn WT-01 6cf120a3. Both rows edit packages/moe-daemon/src/types/schema.ts.\n- WT-01's plan checks that this row is seatless before WT-01 starts, but nothing covered the reverse: this row being claimed while WT-01 is mid-flight.\n- By my timing that window is real. WT-01 runs once WT-S lands. This row becomes claimable once 01f37ac6 lands, which is behind f31d415d and b1aecb54.\n- The edge only adds order in the safe direction. WT-01 is never stalled by it.\n- If WT-01 is still not DONE when 01f37ac6 reaches DONE, a governor revisits this. Undo: removeDependsOn [\"task-6cf120a38b344e72b7bab8b9faf806f1\"].",
+      "timestamp": "2026-10-30T13:24:42.299Z"
+    },
+    {
+      "id": "comment-17b86af9c26a43e8a5395b110d9c20d6",
+      "author": "governor-693b7073",
+      "content": "Governor edge, 13:29Z: this row now also dependsOn 25ba449a, the daemon/proxy path-comparison fix, which is in flight on worker-5ebbf433.\n- Both rows edit packages/moe-proxy/src/utils.ts (collision alert at 13:26Z).\n- This row is already gated on 01f37ac6 and WT-01, so the edge should cost nothing.\n- Undo: removeDependsOn [\"task-25ba449ab87d4039a283426f07302cbc\"].",
+      "timestamp": "2026-10-30T13:26:26.305Z"
+    },
+    {
+      "id": "comment-78115c25bc3f4bf4b62f62ae1cee9d96",
+      "author": "governor-693b7073",
+      "content": "Governor, 14:27Z: I removed this row's dependsOn on 25ba449a. That edge was added at 13:29Z only for packages/moe-proxy/src/utils.ts. 25ba449a's rev-2 re-plan touches only packages/moe-daemon/src/index.ts and index.test.ts, so the overlap is gone. Its rev-1 utils.ts change is already landed in 86a5dca9. Remaining gates: 01f37ac6 (in flight), c4cd6dce (the commit guard, next in the lane), and WT-01.",
+      "timestamp": "2026-10-30T14:02:25.100Z"
+    },
+    {
+      "id": "comment-bb6e1e5f0a474c96b39a77f32c4c011c",
+      "author": "governor-693b7073",
+      "content": "Governor heads-up for whoever works this row. Until task-5b0e90fe lands, `cd packages/moe-daemon && npm test` has one pre-existing red: providerDescriptor.contract.test.ts \"every emitted fact declares per-wrapper emitter evidence\". c4cd6dce's 447281cf changed the ps1 launch lines, and codexDescriptor.ts still pins the old `& $Command` literals.\n\nThat failure is not yours. 5b0e90fe is HIGH and daemon-only, and it becomes claimable together with this row, so it should land well before your final gate. If it hasn't landed by your completion, rerun the gate after it lands rather than editing codexDescriptor.ts here.",
+      "timestamp": "2026-10-30T17:55:00.450Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:25:24.849Z",
+  "updatedAt": "2026-10-30T18:48:25.386Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:25:36.985Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T18:47:44.204Z",
+    "wallClockMs": 40927219
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0",
+    "governor-693b7073",
+    "worker-fe18a9a9",
+    "qa-952969be"
+  ],
+  "dependsOn": [
+    "task-801272c49c0447cc944e6aaa2963f85f",
+    "task-2f2484b426ef42aaa0566323da2d550e",
+    "task-0c72d59aad37467fb49e5ad699692d78",
+    "task-86093c3efd8645748f460db870073392",
+    "task-e7f4026abc0c4a8bb7632c8178ea7d70",
+    "task-01f37ac63316409ab581f5a189002cb8",
+    "task-6cf120a38b344e72b7bab8b9faf806f1",
+    "task-c4cd6dce82bf49648dafdd9c538ff328",
+    "task-7ee53957b90e459fb636948e5cecfa2a"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:36:06.810Z",
+  "executionContract": {
+    "intendedBehavior": "The final row of the split security fix.\n- Every remaining mention of the old WSL bind (the moe-agent.sh probe comment and hint, the proxy JSDoc, the DaemonInfo.bindHost comment, PLUGIN_SPEC.md, CLAUDE.md) matches the landed `--host wsl` and Origin rule.\n- CONFIGURATION.md and TROUBLESHOOTING.md describe both rules.\n- A live scratch Windows daemon started with --host wsl:\n  - never listens on 0.0.0.0;\n  - is reachable from WSL through moe-agent.sh's discovery order, with /health and a 101 /mcp upgrade;\n  - refuses an Origin-bearing upgrade with 403.\n- The daemon, proxy and JetBrains suites, the parity check and the lint all pass.",
+    "acceptanceCriteria": [
+      "The residual grep for 0.0.0.0 across CLAUDE.md, docs, scripts, moe-jetbrains/src/main, moe-vscode/src and packages/*/src shows only explicit operator-choice or port-probe mentions.",
+      "The scratch daemon's netstat lists 127.0.0.1:9990 (plus the WSL adapter address when present) and never 0.0.0.0:9990. Its daemon.json records bindHost 'wsl'.",
+      "From WSL, the first discovery candidate that answers serves /health and a 101 /mcp upgrade, and the same upgrade with an Origin header gets 403.",
+      "Daemon tsc and tests, proxy tests, gradle tests, parity-check.sh and the root lint all exit 0."
+    ],
+    "invariants": [
+      "The live daemon, the repo's .moe and the shared node_modules are never touched by the live check; scratch is always torn down.",
+      "No exploit walkthrough appears in docs, task fields or chat."
+    ],
+    "compatibility": [
+      "An explicit --host 0.0.0.0 stays an operator choice, and an older daemon.json with bindHost 0.0.0.0 still probes loopback.",
+      "No MCP tool contract changes."
+    ],
+    "approvedScope": [
+      "Comment and doc alignment in scripts/moe-agent.sh, packages/moe-proxy/src/utils.ts, packages/moe-daemon/src/types/schema.ts, docs/PLUGIN_SPEC.md and CLAUDE.md.",
+      "docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md are edited only to fix a gap in the siblings' text."
+    ],
+    "reuse": [
+      "The siblings' landed rules and tests are verified here, not re-implemented."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh probes a Windows-owned daemon from WSL. The candidates are MOE_DAEMON_HOST, then 127.0.0.1, then wsl_gateway_host. Lines ~1513-1534 hold the 0.0.0.0 comment and hint.",
+      "packages/moe-proxy/src/utils.ts getDaemonHost defaults to 127.0.0.1, and its JSDoc mentions a daemon bound to 0.0.0.0.",
+      "The local runner (guest-session.mjs, runner-client.mjs, vm-control.mjs) refuses any non-loopback bindHost."
+    ],
+    "checkRefs": [
+      "(Linux snapshot) cd packages/moe-daemon && npx tsc --noEmit && npm test",
+      "(Linux snapshot) cd packages/moe-proxy && npm test",
+      "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+      "bash scripts/tests/parity-check.sh",
+      "npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- One task for everything. Rejected: 14 files across the daemon, JetBrains, scripts and docs is over the 10-file cap. The JetBrains half shares files with the in-flight CQ-RF chain, so it would also have held the Origin fix hostage.\n- The split puts each change on its own seam:\n  - task-801272c4: Origin rule, daemon only, claimable now;\n  - task-2f2484b4: daemon `--host wsl` (loopback plus the vEthernet (WSL) adapter, multi-listener);\n  - task-0c72d59a: JetBrains argv, slotted after RF01/RF02 and before RF03;\n  - this row: final alignment and verification. It owns the DoD as filed.\n- Resolving the WSL adapter in Kotlin and passing an IP. Rejected: the daemon must listen on loopback for Windows-side clients anyway, and a symbolic 'wsl' keeps every launcher trivial.\n- A configurable origin allowlist. Rejected (YAGNI): no Moe client is a browser.",
+    "codebaseInsights": "- WebSocketServer builds `new WSS({ server: httpServer })` with no verifyClient. Every path except /mcp and /runner is the plugin channel.\n- Clients and their handshakes:\n  - moe-proxy and VS Code use 'ws' with no options;\n  - the claude-plugin hook writes a raw handshake;\n  - vm-control uses Node's global WebSocket;\n  - JetBrains uses org.java_websocket;\n  - none of them sends Origin.\n- Only daemon index.ts consumes bindHost, plus the local runner's loopback refusals.\n- VS Code has no WSL agent mode, so VS Code parity needs no change. This is recorded in the siblings' descriptions.",
+    "risks": "- The live check spawns a Windows process from WSL. Use Start-Process so it outlives the interop console, and always tear it down.\n- Firewall: if neither candidate answers, report it as not proven; never fake it.\n- Peers edit moe-agent.sh, CLAUDE.md and the docs concurrently. Touch only the named lines.\n- If a sibling regresses a suite, file a bug row and do not patch it here.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/index.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "scripts/moe-agent.sh",
+      "packages/moe-proxy/src/utils.ts",
+      "docs/CONFIGURATION.md",
+      "docs/TROUBLESHOOTING.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:36:06.837Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T18:22:13.178Z",
+  "reviewStartedAt": "2026-10-30T18:41:04.375Z",
+  "verification": {
+    "command": "set -euo pipefail\ncd /mnt/d/projexts/moes\nREV=$(git rev-parse HEAD)\nOWN=\"scripts/moe-agent.sh packages/moe-proxy/src/utils.ts packages/moe-daemon/src/types/schema.ts docs/PLUGIN_SPEC.md CLAUDE.md docs/CONFIGURATION.md\"\nNODEBIN=$HOME/.nvm/versions/node/v24.21.0/bin\nSNAP=$(mktemp -d /tmp/moe-724e-final.XXXXXX)\ngit archive \"$REV\" | tar -x -C \"$SNAP\"\nfor f in $OWN; do cp \"$f\" \"$SNAP/$f\"; cmp \"$f\" \"$SNAP/$f\"; done\necho \"== Linux snapshot $SNAP rev=$REV (owned overlay cmp OK)\"\nenv -i HOME=\"$HOME\" PATH=\"$NODEBIN:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 TMPDIR=/tmp bash -c \"set -euo pipefail\ncd '$SNAP/packages/moe-daemon' && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && echo daemon-tsc-ok && npm test 2>&1 | grep -a -E '^ +(Test Files|Tests) '\ncd '$SNAP/packages/moe-proxy' && npm ci --no-audit --no-fund >/dev/null 2>&1 && npm test 2>&1 | grep -a -E '^ +(Test Files|Tests) '\ncd '$SNAP' && bash scripts/tests/parity-check.sh && npm run lint 2>&1 | tail -3\"\nG=/mnt/d/projexts/moe-724e-final-gradle-$(date -u +%Y%m%dT%H%M%SZ)\nmkdir -p \"$G\"\ngit archive \"$REV\" | tar -x -C \"$G\"\nfor f in $OWN; do cp \"$f\" \"$G/$f\"; cmp \"$f\" \"$G/$f\"; done\necho \"== Windows gradle snapshot $(wslpath -w \"$G\") (jetbrains-gradle lease held)\"\ncd \"$G\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$G\")\\\\moe-jetbrains && .\\\\gradlew.bat test --rerun\" 2>&1 | tr -d '\\r' | grep -E 'BUILD|Task :test'\npython3 - \"$G/moe-jetbrains/build/test-results/test\" <<'PY'\nimport sys, glob, xml.etree.ElementTree as ET\nroots = [ET.parse(p).getroot() for p in glob.glob(sys.argv[1] + '/TEST-*.xml')]\nn = {k: sum(int(r.get(k)) for r in roots) for k in ('tests', 'failures', 'errors', 'skipped')}\nprint('gradle XML files=%d' % len(roots), n)\nsys.exit(0 if roots and n['tests'] > 0 and n['failures'] == 0 and n['errors'] == 0 else 1)\nPY\ncd /mnt/d/projexts/moes && rm -rf \"$G\"\necho \"FINAL GATE OK rev=$REV\"",
+    "exitCode": 0,
+    "outputTail": "== Linux snapshot /tmp/moe-724e-final.cKg7he rev=35971a8408a5bfd455f42daf538ac6435a2ce014 (owned overlay cmp OK)\nnpm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' --noEmit\ndaemon-tsc-ok\n Test Files  211 passed (211)\n      Tests  6116 passed | 20 skipped (6136)\n Test Files  6 passed (6)\n      Tests  290 passed (290)\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 35 lines (max 40)\n== Windows gradle snapshot D:\\projexts\\moe-724e-final-gradle-20261030T183905Z (jetbrains-gradle lease held)\n> Task :testClasses\n> Task :test\nBUILD SUCCESSFUL in 36s\ngradle XML files=28 {'tests': 482, 'failures': 0, 'errors': 0, 'skipped': 0}\nFINAL GATE OK rev=35971a8408a5bfd455f42daf538ac6435a2ce014\nFINAL_GATE_EXIT=0\n[Linux-native snapshot for daemon/proxy/parity/lint, Windows gradlew.bat in a D: git-archive snapshot under the jetbrains-gradle lease; script at /tmp/moe-724e-probe/final-gate.sh, log final-gate.log]",
+    "reportedAt": "2026-10-30T18:41:04.375Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "docs/PLUGIN_SPEC.md",
+    "CLAUDE.md",
+    "docs/CONFIGURATION.md",
+    ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+    ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
+    ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+    ".moe/tasks/task-9eae3377dd504f8b8007986d51c651e9.json"
+  ],
+  "completionSummary": "This is the final row of the 4-row Origin and WSL-bind split. The siblings 801272c4, 2f2484b4 and 0c72d59a own the code. This row aligns the docs and comments, runs the live check and the full gate. Comments and docs only: 6 files, +8/-7.\n\nEdits:\n- moe-agent.sh: the probe comment, and the fix hint now reads `--host wsl (or MOE_BIND_HOST=wsl)`.\n- Comments: the proxy getDaemonHost JSDoc and schema.ts DaemonInfo.bindHost.\n- PLUGIN_SPEC:76.\n- CLAUDE.md: the WSL sentence says `--host wsl`, and the Endpoints sentence gains an Origin/403 clause.\n- CONFIGURATION:28, a gap the siblings left: \"same mode\" read as the Origin rule; any --host beats MOE_BIND_HOST; an old 0.0.0.0 bind survives supervised crash restarts.\n- TROUBLESHOOTING was already complete.\n\nResidual 0.0.0.0 grep hits:\n- operator choice or compatibility: CONFIGURATION:28, index.ts:80;\n- port-probe comments: index.ts:537, certify-bridge:104;\n- the exclusion guard in bindHosts.ts;\n- a dated RF05 decision record (threat-model.md:113), left as history.\n\nDoD1 (Origin):\n- the siblings' 24 rows;\n- live: the WSL gateway's /mcp gave 101 with no Origin and 403 with one; /ws with \"null\" gave 403; Windows loopback agreed;\n- raw probes against the real verifier, all 403 with no 'connection' event: two Origin headers, uppercase, Sec-WebSocket-Origin, a space-only value;\n- a real moe-proxy from WSL listed 71 tools.\n\nDoD2 (WSL bind), from a live scratch daemon started with --port 9990 --host wsl:\n- netstat showed only 127.0.0.1:9990 and 172.26.208.1:9990 (the vEthernet WSL adapter), with no 0.0.0.0 and no v6;\n- daemon.json and /health both say bindHost wsl;\n- moe-agent.sh's own probe helpers, byte-equal to HEAD: 127.0.0.1 gave rc=1, then the NAT gateway answered healthy;\n- plus 2f2484b4's R/L/D rows and gradle W1/W2/S1;\n- resolver probes: no adapter entry yields 0.0.0.0 or ::.\nThe scratch was torn down: 0 processes, no listener, directory deleted.\n\nDoD3: the gate passed, exit 0 (see the verification above).\n- Gradle ran in a D:",
+  "commits": [
+    {
+      "sha": "e92e361692cfa3af211d6f699d74cf3d556c2c8f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T18:20:36Z",
+      "paths": [
+        ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+        "CLAUDE.md",
+        "docs/CONFIGURATION.md",
+        "docs/PLUGIN_SPEC.md",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-proxy/src/utils.ts",
+        "scripts/moe-agent.sh"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T18:41:30.922Z",
+      "treeId": "4680f3ca3ddcf40a3a1ee5ccab705bbb550a7a35",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "859b6921c09defa164c59036e416a9acfc9e426e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T18:42:06Z",
+      "paths": [
+        ".moe/tasks/task-48f0b3aaa82c4b938d3a15f3710a66e5.json",
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-724e31fadd3e4f5cb137abe9e4147f11.json",
+        ".moe/tasks/task-9eae3377dd504f8b8007986d51c651e9.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T18:48:25.386Z",
+      "treeId": "73df9d325ff29da7b4596c8e60a995024f58dd64",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "packages/moe-proxy/src/utils.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "docs/PLUGIN_SPEC.md",
+    "CLAUDE.md",
+    "docs/CONFIGURATION.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T18:42:06Z",
+    "at": "2026-10-30T18:48:25.386Z"
+  },
+  "completedAt": "2026-10-30T18:47:44.204Z",
+  "reviewCompletedAt": "2026-10-30T18:47:44.204Z",
+  "reviewSummary": "Reviewed e92e3616 (on moe/work-2026-10-24 + origin): 6 files, +8/-7, docs/comments only. Siblings 801272c4/2f2484b4/0c72d59a landed; their code checks out: verifyClient 403 on any Origin; resolveBindHosts('wsl') = loopback + vEthernet IPv4, never 0.0.0.0; --host beats MOE_BIND_HOST (index.ts:67); supervisor re-passes --host (:990). VS Code has no WSL mode, so parity is N/A.\n\nRe-ran on a clean archive of e92e3616 (Linux, env -i, node 24.21.0):\n- daemon tsc OK; tests 211 files, 6116 passed, 20 skipped\n- proxy tsc OK; 290 passed\n- parity PASS; lint OK\n\nJetBrains, under the jetbrains-gradle lease: gradlew.bat test --rerun in a D: archive, BUILD SUCCESSFUL. XML: 486 tests, 0 failed (worker saw 482; +4 from d69f0f9f). W1/W2 ran.\n\nLive check, my own scratch daemon on 9990 --host wsl:\n- netstat: only 127.0.0.1:9990 and 172.26.208.1:9990; no 0.0.0.0, no v6\n- daemon.json and /health: bindHost wsl\n- moe-agent.sh's own probe loop: 127.0.0.1 rc=1, then the gateway healthy\n- /mcp and /ws: 101 with no Origin; 403 with Origin http://example.invalid or null\n- real moe-proxy: 71 tools\n- torn down; live :9876 not touched\n\nDocs: CONFIGURATION and TROUBLESHOOTING cover the Origin 403 and the WSL bind. No exploit walkthrough, no forbidden patterns, no contract change.\n\nResidual 0.0.0.0 grep is operator choice, compatibility, port probes or a guard. Accepted: threat-model.md:113 is a dated RF05 record, outside scope.\n\nNon-blocking:\n(a) CLAUDE.md \"bindHost when non-loopback\" predates this row and is looser than the code.\n(b) The LIVE daemon pid 17468 still binds 0.0.0.0:9876 (an older plugin started it). It needs a restart by a human or the governor.",
+  "requiredCheckAtDone": null
+}

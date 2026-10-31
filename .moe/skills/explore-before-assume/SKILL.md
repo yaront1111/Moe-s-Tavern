@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=bf1df322eab5
+# moe-generated: sha=9f64d49809db
 name: explore-before-assume
 description: Use before referencing any function, model, method, relationship, constant, or import in a plan or implementation. Verifies things actually exist in the codebase before building on top of them. Eliminates an entire class of hallucinated-API bugs.
 when_to_use: Architect during planning before naming symbols in implementationPlan; worker on first start_step before editing unfamiliar code.
@@ -16,7 +16,7 @@ For every function, class, method, model, attribute, relationship, constant, env
 
 ## Why this matters
 
-Without this discipline, you will confidently call `user.clientProfile.accounts` — a relationship chain that doesn't exist. The code will look right. It will read right. It will fail at runtime, often subtly. Every team that adopts a "verify before you reference" rule eliminates an entire class of bugs immediately.
+A plausible reference that doesn't exist (`user.clientProfile.accounts`) reads right, passes review by eye, and fails at runtime — often subtly. Checking first removes that whole class of bug.
 
 ## The minimum check
 

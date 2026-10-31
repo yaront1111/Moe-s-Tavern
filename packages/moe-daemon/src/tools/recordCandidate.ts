@@ -67,6 +67,17 @@ export function recordCandidateTool(_state: StateManager): ToolDefinition {
           type: 'string',
           description: 'Where the bytes are meant to land, e.g. refs/heads/wave1-pilot. Non-blank, no surrounding whitespace or control characters, at most 255 chars.',
         },
+        protectedEntries: {
+          type: 'array',
+          maxItems: 2000,
+          items: {
+            type: 'object',
+            properties: { path: { type: 'string' }, oid: { type: 'string' } },
+            required: ['path', 'oid'],
+            additionalProperties: false,
+          },
+          description: 'Optional. The runner\'s `git ls-tree -r` entries for the task\'s protected check paths in this tree: normalized project-relative paths, lowercase 40-hex oids, strictly ascending by path (UTF-8 bytes). Omit when not measured; [] means nothing exists under those paths. Recorded as reported; the daemon never verifies it. A same-id record with different entries is CANDIDATE_IMMUTABLE.',
+        },
         workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy). Not stored on the candidate.' },
       },
       required: ['taskId', 'attemptId', 'baseRevision', 'treeSha', 'deliveryTarget'],

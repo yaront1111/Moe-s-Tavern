@@ -1,0 +1,284 @@
+{
+  "id": "task-16628bef427b426aa9d8fc6ac1d19534",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: architectureRules lexer desync hides imports on later lines",
+  "description": "extractImports in packages/moe-daemon/src/delivery/architectureRules.ts assumes a lexing misread stays on one line. That holds for strings and regexes, but not for template or `/* */` state. A regex/division misread, an Annex-B `<!--` comment, or a backtick in JSX text flips that state, so imports on LATER lines are hidden until the next backtick or `*/`. No uncertainty is reported.\n\nProbed on HEAD 7f04b869: every case below gives imports=[] and uncertain=[], and in a node vm Script the require in (1)-(3) really executes.\n1. `const a = {} / 1, b = `/;` NL `\\`;` NL require('../tools/t.js') NL `// \\``\n2. `class A extends /`/.constructor {}` NL require NL `// \\``\n3. `<!-- \\`` NL require NL `// \\``\n4. TSX `<p>Use \\` here</p>` NL require NL `// \\``\n5. `export default /\\/*/;` NL require NL `// */`\n6. `const r = a! / b; const p = `${x}/${y}`;` NL require NL `const q = \\`z\\`;`\n\nCases (4) and (6) can happen by accident.\n\nThis needs an architect decision. The V10a contract forbids adding an uncertainty reason, so the options are a new 'ambiguous' reason, parser-backed extraction, or something else. CQ-V10 must not trust 'passed' until this is resolved.\n\nFound in the CQ-V10a (task-2cd62d2c) step-5 adversarial review. Not fixed there, because its bytes are frozen under size waiver prop-7401cd0b.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the acceptance tests first, as a NEW file packages/moe-daemon/src/delivery/architectureRules.desync.test.ts. Do not touch CQ-V10a's architectureRules.test.ts: its 133 tests stay byte-identical and green under the epic size waiver. Define these helpers locally: src = (...lines) => lines.join('\\n'); ref(line, specifier); amb(line) = { line, reason: 'ambiguous-syntax' }; none = { imports: [], uncertain: [] }; REQ = \"const t = require('../tools/t.js');\". Every assertion is toStrictEqual on the whole result. Write U+2028 inputs as the '\u2028' escape and check the saved bytes, because some edit tools turn the escape into a raw separator (mem:gotcha-edit-tool-unescapes-unicode-literals).\n\nD1, hidden later lines. An it.each where each row expects { imports: [], uncertain: [amb(N)] }:\n(1) src('const a = {} / 1, b = `/;', '`;', REQ, '// `'), N=3.\n(2) src('class A extends /`/.constructor {}', REQ, '// `'), N=2.\n(3) src('<!-- `', REQ, '// `'), N=2.\n(4) src('const el = <p>Use ` here</p>;', REQ, '// `'), N=2.\n(5) src('export default /\\\\/*/;', REQ, '// */'), N=2.\n(6) src('const r = a! / b; const p = `${x}/${y}`;', REQ, 'const q = `z`;'), N=2.\n(7) Multi-line JSX text: src('const el = (', '  <p>', '    Use ` here', '  </p>', ');', REQ, '// `'), N=6.\n(8) Annex-B close: src('x = 1', '--> `', REQ, '// `'), N=3.\n(9) A misread regex swallows a substitution's closing brace: src('const s = `${', '  a++ / 2}/x', '`;', REQ, '// `'), N=4.\n(10) A hidden line that starts with a star: src('export default /\\\\/*/;', 'x = 1', \"* 0; require('../tools/t.js');\", '// */'), N=3.\n\nD2, evaluateArchitecture. Use rules = parseArchitectureRules(JSON of version 1 with one rule {id 'state-no-tools', from ['src/state'], forbid ['src/tools'], reason 'r'}), tree = new Set(['src/tools/t.ts']) and path 'src/state/s.ts'.\n- Every D1 text gives { outcome: 'inconclusive', selectedRules: ['state-no-tools'], violations: [], uncertain: [{ file: 'src/state/s.ts', line: N, reason: 'ambiguous-syntax' }] }.\n- Control: REQ alone gives outcome 'failed', so the hidden require is a real violation.\n- Precedence: src(\"import t0 from '../tools/t.js';\", 'class A extends /`/.constructor {}', REQ, '// `') gives 'failed', with the line-1 violation AND uncertain [{ file, line: 3, reason: 'ambiguous-syntax' }].\n\nD3 controls, exact:\n(a) No risk point, code-gen template: src('const gen = `', \"import a from './a';\", \"const b = require('./b');\", '`;') gives none.\n(b) No risk point, commented-out code: src('/*', \"const legacy = require('./legacy');\", '*/', \"require('./r');\") gives { imports: [ref(4,'./r')], uncertain: [] }.\n(c) A risk point with no multi-line region: src('const x = {} / 2; const s = `${x}`;', \"require('./r');\") gives { imports: [ref(2,'./r')], uncertain: [] }.\n(d) A region BEFORE the first risk point is not re-scanned: src('const s = `', \"import a from './a';\", '`;', 'const x = {} / 2 + `y`;') gives none.\n(e) A hidden external-only line: src('class A extends /`/.constructor {}', \"const fs = require('fs');\", '// `') gives none.\n(f) A hidden dynamic import: src('class A extends /`/.constructor {}', 'const m = await import(name);', '// `') gives { imports: [], uncertain: [amb(2)] }.\n(g) One flag per hidden line, ascending: src('class A extends /`/.constructor {}', \"require('../a'); require('../b');\", \"import c from './c';\", '// `') gives [amb(2), amb(3)].\n(h) Single-line regions after a risk point are ignored: src('const el = <br>; const s = `x`; /* note */', \"require('./r');\") gives { imports: [ref(2,'./r')], uncertain: [] }.\n(i) One flag when two regions share a line: src('export default /\\\\/*/;', \"require('../a'); */ x = 1; /* require('../b');\", '*/') gives [amb(2)].\n\nD4, line numbering:\n- D1(1)'s lines joined by '\\r\\n' give amb(3).\n- D1(2)'s lines joined by '\u2028' give amb(2).\n- D1(3)'s lines joined by '\\r' give amb(2).\n\nD5, unterminated at EOF:\n- src('const a = {} / 1, b = `/;', '`;', REQ) gives amb(3).\n- src('export default /\\\\/*/;', REQ) gives amb(2).\n\nD6, linearity. No wall-clock asserts; sizes follow mem:gotcha-vitest-linearity-tests.\n- (a) 'a/b;'.repeat(80_000) gives none. That is 80k hazard-free slashes on one line: an uncached per-slash rescan takes about 20s, the cached scan milliseconds.\n- (b) '<p>\\n' + '/*\\n*/\\n'.repeat(100_000) gives none.\n- (c) '<p>\\n`\\n' + \"require('../x');\\n\".repeat(20_000) + '`' gives imports [], 20_000 flags, the first amb(3) and the last amb(20_002).\n\nD7, robustness. Copy X6's seeded generator: seed 7, 3000 runs, 1 + pick(60) entries, using X6's alphabet plus '<', '!', '-', '>', 'p' and \"require('../a')\". Assert that it never throws, that every reported line is within [1, text.split(/\\r\\n|[\\n\\r\u2028\u2029]/).length], and that the corpus yields more than 0 'ambiguous-syntax' flags. The architect's prototype gave 36 flags out of 1233 reports, none out of range.\n\nRun this test file now and record the red evidence: D1, D2, D3f, D3g, D3i, D4, D5, D6c and D7's flag count must fail on today's code. The other D3 controls and D6a/b already pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/architectureRules.desync.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/architectureRules.desync.test.ts"
+      ],
+      "note": "New file architectureRules.desync.test.ts with 40 tests (D1-D7); the landed architectureRules.test.ts was not touched. U+2028/U+2029 are written as escapes: the Write tool turned them into raw characters, so I rewrote them with python. A non-ASCII grep now finds nothing. RED on HEAD 1422c1d, in a Linux snapshot at /tmp/moe-16628-dev.mpQ4cj: 31 failed and 9 passed. The failures are D1 x10, D2 x10 plus the precedence case, D3f/g/i, D4 x3, D5 x2, D6c, and D7, which fails only on the 0-flag count. The passes are the D3a-e/h controls, D6a/b and the D2 bare-require control, as the plan predicted. 728 dirty peer paths are untouched.",
+      "startedAt": "2026-10-29T23:23:31.866Z",
+      "completedAt": "2026-10-29T23:28:43.660Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Lexer bookkeeping in packages/moe-daemon/src/delivery/architectureRules.ts. The Lexer must emit exactly the tokens it emits today. Leave slash()'s regex/division choice, REGEX_KEYWORDS, CONTROL_KEYWORDS, the parens/braces stacks and the regexOffUntil guard untouched.\n\n(a) Factor slash()'s prev test into a module-level operandMayFollow(p: Token | null). slash() calls it as `this.i >= this.regexOffUntil && operandMayFollow(p)`, a pure refactor.\n\n(b) Add `readonly regions: { start: number; end: number; line: number }[]` to the Lexer. Record a region only when it crossed a line break (this.line > its entry line). Never record single-line chunks.\n- templateText records { start: this.i at entry, end: j (the index of the closing backtick, of the `${`, or text.length), line: its entry line }.\n- skipBlock records { start: this.i + 2, end: j (the index of `*/`, or text.length), line }.\n\n(c) Add `firstRisk = -1`: the start index of the first token after which the lexer's view may disagree with a real parse. Set it once and never overwrite it. Candidates:\n- (R1) Every slash() call, whatever the regex/division choice. That is every `/` in code that does not start `//` or `/*`.\n- (R2) A `<!--` or a `-->` at a code position. Detect it in punct() before this.i advances.\n- R1 and R2 count only when the rest of their line, from the token to the next breakLen terminator or EOF, contains a backtick, the two characters `/*`, or, while lexing inside a template substitution (braces.length > 0), a `}`. Reason: a regex or Annex-B misread never reaches past its own line, so without one of these it cannot flip template or comment state.\n- (R3) A JSX-like `<` at a code position: operandMayFollow(prev) holds, or prev is the non-member id `default`, and the next character after optional spaces or tabs is an identifier start (isIdStart) or `>`. R3 is ungated, because JSX text spans lines.\n\n(d) Linearity: answer the line-remainder question lazily, scanning each line at most once.\n- Cache the end of the span you scanned, plus the last backtick-or-`/*` index and the last `}` index in it.\n- A later candidate on the same line answers from the cache: lastHazard > i, or braces are open and lastBrace > i.\n- Stop checking once firstRisk is set.\n- Never ship a per-candidate rescan of the line: it is quadratic, and D6a times out on it.\n\nError handling: none of this can throw, and indices stay within [0, text.length].",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/architectureRules.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/architectureRules.ts"
+      ],
+      "note": "Lexer bookkeeping in architectureRules.ts:\n- (a) a module-level operandMayFollow(p). slash() is now `this.i >= this.regexOffUntil && operandMayFollow(this.prev)`.\n- (b) readonly regions: Region[], pushed by templateText and skipBlock only when this.line > their entry line.\n- (c) firstRisk = -1, set once through risk(gated). R1 is every slash() call. R2 is `<!--` or `-->` in punct(), checked before the index advances. R1 and R2 are gated by lineHazard. R3 is a JSX-like `<` after operandMayFollow(prev) or a non-member `default`, when optional spaces or tabs are followed by idStart or `>`; it is ungated.\n- (d) lineHazard caches hazardEnd, lastHazard and lastBrace, so each line is scanned at most once. Checking stops once firstRisk >= 0.\n\nEvidence:\n- Token-invariance probe: the old and new Lexer give byte-identical JSON token streams on 200k random inputs, using an extended alphabet that includes `<!--`, `-->`, `/*`, default, extends and ++. All regions are in bounds and firstRisk is in range. The probe is /tmp/moe-16628-probe/tokens.mts, with scratch Lexer exports only in the snapshot copies.\n- Landed architectureRules.test.ts: 133/133 green.\n- The desync tests are still red (31) until the step-3 re-scan.",
+      "startedAt": "2026-10-29T23:28:46.085Z",
+      "completedAt": "2026-10-29T23:30:15.059Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Re-scan in extractImports (packages/moe-daemon/src/delivery/architectureRules.ts).\n\n(a) Widen ImportUncertainty.reason with 'ambiguous-syntax'. Document it on the interface: a line inside a multi-line template-text or block-comment region that would import if it were code. It is reported because an earlier lexing ambiguity means the lexer may have misread that region.\n\n(b) Move the per-token recognizer loop out of extractImports into a private recognize(tokens) that returns { imports, uncertain }. Keep the logic identical.\n\n(c) extractImports lexes once and recognizes. If lexer.firstRisk >= 0, take each recorded region whose start > firstRisk and walk its line segments: the opener-line remainder, each interior line, and the closer-line prefix.\n- Split only at breakLen terminators: CRLF as one, CR, LF, U+2028, U+2029. Number lines from region.line.\n- Re-lex each segment on its own with a fresh Lexer, then recognize.\n- Flag the segment's line with { line, reason: 'ambiguous-syntax' } when it yields any uncertain entry, or any import whose specifier isRelative. An external specifier can never resolve into the tree, so it cannot change the outcome.\n- At most one flag per line, including when two regions share a line. Track the last flagged line: regions and segments arrive in ascending order.\n- Append the flags after the main-pass entries.\n- Do not skip star-led lines (D1(10)).\n\n(d) Update the Lexer banner comment. Strings and regexes recover at a line break; template and block-comment state do not. The re-scan reports such lines as uncertainty instead of passing silently. Name the residual the module still accepts: a misread can still hide an import on its OWN line.\n\n(e) Error handling and purity:\n- extractImports still never throws on any input.\n- Exports are unchanged apart from the widened union.\n- No IO, no Git, no module-level mutable state.\n- evaluateArchitecture is unchanged: it already passes uncertainty through, sorts it, and ranks failed > inconclusive > passed.\n- Stay linear: segments partition their region, and regions never overlap.\n\nRun both architectureRules test files until green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/architectureRules.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/architectureRules.ts"
+      ],
+      "note": "Re-scan in architectureRules.ts:\n- (a) ImportUncertainty.reason widened with 'ambiguous-syntax'; the JSDoc is on the field.\n- (b) The private recognize(tokens) is the old loop, moved unchanged.\n- (c) extractImports lexes once and recognizes. When firstRisk >= 0, flagHiddenLines walks the regions with start > firstRisk, splits each one only at breakLen terminators, and runs each segment through wouldImport, which re-lexes it with a fresh Lexer and recognizes. A segment is flagged when it has any uncertain entry or a relative import. There is at most one flag per line (tracked by the last flagged line), flags are pushed straight into the main uncertain array, and star-led lines are not skipped. I deliberately avoided push(...spread): 200k flags would overflow the argument stack.\n- (d) The banner comment covers recovery, re-scan and the same-line residual.\n\nEvidence, in snapshot /tmp/moe-16628-dev.mpQ4cj on HEAD 1422c1d with the two owned files copied in:\n- vitest on both files: 173/173 (133 landed + 40 desync).\n- tsc --noEmit exit 0. Both test files also type-check with a scratch tsconfig (types: node), exit 0.\n- Probe: D7 gives 36 flags of 1233 reports, matching the architect's prototype.\n- 200k hidden lines: 200k flags in 397ms, no throw. Empty input, a lone backtick, an unterminated `/*`, a BOM, a hashbang and 1 MB lines all return.\n- The landed architectureRules.test.ts is untouched (git diff --quiet HEAD).",
+      "startedAt": "2026-10-29T23:30:17.881Z",
+      "completedAt": "2026-10-29T23:31:39.056Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate, run once and fresh, in a Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate). The in-tree node_modules is Windows-native.\n1. git archive HEAD of the WHOLE repo into /tmp.\n2. Overlay ONLY the two owned files: architectureRules.ts and architectureRules.desync.test.ts.\n3. Provide a native packages/moe-daemon/node_modules: symlink an existing install whose package-lock.json matches modulo CR, or run npm ci.\n4. Under env -i HOME=$HOME PATH=<nvm node v24 bin>:/usr/local/bin:/usr/bin:/bin NO_COLOR=1, run exactly: cd packages/moe-daemon && npm test && npx tsc --noEmit\n\nExpect exit 0. The 133 landed architectureRules tests must be green and unchanged, every desync test green, and the skip set equal to the pre-existing one.\n\nBefore citing the run, cmp the owned files against the snapshot, and confirm with `git diff --quiet HEAD -- packages/moe-daemon/src/delivery/architectureRules.test.ts` that the landed test file is untouched. Read the vitest log with grep -a, since the octal test can print NUL bytes.\n\nSubmit that command, its exit code and the output tail as the complete_task verification evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh gate, green, in a Linux-native snapshot at /tmp/moe-16628-gate.OpJnbh.\nSetup: git archive of the whole repo at HEAD cac652b. The two owned files were overlaid and are cmp-equal to the worktree and to HEAD, since they were already landed in checkpoint 38397f3. npm ci ran under env -i with node v24.21.0.\nCommand: `cd packages/moe-daemon && npm test && npx tsc --noEmit`, run with NO_COLOR=1. It exited 0.\n- Test Files: 187 passed (187).\n- Tests: 5234 passed, 16 skipped. The skips are the pre-existing set: baselineRun 6, accounts/cli 1, claudeHook 4, gitExecutable 2, heartbeatStop 3.\n- architectureRules.test.ts: 133/133.\n- architectureRules.desync.test.ts: 40/40.\n- tsc --noEmit: exit 0.\nThe landed architectureRules.test.ts is byte-identical: `git diff --quiet HEAD` and `git diff --quiet 38397f3~ HEAD` both pass on it. This step modified no files. The 727 dirty peer paths were not touched.",
+      "startedAt": "2026-10-29T23:33:41.738Z",
+      "completedAt": "2026-10-29T23:36:25.889Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff. Load adversarial-self-review.\n\nMutation probes: apply each in a scratch copy, see it go red, restore, then cmp.\n- M1: firstRisk never set. D1 and D2 go red.\n- M2: re-scan every multi-line region when no risk point exists. D3a, D3b and landed X4 'a multi-line block comment' go red.\n- M3: re-scan regions that start before firstRisk. D3d goes red.\n- M4: drop the `}`-in-substitution hazard. D1(9) goes red.\n- M5: rescan the line per candidate, with no cache. D6a times out.\n- M6: flag external specifiers too. D3e goes red.\n- M7: ignore uncertain entries in segments. D3f goes red.\n- M8: no per-line dedupe. D3i goes red.\n- M9: skip star-led lines. D1(10) goes red.\n- M10: gate R3 on the line hazard. D1(7) goes red.\n- M11: split segments at LF only. D4 goes red.\n\nCheck also:\n- The diff carries none of the global forbidden tokens.\n- No new exports beyond the widened union, and no IO, Git or node: imports.\n- No source comment phrasing that util/daemonGitDocs.test.ts rejects (e.g. 'runs no Git').\n- Optionally, type-check the new test file with a scratch tsconfig, because the package tsconfig excludes tests.\n- What if the input is empty, a lone backtick, an unterminated comment, a BOM, a hashbang, or a 1 MB line? It must still return and never throw.\n\nWrite the Serena handoff. It must say:\n- the residuals that stay accepted: a same-line misread still hides that line's import; quoted-string continuations are not re-scanned; deliberate evasion is out of reach;\n- the accepted false-inconclusive trade-off;\n- that V10 (task-db328cda) must surface 'ambiguous-syntax' as a named exit-2 reason.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/architectureRules.ts",
+        "packages/moe-daemon/src/delivery/architectureRules.desync.test.ts"
+      ],
+      "note": "Adversarial review. It found one real gap, now fixed and tested.\n- Gap: the plan's hazard set (backtick, `/*`, or `}` inside a substitution) misses a `{` inside a substitution. A misread that swallows or exposes `{` shifts the per-substitution brace depth, so a `}` on a LATER line closes the substitution early or late and hides the lines after it. vm runs the hidden require in both directions:\n  - swallowed: `${ {} / 1, f({ k: '/'` NL `}),` NL require\n  - exposed: `${ new (class extends /{/.constructor` NL ` {})() }` NL backtick NL REQ\n- Fix: lineHazard records `{` or `}` (one token), plus comment updates. Two new HIDDEN rows (D1 and D2) were red before the fix and are green after it.\n- Why this is in scope: it serves the contract's intendedBehavior, stays inside the approved hazard cache, and the original ten D1 texts are unchanged.\n\nMutants, each applied in a scratch copy, run red, then restored and cmp-verified:\n- M1-M4 and M6-M11: all killed by the predicted tests.\n- M2 also killed landed X4.\n- M5 (no cache) timed out D6a at 193s, and landed X6 with it.\n- M11 leaves CRLF green by construction; U+2028 and lone CR go red.\n- M4a (`}` only) and M4b (`{` only): killed.\n\nChecks:\n- None of the global forbidden tokens appear.\n- Exports and imports are unchanged; no module let/var.\n- Nothing matches the daemonGitDocs phrasing.\n- No non-ASCII in the test file.\n- Both test files type-check under a scratch tsconfig.\n- Edge inputs return without throwing, every line in range: empty, a lone backtick, unterminated `/*`, a BOM, a hashbang, a 1 MB line, a 1 MB line plus a template, and `<!--`/`-->`/`<`/`/` at EOF.\n\nRuled out: a desynced parens stack only changes later `/` choices, and each of those slashes is a gated candidate itself. regexOffUntil ends at its own line.\n\nFresh re-gate after the fix: archive of HEAD 90a97db, owned files overlaid and cmp-equal. `cd packages/moe-daemon && npm test && npx tsc --noEmit` exited 0: 187 files, 5250 passed, 16 skipped (the pre-existing set). Net is 121 runtime + 135 test - 9 = 247 LOC.\n\nThe handoff and the extended gotcha-lexical-import-scan-desync are written to Serena. The 727 dirty peer paths are untouched.",
+      "startedAt": "2026-10-29T23:36:28.139Z",
+      "completedAt": "2026-10-29T23:48:00.915Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-2cd62d2c87ab4e118222a5a8b841db6c"
+  ],
+  "priority": "HIGH",
+  "order": 265.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T19:25:18.471Z",
+  "updatedAt": "2026-10-30T00:40:01.524Z",
+  "contextFetchedBy": [
+    "qa-952969be",
+    "architect-32ff5555",
+    "worker-093a65d0"
+  ],
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-29T22:13:32.164Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:57:22.171Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T00:38:50.617Z",
+    "wallClockMs": 6088446
+  },
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T23:22:40.008Z",
+  "executionContract": {
+    "intendedBehavior": "extractImports never silently drops an import that its own lexing ambiguity hides on a LATER line.\n\nAfter the first point where the lexer's view may diverge from a real parse, every multi-line template-text or block-comment region is re-lexed line by line. That point is either a JSX-like `<`, or a code-position `/`, `<!--` or `-->` whose line remainder holds a backtick, `/*`, or a `}` inside a substitution. Each re-lexed line that would import a relative path, or call import()/require() with a non-literal, is reported once as { line, reason: 'ambiguous-syntax' }.\n\nSo evaluateArchitecture gives 'inconclusive' instead of 'passed' for the six task repros, or 'failed' when a real violation is also present.",
+    "acceptanceCriteria": [
+      "D1: all ten hidden-line texts give { imports: [], uncertain: [{ line: N, reason: 'ambiguous-syntax' }] } at the planned N.",
+      "D2: evaluateArchitecture gives 'inconclusive' with the file-tagged ambiguous entry for every D1 text, 'failed' for the bare require control, and 'failed' plus the ambiguous entry in the precedence case.",
+      "D3: there are no false flags without a risk point, before it, for single-line regions or for external-only lines. Dynamic or non-literal hidden calls are flagged. There is one flag per line, in ascending order.",
+      "D4/D5: line numbers are exact under CRLF, U+2028 and lone CR, and for regions left unterminated at EOF.",
+      "D6/D7: linear on the planned pathological inputs; never throws; every line is in range; the seeded corpus yields more than 0 flags.",
+      "The 133 landed tests in architectureRules.test.ts pass unchanged, and the file is byte-identical to HEAD."
+    ],
+    "invariants": [
+      "The Lexer's token output is unchanged for every input.",
+      "extractImports never throws, and stays linear in the input length.",
+      "The module stays pure: no IO, Git or node: imports, no module-level mutable state, no new runtime dependency.",
+      "Existing uncertainty reasons and their lines are unchanged."
+    ],
+    "compatibility": [
+      "The result shapes of extractImports and evaluateArchitecture are unchanged. Only the reason union widens.",
+      "V10 (task-db328cda, gated on this task) consumes the widened union as a named exit-2 reason."
+    ],
+    "approvedScope": [
+      "ImportUncertainty.reason gains 'ambiguous-syntax'.",
+      "Private Lexer additions: regions, firstRisk, and the lazy per-line hazard cache.",
+      "A module-level operandMayFollow, factored out of slash() with identical behavior.",
+      "A private recognize(tokens), moved from extractImports with identical logic.",
+      "The extractImports re-scan of regions after firstRisk.",
+      "New test file architectureRules.desync.test.ts."
+    ],
+    "reuse": [
+      "breakLen for line terminators.",
+      "isRelative for the external filter.",
+      "The existing Lexer and recognizer logic, run per segment.",
+      "X6's seeded generator for D7."
+    ],
+    "sourceAssumptions": [
+      "architectureRules.ts Lexer: slash() regexAllowed prev test, templateText(head), skipBlock, regexEnd with the regexOffUntil guard, punct() braces/parens.",
+      "architectureRules.ts extractImports: the forEach recognizer using callOpen and clauseSource.",
+      "architectureRules.ts evaluateArchitecture: uncertain pass-through and sort; failed > inconclusive > passed.",
+      "architectureRules.test.ts X4 'a multi-line block comment' expects uncertain [] (no risk point)."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test && npx tsc --noEmit"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Architect decision required by the task: add a new fail-safe uncertainty reason, 'ambiguous-syntax'. CQ-V10a's no-new-reason contract was scoped to V10a, and that task is DONE. Options rejected:\n- Parser-backed extraction. typescript is only a devDependency; the daemon's runtime deps are chokidar, pino, pino-pretty and ws. A parser is a large new runtime dependency, and it still has to guess script vs module and JSX vs TS per file.\n- Fixing the heuristics (default/extends regex keywords, Annex-B comments, JSX awareness). That changes V10a's frozen token output, and a lexer heuristic can never be complete. The re-scan does not depend on any heuristic being right.\n- Always re-scanning every multi-line template or comment. It breaks the landed X4 case ('a multi-line block comment' expects uncertain []) and flags every code-gen template and commented-out import.\n- Reporting re-scanned lines as real imports. An ambiguity must map to 'inconclusive', never to a false 'failed'.\n- Tighter hazards: only up to the line's last `/`, or only after 'heuristic' prev tokens. Fewer risk points, but more logic and an enumeration QA can poke holes in. The rest-of-line hazard on every slash is sound for single-line misreads and simpler.\n- Skipping star-led lines as JSDoc. That opens a bypass (D1(10)). Noise is limited by the relative-or-dynamic filter instead.",
+    "codebaseInsights": "Architect's scratch prototype of exactly this design, built under the scratchpad with no repo bytes changed:\n- All 133 landed architectureRules.test.ts tests pass.\n- Every D1-D5 case gives the exact output listed.\n- D6a/b/c each run in about 35-75 ms.\n- The uncached-hazard mutant took 5.5 s at 40k slashes and grows quadratically, hence the 80k size.\n- The extended-alphabet D7 corpus gave 36 flags and 0 lines out of range.\n- In a sloppy node vm.Script the hidden require really runs for D1(1), (2), (3), (8) and (9); today evaluateArchitecture gives 'passed' for all ten D1 texts.\n\nSource facts:\n- The Lexer is private, so test through extractImports and evaluateArchitecture.\n- evaluateArchitecture copies extractImports().uncertain as is, sorts by file, line and reason, and maps any uncertainty to 'inconclusive' unless there is a violation. It needs no change.\n- grep finds no consumer of ImportUncertainty['reason'] outside architectureRules.ts and its test.\n- V10 (task-db328cda) dependsOn this task and maps uncertainty to exit 2 'inconclusive' with a named reason, so the new reason flows through.\n- breakLen (CRLF as one; CR, LF, U+2028, U+2029) is the single line-number authority. The X6 random test already checks line bounds and will now exercise the new code.",
+    "risks": "- Same-line misreads stay an accepted V10a residual and are not in this task. A misread can still hide an import on its own line, for example `x! / 2; require('../db'); y / 3`.\n- Quoted-string line continuations after a misread are not re-scanned.\n- Deliberate evasion stays out of a lexical check's reach: aliases, runtime indirection, crafted same-line misreads.\n- False 'inconclusive' is possible and accepted as fail-safe: a multi-line template or comment after the first risk point whose line, read as code, imports a relative path or calls import()/require() with a non-literal. Examples are code-gen templates and commented-out code in a TSX file or after a slash-plus-backtick line.\n- Serialized: sibling bug task-54dc3d38 (resolveImport, same file) is set to dependsOn this task.\n- Keep architectureRules.test.ts byte-identical: the epic size waiver freezes V10a's bytes.\n- Linearity tests must not use wall-clock asserts (mem:gotcha-vitest-linearity-tests).\n- Escape U+2028 in test sources.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/architectureRules.ts",
+      "packages/moe-daemon/src/delivery/architectureRules.test.ts",
+      "mem:gotcha-lexical-import-scan-desync",
+      "mem:task-task-2cd62d2c87ab4e118222a5a8b841db6c-handoff",
+      "mem:gotcha-daemon-linux-snapshot-gate",
+      "mem:gotcha-vitest-linearity-tests",
+      "mem:gotcha-edit-tool-unescapes-unicode-literals"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T23:22:40.113Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T23:23:31.866Z",
+  "commits": [
+    {
+      "sha": "38397f3467f8c832d045f733252f086bc6412b73",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-29T23:22:46Z",
+      "paths": [
+        ".moe/tasks/task-025249c9051749e5bf23685a1c00ca29.json",
+        ".moe/tasks/task-16628bef427b426aa9d8fc6ac1d19534.json",
+        ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
+        ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+        "packages/moe-daemon/src/delivery/architectureRules.desync.test.ts",
+        "packages/moe-daemon/src/delivery/architectureRules.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-29T23:32:15.019Z",
+      "treeId": "e9283e1b131a6a68dfa0375fb0d389405e050964",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "e47aec78979668ca70230e02670ee465adabe4bc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-29T23:32:47Z",
+      "paths": [
+        ".moe/tasks/task-025249c9051749e5bf23685a1c00ca29.json",
+        ".moe/tasks/task-16628bef427b426aa9d8fc6ac1d19534.json",
+        ".moe/tasks/task-5e816f2cafe8490596af56d9a5108efe.json",
+        "packages/moe-daemon/src/delivery/architectureRules.desync.test.ts",
+        "packages/moe-daemon/src/delivery/architectureRules.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-29T23:48:55.893Z",
+      "treeId": "afccec88954e211458ee52e43c6e9b7cfbf7d61d",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "800b2eed49b6a39e1a28fc2636332e06d0c0ba42",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T00:25:52Z",
+      "paths": [
+        ".moe/tasks/task-16628bef427b426aa9d8fc6ac1d19534.json",
+        ".moe/tasks/task-18b365e5f7ac43d49c1f34c3aebd4461.json",
+        ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T00:40:01.524Z",
+      "treeId": "127e5a1b42f706a9138d0a533935511f5915c801",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/architectureRules.desync.test.ts",
+    "packages/moe-daemon/src/delivery/architectureRules.ts",
+    ".moe/tasks/task-025249c9051749e5bf23685a1c00ca29.json",
+    ".moe/tasks/task-16628bef427b426aa9d8fc6ac1d19534.json",
+    ".moe/tasks/task-5e816f2cafe8490596af56d9a5108efe.json",
+    ".moe/tasks/task-18b365e5f7ac43d49c1f34c3aebd4461.json",
+    ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/architectureRules.desync.test.ts",
+    "packages/moe-daemon/src/delivery/architectureRules.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T00:25:52Z",
+    "at": "2026-10-30T00:40:01.524Z"
+  },
+  "reviewStartedAt": "2026-10-29T23:48:21.922Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test && npx tsc --noEmit",
+    "exitCode": 0,
+    "outputTail": "Fresh git archive of HEAD 90a97db + the 2 owned files overlaid (cmp-equal to the worktree), npm ci, env -i, node v24.21.0, NO_COLOR=1.\n ✓ src/delivery/architectureRules.test.ts (133 tests) 239ms\n ✓ src/delivery/architectureRules.desync.test.ts (44 tests) 236ms\n ✓ src/benchmarks/baselineRun.test.ts (20 tests | 6 skipped)\n ✓ src/accounts/cli.test.ts (14 tests | 1 skipped)\n ✓ src/util/claudeHook.test.ts (12 tests | 4 skipped)\n ✓ src/util/gitExecutable.test.ts (12 tests | 2 skipped)\n ✓ src/util/heartbeatStop.test.ts (9 tests | 3 skipped)\n\n Test Files  187 passed (187)\n      Tests  5250 passed | 16 skipped (5266)\n   Start at  01:46:53\n   Duration  30.54s (tests 92%, transform 4%, import 4%)\n\nnpm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' --noEmit\nEXIT=0",
+    "reportedAt": "2026-10-29T23:48:21.922Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Fix for the architectureRules lexer desync. A line hidden by a lexing ambiguity now surfaces as 'ambiguous-syntax' uncertainty, so the result is 'inconclusive' (or 'failed' alongside a real violation), never a silent 'passed'.\n\nRuntime: architectureRules.ts, +121/-9.\n- ImportUncertainty.reason gains 'ambiguous-syntax'.\n- The Lexer records the multi-line template and comment regions and the first risk point:\n  - every `/`, or an Annex-B `<!--`/`-->`, when the rest of its line holds a backtick, a `/*`, or (inside a substitution) a brace;\n  - a JSX-like `<`, ungated.\n- The hazard check uses a per-line cache, so it stays linear.\n- extractImports re-lexes each line of the regions after that point, through the private recognize() moved from extractImports. It flags, once per line in ascending order, any line that imports a relative path or calls import()/require() on a non-literal.\n- Exports and result shapes are unchanged. The module is still pure.\n\nTests: new architectureRules.desync.test.ts, 44 tests (D1-D7 plus 2 brace rows). The landed architectureRules.test.ts is byte-identical, 133/133.\n\nDeviation, found in step-5 review: the plan's hazard set covered only `}` inside a substitution. A swallowed or exposed `{` also shifts the substitution's brace depth, so a `}` on a LATER line closes it early or late. vm runs the hidden require in both directions. The fix records `{` as well, and the two new HIDDEN rows go red without it.\n\nEvidence:\n- Mutants M1-M11 plus M4a/M4b: all killed. M5 timed out D6a.\n- Token-invariance probe (200k random inputs, run in step 2 before the review fix): identical tokens. The fix only adds `{` to the hazard scan, which sets firstRisk and never touches tokens.\n- Both test files type-check under a scratch tsconfig.\n- Edge inputs (empty, a BOM, a hashbang, a 1 MB line, constructs at EOF) never throw, and every line stays in range.\n- Gate exit 0: 5250 passed, 16 pre-existing skips.\n\nAccepted residuals:\n- A same-line misread still hides that line's ",
+  "completedAt": "2026-10-30T00:38:50.617Z",
+  "reviewCompletedAt": "2026-10-30T00:38:50.617Z",
+  "reviewSummary": "APPROVED. Commits 38397f3 (checkpoint) and e47aec7 (completion, pushed) are on moe/work-2026-10-24. Owned diff: architectureRules.ts +121/-9 and new desync.test.ts +135, 247 net LOC.\n\nGate: fresh archive of HEAD 04ec043, owned files cmp-equal to e47aec7, native node_modules, env -i, node 24.21. `cd packages/moe-daemon && npm test && npx tsc --noEmit` exited 0: 188 files, 5257 passed, 16 skipped (the pre-existing set). The landed architectureRules.test.ts passed 133/133 and is byte-identical; desync passed 44/44.\n\nDoD: D1-D7 are pinned by exact tests. In node vm the hidden require runs for T1-T3, both brace rows, `<!--` in a substitution and `*/ -->`, and the scan flags each one on the correct line.\n\nInvariants: a differential fuzz of the pre-task code against the new code on 200k inputs showed identical imports and existing uncertainty, 0 throws, 0 out-of-range lines, and unique ascending flags. No forbidden tokens, no node: imports, no module-level mutable state. The step-5 `{` hazard stays within the approved cache and has red-before-fix tests.\n\nNotes for V10 (task-db328cda), non-blocking:\n1) The plan-accepted string-continuation residual is real: `class A extends /'/.constructor {} // \\` NL require runs in vm, and the scan gives [].\n2) `(<` NL `p>` is valid TSX (esbuild) but sets no R3 risk, because the approved spec allows only spaces and tabs. That is evasion-class.\n3) False inconclusive on this repo: 2 of 414 JS/TS files, both code-gen templates in daemon scripts.\n\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": null
+}

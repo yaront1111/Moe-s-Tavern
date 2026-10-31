@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -161,6 +161,41 @@ describe('runPostToolUseHook', () => {
     } finally {
       if (prev === undefined) delete process.env.MOE_WORKER_ID;
       else process.env.MOE_WORKER_ID = prev;
+    }
+  });
+
+  it('stays fail-open when daemon.json is over the 64 KiB cap', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-plugin-oversize-'));
+    const prev = process.env.MOE_WORKER_ID;
+    process.env.MOE_WORKER_ID = 'worker-test';
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      fs.mkdirSync(path.join(project, '.moe'), { recursive: true });
+      const json = JSON.stringify({
+        port,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        projectPath: project,
+      });
+      const text = json + ' '.repeat(65537 - Buffer.byteLength(json));
+      expect(Buffer.byteLength(text)).toBe(65537);
+      fs.writeFileSync(path.join(project, '.moe', 'daemon.json'), text);
+
+      const result = await runPostToolUseHook({
+        tool_name: 'mcp__moe__moe_list_tasks',
+        session_id: 's5',
+        cwd: project,
+      });
+      expect(result).toEqual({ forwarded: false, reason: 'send-failed' });
+      await new Promise((r) => setTimeout(r, 100));
+      expect(received).toHaveLength(0);
+      const logged = stderr.mock.calls.map((c) => String(c[0])).join('');
+      expect(logged).toContain('Moe daemon not running for project');
+    } finally {
+      stderr.mockRestore();
+      if (prev === undefined) delete process.env.MOE_WORKER_ID;
+      else process.env.MOE_WORKER_ID = prev;
+      fs.rmSync(project, { recursive: true, force: true });
     }
   });
 

@@ -232,8 +232,21 @@ jobs:
       - name: Test installers with isolated profiles
         run: node --test scripts/tests/installers.test.mjs scripts/tests/install-dependencies-windows.test.mjs scripts/tests/dependencies.test.mjs scripts/tests/runtime-requirements.test.mjs
 
+      - name: Test local runner prerequisite bundles
+        run: node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-channel.test.mjs scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-daemon-bind.test.mjs scripts/tests/local-runner-pinned-client.test.mjs
+
+      - name: Test Moe CLI response transport
+        run: node --test scripts/tests/moe-call.test.mjs
+
       - name: Test agent runtime discovery
-        run: node --test scripts/tests/agent-runtime.test.mjs scripts/tests/taskless-handoff.test.mjs scripts/tests/taskless-binding-notice.test.mjs scripts/tests/push-failure-message.test.mjs scripts/tests/prompt-cache.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/usage-attribution.test.mjs scripts/tests/resume-progress.test.mjs scripts/tests/moe-account-lease.test.mjs
+        run: node --test scripts/tests/agent-runtime.test.mjs scripts/tests/taskless-handoff.test.mjs scripts/tests/taskless-binding-notice.test.mjs scripts/tests/push-failure-message.test.mjs scripts/tests/prompt-cache.test.mjs scripts/tests/prompt-cache-witness.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/usage-attribution.test.mjs scripts/tests/resume-progress.test.mjs scripts/tests/moe-account-lease.test.mjs
+
+      - name: Test launcher daemon.json cap and seat re-registration
+        # Real launcher blocks: Linux runs bash and pwsh 7; Windows runs Git Bash,
+        # PowerShell 5.1 and pwsh 7. Not macOS: its /bin/bash is 3.2 and these
+        # suites have not been run there.
+        if: runner.os != 'macOS'
+        run: node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs
 
       - name: Test Bash landing and postflight runner
         run: node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/hook-isolation-bash.test.mjs scripts/tests/postflight-safe.test.mjs
@@ -270,6 +283,8 @@ jobs:
           pwsh -NoProfile -File scripts/tests/parity-check.ps1
 
       - name: Test VS Code daemon startup
+        # bash on every OS: Windows' default pwsh only fails on the last command, so a failing lint or compile passed.
+        shell: bash
         run: |
           npm ci
           npm run lint

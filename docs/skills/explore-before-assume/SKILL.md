@@ -13,6 +13,10 @@ Before referencing a symbol — any symbol — verify it exists. The cheapest bu
 
 For every function, class, method, model, attribute, relationship, constant, env var, file path, or import you're about to reference: **grep for it first**. If it doesn't show up, either it doesn't exist or you have the name wrong. Either way, stop and find out before writing a line that depends on it.
 
+## Reuse what was already verified
+
+Moe may already have checked a reference for you: the approved plan names a symbol with its file, `moe.get_context` serves a section, or a landed prerequisite carries its evidence. Start from that instead of searching again: a supplied location needs no fresh grep. Still read a definition before you depend on its signature, and verify anything the context marks truncated, omitted, missing or stale, anything a listed limitation leaves out (`no-repository-source`: no source was served), and anything the supplied slice does not cover. A supplied slice is a navigation aid, never a reason to skip a read the change needs.
+
 ## Why this matters
 
 A plausible reference that doesn't exist (`user.clientProfile.accounts`) reads right, passes review by eye, and fails at runtime — often subtly. Checking first removes that whole class of bug.

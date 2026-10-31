@@ -1,0 +1,230 @@
+{
+  "id": "task-fdbc59358b8746a4b19073b5f2ef5a7c",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "[CQ-F11] PowerShell execution identity transport",
+  "description": "Objective: Mirror Bash receipt/revision/session transport in both native PowerShell engines.\n\nDeliverable: PowerShell execution identity transport. This is task F11 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs\n\nDependency aliases (wired by Moe task ids after import): F09.",
+  "definitionOfDone": [
+    "PowerShell5.1 and7 transport equivalent identities and complete role-scoped payload.",
+    "Preserve UTF-8 BOM, shell-sensitive/Unicode fixture behavior and stable prefix.",
+    "Missing or stale identity triggers refresh rather than legacy bypass in strict mode.",
+    "Fresh verification `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first. Extend the sh-only identity tests that CQ-F10 (task-b15bbbe5, a dependency) LANDED in scripts/tests/prompt-cache-launcher.test.mjs to the ps1 engines. The file's `engines` list already runs powershell.exe (5.1) and pwsh.exe (7) on win32. Read F10's landed tests and completion summary first and mirror them; do not rewrite them. Follow the existing ps1 idioms:\n- a ﻿ script prefix;\n- `$ErrorActionPreference='Stop'`;\n- `[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)`;\n- between() slices of the REAL wrapper.\n\nTwins:\n1. Pre-flight args. Slice the pre-flight `get_context` statement with a mocked `Invoke-MoeRpc` that records -Args.\n   - With $env:MOE_SESSION_ID set, the args are exactly {taskId, sessionId}.\n   - Unset, they are exactly {taskId}: a full read, never a delta.\n   - The existing ps1 context-injection test's fixture now carries servedContext and packetManifest, and its Unicode/shell-sensitive values (שלום 漢字, \"quoted\", $literal, `text`) still deep-equal after injection (DoD1, DoD2).\n2. Pin and refresh, with a temp project's .moe/attempts/*.json. Slice Test-MoeGeneration, Get-MoeProp (if needed), Read-MoeAttempt and Set-MoeAttemptIdentity.\n   - A fresh verified claim sets $env:MOE_ATTEMPT_ID and $env:MOE_ATTEMPT_GENERATION (the decimal string) together.\n   - A resume (alreadyAssigned, no attemptId) after the record moved to attempt-b generation 3 exports attempt-b/3: the refresh.\n   - A stale or foreign identity clears BOTH env variables and both script variables, never leaving half a pair or the previous values (DoD3).\n3. Get-CodexMoeServerOverride. With MOE_SESSION_ID, the attempt pair and the runner pair set, the env table ends exactly `MOE_SESSION_ID='<sid>',MOE_ATTEMPT_ID='attempt-a',MOE_ATTEMPT_GENERATION='2',MOE_WORKER_ID='w',MOE_RUNNER_PROCESS_STARTED_AT='…',MOE_RUNNER_HOST='…'}}` (TOML literal strings, as this function already emits). A stale config-file entry is dropped. A blank attempt variable omits the pair.\n4. Stable prefix and file transport. The existing ps1 \"Codex task text never enters stable model instructions\" test also sets identity env values and asserts that the stable instructions contain none of them, while the private context file stays exact.\n5. Grok and unserved reads.\n   - The ps1 source carries the three single-quoted grok `KEY = \"${KEY:-}\"` lines.\n   - A sliced `Invoke-MoeRpcUnserved` run with a mocked Invoke-MoeRpc sees MOE_SESSION_ID absent, and restores the caller's value afterwards, including when the mock throws.\n   - The post-flight and adoption get_context calls use it.\n\nThe RED run needs Windows-native node (see step 3); on Linux these tests are skipped by the engines list. Budget: about 160 added test lines or fewer.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "note": "RED. Mirrored F10's identity tests for the ps1 engines (powershell.exe 5.1 and pwsh 7). The ps1 context test now slices the real pre-flight get_context statement with a mocked Invoke-MoeRpc and asserts args are exactly {taskId[,sessionId]} on both engines, while the fixture (packetManifest, servedContext, Unicode/shell-sensitive values) still deep-equals.\nNew ps1 tests:\n- pin: fresh, resume refresh, stale, foreign; checks env and script vars together;\n- per-iteration reset clears the env pair;\n- codex override, with key order, a stale config key dropped, both-or-neither;\n- grok lines, the get_context call-site count, and the Invoke-MoeRpcUnserved restore including on throw.\nWindows-native node RED: 20 fail (6 context + 14 identity), 45 pass; Linux sh 19/19. Harness gotcha: a mock with a param named $Args must be an advanced function ([Parameter(Mandatory)]), else the automatic $args shadows it.",
+      "startedAt": "2026-10-26T00:42:43.605Z",
+      "completedAt": "2026-10-26T00:47:38.752Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement in scripts/moe-agent.ps1. Rebase on the landed bytes of task-5c71dff9 and CQ-F10, both dependencies.\n\nKeep the file UTF-8 WITH its BOM: `head -c3 | xxd` must show efbbbf, and the parity check enforces it. Windows PowerShell 5.1 cannot parse a BOM-less file with non-ASCII text. Keep every between() boundary used by the three verification tests byte-identical.\n\n1. Set-MoeAttemptIdentity:\n   - At entry, clear both script variables and `Remove-Item Env:MOE_ATTEMPT_ID, Env:MOE_ATTEMPT_GENERATION -ErrorAction SilentlyContinue`.\n   - A fresh-claim identity must also pass `Read-MoeAttempt $TaskId $id $g` before it is pinned. That matches bash pin_attempt_identity, which verifies before assigning.\n   - Only on success, set both script variables AND `$env:MOE_ATTEMPT_ID` / `$env:MOE_ATTEMPT_GENERATION` (the generation as an invariant decimal string). The pair moves together.\n   - The existing WARN and the fail-closed candidate behavior stay unchanged.\n2. The per-iteration reset beside `$script:MoeAttemptId = \"\"` also clears the env pair, so a taskless or failed iteration never hands the CLI the previous task's attempt.\n3. Pre-flight get_context: `-Args @{ taskId = $preflightTaskId; sessionId = $env:MOE_SESSION_ID }`, built only when $env:MOE_SESSION_ID is non-empty, so a pre-F09 proxy still records the receipt.\n4. New `function Invoke-MoeRpcUnserved` next to Invoke-MoeRpc:\n   - save $env:MOE_SESSION_ID, then remove it;\n   - call `Invoke-MoeRpc @args` (splat whatever parameters callers pass) inside try;\n   - restore the saved value in finally.\n   Use it for the post-flight `$ctxResp` and adoption `$adoptResp` get_context reads. Those reads were never served to the agent, so they must mint no receipt; the status view lacks isEpicFinal and epic.id. Twin: bash moe_rpc_unserved.\n5. Get-CodexMoeServerOverride:\n   - Add MOE_SESSION_ID, MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION to the keys filtered out of the config file.\n   - Before `MOE_WORKER_ID='…'`, append `MOE_SESSION_ID='…'` when it is non-empty and contains no single quote.\n   - Append the attempt pair only when both values are non-empty and quote-safe: both or neither.\n   - Same order as the bash twin. The runner identity stays last, so postflight.ps1's scope-Z pin still holds.\n6. Grok writer: three single-quoted lines beside $grokRunnerHostLine, written into the same [mcp_servers.moe.env] table.\n7. Error handling:\n   - identity setup never throws into the wrapper loop;\n   - a blank or unverified pair transports nothing, and a strict daemon then refuses execution. Refresh is the next iteration's re-pin (DoD3), never a legacy bypass;\n   - the proxy refuses half pairs.\nTouch no other behavior.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "moe-agent.ps1 is +44/-7; BOM efbbbf kept; 0 CR.\n- Set-MoeAttemptIdentity clears the script and env pair at entry. It verifies a fresh-claim identity via Read-MoeAttempt before pinning (twin of pin_attempt_identity), then sets the script vars and $env:MOE_ATTEMPT_ID/MOE_ATTEMPT_GENERATION ([string] generation) together. On failure it keeps the same WARN and leaves both blank.\n- The per-iteration reset line also removes the env pair.\n- Pre-flight get_context args are $preflightContextArgs {taskId}, plus sessionId when $env:MOE_SESSION_ID is non-empty.\n- New Invoke-MoeRpcUnserved does save, Remove-Item Env:MOE_SESSION_ID, try { Invoke-MoeRpc } finally restore. It uses explicit Tool/Args params, not the planned `@args` splat: an advanced function has no automatic $args. Used at $ctxResp and $adoptResp.\n- Get-CodexMoeServerOverride filters the 3 keys from the config file. It emits MOE_SESSION_ID, then the attempt pair (both or neither, quote-safe), before MOE_WORKER_ID; the runner identity stays last.\n- Grok gets 3 single-quoted lines after $grokRunnerHostLine.\nWindows-native node: launcher tests 65/65.\nSCOPE GROWTH: scripts/tests/postflight.ps1 (+4/-1). attemptFixture gets the same reopen-closed-when-claimLimit>1 fix CQ-F10 landed in postflight.sh; the fixture is now byte-identical to the sh twin (see Serena gotcha-postflight-frozen-claim-reuses-closed-attempt). Proof on PS 5.1: the new wrapper with the OLD fixture fails loop-land-twice (FROZEN FIXTURE assertion); with the new fixture all 73 frozen modes, [accounts] and both hot-reload arms pass. No assertion was loosened.",
+      "startedAt": "2026-10-26T00:47:39.930Z",
+      "completedAt": "2026-10-26T00:58:36.196Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Parity, then the gate.\n\n1. Add `MOE_SESSION_ID MOE_ATTEMPT_ID MOE_ATTEMPT_GENERATION` to the require_both env lists in BOTH scripts/tests/parity-check.sh and scripts/tests/parity-check.ps1. Use the runner-identity group or a new 'execution identity' group, spelled identically in both. Both wrappers carry the names after this task.\n2. Run the gate twice, fresh. Both runs must exit 0:\n   - (a) Linux, sh engine: `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs`.\n   - (b) The SAME command under Windows-native node, which exercises powershell.exe 5.1, pwsh.exe 7 and Git Bash: `cd /mnt/d/projexts/moes && env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION -u MOE_WORKER_ID -u MOE_PROJECT_PATH -u MOE_DAEMON_HOST \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs`. Keep a Windows-drive cwd. WSL interop leaks the seat's MOE_* variables into Windows processes; see Serena gotcha-qa-ps1-postflight-from-wsl.\n   Supply run (b)'s command, exit code 0 and output tail to moe.complete_task: it is the run that proves the PowerShell 5.1 and 7 engines. Mention run (a) in the summary.\n3. Required regression checks:\n   - `bash scripts/tests/parity-check.sh`;\n   - `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/tests/parity-check.ps1`;\n   - the BOM check;\n   - postflight.ps1, per that memory's recipe: copy scripts to /mnt/d/moe-scratch/<dir>, set MOE_POSTFLIGHT_TIMEOUT_SEC=180, and poll its log, because it takes about 12 minutes. When a ps1 run fails, run the parent revision's scripts the same way before blaming this change.\n\nError handling: a failure is a defect to fix with systematic-debugging, never a test to loosen. Live seats run the installed plugin copy of the wrapper, not this file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Added a new 'execution identity' group with MOE_SESSION_ID, MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION, spelled identically in both checkers. Negative proof: against HEAD's ps1, parity-check.sh fails on exactly MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION.\n\nGates (seat MOE_* unset):\n- (a) Linux node, DoD command: 38/38, rc 0.\n- (b) Windows-native node, DoD command: 114/114, rc 0 (PS 5.1, pwsh 7, Git Bash).\n\nRegression:\n- parity-check.sh PASS; parity-check.ps1 PASS on powershell.exe and on pwsh.exe.\n- BOM efbbbf on moe-agent.ps1 and postflight.ps1. parity-check.ps1 was and stays BOM-less.\n- postflight.ps1, TIMEOUT 180, from D:\\moe-scratch snapshots that are cmp-identical to the working tree, PASS (exit 0) on PS 5.1.26100 and on pwsh 7.6.8. Each ran: frozen 73, [accounts], [hot reload], [hot reload refused], and 36 commit-scope scenarios (AD/AE skip their symlink variants because this host has no symlink rights, as in 5c71dff9's QA).",
+      "startedAt": "2026-10-26T00:58:37.442Z",
+      "completedAt": "2026-10-26T01:11:25.639Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review: load adversarial-self-review and review `git diff -- scripts/moe-agent.ps1 scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/parity-check.sh scripts/tests/parity-check.ps1`. Check each of these:\n- Do PowerShell 5.1 and 7 behave the same? Watch for $null vs '' in $env:, ConvertTo-Json depth 20, and native argv quoting (no double quotes reach codex on PS < 7.3).\n- Can the CLI ever get half a pair, a previous pair, an unverified pair, or a stale MOE_SESSION_ID? Check fresh claim, resume, a failed pin, a taskless iteration, a BLOCKED hold and the in-process hot-reload supervisor, which keeps env, so the per-iteration reset must clear the pair.\n- Is $env:MOE_SESSION_ID restored after every unserved read, including on throw?\n- Can an identity reach the stable instruction prefix?\n- Is the BOM intact?\n- Are bash and ps1 at behavioral parity with CQ-F10: same env contract, codex key order, grok lines and unserved sites?\n- Error handling: is every path fail-closed, with no new throws into the loop?\n- Scope:\n  - only the four planned files changed;\n  - no .moe edits and no git writes;\n  - no forbidden-pattern tokens;\n  - net LOC 400 or less (`git diff --numstat`).\nFix any finding with a focused test. If anything changed, re-run step 3's gate and checks fresh. The completion summary states the PowerShell contract and both engines' results.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of checkpoint 2a39de0 (all 5 files cmp-clean against HEAD; the session resumed after an ACCOUNT-SWITCH). No findings, so no code changed in this step.\n\nChecked:\n- Ordering:\n  - Invoke-MoeReattachOwnAttempts (5699) runs before the pin (5895), so a reconciling attempt is reattached before Read-MoeAttempt verifies it. Reattach keeps the id/generation, so the pair stays valid.\n  - The codex override is rebuilt per iteration (6471), after both the pin and $env:MOE_SESSION_ID (5628).\n- Half, stale or unverified pair: the pair is cleared at Set-MoeAttemptIdentity entry and at the loop-top reset (the in-process hot-reload supervisor keeps env). It is set together only after Read-MoeAttempt verifies it. A taskless or failed claim leaves both blank. Tested fresh, resume refresh, stale, foreign and reset on PS 5.1 and pwsh 7.\n- Unserved reads: Invoke-MoeRpcRaw spawns `node $proxyScript` with the process env, so the removal reaches the proxy. finally restores a non-empty sid, including on throw (tested). Nothing else in-process reads the var concurrently: the sidecar is a separate Start-Job process and the CLI has already exited.\n- Bash parity (pin_attempt_identity verifies fresh and resume; moe_rpc_unserved at the same 2 sites): same env contract, the codex key order SESSION, ATTEMPT_ID, GENERATION before WORKER_ID, and the grok lines. The one documented difference is that ps1 emits the pair both-or-neither in codex. Both fail closed, and the env pair is only ever set together.\n- Stable prefix: the shared test (line 119) sets the identity env on both ps1 engines; it is absent from the instructions.\n- BOM efbbbf (agent and postflight.ps1); 0 CR; no forbidden tokens; no .moe edits or git writes; net LOC 129 (+143/-14).\n\nFresh gates: Linux node DoD 38/38; Windows-native node DoD 114/114, rc 0; parity PASS on bash, PS 5.1 and pwsh 7. postflight.ps1 was not re-run because no bytes changed since the step-3 PASS on both engines.",
+      "startedAt": "2026-10-26T01:13:19.669Z",
+      "completedAt": "2026-10-26T01:15:54.111Z"
+    }
+  ],
+  "planRevision": 9,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the standing delegation. Both dependencies are DONE: CQ-F09 task-3c547751 (QA approved on the first pass; landed 4ea8783) and task-35584de2. The task rails contain no human-approval gate. Plan against F09's landed proxy attempt-identity transport in packages/moe-proxy/src/index.ts and utils.ts. This is the PowerShell twin of CQ-F10 task-b15bbbe5, promoted together. If both plans touch the launchers or the parity tests, serialize them with dependsOn. While task-5c71dff9 (the wrapper hot-reload syntax check, which edits both moe-agent.sh and moe-agent.ps1) is not DONE, dependsOn it too.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 110,
+  "comments": [
+    {
+      "id": "comment-869797fec3a94f98849d974e02d70a71",
+      "author": "architect-4c57a52b",
+      "content": "Interface note from CQ-F09 (task-3c547751, plan rev 1, TURBO-approved; re-check against F09's landed code before you build on it). This mirrors the F10 note. moe-proxy stamps the session's execution identity from its own env:\n- MOE_SESSION_ID: sent as sessionId on moe.get_context and moe.start_step.\n- MOE_ATTEMPT_ID + MOE_ATTEMPT_GENERATION, both or neither: sent as attemptId and generation (a JSON number) on moe.start_step only. The id must match [A-Za-z0-9_-]{1,128}. The generation must be a positive decimal safe integer with no leading zero.\n- A blank value counts as unset (legacy path).\n- A caller value that differs from the env is refused: EXECUTION_IDENTITY_SUBSTITUTED (-32003).\n- A malformed value or a half pair refuses every call that would carry it: EXECUTION_IDENTITY_INVALID (-32602). Nothing is coerced or dropped.\n\nWhat PowerShell must do:\n1. Set $env:MOE_ATTEMPT_ID and $env:MOE_ATTEMPT_GENERATION together once the attempt is pinned, and clear both when none is pinned. Never leave half a pair. This applies to both 5.1 and 7.\n2. $env:MOE_SESSION_ID is already set before preflight (moe-agent.ps1 ~5571). The wrapper's own Invoke-MoeRpc get_context calls therefore carry sessionId and mint receipts. Keep that for preflight, and move the postflight/adoption lookups (~7190, ~7349) to view:\"status\".\n3. codex/grok env tables must name the three keys, the same as in sh.\n4. A stale identity must be refreshed by relaunch, never by a legacy bypass in strict mode. The proxy refuses a stale or partial pair; it never drops one.",
+      "timestamp": "2026-10-25T22:40:59.793Z"
+    },
+    {
+      "id": "comment-5ade24bdcc794c59b94972fc41ba7e2f",
+      "author": "architect-4c57a52b",
+      "content": "Twin note from CQ-F10 (task-b15bbbe5, plan rev 1). Mirror what F10 actually LANDS; check its completion summary first.\n\ndependsOn is now F09, C00, F10 and task-5c71dff9 (hot-reload syntax check). F10 and F11 share scripts/tests/prompt-cache-launcher.test.mjs, and 5c71dff9 edits both wrappers and parity-check.\n\nPlanned bash behavior to mirror in both PowerShell 5.1 and 7:\n1. Attempt pin. Pin-AttemptIdentity sets $env:MOE_ATTEMPT_ID and $env:MOE_ATTEMPT_GENERATION together, only after the attempt record verifies, so a failure leaves both blank (never half). The per-iteration reset blanks both.\n2. Pre-flight get_context passes sessionId = $env:MOE_SESSION_ID.\n3. Post-flight (~7190) and adoption (~7349) get_context calls run with MOE_SESSION_ID blanked, so they mint no receipt. The status view cannot replace them because post-flight needs isEpicFinal and epic.id.\n4. Codex per-seat override: emit MOE_SESSION_ID, MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION (non-empty ones) BEFORE MOE_WORKER_ID. The runner identity stays last, and postflight.ps1's scope-Z pin keeps holding.\n5. Grok env lines `KEY = \"${KEY:-}\"` for the three keys.\n6. Extend F10's sh-only tests to the ps1 engines. Add MOE_SESSION_ID, MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION to parity-check.{sh,ps1} once both wrappers carry them.\n\nKeep moe-agent.ps1 UTF-8 with a BOM.",
+      "timestamp": "2026-10-25T23:05:24.349Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:33:42.062Z",
+  "updatedAt": "2026-10-26T01:35:10.520Z",
+  "dependsOn": [
+    "task-3c54775146c946208dd90a94e2e9caac",
+    "task-35584de27bb24c38a3cf508aeba5550c",
+    "task-5c71dff9ff2a488d8f75ec375c4f99f8",
+    "task-b15bbbe5caab4a8dbdb6c2e10ec2805e"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-25T23:05:26.769Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-26T01:34:35.539Z",
+    "wallClockMs": 8948770
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T23:08:09.591Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Pin the claim's identity without reading the record, as PS1 does today for fresh claims: rejected. Bash F10 verifies before assigning, and DoD3 wants a stale identity refreshed or blanked, never carried.\n2. A fallback that re-pins the record's current attempt when the claim identity is stale: rejected. Claim and record are written by the same daemon call, so a mismatch within seconds is near-impossible. Blank-and-relaunch is the refresh.\n3. Switching post-flight/adoption to view:\"status\": rejected. The status view lacks isEpicFinal and epic.id. A save/remove/restore of $env:MOE_SESSION_ID around those two reads mints no receipt.\n4. Double-quoted TOML values in the codex override: rejected. PS < 7.3 mangles double quotes in native argv, so it keeps the existing literal-string ('...') form.\n5. Running only the Linux gate: rejected. The engines list skips ps1 off Windows, so DoD1's PowerShell 5.1/7 proof needs Windows-native node.",
+    "codebaseInsights": "- PS1 attempt pin: Set-MoeAttemptIdentity (~1519) sets $script:MoeAttemptId/$script:MoeAttemptGeneration. It reads the record only for alreadyAssigned resumes. Read-MoeAttempt (~1502) is the verifier.\n- The per-iteration reset is near `$script:MoeAttemptId = \"\"` (~5557). $env:MOE_SESSION_ID is set at ~5571, before the claim.\n- Pre-flight get_context: Invoke-MoeRpc -Tool \"get_context\" -Args @{ taskId = $preflightTaskId }. Post-flight is $ctxResp; adoption is $adoptResp with @{ workerId }.\n- Get-CodexMoeServerOverride (~231) emits TOML literal strings and skips values containing a single quote. The runner identity goes last.\n- The grok lines are single-quoted PowerShell strings (~1150).\n- The Windows host has node.exe, Git Bash, powershell.exe, pwsh (WindowsApps) and python, so the native gate is runnable from WSL.\n- parity-check uses explicit require_both lists; a new literal must exist in both wrappers.",
+    "risks": "- Depends on CQ-F10 (shared test file) and task-5c71dff9 (hot reload, edits both wrappers and parity-check). Rebase on both.\n- BOM loss breaks Windows PowerShell 5.1 parsing.\n- WSL interop leaks MOE_* into Windows processes, so scrub with env -u.\n- postflight.ps1 is slow (about 12 min) and flaky from a UNC cwd or under a 60s timeout.\n- Never spell the project's forbidden-pattern tokens. No Git-write commands.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1",
+      "scripts/tests/postflight.ps1",
+      "packages/moe-proxy/src/utils.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T23:08:09.687Z",
+  "contextFetchedBy": [
+    "worker-3729a0d6",
+    "qa-7c627d35"
+  ],
+  "workStartedAt": "2026-10-26T00:42:43.605Z",
+  "commits": [
+    {
+      "sha": "2a39de08e387e6add47c2f7ba5134bd02abb1221",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T00:39:46Z",
+      "paths": [
+        ".moe/tasks/task-fdbc59358b8746a4b19073b5f2ef5a7c.json",
+        ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T01:12:14.369Z",
+      "treeId": "36fa3fa85deefcdaf625746395f42de69087ffe0",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "a3e459b74f1799678e5ba04a26a46d9136f8e7ed",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T01:12:45Z",
+      "paths": [
+        ".moe/tasks/task-fdbc59358b8746a4b19073b5f2ef5a7c.json"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T01:16:50.661Z",
+      "treeId": "859786fac4ef5383bba13e27688daa9e368f6150",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "801495d0f3a47dbd55585835095272fbd90906fb",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T01:17:13Z",
+      "paths": [
+        ".moe/tasks/task-fdbc59358b8746a4b19073b5f2ef5a7c.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T01:35:10.520Z",
+      "treeId": "689e71e71625780aa442cd901aeecef02482e250",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/prompt-cache-launcher.test.mjs",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    ".moe/tasks/task-fdbc59358b8746a4b19073b5f2ef5a7c.json"
+  ],
+  "touchedFiles": [
+    "scripts/tests/prompt-cache-launcher.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T01:17:13Z",
+    "at": "2026-10-26T01:35:10.520Z"
+  },
+  "reviewStartedAt": "2026-10-26T01:16:16.967Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION -u MOE_WORKER_ID -u MOE_PROJECT_PATH -u MOE_DAEMON_HOST \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs  # the plan's DoD command under Windows-native node (powershell.exe 5.1, pwsh 7, Git Bash); also run under Linux node: 38/38 rc 0",
+    "exitCode": 0,
+    "outputTail": "✔ powershell.exe: attempt identity fresh claim / resume refresh / stale claim / foreign record exports a verified pair or none\n✔ pwsh.exe: (same 4)\n✔ powershell.exe + pwsh.exe: each iteration starts without the previous task's attempt pair\n✔ powershell.exe + pwsh.exe: Codex override carries the seat's execution identity before its worker id\n✔ powershell.exe + pwsh.exe: wrapper-only context reads are never served as the session's context\n✔ powershell.exe + pwsh.exe: Codex task text never enters stable model instructions\n...\n✔ pwsh: the pre-launch payload names another task keeps the resume count (315.4154ms)\n✔ pwsh: a first session's progress stays quiet when nothing was counted (313.3344ms)\nℹ tests 114\nℹ suites 0\nℹ pass 114\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 19145.1326",
+    "reportedAt": "2026-10-26T01:16:16.967Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-F11 is delivered: plan rev 1, 4/4 steps. Both PowerShell engines now match CQ-F10's bash transport of the execution identity. Code is in checkpoint 2a39de0: 5 files, +143/-14 (net 129).\n\nContract (scripts/moe-agent.ps1, +44/-7):\n- Set-MoeAttemptIdentity clears the script and env pair at entry. It verifies the identity via Read-MoeAttempt for both fresh claims and resumes, then sets $env:MOE_ATTEMPT_ID and $env:MOE_ATTEMPT_GENERATION (a [string]) together. A failure leaves both blank and keeps the existing WARN, so candidate completion fails closed.\n- The loop-top reset also removes the env pair, because the in-process hot-reload supervisor keeps env.\n- Pre-flight get_context args are {taskId}, plus sessionId when $env:MOE_SESSION_ID is non-empty.\n- New Invoke-MoeRpcUnserved: save, remove MOE_SESSION_ID, call Invoke-MoeRpc in try, restore in finally. It serves the post-flight $ctxResp and adoption $adoptResp reads, so they mint no receipt.\n- Get-CodexMoeServerOverride drops the 3 keys from config.toml. It emits MOE_SESSION_ID, then the attempt pair (both or neither, single-quote-safe), before MOE_WORKER_ID; the runner identity stays last.\n- Grok gets 3 single-quoted `KEY = \"${KEY:-}\"` lines.\n\nTests (prompt-cache-launcher.test.mjs, +86/-6), run on both PowerShell engines:\n- Pre-flight args are exact {taskId[,sessionId]}, while the Unicode and shell-sensitive fixture with packetManifest and servedContext still deep-equals.\n- Pin: fresh, resume refresh, stale and foreign, checking env and script vars together.\n- The reset.\n- The codex override's order, its stale config key, and both-or-neither.\n- The grok lines, the call-site count, and the unserved restore including on throw.\n- RED first: 20 failures.\n\nparity-check.sh and parity-check.ps1 get a new 'execution identity' group: MOE_SESSION_ID, MOE_ATTEMPT_ID, MOE_ATTEMPT_GENERATION.\n\nScope growth: postflight.ps1 (+4/-1). Its attemptFixture gets the same fix F10 made in sh: reopen a closed attempt when claimLimit>1. Wi",
+  "completedAt": "2026-10-26T01:34:35.539Z",
+  "reviewCompletedAt": "2026-10-26T01:34:35.539Z",
+  "reviewSummary": "APPROVED CQ-F11. Reviewed checkpoint 2a39de0 (code) and completion a3e459b (task record); both are on moe/work-2026-10-24. Code is +143/-14, net 129 LOC. The tree was cmp-clean against HEAD, with no forbidden tokens.\n\nRe-ran, seat MOE_*/CLAUDE* unset:\n- The DoD node --test under Windows-native node: 114/114, rc 0 (PS 5.1, pwsh 7, Git Bash; all 14 new ps1 identity tests). Under Linux node: 38/38.\n- parity-check.sh and parity-check.ps1 PASS on PS 5.1 and pwsh 7.\n- BOM efbbbf; 0 CR.\n- postflight.ps1 (TIMEOUT 180, from a git-archive snapshot of a3e459b) PASS, exit 0, on PS 5.1 and pwsh 7: 73 frozen modes including loop-land-twice, [accounts], both hot-reload arms, 46 scenario oks.\n\nDoD:\n1. Parity with bash F10:\n   - the pin verifies fresh claims via Read-MoeAttempt, which matches moe_attempt_read;\n   - 3 get_context sites: pre-flight is served with {taskId[,sessionId]}, post-flight and adoption go through Invoke-MoeRpcUnserved. The proxy is a per-call child, so the removal works, and finally restores the value even on throw;\n   - codex order is SESSION, the pair, WORKER_ID, runner; the grok lines are literal.\n2. The Unicode fixture with servedContext and packetManifest deep-equals on both engines; the stable-prefix test sets identity env.\n3. A stale, foreign or missing identity clears both env and script pairs, and a resume refreshes. Mutation-resistant; the loop-top reset clears the env pair.\n4. Verification rc 0.\n\nThe postflight.ps1 fixture growth is justified as F10's twin fix, with no loosened assertion.\n\nNon-blocking:\n- The quote guard on the regex-validated pair is redundant.\n- The call-site count test is source-text brittle.\n- The scripts/CLAUDE.md identity-key docs are deferred to the epic-final task, as with F10.",
+  "requiredCheckAtDone": null
+}

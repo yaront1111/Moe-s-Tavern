@@ -6,12 +6,14 @@ import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/
 import { noTeamMembershipRefusal, resolveEffectiveTeam } from '../util/teamMembershipHeal.js';
 import {
   blockingHold,
+  executionAdmissionRefusal,
   finalizingAttemptsByTask,
   foreignFinalizingAttempt,
   heldTaskRefusal,
   isClaimGatedByDependsOn
 } from '../util/claimEligibility.js';
 import { logger } from '../util/logger.js';
+import { awaitingPlanReuse } from '../context/planReuseJob.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   CRITICAL: 0,
@@ -113,7 +115,8 @@ interface MatchResult {
   /**
    * True when the pool had claimable candidates and the solo epic+status rule
    * removed every one of them. claim_next_task answers that exact case with
-   * NO_TEAM_MEMBERSHIP and a join_team nextAction; wait_for_task used to
+   * NO_TEAM_MEMBERSHIP and the remedy for the caller's role (see
+   * noTeamMembershipRefusal); wait_for_task used to
    * answer it with a bare hasNext:false, which reads as "nothing to do" and
    * parked a team-less seat indefinitely. Measured 2026-09-05: a seat whose
    * catch-all team was full (join_team refused it) idled through three
@@ -136,13 +139,17 @@ function findMatchingTask(
   // grant flips it back to WORKING. Not a spin risk: claiming an own-held
   // task is the sanctioned resume (ownedBySelf) in claim_next_task, and the
   // alreadyAssigned answer it may get instead still carries the task to act on.
+  // A held row the execution-profile admission refuses does NOT wake it: that
+  // resume is refused, so waking would only spin; blockingHold below parks the
+  // seat instead (CQ-M01e).
   if (workerId) {
     const own = Array.from(state.tasks.values()).find(
       (t) =>
         t.assignedWorkerId === workerId &&
         statuses.includes(t.status) &&
         (epicId ? t.epicId === epicId : true) &&
-        !(t.status === 'REVIEW' && t.needsHumanReview === true)
+        !(t.status === 'REVIEW' && t.needsHumanReview === true) &&
+        !executionAdmissionRefusal(state, t, workerId)
     );
     if (own) {
       return {
@@ -183,7 +190,19 @@ function findMatchingTask(
     .filter((t) => {
       finalizingByTask ??= finalizingAttemptsByTask(state);
       return !foreignFinalizingAttempt(finalizingByTask, t.id, workerId);
-    });
+    })
+    // Execution-profile admission — the SAME predicate as claim_next_task's
+    // ranked pool; a drift here re-creates the wake→claim→refuse spin. Last, so
+    // the cheap filters run first: it runs per candidate per waiter per task
+    // event, and builds an Error only for a strict or malformed row. It never
+    // throws: a malformed setting matches nothing, and only an explicit claim
+    // names the reason.
+    .filter((t) => !executionAdmissionRefusal(state, t, workerId))
+    // Approved-plan reuse (CQ-C07) — the SAME predicate as claim_next_task's
+    // ranked pool; a drift here re-creates the wake→claim→refuse spin. A pending
+    // row starts its assessment here too, and the job's record or resume write
+    // emits TASK_UPDATED, which re-runs this matcher.
+    .filter((t) => !awaitingPlanReuse(state, t));
   // Single-worker-per-epic-status (solo workers only): claim skips a
   // candidate when a live OTHER worker holds a different task in the same
   // epic+status — mirror that too. Effective membership, exactly as
@@ -215,7 +234,8 @@ function findMatchingTask(
     // Same two dead ends claim_next_task distinguishes: an empty pool, or a
     // pool the solo rule alone emptied. Only the second has a remedy the
     // caller can act on, and hiding it behind hasNext:false is what parked
-    // team-less seats — report it so the caller reaches join_team.
+    // team-less seats — report it so the caller gets claim_next_task's
+    // NO_TEAM_MEMBERSHIP remedy for its role.
     return { match: null, skippedForNoTeam: solo && eligible.length > 0 };
   }
   return {
@@ -286,8 +306,8 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
       }
       // Work exists but the caller is team-less and the solo epic+status rule
       // withheld all of it. Answer exactly as claim_next_task does — with the
-      // code and the join_team nextAction — instead of parking the caller on a
-      // timer it cannot escape by waiting.
+      // code and the remedy for the caller's role — instead of parking the
+      // caller on a timer it cannot escape by waiting.
       if (immediate.skippedForNoTeam) {
         return noTeamMembershipRefusal(workerId);
       }

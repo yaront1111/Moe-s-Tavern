@@ -1,0 +1,191 @@
+{
+  "id": "task-e57d1d20d1854e2cae44eaea9fee584e",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the VS Code extension reads .moe/daemon.json with no size cap",
+  "description": "Objective: bound every .moe/daemon.json read in moe-vscode. Each of these call sites reads the whole file with fs.readFileSync:\n- src/services/MoeDaemonClient.ts: the connection lookup (~:604);\n- src/services/MoeDaemonClient.ts: the wait-for-daemon loop (~:792), which re-reads the file until a timeout;\n- src/extension.ts: the status quick-pick (~:196).\nThis is a sibling of task-4f1e37f30ee548298b26e17c0b6ea84e (the JetBrains reader, 64 KiB cap). daemon.json is repository content.\n\nDeliverable:\n- One small helper that reads at most 65537 bytes, used by every daemon.json read.\n- At each call site, a file over 64 KiB (65536 bytes) is handled like an unparseable one.\n- Valid files behave as today.\n\nNot in scope: JetBrains (task-4f1e37f3), connection and retry behaviour, and the other clients, which have their own sibling tasks.\n\nVerification: cd moe-vscode && npm test && npm run compile.",
+  "definitionOfDone": [
+    "Every daemon.json read in MoeDaemonClient.ts and extension.ts goes through one helper that reads at most 65537 bytes; a grep finds no other readFileSync of daemon.json in moe-vscode/src.",
+    "A node:test case proves the helper accepts a valid 65536-byte daemon.json, treats a 65537-byte one as unreadable, and refuses a sparse multi-GiB file promptly.",
+    "Fresh cd moe-vscode && npm test && npm run compile exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first (load test-driven-development). Create moe-vscode/tests/daemon-json-cap.test.cjs. It is picked up by the existing npm test glob, node --test tests/*.test.cjs.\n\nThe cap contract is shared with the daemon, proxy, Claude-plugin and JetBrains rows (task-91ef7886, task-685d8a8e, task-938653f9, task-4f1e37f3):\n- 64 KiB is 65536 bytes;\n- read at most 65537 bytes through one descriptor;\n- a larger file counts as unreadable and is never deleted for its size.\nPin 65536 and 65537 as literals.\n\nLOADER. Copy the daemon-start.test.cjs pattern:\n- ts.transpileModule(src/services/MoeDaemonClient.ts) with { module: CommonJS, target: ES2020, esModuleInterop: true };\n- per test, vm.runInContext in a fresh vm.createContext({ exports, module, process, console, Buffer, setTimeout, clearTimeout, setInterval, clearInterval, require }). Buffer MUST be passed: a vm context has no Buffer global;\n- require maps 'vscode' to a minimal stub ({ EventEmitter: class { event = () => ({ dispose() {} }); }, window: { createOutputChannel: () => ({ appendLine() {} }) } }) and 'fs' to the guarded fs below; anything else uses the real require;\n- read module.exports.readDaemonJsonText.\nThis was verified on a scratch snapshot: the transpiled `import * as fs` binds to the injected object, so the guard sees every call.\n\nGUARDED FS (a fresh one per test), { ...fs } plus:\n- readFileSync throws 'whole-file read' for any path ending in daemon.json;\n- openSync records each fd;\n- readSync passes through, sums the bytes, and throws 'unbounded read' once the total passes 1 MiB;\n- closeSync records each fd.\nThe two throws are SAFETY STOPS: a wrong implementation then fails fast instead of reading the multi-GiB fixture into memory. Do NOT add a /dev/zero case (mem:gotcha-dev-zero-red-run-runaway).\n\nCASES. Each uses its own mkdtemp dir, removed in finally. Fixtures are JSON.stringify(info) padded with trailing spaces to an exact byte length; assert Buffer.byteLength.\n(a) A valid 65536-byte file returns its text, and JSON.parse of it deepStrictEquals info. The read total is 65536, and the one opened fd is closed.\n(b) A valid 65537-byte file throws (assert.throws with /larger than 64 KiB/). Each call site's existing catch then treats it exactly like an unparseable file.\n(c) A sparse 3 GiB file: fs.openSync(file, 'w'), fs.ftruncateSync(fd, 3 * 1024 ** 3), closeSync. Assert:\n   - it throws /larger than 64 KiB/ in under 2000 ms;\n   - readFileSync was never called;\n   - the read total is EXACTLY 65537, not \"at most\": a size pre-check would read 0;\n   - exactly one fd was opened, and that fd was closed once.\n   ftruncate makes the file sparse on ext4 and APFS. On NTFS it extends without writing, so the file needs about 3 GiB of free temp space, but zero bytes are written.\n(d) Error path: a readSync that throws an Error whose code is 'EIO' propagates out of the helper, and the opened fd is still closed.\n(e) Call sites, statically, reading the two files as text:\n   - neither src/services/MoeDaemonClient.ts nor src/extension.ts matches /readFileSync\\([^)]*daemon/i;\n   - extension.ts imports readDaemonJsonText from './services/MoeDaemonClient'.\n\nRun only this file, `node --test tests/daemon-json-cap.test.cjs`, in the step 3 snapshot. Every case fails on today's code: (a) through (d) because the helper is undefined, and (e) because of the four readFileSync(daemon...) sites. Record that.\n\nNEVER run npm ci, npm install or npm run compile in the shared checkout's moe-vscode. compile writes the gitignored dist/ that holds the packaged esbuild bundle. All runs happen in the snapshot.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/daemon-json-cap.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/daemon-json-cap.test.cjs"
+      ],
+      "note": "RED in snapshot /tmp/moe-e57d-gate.*: 0 pass / 5 fail on HEAD code (helper undefined; 4 readFileSync(daemon...) sites). Shared checkout untouched except the new test file.",
+      "startedAt": "2026-10-27T14:24:25.232Z",
+      "completedAt": "2026-10-27T14:25:03.755Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN.\n\nmoe-vscode/src/services/MoeDaemonClient.ts, next to the module-level pathsMatch (~:102):\n- Add const MAX_DAEMON_JSON_BYTES = 64 * 1024, with a one-line comment: daemon.json is repository content, and the cap matches the daemon, proxy, Claude-plugin and JetBrains readers.\n- Add `export function readDaemonJsonText(filePath: string): string`:\n  - const fd = fs.openSync(filePath, 'r');\n  - in try: one Buffer.alloc(MAX_DAEMON_JSON_BYTES + 1), then loop fs.readSync(fd, buf, total, buf.length - total, null) until it returns 0 or the buffer is full. A device can return short reads;\n  - when total > MAX_DAEMON_JSON_BYTES, throw new Error('daemon.json is larger than 64 KiB'). Fixed text, no file content;\n  - otherwise return buf.toString('utf8', 0, total);\n  - finally: fs.closeSync(fd).\n  - Use the existing `fs` namespace import.\n- Keep the helper in this module rather than a new file. Four test harnesses (daemon-start, plan-approval-client, approval-paths, settings-wire) run this file in a vm whose require stub would not resolve a new relative import.\n- Replace the three daemon.json reads with readDaemonJsonText(<same path variable>), each inside its existing try:\n  - getDaemonInfo (~:609);\n  - ensureDaemonRunning (~:689);\n  - waitForDaemonInfo (~:797).\n\nmoe-vscode/src/extension.ts:\n- Extend the existing import to { MoeDaemonClient, readDaemonJsonText } from './services/MoeDaemonClient'.\n- At the status quick-pick (~:198), use JSON.parse(readDaemonJsonText(daemonJsonPath)).\n\nError handling is unchanged and comes for free. Each site's existing catch already handles a throw from JSON.parse, so an oversize or unreadable file now takes the unparseable path:\n- getDaemonInfo returns undefined;\n- ensureDaemonRunning calls startDaemon('start');\n- waitForDaemonInfo keeps polling, and each poll is now bounded;\n- the quick-pick ignores it.\nThe stale-project unlink runs only after a successful parse, so an oversize file is never deleted.\n\nUnchanged: the ~/.moe/config.json read (~:647), AgentLauncher.ts, connection and retry logic, and the STATE_SNAPSHOT unlink.\n\nRe-run the new file in the snapshot: green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "note": "GREEN in snapshot: 5/5 new tests pass. Helper + 3 client sites + extension quick-pick use readDaemonJsonText.",
+      "startedAt": "2026-10-27T14:25:04.675Z",
+      "completedAt": "2026-10-27T14:25:15.221Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run once: (cd moe-vscode && npm test && npm run compile), from an isolated snapshot, never the shared checkout.\n\n1. ROOT=$(git rev-parse --show-toplevel); SNAP=$(mktemp -d /tmp/moe-e57d-gate.XXXXXX).\n2. git -C \"$ROOT\" archive HEAD moe-vscode | tar -x -C \"$SNAP\".\n3. Check that package.json and package-lock.json equal HEAD.\n4. Overlay exactly the three owned files and cmp each against the working copy.\n5. (cd \"$SNAP/moe-vscode\" && npm ci --no-audit --no-fund) with the Linux node/npm. At HEAD this took 8 s, 160/160 tests passed and compile exited 0.\n6. From $SNAP, run the command above.\n\nRequire exit 0 for both halves and zero failed tests: 160 plus the new ones.\n\ncomplete_task gets { command: '(cd moe-vscode && npm test && npm run compile)', exitCode, outputTail }, plus the tested root and base commit.\n\nIf npm ci cannot reach the registry, report_blocked with the error; never fall back to an in-place run. Error handling: on a failure, fix the cause, re-overlay and re-run; never weaken an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/tests/daemon-json-cap.test.cjs",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "note": "Gate in snapshot /tmp/moe-e57d-gate.GrZh29 (base bbd614a, 3 owned files overlaid + cmp'd): npm test 165/165 pass, compile exit 0.",
+      "startedAt": "2026-10-27T14:25:16.249Z",
+      "completedAt": "2026-10-27T14:25:23.327Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (load adversarial-self-review) of the three-file diff. Check:\n- the off-by-one at the cap: 65536 is accepted, 65537 is refused;\n- short reads are looped;\n- the fd is closed on every path, including a throwing readSync;\n- `grep -rn readFileSync moe-vscode/src` leaves only the two config.json reads (MoeDaemonClient.ts ~:647 and AgentLauncher.ts:60);\n- the oversize error text carries no file content;\n- no call site's behavior changes for a valid file. The four existing harnesses still pass unchanged, and none of them was edited;\n- the sparse fixture is removed even when an assertion fails;\n- the extension bundle still builds: tsc compile is the check here, and esbuild bundles the same import graph.\n\nResiduals, noted only and pre-existing:\n- ensureDaemonRunning restarts the daemon on any unreadable daemon.json, oversize included, exactly as for a malformed one;\n- opening a FIFO blocks, but git cannot commit FIFOs.\n\nIf the review changes bytes, re-run the step 3 gate fresh. Report all three paths in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/tests/daemon-json-cap.test.cjs",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "note": "Self-review of the 3-file diff found nothing to change, so the step 3 gate stands. Checks: cap off-by-one (65536 ok, 65537 refused); short reads looped; fd closed in finally; only the two config.json readFileSync calls remain in src; the error text has no file content; no existing harness edited. Residuals (pre-existing): ensureDaemonRunning restarts the daemon on any unreadable daemon.json; opening a FIFO would block.",
+      "startedAt": "2026-10-27T14:25:24.460Z",
+      "completedAt": "2026-10-27T14:25:29.140Z"
+    }
+  ],
+  "planRevision": 9,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human asked the architect seat to promote and plan the daemon.json size-cap follow-ups (2026-10-27).",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 236.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T13:43:26.045Z",
+  "updatedAt": "2026-10-27T15:54:27.572Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-27T14:18:47.543Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-10-27T15:53:58.747Z",
+    "wallClockMs": 5711204
+  },
+  "contextFetchedBy": [
+    "architect-2c9d5121",
+    "worker-3729a0d6",
+    "qa-6fa5d758"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-27T14:23:27.001Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) A new src/util module for the helper: rejected. Four vm harnesses transpile MoeDaemonClient.ts with a require stub that resolves unknown names from tests/, so a new relative import would break them all, or force edits to four more test files. Exporting the helper from MoeDaemonClient.ts keeps the harnesses untouched; extension.ts already imports from it. (2) A helper that returns null and adds per-site null branches: rejected. Throwing reuses each site's existing catch, which already defines what 'unparseable' means at that site, so each site changes one token. (3) A size pre-check: rejected. Lying metadata. (4) A /dev/zero case: rejected. Runaway memory against unbounded code.",
+    "codebaseInsights": "- There are four daemon.json reads, one more than the task description lists:\n  - MoeDaemonClient.ts:609 getDaemonInfo (catch: undefined);\n  - :689 ensureDaemonRunning (catch: startDaemon('start'));\n  - :797 waitForDaemonInfo (catch: keep polling every 200 ms);\n  - extension.ts:198 status quick-pick (catch: ignore).\n- The :845 STATE_SNAPSHOT path only unlinks.\n- Tests are node --test tests/*.test.cjs and transpile TS via ts.transpileModule into a vm. No harness exercises a real daemon.json today; daemon-start stubs waitForDaemonInfo.\n- No test loads extension.ts.\n- Verified on a scratch snapshot:\n  - the vm-loaded helper with an injected guarded fs reads exactly 65537 bytes of a 3 GiB sparse file (0 blocks on ext4) in under 1 ms and closes its fd;\n  - the HEAD gate passes: npm ci 8 s, 160/160, compile exit 0.",
+    "risks": "- Do not run compile, npm ci or npm install in the shared checkout: compile overwrites the gitignored dist bundle.\n- The new vm context must pass Buffer.\n- The sparse 3 GiB fixture needs about 3 GiB of free temp space on NTFS, though it writes no bytes.\n- The cap is a cross-package contract: do not change 64 KiB here.\n- The plan files of task-6f3725e6 [CQ-I04] (REVIEW) are disjoint (PlanReviewPanel.ts and the tests).",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/extension.ts",
+      "moe-vscode/tests/daemon-start.test.cjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-27T14:23:27.160Z",
+  "workStartedAt": "2026-10-27T14:24:25.232Z",
+  "reviewStartedAt": "2026-10-27T14:25:33.888Z",
+  "verification": {
+    "command": "(cd moe-vscode && npm test && npm run compile)  # run in snapshot /tmp/moe-e57d-gate.GrZh29, base bbd614a1732b0df8b1e68018b27d48b58e76448a",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 165\nℹ suites 0\nℹ pass 165\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./  (exit 0)",
+    "reportedAt": "2026-10-27T14:25:33.888Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/daemon-json-cap.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-vscode/src/extension.ts",
+    ".moe/tasks/task-e57d1d20d1854e2cae44eaea9fee584e.json",
+    ".moe/tasks/task-fc9835feb5c64caab19b736797408b8e.json"
+  ],
+  "completionSummary": "Added readDaemonJsonText (exported from MoeDaemonClient.ts): one fd, reads at most 65537 bytes in a short-read loop, throws 'daemon.json is larger than 64 KiB' over the cap, closes the fd in finally. All four daemon.json reads now use it: getDaemonInfo, ensureDaemonRunning, waitForDaemonInfo, and the extension.ts status quick-pick. Each site's existing catch treats an oversize file as unparseable, and an oversize file is never unlinked. New tests/daemon-json-cap.test.cjs covers a 65536-byte file accepted, 65537 refused, a sparse 3 GiB file refused promptly with exactly 65537 bytes read and one fd opened and closed, a read error still closing the fd, and a static check that no daemon.json readFileSync remains. Verified in an isolated snapshot (base bbd614a, 3 owned files overlaid): npm test 165/165, compile exit 0. The shared checkout's moe-vscode was never built.",
+  "commits": [
+    {
+      "sha": "a7b407c8c75fc7602a1e77f6ffc7103968142406",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-27T14:23:30Z",
+      "paths": [
+        ".moe/tasks/task-e57d1d20d1854e2cae44eaea9fee584e.json",
+        ".moe/tasks/task-fc9835feb5c64caab19b736797408b8e.json",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-json-cap.test.cjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-27T14:26:16.941Z",
+      "treeId": "55bfd5f0c2469c421a3a4d6785a332dd08c3d632",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "74bf607fb0b0ce6e6b7e90a5914cd4c5338babcb",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-6fa5d758@2026-10-27T15:52:36Z",
+      "paths": [
+        ".moe/tasks/task-e57d1d20d1854e2cae44eaea9fee584e.json"
+      ],
+      "recordedBy": "qa-6fa5d758",
+      "recordedAt": "2026-10-27T15:54:27.572Z",
+      "treeId": "0073758c9f45f9d5c3d8d1c36602cd47de1ae2b5",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/daemon-json-cap.test.cjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-6fa5d758@2026-10-27T15:52:36Z",
+    "at": "2026-10-27T15:54:27.572Z"
+  },
+  "completedAt": "2026-10-27T15:53:58.747Z",
+  "reviewCompletedAt": "2026-10-27T15:53:58.747Z",
+  "reviewSummary": "APPROVED. Reviewed completion a7b407c8 (on moe/work-2026-10-24, pushed; 3 non-board files, +145/-5, well under the 400 cap). Diff read via git show: readDaemonJsonText in moe-vscode/src/services/MoeDaemonClient.ts opens one fd, Buffer.alloc(65537), loops readSync until 0 or full, throws a fixed 'daemon.json is larger than 64 KiB' when total > 65536, closeSync in finally. Used at all four daemon.json reads (getDaemonInfo, ensureDaemonRunning, waitForDaemonInfo, extension.ts status quick-pick); each is inside an existing try/catch, so oversize is handled like unparseable, and the stale-project unlink only runs after a successful parse, so an oversize file is never deleted. DoD1: grep of moe-vscode/src leaves only the two ~/.moe/config.json readFileSync calls (MoeDaemonClient.ts:670, AgentLauncher.ts:60); no daemon.json readFileSync. DoD2: tests/daemon-json-cap.test.cjs proves 65536 accepted (bytesRead 65536, fd closed), 65537 refused, sparse 3 GiB refused in <2s with exactly 65537 bytes read, one fd opened/closed, readFileSync never called, EIO propagates with fd closed, plus a static no-bypass check. DoD3: re-ran in a fresh isolated snapshot (git archive HEAD moe-vscode, 3 owned files cmp-identical to the working copy, env -i npm ci): npm test 165/165 pass 0 fail, npm run compile exit 0. Mutation check in the snapshot: shrinking the buffer to 65536 turned the 65537 and sparse-3GiB tests RED (2 fail), restoring went 5/5 green. Shared checkout's moe-vscode untouched (no npm ci/compile run there); snapshot removed. Ponytail pass: nothing to cut, a single helper and minimal call-site edits. Residuals noted only, pre-existing: ensureDaemonRunning restarts the daemon on any unreadable daemon.json including oversize, same as malformed; opening a FIFO would block.",
+  "requiredCheckAtDone": null
+}

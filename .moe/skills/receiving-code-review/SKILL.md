@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=bf686851e3e5
+# moe-generated: sha=b87db22bbedb
 name: receiving-code-review
 description: Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable - requires technical rigor and verification, not performative agreement or blind implementation
 ---
@@ -17,14 +17,9 @@ Code review requires technical evaluation, not emotional performance. **Verify b
 5. **Respond** with technical acknowledgment or reasoned pushback.
 6. **Implement** one item at a time, test each.
 
-## Forbidden phrases
+## How to respond
 
-NEVER write:
-- "You're absolutely right!" / "Great point!" / "Excellent feedback!" / "Thanks for catching that!"
-- "Let me implement that now" before verification
-- Any gratitude expression
-
-INSTEAD: restate the requirement, ask clarifying questions, push back with technical reasoning, or just start working. Actions > words. If you catch yourself typing "Thanks", delete it.
+Respond with technical content only: restate the requirement, ask a specific question, push back with reasons, or fix it. Don't agree to an item before you've verified it.
 
 ## Unclear items — STOP
 
@@ -80,7 +75,7 @@ When you receive a QA rejection:
 1. **Read all of `rejectionDetails` first.** Don't start fixing until you understand every item.
 2. **Verify each item against the diff.** If QA points at a file/line, open it and read for yourself.
 3. **If an item seems wrong**, push back via `moe.add_comment` on the task channel with technical reasoning. Don't silently ignore; don't silently implement.
-4. **Implement in priority order** (security/correctness > simple fixes > refactoring). Use one `moe.start_step` per item — don't batch unrelated fixes.
+4. **Implement in priority order** (security/correctness > simple fixes > refactoring). One item at a time within the plan's current steps — don't batch unrelated fixes into one change.
 5. **After fixes, run regression-check** and put actual results in your `moe.complete_task` summary.
 
 Never include performative gratitude in `moe.add_comment`. State what you changed.

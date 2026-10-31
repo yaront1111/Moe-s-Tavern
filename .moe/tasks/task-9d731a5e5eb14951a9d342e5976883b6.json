@@ -114,7 +114,7 @@
       "completedAt": "2026-09-11T10:56:17.556Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -130,7 +130,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:41:38.049Z",
-  "updatedAt": "2026-09-11T11:03:23.559Z",
+  "updatedAt": "2026-10-24T15:18:59.213Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:41:00.939Z",
     "plannedStepCount": 6,
@@ -253,5 +253,6 @@
   },
   "completedAt": "2026-09-11T11:02:49.647Z",
   "reviewCompletedAt": "2026-09-11T11:02:49.647Z",
-  "reviewSummary": "All 6 DoD items + rails verified. Completion fe608c7 (worker, pushed, ancestor of origin/moe/work-2026-09-10) holds exactly the 5 scoped files (+309/-37); Moe-Contested trailers but every byte landed: git diff HEAD on the 5 files is empty. taskDetail.js and the 2 existing tests are untouched. Prereq task-435683c2 landed (e0ed8ca/e09bcb6). I re-ran the exact gate from the repo root (pwsh): npm --prefix moe-vscode test gave tests 24, pass 24, fail 0 (7 daemon-start + 6 metrics-view + 11 new); npm run compile (tsc -p ./, 203 files incl. the 3 touched TS) exit 0. Red proof: new test vs fe608c7^ sources in a scratch dir outside the repo exited 1 with 11/11 fail, 11 AssertionError and 0 harness errors. Old output showed '[10m/1h ✓]', 'Budget remaining 50m / 1h', a Metrics heading for a cap-only task, and .task-budget. Mutations on a scratch HEAD copy: 11/11 real mutants killed (board firstClaimAt guard, elapsed fallback, NaN guard, tooltip, selector rename, detail empty-section guard, wall-clock KPI, detail fallback, rejects, reopens source, title escaping). 2 survivors are equivalent: the badge label escape (durations only) and the Math.max clamp (humanise maps <=0 to 0s). Diff: elapsedSuffix keeps the uncapped branch verbatim. Its guard is now !firstClaimAt, so a recorded duration without a first claim still shows no badge. Class task-elapsed matches the .task-elapsed selector, same declarations. The detail keeps usedMs for Wall-clock, and a cap-only task renders no Metrics section. TaskBudget and Task.budget are gone; TaskMetrics is unchanged. grep budget in src/media is empty, and added lines have no forbidden patterns. Tests run the real renderers (vm + transpileModule) with throw-on-touch stubs; timers, panel and provider are disposed in finally; 0.4s."
+  "reviewSummary": "All 6 DoD items + rails verified. Completion fe608c7 (worker, pushed, ancestor of origin/moe/work-2026-09-10) holds exactly the 5 scoped files (+309/-37); Moe-Contested trailers but every byte landed: git diff HEAD on the 5 files is empty. taskDetail.js and the 2 existing tests are untouched. Prereq task-435683c2 landed (e0ed8ca/e09bcb6). I re-ran the exact gate from the repo root (pwsh): npm --prefix moe-vscode test gave tests 24, pass 24, fail 0 (7 daemon-start + 6 metrics-view + 11 new); npm run compile (tsc -p ./, 203 files incl. the 3 touched TS) exit 0. Red proof: new test vs fe608c7^ sources in a scratch dir outside the repo exited 1 with 11/11 fail, 11 AssertionError and 0 harness errors. Old output showed '[10m/1h ✓]', 'Budget remaining 50m / 1h', a Metrics heading for a cap-only task, and .task-budget. Mutations on a scratch HEAD copy: 11/11 real mutants killed (board firstClaimAt guard, elapsed fallback, NaN guard, tooltip, selector rename, detail empty-section guard, wall-clock KPI, detail fallback, rejects, reopens source, title escaping). 2 survivors are equivalent: the badge label escape (durations only) and the Math.max clamp (humanise maps <=0 to 0s). Diff: elapsedSuffix keeps the uncapped branch verbatim. Its guard is now !firstClaimAt, so a recorded duration without a first claim still shows no badge. Class task-elapsed matches the .task-elapsed selector, same declarations. The detail keeps usedMs for Wall-clock, and a cap-only task renders no Metrics section. TaskBudget and Task.budget are gone; TaskMetrics is unchanged. grep budget in src/media is empty, and added lines have no forbidden patterns. Tests run the real renderers (vm + transpileModule) with throw-on-touch stubs; timers, panel and provider are disposed in finally; 0.4s.",
+  "planRevision": 0
 }

@@ -2,25 +2,31 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState, notAllowed } from '../util/errors.js';
 import { assertWorkerHoldsTask, assertContextFetched } from '../util/enforcement.js';
+import { assertExecutionAuthorized } from '../util/executionAuthorization.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { accountSwitchCause, accountSwitchFor } from '../state/accountStore.js';
 
 export function startStepTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.start_step',
-    description: 'Mark a step as IN_PROGRESS',
+    description: 'Mark a step as IN_PROGRESS. Under verified-local, entry needs workerId, attemptId, generation and the sessionId that read moe.get_context, with the current plan revision approved; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE.',
     inputSchema: {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'The task that owns the step' },
         stepId: { type: 'string', description: 'An existing step id from the approved plan' },
-        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' },
+        attemptId: { type: 'string', maxLength: 128, description: 'The attemptId moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
+        generation: { type: 'integer', minimum: 1, description: 'The generation moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
+        sessionId: { type: 'string', description: 'The sessionId this session passed to moe.get_context. Optional under legacy/observe; required under verified-local.' }
       },
       required: ['taskId', 'stepId'],
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = args as { taskId: string; stepId: string; workerId?: string };
+      const params = args as {
+        taskId: string; stepId: string; workerId?: string; attemptId?: unknown; generation?: unknown; sessionId?: unknown;
+      };
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 
@@ -30,6 +36,9 @@ export function startStepTool(_state: StateManager): ToolDefinition {
 
       assertWorkerHoldsTask(task, params.workerId, 'moe.start_step');
       assertContextFetched(task, params.workerId, 'moe.start_step');
+      // Read-only, before any write below: strict entry needs the current attempt, approval and receipt.
+      const { attemptId, generation, sessionId } = params;
+      assertExecutionAuthorized(state, task, params.workerId, { attemptId, generation, sessionId }, 'moe.start_step');
 
       if (!task.implementationPlan || task.implementationPlan.length === 0) {
         throw invalidState('Task', 'no-plan', 'has-plan');

@@ -99,7 +99,7 @@
       "completedAt": "2026-09-12T14:20:42.879Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -112,7 +112,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-12T13:51:11.824Z",
-  "updatedAt": "2026-09-12T14:27:21.927Z",
+  "updatedAt": "2026-10-24T15:19:03.941Z",
   "declaredFiles": [
     "packages/moe-daemon/src/tools/createTask.ts",
     "packages/moe-daemon/src/tools/createTask.test.ts"
@@ -230,5 +230,6 @@
   },
   "completedAt": "2026-09-12T14:27:15.258Z",
   "reviewCompletedAt": "2026-09-12T14:27:15.258Z",
-  "reviewSummary": "APPROVED — 6/6 DoD verified by me. Detail in Serena memory task-task-fa46784f7d7548a1b50f8ea7faf79df3-handoff.\n\nRE-RAN in packages/moe-daemon: `npx tsc --noEmit` exit 0; `npm.cmd test` exit 0 = 115 files/1570 passed/4 skipped, no flake; focused 3 files 70/70 (DoD6).\n\nDoD1: 9eaed1f, kind=completion, 9 paths/0 unattributed, pushed; no hand-written chore commit on either orphan path (prior touch 5b5784e).\n\nDoD2+3: test seeds the real launcher shape (one role:null team, 4 role-prefixed seats), asserts exact ARCHITECT/QA/GOVERNOR/WORKER; roled team still beats prefix; fallback uses `console-1` (no prefix) so both steps bite — HUMAN then WORKER, where `worker-unknown` was vacuous; creation never fails on an unresolvable role.\n\nDoD4: all 3 converted, per-site reasons in the summary. Re-grepped: remaining non-test getTeamForWorker callers are only the definition, StateManager delegation, workerRole.ts:50, a comment, and teamMembershipHeal's membership-existence lookups. Zero per-seat role gates left. Onboarding escape correctly keyed on state.getWorker().\n\nDoD5: refusal intact twice over — test asserts NOT_ALLOWED + unchanged message AND state (IDLE, task still held, no broadcast); the throw precedes runExclusive, so a refused caller reaches no write.\n\nRED PROOF RUN BY ME, not taken from the diff: scratch tree outside the repo, baseline 70/70, one grep-verified mutation at a time. Four old behaviours reproduced — 'WORKER' vs 'ARCHITECT'; hasNext true vs false (governor really claimed); `is online (worker)` vs `(architect)`; real NOT_ALLOWED at a genuine governor. Rest green 13/14, 46/47, 46/47, 8/9. No leak into the repo.\n\nRAIL: gh pr view 179 still OPEN, same 2 files — nothing to rebase; heads-up present. Gate conversion non-widening: join_team is unauthenticated, so a governor-named seat already passed the OLD gate with one extra call.\n\nScope matches plan: 6 source files + 3 daemon-written board records, additive."
+  "reviewSummary": "APPROVED — 6/6 DoD verified by me. Detail in Serena memory task-task-fa46784f7d7548a1b50f8ea7faf79df3-handoff.\n\nRE-RAN in packages/moe-daemon: `npx tsc --noEmit` exit 0; `npm.cmd test` exit 0 = 115 files/1570 passed/4 skipped, no flake; focused 3 files 70/70 (DoD6).\n\nDoD1: 9eaed1f, kind=completion, 9 paths/0 unattributed, pushed; no hand-written chore commit on either orphan path (prior touch 5b5784e).\n\nDoD2+3: test seeds the real launcher shape (one role:null team, 4 role-prefixed seats), asserts exact ARCHITECT/QA/GOVERNOR/WORKER; roled team still beats prefix; fallback uses `console-1` (no prefix) so both steps bite — HUMAN then WORKER, where `worker-unknown` was vacuous; creation never fails on an unresolvable role.\n\nDoD4: all 3 converted, per-site reasons in the summary. Re-grepped: remaining non-test getTeamForWorker callers are only the definition, StateManager delegation, workerRole.ts:50, a comment, and teamMembershipHeal's membership-existence lookups. Zero per-seat role gates left. Onboarding escape correctly keyed on state.getWorker().\n\nDoD5: refusal intact twice over — test asserts NOT_ALLOWED + unchanged message AND state (IDLE, task still held, no broadcast); the throw precedes runExclusive, so a refused caller reaches no write.\n\nRED PROOF RUN BY ME, not taken from the diff: scratch tree outside the repo, baseline 70/70, one grep-verified mutation at a time. Four old behaviours reproduced — 'WORKER' vs 'ARCHITECT'; hasNext true vs false (governor really claimed); `is online (worker)` vs `(architect)`; real NOT_ALLOWED at a genuine governor. Rest green 13/14, 46/47, 46/47, 8/9. No leak into the repo.\n\nRAIL: gh pr view 179 still OPEN, same 2 files — nothing to rebase; heads-up present. Gate conversion non-widening: join_team is unauthenticated, so a governor-named seat already passed the OLD gate with one extra call.\n\nScope matches plan: 6 source files + 3 daemon-written board records, additive.",
+  "planRevision": 0
 }

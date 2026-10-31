@@ -18,11 +18,19 @@
 import fs from 'fs';
 import path from 'path';
 import type { StateManager } from './StateManager.js';
-import type { ActivityEventType, Task, TaskComment, TaskPriority, TaskStatus } from '../types/schema.js';
+import type { ActivityEventType, ExecutionPolicySnapshot, PlanReuseRecord, RecipeInstance, RequiredCheckSnapshot, Task, TaskComment, TaskPriority, TaskStatus } from '../types/schema.js';
+import {
+  assertExecutionProfileReady,
+  readExecutionPolicySnapshot,
+  resolveTaskExecutionProfile,
+} from '../delivery/executionProfile.js';
+import { captureExecutionPolicySnapshot } from '../delivery/policy.js';
+import { readPlanningEntry, readPlanSourceBasis, validatePlanReuseRecord } from '../context/planReuseState.js';
 import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
 import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { sanitizeString, sanitizeStringArray } from '../util/sanitize.js';
+import { effectiveStepDescription } from '../util/planAmendments.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
 import { nonHolderFinalizingRefusal } from '../util/claimGuards.js';
@@ -30,12 +38,14 @@ import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
 import { cleanupStaleWaiters } from '../tools/waitForTask.js';
 import {
   MAX_COMMENTS_PER_TASK,
+  validateExecutionContract,
   sanitizeImplementationPlan,
   sanitizeStringIdArray,
   trimComments,
 } from './validators.js';
 import { runDependencyUnblock } from './dependencyUnblock.js';
 import { closeHandedBackAttempts, closeOpenAttempts, listAttempts } from './attemptStore.js';
+import { nextStatusForRelease } from './workerLifecycle.js';
 
 /** Hard cap on declared dependency ids per task (dependsOn / blockedOnTaskIds). */
 export const MAX_TASK_DEPENDENCY_IDS = 20;
@@ -54,7 +64,7 @@ const MAX_PLAN_REVISION = Number.MAX_SAFE_INTEGER;
  * non-negative safe-integer domain fails CLOSED (no coercion, no reset): a
  * corrupted stamp must not silently pass an approval-freshness comparison.
  */
-function decodeStoredPlanRevision(task: Task): number {
+export function decodeStoredPlanRevision(task: Task): number {
   const stored = task.planRevision;
   if (stored === undefined) return 0;
   if (typeof stored !== 'number' || !Number.isSafeInteger(stored) || stored < 0) {
@@ -72,18 +82,41 @@ function decodeStoredPlanRevision(task: Task): number {
  * what a token is. Error handling contract: only a non-negative safe integer
  * passes; null, strings, booleans, fractional, negative, unsafe and non-finite
  * values throw INVALID_INPUT. Never coerce, and never degrade a malformed
- * token into the token-free legacy approval — that would turn a typo into an
- * unchecked approval.
+ * token into an unchecked approval — that would turn a typo into one.
  */
 function decodeSuppliedPlanRevision(value: unknown, taskId: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw invalidInput(
       'expectedPlanRevision',
       `approval token for task ${taskId} must be a non-negative safe integer (got ${String(value)}); ` +
-        'omit the field entirely to approve without a revision check'
+        'send the plan revision the approver reviewed'
     );
   }
   return value;
+}
+
+function planRevisionMismatch(taskId: string, supplied: number, current: number): MoeError {
+  return new MoeError(
+    MoeErrorCode.STATE_CONFLICT,
+    `Plan for task ${taskId} changed since it was reviewed (approved revision ${supplied}, current revision ${current}). ` +
+      'Re-open the plan, review the current revision and approve again.',
+    { taskId, expectedPlanRevision: supplied, currentPlanRevision: current },
+    'PLAN_REVISION_MISMATCH'
+  );
+}
+
+/**
+ * The approvedPlanRevision an approval write stamps: the revision a human
+ * reviewed (PLAN_APPROVED) or a SPEED/TURBO submission committed
+ * (PLAN_AUTO_APPROVED), only if it equals the revision this same write commits,
+ * so a delayed approval can never authorize a newer plan, DoD or contract. Error handling:
+ * INVALID_INPUT for a malformed value, STATE_CONFLICT / PLAN_REVISION_MISMATCH
+ * for any other; both throw before any write.
+ */
+function checkedApprovalRevision(taskId: string, reviewed: unknown, planRevision: number): number {
+  const supplied = decodeSuppliedPlanRevision(reviewed, taskId);
+  if (supplied !== planRevision) throw planRevisionMismatch(taskId, supplied, planRevision);
+  return supplied;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -91,10 +124,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Structural comparison of two SANITIZED plan/DoD surfaces. Array order is
- * significant (a reordered plan is a different plan), object key insertion
- * order is not (re-serializing the same step is not a mutation). Compares
- * every retained key, so step execution fields and amendment entries count.
+ * Compare only the instructions and scope that approval authorizes. Sanitizing
+ * both sides preserves the existing input bounds; execution evidence and
+ * amendment audit/history fields never enter this projection. DoD and the
+ * execution contract are compared separately as part of the approval surface.
+ */
+function approvalPlanSurface(plan: unknown) {
+  return sanitizeImplementationPlan(plan).map(step => ({
+    stepId: step.stepId,
+    originalDescription: step.description,
+    effectiveDescription: effectiveStepDescription(step),
+    affectedFiles: step.affectedFiles,
+    newFiles: step.newFiles ?? [],
+  }));
+}
+
+/**
+ * Structural comparison of canonical plan/DoD/contract surfaces. Array order remains
+ * significant; object key insertion order is not a material change.
  */
 function sameSanitizedSurface(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -114,9 +161,9 @@ function sameSanitizedSurface(a: unknown, b: unknown): boolean {
 
 /**
  * The revision to stamp into this write. Bumps once for a plan submission and
- * once for any write that actually changes the sanitized steps/DoD — a write
- * that does both still advances by one. `undefined` for either field means the
- * caller did not supply it, so it cannot be a change.
+ * once for any write that changes the canonical approval surface/DoD/contract.
+ * Combined changes still advance by one. Undefined plan/DoD means unsupplied;
+ * an own contract key (even undefined) explicitly replaces or clears it.
  *
  * Error handling: a malformed stored stamp (INVALID_INPUT, via the decode
  * above) and an exhausted counter (STATE_CONFLICT / PLAN_REVISION_EXHAUSTED)
@@ -130,11 +177,14 @@ function derivePlanRevision(
   const current = decodeStoredPlanRevision(task);
   const planChanged =
     updates.implementationPlan !== undefined &&
-    !sameSanitizedSurface(updates.implementationPlan, sanitizeImplementationPlan(task.implementationPlan));
+    !sameSanitizedSurface(approvalPlanSurface(updates.implementationPlan), approvalPlanSurface(task.implementationPlan));
   const dodChanged =
     updates.definitionOfDone !== undefined &&
     !sameSanitizedSurface(updates.definitionOfDone, sanitizeStringArray(task.definitionOfDone, 50, 1000));
-  if (event !== 'PLAN_SUBMITTED' && !planChanged && !dodChanged) {
+  const contractChanged =
+    Object.prototype.hasOwnProperty.call(updates, 'executionContract') &&
+    !sameSanitizedSurface(updates.executionContract, task.executionContract);
+  if (event !== 'PLAN_SUBMITTED' && !planChanged && !dodChanged && !contractChanged) {
     return current;
   }
   if (current >= MAX_PLAN_REVISION) {
@@ -146,6 +196,94 @@ function derivePlanRevision(
     );
   }
   return current + 1;
+}
+
+/**
+ * The executionPolicySnapshot a plan submission stores: configuration identity
+ * only, never approval, readiness or runner trust. A stored verified-local
+ * snapshot is the floor and is kept whole (version, profile and captured
+ * deliveryPolicy); only planRevision advances, so neither a project rollback
+ * nor a stale revision can downgrade it or fill a v1 one in. There is no policy
+ * ranking: anything else captures the live settings. Today the strict
+ * progression check refuses every verified-local submission before this runs.
+ *
+ * Error handling: a malformed stored snapshot or malformed live settings throw
+ * INVALID_INPUT, so the submission is refused before any write.
+ */
+export function planSubmissionSnapshot(
+  settings: { executionProfile?: unknown; deliveryPolicy?: unknown } | null | undefined,
+  stored: unknown,
+  planRevision: number
+): ExecutionPolicySnapshot {
+  const prior = readExecutionPolicySnapshot(stored);
+  const captured = captureExecutionPolicySnapshot(settings, planRevision);
+  if (prior?.profile !== 'verified-local') return captured;
+  return readExecutionPolicySnapshot({ ...prior, planRevision }) as ExecutionPolicySnapshot;
+}
+
+/**
+ * Lifecycle rank. A Map, so only its own entries rank: a hand-edited status
+ * such as 'constructor' can never rank through an inherited key. BLOCKED and
+ * ARCHIVED are never progression targets.
+ */
+const PROGRESSION_RANK: ReadonlyMap<TaskStatus, number> = new Map<TaskStatus, number>([
+  ['BACKLOG', 0],
+  ['PLANNING', 1],
+  ['AWAITING_APPROVAL', 2],
+  ['WORKING', 3],
+  ['REVIEW', 4],
+  ['DONE', 5],
+]);
+
+/** A BLOCKED row stands at its recorded blockedFromStatus; ARCHIVED, an unrecorded block or an unknown status at 0. */
+function standing(task: Task): number {
+  const at = task.status === 'BLOCKED' ? task.blockedFromStatus : task.status;
+  return at ? PROGRESSION_RANK.get(at) ?? 0 : 0;
+}
+
+/**
+ * Every plan submission is a new progression, and so is a status change to a
+ * ranked target above where the row stands. A release is not: the stored row
+ * holds a seat, the caller's own update clears it, and the target is exactly
+ * nextStatusForRelease (an all-done WORKING row lands in REVIEW). Pass the
+ * caller's update, never finalUpdates: that clears the seat on every status
+ * change, so each complete_task would look like a hand-back.
+ */
+function isNewProgression(
+  task: Task,
+  callerUpdates: Partial<Task>,
+  nextStatus: TaskStatus,
+  event: ActivityEventType | undefined
+): boolean {
+  if (event === 'PLAN_SUBMITTED') return true;
+  const target = nextStatus === task.status ? undefined : PROGRESSION_RANK.get(nextStatus);
+  if (target === undefined || target <= standing(task)) return false;
+  const release = Boolean(task.assignedWorkerId)
+    && callerUpdates.assignedWorkerId === null
+    && nextStatus === nextStatusForRelease(task);
+  return !release;
+}
+
+/**
+ * The strict-progression backstop, run before any write. It grants nothing:
+ * passing is not approval, readiness or trust. Only a new progression decodes
+ * anything, so reads, metadata, progress, assignment and cleanup/release never
+ * touch the snapshot and a bad record cannot wedge them. The profile is the
+ * live one floored by a stored verified-local snapshot, stale revision or not.
+ * Claim admission and waiters belong to CQ-M01e.
+ *
+ * Error handling: a malformed snapshot or setting throws INVALID_INPUT and
+ * verified-local throws EXECUTION_PROFILE_NOT_READY, both before any write.
+ */
+function assertProgressionReady(
+  state: StateManager,
+  task: Task,
+  callerUpdates: Partial<Task>,
+  nextStatus: TaskStatus,
+  event: ActivityEventType | undefined
+): void {
+  if (!isNewProgression(task, callerUpdates, nextStatus, event)) return;
+  assertExecutionProfileReady(resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot));
 }
 
 export async function createTask(state: StateManager, input: Partial<Task>): Promise<Task> {
@@ -190,6 +328,8 @@ export async function createTask(state: StateManager, input: Partial<Task>): Pro
     implementationPlan: sanitizeImplementationPlan(input.implementationPlan),
     // Daemon-owned: a new task starts at 0 whatever the caller passed (and
     // whatever initial plan it shipped with) — the first submission is 1.
+    // Built field by field, so a caller's executionPolicySnapshot is never
+    // copied either: the first plan submission captures it.
     planRevision: 0,
     status: input.status || 'BACKLOG',
     assignedWorkerId: input.assignedWorkerId || null,
@@ -209,6 +349,12 @@ export async function createTask(state: StateManager, input: Partial<Task>): Pro
     createdAt: now,
     updatedAt: now
   };
+
+  // A row created past BACKLOG is a new progression. It has no snapshot yet,
+  // so the live profile decides, before any write.
+  if ((PROGRESSION_RANK.get(task.status) ?? 0) > 0) {
+    assertExecutionProfileReady(resolveTaskExecutionProfile(state.project.settings));
+  }
 
   await state.writeEntity('tasks', task.id, task);
   state.tasks.set(task.id, task);
@@ -278,7 +424,12 @@ export function assertNoFinalizingAttempt(state: StateManager, taskId: string): 
   );
 }
 
-export async function updateTask(state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string): Promise<Task> {
+export async function updateTask(
+  state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string,
+  daemonOwned?: { requiredCheckSnapshot?: RequiredCheckSnapshot; approvedPlanRevision?: number;
+    planSourceBasis?: { commit: string }; planReuse?: PlanReuseRecord;
+    recipeInstance?: Omit<RecipeInstance, 'version' | 'planRevision'> },
+): Promise<Task> {
   const task = state.tasks.get(taskId);
   if (!task) {
     throw new Error(`Task not found: ${taskId}`);
@@ -295,6 +446,30 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
   // any caller-supplied value (MCP tool, plugin UPDATE_TASK) so a client can
   // neither forge a newer stamp nor reset an older one.
   delete (sanitized as Record<string, unknown>).planRevision;
+  // The approval stamp is daemon-owned too: only the daemonOwned argument below
+  // writes it, so no caller may forge, null or erase it.
+  delete sanitized.approvedPlanRevision;
+  // executionPolicySnapshot is daemon-owned as well: only the PLAN_SUBMITTED
+  // capture below writes it, so no caller (MCP tool, plugin UPDATE_TASK, a
+  // board echo of the whole row) may forge, reset, null or erase it. Deleting
+  // the key also keeps an own-key undefined out of the merged row.
+  delete (sanitized as Record<string, unknown>).executionPolicySnapshot;
+  // Protected file identity has the same ownership: only submit_plan's internal
+  // parameter may set/clear it. StateManager's public update signature omits it.
+  delete sanitized.requiredCheckSnapshot;
+  // Plan-reuse state is daemon-owned: submit_plan's basis (PLAN_SUBMITTED),
+  // the PLANNING-entry stamp below and the daemonOwned reuse record are its
+  // only writers. A caller value, null included, never reaches the row.
+  delete sanitized.planSourceBasis;
+  delete sanitized.planningEntry;
+  delete sanitized.planReuse;
+  // The recipe binding is daemon-owned: only submit_plan's internal recipe channel writes it (PLAN_SUBMITTED).
+  delete sanitized.recipeInstance;
+  // Refused before any write: nothing is persisted, mapped or emitted.
+  const reuse = daemonOwned?.planReuse === undefined ? undefined : validatePlanReuseRecord(daemonOwned.planReuse);
+  if (Object.prototype.hasOwnProperty.call(sanitized, 'executionContract')) {
+    sanitized.executionContract = validateExecutionContract(sanitized.executionContract);
+  }
   if (sanitized.title !== undefined) {
     sanitized.title = sanitizeString(sanitized.title, 'title', 500);
   }
@@ -378,6 +553,16 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
   if (statusChanged && (normalizedUpdates.status === 'DONE' || normalizedUpdates.status === 'ARCHIVED')) {
     assertNoFinalizingAttempt(state, taskId);
   }
+  // Strict readiness, also before any write (and before the capture below).
+  assertProgressionReady(state, task, normalizedUpdates, normalizedUpdates.status ?? task.status, event);
+  // A strict profile may not approve unchecked. Behind the readiness gate
+  // above, which still refuses every verified-local progression. Automatic
+  // approvals always carry the revision their submission committed (CQ-F05).
+  const reviewed = event === 'PLAN_APPROVED' || event === 'PLAN_AUTO_APPROVED' ? daemonOwned?.approvedPlanRevision : undefined;
+  if (event === 'PLAN_APPROVED' && reviewed === undefined &&
+    resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot) === 'verified-local') {
+    throw invalidInput('expectedPlanRevision', `approval of task ${taskId} under verified-local must name the reviewed plan revision`);
+  }
 
   // Derive the plan revision from the sanitized surface, BEFORE any write, so a
   // malformed stored stamp or an exhausted counter refuses the whole update
@@ -385,13 +570,50 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
   // object — and therefore the same writeEntity call — as the plan/DoD it
   // versions, so a reader can never see one without the other.
   const planRevision = derivePlanRevision(task, finalUpdates, event);
+  // Only a plan submission captures the snapshot (planSubmissionSnapshot). It
+  // rides in the same fresh object, and so the same writeEntity, as the
+  // revision it names: a refused or failed write publishes neither. Approval
+  // writes never capture.
+  const capture = event === 'PLAN_SUBMITTED'
+    ? { executionPolicySnapshot: planSubmissionSnapshot(state.project?.settings, task.executionPolicySnapshot, planRevision) }
+    : {};
+  // The reviewed revision rides in the same image as the approval it records.
+  // Without one the field is untouched: an older number stays as history.
+  const stamp = reviewed === undefined
+    ? {}
+    : { approvedPlanRevision: checkedApprovalRevision(taskId, reviewed, planRevision) };
+  // The commit the submitted plan was measured against, with the revision this write commits.
+  const basis = event === 'PLAN_SUBMITTED' && daemonOwned?.planSourceBasis
+    ? readPlanSourceBasis({ planSourceBasis: { version: 1, commit: daemonOwned.planSourceBasis.commit, planRevision } })
+    : undefined;
+  if (basis === null) throw invalidInput('planSourceBasis', 'commit must be 40 or 64 lowercase hex');
 
+  const now = new Date().toISOString();
   const updated: Task = {
     ...task,
     ...finalUpdates,
     planRevision,
-    updatedAt: new Date().toISOString()
+    ...capture,
+    ...stamp,
+    updatedAt: now
   };
+  if (event === 'PLAN_SUBMITTED' && daemonOwned) {
+    if (daemonOwned.requiredCheckSnapshot) updated.requiredCheckSnapshot = daemonOwned.requiredCheckSnapshot;
+    else delete updated.requiredCheckSnapshot;
+    if (basis) updated.planSourceBasis = basis;
+    else delete updated.planSourceBasis;
+    if (daemonOwned.recipeInstance) updated.recipeInstance = { version: 1, ...daemonOwned.recipeInstance, planRevision };
+    else delete updated.recipeInstance;
+  }
+  if (reuse) updated.planReuse = reuse;
+  // How the task last entered PLANNING. Judged on the STORED row: an unblock
+  // nulls blockedFromStatus in this same update, and a return from a block
+  // taken in PLANNING is not a new entry.
+  if (statusChanged && finalUpdates.status === 'PLANNING'
+    && !(task.status === 'BLOCKED' && task.blockedFromStatus === 'PLANNING')) {
+    const prior = readPlanningEntry(task)?.seq ?? 0;
+    updated.planningEntry = { from: task.status, at: now, seq: prior < Number.MAX_SAFE_INTEGER ? prior + 1 : 1 };
+  }
 
   await state.writeEntity('tasks', taskId, updated);
   state.tasks.set(taskId, updated);
@@ -535,29 +757,32 @@ export async function approveTask(
   if (task.status !== 'AWAITING_APPROVAL') {
     throw new Error(`Cannot approve task in ${task.status} status, must be AWAITING_APPROVAL`);
   }
-  // Compare-and-swap on the plan revision the approver actually reviewed.
-  // ABSENCE is the only legacy opt-out (SPEED/TURBO auto-approval,
-  // set_task_status relaxed mode, an old client) — a supplied token is always
-  // validated and compared. This whole block runs BEFORE cancelSpeedModeTimeout
-  // and before any write, so a refusal cancels no pending timer, mutates no
-  // bytes and publishes nothing.
-  if (expectedPlanRevision !== undefined) {
-    const supplied = decodeSuppliedPlanRevision(expectedPlanRevision, taskId);
-    // Absent stamp reads as 0, so a legacy row matches an explicit 0; a corrupt
-    // stored stamp still fails closed as INVALID_INPUT.
-    const current = decodeStoredPlanRevision(task);
-    if (supplied !== current) {
-      throw new MoeError(
-        MoeErrorCode.STATE_CONFLICT,
-        `Plan for task ${taskId} changed since it was reviewed (approved revision ${supplied}, current revision ${current}). ` +
-          'Re-open the plan, review the current revision and approve again.',
-        { taskId, expectedPlanRevision: supplied, currentPlanRevision: current },
-        'PLAN_REVISION_MISMATCH'
-      );
-    }
+  // Compare-and-swap on the plan revision the approver actually reviewed. Only
+  // the two human /ws routes come here (set_task_status relaxed mode never
+  // does, and SPEED/TURBO bind their own revision in submitPlan), and each must
+  // name the revision: CQ-F MODIFY_RAIL prop-5e7763ed (human-approved
+  // 2026-10-25) deleted revision-less approval, so an omission is refused. This
+  // whole block runs before any write, so a refusal cancels no pending timer,
+  // mutates no bytes and publishes nothing.
+  if (expectedPlanRevision === undefined) {
+    throw invalidInput('expectedPlanRevision', `approval of task ${taskId} must name the reviewed plan revision`);
   }
+  const reviewed = decodeSuppliedPlanRevision(expectedPlanRevision, taskId);
+  // Absent stamp reads as 0, so a legacy row matches an explicit 0; a corrupt
+  // stored stamp still fails closed as INVALID_INPUT.
+  const current = decodeStoredPlanRevision(task);
+  if (reviewed !== current) throw planRevisionMismatch(taskId, reviewed, current);
+  // Readiness is checked here too, before the write.
+  assertProgressionReady(state, task, {}, 'WORKING', 'PLAN_APPROVED');
+  // The reviewed revision travels in the store's private argument, so this one
+  // write stamps it beside the approval.
+  const updated = await updateTask(
+    state, taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_APPROVED', undefined,
+    { approvedPlanRevision: reviewed }
+  );
+  // Only once the write has landed: a refused or failed approval keeps a pending
+  // SPEED timer, whose queued callback re-checks the status under the mutex.
   cancelSpeedModeTimeout(taskId);
-  const updated = await state.updateTask(taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_APPROVED');
   return updated;
 }
 

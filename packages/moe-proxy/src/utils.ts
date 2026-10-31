@@ -14,40 +14,52 @@ export interface DaemonInfoReadResult {
   retryable: boolean;
 }
 
+const WINDOWS_FORM = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/;
+const WSL_SHARE = /^\/\/(?:wsl\$|wsl\.localhost)\/[^/]+(\/.*)?$/i;
+const MNT_DRIVE = /^\/mnt\/([A-Za-z])(?:\/(.*))?$/;
+
 /**
- * Reduce a project path to a form comparable across the Windows/WSL boundary.
- * A Windows daemon records `D:\projexts\app` in daemon.json while a WSL-side
- * proxy resolves the same directory as `/mnt/d/projexts/app`; both reduce to
- * `d:/projexts/app`. Paths without a drive-letter equivalent keep the old
- * behavior (resolve; case-insensitive only on win32).
+ * The cross-platform project-path comparison contract. The key is the same
+ * whatever OS computes it, and is comparison-only: never written anywhere.
+ * The daemon's comparableProjectPath twin, JetBrains DaemonIdentityProbe and
+ * the launchers follow it (scripts/tests/daemon-json-cap.test.mjs checks them).
+ * - Drive (`D:\x`, `d:/x/`) and UNC (`\\srv\share\x`, `//srv/share/x`): `\` and
+ *   `/` both separate, '..' never climbs past the drive or the UNC server and
+ *   share, and case folds with toLowerCase (locale-independent, full Unicode:
+ *   it over-folds U+212A and U+212B, which NTFS keeps apart, a fail-open same).
+ * - `\\wsl$\<distro>\x` and `\\wsl.localhost\<distro>\x` name that distro's
+ *   POSIX `/x`; the distro is not compared. The launchers still read a WSL
+ *   share as plain UNC until task-3def0804.
+ * - Any other path starting with `/` is POSIX: only `/` separates, '..' stops
+ *   at the root, case is kept, and `/mnt/<d>[/x]` maps to `<d>:[/x]`.
+ * The drive letter and the mount letter are ASCII-only. Only a relative input
+ * is first resolved natively against the cwd.
  */
 export function comparableProjectPath(projectPath: string): string {
   const raw = projectPath.trim();
-
-  // Both special forms are detected on the RAW string: path.resolve would
-  // mangle a Windows-drive path on Linux (treated as relative) and a /mnt
-  // path on Windows (prefixed with the cwd drive).
-  if (/^[a-zA-Z]:[\\/]/.test(raw)) {
-    return normalizeWindowsDrivePath(raw);
-  }
-  const wslMatch = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(raw);
-  if (wslMatch) {
-    const rest = (wslMatch[2] ?? '').replace(/\/+$/, '');
-    return `${wslMatch[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();
-  }
-
-  const resolved = path.resolve(raw);
-  if (/^[a-zA-Z]:[\\/]/.test(resolved)) {
-    return normalizeWindowsDrivePath(resolved);
-  }
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  const abs = WINDOWS_FORM.test(raw) || raw.startsWith('/') ? raw : path.resolve(raw);
+  if (!WINDOWS_FORM.test(abs)) return posixKey(abs);
+  const s = abs.replace(/\\/g, '/');
+  const share = WSL_SHARE.exec(s);
+  if (share) return posixKey(share[1] ?? '/');
+  const unc = s.startsWith('//');
+  return ((unc ? '//' : '') + collapse(s, unc ? 2 : 1)).toLowerCase();
 }
 
-function normalizeWindowsDrivePath(drivePath: string): string {
-  return path.win32.normalize(drivePath)
-    .replace(/\\/g, '/')
-    .replace(/\/+$/, '')
-    .toLowerCase();
+function posixKey(p: string): string {
+  const key = '/' + collapse(p, 0);
+  const mnt = MNT_DRIVE.exec(key);
+  return mnt ? `${mnt[1]}:${mnt[2] ? `/${mnt[2]}` : ''}`.toLowerCase() : key;
+}
+
+/** Drops empty and '.' segments; '..' never pops the first `keep` (drive, or UNC server and share). */
+function collapse(p: string, keep: number): string {
+  const kept: string[] = [];
+  for (const segment of p.split('/').filter((s) => s !== '' && s !== '.')) {
+    if (segment !== '..') kept.push(segment);
+    else if (kept.length > keep) kept.pop();
+  }
+  return kept.join('/');
 }
 
 function isSameProjectPath(a: string, b: string): boolean {
@@ -56,7 +68,7 @@ function isSameProjectPath(a: string, b: string): boolean {
 
 /**
  * Host the proxy connects to. Defaults to loopback; MOE_DAEMON_HOST overrides
- * for cross-boundary setups (WSL agent -> Windows daemon bound to 0.0.0.0).
+ * for cross-boundary setups (WSL agent -> Windows daemon started with --host wsl).
  */
 export function getDaemonHost(): string {
   return process.env.MOE_DAEMON_HOST || '127.0.0.1';
@@ -80,11 +92,42 @@ function isDaemonInfoShape(value: unknown): value is DaemonInfo {
     && typeof info.startedAt === 'string';
 }
 
+/**
+ * daemon.json is repository content (a repository can commit one), and a
+ * wrapper RPC spawns a fresh proxy per call, so an oversize file would be
+ * read again on every call. The cap matches the daemon and JetBrains readers.
+ */
+const MAX_DAEMON_JSON_BYTES = 64 * 1024;
+
+/**
+ * Read at most MAX + 1 bytes through one descriptor. Returns null when the
+ * file holds more than MAX bytes. Size metadata is not trusted (a device
+ * symlink reports 0), so the read itself is bounded; short reads are looped.
+ */
+function readBounded(filePath: string): string | null {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(MAX_DAEMON_JSON_BYTES + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const n = fs.readSync(fd, buf, total, buf.length - total, null);
+      if (n === 0) break;
+      total += n;
+    }
+    return total > MAX_DAEMON_JSON_BYTES ? null : buf.toString('utf-8', 0, total);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export function readDaemonInfoResult(projectPath: string): DaemonInfoReadResult {
   const filePath = path.join(projectPath, '.moe', 'daemon.json');
   if (!fs.existsSync(filePath)) return { info: null, retryable: true };
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
+    const raw = readBounded(filePath);
+    if (raw === null) {
+      return { info: null, retryable: false, error: 'daemon.json is larger than 64 KiB' };
+    }
     const parsed = JSON.parse(raw) as unknown;
     if (!isDaemonInfoShape(parsed)) {
       return {
@@ -115,7 +158,9 @@ export function readDaemonInfo(projectPath: string): DaemonInfo | null {
 }
 
 export function getProjectPath(): string {
-  return process.env.MOE_PROJECT_PATH || process.cwd();
+  // Our own path names a directory on this host, so resolve it natively, as the
+  // daemon does (canonicalProjectPath). Recorded and served paths stay compared as written.
+  return path.resolve(process.env.MOE_PROJECT_PATH || process.cwd());
 }
 
 export function formatError(message: string): string {
@@ -238,6 +283,152 @@ export function injectRunnerIdentity(
     return true;
   } catch {
     return false;
+  }
+}
+
+/** The two tools that register a seat: the daemon records the reported worker type on either. */
+const WORKER_TYPE_TOOLS = new Set([...CLAIM_TOOL, 'moe.join_team', 'moe_join_team', 'join_team']);
+
+/**
+ * Add the launcher's MOE_WORKER_TYPE, the agent CLI it started, as `workerType`
+ * on moe.claim_next_task and moe.join_team, so the daemon records which CLI a
+ * seat runs. Unlike injectWorkerId it does not bail when the call names its own
+ * workerId (the wrapper's pre-flight claim and join always do) and it never
+ * touches tools/list. A `workerType` key the caller already set wins whatever
+ * its value, and a blank value counts as unset, as for MOE_WORKER_ID. The value
+ * is sent verbatim: the daemon owns validation (CLAUDE, CODEX, GEMINI or GROK,
+ * anything else registers as CLAUDE). Returns true if the parsed object was
+ * mutated. Never throws.
+ */
+export function injectWorkerType(
+  parsed: unknown,
+  envWorkerType: string | undefined
+): boolean {
+  try {
+    if (typeof envWorkerType !== 'string' || envWorkerType.trim() === '') return false;
+    if (!parsed || typeof parsed !== 'object') return false;
+    const msg = parsed as Record<string, unknown>;
+    if (msg.method !== 'tools/call') return false;
+    const params = msg.params as Record<string, unknown> | undefined;
+    if (!params || typeof params !== 'object') return false;
+    if (typeof params.name !== 'string' || !WORKER_TYPE_TOOLS.has(params.name)) return false;
+    const args = params.arguments as Record<string, unknown> | undefined;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+    if (Object.prototype.hasOwnProperty.call(args, 'workerType')) return false;
+    args.workerType = envWorkerType;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface ExecutionIdentityRefusal { code: number; codeName: string; message: string }
+
+type IdentityGroup = 'attempt' | 'session';
+type IdentityFields = Record<string, string | number>;
+/** A group's env read: null when absent, a reason string when partial or malformed. */
+type GroupRead = IdentityFields | string | null;
+
+/** The tools that carry the session's execution identity, under every spelling. */
+const EXECUTION_IDENTITY_TOOLS = new Map<string, readonly IdentityGroup[]>();
+for (const [tool, groups] of [
+  ['get_context', ['session']], ['start_step', ['attempt', 'session']],
+  ['complete_step', ['attempt', 'session']], ['complete_task', ['attempt', 'session']],
+  ['qa_approve', ['attempt', 'session']], ['qa_reject', ['attempt', 'session']],
+] as const) {
+  for (const name of [`moe.${tool}`, `moe_${tool}`, tool]) EXECUTION_IDENTITY_TOOLS.set(name, groups);
+}
+
+const IDENTITY_ENV: Record<string, string> = {
+  attemptId: 'MOE_ATTEMPT_ID', generation: 'MOE_ATTEMPT_GENERATION', sessionId: 'MOE_SESSION_ID',
+};
+
+const nonBlank = (value: string | undefined) => (typeof value === 'string' && value.trim() !== '' ? value : undefined);
+
+/** The daemon's sessionId rule (readContextSessionId): at most 255 UTF-16 units, no NUL, CR or LF. Verbatim. */
+function readSessionGroup(env: Record<string, string | undefined>): GroupRead {
+  const sessionId = nonBlank(env.MOE_SESSION_ID);
+  if (sessionId === undefined) return null;
+  if (sessionId.length > 255 || /[\u0000\r\n]/.test(sessionId)) {
+    return 'MOE_SESSION_ID must be at most 255 characters with no NUL, CR or LF';
+  }
+  return { sessionId };
+}
+
+/** Both or neither; attemptId is the wrapper's pin_attempt_identity shape; generation is never trimmed or loosely parsed. */
+function readAttemptGroup(env: Record<string, string | undefined>): GroupRead {
+  const attemptId = nonBlank(env.MOE_ATTEMPT_ID);
+  const generation = nonBlank(env.MOE_ATTEMPT_GENERATION);
+  if (attemptId === undefined && generation === undefined) return null;
+  if (attemptId === undefined || generation === undefined) {
+    return 'MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION must be set together';
+  }
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(attemptId)) {
+    return 'MOE_ATTEMPT_ID must be 1-128 characters of A-Z, a-z, 0-9, _ or -';
+  }
+  const value = Number(generation);
+  if (!/^[1-9][0-9]*$/.test(generation) || !Number.isSafeInteger(value)) {
+    return 'MOE_ATTEMPT_GENERATION must be a positive safe integer in plain decimal digits';
+  }
+  return { attemptId, generation: value };
+}
+
+const GROUP_READERS: Record<IdentityGroup, (env: Record<string, string | undefined>) => GroupRead> = {
+  attempt: readAttemptGroup, session: readSessionGroup,
+};
+
+/**
+ * CQ-F09, CQ-F12a, CQ-V06a: stamp the session's execution identity onto
+ * moe.get_context (sessionId) and onto moe.start_step, moe.complete_step,
+ * moe.complete_task, moe.qa_approve and moe.qa_reject
+ * (attemptId, generation, sessionId). The
+ * runner (the wrapper's env), never the CLI caller, owns that identity: the
+ * same transport as injectRunnerIdentity, except the caller can never
+ * override it. A presented field must equal the env value exactly, and a
+ * malformed or partial env group refuses the calls that carry it. With no
+ * identity env this is the legacy proxy: returns false and the daemon decides.
+ * Returns true when the checked object must be forwarded (stamped or already
+ * equal), or a refusal; it never mutates on refusal, never echoes a value and
+ * never throws (an unexpected error fails closed).
+ */
+export function stampExecutionIdentity(
+  parsed: unknown,
+  env: Record<string, string | undefined>
+): boolean | ExecutionIdentityRefusal {
+  try {
+    if (!parsed || typeof parsed !== 'object') return false;
+    const msg = parsed as Record<string, unknown>;
+    if (msg.method !== 'tools/call') return false;
+    const params = msg.params as Record<string, unknown> | undefined;
+    if (!params || typeof params !== 'object') return false;
+    const tool = params.name;
+    const groups = typeof tool === 'string' ? EXECUTION_IDENTITY_TOOLS.get(tool) : undefined;
+    if (!groups) return false;
+    const args = params.arguments as Record<string, unknown> | undefined;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+    const stamp: IdentityFields = {};
+    for (const group of groups) {
+      const read = GROUP_READERS[group](env);
+      if (typeof read === 'string') {
+        return { code: -32602, codeName: 'EXECUTION_IDENTITY_INVALID', message: `${tool}: ${read}; fix the session environment` };
+      }
+      if (read) Object.assign(stamp, read);
+    }
+    const fields = Object.keys(stamp);
+    if (fields.length === 0) return false;
+    for (const field of fields) {
+      if (Object.prototype.hasOwnProperty.call(args, field) && args[field] !== stamp[field]) {
+        return {
+          code: -32003,
+          codeName: 'EXECUTION_IDENTITY_SUBSTITUTED',
+          message: `${tool}: ${field} differs from this session's ${IDENTITY_ENV[field]}; omit ${field} so the proxy supplies the session's own value`,
+        };
+      }
+    }
+    Object.assign(args, stamp);
+    return true;
+  } catch {
+    return { code: -32602, codeName: 'EXECUTION_IDENTITY_INVALID', message: 'execution identity could not be checked' };
   }
 }
 

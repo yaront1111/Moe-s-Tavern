@@ -1,0 +1,144 @@
+{
+  "id": "task-faa4d9ef330f4ef7900a00bd2b7dc049",
+  "epicId": "epic-be924fb8",
+  "title": "bug: an idle moe-agent.sh seat exits when its poll sleep is killed, and its EXIT trap reports every exit as terminal_closed",
+  "description": "Observed 2026-10-31 at 04:47:37Z. A review subagent in worker-25da16b2's CQ-R13 session ran a probe that killed every `sleep 30` process on the WSL host (a pattern kill). Five idle seats died in the same second: worker-c75a6f39, architect-4ff0711c, architect-915213a1, qa-12f7cf2d and qa-4b0c6c8e. Each one deregistered as `terminal_closed`, which first read as a deliberate human tab close. None held a task, and nothing was lost except the seats, which needed a human relaunch.\n\nMechanism (scripts/moe-agent.sh):\n- The idle branch of the main loop waits in `sleep \"$POLL_INTERVAL\"` (~:6932). The launch-failure/outage backoff waits in `sleep \"$LAUNCH_FAIL_BACKOFF_SEC\"` (~:6925). The script runs under `set -e`. A killed sleep exits 143 (SIGTERM) or 137 (SIGKILL), so the wrapper exits.\n- cleanup_temp, the EXIT trap (~:186-191), always deregisters with `\"reason\":\"terminal_closed\"`, whatever the exit cause. That hides crashes and stray kills behind a reason that reads as an operator action.\n\nFix direction (the planner decides):\n- A poll or backoff sleep that is interrupted by anything other than the wrapper's own INT/TERM handling should not end the seat. For example `sleep \"$POLL_INTERVAL\" || true`, while keeping Ctrl+C and the trap's own teardown semantics intact.\n- The EXIT trap's deregister reason should tell an operator close or Ctrl+C apart from an unexpected exit, for example by including the exit status.\n- Check the ps1 twin's idle wait (Start-Sleep) for the same class of exit.\n\nOut of scope: the agent-side cause. A GLOBAL rule forbidding pattern kills on the shared host was proposed separately.",
+  "definitionOfDone": [
+    "Killing an idle seat's poll sleep (SIGTERM or SIGKILL to that sleep process only) no longer ends the moe-agent.sh seat: it logs the interruption and continues its loop. Ctrl+C / SIGINT / SIGTERM to the wrapper itself still tears down exactly as today.",
+    "The EXIT-trap deregister reason distinguishes an unexpected exit, for example by carrying the exit status, from terminal_closed. The daemon accepts the new reason value, or the existing reason field carries it.",
+    "A regression arm in scripts/tests/postflight.sh kills the idle seat's sleep child and proves the seat survives and re-polls. Pre-existing arms stay unchanged and pass. bash -n and parity-check pass, and the ps1 twin is either aligned or shown unaffected in the completion summary."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST: the regression arm for DoD 1-3. Load test-driven-development.\n\nThis row sits at the tail of the wrapper lane (dependsOn 69c02444), so the rows ahead of it will have reworked scripts/moe-agent.sh. Locate every site in this plan by its text, never by line number.\n\nNew arm in scripts/tests/postflight.sh, '[idle wait killed]', ending with '[idle wait killed] ok'. Do not edit any pre-existing arm (DoD 3).\n- Fixture, modelled on the '[hot reload]' arm: its own project under $TMP_DIR, with .moe/project.json (autoCommit false), .moe/messages/chan-general.jsonl and a .moe/daemon.json. moe-call.sh refuses to deregister without daemon.json; the fake proxy never reads it.\n- Launch an idle looping seat: PATH=\"$TMP_DIR:$PATH\" HOME=\"$HOME_DIR\" MOE_PROXY_PATH=\"$FAKE_PROXY\" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \"$WRAPPER\" --project <P> --worker-id worker-idle-wait --role worker --no-start-daemon --command /bin/true --loop --poll-interval 47, in the background. Record its PID and add it to LIVE_PIDS, restoring that afterwards as '[hot reload]' does. 47 is deliberately distinctive: seats sleep 20, 30 and 60.\n- Find the poll sleep only as the child of that recorded PID: the row of `ps -A -o pid=,ppid=,comm=` whose ppid is the wrapper PID and whose comm is sleep. GLOBAL rule: never pkill, killall, `kill $(pgrep …)` or select by name or pattern alone.\n- (a) `kill -TERM` that one PID. Within 15 s (well under the 47 s poll) a second claim_next_task appears in .moe/evidence-rpcs.jsonl. The wrapper PID is still alive, its output has MOE_IDLE_WAIT_INTERRUPTED naming exit 143, and .moe/deregister.log has no line for worker-idle-wait.\n- (b) The same with `kill -KILL` on the next poll sleep: a third claim, and exit 137.\n- (c) The wrapper itself: `kill -TERM` the wrapper PID, then `kill -TERM` its current sleep child (found by PPID), so the TERM trap, which bash defers until the foreground sleep returns (as today), runs now. The wrapper exits 0 within a few seconds, its output has 'Agent stopped.', and its deregister.log line carries reason terminal_closed.\n- (d) An unexpected exit: a fresh single-shot seat, in its own project, that exits 1 after registering deregisters with reason unexpected_exit:1. Use the codex argv-probe refusal (MOE_CLI_ARGV_REJECTED, the fake codex with FAKE_CODEX_REJECT_ARGV=1, as scenario Z drives it, without editing scenario Z), or another deterministic exit-1 path after registration.\n- Bound every wait by POSTFLIGHT_TIMEOUT_SEC. On failure, print the wrapper output and deregister.log, and kill only the recorded PID.\n\nRun the arm and record in the step note: at RED, (a) fails because the wrapper exits 143 and deregisters terminal_closed, and (d) reports terminal_closed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The sh fix, in scripts/moe-agent.sh.\n\n1. An idle_wait SECONDS helper, defined before the grouped main loop next to the INT/TERM trap:\n   idle_wait() { local rc=0; sleep \"$1\" || rc=$?; [ \"$rc\" -eq 0 ] || echo \"[WARN] MOE_IDLE_WAIT_INTERRUPTED: the ${1}s wait ended early (sleep exited $rc); the seat keeps looping.\" >&2; return 0; }\n   Its comment says why. A sleep killed by another process used to end the seat under set -e (five seats on 2026-10-31 at 04:47Z). The wrapper's own Ctrl+C, SIGINT or SIGTERM still stops it: bash runs the INT/TERM trap's `exit 0` as soon as the sleep returns, before `||` is evaluated. Probed for this plan: SIGTERM to the shell, then to its sleep, gave 'stopped' and exit 0, with no `||` branch; a killed sleep alone gave 'interrupted rc=143' and the script continued.\n2. Use idle_wait for every idle or backoff wait:\n   - sleep \"$POLL_INTERVAL\" (the idle poll);\n   - sleep \"$LAUNCH_FAIL_BACKOFF_SEC\" (the launch-failure and outage backoff);\n   - sleep \"$MOE_TASKLESS_POLL_SEC\" (the single-shot taskless wait);\n   - the account lease loop's sleep \"$trust_sec\" (untrusted retry) and sleep \"$f1\" (MOE_ACCOUNT_WAIT).\n   Leave the sub-second retries and the heartbeat sidecar alone: its subshell already runs `set +e`.\n3. cleanup_temp, the EXIT trap:\n   - its very first statement is `local exit_status=$?`, ahead of `set +e`;\n   - the deregister sends reason terminal_closed when exit_status is 0, else unexpected_exit:<status>;\n   - for a non-zero status it also prints one best-effort line to stderr: `[WARN] seat exiting with status <N>; deregistering as unexpected_exit:<N>`.\n   These stay unchanged:\n   - the INT/TERM trap still ends in `exit 0`, so Ctrl+C and SIGTERM keep terminal_closed;\n   - the hot-reload hand-over keeps its explicit wrapper_restart;\n   - a hang-up stays untrapped: it runs the EXIT trap with the last command's status, normally 0 (probed). The JetBrains plugin also deregisters a closed tab as terminal_closed itself (MoeProjectService.kt).\n   The daemon stores any reason string up to 200 chars (deregisterWorker.ts), so no daemon change is needed (DoD 2).\nThen `bash -n scripts/moe-agent.sh`, and step 1's arm passes.\nError handling: the EXIT trap stays best-effort under set +e, so a failed echo or moe-call never aborts it. idle_wait always returns 0, so a set -e abort can only come from somewhere else.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "The ps1 twin, in scripts/moe-agent.ps1 and scripts/tests/postflight.ps1.\n\nThe idle-wait half does not apply to ps1. Every ps1 wait is an in-process Start-Sleep (the poll, the backoff, the taskless wait, the account waits), so no process kill can end it short of killing the wrapper itself. Say so in the completion summary.\n\nThe reason half is aligned:\n- `$script:MoeExitStatus = $null` sits beside `$script:MoeDeregistered`.\n- Invoke-MoeDeregister's default reason becomes unexpected_exit:<MoeExitStatus> when that is set, else terminal_closed. The self-restart call keeps passing 'wrapper_restart'.\n- The main loop's `try { do { … } while (…) } finally { … }` gains `catch { if ($_.Exception -isnot [System.Management.Automation.PipelineStoppedException]) { $script:MoeExitStatus = 1 }; throw }`. A terminating error still ends the script exactly as today, and Ctrl+C (a pipeline stop) keeps terminal_closed.\n- Each `exit 1` inside that loop (five at plan time, between the `do {` and the outer `} finally {`) first sets `$script:MoeExitStatus = 1`. PowerShell exposes no exit status inside finally after `exit N`: probed on 5.1, $LASTEXITCODE is empty there.\n- Residual, for the summary: the post-loop one-shot teamless exit 1 (MOE_SEAT_UNREGISTERED) runs after the finally has already deregistered, so ps1 still reports terminal_closed for it. The sh twin reports unexpected_exit:1.\nKeep the spelling 'unexpected_exit:' identical in both wrappers, and keep moe-agent.ps1 saved as UTF-8 with a BOM.\n\nNew arm in scripts/tests/postflight.ps1, the twin of step 1's (c) and (d), with no pre-existing arm changed:\n- a clean single-shot run deregisters terminal_closed;\n- the argv-probe refusal (the ps1 scenario Z fake codex) deregisters unexpected_exit:1.\nError handling: the catch only records the status and rethrows. It never swallows an error or changes the exit code.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh, on the finished code. The launcher harnesses may run in place (GLOBAL rule).\n1. The completion evidence, which are CI's Linux wrapper legs:\n`bash -n scripts/moe-agent.sh && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh`\n   Run it in the Bash tool's foreground, never under nohup or setsid. A detached launch starts with SIGINT ignored, and scenario W then fails (Serena gotcha-qa-session-env-and-signals-leak-into-harness). If it must run detached, use that memory's sigreset shim.\n2. The ps1 legs, in a separate call from any Linux run, under Windows Node from D:\\projexts\\moes: `node scripts\\tests\\postflight-safe.mjs powershell`, then `node scripts\\tests\\postflight-safe.mjs pwsh` and `pwsh -NoProfile -File scripts\\tests\\parity-check.ps1`. Write them into a run.cmd in a fresh scratch dir under %TEMP%, invoke it as `cmd.exe /d /c '<windows path>\\run.cmd'`, and delete the dir afterwards. If pwsh is missing, run the Windows PowerShell 5.1 leg alone and say so.\n3. `git diff --check` over the four files.\nRecord each leg's pass and fail outcome in the step note.\nError handling:\n- compare any failing arm or scenario against a run at HEAD before calling it pre-existing, and name both runs;\n- never weaken a test;\n- never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path;\n- kill only PIDs this session recorded (GLOBAL rule).",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW of this row's diff. Load adversarial-self-review.\n- Ctrl+C, SIGINT and SIGTERM to the wrapper still give exit 0, 'Agent stopped.' and terminal_closed, both in an idle wait and during a CLI run.\n- A killed wait does not skip the hot-reload check or reset the account relaunch flag, because the loop goes on from the same point. A sleep killed again and again makes the seat iterate once per kill, bounded by the killer; it never spins on its own.\n- exit_status is captured before anything else in the trap.\n- No idle or backoff `sleep \"$…\"` is left bare. Grep the main loop and the account lease loop.\n- The reason is `unexpected_exit:` plus an integer, with no quote or space, so the JSON that cleanup_temp builds by hand stays valid.\n- The test kills only PIDs it recorded or whose PPID is its recorded wrapper, and it restores LIVE_PIDS.\n- ps1: the catch rethrows, PipelineStoppedException is excluded, the BOM is intact and the spelling matches sh.\n- Docs: none required. In the summary, say that a non-zero exit now reads unexpected_exit:<N> in the activity log, so a deregister wave tagged terminal_closed means an operator close or Ctrl+C again.\nError handling: fix in-scope findings here, with a test. Route out-of-scope findings to the governor with moe.add_comment on this row.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor (human allowed returning rows to BACKLOG, 05:36Z): LOW and wrapper-lane-bound (moe-agent.sh + ps1 + postflight), so planning it now would add a hop to the 26-row critical lane and its plan would go stale; its trigger (pattern kills) is now covered by GLOBAL customRules[1]. Promote after WT-19 / the worktree flip.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 324.7,
+  "comments": [
+    {
+      "id": "comment-07b4266e07af4d9e9eed1ad5083127b3",
+      "author": "governor-693b7073",
+      "content": "Line refs verified at HEAD by governor-4764040b (04:54Z):\n- moe-agent.sh:5 sets `set -e`.\n- moe-agent.sh's two idle waits are `sleep \"$POLL_INTERVAL\"` (:6932) and `sleep \"$LAUNCH_FAIL_BACKOFF_SEC\"` (:6924). A killed sleep exits 143 and aborts the wrapper.\n- moe-agent.sh's EXIT trap (:190) always sends `\"reason\":\"terminal_closed\"`.\n- ps1: its idle wait is an in-process `Start-Sleep -Seconds $PollInterval` (:6411), so a pattern kill can't reach it. Its deregister reason also defaults to 'terminal_closed' (:445), so the misleading-reason half of the fix applies to both twins.\n\nPriority lowered to LOW: the trigger was agent misbehaviour, and the GLOBAL rule against pattern kills (prop-c598324b, customRules[1]) now covers it.",
+      "timestamp": "2026-10-31T04:55:34.467Z"
+    },
+    {
+      "id": "comment-ca351c379e9c41e192df5f96b4166671",
+      "author": "architect-66fd8127",
+      "content": "Planner note from architect-66fd8127 (plan rev 1), for @governor-693b7073.\n\nThis row was dragged back to PLANNING at 05:42:11Z: TASK_UPDATED with no workerId and order 324.7, which is the human's board drag. That came after your 05:37Z return to BACKLOG, so I planned it.\n\nTo keep it off live wrapper files, I slotted it at the wrapper-lane tail: dependsOn task-69c02444 (the lane's only tail, after WT-19 b1ca54f2). The lane DAG then has no unordered pair with the 4 lane files it touches (moe-agent.sh, moe-agent.ps1, postflight.sh, postflight.ps1). If you want it earlier, it's yours to re-slot. It's a small, file-local change (five one-line wait swaps plus the EXIT-trap reason), so a swap with the lane head costs little.\n\nThe plan locates every site by its text, not by line number, so it survives the lane rows that land ahead of it.\n\nDesign, for QA context:\n- idle_wait replaces the bare idle and backoff sleeps;\n- the EXIT trap reports terminal_closed for exit 0 and unexpected_exit:<status> otherwise;\n- ps1 gets the same reason through a catch-and-rethrow plus `$script:MoeExitStatus` at its in-loop `exit 1` sites. ps1's Start-Sleep waits are in-process, so the kill half doesn't apply there.\nA scratch probe confirmed that bash runs the INT/TERM trap's `exit 0` before evaluating the `sleep || …` branch, so Ctrl+C and SIGTERM teardown are unchanged.",
+      "timestamp": "2026-10-31T06:34:14.788Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T04:54:29.471Z",
+  "updatedAt": "2026-10-31T06:34:14.788Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T05:42:11.681Z",
+    "seq": 2
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T06:15:58.877Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-66fd8127"
+  ],
+  "dependsOn": [
+    "task-69c024444381492c85878307df40c6e2"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T06:34:04.147Z",
+  "executionContract": {
+    "intendedBehavior": "A moe-agent.sh seat survives its idle or backoff wait being killed from outside (SIGTERM or SIGKILL to that sleep only): it logs MOE_IDLE_WAIT_INTERRUPTED with the sleep's status and goes on looping. Ctrl+C, SIGINT and SIGTERM to the wrapper itself tear it down exactly as today, with exit 0 and reason terminal_closed. The deregister reason is terminal_closed for a zero exit status and unexpected_exit:<status> otherwise. ps1 reports unexpected_exit:1 for a terminating error or an in-loop exit 1.",
+    "acceptanceCriteria": [
+      "postflight.sh '[idle wait killed]': after a TERM and then a KILL of the seat's sleep, the seat re-polls twice and stays alive; a TERM to the wrapper gives exit 0 and terminal_closed; an exit-1 path gives unexpected_exit:1.",
+      "The postflight.ps1 twin arm: a clean run gives terminal_closed and the argv-probe refusal gives unexpected_exit:1.",
+      "Every pre-existing arm is unchanged and passes. bash -n, parity-check.sh and parity-check.ps1 pass."
+    ],
+    "invariants": [
+      "The INT/TERM trap text and its exit 0 are unchanged.",
+      "The hot-reload hand-over still deregisters wrapper_restart.",
+      "The EXIT trap never aborts half-way."
+    ],
+    "compatibility": [
+      "The deregister_worker reason stays a free string. No daemon or MCP contract change.",
+      "terminal_closed keeps its meaning (operator close, Ctrl+C, a clean end)."
+    ],
+    "checkRefs": [
+      "bash -n scripts/moe-agent.sh && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/parity-check.sh",
+      "Windows Node: node scripts\\tests\\postflight-safe.mjs powershell; node scripts\\tests\\postflight-safe.mjs pwsh; pwsh -NoProfile -File scripts\\tests\\parity-check.ps1"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) A HUP trap that marks a tab close: rejected. It would change hang-up timing, deferring it until the foreground child exits, and the DoD freezes the teardown semantics. Untrapped HUP already runs the EXIT trap with status 0 in the idle wait (probed), and the plugin deregisters closed tabs itself. 2) Re-sleeping for the remaining poll time after an interrupted wait: rejected. The DoD asks for a logged interruption and a re-poll, which is also what proves the seat lives. 3) Patching only the poll sleep: rejected in favour of one idle_wait helper at all five idle or backoff waits, one line each, because the same kill ends the seat at the backoff, taskless and account waits too. 4) Leaving ps1 'unaffected': rejected for the reason half, because the governor's 04:55Z comment notes its default also reads terminal_closed.",
+    "codebaseInsights": "- bash defers a trapped signal until the foreground command returns, then runs the trap before evaluating `||`. So `sleep … || rc=$?` cannot swallow the wrapper's own INT/TERM: the trap's `exit 0` wins. Probed in a scratch dir for this plan.\n- A background launch from a non-interactive shell starts with SIGINT ignored, so harness arms must stop the wrapper with TERM, never INT.\n- The fake proxy logs every deregister as '<iso> <workerId> <reason>' in <project>/.moe/deregister.log, and records RPCs in evidence-rpcs.jsonl. The '[hot reload]' arm (c=claim, r/x=deregister) is the model for a looping idle seat.\n- On PowerShell 5.1, finally cannot see an `exit N` status.\n- The daemon's deregister_worker reason is a free string, cut to 200 chars.",
+    "risks": "- This row is slotted at the wrapper-lane tail (dependsOn 69c02444, after WT-19), so moe-agent.sh will have moved by the time it runs. The plan anchors on text. If a lane row already changed one of these waits or the EXIT trap, adapt to it and say so in the step note.\n- The postflight harness takes about 10 min per engine. Run the Linux and Windows legs in separate calls.\n- The test kills real processes: only by recorded PID, or by PPID of the recorded wrapper (GLOBAL rule).",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/postflight-fake-proxy.js",
+      "packages/moe-daemon/src/tools/deregisterWorker.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-31T06:34:04.169Z",
+  "approvedPlanRevision": 1
+}

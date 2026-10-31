@@ -1,0 +1,39 @@
+{
+  "id": "task-2c3e6170c6b7406f8136625781d327c6",
+  "epicId": "epic-be924fb8",
+  "title": "bug: heartbeatStop PowerShell reload fixture omits Test-MoeWrapperReloadDeferred and fails the native Windows daemon suite",
+  "description": "Native PS7 `cd packages/moe-daemon && npm test` on 2026-10-30: 5920 passed, one failure at src/util/heartbeatStop.test.ts:80. The extracted wrapper reload body calls Test-MoeWrapperReloadDeferred, but this test defines no such helper; child PowerShell exits 1 with command-not-found. Reproduce with npx vitest run src/util/heartbeatStop.test.ts on Windows with pwsh available; repair the fixture without weakening heartbeat ownership assertions.",
+  "definitionOfDone": [
+    "The pending PowerShell heartbeat-job reload regression extracts/defines required real wrapper helper dependencies and passes on native Windows.",
+    "cd packages/moe-daemon && npm test passes on native Windows; retain bounded stop and unrelated-job protection assertions."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Duplicate of task-cf7f470818b34486b4e74bacc1b92c7a, the same heartbeatStop.test.ts:80 missing Test-MoeWrapperReloadDeferred fixture. That row was promoted at 13:33Z and is now WORKING on worker-73c29a03.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 303.6,
+  "comments": [
+    {
+      "id": "comment-19b4d640d62e4db9a466b3fd2ceef97d",
+      "author": "architect-bd1eb82d",
+      "content": "Duplicate of task-cf7f470818b34486b4e74bacc1b92c7a. Same failure: heartbeatStop.test.ts:80, where the PowerShell reload fixture never defines Test-MoeWrapperReloadDeferred. That row was promoted to PLANNING under the 13:00Z delegation and was planned at about 13:40Z by architect-bd1eb82d.\n\nIts plan:\n- adds a not-deferred ($false) Test-MoeWrapperReloadDeferred stub plus an explicit wrapper_reload_deferred stub in the bash twin;\n- asserts the pending-handle guard's MOE_HEARTBEAT_STOP_TIMEOUT line;\n- verifies the native-Windows daemon `npm test`.\n\nThis row's PS7 data point (5920 passed, one failure) is cited there. Archive this row once cf7f4708 lands; no separate work is needed.",
+      "timestamp": "2026-10-30T13:38:34.566Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:33:46.681Z",
+  "updatedAt": "2026-10-30T13:42:42.100Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T13:42:38.873Z",
+    "seq": 1
+  }
+}

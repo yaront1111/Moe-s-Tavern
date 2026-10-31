@@ -1,0 +1,250 @@
+{
+  "id": "task-c0b0775f72154aa4a8bb634bc6908fc5",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "[CQ-I03a] Owned VM status and control CLI",
+  "description": "Objective: build the producer contract that CQ-I03 (JetBrains managed VM interface, task-63930ba4) and later CQ-I05 (VS Code) consume.\n\narchitect-4ae016fb split this out of I03 on 2026-10-29, following the human's 2026-10-27 instruction: \"plan now instead of parking; if a prerequisite's contract must be designed first, split it out (SPIDR, as with R10a)\". I03's earlier block named exactly this gap:\n- scripts/local-runner/cli.mjs only offers doctor, prerequisites and native-smoke;\n- R06's lifecycle.mjs (createLedger, reconcileOwned, cleanupOwned) has no IDE-callable entry point, and no ledger location.\n\nScope: host-side only, under scripts/local-runner/. No daemon tool, no IDE code, no activation.\n\nDeliverable: scripts/local-runner/vm-control.mjs, with a CLI guarded by import.meta.url like cli.mjs:\n\n`node scripts/local-runner/vm-control.mjs <status|reconcile|cleanup> --project <absolute path>`\n\nIt prints exactly ONE JSON line, at most 64 KiB, and exits 0 for every report; a refusal is a code inside the report. A usage error prints {\"code\":\"VM_CONTROL_INPUT_INVALID\"} and exits 2.\n\n1. Ledger location: export ownedLedgerDir(projectPath).\n   - It is <MOE_RUNNER_STATE_DIR (trimmed, resolved) | ~/.moe/runner-state>/<first 32 hex of sha256(canonical projectPath)>/vms, created with mode 0700.\n   - It is never inside .moe/ or the repository, mirroring runnerKeyPath in packages/moe-daemon/src/server/runnerChannel.ts.\n   - Canonicalize the project path the way the daemon names the project, so the IDE (D:/x), the ps1 wrapper (D:\\x) and WSL (/mnt/d/x) reach the SAME ledger. Pin that with tests.\n   - Activation (R11 final, V04b) must provision through this same ledger: say so in the header.\n2. status returns {schema:'moe-vm-status-v1', provider:{ready, code?, platform?}, executionReady:false, verified:false, instances:[{instance, phase, state, launchTries, taskId}], invalid:<count>}:\n   - provider comes from cli.mjs hostPrerequisites;\n   - instances are ledger records ONLY. state comes from queryOwnedInstance on each record's own name, and is 'Unknown' on any failure;\n   - a Multipass instance with no ledger record, moe-vm-* names included, is never listed.\n3. reconcile returns R06's reconcileOwned report, with schema 'moe-vm-reconcile-v1'.\n4. cleanup returns R06's cleanupOwned report, with schema 'moe-vm-cleanup-v1'.\n   - attemptPhase and leaseHeld come from the DAEMON, never from arguments.\n   - A record is deleted only when the daemon proves that its owner attempt is closed AND that the job lease jobLeaseResourceId(name) has no holder (moe.list_resources).\n   - Anything unknown, superseded or unreachable is preserved, so it fails closed.\n   - Reach the daemon over its existing loopback /mcp JSON-RPC path, as scripts/moe-call.sh does, or over the V04b1 runner channel if it has landed. If the existing projections (get_context view:'status' and its delivery attemptPhase) cannot prove 'closed' for the owner attempt, split out a read-only daemon slice instead of guessing.\n5. No argument names, adds or adopts an instance: every control acts on the ledger alone.\n6. executionReady and verified are always false. Nothing here claims isolation or enables verified-local.\n\nError handling: every failure is a fixed code. No path, stack, key or provider stderr reaches stdout.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-vm-control.test.mjs",
+  "definitionOfDone": [
+    "status lists exactly the ledger's owned records and never a provider instance without a ledger record, and reports provider readiness separately from executionReady:false and verified:false, proven by scripts/tests/local-runner-vm-control.test.mjs with fake provider, ledger and daemon.",
+    "reconcile and cleanup act only on ledger-owned names. cleanup deletes only a record whose owner attempt the daemon reports closed and whose job lease has no holder; it preserves every other, unknown or unreachable case, proven in the same file.",
+    "ownedLedgerDir resolves the same directory for Windows-drive, backslash and /mnt/<drive> spellings of one project, outside .moe/ and the repository. No argument can name, add or adopt an instance. Unknown subcommands or flags give VM_CONTROL_INPUT_INVALID with exit 2. Output is one JSON line of fixed codes with no path, stack, key or provider stderr.",
+    "Fresh verification `node --test scripts/tests/local-runner-vm-control.test.mjs` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nCreate scripts/tests/local-runner-vm-control.test.mjs (node:test, stdlib only), in the style of scripts/tests/local-runner.test.mjs. Keep it to about 220 lines, because tests count toward QA's 400-net cap.\n\nEvery dependency is injected:\n- a fake ledger (R06 createLedger shape: list, read) or a real createLedger in a temp dir;\n- a fake provider for queryOwnedInstance and deleteOwnedInstance, recording calls;\n- a fake prerequisites function;\n- a fake daemon `call(tool, args)`.\nNo test touches a real VM, ~/.moe or a running daemon. Assert exact objects (deepStrictEqual), exact call lists and exact stdout bytes; never truthiness.\n\nCases:\n- L1, ledger location (DoD 3):\n  - ownedLedgerDir gives ONE directory for 'D:/p/x', 'D:\\\\p\\\\x', 'd:\\\\p\\\\x\\\\' and '/mnt/d/p/x', and a different one for '/home/u/x';\n  - MOE_RUNNER_STATE_DIR set, with surrounding spaces, is used trimmed and resolved; unset, the root is os.homedir()/.moe/runner-state. Save and restore the env;\n  - the result is never inside the project path or its .moe/;\n  - mode 0700 on POSIX (skipped on win32).\n- S1, status (DoD 1):\n  - two ledger records give exactly those two instances, in ledger order, as {instance, phase, state, launchTries, taskId};\n  - a query failure gives state 'Unknown';\n  - the provider is queried ONLY for the ledger names, by exact call list, even when a foreign 'moe-vm-…' name exists;\n  - provider.ready true still gives executionReady:false and verified:false, as a whole-report deepStrictEqual;\n  - invalid equals ledger.list().invalid.length.\n- R1, reconcile: exactly R06 reconcileOwned's report plus schema 'moe-vm-reconcile-v1'.\n- C1, cleanup (DoD 2). Records:\n  - A: the owner attempt is the task's open attempt (get_context servedContext.attemptId equals it): preserved;\n  - B: the open attempt differs, or there is none, and the job lease is free: deleted, with the provider deleting exactly B's name;\n  - C: the lease is held: preserved;\n  - D: get_context refused (task missing): preserved;\n  - E: every daemon call rejects, so the daemon is unreachable: ALL preserved, and no delete call happens.\n  Assert the deleted, preserved and errors arrays exactly.\n- C2, no truth from arguments: flags such as --attempt-closed, --lease-free or an instance name give VM_CONTROL_INPUT_INVALID, and no daemon or provider call happens.\n- U1, usage (DoD 3): each gives exit 2 and stdout exactly '{\"code\":\"VM_CONTROL_INPUT_INVALID\"}\\n':\n  - an unknown subcommand;\n  - a missing or relative --project;\n  - a duplicate flag;\n  - an extra positional.\n- O1, output: every report is exactly one line of at most 64 KiB. An internal throw whose message holds a sentinel path or key gives only {\"code\":\"VM_CONTROL_FAILED\"} and exit 0, with the sentinel absent from stdout and stderr.\n- M1, daemon caller: readDaemonInfo gives DAEMON_UNREACHABLE, before any connection attempt, for each of these:\n  - a missing daemon.json;\n  - an oversized file (more than MAX_DAEMON_INFO_BYTES);\n  - a non-loopback host;\n  - a bad port;\n  - a projectPath that differs after canonicalization.\n  A fake WebSocket answering a JSON-RPC error maps to a rejection carrying its codeName.\n\nRun `node --test scripts/tests/local-runner-vm-control.test.mjs`: every case fails before implementation.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "RED. Created scripts/tests/local-runner-vm-control.test.mjs (251 lines, node:test stdlib only). It has 10 rows prefixed VC-, so they cannot collide with L/S/C/M rows in other local-runner test files: L1, L2, S1, R1, C1, C1e, C2, U1, O1, M1.\n\nFakes and what each test checks:\n- A real R06 createLedger runs in temp dirs, with a fake provider run, a fake daemon call and a fake EventTarget WebSocket. No test touches a VM, ~/.moe or a daemon; HOME and USERPROFILE point at a temp dir in L2.\n- S1 covers foreign and tampered names.\n- C1 covers six owners (open, other-open, none, lease-held, NOT_FOUND, identity-unreadable). C1e covers a down daemon and a malformed list_resources.\n- U1, O1 and C2 assert exact stdout and stderr and that no dependency is touched. O1 and U1 also include two real-subprocess rows, which also prove the import.meta.url guard.\n\nRed result, shared tree: ERR_MODULE_NOT_FOUND (file fails).\nRed result, /tmp/vmc-red with a throwing stub: all 10 rows fail on 'not implemented'.\n\nPeer dirty paths (743, including UU scripts/tests/postflight.*) were left untouched.",
+      "startedAt": "2026-10-29T19:25:48.224Z",
+      "completedAt": "2026-10-29T19:28:43.873Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create scripts/local-runner/vm-control.mjs (Node stdlib only), the ledger location, status and reconcile. The whole module is about 170 lines.\n\nHeader comment:\n- the producer contract that CQ-I03 (JetBrains) and CQ-I05 (VS Code) consume;\n- ownership is R06's ledger, and activation (R11 final, V04b) must provision through ownedLedgerDir;\n- executionReady and verified are always false; it claims no isolation and never enables verified-local.\n\nExports:\n1. canonicalProjectPath(p): a port of packages/moe-proxy/src/utils.ts comparableProjectPath (cite it), so all of these reduce to 'd:/p/x':\n   - a drive path, normalized with path.win32, '/' separators, no trailing '/', lowercased;\n   - a /mnt/<d>/… path;\n   - otherwise path.resolve, lowercased on win32.\n2. ownedLedgerDir(projectPath) = <(MOE_RUNNER_STATE_DIR trimmed and resolved) || os.homedir()/.moe/runner-state>/<sha256(canonical).hex.slice(0, 32)>/vms. Create it with mkdir recursive, mode 0o700. It mirrors runnerKeyPath in packages/moe-daemon/src/server/runnerChannel.ts.\n3. statusReport({ ledger, provider, prerequisites }):\n   - { records, invalid } = await ledger.list();\n   - for each record, queryOwnedInstance(record.instance, provider): state from info, 'Unknown' on any throw;\n   - provider readiness: reuse cli.mjs's prerequisites path. Export hostPrerequisites, or call runCli(['prerequisites']) with a capturing write; report only {ready, code?, platform?};\n   - return {schema:'moe-vm-status-v1', provider, executionReady:false, verified:false, instances, invalid: invalid.length}.\n   It never lists provider instances: there is no multipass list call.\n4. reconcileReport({ ledger, provider }) = { schema:'moe-vm-reconcile-v1', ...(await reconcileOwned({ ledger, provider })) }.\n\nReuse, never re-implement: createLedger, queryOwnedInstance, reconcileOwned and isOwnedInstanceName from ./lifecycle.mjs.\n\nError handling: a ledger read failure gives {schema, code:'LEDGER_UNREADABLE', instances:[], executionReady:false, verified:false}, never a throw out of the report. Make L1, S1 and R1 pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/vm-control.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "GREEN for L1, L2, S1 and R1. I checked them in a /tmp snapshot with stub exports added for the later steps; C1, C2, U1, O1 and M1 still fail as planned.\n\nvm-control.mjs now has:\n- canonicalProjectPath: a port of the proxy's comparableProjectPath, cited in the code;\n- ownedLedgerDir: MOE_RUNNER_STATE_DIR (trimmed) or ~/.moe/runner-state, then sha256(canonical)[:32]/vms, created with mkdir 0700 plus chmod on POSIX;\n- statusReport: ledger records only, each queried by its own name. The states are 'Unknown' on failure and 'Absent' when Multipass says the instance does not exist;\n- reconcileReport.\n\nProvider readiness reuses cli.mjs runCli(['prerequisites']) with a capturing write, so cli.mjs is unchanged.\n\nDeviations from the plan:\n1. ownedLedgerDir refuses (VM_CONTROL_STATE_DIR_INVALID) a MOE_RUNNER_STATE_DIR that resolves inside the project. This enforces the DoD's \"outside .moe/ and the repository\"; L1 asserts it.\n2. The reconcile and cleanup reports carry `invalid` as a count, not R06's file-name array. Ledger file names are not fixed codes. This matches status's invalid count.\n3. LEDGER_UNREADABLE is returned only for R06's own LEDGER_RECORD_INVALID list failure. Any other throw is a defect and reaches the CLI's VM_CONTROL_FAILED.\n\nNo other files touched.",
+      "startedAt": "2026-10-29T19:28:47.183Z",
+      "completedAt": "2026-10-29T19:31:18.971Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "In scripts/local-runner/vm-control.mjs, add cleanup with daemon truth, plus the daemon caller. Report the file in modifiedFiles.\n\n1. cleanupReport({ ledger, provider, call }):\n   - list the ledger once, and build attemptId -> { taskId } from the records;\n   - attemptPhase(attemptId): call('moe.get_context', { taskId }), the default view, which ends with servedContext.\n     - servedContext.attemptId === attemptId gives 'running';\n     - a served context whose attemptId differs or is absent gives 'closed'. The daemon keeps at most ONE open attempt per task and attempts are append-only (state/attemptStore.ts currentAttempt), so a ledger owner attempt that is not open is closed;\n     - any refusal, malformed reply or transport failure gives 'unknown'.\n   - leaseHeld(resourceId): one call('moe.list_resources', {}) per run, cached.\n     - Adapt to its landed shape (state/resourceStore.ts): the resource is held iff its entry has a holder;\n     - a resource not listed has no lease (false);\n     - any failure gives true.\n   - Then return { schema:'moe-vm-cleanup-v1', ...(await cleanupOwned({ ledger, provider, attemptPhase, leaseHeld })) }. R06's holdReason preserves anything not 'closed' or not lease-free.\n2. The daemon caller, `export async function mcpCaller(projectPath, { WebSocketImpl = globalThis.WebSocket, timeoutMs = 15000 } = {})`:\n   - readDaemonInfo reads <project>/.moe/daemon.json: at most MAX_DAEMON_INFO_BYTES (import it from guest-session.mjs) with a +1-byte read, a numeric port from 1 to 65535, a loopback host only (127.0.0.1 or ::1, or no bindHost), and a projectPath equal under canonicalProjectPath. Anything else rejects DAEMON_UNREACHABLE.\n   - Open ws://127.0.0.1:<port>/mcp. Each call sends one tools/call with a fresh id and resolves the parsed result.content[0].text JSON.\n   - A JSON-RPC error rejects with its data.codeName.\n   - A timeout, close or missing WebSocketImpl (Node < 22) rejects DAEMON_UNREACHABLE, so cleanup preserves everything.\n   - The socket is closed in finally.\n\nError handling: no daemon reply text reaches the report beyond fixed codes. Make C1 and M1 pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/vm-control.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/vm-control.mjs"
+      ],
+      "note": "GREEN for C1, C1e and M1, plus the earlier L1, L2, S1 and R1 (7/10 in a /tmp snapshot; only runVmControl is stubbed).\n\ncleanupReport:\n- It lists the ledger once and hands cleanupOwned a ledger view whose list() returns that same listing. The attempt→task map and the cleanup therefore see identical records.\n- attemptPhase calls get_context in its default view.\n  - It gives 'running' when servedContext.attemptId equals the owner attempt. It gives 'closed' when it differs or is null.\n  - It gives 'unknown' on a refusal, a malformed reply, a taskId mismatch, or receiptStatus 'identity-unreadable'. In that last case the daemon serves attemptId:null because the attempt could not be read; this is getContext.ts servedContextIdentity's decoded(), and it must not be read as 'closed'.\n- leaseHeld makes one list_resources call, cached as a promise. It answers held iff the entry has holders; a resource that is not listed is free. A malformed list or a failed call counts as held.\n\nmcpCaller and readDaemonInfo:\n- readDaemonInfo uses O_NOFOLLOW|O_NONBLOCK, checks isFile, and reads at most MAX_DAEMON_INFO_BYTES+1 (imported from guest-session.mjs).\n- It requires an integer port from 1 to 65535, a bindHost that is absent or 127.0.0.1/::1, and an equal canonical projectPath. Anything else gives DAEMON_UNREACHABLE, before any socket is opened.\n- Each call opens one socket to ws://127.0.0.1:<port>/mcp. It rejects with the error's data.codeName, or DAEMON_REFUSED when there is none, and never carries the daemon's message text. A timeout, close, error or missing WebSocketImpl gives DAEMON_UNREACHABLE. The socket is closed in finally.\n\nNote for I03: this project's live daemon.json has bindHost 0.0.0.0 (WSL agent mode). Under the plan's loopback-only rule, cleanup then preserves everything; that fails closed. I'll record it in the handoff.",
+      "startedAt": "2026-10-29T19:31:19.992Z",
+      "completedAt": "2026-10-29T19:32:13.940Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "In scripts/local-runner/vm-control.mjs, add the CLI entry: a main guarded by import.meta.url, like cli.mjs. Report the file in modifiedFiles.\n\n`export async function runVmControl(argv, deps)` is the testable core, and main passes the real deps.\n\nUsage is exactly `<status|reconcile|cleanup> --project <absolute path>`:\n- one subcommand and one --project, which is absolute and has no control characters;\n- any other flag, a duplicate, or an extra positional (such as an instance name) gives stdout '{\"code\":\"VM_CONTROL_INPUT_INVALID\"}\\n' and exit 2;\n- nothing is read or called before validation passes.\n\nThe real deps:\n- ledger = createLedger(ownedLedgerDir(project));\n- provider = {}, R06's default multipass executable;\n- prerequisites, from cli.mjs's path;\n- call = mcpCaller(project), used only by cleanup.\n\nOutput: exactly one JSON line followed by '\\n', with exit 0 for every report. A serialized report over 64 KiB is replaced by {\"code\":\"VM_CONTROL_REPORT_TOO_LARGE\"}.\n\nError handling: an unexpected throw anywhere prints only {\"code\":\"VM_CONTROL_FAILED\"} with exit 0. stderr stays empty, and no path, stack, key or provider stderr is printed. Make C2, U1 and O1 pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/vm-control.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs",
+        "scripts/local-runner/cli.mjs"
+      ],
+      "note": "GREEN: all 8 rows pass in the shared tree (`node --test scripts/tests/local-runner-vm-control.test.mjs`).\n\nCLI:\n- runVmControl(argv, {write, provider, ...deps}) accepts exactly 3 argv entries: a subcommand in {status, reconcile, cleanup}, the literal '--project', and an absolute path with no control characters.\n- Anything else prints '{\"code\":\"VM_CONTROL_INPUT_INVALID\"}\\n' and exits 2, before any dependency is read. C2 and U1 prove this with throwing spies.\n- Real deps: createLedger(ownedLedgerDir(project)), provider {} (multipass), cli.mjs hostPrerequisites, and mcpCaller(project) for cleanup only.\n- A report of 64 KiB or more becomes VM_CONTROL_REPORT_TOO_LARGE. Any throw becomes VM_CONTROL_FAILED with exit 0, and nothing is written to stderr.\n- main is guarded by import.meta.url, as in cli.mjs. The subprocess rows in U1 (exit 2) and O1 (exit 0, exact bytes) prove the guard.\n\nSize: the plan's row matrix put me at 485 lines, so I trimmed to fit the 400 cap without dropping any case. To save lines:\n- L2 is merged into L1, and C1e into C1;\n- C2 and U1 share a refusedUntouched helper;\n- request() is inlined into mcpCaller;\n- cli.mjs's hostPrerequisites is exported (+1/-1) instead of a runCli wrapper. The plan offered both options.\n\nCurrent additions: vm-control.mjs 183, test 215, cli.mjs 1, total 399.",
+      "startedAt": "2026-10-29T19:32:15.005Z",
+      "completedAt": "2026-10-29T19:39:50.062Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then cmp. Each must fail the named case:\n   - list provider instances in status: S1;\n   - derive executionReady from provider.ready: S1;\n   - treat 'unknown' as closed, or an unreachable daemon as lease-free: C1;\n   - read the attempt phase from an argument: C2;\n   - drop the /mnt canonicalization: L1;\n   - accept a non-loopback daemon host: M1;\n   - print an error message: O1.\n2. The GATE runs fresh under env -i, with HOME and a Linux-only PATH including the nvm node 24 bin: `node --test scripts/tests/local-runner-vm-control.test.mjs` must exit 0.\n   - Also run `node --test scripts/tests/local-runner.test.mjs` once, to show that R06's suite is unchanged.\n   - If Windows node is available, run the same command there once; L1's win32 rows matter.\n3. Size: this task's numstat over scripts/ must be at most 400 net (QA cap; tests count).\n4. CI wiring: .github/workflows/ci.yml lists local-runner test files explicitly, and CQ-V04b1 and CQ-V04b hold that file. Do NOT edit it. CQ-I06 owns adding local-runner-vm-control.test.mjs to the 'Test local runner prerequisite bundles' step, as noted on I06.\n5. Supply the command, its exit code and the output tail to complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "VERIFIED.\n\n1. Mutants: 36 of 36 killed (harness /tmp/vmc-mut/run.mjs; each mutant ran on a scratch copy of a snapshot, which was then deleted). Each row pattern was first checked to select ≥1 passing test in the clean snapshot, and sha256sum -c confirms the shared vm-control, test and cli files are unchanged.\n   - The plan's 7 were all killed, each by its named row:\n     - status lists a foreign name: S1;\n     - executionReady/verified taken from the provider: S1;\n     - unknown as closed, unreachable get_context as closed, unreachable lease as free: C1;\n     - attempt phase from an argument: C2;\n     - /mnt branch dropped: L1;\n     - non-loopback host accepted: M1;\n     - error message printed to stdout or stderr: O1.\n   - My 29 extras were all killed too. They cover identity-unreadable ignored, an undefined attemptId treated as closed, a malformed list treated as free, empty holders treated as held, an uncached list_resources, extra argv, control characters, relative paths, drive lowercase, the trim, the inside-project guard, mode 0755, oversize, another project, port range, connecting before daemon info, a dropped codeName, no timeout, no close, no size cap, any-throw-as-unreadable, the invalid array, prereq sanitization, a truthy ready, and absent-as-unknown.\n   - Findings fixed in this step, with the size kept ≤400:\n     - (a) A list_resources rejection with a good get_context was not covered. C1 now loops over a malformed list and a rejected one.\n     - (b) A servedContext with no attemptId (an older daemon) must be unknown. Owner 'o' was added.\n     - (c) The prerequisites code and platform are sanitized; S1 has a row for it.\n     - (d) The unused taskId echo check was dropped.\n     - (e) chmodSync was dropped: recursive mkdir mode 0700 applies to every directory it creates.\n2. Gate: `env -i HOME PATH=nvm v24.21.0:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-vm-control.test.mjs` exits 0, 8/8.\n   - local-runner.test.mjs (R06 and others) exits 0: 222 passed, 1 skipped (pre-existing macOS), 0 failed.\n   - Windows node v24.16.0 (from a %TEMP% copy, since deleted): 8/8.\n   - Node 22, 20 and 18: 8/8 each.\n3. Size: vm-control.mjs +182 (new), test +215 (new), cli.mjs +1/-1 (`export` on hostPrerequisites). That is 398 added lines, at most 400.\n4. ci.yml is not edited. CQ-I06 owns adding the test file.",
+      "startedAt": "2026-10-29T19:39:51.037Z",
+      "completedAt": "2026-10-29T19:45:53.752Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Read the diff as someone trying to make an IDE button delete a VM Moe does not own, or a VM still in use:\n- foreign names: a moe-vm-* instance without a ledger record, or a tampered ledger record that fails isOwnedInstanceName (R06's invalid bucket);\n- in-use VMs:\n  - the owner attempt is still open;\n  - the lease was granted between the list_resources read and the delete. That is a residual: say so in the header; R10 pins its release;\n  - the daemon restarted, leaving attempts reconciling, which are open, so preserve;\n- spoofing: a daemon.json pointing at a non-loopback host, or at another project's daemon (the canonical projectPath check);\n- leaks: an argv instance name, error text or provider stderr in stdout;\n- cross-platform: Windows drive case and separators, and UNC paths. UNC goes through path.resolve; note it as unsupported if it cannot match;\n- rails: no .moe writes (daemon.json is only read), no Git writes, no forbidden tokens, executionReady and verified false, and no activation.\n\nThen write the Serena memory 'task-task-c0b0775f72154aa4a8bb634bc6908fc5-handoff' for CQ-I03, CQ-I05 and CQ-I06. Cover:\n- the CLI contract, schemas and codes;\n- ownedLedgerDir and canonicalProjectPath;\n- the closed rule (not the task's open attempt) and the lease rule;\n- the Node 22+ WebSocket requirement for cleanup;\n- the CI wiring left to I06.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "note": "ADVERSARIAL REVIEW done (my own diff: vm-control.mjs, its test, cli.mjs export).\n\nFIXED, real risk: list_resources was cached for the whole run. cleanupOwned deletes sequentially, each delete taking up to 120 s, so a later record's lease decision could be minutes stale, and a VM a job leased mid-run could have been deleted. The lease is now read fresh for each closed record, just before its delete. C1 asserts the exact call interleaving [gc, gc, lr, gc, lr, gc, lr, gc, gc, gc]. A cache mutant fails C1. A full re-sweep on the final source killed 36/36, and the shared tree matches the snapshot by sha.\n\nConsidered and safe:\n- Foreign moe-vm-* names with no record are never queried (S1). A tampered record fails validRecord/isOwnedInstanceName and is only counted in invalid.\n- An open owner attempt gives attempt-active. After a daemon restart the attempts are reconciling, which is in OPEN_PHASES, so currentAttempt serves them and they are preserved.\n- identity-unreadable, or an attemptId that is neither a string nor null, gives unknown.\n- A non-loopback bindHost, another project's daemon.json (canonical projectPath) or an oversized file is refused before any socket opens.\n- No argv echo. Only fixed codes and validated names, phases and task ids reach stdout; provider and daemon text never does; stderr is empty.\n- Socket, timer and file handle are closed on every path.\n- Two concurrent cleanups: R06's CAS makes the second one LEDGER_CONFLICT, which is harmless.\n\nResiduals, documented (header and handoff):\n- the lease race between the fresh read and the delete (seconds);\n- a malformed attempt file dropped by the daemon's loadEntities looks closed, and only the lease check guards it;\n- a stale daemon.json port reused by a hostile local process that speaks JSON-RPC;\n- WSL mode (bindHost 0.0.0.0) always preserves;\n- UNC paths do not match across OSes (unsupported, as in the proxy). The inside-project guard only checks '/' separators, so it is ineffective for UNC;\n- status lists collision and deleted records, which I03 must render as foreign or filter out.\n\nRails: daemon.json is only read; no .moe writes, no Git writes, no forbidden tokens. executionReady and verified are false, and nothing is activated.\n\nSerena: wrote task-task-c0b0775f72154aa4a8bb634bc6908fc5-handoff and appended to gotcha-local-runner-tests.",
+      "startedAt": "2026-10-29T19:45:54.715Z",
+      "completedAt": "2026-10-29T19:49:24.132Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-deba1a56a8104786ae25b84c58c363b4",
+    "task-e6411b76f42a43c5b679c725947336af"
+  ],
+  "priority": "HIGH",
+  "order": 228.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T19:15:35.382Z",
+  "updatedAt": "2026-10-29T20:10:33.047Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T19:18:39.892Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-29T20:09:36.338Z",
+    "wallClockMs": 3056446
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-b5749787",
+    "qa-952969be"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T19:22:20.944Z",
+  "planningNotes": {
+    "approachesConsidered": "- A new read-only daemon tool for the attempt phase: unnecessary. The daemon keeps at most one open attempt per task (attemptStore currentAttempt), and attempts are append-only. So get_context's servedContext, which names the open attempt, proves that a ledger owner attempt is closed when it is not that attempt. A refusal or failure gives 'unknown', which preserves the VM.\n- Spawning moe-proxy as moe-call.sh does: heavier, and it needs the proxy dist. A dependency-free /mcp WebSocket caller (Node 22+ global WebSocket) is about 30 lines; on older Node it fails closed.\n- Listing provider instances: rejected. Ownership is the ledger only, and status queries each ledger name individually.\n- Editing ci.yml: deferred to CQ-I06, because V04b1 and V04b, both unlanded, hold it.",
+    "codebaseInsights": "Verified:\n- lifecycle.mjs exports createLedger(stateDir).list() → {records, invalid}, queryOwnedInstance, reconcileOwned, cleanupOwned({ledger, provider, attemptPhase, leaseHeld}) and isOwnedInstanceName. Owner records carry {taskId, attemptId, generation}. jobLeaseResourceId(name) gives the lease id.\n- cli.mjs: hostPrerequisites is module-private; runCli(argv, { write }) is exported.\n- guest-session.mjs exports MAX_DAEMON_INFO_BYTES (16384).\n- packages/moe-proxy/src/utils.ts comparableProjectPath is the D:\\ vs /mnt/d rule.\n- runnerChannel.ts runnerKeyPath is the precedent for a per-project hash location.\n- ExecutionAttemptPhase is running | finalizing | reconciling | closed. currentAttempt returns the open one or null.\n- get_context's default read ends with servedContext {attemptId, generation} of the open attempt.\n- ci.yml's 'Test local runner prerequisite bundles' step lists test files explicitly.",
+    "risks": "- Lease race: a lease granted between list_resources and delete. The mutex is daemon-side, and this CLI is not atomic with it. Document it as a residual. R10's job flow acquires before use and the VM name is random, so the window is narrow; never retry a delete.\n- Node < 22 has no global WebSocket, so cleanup preserves everything (DAEMON_UNREACHABLE). Document it.\n- list_resources' landed shape: adapt, and fail closed on anything unreadable.\n- Size: keep the module to about 170 lines and the test to about 220, within the 400-net cap.\n- Windows: L1's win32 rows. Run once on Windows node if available.\n- No VM is created here, and no isolation is claimed.",
+    "keyFiles": [
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/cli.mjs",
+      "scripts/local-runner/guest-session.mjs",
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-daemon/src/server/runnerChannel.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/state/resourceStore.ts",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T19:22:21.047Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T19:25:48.224Z",
+  "reviewStartedAt": "2026-10-29T19:50:07.222Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner-vm-control.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ VC-L1 one ledger directory per project across Windows-drive, backslash and /mnt spellings, outside the project\n✔ VC-S1 status lists exactly the ledger records, queries only their names and never claims execution\n✔ VC-R1 reconcile is R06 reconcileOwned over the ledger only, with its schema and an invalid count\n✔ VC-C1 cleanup deletes only a closed owner attempt with a free job lease; every other case is preserved\n✔ VC-C2 no flag or argument supplies daemon truth or names an instance\n✔ VC-U1 usage errors exit 2 with only VM_CONTROL_INPUT_INVALID, before anything is read\n✔ VC-O1 every report is one bounded line of fixed codes; internal throws never leak text\n✔ VC-M1 the daemon caller trusts only a bounded loopback daemon.json for this project and fails closed\nℹ tests 8\nℹ suites 0\nℹ pass 8\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 478.475745\n(also exit 0 under env -i HOME + Linux-only PATH, nvm Node v24.21.0: pass 8 fail 0)",
+    "reportedAt": "2026-10-29T19:50:07.222Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-vm-control.test.mjs",
+    "scripts/local-runner/vm-control.mjs",
+    "scripts/local-runner/cli.mjs",
+    ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+    ".moe/tasks/task-3b4e3833e3c74927b4cdf455663cf6b4.json",
+    ".moe/tasks/task-465fb4b958934707b311fc0e7731cc7b.json",
+    ".moe/tasks/task-c0b0775f72154aa4a8bb634bc6908fc5.json",
+    ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json"
+  ],
+  "completionSummary": "CQ-I03a delivered: scripts/local-runner/vm-control.mjs (new, 182 lines), scripts/tests/local-runner-vm-control.test.mjs (new, 215 lines), and one word in cli.mjs (`export` on hostPrerequisites, +1/-1). That is 398 added lines, at most 400.\n\nCLI: `vm-control.mjs <status|reconcile|cleanup> --project <abs>` takes exactly 3 argv entries and prints one JSON line under 64 KiB, exiting 0. Schemas are moe-vm-{status,reconcile,cleanup}-v1. Any other argv gives VM_CONTROL_INPUT_INVALID with exit 2, before anything is read. Other codes: VM_CONTROL_FAILED, VM_CONTROL_REPORT_TOO_LARGE, LEDGER_UNREADABLE. stderr is always empty.\n\n- ownedLedgerDir is <MOE_RUNNER_STATE_DIR | ~/.moe/runner-state>/sha256(canonical)[:32]/vms, created 0700, and is refused if it resolves inside the project. D:/, D:\\ and /mnt/d spellings reach one directory.\n- status lists ledger records only, each queried by its own name; state is 'Unknown' or 'Absent' when the query fails or finds nothing. Provider readiness is separate, and executionReady and verified are always false.\n- cleanup:\n  - Owner attempt closed: servedContext.attemptId differs from it or is null. identity-unreadable or malformed gives unknown.\n  - Lease free: a fresh list_resources read per record, held iff it has holders. A record not listed is free; a failure counts as held.\n  - The daemon is reached over loopback /mcp. daemon.json must be bounded, loopback, and for the same project. Node 22+ WebSocket is required; otherwise everything is preserved.\n\nDeviations:\n- `invalid` is a count in every report: ledger file names are not fixed codes.\n- There is one fresh lease read per record, not a per-run cache. Adversarial review found a cache would go stale across 120 s deletes.\n\nVerification:\n- Gate: 8/8, exit 0, also under env -i with Node 24.21.\n- Also 8/8 on Windows Node 24.16 and on Node 18/20/22.\n- local-runner.test.mjs: 222 pass, 1 pre-existing skip.\n- 36/36 mutants killed: the plan's 7 plus 29 extra.\n\nResiduals, recorded in the header and",
+  "commits": [
+    {
+      "sha": "ad8097f73e4b417cc3d2bf36b4722fc81d37a8dc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b5749787@2026-10-29T19:22:30Z",
+      "paths": [
+        ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+        ".moe/tasks/task-3b4e3833e3c74927b4cdf455663cf6b4.json",
+        ".moe/tasks/task-465fb4b958934707b311fc0e7731cc7b.json",
+        ".moe/tasks/task-c0b0775f72154aa4a8bb634bc6908fc5.json",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "recordedBy": "worker-b5749787",
+      "recordedAt": "2026-10-29T19:51:36.145Z",
+      "treeId": "775612a0e51ee76e059990d19755bc4910bad9cd",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "91731a6b5765d88efed36cbaabd17e4657bd9b58",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T20:01:43Z",
+      "paths": [
+        ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+        ".moe/tasks/task-c0b0775f72154aa4a8bb634bc6908fc5.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T20:10:33.047Z",
+      "treeId": "1ac7660001fea40b683ae9bedd1607c116668b99",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-vm-control.test.mjs",
+    "scripts/local-runner/vm-control.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T20:01:43Z",
+    "at": "2026-10-29T20:10:33.047Z"
+  },
+  "completedAt": "2026-10-29T20:09:36.338Z",
+  "reviewCompletedAt": "2026-10-29T20:09:36.338Z",
+  "reviewSummary": "QA approve CQ-I03a. Reviewed completion ad8097f, on moe/work-2026-10-24; the shared tree is byte-identical. Size: scripts/ +398/-1, under 400.\nGate: `node --test scripts/tests/local-runner-vm-control.test.mjs` exits 0, 8/8, in a git-archive snapshot (env -i, Linux Node 24.21), in the shared tree, and on Windows Node 24.16, which ran L1's win32 rows. R06 local-runner.test.mjs: 222 pass, 1 pre-existing skip.\nDoD1: status lists ledger records only, each queried by its own name; a foreign moe-vm-* is never queried (S1 checks the exact call list). executionReady and verified are always false, and provider readiness is reported separately. The real CLI reports PROVIDER_NOT_FOUND/linux.\nDoD2: cleanup runs through R06 cleanupOwned (LAUNCHED only, never collision). 'closed' means servedContext.attemptId differs from the owner attempt, consistent with attemptStore OPEN_PHASES/currentAttempt. Unreadable, refused or unreachable is unknown, so preserved. The lease is read fresh per record, and a failed read counts as held.\nLIVE read-only /mcp probe of the real daemon (Windows node, no workerId): the list_resources and servedContext shapes match. A missing task gives codeName TASK_NOT_FOUND with no message text. The open-attempt record was preserved; a closed attempt with a free lease was purged (fake provider).\nDoD3: the D:/, D:\\ and /mnt/d spellings reach one directory, 0700 and outside the project. Usage errors exit 2 with exact bytes and empty stderr.\nDoD4: verification reproduces.\nRails: no forbidden tokens, no .moe or Git writes, no activation. Independent mutants: 7/7 killed.\nAdvisories (non-blocking):\n(a) A WSL-mode bindHost of 0.0.0.0 (this repo's live daemon.json) makes cleanup preserve everything; bindHost ::1 still dials 127.0.0.1. Both fail closed.\n(b) mkdir 0700 does not tighten an existing directory.\n(c) ci.yml wiring is left to I06.\n(d) The read-to-delete lease race is documented.",
+  "requiredCheckAtDone": null
+}

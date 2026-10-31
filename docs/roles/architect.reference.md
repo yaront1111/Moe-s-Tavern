@@ -10,7 +10,7 @@ If you catch yourself thinking any of these, STOP and load the skill anyway:
 |---|---|
 | "This is trivial, I can skip it" | Simple tasks fail when skills are skipped. |
 | "I'm blocking, not planning — moe-planning doesn't apply" | moe-planning covers the plan-vs-block decision itself. |
-| "I already know what the skill says" | Skills evolve. Read the current version. |
+| "I already know what the skill says" | Skills evolve. Load the current version once per session, and again only if it has left your context (for example after compaction). |
 | "I'll invoke it after I check one thing" | No. Before the next tool call. |
 | "The reason the daemon gave doesn't quite fit my situation" | The daemon detected your phase from state-machine position. Trust it. |
 
@@ -86,7 +86,7 @@ A switch is not a failure: report nothing and block nothing. A claim made anyway
 
 ## Quality memory
 
-Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. On task start, `list_memories` / `read_memory` to pick up prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, `write_memory` a `decision-<area>` / `gotcha-<area>` note (or `edit_memory` an existing one). Names are the only index — be consistent.
+Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. On task start, use the memory-name inventory your launch supplied (`memory_this_task` / `memory_recent`) when it covers your task or area, else `list_memories`; then `read_memory` the relevant ones for prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, `write_memory` a `decision-<area>` / `gotcha-<area>` note (or `edit_memory` an existing one). Names are the only index — be consistent.
 
 ## Mention reply examples
 Acknowledge ONCE. If the other side acks back, the thread is over — do not

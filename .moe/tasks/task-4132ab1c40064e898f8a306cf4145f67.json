@@ -1,0 +1,357 @@
+{
+  "id": "task-4132ab1c40064e898f8a306cf4145f67",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R13h] Certify cancellation and recovery probes",
+  "description": "Objective: add certify checks showing, on real hardware, that a cancelled run tears down cleanly and that a crashed controller's VM is recovered. Both are in CQ-R13's objective: cancellation and recovery.\n\nSplit out of CQ-R13 (task-f4811a72) by architect-e4b7eee0 on 2026-10-30. It depends on CQ-R13f, for the edit order on certify.mjs.\n\nDeliverable: two checks appended to CERTIFY_CHECKS, each in its own VM.\n- 'cancellation': runCheckJob with an approved command that blocks, and an AbortSignal that fires once the session has started. The run must resolve with VM 'deleted', an outcome other than 'passed', and no live ledger record of its attempt.\n- 'recovery':\n  - A child node process runs a provisioning, and this check SIGKILLs it once the VM is launched. The child is spawned with process.execPath and a fixed module argument, never a shell.\n  - Then, in the parent, lifecycle reconcile and cleanupOwned, with the child's attempt closed, must delete exactly that VM.\n  - A foreign VM record present in the same ledger must survive.\n\nEvery timing bound is a fixed constant, and every outcome maps to a fixed code.\n\nTests in scripts/tests/local-runner.test.mjs use fake providers and fake child processes. The native behavior is certified only by the operator run.\n\nOut of scope:\n- the canary toolchain check (CQ-R13g);\n- enabling verified-local;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "'cancellation' passes only when an aborted check run resolves without 'passed', with its VM deleted and no live ledger record of its attempt. Shown by tests.",
+    "'recovery' passes only when, after its controller child is SIGKILLed mid-provision, reconcile and cleanup delete exactly that orphaned VM and leave a foreign record intact. Shown by tests.",
+    "The child process is spawned without a shell, with a fixed argv, and is always reaped. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. These land first, in order:\n- CQ-R13d: certify.mjs, with run(context) checks and the CF rows;\n- CQ-R13e1/CQ-R13e: certify-bridge.mjs, BRIDGE_CHECKS, certifySnapshot(), the context.bounds and deps.bounds mechanism, and the harness's materialize and check-session spawn fakes;\n- CQ-R13f: its own checks;\n- CQ-R11e: runCheckJob with a required `dependencies` and injectable toolchain/installToolchain steps.\nRe-read certify.mjs, certify-bridge.mjs, check-lifecycle.mjs and the certify rows of scripts/tests/local-runner.test.mjs first.\n\nTHE HARNESS. In scripts/tests/local-runner.test.mjs, extend the certify harness with:\n- deps.checkSteps: { toolchain: <resolves a frozen {file, sha256: 64 hex, size, version}>, installToolchain: <resolves> }, so no test downloads Node.\n- deps.spawn: a fake child factory. Each fake child is an EventEmitter with a Writable stdin that records its bytes. kill(signal) records the signal and emits 'close' (null, signal) on setImmediate, unless the row says it hangs.\n- A per-row onInput hook that sees the child's parsed stdin JSON. The default simulates the child's provisioning: ledger.reserve(owner), then update to 'launching' and then 'owned', and fake.present.set(instance, 'Running').\n- deps.bounds with small cancelBudgetMs, launchMs, pollMs and reapMs, and deps.sleep resolving at once.\n\nROWS (each failure row asserts the fixed code via the report's checks entry, and asserts that teardown still passed):\n- LC1, cancellation passes.\n  - Exactly one check session runs, with frame {id:'certify-cancel', command:'echo ready; exec sleep 600', protected:[]}.\n  - Its stdin was destroyed right after its first stdout bytes: the abort.\n  - runCheckJob resolved outcome 'infra-failure' and vm 'deleted'.\n  - ledger.read(<its instance>).phase is 'deleted'.\n  - The instance differs from certify's main VM, which is still 'owned'.\n- LC2, cancellation fail mapping. Each row uses injected deps.checkSteps:\n  - The session step resolves without ever calling its provider.spawn: CERTIFY_CANCEL_NOT_STARTED.\n  - The session step calls input.provider.spawn and pushes stdout bytes, then resolves {outcome:'passed', exitCode:0, signal:null, outputTail:''}: CERTIFY_CANCEL_PASSED.\n  - The fake delete fails, so vm is 'delete-failed': CERTIFY_CANCEL_VM_NOT_DELETED.\n  - A remove step resolves 'deleted' without touching the ledger: CERTIFY_CANCEL_RECORD_LIVE.\n  - An onReady-style runCheckJob rejection keeps its own stable code.\n- LC3, recovery passes.\n  - kill('SIGKILL') was called exactly once, after the child's record reached 'owned', and 'close' was awaited.\n  - The delete recorder shows exactly the child's instance deleted, and its record is 'deleted'.\n  - The foreign record the check seeded is not 'deleted', and no delete targeted it.\n  - certify's main VM is still 'owned'.\n- LC4, spawn contract.\n  - spawn was called exactly once, as (process.execPath, [RECOVERY_CHILD], { shell: false, windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] }). RECOVERY_CHILD equals path.join(<scripts/local-runner>, 'certify-recovery-child.mjs').\n  - stdin received exactly one JSON line, {ledgerDir, cacheDir, owner}, and was ended.\n- LC5, recovery fail mapping. Every row awaits the child's 'close' and ends with no live child VM, because the check's finally deleteOwned removed it:\n  - the child closes before 'owned': CERTIFY_RECOVERY_CHILD_EXITED;\n  - no 'owned' record within the launchMs/pollMs poll budget: a kill, then CERTIFY_RECOVERY_NOT_LAUNCHED;\n  - a child that never closes after the kill: CERTIFY_RECOVERY_NOT_REAPED after reapMs;\n  - spawn throws, or the child emits 'error': CERTIFY_RECOVERY_SPAWN_FAILED;\n  - the fake delete fails for the child's VM: CERTIFY_RECOVERY_CLEANUP_FAILED.\n- LC6, the REAL child module. Spawned as process.execPath certify-recovery-child.mjs, without a shell, it exits 64 within 10 s, with empty stdout and stderr, for each of these on stdin:\n  - '';\n  - 'x';\n  - '{}';\n  - an extra key;\n  - a relative ledgerDir;\n  - a control character in cacheDir;\n  - an owner that fails validOwner;\n  - more than 4096 bytes.\n- LC7, composition.\n  - The ids of CERTIFY_CHECKS end [..., 'cancellation', 'recovery', 'teardown'].\n  - The all-pass CF1 row passes.\n  - Each new deps.bounds key outside 1..its constant is CERTIFY_INPUT_INVALID before any provider call.\n\nscripts/tests/local-runner-bundle.test.mjs: `shipped` (NOT `required`, which the onboarding refusal row walks) gains 'certify-lifecycle.mjs' and 'certify-recovery-child.mjs'.\n\nRun `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs`. The new rows fail and every other row passes.\n\nERROR HANDLING in the tests: assert fixed codes, never messages. Remove every scratch directory in t.after, and close every fake child.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "QA reopen 1 (DoD 2): LC5 gains four rows, each breaking exactly one conjunct of recovered() through the REAL reconcileOwned/cleanupOwned (no production seam): #6 foreign record settled 'deleted' before the child VM's delete --purge (kills `theirs.phase !== 'deleted'`); #7 child `twice` seeds a 2nd 'owned' record nameAt(5) under its attempt, so cleanup deletes two (kills `deleted.length === 1`); #8 twice + the child's record/VM settled mid-reconcile on the first `info nameAt(5)`, so cleanup deletes only nameAt(5) (kills `deleted[0] === record.instance`); #9 twice + every `info nameAt(5)` rejects, so cleanup reports an error (kills `errors.length === 0`). Loop messages now `${code} #${at}`; the existing kills/closed/no-live-child-VM assertions apply to every row. RED proof by mutation in a /tmp git-archive snapshot (HEAD + this test file), `node --test --test-name-pattern='^(LC|CF|CC)'`: A killed by #6, B by #7, C by #8, D by #9, each alone; E (`mine.phase === 'deleted'`) survives = equivalent mutant: cleanupOwned's purgeOwned awaits ledger.update(...'deleted') before report.deleted.push, and the reaped child is the record's only other writer, so C implies E; kept as a guard, documented in step 4. Green in place: LC/CF/CC 21/21 pass. Diff +23/-5. Peer/pre-existing dirty paths untouched: .moe/tasks/* (5), .moe/decisions/, moe-jetbrains RuntimeSelectionPolicy*.kt, scripts/moe-agent.{ps1,sh}, scripts/tests/postflight.{ps1,sh}, scripts/tests/worktree-landing.{ps1,sh}.",
+      "startedAt": "2026-10-30T21:20:12.778Z",
+      "completedAt": "2026-10-30T21:26:28.043Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create scripts/local-runner/certify-recovery-child.mjs: the recovery check's controller child.\n\nHEADER COMMENT\n- It runs one real provisioning, which the certify parent SIGKILLs once the VM is launched, so that reconcile and cleanup are certified on a real orphan.\n- Its argv is fixed: [process.execPath, this file].\n- Its only input is one JSON line on stdin, {ledgerDir, cacheDir, owner}.\n- It prints nothing.\n- Exit codes: 0 provisioned (the parent normally kills it first), 64 bad input, 70 any provisioning failure.\n\nBEHAVIOR\n1. Read stdin up to 4097 bytes. More than 4096 bytes exits 64.\n2. JSON.parse it. The result must be a record with exactly the keys ledgerDir, cacheDir and owner.\n   - Both dirs are absolute strings with no control character (/[\\x00-\\x1f\\x7f]/).\n   - owner passes lifecycle.mjs validOwner.\n   - Anything else exits 64 BEFORE any import of a platform module or any provider call.\n3. Then it calls provisionGuest({ platform: platformFor(process.platform), ledger: createLedger(ledgerDir), owner, cacheDir, supervisor: <the REAL bytes of ./guest-supervisor.py via readFile(new URL(..., import.meta.url))>, credential: randomBytes(32) }).\n   - A null platformFor, a throw, or provisioned !== true exits 70.\n   - provisioned === true exits 0.\n\nERROR HANDLING\n- Every path ends in process.exitCode plus a natural exit, or an explicit exit with a fixed code.\n- No stack, path or credential byte is ever printed.\n- The credential never leaves this process.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/certify-recovery-child.mjs"
+      ],
+      "note": "No change this round: certify-recovery-child.mjs landed in 2cd85cc0 and is byte-identical to HEAD (git diff --quiet). QA round 1 confirmed DoD 3 (no-shell fixed-argv spawn, always reaped) and LC6 (real child exits 64 on every bad stdin) and killed the shell:true mutant; the rejection named no defect in this file.",
+      "startedAt": "2026-10-30T21:26:33.314Z",
+      "completedAt": "2026-10-30T21:26:45.737Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create scripts/local-runner/certify-lifecycle.mjs with the 'cancellation' check. The 'recovery' check follows in the next step.\n\nEXPORTS\n- LIFECYCLE_BOUNDS = Object.freeze({ cancelBudgetMs: 300_000, launchMs: 900_000, pollMs: 1_000, reapMs: 30_000 }).\n- LIFECYCLE_CHECKS: frozen [cancellation, recovery] entries in R13d's frozen {id, run(context)} shape.\n- RECOVERY_CHILD = fileURLToPath(new URL('./certify-recovery-child.mjs', import.meta.url)).\n\nCONTEXT\nThe check reads these from context: name (certify's main VM, never touched here), platform (the observed platform), ledger (the base ledger, not the capturing wrapper), cacheDir, supervisor (the real bytes), provider, bounds, and deps.checkSteps (test-only; undefined natively).\n\n'cancellation', in its own VM:\n- cancelOwner = { taskId: 'task-certify', attemptId: `attempt-${randomBytes(16).toString('hex')}`, generation: 1 }.\n- A controller = new AbortController() and started = false.\n- session = input => (steps.session ?? runCheckSession)({ ...input, provider: { ...input.provider, spawn: (...args) => { const child = (input.provider.spawn ?? spawnProcess)(...args); child?.stdout?.once?.('data', () => { started = true; controller.abort(); }); return child; } } }).\n  - The trigger wraps only the check session's spawn, never materialize's or verify's. The supervisor writes hello first, so the first stdout bytes mean the session started.\n- result = await runCheckJob({ platform, ledger, owner: cancelOwner, cacheDir, supervisor, credential: randomBytes(32), snapshot: certifySnapshot(), check: { id: 'certify-cancel', command: 'echo ready; exec sleep 600', protected: [] }, budgetMs: bounds.cancelBudgetMs, onReady: async () => {}, dependencies: [], provider, signal: controller.signal }, { ...steps, session }).\n- Map the result in this order:\n  1. !started is CERTIFY_CANCEL_NOT_STARTED. A run that failed for any other reason must never pass vacuously.\n  2. result.outcome === 'passed' is CERTIFY_CANCEL_PASSED.\n  3. result.vm !== 'deleted' is CERTIFY_CANCEL_VM_NOT_DELETED.\n  4. (await ledger.read(result.instance)).phase !== 'deleted' is CERTIFY_CANCEL_RECORD_LIVE. A read failure maps to this code too.\n  5. Otherwise the check passes.\n- A runCheckJob rejection propagates its own stable code through R13d's wrapper. runCheckJob deletes its VM before it settles, on every path.\n\nERROR HANDLING\n- Fixed codes only.\n- The trigger never throws: optional chaining on the child.\n- No guest byte reaches the report.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/certify-lifecycle.mjs"
+      ],
+      "note": "No change this round: the 'cancellation' check in certify-lifecycle.mjs (landed 2cd85cc0) is unchanged. QA round 1 met DoD 1 and killed every cancellation mutant (not-started, passed, timed-out, vm-deleted, record-live). TDD discipline for this step was already applied in round 0 (LC1/LC2); the reopen names no cancellation defect.",
+      "startedAt": "2026-10-30T21:26:49.497Z",
+      "completedAt": "2026-10-30T21:26:55.618Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "scripts/local-runner/certify-lifecycle.mjs: the 'recovery' check, after 'cancellation'.\n\nSETUP\n1. The foreign record. foreignOwner is a fresh synthetic owner. Run foreign = await ledger.reserve(foreignOwner), then update it to { phase: 'launching', launchTries: 1 }, then to { phase: 'owned' }. That is the test helper seed()'s sequence. No VM exists for it, and cleanup must preserve it.\n2. childOwner is a fresh synthetic owner.\n3. Spawn the child: child = (deps.spawn ?? spawn)(process.execPath, [RECOVERY_CHILD], { shell: false, windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] }).\n   - A throw, or an 'error' event, is CERTIFY_RECOVERY_SPAWN_FAILED.\n   - Track closed = once('close').\n4. Write JSON.stringify({ ledgerDir, cacheDir, owner: childOwner }) + '\\n' to stdin, then end it. ledgerDir is the certify ledger's directory (path.join(workDir, 'ledger')) and cacheDir is certify's cacheDir.\n\nTHE WATCH\nPoll at most ceil(launchMs / pollMs) times, sleeping with deps.sleep ?? timers/promises setTimeout(pollMs):\n- If the child closed, it is CERTIFY_RECOVERY_CHILD_EXITED.\n- record = (await ledger.list()).records.find(r => r.attemptId === childOwner.attemptId). If its phase is 'owned', stop polling.\n- When the polls are exhausted, kill and fail with CERTIFY_RECOVERY_NOT_LAUNCHED.\n\nTHE KILL\nchild.kill('SIGKILL'). Then await closed, bounded by reapMs. No close within that bound is CERTIFY_RECOVERY_NOT_REAPED.\n\nTHE RECOVERY\n1. await reconcileOwned({ ledger, provider }).\n2. report = await cleanupOwned({ ledger, provider, attemptPhase: id => (id === childOwner.attemptId ? 'closed' : null), leaseHeld: () => false }).\n3. It passes only when ALL of these hold:\n   - report.deleted deep-equals [record.instance];\n   - report.errors is empty;\n   - the child record now reads phase 'deleted';\n   - the foreign record's phase is not 'deleted'.\n   Otherwise it is CERTIFY_RECOVERY_CLEANUP_FAILED.\n   certify's main VM and the cancellation record are never deleted here: the main VM's attempt reads null, and 'deleted' is not a launched phase.\n\nFINALLY, ON EVERY PATH\n- If the child has not closed, kill it and await the bounded close.\n- If the child's record exists and is not 'deleted', call deleteOwned({ ledger, name: record.instance, owner: childOwner, provider }) and swallow its result. No real VM may leak, but this cleanup never turns a failure into a pass.\n\nThe parent kills the child alone (TerminateProcess on Windows), as a crashed controller would leave it. Grandchild multipass probes end on their own bounded timeouts.\n\nERROR HANDLING\n- Fixed codes only. Every await is bounded.\n- The child is always reaped.\n- No guest byte, path or credential reaches the report.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/certify-lifecycle.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/certify-lifecycle.mjs"
+      ],
+      "note": "Recovery behavior unchanged; the predicate is NOT weakened (all 5 conjuncts kept). Comment-only change (+2/-1) above recovered(): documents why `mine.phase === 'deleted'` survives mutation. lifecycle.mjs purgeOwned ends with `await ledger.update(record, { phase: 'deleted' })` and cleanupOwned pushes report.deleted only after it resolves; the child is reaped before recovered() runs, so nothing else writes its record. Through the real primitives `report.deleted[0] === record.instance` therefore implies it, so no fake side effect can make that conjunct false alone. It stays as a guard against a cleanup that reports a deletion it never recorded (if it went, a pass could rest on the report alone). QA's other 4 conjuncts are now each pinned by an LC5 row (step 1). LC1-LC7: 7/7 pass.",
+      "startedAt": "2026-10-30T21:26:56.548Z",
+      "completedAt": "2026-10-30T21:27:35.819Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "scripts/local-runner/certify.mjs: wire in LIFECYCLE_CHECKS.\n\nThe prerequisite CQ-R13d CREATES this file, which is why it is listed under newFiles: it is absent when this plan is submitted. This step EDITS the landed bytes, including CQ-R13e1's and CQ-R13f's edits.\n\n1. Import LIFECYCLE_CHECKS and LIFECYCLE_BOUNDS from './certify-lifecycle.mjs'.\n2. BODY becomes [...R13d's core, ...BRIDGE_CHECKS, ...<CQ-R13f's checks>, ...LIFECYCLE_CHECKS]. Keep 'teardown' last.\n3. The bounds table becomes { ...BRIDGE_BOUNDS, ...<R13f's, if any>, ...LIFECYCLE_BOUNDS }. Key names are unique. The deps.bounds validation covers every key.\n4. The check context must carry platform (the observed platform), the base ledger, cacheDir, workDir, supervisor (the real bytes, read once), provider, bounds and the deps the checks use (sleep, spawn, checkSteps). Add whichever R13d did not already put there. In the native entry deps is {}, so nothing can be injected.\n\nError handling is unchanged. An import failure fails loudly at module load: the CLI imports certify.mjs lazily, so doctor and prerequisites are unaffected.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/certify.mjs"
+      ],
+      "note": "No change this round: certify.mjs is byte-identical to its 2cd85cc0 landing (git diff --quiet HEAD). BODY = [core, ...BRIDGE_CHECKS, ...CONTAINMENT_CHECKS (R13f1), ...LIFECYCLE_CHECKS], then teardown; BOUNDS = {...BRIDGE_BOUNDS, ...LIFECYCLE_BOUNDS}. CQ-R13f (d45d52c0) is still PLANNING, so there are no R13f checks to splice in, per the governor's 20:31Z lane-swap comment. LC7 (composition and bounds) is green.",
+      "startedAt": "2026-10-30T21:27:39.140Z",
+      "completedAt": "2026-10-30T21:27:45.323Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "VERIFY ONCE, fresh.\n\n1. Run `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs`. On WSL, run it under env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\". It must exit 0. Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. `git diff --check` over the five files is clean.\n3. A read-only `git status --short` shows only those five files changed by this task. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nThe native run (real Multipass, two VMs at a time) is operator-only and is NOT part of this verification.\n\nError handling: fix a failing row in code, never by weakening an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh, in place, foreground: `env -i HOME=\"$HOME\" PATH=\"/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs` exited 0: 346 tests, 345 pass, 0 fail, 1 skipped (the opt-in macOS smoke, as in round 0), LC1-LC7 all green. `git diff --check` over the five files is clean. This round adds +25/-6 over two files (test +23/-5, certify-lifecycle comment +2/-1). The task total vs 2cd85cc0^ is +382/-33 = 415 changed, 349 net, under the 400-net bar. Read-only `git status --short`: this task changed only scripts/local-runner/certify-lifecycle.mjs and scripts/tests/local-runner.test.mjs, plus its own daemon-written board file. Every other dirty path belongs to a peer or pre-existed, and was left untouched.",
+      "startedAt": "2026-10-30T21:27:51.668Z",
+      "completedAt": "2026-10-30T21:30:06.926Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the five-file diff as an attacker.\n\nCancellation:\n- Can it pass when the session never started? `started` must gate it.\n- Can the abort trigger fire on materialize's or verify's spawn?\n- Can a run pass while its VM or ledger record is still live?\n\nRecovery:\n- Can cleanup delete anything but the child's VM: certify's main VM, the cancellation record, the foreign record, or a record whose attempt lookup throws?\n- Can a real VM leak on any failure path (the finally deleteOwned)?\n- Is the child ALWAYS reaped and every wait bounded: the poll budget, reapMs, and the stdin write to a child that has already died (handle 'error' on stdin)?\n\nThe child:\n- Can the child's argv or stdin carry anything from the guest?\n- Does the child validate its input BEFORE any provider call?\n- Could the credential escape the child?\n\nGeneral:\n- What if two certify runs share a workDir? Owners are random, and so are names.\n- Would I be embarrassed if this shipped?\n\nFix any finding, then re-run step 6's command fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Adversarial review of this task's five-file diff.\n\nFINDING (fixed): the new tamper rows could fail on another conjunct's account if their tamper silently degraded, and so pin nothing. Examples: settle throwing makes the delete reject, which is an errors[] failure; a renamed extra record makes `before`/infoFails never fire, so two deletions fail instead. Each predicate row now also asserts its own end state, the ledger nameAt(1..) phases plus h.deletes, through `ended(...)`. Proven in the /tmp snapshot. Pointing the settle at nameAt(9), the reconcile tamper at nameAt(6), or infoFails at nameAt(6) each turns LC5 red at its own row (#6/#8/#9). Mutants A-D are still killed, each by exactly its row (#6-#9). E is an equivalent mutant, documented in step 4.\n\nRechecked round-0 code against the plan's list, no new findings:\n- Cancellation is gated by `started`. Its abort fires only on the session step's spawn. It passes only with outcome not passed/timeout, vm 'deleted' and the record 'deleted'.\n- Cleanup deletes only closed-attempt launched records, and only the child's attempt reads 'closed'. A throwing lookup gives attempt-unknown, so the record is preserved. The main VM and the foreign record are preserved, and the cancellation record is not a launched phase.\n- On every path, finally reaps the child and calls deleteOwned on its first record. Every wait is bounded: the poll count, reapMs, and stdin 'error' is swallowed.\n- The child validates stdin before any import or provider call.\n- Owners and names are random, so concurrent runs are disjoint.\n\nTheoretical, accepted in round 0:\n- A late multipass launch after NOT_LAUNCHED.\n- A child surviving SIGKILL for more than 2×reapMs.\n- finally removes only the child's FIRST record. The real child reserves exactly one; only the test's `twice` seeds two.\n\nFresh re-run of step 6's command after the fix: exit 0, 346 tests, 345 pass, 1 skipped. diff --check is clean. This round is +29/-6, and the task total is about 353 net.",
+      "startedAt": "2026-10-30T21:30:10.291Z",
+      "completedAt": "2026-10-30T21:35:07.415Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD 2 asks the tests to show that 'recovery' passes ONLY WHEN cleanup deletes exactly the child's VM and leaves the foreign record intact. The tests do not show it. I ran mutation probes on the landed bytes (snapshot of 2cd85cc0, `node --test --test-name-pattern='^(LC|CF|CC)' scripts/tests/local-runner.test.mjs`). Each of the five conjuncts in `recovered()` (certify-lifecycle.mjs:88-90) can be deleted alone with every test still green:\n- `theirs.phase !== 'deleted'`: the foreign-record guard;\n- `report.deleted.length === 1`;\n- `report.deleted[0] === record.instance`;\n- `report.errors.length === 0`;\n- `mine.phase === 'deleted'`.\nLC3 only checks that the REAL cleanupOwned leaves the foreign record alone. No row makes the check face a cleanup that deletes the foreign record, or deletes more than the child's VM. So if cleanup broke, which is exactly what this probe certifies, nothing proves the probe would catch it.\n\nEverything else holds:\n- The verification command re-run on a snapshot of the commit: exit 0, 346 tests, 345 pass, 1 skipped (the opt-in macOS smoke).\n- git diff --check is clean.\n- Size: 396 changed / 330 net.\n- The other 13 mutations were all killed: not-started, passed, timed-out, vm-deleted, record-live, the finally deleteOwned, the finally reap, the attempt-all-closed lookup, owned-only polling, errored, shell:true, no-reconcile and the reap timeout.\n- DoD 1, DoD 3 and DoD 4 are met.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-f4811a729f9e436ba129a65c12d348c1",
+  "priority": "HIGH",
+  "order": 254.42,
+  "comments": [
+    {
+      "id": "comment-27a25509ad3142d786efe98e79b004db",
+      "author": "governor-693b7073",
+      "content": "Governor, 20:35Z: LANE SWAP, so idle coders can start (human: \"release the dependencies first\"). R13h now goes BEFORE R13f. The R13f edge was only \"for the edit order on certify.mjs\", and R13f (d45d52c0) is still unplanned. It now depends on this row.\nFor your plan: R13f's edits have NOT landed. Where the plan says \"<CQ-R13f's checks>\" or \"<R13f's bounds, if any>\", there are none: BODY = [...R13d's core, ...BRIDGE_CHECKS, ...LIFECYCLE_CHECKS], with 'teardown' kept last. Don't wait for, and don't create, R13f's checks. Everything else in the plan is unchanged.",
+      "timestamp": "2026-10-30T20:31:19.685Z"
+    },
+    {
+      "id": "comment-373f6933e169453091dc1b9331c337eb",
+      "author": "worker-25da16b2",
+      "content": "Reopen-1 fix (DoD 2). LC5 gains 4 rows (#6-#9). Each makes exactly one conjunct of recovered() false through the REAL reconcileOwned/cleanupOwned, with no production seam:\n- #6: the foreign record is settled 'deleted' just before the child VM's `delete --purge`. Kills `theirs.phase !== 'deleted'`.\n- #7: the child (`twice`) also seeds a second 'owned' record, nameAt(5), under its own attempt. It has no VM, but cleanup still purges and reports it, so report.deleted = [n4, n5]. Kills `deleted.length === 1`.\n- #8: twice, plus the child's record and VM settled mid-reconcile, on the first `info nameAt(5)`. Cleanup then deletes only nameAt(5). Kills `deleted[0] === record.instance`.\n- #9: twice, plus every `info nameAt(5)` rejects, so cleanup reports an error. Kills `errors.length === 0`.\n\nEach row also asserts its own end state: the ledger phases plus h.deletes. So a degraded tamper cannot pass on another conjunct's account. Re-pointing each tamper at a wrong name turns its row red.\n\nMutation re-run on a /tmp snapshot of HEAD plus this diff, `--test-name-pattern='^(LC|CF|CC)'`: A is killed by #6, B by #7, C by #8 and D by #9, each by its own row.\n\n`mine.phase === 'deleted'` survives as an equivalent mutant:\n- purgeOwned awaits ledger.update(record, {phase:'deleted'}) before cleanupOwned pushes the instance onto report.deleted.\n- The reaped child is the record's only other writer.\n- So C implies it through the real primitives, and no side effect can make it false alone.\n\nI kept it rather than dropping it, as a guard against a cleanup that reports a deletion it never recorded, and added a comment above recovered() saying so. The predicate is unchanged.\n\nFresh verification: exit 0, 346 tests, 345 pass, 1 skipped. Task total is about 353 net.",
+      "timestamp": "2026-10-30T21:35:43.355Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T06:04:25.134Z",
+  "updatedAt": "2026-10-30T21:46:41.253Z",
+  "dependsOn": [],
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:34:26.929Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 14,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-10-30T21:45:44.753Z",
+    "wallClockMs": 54677824
+  },
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [
+    {
+      "item": "'recovery' passes only when, after its controller child is SIGKILLed mid-provision, reconcile and cleanup delete exactly that orphaned VM and leave a foreign record intact. Shown by tests.",
+      "rejectedAt": "2026-10-30T21:13:33.606Z",
+      "rejectedBy": "qa-b29f7b3d"
+    }
+  ],
+  "planSubmittedAt": "2026-10-30T06:39:43.175Z",
+  "planningNotes": {
+    "approachesConsidered": "- Cancellation abort trigger. Rejected: aborting in onReady, because the session would never start, so that tests pre-session cancellation, not in-session. Also rejected: a timer, which is imprecise. Chosen: wrap ONLY the check session's provider.spawn and fire on its first stdout bytes (hello). A `started` gate keeps a run that failed for another reason from passing vacuously.\n- Recovery input channel. Rejected: argv JSON, because the argv must stay fixed. Rejected: env. Chosen: one stdin JSON line. The child generates its own credential, so nothing secret crosses.\n- Kill scope. The child is killed alone, not its process group: a SIGKILLed controller leaves exactly that. Grandchild probes are bounded by their own timeouts.\n- Foreign record. A launched-phase record ('owned', with no VM) is seeded through the ledger API, as seed() does, so cleanupOwned really evaluates it. A 'reserved' record would be skipped trivially, which would make the test vacuous.",
+    "codebaseInsights": "- runCheckJob(input, steps), after CQ-R11e: dependencies is required ([] = no phase). steps include toolchain/installToolchain/session/remove. It deletes its VM before settling on every path, and resolves {outcome, vm, instance, ...}.\n- lifecycle.mjs exports createLedger (with list/read/reserve/update), deleteOwned, cleanupOwned({ledger, provider, attemptPhase, leaseHeld}), which deletes only launched records whose attempt is 'closed' and preserves anything unknown, reconcileOwned and validOwner. updateRecord accepts only phase/launchTries changes.\n- platformFor (cli.mjs) imports without side effects; native-smoke.mjs imports it the same way.\n- The harness pieces come from earlier tasks: fakeVm present-map, a delete recorder, R13e1's materialize and check-session spawn fakes, and R11e's checkHarness step fakes pattern (CJ rows).",
+    "risks": "- Edit order: R13f lands its checks in certify.mjs first. Keep BODY's order, and make the bounds keys unique.\n- Natively, two VMs run at once: certify's main VM plus the cancellation VM, or plus the recovery VM. The operator host needs room for 2x GUEST_RESOURCES.\n- If the cancellation run's toolchain step downloads the pinned Node toolchain into certify's cacheDir on first use, that is expected.\n- On Windows, kill('SIGKILL') is TerminateProcess. 'close' still follows, because the child's stdout and stderr are 'ignore'.\n- The poll budget is a count (deterministic with an injected sleep), not wall-clock time.",
+    "keyFiles": [
+      "scripts/local-runner/check-lifecycle.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/check-session.mjs",
+      "scripts/local-runner/provision.mjs",
+      "scripts/local-runner/cli.mjs",
+      "scripts/local-runner/native-smoke.mjs",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:39:43.195Z",
+  "approvedPlanRevision": 1,
+  "contextFetchedBy": [
+    "qa-b29f7b3d",
+    "worker-25da16b2",
+    "architect-915213a1"
+  ],
+  "workStartedAt": "2026-10-30T20:32:00.540Z",
+  "reviewStartedAt": "2026-10-30T21:36:38.328Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ LC1 cancellation aborts its own check VM's session at its first stdout bytes; the run resolves infra-failure with that VM and record deleted (130.953588ms)\n✔ LC2 cancellation fails with one fixed code unless its session started, did not pass, and its VM and record were deleted (535.162763ms)\n✔ LC3 recovery SIGKILLs its controller child once its VM is owned, awaits close, then deletes exactly that VM; a foreign record survives (147.99419ms)\n✔ LC4 the recovery child is spawned once, with no shell and a fixed argv, and gets exactly one JSON line on stdin, then EOF (126.480472ms)\n✔ LC5 recovery fails with one fixed code when its child exits early, never launches, outlives its kill, cannot spawn or is not cleaned up exactly (1461.22862ms)\n✔ LC6 the real recovery child exits 64 with no output on any bad stdin, before any ledger or provider call (646.075106ms)\n✔ LC7 cancellation and recovery run after check-containment, before teardown; each lifecycle bound outside 1..its constant refuses before any call (553.846596ms)\n...\n✔ AH3 end to end, installAgents installs both stand-ins as 0555 through the real supervisor (107.89337ms)\n✔ RA checkAgents reports AGENT_MISSING for an absent binary and AGENT_HASH_MISMATCH for a changed one, from the installed pins only (32.650386ms)\nℹ tests 346\nℹ suites 0\nℹ pass 345\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 71296.754061",
+    "reportedAt": "2026-10-30T21:36:38.328Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/certify-lifecycle.mjs",
+    ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+    ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+    ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json"
+  ],
+  "completionSummary": "CQ-R13h reopen-1 fix (DoD 2). QA's mutation probes showed every conjunct of recovery's recovered() predicate survived deletion. LC5 in scripts/tests/local-runner.test.mjs gains 4 rows, #6-#9. Each makes exactly one conjunct false through the REAL reconcileOwned and cleanupOwned, with no production seam, and asserts CERTIFY_RECOVERY_CLEANUP_FAILED.\n- #6: the foreign record nameAt(3) is settled 'deleted' just before the child VM's delete --purge. Pins `theirs.phase !== 'deleted'`.\n- #7: the child `twice` seeds a 2nd 'owned' record, nameAt(5), under its attempt. It has no VM, so the infoFails row cannot leak one, but cleanup still purges and reports it, so report.deleted = [n4, n5]. Pins `deleted.length === 1`.\n- #8: twice, plus the child's record and VM settled mid-reconcile, so cleanup deletes only nameAt(5). Pins `deleted[0] === record.instance`.\n- #9: twice, plus every info nameAt(5) rejects, so cleanup reports an error. Pins `errors.length === 0`.\n\nEach row keeps LC5's kills/closed/no-live-child-VM checks. It also asserts its own end state, the ledger phases and h.deletes, so a degraded tamper cannot pass on another conjunct's account. Re-pointing each tamper at a wrong name turns its row red.\n\nMutation re-run on a /tmp snapshot, --test-name-pattern='^(LC|CF|CC)': A is killed by #6, B by #7, C by #8 and D by #9. `mine.phase === 'deleted'` survives as an equivalent mutant: purgeOwned's update to 'deleted' resolves before report.deleted.push, and the reaped child is the only other writer, so C implies it. It is kept, not dropped, and a 2-line comment in certify-lifecycle.mjs says why. The predicate is unchanged.\n\nFresh verification: exit 0, 346 tests, 345 pass, 1 skipped (the opt-in macOS smoke). diff --check is clean. This round is +29/-6; the task total is about 353 net. DoD 1, 3 and 4 are unchanged from round 0.",
+  "commits": [
+    {
+      "sha": "2cd85cc090623d2bdf9c649196188d7499410e71",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c75a6f39@2026-10-30T20:31:07Z",
+      "paths": [
+        ".moe/tasks/task-1b2e6fe3ba1343c8ab02271510131155.json",
+        ".moe/tasks/task-1f7409c5bcc1499ab886f656bd78c894.json",
+        ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+        ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+        ".moe/tasks/task-414eae5aa1f349f49852bf01f4e617db.json",
+        ".moe/tasks/task-44b817f973374dffb578308278050497.json",
+        ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+        ".moe/tasks/task-a28c66bbd21448c7b25daec49a3fa217.json",
+        ".moe/tasks/task-b319b263fada419d9d7de279682dc5f4.json",
+        ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json",
+        "scripts/local-runner/certify-lifecycle.mjs",
+        "scripts/local-runner/certify-recovery-child.mjs",
+        "scripts/local-runner/certify.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-c75a6f39",
+      "recordedAt": "2026-10-30T21:04:07.285Z",
+      "treeId": "604092be238e31c39f9db0c4fdf64417e78063a7",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "434924c571871889eb89da6c21d765466b533410",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-30T21:04:44Z",
+      "paths": [
+        ".moe/tasks/task-2c95c5d1d2bd4dcc9d16fbff1fdb9654.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-30T21:14:38.436Z",
+      "treeId": "439d1705afb9d2d75c29ba978fb3d03c5290dae7",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "5fb1eef73f47956ef251df7fdd9a65009e9ec1df",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-30T21:14:35Z",
+      "paths": [
+        ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+        ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+        ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json",
+        "scripts/local-runner/certify-lifecycle.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-30T21:37:23.788Z",
+      "treeId": "40bb03939ec28e9c5566c9529e40e74e26ef697a",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "81086f8a0a69abac2470c19e117c8fd2ba6a62b8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-30T21:37:55Z",
+      "paths": [
+        ".moe/tasks/task-4132ab1c40064e898f8a306cf4145f67.json",
+        ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-30T21:46:41.253Z",
+      "treeId": "4a0836eff67f21ec2e2bdfd6168d68ab7a5e37f9",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/certify-recovery-child.mjs",
+    "scripts/local-runner/certify-lifecycle.mjs",
+    "scripts/tests/local-runner.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-30T21:37:55Z",
+    "at": "2026-10-30T21:46:41.253Z"
+  },
+  "reviewCompletedAt": "2026-10-30T21:45:44.753Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "'recovery' passes only when, after its controller child is SIGKILLed mid-provision, reconcile and cleanup delete exactly that orphaned VM and leave a foreign record intact. Shown by tests."
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "file": "scripts/tests/local-runner.test.mjs",
+        "description": "Add an LC5 row (or rows) where the FOREIGN record ends up 'deleted' during recovery. For example, a `setup` that wraps h.deps.provider.run so the child VM's `delete --purge` also rewrites the foreign record (nameAt(3)) on disk to phase 'deleted', or deletes it through the ledger. Assert failedAt('recovery', 'CERTIFY_RECOVERY_CLEANUP_FAILED'). Deleting `&& theirs.phase !== 'deleted'` at certify-lifecycle.mjs:90 must then turn a test red. It survives today."
+      },
+      {
+        "type": "missing_feature",
+        "file": "scripts/tests/local-runner.test.mjs",
+        "description": "Add an LC5 row where cleanup deletes MORE than the child's VM. For example, a child onInput that seeds a second launched record under the same child attempt, with a present VM, so the real cleanupOwned reports two deletions. Assert CERTIFY_RECOVERY_CLEANUP_FAILED, and keep the existing no-live-child-VM assertions. Deleting `report.deleted.length === 1 &&` at certify-lifecycle.mjs:89 must then turn a test red. It survives today."
+      },
+      {
+        "type": "other",
+        "file": "scripts/local-runner/certify-lifecycle.mjs",
+        "line": 89,
+        "description": "Optional: also pin `report.deleted[0] === record.instance`, `report.errors.length === 0` and `mine.phase === 'deleted'` (each survives deletion on its own today), or drop any that is provably redundant. Do not weaken the predicate. The two rows above are the required part. The 400-LOC bar is net changed lines and this diff is at 330 net, so ~20 test lines are fine."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 2 asks the tests to show that 'recovery' passes ONLY WHEN cleanup deletes exactly the child's VM and leaves the foreign record intact. The tests do not show it. I ran mutation probes on the landed bytes (snapshot of 2cd85cc0, `node --test --test-name-pattern='^(LC|CF|CC)' scripts/tests/local-runner.test.mjs`). Each of the five conjuncts in `recovered()` (certify-lifecycle.mjs:88-90) can be deleted alone with every test still green:\n- `theirs.phase !== 'deleted'`: the foreign-record guard;\n- `report.deleted.length === 1`;\n- `report.deleted[0] === record.instance`;\n- `report.errors.length === 0`;\n- `mine.phase === 'deleted'`.\nLC3 only checks that the REAL cleanupOwned leaves the foreign record alone. No row makes the check face a cleanup that deletes the foreign record, or deletes more than the child's VM. So if cleanup broke, which is exactly what this probe certifies, nothing proves the probe would catch it.\n\nEverything else holds:\n- The verification command re-run on a snapshot of the commit: exit 0, 346 tests, 345 pass, 1 skipped (the opt-in macOS smoke).\n- git diff --check is clean.\n- Size: 396 changed / 330 net.\n- The other 13 mutations were all killed: not-started, passed, timed-out, vm-deleted, record-live, the finally deleteOwned, the finally reap, the attempt-all-closed lookup, owned-only polling, errored, shell:true, no-reconcile and the reap timeout.\n- DoD 1, DoD 3 and DoD 4 are met.",
+      "rejectedAt": "2026-10-30T21:13:33.606Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "'recovery' passes only when, after its controller child is SIGKILLed mid-provision, reconcile and cleanup delete exactly that orphaned VM and leave a foreign record intact. Shown by tests."
+      ],
+      "issues": [
+        {
+          "type": "missing_feature",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "description": "Add an LC5 row (or rows) where the FOREIGN record ends up 'deleted' during recovery. For example, a `setup` that wraps h.deps.provider.run so the child VM's `delete --purge` also rewrites the foreign record (nameAt(3)) on disk to phase 'deleted', or deletes it through the ledger. Assert failedAt('recovery', 'CERTIFY_RECOVERY_CLEANUP_FAILED'). Deleting `&& theirs.phase !== 'deleted'` at certify-lifecycle.mjs:90 must then turn a test red. It survives today."
+        },
+        {
+          "type": "missing_feature",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "description": "Add an LC5 row where cleanup deletes MORE than the child's VM. For example, a child onInput that seeds a second launched record under the same child attempt, with a present VM, so the real cleanupOwned reports two deletions. Assert CERTIFY_RECOVERY_CLEANUP_FAILED, and keep the existing no-live-child-VM assertions. Deleting `report.deleted.length === 1 &&` at certify-lifecycle.mjs:89 must then turn a test red. It survives today."
+        },
+        {
+          "type": "other",
+          "file": "scripts/local-runner/certify-lifecycle.mjs",
+          "line": 89,
+          "description": "Optional: also pin `report.deleted[0] === record.instance`, `report.errors.length === 0` and `mine.phase === 'deleted'` (each survives deletion on its own today), or drop any that is provably redundant. Do not weaken the predicate. The two rows above are the required part. The 400-LOC bar is net changed lines and this diff is at 330 net, so ~20 test lines are fine."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-10-30T21:45:44.753Z",
+  "reviewSummary": "Reviewed completion commit 5fb1eef7 (on moe/work-2026-10-24) from a /tmp git-archive snapshot, not the shared tree.\n\n- Verification, re-run on the snapshot (env -i, Node 24.21.0): `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs` exits 0. 346 tests: 345 pass, 1 skipped (the macOS smoke). LC1-LC7 green.\n- DoD 2 (the round-1 failure) now holds. I deleted each recovered() conjunct alone and ran `--test-name-pattern='^(LC|CF|CC)'`:\n  - A, the foreign guard: killed by LC5 #6.\n  - B, deleted.length===1: killed by #7.\n  - C, deleted[0]===record.instance: killed by #8.\n  - D, errors.length===0: killed by #9.\n  - E, mine.phase==='deleted': survives. It is an equivalent mutant, documented at certify-lifecycle.mjs:86-88. purgeOwned writes 'deleted' before cleanup reports it, and certifyCore builds its own ledger with no seam. Any later provider call already fails B or D. Keeping E as a guard is what reject issue 3 allowed.\n  - Each new row also pins its end state (ledger phases + deletes), so a tamper that silently failed would be caught.\n- DoD 1, 3, 4: production code changed only by a comment. LC1/LC2, LC4, LC6 and LC5's reap rows are unchanged and green. task.verification exit 0.\n- No test deleted or weakened. The existing LC5 rows and assertions are unchanged; only the message changed.\n- git diff --check clean, no forbidden patterns.\n- Size: this round +29/-6. Task total over its 5 code files vs 2cd85cc0^ is +386/-33 = 353 net, under 400.\n- Rails held: no agent .moe edits, wrapper landing, verified-local untouched.\n- Complexity (non-blocking): failsOnce and infoFails could share one rejects(match, times) helper. net: -2 lines possible.",
+  "requiredCheckAtDone": null
+}

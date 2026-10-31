@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { claimNextTaskTool } from './claimNextTask.js';
+import fs from 'fs';
+import path from 'path';
+import { claimNextTaskTool, deriveAttemptPolicySnapshot } from './claimNextTask.js';
 import { waitForTaskTool } from './waitForTask.js';
 import { ToolTestHarness } from './toolTestHarness.js';
+import { getAttempt, listAttempts } from '../state/attemptStore.js';
+import { StateManager } from '../state/StateManager.js';
+import type { DeliveryPolicy, ExecutionPolicySnapshot, Task } from '../types/schema.js';
+import { MoeError } from '../util/errors.js';
 
 // Migrated verbatim from tools.test.ts.
 //
@@ -61,9 +67,10 @@ describe('moe.claim_next_task', () => {
 
     expect(result.hasNext).toBe(true);
     // attemptId + generation are the claimed attempt's fencing identity: two
-    // scalars beside `task` (task-b6c48bf0), not a context payload.
+    // scalars beside `task` (task-b6c48bf0), not a context payload. The workspace
+    // describes where that attempt runs (WT-01).
     expect(Object.keys(result).sort()).toEqual(
-      ['attemptId', 'chatHint', 'generation', 'hasNext', 'nextAction', 'task'].sort()
+      ['attemptId', 'chatHint', 'generation', 'hasNext', 'nextAction', 'task', 'workspace'].sort()
     );
     expect(Object.keys(result.task).sort()).toEqual([
       'assignedWorkerId',
@@ -502,5 +509,256 @@ describe('moe.claim_next_task blockedOnTaskIds surfacing', () => {
     // The hold guidance names the dependency auto-unblock, not "needs a human".
     expect(result.nextAction.reason).toContain('task-prereq');
     expect(result.nextAction.reason).toContain('auto-unblocks');
+  });
+});
+
+// =============================================================================
+// Attempt policy snapshot (CQ-M01d). A claim that opens a NEW attempt records
+// the configuration identity derived from daemon state alone: the task's stored
+// snapshot (a verified-local one is a floor) and the live project settings, at
+// the task's planRevision. A resume keeps its original attempt untouched, a
+// successor records a fresh identity, and claim arguments are never adopted.
+// Like the rest of this file it mocks nothing: failure is a real malformed
+// record, and update_settings has no deliveryPolicy key, so that half of a
+// settings change is a hand edit (the CQ-M01c precedent).
+// =============================================================================
+describe('moe.claim_next_task attempt policy snapshot', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => {
+    h.init();
+    h.setupMoeFolder();
+    h.createEpic();
+  });
+  afterEach(() => {
+    h.state.clearEmitter();
+    h.cleanup();
+  });
+
+  const LEGACY_AT_2: ExecutionPolicySnapshot = { version: 2, profile: 'legacy', planRevision: 2, deliveryPolicy: 'legacy' };
+  const OBSERVE_LOCAL_AT_2: ExecutionPolicySnapshot = { version: 2, profile: 'observe', planRevision: 2, deliveryPolicy: 'local-branch' };
+  const STRICT: ExecutionPolicySnapshot = { version: 2, profile: 'verified-local', planRevision: 1, deliveryPolicy: 'local-branch' };
+  const HISTORICAL = {
+    id: 'attempt-hist',
+    taskId: 'task-snap',
+    workerId: 'worker-a',
+    runnerId: 'worker-a',
+    generation: 1,
+    workspace: '/old/checkout',
+    phase: 'running',
+    startedAt: '2026-09-01T00:00:00.000Z',
+    lastPhaseAt: '2026-09-01T00:00:00.000Z',
+  };
+
+  type ClaimResult = { hasNext: boolean; attemptId: string; generation: number; task: Record<string, unknown> };
+
+  /** Raw task JSON (and optionally raw attempt records) on disk, then load. */
+  async function seed(task: Record<string, unknown> = {}, attempts: Array<Record<string, unknown>> = []): Promise<void> {
+    h.createTask({ id: 'task-snap', status: 'WORKING', planRevision: 2, ...task } as Partial<Task>);
+    if (attempts.length > 0) fs.mkdirSync(path.join(h.moePath, 'attempts'), { recursive: true });
+    for (const attempt of attempts) {
+      fs.writeFileSync(path.join(h.moePath, 'attempts', `${String(attempt.id)}.json`), JSON.stringify(attempt, null, 2));
+    }
+    await h.state.load();
+  }
+
+  async function claim(workerId: string, extra: Record<string, unknown> = {}): Promise<ClaimResult> {
+    return await claimNextTaskTool(h.state).handler(
+      { statuses: ['WORKING'], taskId: 'task-snap', workerId, ...extra },
+      h.state
+    ) as ClaimResult;
+  }
+
+  async function setSettings(executionProfile: 'legacy' | 'observe', deliveryPolicy: string): Promise<void> {
+    h.state.project!.settings.deliveryPolicy = deliveryPolicy as DeliveryPolicy;
+    await h.state.updateSettings({ executionProfile });
+  }
+
+  function fileBytes(attemptId: string): string {
+    return fs.readFileSync(path.join(h.moePath, 'attempts', `${attemptId}.json`), 'utf8');
+  }
+
+  function readAttempt(attemptId: string): Record<string, unknown> {
+    return JSON.parse(fileBytes(attemptId)) as Record<string, unknown>;
+  }
+
+  function taskOf(overrides: Record<string, unknown>): Task {
+    return { ...h.state.getTask('task-snap')!, ...overrides } as Task;
+  }
+
+  it.each([
+    ['default settings', null, LEGACY_AT_2],
+    ['observe + local-branch settings', ['observe', 'local-branch'] as const, OBSERVE_LOCAL_AT_2],
+  ])('C1 under %s a real claim persists the derived snapshot, unchanged after a restart', async (_label, settings, expected) => {
+    await seed();
+    if (settings) await setSettings(settings[0], settings[1]);
+
+    const result = await claim('worker-a');
+
+    expect(result.generation).toBe(1);
+    expect(readAttempt(result.attemptId).executionPolicySnapshot).toEqual(expected);
+    expect(getAttempt(h.state, result.attemptId)!.executionPolicySnapshot).toEqual(expected);
+    const restarted = new StateManager({ projectPath: h.testDir });
+    await restarted.load();
+    try {
+      expect(getAttempt(restarted, result.attemptId)!.executionPolicySnapshot).toEqual(expected);
+    } finally {
+      restarted.clearEmitter();
+    }
+  });
+
+  it('C2 an own-seat resume keeps the original attempt and snapshot through changed and even malformed settings', async () => {
+    await seed();
+    const first = await claim('worker-a');
+    const bytes = fileBytes(first.attemptId);
+
+    await setSettings('observe', 'remote-push');
+    const resumed = await claim('worker-a');
+    h.state.project!.settings.deliveryPolicy = 'local-brnach' as DeliveryPolicy;
+    const resumedAgain = await claim('worker-a');
+
+    for (const result of [resumed, resumedAgain]) {
+      expect(result.attemptId).toBe(first.attemptId);
+      expect(result.generation).toBe(1);
+    }
+    expect(fileBytes(first.attemptId)).toBe(bytes);
+    expect(readAttempt(first.attemptId).executionPolicySnapshot).toEqual(LEGACY_AT_2);
+    expect(listAttempts(h.state, 'task-snap')).toHaveLength(1);
+  });
+
+  it('C3 a successor after a release records generation 2 with a fresh identity and leaves generation 1 as it was', async () => {
+    await seed();
+    const first = await claim('worker-a');
+    await setSettings('observe', 'local-branch');
+    await h.state.updateTask('task-snap', { assignedWorkerId: null });
+    const closedBytes = fileBytes(first.attemptId);
+
+    const successor = await claim('worker-b');
+
+    expect(successor.generation).toBe(2);
+    expect(successor.attemptId).not.toBe(first.attemptId);
+    expect(readAttempt(successor.attemptId).executionPolicySnapshot).toEqual(OBSERVE_LOCAL_AT_2);
+    expect(readAttempt(first.attemptId)).toMatchObject({ generation: 1, phase: 'closed', executionPolicySnapshot: LEGACY_AT_2 });
+    expect(fileBytes(first.attemptId)).toBe(closedBytes);
+  });
+
+  it('C3 a successor that closes a historical leftover records a fresh identity and never backfills the leftover', async () => {
+    await seed({}, [HISTORICAL]);
+    await setSettings('observe', 'local-branch');
+
+    const successor = await claim('worker-b');
+
+    expect(successor.generation).toBe(2);
+    expect(readAttempt(successor.attemptId).executionPolicySnapshot).toEqual(OBSERVE_LOCAL_AT_2);
+    const leftover = readAttempt('attempt-hist');
+    expect(leftover.phase).toBe('closed');
+    expect('executionPolicySnapshot' in leftover).toBe(false);
+  });
+
+  it('C4 resuming a historical open attempt returns it as it was, with no snapshot backfilled', async () => {
+    await seed({ assignedWorkerId: 'worker-a' }, [HISTORICAL]);
+    await h.state.createWorker({
+      id: 'worker-a', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: 'task-snap', status: 'CODING',
+    });
+    const bytes = fileBytes('attempt-hist');
+
+    const resumed = await claim('worker-a');
+
+    expect(resumed.attemptId).toBe('attempt-hist');
+    expect(resumed.generation).toBe(1);
+    expect(fileBytes('attempt-hist')).toBe(bytes);
+    expect(Object.prototype.hasOwnProperty.call(getAttempt(h.state, 'attempt-hist'), 'executionPolicySnapshot')).toBe(false);
+  });
+
+  it.each([
+    ['a forged STRICT snapshot', { executionPolicySnapshot: STRICT }],
+    ['a forged legacy snapshot', { executionPolicySnapshot: { version: 2, profile: 'legacy', planRevision: 9, deliveryPolicy: 'remote-push' } }],
+    ['profile and deliveryPolicy', { profile: 'legacy', deliveryPolicy: 'remote-push' }],
+  ])('C5 a claim carrying %s records only the derived snapshot and keeps its response shape', async (_label, injected) => {
+    await seed();
+    await setSettings('observe', 'local-branch');
+
+    const result = await claim('worker-a', injected);
+
+    expect(readAttempt(result.attemptId).executionPolicySnapshot).toEqual(OBSERVE_LOCAL_AT_2);
+    expect(Object.keys(result).sort()).toEqual(['attemptId', 'chatHint', 'generation', 'hasNext', 'nextAction', 'task', 'workspace'].sort());
+    expect(result.task).not.toHaveProperty('executionPolicySnapshot');
+    const schema = claimNextTaskTool(h.state).inputSchema as { properties: Record<string, unknown> };
+    expect(Object.keys(schema.properties)).not.toContain('executionPolicySnapshot');
+  });
+
+  it('C6 a STRICT task snapshot is the floor under rolled-back legacy settings, at the task revision', async () => {
+    await seed();
+    const task = taskOf({ executionPolicySnapshot: STRICT, planRevision: 3 });
+
+    const derived = deriveAttemptPolicySnapshot(h.state, task);
+
+    expect(derived).toStrictEqual({ version: 2, profile: 'verified-local', planRevision: 3, deliveryPolicy: 'local-branch' });
+    expect(derived).not.toBe(task.executionPolicySnapshot);
+    expect(task.executionPolicySnapshot).toEqual(STRICT);
+  });
+
+  it('C6 a v1 verified-local task snapshot stays v1 at the task revision', async () => {
+    await seed();
+    await setSettings('observe', 'remote-push');
+    const task = taskOf({ executionPolicySnapshot: { version: 1, profile: 'verified-local', planRevision: 1 }, planRevision: 3 });
+
+    expect(deriveAttemptPolicySnapshot(h.state, task)).toStrictEqual({ version: 1, profile: 'verified-local', planRevision: 3 });
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['legacy', { version: 2, profile: 'legacy', planRevision: 1, deliveryPolicy: 'legacy' }],
+    ['observe', { version: 2, profile: 'observe', planRevision: 1, deliveryPolicy: 'manual-artifact' }],
+    ['v1 observe', { version: 1, profile: 'observe', planRevision: 1 }],
+  ])('C6 an %s task snapshot gives the live settings', async (_label, snapshot) => {
+    await seed();
+    await setSettings('observe', 'remote-push');
+
+    expect(deriveAttemptPolicySnapshot(h.state, taskOf({ executionPolicySnapshot: snapshot, planRevision: 5 })))
+      .toStrictEqual({ version: 2, profile: 'observe', planRevision: 5, deliveryPolicy: 'remote-push' });
+  });
+
+  it('C6 an absent planRevision reads as 0', async () => {
+    await seed();
+    const task = taskOf({});
+    delete (task as { planRevision?: number }).planRevision;
+
+    expect(deriveAttemptPolicySnapshot(h.state, task))
+      .toStrictEqual({ version: 2, profile: 'legacy', planRevision: 0, deliveryPolicy: 'legacy' });
+  });
+
+  it.each([
+    ['a null planRevision', { planRevision: null }, null],
+    ['a null planRevision under a STRICT floor', { planRevision: null, executionPolicySnapshot: STRICT }, null],
+    ['a -1 planRevision', { planRevision: -1 }, null],
+    ["a '3' planRevision", { planRevision: '3' }, null],
+    ['a malformed task snapshot', { executionPolicySnapshot: { version: 3 } }, null],
+    ['a malformed executionProfile setting', {}, { executionProfile: 'turbo' }],
+    ['a malformed deliveryPolicy setting', {}, { deliveryPolicy: 'local-brnach' }],
+  ])('C6 %s throws INVALID_INPUT', async (_label, overrides, settings) => {
+    await seed();
+    if (settings) Object.assign(h.state.project!.settings, settings);
+
+    expect(() => deriveAttemptPolicySnapshot(h.state, taskOf(overrides))).toThrow(MoeError);
+    expect(() => deriveAttemptPolicySnapshot(h.state, taskOf(overrides))).toThrow('[INVALID_INPUT]');
+  });
+
+  it.each([
+    ['a malformed stored task snapshot', { executionPolicySnapshot: { version: 3 } }, null],
+    ['a malformed deliveryPolicy setting', {}, 'local-brnach'],
+  ])('C7 a fresh claim of a row with %s is refused, records no attempt and hands the seat back', async (_label, task, deliveryPolicy) => {
+    await seed(task);
+    if (deliveryPolicy) h.state.project!.settings.deliveryPolicy = deliveryPolicy as DeliveryPolicy;
+
+    await expect(claim('worker-a')).rejects.toThrow('[INVALID_INPUT]');
+
+    expect(listAttempts(h.state, 'task-snap')).toEqual([]);
+    expect(fs.existsSync(path.join(h.moePath, 'attempts'))
+      ? fs.readdirSync(path.join(h.moePath, 'attempts'))
+      : []).toEqual([]);
+    expect(h.state.getTask('task-snap')!.assignedWorkerId).toBeNull();
+    const onDisk = JSON.parse(fs.readFileSync(path.join(h.moePath, 'tasks', 'task-snap.json'), 'utf8')) as Task;
+    expect(onDisk.assignedWorkerId).toBeNull();
   });
 });

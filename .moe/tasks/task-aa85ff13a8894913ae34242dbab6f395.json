@@ -1,0 +1,143 @@
+{
+  "id": "task-aa85ff13a8894913ae34242dbab6f395",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "security: under MOE_RUNTIME_PROTECTED=1, moe-agent.sh/.ps1 run only a known agent CLI, resolved outside the project",
+  "description": "Split from task-465ee875 (HIGH, the PROTECTED agentCommand gap) by architect-4ae016fb on 2026-10-30. That row keeps three things and dependsOn this one: the JetBrains launcher slice, docs/CONFIGURATION.md, and the final verification of both slices.\n\nProblem:\n- scripts/moe-agent.sh parses --command into COMMAND_BIN plus COMMAND_ARGV (parse_command_into_argv, ~:366) and runs it. The basename only classifies the CLI as codex, gemini or grok; anything else counts as claude.\n- moe-agent.ps1 Resolve-CommandParts (~:318) does the same with -Command.\n- Under the PROTECTED profile, the IDE forwards a value that repository content can choose (.moe/project.json settings.agentCommand). The wrapper then runs a repository-chosen binary on the host.\n- Under the threat model in docs/design/protected-profile-threat-model.md (CQ-RF05), a file under the project may add a refusal but never an admission.\n\nWanted, only when MOE_RUNTIME_PROTECTED is exactly '1' (the CQ-R13c1 marker; reuse CQ-R13c2's RUNTIME_PROTECTED flag once it lands):\n- The command must be exactly one of claude, codex, gemini, grok: one bare token, with no path separator, no extension and no extra arguments.\n- For anything else, print one stderr line, byte-identical in both wrappers, then exit 1. Do this before any MCP config write or daemon RPC:\n  [ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '<command>' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start.\n  Show the command as given, truncated to 200 characters, with control characters replaced.\n- Resolve a known name only from absolute PATH entries outside the project. Drop empty entries, '.', relative entries, and entries under the project's real path. Every later invocation of that CLI by the wrapper, the account checks included, uses the resolved absolute path.\n- If no such entry holds the CLI, print one line, MOE_PROTECTED_AGENT_CLI_NOT_FOUND, naming the CLI, then exit 1.\n- Without the marker, behavior is unchanged byte for byte (legacy policy).\n\nTests: a new scripts/tests/protected-agent-command.test.mjs. Model it on CQ-R13c2's marker rows: sh rows, plus ps1 rows where PowerShell exists. Rows:\n- refused: a path, 'claude --flag', 'claude.exe', and an empty value;\n- accepted: 'codex' found on a trusted PATH dir;\n- not run: a project-local ./claude reachable only through an empty, '.' or in-project PATH entry;\n- unchanged: the same commands without the marker.\nscripts/tests/parity-check.sh must pass, because the refusal strings are identical in both wrappers.\n\nOrdering:\n- This row dependsOn CQ-R13c2 (task-6f5cf10f), which adds the marker gate to the same two wrappers.\n- moe-agent.sh/.ps1 are hot files. The planning architect must check every open row that edits them (CQ-V07, V08, V08b, V04c, task-e7f4026a, task-01f37ac6, task-a2f243a1, task-dfbda1a8) and serialize through dependsOn where hunks would collide.\n\nNot in scope: the JetBrains launcher and the docs (task-465ee875), VS Code, and the daemon.",
+  "definitionOfDone": [
+    "With MOE_RUNTIME_PROTECTED=1, both wrappers refuse any --command/-Command that is not exactly claude, codex, gemini or grok. They print the byte-identical MOE_PROTECTED_AGENT_COMMAND_REFUSED line naming the command, exit 1, and make no daemon RPC or MCP config write. Proven by scripts/tests/protected-agent-command.test.mjs rows for sh, and for ps1 where PowerShell exists.",
+    "With the marker, a known CLI runs only from an absolute PATH entry outside the project. A project-local binary reachable only through an empty, relative or in-project PATH entry is never run, and a missing CLI refuses with MOE_PROTECTED_AGENT_CLI_NOT_FOUND. Without the marker, behavior is unchanged. Proven by the same test file.",
+    "`node --test scripts/tests/protected-agent-command.test.mjs` and `bash scripts/tests/parity-check.sh` exit 0, with their output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Legacy policy is unchanged: every new branch runs only when MOE_RUNTIME_PROTECTED is exactly '1'.",
+    "The refusal lines are byte-identical in moe-agent.sh and moe-agent.ps1, and moe-agent.ps1 stays UTF-8 with a BOM (scripts/CLAUDE.md)."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development. Read the LANDED bytes of CQ-R13c2 (task-6f5cf10f) first: its RUNTIME_PROTECTED flag and MOE_RUNTIME_PROTECTED_PATH_MISSING gate sit in the same wrappers, and this row builds on them. Anchor on names, not line numbers. Live seats hot-reload moe-agent.sh, so never leave it unparseable on disk (mem:gotcha-editing-wrapper-while-harness-runs).\n\nNew scripts/tests/protected-agent-command.test.mjs (node:test). It spawns `bash scripts/moe-agent.sh --role worker --command <c> --no-loop` with streamed stdout/stderr. Use the exact flag names from the wrapper's arg parser.\n\nEnvironment per row:\n- a temp HOME;\n- a temp project with .moe/;\n- MOE_RUNTIME_PROTECTED=1, so R13c2's gate passes;\n- MOE_PROXY_PATH and MOE_DAEMON_PATH pointing at inert stub .js files that exit 0;\n- MOE_DISABLE_HEARTBEAT=1;\n- PATH built from fixture dirs plus /usr/bin:/bin.\n\nEnd of a row:\n- a refused row waits for exit;\n- an accepted row waits for the new line `[INFO] MOE_PROTECTED_AGENT_CLI: <name> -> <absolute path>`, then kills the process group;\n- every row has a 20 s cap.\nEach fixture CLI is a stub that writes a 'ran' marker file, so a row can prove a binary was NOT run.\n\nRows:\n- R1 refused: '/tmp/x/claude', 'claude --flag', 'claude.exe', 'CLAUDE' and ''. Each gives exit 1. stderr has exactly one line `[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '<c>' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start.` No stub ran, and no .mcp.json or HOME MCP config was written.\n- R2: a value of 300 chars with a control char is shown truncated to 200 chars, with the control char replaced.\n- A1 accepted: 'codex' with a trusted fixture dir holding codex. The INFO line names that absolute path.\n- T1: PATH ':<trusted-without-claude>', with a project-local ./claude reachable only through the empty entry. Gives exit 1 with `[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: claude was not found on an absolute PATH entry outside the project; refusing to start.`, and the local stub did not run.\n- T2: '.' and a relative entry behave like T1.\n- T3: PATH '<project>/bin:<trusted>', with claude in both. The INFO line names the trusted one.\n- L1 legacy, no marker: '/tmp/x/claude' and 'claude --flag' print no MOE_PROTECTED_* line within the cap. Kill the process afterwards.\n- PowerShell rows mirroring R1, A1 and T3 run the ps1 wrapper under `pwsh` when it is on PATH (-Command, and -CommandArgs must be empty); otherwise skip with a reason.\n\nError handling in the harness: every spawned process group is killed in a finally block, and every temp dir is removed.\n\nRun the file and confirm the protected rows fail.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/moe-agent.sh. Under RUNTIME_PROTECTED=1 only (R13c2's flag, which is set when MOE_RUNTIME_PROTECTED is exactly '1'):\n\n1. Right after the command is parsed and the CLI type detected (CMD_FIRST and CMD_BASE, ~:416-440), and BEFORE any MCP config write or daemon RPC, add a helper protected_agent_command_gate. It accepts COMMAND only when the raw value is exactly one of claude, codex, gemini, grok (case-sensitive) and parse_command_into_argv produced no extra argv. Otherwise:\n   - print the R1 line to stderr (`printf '%s\\n'` with the sanitized value: tr -d control chars, then cut to 200 chars);\n   - exit 1.\n   Write it as an if/else: the file runs under set -e (mem:gotcha-moe-agent-sh-set-e-unguarded-assignments).\n2. A helper protected_resolve_cli NAME:\n   - Walk PATH split on ':'. Skip an empty entry, '.', any entry not starting with '/', and any entry whose `cd \"$entry\" && pwd -P` equals the project's real path or lies under it with a '/' boundary.\n   - Return the first `$dir/$NAME` that is a regular executable file. On MSYS/MINGW (uname -s), also try `.exe` and `.cmd`.\n   - Do a manual scan, not `command -v`: bash's hash table and aliases must not answer.\n   - On success, set COMMAND_BIN to that absolute path and print the A1 INFO line. On failure, print the T1 CLI_NOT_FOUND line and exit 1.\n   - Call it right after the gate.\n3. COMMAND_BIN is re-parsed later (~:546 and ~:679 call parse_command_into_argv again after PYTHON_CMD resolves). Under the marker, re-apply the resolved absolute path after every such re-parse, so no later site ever sees the bare name. Any later name substitution (`gemini` -> `agy`, ~:7831) under the marker must also go through protected_resolve_cli, or be skipped. Compare on CMD_BASE, not COMMAND_BIN.\n\nError handling:\n- every refusal is one stderr line and exit 1, with no partial state: nothing written, no RPC;\n- a `cd` into an unreadable PATH entry fails quietly and that entry is skipped;\n- the gate and the resolver never run without the marker.\n\nWithout the marker, every byte of behavior is unchanged. Run `bash -n scripts/moe-agent.sh` before every save of a final version.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/moe-agent.ps1 is the twin, keeping parity with step 2. It stays UTF-8 with BOM (scripts/CLAUDE.md).\n\nRight after `$resolvedCommand = Resolve-CommandParts ...` (~:795-797), and before any MCP config write or daemon RPC, act only when R13c2's protected flag is set:\n1. Gate. Accept only when `$Command` is exactly one of claude, codex, gemini, grok (-ceq, case-sensitive) and `$CommandArgs` is empty. Otherwise:\n   - write the R1 line through [Console]::Error.WriteLine, byte-identical to sh, with the same sanitizing (control chars replaced, then truncated to 200);\n   - exit 1, the way R13c2's gate exits (the supervisor at the top re-exits with 1).\n2. Resolve.\n   - Split $env:PATH on [IO.Path]::PathSeparator.\n   - Skip empty entries and entries that are not fully qualified: a drive root with a separator, UNC, or a leading '/' on non-Windows pwsh.\n   - Skip entries inside the project: compare [IO.Path]::GetFullPath on both sides with a separator boundary, case-insensitively on Windows.\n   - For the first entry holding `<name>` with a PATHEXT extension (Windows) or the bare name (elsewhere) as a leaf file, set `$Command` to that absolute path and print the INFO line. Otherwise print the CLI_NOT_FOUND line and exit 1.\n   - Do NOT use Get-Command: it consults aliases, functions and the module path.\n3. Every later use of the CLI reads `$Command`, so they all get the absolute path. `$cmdBase` detection still works through GetFileNameWithoutExtension. A later gemini->agy style substitution under the flag goes through the same resolver, or is skipped.\n\nError handling:\n- GetFullPath or Test-Path exceptions on a malformed PATH entry are caught, and that entry is skipped;\n- a refusal writes one line and exits 1 before any write or RPC;\n- nothing runs without the flag.\n\nWithout the flag, behavior is unchanged. Run `bash scripts/tests/parity-check.sh`. If it pins wrapper strings, add the four new message codes the way it pins R13c2's codes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh, from the repo root on WSL:\n\nnode --test scripts/tests/protected-agent-command.test.mjs && bash scripts/tests/parity-check.sh\n\nIt must exit 0. Its command, exit code and output tail are complete_task's evidence; say whether the pwsh rows ran or were skipped. Also run `bash -n scripts/moe-agent.sh`, `pwsh -NoProfile -File scripts/tests/parity-check.ps1` when pwsh exists, and the existing R13c2 marker rows (postflight.sh's P rows), and report them, so the shared marker block is not regressed.\n\nMutants, on scratch copies, each turning the named rows red:\n(i) a prefix match (claude*): R1;\n(ii) `command -v` instead of the manual scan: T1 or T2;\n(iii) no in-project skip: T3;\n(iv) the gate placed after the MCP config write: R1's no-config assertion;\n(v) the gate active without the marker: L1.\n\nA read-only `git status --short` must show only the three owned paths. moe-agent.sh/.ps1 are hot files: if a peer row has unlanded hunks in them, never sweep, revert or stash them. Coordinate in chat instead.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review, then check:\n- Under the marker, is there any path where a bare or repository-chosen name still reaches exec? Check every COMMAND_BIN or $Command use: re-parses, the account helper's signin-state call (sh ~:6381), the codex argv probe, the gemini/agy branch and the grok branch.\n- Could a symlinked PATH dir that points into the project slip through? pwd -P and GetFullPath must canonicalize it.\n- Does the message leak anything beyond the bounded, sanitized value?\n- Is legacy byte-identical?\n- Are the refusal lines identical in both wrappers (parity)?\n- Is set -e safety intact?\n\nFix any finding, then re-run step 4 fresh. Report the three paths in complete_step.modifiedFiles. Write the Serena handoff 'task-task-aa85ff13a8894913ae34242dbab6f395-handoff' for task-465ee875, the JetBrains slice and docs, which dependsOn this row and must cite the exact message codes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-6f5cf10f78184c38a46e6973cadda817",
+    "task-e7f4026abc0c4a8bb7632c8178ea7d70",
+    "task-01f37ac63316409ab581f5a189002cb8",
+    "task-dfbda1a8230a4fe5b57dbe512fa62a33",
+    "task-a2f243a111654c7fbb2a28848a923e8c",
+    "task-dd1ee586b90d4fc785434454b1423e76"
+  ],
+  "priority": "HIGH",
+  "order": 278.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T08:07:24.823Z",
+  "updatedAt": "2026-10-30T13:40:44.221Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T08:08:34.580Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T08:11:31.436Z",
+  "executionContract": {
+    "intendedBehavior": "When MOE_RUNTIME_PROTECTED is exactly '1', both wrappers accept only an exact known agent CLI name (claude, codex, gemini, grok), with no extra arguments. Anything else prints one byte-identical MOE_PROTECTED_AGENT_COMMAND_REFUSED line and exits 1, before any MCP config write or daemon RPC. A known name resolves only from absolute PATH entries outside the project, and every later use runs that absolute path. If none is found, MOE_PROTECTED_AGENT_CLI_NOT_FOUND, exit 1. Without the marker, nothing changes.",
+    "acceptanceCriteria": [
+      "R1/R2 refusal rows, the A1 accepted row, T1-T3 trusted-resolution rows and L1 legacy rows in scripts/tests/protected-agent-command.test.mjs, plus pwsh rows where pwsh exists.",
+      "parity-check passes, and the R13c2 marker rows still pass."
+    ],
+    "invariants": [
+      "Every new branch runs only under the exact marker value '1'.",
+      "The refusal precedes any MCP config write or daemon RPC.",
+      "The lookup is a manual filesystem scan of filtered PATH entries; no hash, alias, function or module lookup."
+    ],
+    "compatibility": [
+      "Legacy (no marker) argv parsing, CLI detection and launch are unchanged, including custom commands with arguments."
+    ],
+    "approvedScope": [
+      "moe-agent.sh: protected_agent_command_gate, protected_resolve_cli, and re-applying the resolved path after re-parses.",
+      "moe-agent.ps1: the twin gate and resolver after Resolve-CommandParts.",
+      "The new test file."
+    ],
+    "reuse": [
+      "R13c2's flag, its gate placement and its [ERROR] line style; the existing parse_command_into_argv and Resolve-CommandParts."
+    ],
+    "sourceAssumptions": [
+      "moe-agent.sh parse_command_into_argv (~:366), CLI detection (~:416-440), re-parses (~:546, ~:679), execution through \"$COMMAND_BIN\" at ~:7773-8450.",
+      "moe-agent.ps1 Resolve-CommandParts (~:318), normalization (~:795-797).",
+      "CQ-R13c2 (task-6f5cf10f) provides the RUNTIME_PROTECTED flag and its early gate in both wrappers."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/protected-agent-command.test.mjs && bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Resolve once, right after the command is parsed, and replace COMMAND_BIN/$Command with the trusted absolute path (chosen). Every later execution site uses the variable, so one swap covers all of them.\n- Filtering PATH for the whole wrapper process: rejected. It could change how node, python or git are looked up, which is outside this row's concern.\n- `command -v` or Get-Command for the lookup: rejected. The hash table, aliases, functions and modules could answer instead of the filesystem.\n- Adding an IDE-supplied trusted token: rejected, because the allowlist plus trusted resolution is enough and simpler.",
+    "codebaseInsights": "- sh: COMMAND defaults to \"claude\" (~:205), is set from --command (~:245), and parse_command_into_argv (~:366) splits it with shlex via python. CLI type detection runs at ~:416-440, with re-parses at ~:546 and ~:679.\n- Execution sites are \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" at ~:7773-7993 (codex, gemini/agy, grok) and ~:8433-8450 (claude), plus the account helper signin-state call (~:6381). The gemini->agy substitution compares COMMAND_BIN (~:7831).\n- ps1: Resolve-CommandParts (~:318) and normalization at ~:795, plus a -CommandArgs parameter. $cmdBase uses GetFileNameWithoutExtension.\n- CQ-R13c2 adds the RUNTIME_PROTECTED flag and an early fail-closed gate with a [ERROR] CODE: line and exit 1, in both wrappers.",
+    "risks": "- moe-agent.sh/.ps1 are edited by many rows. This row dependsOn R13c2 (and transitively V08b/V04c/V08/V07), plus e7f4026a, 01f37ac6, dfbda1a8 and a2f243a1, per the CQ-RF serialize rail.\n- Live seats hot-reload moe-agent.sh: run bash -n before every save.\n- The tests spawn the real wrapper, so they need inert stub runtime files and early kills to avoid side effects (no real daemon, a temp HOME).\n- pwsh may be absent on WSL; those rows skip, and parity-check guards the string twins.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/agent-runtime.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T08:11:31.467Z",
+  "approvedPlanRevision": 1
+}

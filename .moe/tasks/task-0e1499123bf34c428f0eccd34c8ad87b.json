@@ -1,0 +1,185 @@
+{
+  "id": "task-0e1499123bf34c428f0eccd34c8ad87b",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: runCheckJob reports a host admission refusal of the candidate's lockfile as infra-failure, so the daemon retries a candidate-caused refusal on fresh VMs with an empty output tail",
+  "description": "The host-side sibling of task-42e9990c. That row and its interface slice task-a80f46db split only the guest supervisor's dependency-phase exit (code-failure 82). Found while planning task-adbab50d (msg-3cfb9170). Filed at the governors' request (msg-9547f434, msg-32489cd8).\n\nPath: runCheckJob (scripts/local-runner/check-lifecycle.mjs) provisions the VM, then builds the dependency cache on the host before any session. buildDependencyCache runs admitLockfiles/admitEntries (scripts/local-runner/dependency-cache.mjs) over the candidate's own package-lock.json bytes. A refusal throws a DEPENDENCY_* code. check-lifecycle.mjs:189 passes that code through as `failure`, and :117 maps every pre-session failure to {outcome:'infra-failure', exitCode:null, signal:null, outputTail:''}. packages/moe-daemon/src/delivery/repairPolicy.ts classify() treats infra-failure as 'infra'. So a candidate whose lockfile admission refuses spends the infra retry budget on fresh VMs, then escalates with an empty tail, and the worker never learns that its lockfile was refused. Refusal causes include malformed JSON, a link or non-registry source, a bad location or integrity, and too many packages.\n\nGoal: a host admission refusal that the candidate's lockfile bytes alone cause resolves as code-failure, with a fixed, bounded ASCII outputTail derived from the code only (never lockfile bytes, paths or package names). Every host, network or cache fault stays infra-failure.\n\nConstraints found at filing (line numbers as of 2026-10-31 08:25Z):\n- Daemon: repairPolicy.ts classify() repairs a 'code-failure' only when exitCode is nonzero; exitCode null classifies as 'other', which is never repairable. A host refusal runs no session. The plan must either choose a fixed host-owned nonzero exitCode (reuse a80f46db's 82 DEPENDENCIES_CANDIDATE_INVALID contract, or justify a distinct value) or change classify(), and then prove the daemon's repair decision.\n- Move to code-failure: DEPENDENCY_LOCKFILE_INVALID, DEPENDENCY_LOCATION_INVALID, DEPENDENCY_SOURCE_UNSUPPORTED, DEPENDENCY_INTEGRITY_INVALID. The planner decides DEPENDENCY_LIMIT_EXCEEDED and DEPENDENCY_TOO_LARGE per throw site, with the reason in the plan. dependency-cache.mjs:110 and :144 depend on lockfile content alone. :234 and :241 are post-download or snapshot limits.\n- Stay infra-failure: DEPENDENCY_CHECKSUM_MISMATCH (certify-canary.mjs:94's 'altered' verdict requires exactly infra-failure + DEPENDENCY_CHECKSUM_MISMATCH with zero sessions), DEPENDENCY_DOWNLOAD_FAILED, DEPENDENCY_CACHE_FAILED, DEPENDENCY_INPUT_INVALID (also the catch-all for unexpected errors at dependency-cache.mjs:173/186/241), CHECK_DEPENDENCIES_FAILED, and every TOOLCHAIN_, TRANSFER_ and provision code.\n- Evidence: a80f46db changes check-evidence.mjs CHECK_BOUNDARIES.dependencies.failure to {candidate:'code-failure', infrastructure:'infra-failure'}. Bind this host split under that descriptor, and state whether checkEnvironment's hash changes again.\n- The VM delete and the single onCleanup report stay exactly as today on the refusal path.\n- Shared test file: adbab50d, a80f46db and 42e9990c each declare scripts/tests/local-runner-check.test.mjs. dependsOn 42e9990c orders this row after all three. scripts/tests/local-runner.test.mjs and CERTIFICATION.md belong to CQ-R13 (task-f4811a72).\nNot in scope: admitting lockfiles before provisioning (admission needs the guest's verified arch), guest-supervisor.py, and daemon retry-budget tuning.",
+  "definitionOfDone": [
+    "runCheckJob resolves a host admission refusal coded DEPENDENCY_LOCKFILE_INVALID, DEPENDENCY_LOCATION_INVALID, DEPENDENCY_SOURCE_UNSUPPORTED or DEPENDENCY_INTEGRITY_INVALID as outcome 'code-failure' with that failure code, a nonzero exitCode, signal null, and a fixed nonempty ASCII outputTail of at most 512 bytes that contains no lockfile bytes. Rows in scripts/tests/local-runner-check.test.mjs table-drive each code through runCheckJob.",
+    "DEPENDENCY_CHECKSUM_MISMATCH, DEPENDENCY_DOWNLOAD_FAILED, DEPENDENCY_CACHE_FAILED, DEPENDENCY_INPUT_INVALID, CHECK_DEPENDENCIES_FAILED and the TOOLCHAIN_, TRANSFER_ and provision codes still resolve infra-failure exactly as before, and certify-canary's 'altered' verdict tests pass unchanged.",
+    "On the refusal path the VM is still deleted (vm 'deleted') and onCleanup is told exactly once, as today.",
+    "packages/moe-daemon/src/delivery/repairPolicy.test.ts proves the daemon classifies the new host-refusal result as a repairable code-failure, neither 'infra' nor 'other', and spends no infra retry on it.",
+    "node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test) passes with zero failures from a full external snapshot."
+  ],
+  "taskRails": [
+    "Do not edit scripts/tests/local-runner.test.mjs or CERTIFICATION.md; CQ-R13 (task-f4811a72) owns them.",
+    "outputTail and every error message carry fixed literals only: no lockfile bytes, package names, paths or upstream text."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (load test-driven-development), in scripts/tests/local-runner-check.test.mjs only.\n\nPreconditions, before any edit:\n(a) a80f46db, 42e9990c and adbab50d have landed on moe/work-2026-10-24 (epicSiblings landing.merged, or `git log moe/work-2026-10-24 --grep 'Moe-Task: task-<id>'`).\n(b) scripts/local-runner/check-session.mjs exports DEPENDENCIES_CANDIDATE_INVALID === 82 (a80f46db).\nIf (b) is false, stop: post a task comment @mentioning the planner. Never invent the constant. Build on the landed bytes only. Write with the Edit tool only: CQ-R13 (f4811a72) also declares this file, so a shell write would be HELD at landing.\n\nAppend one section 'task-0e149912: host admission refusals' at the END of the file, after the last landed row. It holds rows HA1-HA4.\n- Reuse the file's lock/ok/sri/regUrl/tarball/entryOf/scratchDir/fixtureFetch/dependencyError helpers and MAX_* constants.\n- Grep before declaring any top-level name (TOOLCHAIN, NAME, CHECK and DEPENDENCY_MAPS already exist; a redeclaration is a SyntaxError). Prefix new names with HA_ or ha.\n- Add imports: runCheckJob (../local-runner/check-lifecycle.mjs), lockfileRefusal (dependency-cache.mjs, merged into its existing import), DEPENDENCIES_CANDIDATE_INVALID (check-session.mjs, merged), and canarySnapshot and CANARY_PACKAGE (../local-runner/certify-canary.mjs).\n\nHarness haJob(t, files, { steps, input }) runs the REAL runCheckJob, with the REAL default dependencies step (buildDependencyCache) unless a row overrides it.\n- provision: reserves through the ledger it is given, then returns a ready x64 guest: provisioned, instance = the reserved name, bootstrapReady, failures [], 64-hex source/provider/supervisor hashes.\n- toolchain: returns a 64-hex sha256.\n- materialize, installToolchain, installDependencies, session and verify: recording fakes.\n- remove: logs 'remove', then 'removed', and answers 'deleted'.\n- ledger read/update/recordImage fail the test if called.\n- cacheDir = join(scratchDir(t), 'cache'). onCleanup records each report.\n- Snapshot: validateImport of the given files, with an empty overlay. dependencies ['.'] (or ['.', 'pkg']).\nHA_TAILS is an independent copy of step 2's five exact literals; never import them.\n\nHA1 (DoD 1, 3) table-drives each code through runCheckJob with REAL admission. Each lockfile plants distinctive secret markers in its keys, names, specs, resolved, integrity and raw text.\n- LOCKFILE_INVALID: truncated JSON; lockfileVersion 1.\n- LOCATION_INVALID: a key outside node_modules.\n- SOURCE_UNSUPPORTED: a file: resolved, and a link entry (both give the same tail).\n- INTEGRITY_INVALID: a sha1 integrity.\n- LIMIT_EXCEEDED at both admission sites: a space-padded lockfile of MAX_LOCKFILE_BYTES+1 bytes, and MAX_DEPENDENCY_PACKAGES+1 packages.\n- One refusal in pkg after a valid root, with dependencies ['.', 'pkg'].\nEach run resolves exactly the frozen {outcome:'code-failure', exitCode:82, signal:null, outputTail:HA_TAILS[code], environment:null, workspace:'unverified', instance:<reserved>, vm:'deleted', failure:code, executionReady:false}. Assert:\n- exitCode === 82 (as a literal) and === DEPENDENCIES_CANDIDATE_INVALID.\n- The log is exactly provision, reserve, toolchain, remove, removed.\n- onCleanup was told exactly once: {vm:'deleted', failure:null}.\n- outputTail is nonempty, matches /^[\\x20-\\x7e]+$/ and is at most 512 UTF-8 bytes.\n- JSON.stringify(result) contains no planted marker.\n- cacheDir was never created.\n- Two refusals of different codes run under Promise.all resolve independently, each with its own tail.\n\nHA2 (DoD 3): a remove that throws, and one that answers 'not-deleted', each give vm 'delete-failed', outcome 'code-failure', failure = the DEPENDENCY_ code (today's failure ?? rule), and one onCleanup report {vm:'delete-failed', failure:'CHECK_VM_DELETE_FAILED'}. A dependencies wrapper that aborts the run's signal, then calls the real buildDependencyCache, still resolves code-failure. Admission is pure, so an abort cannot cause a refusal, and a completed dependency step's code wins today too.\n\nHA3 (DoD 2, provenance). These stay exactly {outcome:'infra-failure', exitCode:null, signal:null, outputTail:'', environment:null, failure:<code>}:\n(a) a stub that throws a plain Error carrying each candidate code (CJ13's shape);\n(b) a stub that throws dependencyError(<candidate code>), minted outside admission;\n(c) a wrapper that copies a real refusal into a new Error with the same code.\nContrast rows:\n(d) a wrapper that rethrows the real refusal object unchanged gives code-failure;\n(e) a wrapper that rewrites error.code on the real refusal still gives code-failure with the ORIGINAL code and tail.\nReal post-admission faults stay infra-failure, with an admitted lockfile:\n- a cacheDir that is a regular file gives DEPENDENCY_CACHE_FAILED;\n- a relative cacheDir gives DEPENDENCY_INPUT_INVALID;\n- a dependencies wrapper input => buildDependencyCache(input, { fetch }) over fixtureFetch: a 404 gives DEPENDENCY_DOWNLOAD_FAILED, and DC2's content-length over MAX_PACKAGE_BYTES gives DEPENDENCY_TOO_LARGE;\n- canarySnapshot('altered'), with other bytes served at CANARY_PACKAGE.resolved, gives DEPENDENCY_CHECKSUM_MISMATCH and the session is never called;\n- a malformed tree gives CHECK_DEPENDENCIES_FAILED, and one code each from TOOLCHAIN_ (toolchain step), TRANSFER_ (materialize) and PROVISION_ (provision step) gives infra-failure with that code.\n\nHA4: lockfileRefusal returns error.code for each of admitLockfiles' five refusal codes. It returns null for:\n- admission's own DEPENDENCY_INPUT_INVALID (cpu 'ia32', duplicate dirs, string bytes);\n- buildDependencyCache's post-admission faults (CACHE_FAILED, CHECKSUM_MISMATCH), while its admission refusal, the same object, still gives its code;\n- undefined, null, 'x', 1, {}, a plain Error, a coded plain Error, and a minted dependencyError.\nIt never throws.\n\nNo row reaches the network. Run the file in a scratch copy to see it RED (the lockfileRefusal import fails before step 2). Record that, and note that HA3 (a)-(c) and the post-admission rows pin today's behaviour, so they pass before and after the fix.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Minimal implementation: classify by PROVENANCE, never by code string. The design evidence is in /mnt/d/moe-scratch/0e149912-plan/: prototype-runtime.diff and probe.mjs, and on the prototype R13's CJ13 and the canary rows stay green unedited.\n\ndependency-cache.mjs:\n- Add `const LOCKFILE_REFUSALS = new WeakMap();` beside OWN_ERRORS.\n- In admitLockfiles' catch, an error that is not in OWN_ERRORS still becomes a new DEPENDENCY_INPUT_INVALID. An own error whose code is not DEPENDENCY_INPUT_INVALID is recorded with `LOCKFILE_REFUSALS.set(error, error.code)`, then rethrown unchanged.\n- Export `lockfileRefusal(error)`, returning `LOCKFILE_REFUSALS.get(error) ?? null`. JSDoc: the code of a refusal admitLockfiles raised over the lockfile bytes themselves; never a download, checksum, cache or input fault, nor an error anything else built, whatever its code.\n- Add one header sentence.\n- Change no rule, code, message, dependencyError or buildDependencyCache line. Its post-admission throws never pass through admitLockfiles, so they are never recorded.\n\ncheck-lifecycle.mjs:\n- Import DEPENDENCIES_CANDIDATE_INVALID from check-session.mjs and lockfileRefusal from dependency-cache.mjs.\n- Add a frozen REFUSAL_TAILS map holding exactly these literals, with no interpolation:\n  - DEPENDENCY_LOCKFILE_INVALID: 'MOE_DEPENDENCY_LOCKFILE_REFUSED: DEPENDENCY_LOCKFILE_INVALID: host admission refused a package-lock.json in the checked tree before any download. Each must be UTF-8 JSON with lockfileVersion 2 or 3 and a packages object whose entries are objects.'\n  - DEPENDENCY_LOCATION_INVALID: 'MOE_DEPENDENCY_LOCKFILE_REFUSED: DEPENDENCY_LOCATION_INVALID: host admission refused a package-lock.json in the checked tree before any download. Every packages key but the root must be a node_modules/ package location; workspace folders are not supported.'\n  - DEPENDENCY_SOURCE_UNSUPPORTED: 'MOE_DEPENDENCY_LOCKFILE_REFUSED: DEPENDENCY_SOURCE_UNSUPPORTED: host admission refused a package-lock.json in the checked tree before any download. Every package must resolve to its canonical registry.npmjs.org tarball and every dependency spec must be a registry spec; links, file:, git and URL sources, shrinkwrapped entries and bundled entries naming a resolved are refused.'\n  - DEPENDENCY_INTEGRITY_INVALID: 'MOE_DEPENDENCY_LOCKFILE_REFUSED: DEPENDENCY_INTEGRITY_INVALID: host admission refused a package-lock.json in the checked tree before any download. Every fetched package needs exactly one canonical sha512 integrity.'\n  - DEPENDENCY_LIMIT_EXCEEDED: 'MOE_DEPENDENCY_LOCKFILE_REFUSED: DEPENDENCY_LIMIT_EXCEEDED: host admission refused a package-lock.json in the checked tree before any download. A lockfile exceeded its size bound, or the lockfiles named more packages than one dependency tree may hold.'\n- Add `refusal: null` to the run record and pass the run into hostInputs. Its dependencies catch becomes:\n```js\nconst refused = lockfileRefusal(error);\nif (refused !== null && Object.hasOwn(REFUSAL_TAILS, refused)) {\n  run.refusal = Object.freeze({ outcome: 'code-failure', exitCode: DEPENDENCIES_CANDIDATE_INVALID, signal: null, outputTail: REFUSAL_TAILS[refused] });\n  return refused;\n}\nreturn codeOf(error, DEPENDENCY_CODE, 'CHECK_DEPENDENCIES_FAILED');\n```\n- In runCheckJob: `const observed = failure === null ? run.observed : run.refusal ?? { outcome: 'infra-failure', exitCode: null, signal: null, outputTail: '' };`\n- Update the runCheckJob JSDoc and the header's failure sentence.\n\nError handling:\n- Every other path stays byte-for-byte today's: step fallbacks, codeOf pass-throughs, abort checks, the delete with its single onCleanup report, and passed-to-inconclusive.\n- An admission code missing from the map stays infra-failure.\n- lockfileRefusal never throws.\n\nDecisions, to state in comments:\n- exitCode reuses a80f46db's 82. It has the same meaning: the candidate's own dependency inputs were refused before any check command ran. It is nonzero, so classify() repairs it with no repairPolicy.ts change, and it adds no new supervisor exit code. failure and the MOE_DEPENDENCY_LOCKFILE_REFUSED prefix tell this refusal apart from the guest's 82.\n- DEPENDENCY_LIMIT_EXCEEDED is a code-failure only at admission's two sites (lockfile size, package count), which depend on the lockfile bytes alone. The post-download total bound and the validateImport tree bound stay infra-failure: they are decided after network and cache I/O, outside admission.\n- DEPENDENCY_TOO_LARGE stays infra-failure: the download stops at maxBytes before its bytes are verified.\n- CHECK_BOUNDARIES is untouched. This is a80f46db's candidate:'code-failure' branch, and a refusal run carries environment null, so the checkEnvironment hash does not change again.\n\nAll HA rows now pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/dependency-cache.mjs",
+        "scripts/local-runner/check-lifecycle.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 4: test the daemon's decision on the real producer's result, in packages/moe-daemon/src/delivery/repairPolicy.test.ts. Append after 42e9990c's rows, using the Edit tool.\n\n- Load test-only dynamic imports, as requiredChecks.test.ts:277 does: import(pathToFileURL(fileURLToPath(new URL('../../../../scripts/local-runner/check-lifecycle.mjs', import.meta.url))).href), and the same for source-snapshot.mjs.\n- A failed import fails the test, never skips it. If vitest cannot load check-lifecycle.mjs's import graph, feed a literal copy of HA1's result shape (82 plus the exact tail), and say so in complete_task.\n- Drive the REAL runCheckJob with its real default admission over a root package-lock.json whose node_modules entry is a link (SOURCE_UNSUPPORTED), then over truncated JSON (LOCKFILE_INVALID).\n- Fake only provision (reserving, with a ready x64 guest), toolchain (a 64-hex sha256) and remove ('deleted'). Put cacheDir under os.tmpdir(); admission refuses before any mkdir or fetch.\n- Assert outcome 'code-failure', exitCode 82 and the failure code.\n- Build each Run with check-dispatch's rule `Number.isSafeInteger(exitCode) ? exitCode : -1` and its outputTail, through the file's run/cands/diag/decide helpers.\n\nRows HA5:\n- decide(cands(1), [r]) is toStrictEqual {action:'repair', attempt:1, remaining:2, diagnostics: diag(r, ['r1'])}: neither retry-infra nor non-repairable-outcome.\n- With policy {maxCodeRepairs:3, maxInfraRetries:0} the same repair comes back, so no infra retry is spent.\n- c2 failing with the other code gives repair attempt 2, remaining 1, because the tails differ.\n- c2 failing with the same code escalates as unchanged-failure. That is the designed effect of a fixed tail: a repeated identical refusal goes to a human and never loops.\n\nNo repairPolicy.ts change. Never mock decideRepair or runCheckJob. Keep 42e9990c's rows and C1/I1 intact.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "One verification gate. Run it full-scope as DoD 5 says, because this changes runCheckJob's outcome contract.\n\nBuild the snapshot:\n- Create a FULL snapshot outside /mnt/d/projexts/moes: `S=$(mktemp -d) && git -C /mnt/d/projexts/moes archive <landed HEAD> | tar -x -C \"$S\"`. Use the whole tree, never a scripts-only archive: tests read .github, docs and packages.\n- Overlay exactly the four owned files, and record their sha256 and the HEAD sha.\n- Before overlaying, run `git diff HEAD --` on each owned file. It must show only this row's hunks. If a peer's hunks are there, stop and ask the governors.\n- In $S/packages/moe-daemon, run `npm ci --no-audit --no-fund` and `npm run build` (TY1 and the /runner channel tests need dist).\n- Restore src/generated/initFiles.ts from the archive, because the prebuild rewrites it.\n- Confirm `diff -rq -x node_modules -x dist` against a fresh archive lists only the four overlays.\n\nRules:\n- Never npm, build or test in the shared checkout (GLOBAL rail).\n- Kill only PIDs this session started.\n- Use Linux/WSL with a Linux-only PATH.\n- The pinned Node 24.22.2/npm 11.19.1 at /tmp/moe-5ed-tc makes the real-npm rows run. Re-verify its sha256 against toolchain.json, or refetch it through toolchain-cache.\n\nFrom $S, run exactly:\n```bash\nnode --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)\n```\n\nRequire zero failures in both halves. CJ13, every other CJ row and the canary rig's 'altered' rows in local-runner.test.mjs must pass UNEDITED. Rerun any failure on a pristine archive of the same HEAD first, to tell HEAD-red from a regression. complete_task's verification carries the command, the exitCode, an outputTail with the counts, and the overlay hashes.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review, once (load adversarial-self-review), scoped to the four-file diff.\n\nMutation proof in a scratch copy only, never the checkout. Apply each mutation, run the HA rows and CJ13, confirm it is killed, then restore:\n(1) classify by code string, skipping lockfileRefusal: CJ13 and HA3 (a)-(c) fail;\n(2) record INPUT_INVALID too: HA4 fails;\n(3) set exitCode to null: HA1 and HA5 fail;\n(4) read error.code instead of the recorded code: HA3 (e) fails;\n(5) drop run.refusal: HA1 and HA5 fail;\n(6) build a tail from error.message or the lockfile dir: HA1 fails;\n(7) add an abort check before returning the refusal: HA2 fails.\n\nChecklist:\n- Concurrency: run.refusal is per run, and the WeakMap is keyed by the error object.\n- Hostile values: WeakMap.get never throws or calls a Proxy trap.\n- No test reaches the network.\n- Cross-platform: no path logic is added, and the HA rows are pure JS that also run on Windows.\n- Only the four files changed.\n- Untouched: local-runner.test.mjs, CERTIFICATION.md, repairPolicy.ts, check-dispatch.mjs, check-evidence.mjs and guest-supervisor.py.\n- No forbidden pattern.\n\nIf the review changes code, rerun the exact gate.\n\nIn complete_task, report:\n- the mutation results;\n- the code-to-outcome matrix;\n- that the landed check-dispatch still records no pre-dispatch stop (runOnce !dispatch), so the daemon sees this result only after a future row records it.\n\nPost a task comment @governor-693b7073 for CQ-R13: supervisorSha256 and checkEnvironment are unchanged, and runCheckJob's refusal contract changed. The wrapper lands the work; QA reviews.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/dependency-cache.mjs",
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/tests/local-runner-check.test.mjs",
+        "packages/moe-daemon/src/delivery/repairPolicy.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor: archiving. A host admission refusal stops before onReady, so check-dispatch records nothing and no consumer reads the label this row changes. See the 09:20Z ruling comment.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-42e9990c286a43fcab7edd716290a515"
+  ],
+  "priority": "MEDIUM",
+  "order": 1,
+  "comments": [
+    {
+      "id": "comment-d9a1779308d6403284109ef23c847321",
+      "author": "governor-693b7073",
+      "content": "Governor ruling, 09:20Z: ARCHIVED on architect-b58e1112's recommendation (msg-5364f935; comment-afa3fc5d on task-76f2c3c4). I verified it against the code at HEAD 9257b233. runCheckJob (check-lifecycle.mjs) runs its steps in this order: provision → hostInputs (toolchain, then dependencies/buildDependencyCache, which is where a DEPENDENCY_* refusal returns) → checkEnvironment → materialize → installHostInputs → ready(onReady) → session. A host admission refusal therefore always stops before onReady. In check-dispatch.mjs runOnce, `!dispatch` then returns stopped {RUNNER_CHECK_FAILED, failure: <code>}, with no moe.record_check_dispatch and no observation. The daemon's repairPolicy never classifies such a run, so the premise \"the daemon retries a candidate-caused refusal on fresh VMs\" does not hold on the dispatch path. The certify-* callers use generated or absent lockfiles, and certify-containment keeps the failure code, not the outcome. So nothing consumes the infra-failure label this row would change. Task-76f2c3c4's decision (NO: refusals are not recorded; they need a replan) closes the worker-feedback side. To undo: set_task_status ARCHIVED→BACKLOG, then re-plan. The submitted plan (planRevision current) is kept on the row.",
+      "timestamp": "2026-10-31T09:15:16.961Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T08:26:28.001Z",
+  "updatedAt": "2026-10-31T09:15:27.755Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-31T08:36:28.430Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-31T08:36:58.142Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-b58e1112",
+    "governor-693b7073"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-31T09:03:04.294Z",
+  "executionContract": {
+    "intendedBehavior": "runCheckJob resolves a refusal that dependency-cache.mjs admitLockfiles itself raised over the checked tree's package-lock.json bytes as {outcome:'code-failure', exitCode:82, signal:null, outputTail:<fixed per-code ASCII literal, at most 512 bytes>, failure:<its DEPENDENCY_ code>, environment:null}. The codes are DEPENDENCY_LOCKFILE_INVALID, _LOCATION_INVALID, _SOURCE_UNSUPPORTED, _INTEGRITY_INVALID, and _LIMIT_EXCEEDED at admission's lockfile-size and package-count sites. The run makes the same VM delete and the same single onCleanup report as today. Every other failure stays today's infra-failure, including an error with the same code that admission did not raise.",
+    "invariants": [
+      "Only admitLockfiles' own refusals become code-failure, identified by lockfileRefusal's provenance and never by a code string.",
+      "outputTail and every message are fixed literals: no lockfile bytes, package names, paths or upstream text.",
+      "On every path past the two input refusals the VM is deleted and onCleanup is told exactly once.",
+      "CHECK_BOUNDARIES, checkEnvironment's hash, supervisorSha256, repairPolicy.ts and check-dispatch.mjs are unchanged.",
+      "scripts/tests/local-runner.test.mjs and CERTIFICATION.md are unedited, and CJ13 stays green."
+    ],
+    "compatibility": [
+      "runCheckJob's frozen result keys are unchanged.",
+      "check-dispatch's pre-dispatch stop is unchanged: {code:'RUNNER_CHECK_FAILED', failure:<code>} with no observation.",
+      "certify-canary's 'altered' verdict still sees infra-failure plus DEPENDENCY_CHECKSUM_MISMATCH with zero sessions."
+    ],
+    "sourceAssumptions": [
+      "check-lifecycle.mjs: runCheckJob maps every pre-session failure to infra-failure with exitCode null, and hostInputs passes DEPENDENCY_ codes through codeOf.",
+      "dependency-cache.mjs: buildDependencyCache calls admitLockfiles before any I/O and lets its error propagate unchanged. Admission throws only OWN_ERRORS dependencyErrors.",
+      "check-session.mjs exports DEPENDENCIES_CANDIDATE_INVALID = 82 once a80f46db lands.",
+      "repairPolicy.ts classify() repairs a code-failure only when its exitCode is nonzero.",
+      "check-dispatch.mjs runOnce records no observation without a dispatch (local-runner-dispatch test 'V')."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner*.test.mjs && (cd packages/moe-daemon && npm test)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Classify by the code string in runCheckJob. Rejected: CJ13 in scripts/tests/local-runner.test.mjs pins a stubbed DEPENDENCY_SOURCE_UNSUPPORTED as infra-failure. CQ-R13 owns that file and the task rail forbids editing it, so this approach breaks the DoD-5 gate. Any step or seam could also mint the code, which is caller-minted evidence.\n2. Have runCheckJob pre-run admitLockfiles. Rejected: it parses up to 16 x 16 MiB twice, and it would refuse the fake lockfile bytes ('ROOT', '{}') that the R13-owned CJ11/CJ12 feed to stubbed steps.\n3. Change classify() to repair a null exitCode. Rejected: that changes the daemon contract, and the DoD wants a nonzero exitCode on the result.\n4. A distinct host exit code such as 83. Rejected: it means the same thing as 82 and adds a number to the supervisor's exit-code space.\n5. Have check-dispatch record pre-dispatch refusals. Out of scope: no approved environment exists for a refused lockfile, so recording one would mint evidence, and test 'V' forbids that.",
+    "codebaseInsights": "PREMISE CORRECTION: the landed check-dispatch.mjs runOnce records an observation only after onReady's dispatch. A host admission refusal stops before onReady, so it becomes stopped {code:'RUNNER_CHECK_FAILED', failure:<code>} and no observation is recorded. The daemon (repairActivation.ts needs a recorded dispatch) therefore neither retries nor repairs it today, and that holds before and after this row. This row fixes runCheckJob's own contract and proves the daemon's decision on that shape (DoD 4). The prototype is at /mnt/d/moe-scratch/0e149912-plan/: out of 440 held tests, 433 pass, 2 skip, and the 5 failures are ENOENT for files missing from the scripts-only archive; CJ13 is green.",
+    "risks": "- Fixed per-code tails make two identical refusals in a row escalate as unchanged-failure. That is the designed behaviour; HA5 pins it.\n- certify-canary's 'fail' verdict accepts any code-failure. A host refusal is now a code-failure with no session, but 'pass' runs first on an identical lockfile, so this is unreachable. Flag it to CQ-R13.\n- CQ-R13 (f4811a72) declares check-lifecycle.mjs, dependency-cache.mjs and local-runner-check.test.mjs. Write only with the Edit tool so the paths carry a TOOL witness and land.\n- vitest may fail to load the runner's import graph. The plan gives a fallback for that.\n- The 16 MiB lockfile row allocates about 17 MB, which is fine.",
+    "keyFiles": [
+      "scripts/local-runner/check-lifecycle.mjs",
+      "scripts/local-runner/dependency-cache.mjs",
+      "scripts/local-runner/check-dispatch.mjs",
+      "scripts/local-runner/certify-canary.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "packages/moe-daemon/src/delivery/repairPolicy.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3d42fda0d1ab0b61d2e516b95c05f8e3aee3be05",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-10-31T09:03:04.313Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "181d1ca8465fbfd35dc9e3374f2f4cb26fe604f5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-b58e1112@2026-10-31T08:37:00Z",
+      "paths": [
+        ".moe/tasks/task-76f2c3c4860c4792ad7d84a0e33b2b8d.json"
+      ],
+      "recordedBy": "architect-b58e1112",
+      "recordedAt": "2026-10-31T09:07:08.554Z",
+      "treeId": "ede742634411db78e7becd24bc0220557533c56b",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-76f2c3c4860c4792ad7d84a0e33b2b8d.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-b58e1112@2026-10-31T08:37:00Z",
+    "at": "2026-10-31T09:07:08.554Z"
+  }
+}

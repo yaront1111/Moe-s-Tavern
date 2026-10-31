@@ -137,7 +137,7 @@ interface ProjectSettings {
   // Attribution policy for the post-flight (details in CONFIGURATION.md).
   attribution?: {
     undeclared?: 'solo' | 'never' | 'always'; // default 'solo': MEASURED paths only when no other worker is live; MOE_ATTRIBUTION=declared → 'never'
-    contested?: 'skip-untouched' | 'commit' | 'skip'; // default 'skip-untouched': requires a supported Claude editing call and matching successful tool_result from this session; otherwise MOE_ATTR_CONTESTED_UNTOUCHED. Reports remain ASSERTED. 'commit' records Moe-Contested trailers; 'skip' → MOE_ATTR_CONTESTED
+    contested?: 'skip-untouched' | 'commit' | 'skip'; // default 'skip-untouched': a path a contesting task is mid-step on (get_commit_scope editingTaskIds) is held as MOE_ATTR_CONTESTED_EDITING even with a witness; otherwise requires a supported Claude editing call and matching successful tool_result from this session, unless the path was clean at the session's pre-flight and every contesting task reports peerActive:false; otherwise MOE_ATTR_CONTESTED_UNTOUCHED. Reports remain ASSERTED. 'commit' records Moe-Contested trailers, one per path naming every contesting task; 'skip' → MOE_ATTR_CONTESTED
     exclude?: string[];                       // extra DENY prefixes (project-relative, no absolute/..); default []
   };
 
@@ -149,9 +149,18 @@ interface ProjectSettings {
   qualityGate?: string;
 
   // When the gate runs. 'epicFinal' (default): only on the epic's final task
-  // (highest order among siblings) — verification stays concentrated and
+  // (get_context isEpicFinal: the epic's designated finalTaskId, else the highest
+  // order among its non-ARCHIVED tasks) — verification stays concentrated and
   // mid-epic tasks stay lean. 'everyTask': every worker completion.
   qualityGateScope?: 'epicFinal' | 'everyTask';
+
+  // Which execution profile governs tasks (packages/moe-daemon/src/delivery/executionProfile.ts).
+  // Absent = 'legacy': today's behaviour. 'observe' changes no gate and never
+  // weakens deliveryPolicy. 'verified-local' is refused EXECUTION_PROFILE_NOT_READY
+  // until local isolation, trusted runner evidence and revision-bound delivery are
+  // certified. Any other value is refused as invalid input, never read as the
+  // default. See `executionPolicySnapshot` below.
+  executionProfile?: 'legacy' | 'observe' | 'verified-local';
 
   // What moe.qa_approve requires before DONE (packages/moe-daemon/src/delivery/policy.ts).
   // Absent or null = 'legacy': the soft NO-COMPLETION-COMMIT warning, approval
@@ -319,13 +328,21 @@ interface Epic {
   architectureNotes: string;     // "Using JWT in httpOnly cookies..."
   
   // Epic-level rails (add to global)
-  epicRails: string[];           // ["Use Supabase Auth", "Follow OAuth 2.0"]
+  epicRails: string[];           // ["Use Supabase Auth", "Follow OAuth 2.0"]; max 100 entries, 10000 chars each (see "Epic rail limits")
   
   // Status
   status: EpicStatus;
   
   // Ordering
   order: number;                 // 0, 1, 2... for display order
+
+  // Epic-final designation: the epic's final (integration-and-hardening) task,
+  // set or cleared with moe.update_epic { epicId, finalTaskId } ("" clears).
+  // It counts only while it names an existing, non-ARCHIVED task of this epic;
+  // otherwise get_context isEpicFinal falls back to the highest order among the
+  // epic's non-ARCHIVED tasks, ties counting. Optional, so epic files written
+  // before it load unchanged.
+  finalTaskId?: string;          // "task-xyz789"
   
   // Timestamps
   createdAt: string;
@@ -364,6 +381,15 @@ type EpicStatus =
 }
 ```
 
+### Epic rail limits
+
+Epic creation (`moe.create_epic`, and the IDE create-epic form) and every epic update (`moe.update_epic`, and the apply step of an approved EPIC rail proposal) accept at most 100 `epicRails` entries of at most 10000 UTF-16 code units each (JavaScript `string.length`, not bytes or code points). Each entry must be a non-blank single-line string with no NUL character. An entry that breaks a limit is **refused with `INVALID_INPUT`, never truncated or dropped**, and the whole create or update fails with nothing written. Accepted entries are stored exactly as sent, including leading/trailing whitespace and Unicode.
+
+- `moe.propose_rail` applies the same check to the `proposedValue` of an EPIC `ADD_RAIL`/`MODIFY_RAIL` before the proposal is saved or published. `REMOVE_RAIL` uses only `currentValue`, so a rail stored before the cap stays removable. GLOBAL and TASK rails are not newly bounded.
+- The whole array is re-validated on every epic rail change, so an entry already stored over the limit (only possible from a hand edit or an older build) blocks other rail changes until it is shortened (`MODIFY_RAIL`) or removed (`REMOVE_RAIL`); the error names the offending `epicRails[i]`.
+- A PENDING EPIC proposal saved before this check is re-validated when a human approves it. If it is over the limit, approval fails, the proposal stays `PENDING`, and the epic is unchanged; reject it and propose a shorter rail (or split the constraint across entries).
+- On `moe.create_epic`, an absent `epicRails` creates the epic with no rails. `null`, a non-array, more than 100 entries, or any refused entry fails the call, and no epic is created. Blank and non-string entries are refused, not silently dropped. The IDE create-epic forms already trim each line and drop blank lines before sending (JetBrains CreateEpicDialog, VS Code media/epicDetail.js), so their payloads are unaffected.
+
 ---
 
 ## Task
@@ -389,9 +415,30 @@ interface Task {
   // Implementation Plan (AI-generated)
   implementationPlan: ImplementationStep[];
 
-  // Monotonic version of the approval-relevant plan surface
-  // (implementationPlan + definitionOfDone). Daemon-owned; see `planRevision` below.
+  // Monotonic version of the approval-relevant plan surface (ordered step ids,
+  // instructions, approved file scope, definitionOfDone, executionContract).
+  // Daemon-owned; see `planRevision` below.
   planRevision?: number;
+
+  // The planRevision an approval was bound to. Daemon-owned; absent for an
+  // unchecked or legacy approval. See `approvedPlanRevision` below.
+  approvedPlanRevision?: number;
+
+  // Configuration identity (executionProfile + deliveryPolicy) captured with the
+  // committed planRevision. Daemon-owned; never approval or readiness. See
+  // `executionPolicySnapshot` below.
+  executionPolicySnapshot?: ExecutionPolicySnapshot;
+
+  // Structured, approval-relevant intent for the plan. Absent on legacy rows.
+  // Never approval, readiness or evidence by itself. See `executionContract` below.
+  executionContract?: TaskExecutionContract;
+
+  // Daemon-owned plan-reuse facts (CQ-C07a) and recipe binding (CQ-C08). Never
+  // approval, readiness or evidence. See the sections below.
+  planSourceBasis?: PlanSourceBasis;
+  planningEntry?: PlanningEntry;
+  planReuse?: PlanReuseRecord;
+  recipeInstance?: RecipeInstance;
   
   // Status
   status: TaskStatus;
@@ -482,7 +529,7 @@ interface Task {
   touchedFiles?: string[];       // Tool-write harvest (stream-json Edit/Write paths), unioned across sessions (ASSERTED tier)
   inferredPaths?: string[];      // MEASURED-tier paths the wrapper landed — PLANNED tier next session, never promoted
   unattributedPaths?: string[];  // Changed paths the last landing could not attribute (replaced each landing; never staged)
-  lastCommitOutcome?: {          // Every landing attempt, including refused/failed/nothing
+  lastCommitOutcome?: {          // Every landing attempt, including refused/failed/nothing, except an owner-guard refusal (older daemons stored those too)
     outcome: 'committed' | 'nothing' | 'refused' | 'failed';
     kind: 'completion' | 'checkpoint' | 'rescue';
     code?: string;               // MOE_COMMIT_* code on refused/failed
@@ -673,7 +720,7 @@ effect immediately.
 
 ### `planRevision`
 
-`Task.planRevision` is a **daemon-owned monotonic version of the approval-relevant plan surface** — `implementationPlan` + `definitionOfDone`. It exists so a consumer can tell "the plan I am looking at" from "the plan on the board now". Domain: a **non-negative safe integer** (`Number.isSafeInteger`, ≤ `Number.MAX_SAFE_INTEGER`), which the Kotlin/TS clients carry as a `Long`/`number` without truncation.
+`Task.planRevision` is a **daemon-owned monotonic version of the approval-relevant plan surface**: the ordered step ids, each step's original and effective (active-amendment) instructions, the approved `affectedFiles`/`newFiles`, `definitionOfDone` and `executionContract`. It exists so a consumer can tell "the plan I am looking at" from "the plan on the board now". Domain: a **non-negative safe integer** (`Number.isSafeInteger`, ≤ `Number.MAX_SAFE_INTEGER`), which the Kotlin/TS clients carry as a `Long`/`number` without truncation.
 
 Producer rules, all enforced in `taskStore.updateTask` — the single choke point every plan/DoD writer already routes through (`moe.submit_plan`, `moe.amend_plan_step`, `moe.qa_reject`/reopen step resets, `moe.request_replan`, the plugin `UPDATE_TASK` message):
 
@@ -681,10 +728,10 @@ Producer rules, all enforced in `taskStore.updateTask` — the single choke poin
 - **Absent = 0.** A record written before this field existed is read as revision 0. There is **no migration and no `schemaVersion` bump**; the row materializes a real `0`/`1` on its next successful write.
 - **No caller-selected stamp.** A `planRevision` in a tool argument or an `UPDATE_TASK` payload is stripped before the write, so a client can neither forge a newer value nor reset an older one.
 - **+1 for every committed submission**, including a resubmission whose steps are byte-identical to the ones already stored.
-- **+1 for any write that actually changes the sanitized surface**, whoever the writer is. Comparison is structural against the *sanitized* prior value: array order is significant, object key insertion order is not. Every retained key inside a step participates — `status`, `startedAt`/`completedAt`, `note`, `modifiedFiles`, `newFiles`, `amendments`, `activeAmendmentId` — so an amendment or a completed step advances the revision exactly like a re-plan.
-- **One bump per task write.** A write that changes steps *and* DoD *and* carries the submission event advances by exactly 1.
-- **No bump for a no-op or for unrelated metadata.** Re-sending the same sanitized steps/DoD, reordering object keys, omitting the keys, passing them as `undefined`, or writing only status/comments/assignment/metrics leaves the number alone.
-- **Reopen never resets it.** `qa_reject` / reopen may *advance* it, because resetting steps to `PENDING` and dropping their execution evidence is a real surface change; an already-pending plan sanitizes equal and holds steady.
+- **+1 for any write that materially changes that surface**, whoever the writer is. Comparison is structural against the *sanitized* prior value: array order is significant, object key insertion order is not, so a contract whose keys merely arrive in another order does not bump. Material: the ordered step ids, the original and the effective active instructions (an amendment that changes the effective text is a re-plan), the approved `affectedFiles`/`newFiles`, `definitionOfDone` and `executionContract`. Not material: step `status`, `startedAt`/`completedAt`, reported `modifiedFiles`, progress notes, amendment audit metadata and inactive amendment history. Starting or completing a step therefore never advances the revision.
+- **One bump per task write.** A write that changes steps *and* DoD *and* contract *and* carries the submission event advances by exactly 1. A caller-supplied stamp is ignored on every path.
+- **No bump for a no-op or for unrelated metadata.** Re-sending the same sanitized steps/DoD/contract, reordering object keys, omitting the keys, passing them as `undefined`, or writing only status/comments/assignment/metrics leaves the number alone.
+- **Reopen never resets it, and never advances it by clearing execution evidence.** `qa_reject` / reopen resets steps to `PENDING` and drops their execution progress, which is not material; the revision moves only if the reopen also changes a material field.
 
 Atomicity and errors:
 
@@ -693,7 +740,141 @@ Atomicity and errors:
 - A **required increment at `Number.MAX_SAFE_INTEGER`** refuses with numeric code `STATE_CONFLICT` (-32002) and `codeName` `PLAN_REVISION_EXHAUSTED`, carrying `taskId`/`currentRevision`/`maxPlanRevision`, and throws before anything is persisted. A metadata-only write at that value still succeeds.
 - `moe.submit_plan` returns the committed value as `planRevision` in its success result (never a recomputed or later-cached number).
 
-**Scope note:** this section is the *producer*. The consumer side has since landed: an optional `expectedPlanRevision` on both `/ws` approval routes refuses a stale approval with `PLAN_REVISION_MISMATCH` (see [`docs/MCP_SERVER.md`](MCP_SERVER.md)), and the JetBrains plan-review dialog and the VS Code plan-review panel each send the revision they actually rendered. It is still not a universal fence: omitting the token remains a legal legacy approval, the other board/detail approve entry points stay token-free, and SPEED/TURBO auto-approval is unchanged — so a stamped revision documents staleness everywhere but only *prevents* a stale approval on the paths that send it. Cross-client behaviour, reproduction steps and the exact boundaries are in [`docs/PLAN_APPROVAL_FRESHNESS.md`](PLAN_APPROVAL_FRESHNESS.md).
+**Scope note:** this section is the *producer*. The consumer side has since landed: an optional `expectedPlanRevision` on both `/ws` approval routes refuses a stale approval with `PLAN_REVISION_MISMATCH` (see [`docs/MCP_SERVER.md`](MCP_SERVER.md)), and the JetBrains plan-review dialog and the VS Code plan-review panel each send the revision they actually rendered. Every human approval route now requires it: an omitted token is refused `INVALID_INPUT` on both `/ws` routes (CQ-F04b), an explicit `0` still approves a stamp-less row, and unstamped approvals already recorded stay as history. SPEED/TURBO auto-approval is bound to the revision its own submission committed, and the relaxed `moe.set_task_status` approval is the one token-free path that records no stamp (see `approvedPlanRevision` below). Cross-client behaviour, reproduction steps and the exact boundaries are in [`docs/PLAN_APPROVAL_FRESHNESS.md`](PLAN_APPROVAL_FRESHNESS.md).
+
+### `approvedPlanRevision`
+
+`Task.approvedPlanRevision` is the `planRevision` an approval was bound to. It is **daemon-owned** and is the only approval identity that execution consumers trust.
+
+- **Who sets it.** Only the approval write itself, in the same task image as `status: "WORKING"` and `planApprovedAt`, and only when it equals the revision that very write commits: `approveTask`'s `PLAN_APPROVED` with the checked `expectedPlanRevision`, or a SPEED/TURBO `PLAN_AUTO_APPROVED` with the revision its plan submission committed (see [`docs/MCP_SERVER.md`](MCP_SERVER.md)). A delayed approval therefore can never authorize a newer plan.
+- **Absent means unchecked.** An approval recorded without a stamp (history, or the relaxed token-free `moe.set_task_status` approval, which records none) leaves it absent. The daemon never writes `null`, and a stored `null` or non-integer reads exactly like absence. Nothing backfills it from `status`, `planApprovedAt` or event names.
+- **History, not currency.** A material plan, DoD or contract edit advances only `planRevision` and keeps the old number. Only a safe integer **equal to** `planRevision` is a current approval.
+- **No caller writes.** The `/ws` `UPDATE_TASK` denylist and `taskStore.updateTask` strip it from every caller update, and `CREATE_TASK` never copies it.
+- **Consumers.** Under `verified-local`, `moe.start_step`, `moe.complete_step` and `moe.complete_task` treat only that equality as authorization (`PLAN_REVISION_NOT_APPROVED` otherwise). Claims never consult it, and legacy/observe behaviour is unchanged.
+
+### `executionPolicySnapshot`
+
+`Task.executionPolicySnapshot` records which `executionProfile` and `deliveryPolicy` were configured when the plan was submitted, and the `planRevision` it was submitted at. It is **configuration identity only**: never plan approval, readiness, runner trust, verified delivery or completion. The addition is additive, with no `schemaVersion` bump and no migration; a task without it was planned before it existed.
+
+```typescript
+type ExecutionPolicySnapshot =
+  | { version: 1; profile: 'legacy' | 'observe' | 'verified-local'; planRevision: number }
+  | { version: 2; profile: 'legacy' | 'observe' | 'verified-local'; planRevision: number;
+      deliveryPolicy: 'legacy' | 'local-branch' | 'remote-push' | 'merged-pull-request' | 'manual-artifact' };
+```
+
+- **Shapes.** A v1 snapshot has exactly the keys `version`, `profile` and `planRevision`; a v2 snapshot has exactly `version`, `profile`, `planRevision` and `deliveryPolicy`. `planRevision` is a non-negative safe integer. Decoding (`readExecutionPolicySnapshot`) is strict and returns a fresh primitive-only copy; any other key set, version, profile, revision or policy is malformed. A v2 `deliveryPolicy` is never defaulted, and a v1 snapshot never gains one. The daemon captures v2.
+- **Capture.** Only the `PLAN_SUBMITTED` write (`moe.submit_plan`) captures it, in the same fresh `Task` object and the same write as the `planRevision` it names, recording the live `executionProfile` and `deliveryPolicy`. A stored `verified-local` snapshot is a floor and is kept whole: only its `planRevision` advances, so a rollback cannot lower it. Approval, progress, metadata, status and replanning writes (`request_replan`, `amend_plan_step`, reopen) never refresh, backfill or erase it, so a snapshot from an earlier revision is kept until the next submission. A malformed stored snapshot or live setting refuses the submission with `INVALID_INPUT` before any write.
+- **Ownership.** Daemon-owned. `taskStore.updateTask` strips it from every caller update, MCP tools and the plugin `UPDATE_TASK` alike (whose denylist also drops it), and `create_task` never copies it.
+- **Consumers.** A task is strict when its effective profile is `verified-local`: the live `executionProfile`, floored by a stored `verified-local` snapshot of any version or revision (`resolveTaskExecutionProfile`). The progression backstop in `taskStore.updateTask`, claim admission (`util/claimEligibility.ts`, shared by `claim_next_task` and `wait_for_task`) and delivery-policy selection (`resolveTaskDeliveryPolicy`, used by `qa_approve` and the dependency gate) all use that one rule, and today each refuses a strict task with `-32003` / `EXECUTION_PROFILE_NOT_READY`. `moe.start_step`, `moe.complete_step` and `moe.complete_task` (`util/executionAuthorization.ts`) also judge strictness, from the resolved profile or the open attempt's recorded snapshot, so step progress is no longer among the writes that never read it. A malformed snapshot or setting fails closed with `INVALID_INPUT` only where it is judged; reads, metadata writes, releases and cleanup never fail on it (`moe.get_context` names it in `executionPolicy.unreadable`). Legacy and observe tasks keep the **live** `deliveryPolicy`; a captured one is identity only and is never consulted.
+- **Attempts.** A claim that opens an attempt records `ExecutionAttempt.executionPolicySnapshot` from the task's floor plus the live settings at the task's `planRevision` (`deriveAttemptPolicySnapshot`), never from claim arguments. An own-seat resume adopts the open attempt with its original snapshot (or none), and phase changes (restart parking, reattach) keep it; a successor attempt records a fresh one. It is never rewritten or backfilled.
+- **Serving.** `moe.get_context` serves both, decoded, as `executionPolicy` (see [`docs/MCP_SERVER.md`](MCP_SERVER.md)).
+
+### `executionContract`
+
+`Task.executionContract` (`TaskExecutionContract`) is the structured, approval-relevant statement of what a plan intends. It is optional; legacy rows load unchanged with no migration and no `schemaVersion` bump. By itself it grants no approval, readiness or evidence. `EXECUTION_CONTRACT_FIELDS` in `state/validators.ts` is the canonical field order; every field is optional.
+
+| Field | Shape | Meaning |
+|---|---|---|
+| `intendedBehavior` | string, at most 2000 chars | the observable outcome the change must produce |
+| `acceptanceCriteria` | string list | behavioural criteria; `definitionOfDone` stays human-owned |
+| `invariants` | string list | what must not change |
+| `compatibility` | string list | legacy data, wire shapes and callers that must keep working |
+| `approvedScope` | string list | symbols, interfaces and producer/consumer surfaces; file scope stays in the steps |
+| `reuse` | string list | existing implementations reused, or why a new one is introduced |
+| `sourceAssumptions` | string list | source facts with path or symbol references |
+| `checkRefs` | string list | verification commands exactly as they will be run |
+| `requiredChecks` | `ProtectedCheckDefinition[]` (at most 20) | approved check commands (`id`, `command`, and optional `configs`/`scripts`/`assertionRoots` path lists of at most 50). Approval material, never evidence; the measured snapshot and check runs are documented with the CQ-V delivery records |
+
+Every string list holds at most 50 entries, each at most 1000 chars.
+
+- **Validation** (`validateExecutionContract`, run by every `updateTask` writer): strict, refusing `INVALID_INPUT` with `context.field`; unknown keys are refused; strings are preserved and never truncated; the stored object is a fresh canonical copy; empty lists are omitted. `undefined`, `null` or an empty contract clears it.
+- **Writers.** `moe.submit_plan` replaces it, and an omitted contract clears it. `moe.get_context` projects it for every role when set.
+- **Revision.** A material change increments `planRevision` once, in the same write. Object key order is not material; list order is.
+
+### `planSourceBasis`, `planningEntry`, `planReuse` (CQ-C07a)
+
+Daemon-owned facts for approved-plan reuse. Each is optional, and legacy rows load unchanged. All three are written only by `taskStore.updateTask`, stripped from every caller update and the plugin `UPDATE_TASK` denylist, and decoded by never-throwing readers in `context/planReuseState.ts`. None of them is approval, readiness or evidence. Behavior: [`docs/MCP_SERVER.md`](MCP_SERVER.md) (`moe.get_context` **Plan reuse**, `moe.claim_next_task`).
+
+| Field | Shape | Written when | Decoder |
+|---|---|---|---|
+| `planSourceBasis` | `{ version: 1, commit, planRevision }`: `commit` is the full 40/64-hex `HEAD^{commit}` `submit_plan` ran against, `planRevision` the revision that write committed | the `PLAN_SUBMITTED` write | `readPlanSourceBasis` |
+| `planningEntry` | `{ from: TaskStatus, at, seq }`: the status the task left, the write's canonical ISO time, a per-task counter from 1 | any status change into `PLANNING` | `readPlanningEntry` |
+| `planReuse` | `PlanReuseRecord` below | the plan reuse job only (`context/planReuseJob.ts`) | `readPlanReuseRecord` |
+
+```typescript
+interface PlanReuseRecord {
+  version: 1;
+  decision: 'reuse' | 'refresh' | 'reassess' | 'replan';
+  planRevision: number;
+  entrySeq: number;            // the planningEntry.seq the assessment belongs to
+  reasons: string[];           // 0-32 items of 1-300 chars, no control characters
+  assessedAt: string;          // canonical ISO time
+  basisCommit?: string;        // 40 or 64 hex
+  headCommit?: string;
+  changedPaths?: string[];     // at most 64 normalized repo-relative paths
+  candidate?: 'current' | 'revalidate';  // whether the current candidate's base still equals its delivery target
+}
+```
+
+A record is current only for its `planRevision` and, while the task is in `PLANNING`, its `entrySeq`; otherwise `planReuseView` derives `{ decision, reasons }`, with `pending` for an approved plan awaiting assessment. `reuse` and `refresh` resume the task to `WORKING` under its existing approval; `candidate: "revalidate"` never changes the decision.
+
+### `recipeInstance` and `RecipeDefinition` (CQ-C08)
+
+`Task.recipeInstance` records which recipe produced the current plan. It is daemon-owned: set only by the `PLAN_SUBMITTED` write of `moe.submit_plan`'s internal recipe channel (the reserved `moe-recipe` identity, see [`docs/MCP_SERVER.md`](MCP_SERVER.md)), deleted by any other submission, and stripped from caller updates. Decode with `readRecipeInstance`, which returns `null` for a malformed or stale binding (a later `planRevision`). It is never approval or evidence.
+
+```typescript
+interface RecipeInstance {
+  version: 1;
+  recipeId: string;            // /^[a-z0-9][a-z0-9._-]{0,63}$/
+  kind: string;
+  recipeVersion: number;
+  definitionDigest: string;    // sha256 hex of [id, kind, version, requiredChecks, params]
+  commit: string;              // where the definitions, the source and the protected snapshot were read
+  inputs: Record<string, string | number | boolean>;  // at most 32 flat keys
+  inputsDigest: string;        // sha256 hex
+  planRevision: number;
+}
+
+interface RecipeDefinition {
+  id: string;
+  kind: string;
+  version: number;
+  requiredChecks: ProtectedCheckDefinition[];  // become the plan's protected checks (1 or more)
+  params?: Record<string, unknown>;            // checked by the kind's validateDefinition
+}
+```
+
+Definitions live in the committed file `.moe/recipes.json`: `{ "version": 1, "recipes": [RecipeDefinition, ...] }` with 1 to 50 unique-id entries and no other keys. They are read only from committed bytes at the commit `submit_plan` pins (an uncommitted edit does not count), and decoded strictly. The file is appended to every instantiated check's `configs`, so the measured snapshot pins its blob and a changed file is refused `protected-check-changed` until a new approval. A recipe `kind` must be registered in `recipeKinds`; `docs-literal-replace` (`context/recipes/docsLiteralReplace.ts`) is the one kind that exists, with `params: { allowedPaths }` (1 to 16 canonical prefixes, none under `.moe`). Nothing activates a recipe on its own.
+
+### `ContextDelta` and `PacketManifest` (CQ-C06a, CQ-C01)
+
+Response shapes of `moe.get_context`; the behavior, reasons and limits are in [`docs/MCP_SERVER.md`](MCP_SERVER.md) (**Packet manifest**, **Acknowledged deltas**). Neither is approval, readiness or evidence.
+
+```typescript
+interface ContextDelta {
+  basePacketId: string;        // sha256:<64 hex>
+  packetId: string;
+  changed: { pointer: string; value: unknown }[];  // RFC 6901 pointers, sorted by code unit
+  removed: string[];           // explicit removals, sorted
+}
+// servedContext.contextDelta, present only when basePacketId or contextEpoch was presented
+type ContextDeltaStatus = { served: 'delta' }
+  | { served: 'full'; reason: 'no-base' | 'base-unavailable' | 'base-mismatch' | 'session-mismatch' | 'attempt-mismatch'
+      | 'phase-changed' | 'runner-changed' | 'epoch-missing' | 'epoch-changed' | 'diff-failed'
+      | 'identity-unreadable' | 'no-session' | 'no-running-attempt' | 'not-attempt-owner' | 'record-failed' };
+
+interface PacketManifest {
+  version: 1;
+  provenance: { task: { id: string | null; planRevision: number | null }; epic: { id: string } | null;
+                project: { id: string | null }; candidate?: { id: string } };
+  sections: { path: string; mandatory: boolean; status: 'served' | 'truncated' | 'omitted' | 'missing';
+              reason?: string; count?: number }[];
+  complete: boolean;
+  limitations: string[];       // always includes 'no-repository-source'
+  budget: { limitChars: number; mandatoryChars: number; status: 'within' | 'overflow'; requirement?: 'expand' | 'restructure' };
+}
+```
 
 ### Task subtypes
 
@@ -1071,8 +1252,37 @@ interface ExecutionAttempt {
   host?: string;              // A hint that narrows which process, never proof that it is alive
   presenceKind?: 'process' | 'provider' | 'waiting' | 'progress'; // Latest moe.heartbeat self-report, not verified
   presenceAt?: string;        // When it was reported; never touches lastPhaseAt
+  executionPolicySnapshot?: ExecutionPolicySnapshot; // Captured at claim; absent on attempts opened before it existed
+  contextReceipt?: ServedContextReceipt;             // Latest served get_context read; daemon-written, never approval
+  stepCompletions?: StepCompletionEvidence[];        // Strict step evidence; daemon-written, append-only, never approval
+}
+
+interface ServedContextReceipt {
+  id: string;                    // "ctxreceipt-<32 hex>"
+  packetId: string;              // "sha256:<64 hex>" of the served payload without its servedContext block
+  taskId: string;
+  attemptId: string;
+  generation: number;            // >= 1
+  workerId: string;
+  sessionId: string;             // The receiving session's incarnation (MOE_SESSION_ID), at most 255 chars
+  planRevision: number;          // Task.planRevision when served
+  approvedPlanRevision?: number; // Task.approvedPlanRevision when a safe integer; ABSENT, never null
+  view: 'default' | 'full';
+  servedAt: string;              // ISO 8601
+}
+
+interface StepCompletionEvidence {
+  stepId: string;
+  planRevision: number;          // The approved revision the step was completed under
+  completedAt: string;           // ISO 8601
 }
 ```
+
+**`contextReceipt`.** One latest-wins slot, written only by `moe.get_context` (default or `view: "full"`, with a presented `sessionId`) for a `running` attempt, by its own worker, who must also be the task's assignee. `taskId`, `attemptId`, `generation` and `workerId` come from the stored attempt, never the caller. The decoder (`readContextReceipt`) is strict: an exact key set, nothing coerced. It records what was served to whom; `moe.start_step`, `moe.complete_step` and `moe.complete_task` compare it under `verified-local`, but it is never approval.
+
+**`stepCompletions`.** Daemon-owned and append-only, written only by a strict `moe.complete_step` on the caller's own `running` attempt, before the task write. `moe.complete_task` counts an entry only while its attempt is current and its `planRevision` is the task's approved revision, so evidence from a superseded attempt or an earlier revision stays recorded but does not count. It is historical record, never approval. The decoder (`readStepCompletions`) is strict: exactly `stepId`, `planRevision` and `completedAt`, and malformed stored evidence fails closed with `INVALID_INPUT`.
+
+Phase changes (restart parking, reattach, finalizing, closing) keep both fields.
 
 **Phases.** A task has at most one attempt that is not `closed`.
 
@@ -1194,15 +1404,29 @@ interface CheckRun {
   readonly candidateId: string;  // The Candidate whose bytes were checked; must exist when recorded
   readonly treeSha: string;      // The tree the reporter says it checked (7-40 hex). Must equal the
                                  // candidate's treeSha exactly when recorded: no prefix match, no case folding
-  readonly command: string;      // Exactly as reported, never trimmed and never run; at most 500 chars
+  readonly command: string;      // Exactly as reported, never trimmed and never run; at most 1000 UTF-16 code units
   readonly exitCode: number;     // Any signed safe integer. A failing run is recorded like a passing one
   readonly outputTail: string;   // The END of the output, at most 16384 UTF-8 BYTES; "" when none was sent
   readonly runnerId: string;     // The runner the report names: reported, not authenticated
   readonly source: 'runner-observed' | 'agent-reported';
+  // Optional execution identities: REPORTED, absent on rows recorded without them (no key at all)
+  readonly outcome?: CheckOutcome;   // How the run ended; see Outcomes below
+  readonly planRevision?: number;    // The Task.planRevision the reporter ran under; a safe integer >= 1
+  readonly environment?: string;     // Opaque execution-environment identity (e.g. an image digest):
+                                     // non-blank, at most 255 chars, no control characters, kept verbatim
+  readonly dispatchId?: string;      // The dispatch request this run answers; [A-Za-z0-9_-]{1,128}
+  readonly attemptId?: string;       // The ExecutionAttempt the check ran under: the producer's or a
+                                     // REVIEWER's. Distinct from Candidate.attemptId (always the producer)
   readonly createdAt?: string;   // ISO 8601, the daemon's clock at first record (never the caller's).
                                  // Optional only so rows written before the field existed still load
 }
+
+type CheckOutcome = 'passed' | 'code-failure' | 'infra-failure' | 'timeout' | 'skipped' | 'inconclusive';
 ```
+
+**Outcomes.** `passed`: ran to completion and passed (exit 0). `code-failure`: ran to completion and the code under test failed (nonzero exit). `infra-failure`: the runner or environment failed, which says nothing about the code. `timeout`: stopped at its time budget. `skipped`: never ran. `inconclusive`: ran, but the result cannot be judged. Recording enforces coherence: `passed` requires `exitCode` 0 and `code-failure` a nonzero one; every other outcome takes the exit code as reported. Only `passed` can ever satisfy a gate: a run with any other recorded outcome, or an incoherent or unrecognised stored one, never counts, even at exit 0.
+
+**Provenance and compatibility.** The five identities are *reported*, like `treeSha`: shape-validated, never authenticated. A row without them, recorded before they existed or by a reporter that sends none, is an unclassified legacy report, and policy judges it by the exit-code rule alone. Nothing is defaulted, inferred (no `outcome` from `exitCode`) or backfilled, no stored row is rewritten, and an identity-less report stores exactly the pre-identity key set. No `schemaVersion` bump.
 
 **Provenance.** `source` is *declared* provenance. The daemon never executes the command and does not authenticate whoever reports it, so `runner-observed` is a claim about where the result came from — not proof that the command ran, and not a verified identity. There is no third value and no default. `runnerId` is likewise only what the report says.
 
@@ -1219,10 +1443,11 @@ interface CheckRun {
 3. `treeSha` is not exactly the candidate's tree: `-32002` `CHECK_RUN_TREE_MISMATCH`, with `context.candidateId`, `context.expectedTreeSha` and `context.actualTreeSha`.
 4. The id already holds a different run: `-32002` `CHECK_RUN_IMMUTABLE`, with `context.checkRunId` and `context.differingFields`.
 5. The id differs from a stored run's id only by case: `-32002` `CHECK_RUN_ID_CASE_COLLISION`, with `context.checkRunId` (the stored id) and `context.requestedId`.
+6. A supplied `attemptId` names no attempt: `-32001` `ATTEMPT_NOT_FOUND`; or an attempt of another task than the candidate's: `-32002` `ATTEMPT_ID_TASK_MISMATCH`. This is referential integrity only, with no phase or fencing gate: a reviewer's attempt and a closed producer attempt are both valid. It follows the same-id checks, so an identical crash retry still returns its stored run.
 
 A failed write reaches the caller as an error, and the run is published nowhere.
 
-**Recording is not eligibility.** Recording checks shape, that the candidate exists, and that the reported tree is the candidate's. Whether a stored run satisfies a gate — its command, its exit code, its source — is decided later, by policy. Loading never re-checks or repairs a row: a historical row with no `createdAt`, or with a tree or command no gate would accept, loads unchanged.
+**Recording is not eligibility.** Recording checks shape, that the candidate exists, that the reported tree is the candidate's, and that a supplied `attemptId` is an attempt of the candidate's task. Whether a stored run satisfies a gate — its command, its exit code, its outcome, its source — is decided later, by policy. Loading never re-checks or repairs a row: a historical row with no `createdAt`, or with a tree or command no gate would accept, loads unchanged.
 
 **Queries.** Runs are listed per candidate: rows without a `createdAt` first, then by `createdAt`, then by `id`, so ties are deterministic. Every read, and the record `recordCheckRun` returns, is a copy: editing it cannot change the stored run.
 
@@ -1241,6 +1466,51 @@ A failed write reaches the caller as an error, and the run is published nowhere.
   "createdAt": "2026-09-11T03:20:00.000Z"
 }
 ```
+
+---
+
+## CheckDispatch
+
+**File:** `.moe/checks/dispatches/{dispatch-id}.json` (one file per dispatch)
+
+Which check an authenticated runner was asked to run, pinned to the task's current [Candidate](#candidate), that candidate's tree and the task's current approved plan revision while they are current. The runner records one through `moe.record_check_dispatch` over the authenticated `/runner` channel (docs/MCP_SERVER.md, **Runner channel**). Only `packages/moe-daemon/src/state/checkObservationStore.ts` writes the file. `runnerId` comes from the channel, never from an argument, and `treeSha` from the candidate. Purely additive: no `schemaVersion` bump and no migration. The subdirectory is never loaded as check runs.
+
+```typescript
+interface CheckDispatch {
+  readonly id: string;           // "dispatch-<32 hex>" when the daemon generates it; a caller-supplied id
+                                 // matches [A-Za-z0-9_-]{1,128} and must not differ from a stored one only by case
+  readonly taskId: string;
+  readonly candidateId: string;  // The task's current candidate when recorded
+  readonly treeSha: string;      // That candidate's treeSha, copied from the candidate
+  readonly planRevision: number; // The task's planRevision, equal to its approvedPlanRevision, when recorded (>= 1)
+  readonly command: string;      // Verbatim, under the CheckRun command rule (non-blank, at most 1000 UTF-16 code units)
+  readonly checkId?: string;     // Optional protected check id, [A-Za-z0-9][A-Za-z0-9._-]{0,63}
+  readonly environment: string;  // Opaque, verbatim, compared exactly (non-blank, at most 255 chars, no control chars)
+  readonly runnerId: string;     // The authenticated channel's runner-<16 hex>
+  readonly createdAt: string;    // ISO 8601, the daemon's clock
+}
+```
+
+**Immutability.** A dispatch is never edited or deleted. A same-id dispatch that repeats `taskId`, `candidateId`, `planRevision`, `command`, `checkId`, `environment` and `runnerId` returns the stored one; any difference is refused (`CHECK_DISPATCH_IMMUTABLE`). That check precedes the currency checks, so a crash retry still replays once its candidate is superseded. A superseded candidate never gets a new dispatch (`CHECK_DISPATCH_NOT_CURRENT`), but its existing dispatches stay answerable.
+
+## CheckObservation
+
+**File:** `.moe/checks/observations/{dispatch-id}.json` (at most one per dispatch)
+
+The marker naming the one [CheckRun](#checkrun) a runner observed for a [CheckDispatch](#checkdispatch). It is written by `moe.record_check_observation` after the run itself, which is a `runner-observed` CheckRun whose `candidateId`, `treeSha`, `command`, `planRevision`, `environment` and `dispatchId` are the dispatch's and whose `runnerId` is the channel's. Only `packages/moe-daemon/src/state/checkObservationStore.ts` writes the file.
+
+```typescript
+interface CheckObservation {
+  readonly id: string;           // The dispatch id (also the filename)
+  readonly checkRunId: string;   // The CheckRun that answers the dispatch
+  readonly runnerId: string;     // The channel runner that recorded it
+  readonly createdAt: string;    // ISO 8601, the daemon's clock
+}
+```
+
+**One observation per dispatch, never edited.** A run under another id for the same dispatch is refused (`CHECK_DISPATCH_ALREADY_OBSERVED`). An identical retry of the observed run returns it and writes nothing, except that it completes a marker a crash left unwritten.
+
+**Authenticated evidence.** `isAuthenticatedCheckRun(state, run)` is true only for a stored `runner-observed` run that a marker names, with the marker's runner and the dispatch's exact binding. A run recorded through `moe.record_check_run` has no marker, so it stays diagnostic whatever `source`, `runnerId` or `dispatchId` it carries.
 
 ---
 
@@ -1469,7 +1739,7 @@ interface RailProposal {
   id: string;                    // "prop-abc123"
   
   // Source
-  workerId: string;              // Who proposed it
+  workerId: string;              // Proposing caller; legacy fallback described below
   taskId: string;                // Context
   
   // The proposal
@@ -1499,6 +1769,8 @@ type ProposalStatus =
   | 'APPROVED'
   | 'REJECTED';
 ```
+
+`workerId` records the supplied nonempty caller ID, even when different from the task assignee. For legacy calls with an omitted or empty caller ID, it falls back to the task assignee, then `'unknown'` if unassigned. Existing proposal records are not rewritten; the stored shape is unchanged.
 
 **Example:**
 
@@ -1548,7 +1820,7 @@ interface ClaudeAccountRegistry {
 Any key not listed here makes the whole file invalid: rotation turns off and the view's `error` says why, so a stray `dir` or `token` cannot ride along unnoticed.
 
 **Folders next to the list:**
-- `claude-accounts/<id>/`: the account's Claude config folder, which Claude's own `claude auth login` fills. Moe creates it and passes its path as `CLAUDE_CONFIG_DIR`, and never opens a file inside it. Removing an account keeps the folder. A new account never reuses an id whose folder still exists.
+- `claude-accounts/<id>/`: the account's Claude config folder, which Claude's own `claude auth login` fills. Moe creates it and passes its path as `CLAUDE_CONFIG_DIR`. The daemon and the `accounts` CLI never open a file inside it. The one exception is the wrapper helper `scripts/moe-account-lease.mjs`: for an interactive claude seat only, it sets `projects[<key>].hasTrustDialogAccepted` in that account's `.claude.json` (see `docs/MCP_SERVER.md`, **Claude Account Rotation**). Removing an account keeps the folder. A new account never reuses an id whose folder still exists.
 - `claude-usage/<id>.json`: usage numbers only, with no credential and no path.
 
 ```typescript
@@ -1637,7 +1909,7 @@ type ActivityEventType =
   | 'TASK_UNBLOCKED'     // Block cleared: resource grant, dependency auto-unblock (all blockedOnTaskIds
                          // DONE/ARCHIVED — event-driven or sweep backstop), moe.unblock_worker { resolveBlocks: true }, or set_task_status
   | 'TASK_BLOCK_PARKED'    // reserved: deferred unassigned-BLOCKED park sweep (settings.parkUnassignedBlocked), never emitted yet
-  | 'TASK_COMMIT_RECORDED' // moe.record_commit persisted a landing outcome (commit appended, or refused/failed/nothing recorded)
+  | 'TASK_COMMIT_RECORDED' // moe.record_commit persisted a landing outcome (commit appended, or refused/failed/nothing recorded); an owner-guard refusal is logged with no task change
   | 'TASK_FILES_DECLARED'  // moe.declare_files unioned paths into task.declaredFiles
   | 'TASK_DEPENDENCIES_SET' // moe.set_task_dependencies replaced or edited task.dependsOn (a no-op edit records nothing)
   | 'TASK_PRIORITY_SET'    // moe.set_task_priority changed task.priority
@@ -1793,6 +2065,7 @@ function generateId(prefix: string): string {
 - `title` required, 1-200 chars
 - `projectId` must exist
 - `order` must be unique within project
+- `finalTaskId` is optional: at most 200 chars, trimmed, and `""` clears it. `moe.update_epic` refuses, before any write, an id that names no task, a task of another epic, or an ARCHIVED task
 
 ### Task
 - `title` required, 1-200 chars
@@ -1801,6 +2074,8 @@ function generateId(prefix: string): string {
 - `order` must be unique within epic
 - `status` transitions must be valid (see state machine)
 - `planRevision` is daemon-derived: a caller-supplied value is stripped, and a stored value outside the non-negative safe-integer domain refuses the write (`INVALID_INPUT`)
+- `approvedPlanRevision` is daemon-owned: a caller-supplied value is stripped, and it is stored only by an approval write, equal to the revision that write commits
+- `executionContract` is optional and strict: `intendedBehavior` at most 2000 chars; `acceptanceCriteria`, `invariants`, `compatibility`, `approvedScope`, `reuse`, `sourceAssumptions` and `checkRefs` at most 50 entries of at most 1000 chars each; unknown keys and wrong types are refused with `INVALID_INPUT` and `context.field`; `requiredChecks` at most 20 definitions
 
 ### Worker
 - `epicId` must exist
@@ -1833,12 +2108,25 @@ function generateId(prefix: string): string {
 - Immutable: no field changes after the first record, and there is no delete path. A same-id record that differs in any field after normalization is refused (`CHECK_RUN_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored run, `createdAt` included. An `id` that differs from a stored run's id only by case is refused (`CHECK_RUN_ID_CASE_COLLISION`)
 - `id` (optional), `candidateId` and `runnerId` must match `[A-Za-z0-9_-]{1,128}`, and `candidateId` must name an existing candidate (`CANDIDATE_NOT_FOUND`)
 - `treeSha` must be 7-40 hex characters and exactly equal to the candidate's `treeSha` (`CHECK_RUN_TREE_MISMATCH`). It is never prefix-matched, truncated or case-folded
-- `command` must be a non-blank string of at most 500 characters, stored verbatim
+- `command` must be a non-blank string of at most 1000 UTF-16 code units, stored verbatim
 - `exitCode` must be a safe integer; zero, positive and negative values are all accepted
 - `source` must be exactly `runner-observed` or `agent-reported`, with no default
+- `outcome`, `planRevision`, `environment`, `dispatchId` and `attemptId` are optional. When present: `outcome` is one of the six values (`passed` needs `exitCode` 0, `code-failure` a nonzero one); `planRevision` a safe integer >= 1; `environment` non-blank, at most 255 chars, without control characters; `dispatchId` and `attemptId` match `[A-Za-z0-9_-]{1,128}`, and `attemptId` names an attempt of the candidate's task (`ATTEMPT_NOT_FOUND` / `ATTEMPT_ID_TASK_MISMATCH`). Only `undefined` is absent: a `null` is refused `INVALID_INPUT`. Each is a recorded field, so a same-id report that adds, drops or changes one is `CHECK_RUN_IMMUTABLE`
 - `outputTail` is optional and, when present, must be a string. It is stored as its final 16384 UTF-8 bytes, beginning on a whole character
 - An absent required field (`undefined` or `null`) is refused `MISSING_REQUIRED`; a present value of the wrong type or shape is refused `INVALID_INPUT`, never coerced. A `null` `id` or `outputTail` counts as present and is refused `INVALID_INPUT`, as is a report that is not an object
 - `createdAt` is always the daemon's clock; a caller cannot set it
+
+### CheckDispatch
+- Stored at `.moe/checks/dispatches/<id>.json`, recorded only over the authenticated `/runner` channel (`RUNNER_CHANNEL_REQUIRED` elsewhere). `runnerId` and `treeSha` are never arguments: an argument outside the tool's list is refused `INVALID_INPUT` by name
+- Immutable: a same-id dispatch that differs is refused (`CHECK_DISPATCH_IMMUTABLE`); an identical one returns the stored dispatch. An `id` that differs from a stored dispatch's id only by case is refused (`CHECK_DISPATCH_ID_CASE_COLLISION`)
+- `taskId` must name a task (`TASK_NOT_FOUND`) and `candidateId` a candidate (`CANDIDATE_NOT_FOUND`) of that task (`CHECK_DISPATCH_TASK_MISMATCH`) that is its current one (`CHECK_DISPATCH_NOT_CURRENT`)
+- `planRevision` must be a safe integer >= 1 equal to both the task's `planRevision` and `approvedPlanRevision` (`CHECK_DISPATCH_REVISION_MISMATCH`)
+- `command` and `environment` follow the CheckRun rules; `checkId` is optional and matches `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`
+
+### CheckObservation
+- Stored at `.moe/checks/observations/<dispatchId>.json`, recorded only over the authenticated `/runner` channel. `runnerId`, `source`, `candidateId`, `treeSha`, `command` and `planRevision` are never arguments
+- The dispatch must exist (`CHECK_DISPATCH_NOT_FOUND`), belong to the calling runner (`CHECK_RUNNER_MISMATCH`) and have exactly the sent `environment` (`CHECK_ENVIRONMENT_MISMATCH`)
+- One per dispatch: a run under another id is refused (`CHECK_DISPATCH_ALREADY_OBSERVED`). The run itself follows every CheckRun rule above, so a differing same-id run is `CHECK_RUN_IMMUTABLE`
 
 ### DeliveryReceipt
 - At most one per candidate, never rewritten, and there is no delete path. A report for a candidate that already has a receipt is refused when any field differs (`DELIVERY_RECEIPT_CONFLICT`); an identical one is an idempotent no-op that returns the stored receipt and writes nothing. When two receipts on disk already name one candidate, both the lookup and any new report are refused (`DELIVERY_RECEIPT_AMBIGUOUS`)

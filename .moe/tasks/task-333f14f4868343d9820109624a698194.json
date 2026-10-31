@@ -1,0 +1,191 @@
+{
+  "id": "task-333f14f4868343d9820109624a698194",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "docs: land ab6aac94's 10000-char epic rail lines in docs/SCHEMA.md (skipped as contested)",
+  "description": "Delivery gap left by DONE task-ab6aac94 (epic rail cap 1000→10000, QA-approved on completion b35d46c). Its completion omitted docs/SCHEMA.md: the commit trailer reads `Moe-Contested: docs/SCHEMA.md (task-07474ee438f34021a23809f9c764d15c)`, because the stale 07474ee4 still asserts SCHEMA.md from its September checkpoint 9f2cce3. HEAD therefore documents \"1000 chars each\" / \"at most 1000 UTF-16 code units\", while validators.ts MAX_EPIC_RAIL_CHARS is 10000. The correct two-line edit is already uncommitted in the working tree: the Epic interface comment at ~line 330 and the \"Epic rail limits\" paragraph at ~line 377 now say 10000.\n\nWhat to do: confirm the working-tree docs/SCHEMA.md differs from HEAD only by those two 1000→10000 lines. Then re-write the file through a TOOL-witnessed editing call in THIS session: Claude Edit/Write, or Serena replace_content. A Write of the identical content after Read is fine when the bytes are already final. Contested paths land only with a tool witness (scripts/moe-agent.sh ~3559-3569, policy skip-untouched). Bash/sed/heredoc writes and Codex apply_patch are not witnesses, and moe.declare_files does not override the contest. No other file changes.",
+  "definitionOfDone": [
+    "HEAD's docs/SCHEMA.md states the 10000 UTF-16 epic-rail cap in both places (Epic interface comment and the \"Epic rail limits\" paragraph), matching MAX_EPIC_RAIL_CHARS in packages/moe-daemon/src/state/validators.ts.",
+    "This task's landing commit carries docs/SCHEMA.md, and its diff against the previous HEAD is exactly those two lines (1000→10000).",
+    "No other source, test or doc file is changed by this task; verification `grep -n \"10000\" docs/SCHEMA.md` output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "Write docs/SCHEMA.md only through a TOOL-witnessed edit (Claude Edit/Write or Serena replace_content); never via Bash, sed, heredoc or Codex apply_patch, or the contested path is skipped again.",
+    "No Git-write commands; the wrapper lands the bytes."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "SEAT CHECK FIRST, before any edit.\n\ndocs/SCHEMA.md is contested. task-07474ee438f34021a23809f9c764d15c (PLANNING, parked) still ASSERTS it through its September checkpoint 9f2cce3. Under attribution.contested=skip-untouched such a path lands only with a TOOL witness: a complete Claude Code Edit/Write tool_use whose tool_result succeeded, in the session that lands. These are NEVER witnesses: Bash/sed/heredoc writes, Codex apply_patch, and Serena edits made from a codex seat (mem gotcha-contested-path-silently-skipped-from-landing, mem gotcha-plan-mandating-edit-tool-blocks-codex-seats).\n\nIf this session has no Claude Edit tool (a codex, gemini or grok seat), edit nothing. Instead call moe.report_blocked { reason: 'needs a Claude seat: contested docs/SCHEMA.md lands only with a Claude Edit witness', blockedOnTaskIds: ['task-07474ee438f34021a23809f9c764d15c'] } and end the session. Once 07474ee4 is DONE or ARCHIVED the contest is gone, and the already-declared path lands with no edit at all. Until then the governor can re-route the task to a Claude seat.\n\nPRE-CHECKS (read-only):\n(a) `git diff --numstat -- docs/SCHEMA.md` prints `2\t2\tdocs/SCHEMA.md`, and `git diff -U0 -- docs/SCHEMA.md` shows exactly two hunks:\n  - the ~330 epicRails comment: '…max 100 entries, 1000 chars each…' becomes '…10000 chars each…';\n  - the ~377 'Epic rail limits' paragraph: '…at most 1000 UTF-16 code units each…' becomes '…at most 10000 UTF-16 code units each…'.\n  Save that diff to a scratch file for step 2. Any other hunk belongs to another task: STOP and report_blocked naming its owner. Never land a peer's hunk.\n(b) `git show HEAD:packages/moe-daemon/src/state/validators.ts | grep -n 'MAX_EPIC_RAIL_CHARS ='` shows 10000, and `git show HEAD:packages/moe-daemon/src/tools/proposeRail.test.ts | grep -n 'toBe(10000)'` shows the existing pin test. That landed test is the behavioral evidence for this two-line doc landing, so no new test is needed.\n(c) If the tree is already clean and HEAD's SCHEMA.md says 10000 on both lines, someone else landed it. Make NO edit: cite that commit (`git log -1 --format=%h -S '10000 chars each' -- docs/SCHEMA.md`) and go to step 3 (mem pattern-verify-a-stale-task-instead-of-redoing-it). If the tree is clean but HEAD still says 1000, the bytes were lost: in step 2, apply the two 1000->10000 edits with the Edit tool instead of the round trip.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "Claude seat with Edit. Diff is numstat 2/2, exactly the two 1000->10000 hunks (lines 330, 377). Saved to /tmp/schema-333.diff. Many unrelated dirty paths left alone.",
+      "startedAt": "2026-10-25T08:50:05.512Z",
+      "completedAt": "2026-10-25T09:07:53.983Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "WITNESSED WRITE with the Claude Edit tool.\n\nThe bytes are already final. This step only gives this session a TOOL witness for docs/SCHEMA.md. Do NOT rewrite the file with Write: it is 110,992 bytes, and retyping it risks silent corruption.\n\nMake two consecutive Edit calls on the ~330 epicRails comment line:\n1. old_string 'max 100 entries, 10000 chars each', new_string 'max 100 entries, 1000 chars each';\n2. immediately reverse it: old_string 'max 100 entries, 1000 chars each', new_string 'max 100 entries, 10000 chars each'.\nBoth calls must succeed. An Edit whose old and new strings are identical is refused and leaves no witness.\n\nThen prove the bytes are unchanged:\n- `git diff -- docs/SCHEMA.md` equals step 1's saved diff (cmp exit 0);\n- the numstat is still `2\t2`.\nReport modifiedFiles ['docs/SCHEMA.md'] in complete_step (it is already in declaredPaths).\n\nError handling: if the second Edit fails, retry it until the line reads 10000 again before doing anything else, so the session never exits on the reverted 1000 text. Touch no other file and run no Git-write command; the wrapper lands the bytes at session exit.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "Two Edit calls (10000->1000->10000) succeeded. git diff equals saved diff (cmp=0), numstat 2/2.",
+      "startedAt": "2026-10-25T09:07:55.921Z",
+      "completedAt": "2026-10-25T09:08:04.139Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFICATION and self-check (DoD 3), run fresh after step 2.\n\nThe completion evidence is exactly `grep -n \"10000\" docs/SCHEMA.md`, exit 0. Its output must include the ~330 epicRails comment and the ~377 'Epic rail limits' paragraph. The ~569/~688 hits are pre-existing, unrelated step-description caps; say so in the summary.\n\nPaste these companion checks into the summary:\n- `grep -c '10000 chars each\\|at most 10000 UTF-16' docs/SCHEMA.md` prints 2;\n- `git diff --numstat -- docs/SCHEMA.md` prints 2 2;\n- this task changed no other file.\n\nSelf-check:\n- the witness came from the Edit tool, not a shell write;\n- no peer hunk was included;\n- no .moe byte was edited by hand.\n\nTell QA in the completion summary to confirm, on this task's landing commit (the completion commit, or a checkpoint if the session restarted after step 2), that `git show --stat <sha>` lists docs/SCHEMA.md with 2 insertions and 2 deletions. A `Moe-Contested: docs/SCHEMA.md` trailer also appears on commits that DID land the path, so the stat is the proof. If the path is missing, the witness failed, and QA rejects with that evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verified; self-check: witness via Edit tool, no peer hunk, no .moe edits.",
+      "startedAt": "2026-10-25T09:08:04.800Z",
+      "completedAt": "2026-10-25T09:08:10.605Z"
+    }
+  ],
+  "planRevision": 7,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Cycle resolved. task-333f14f4 was removed from 07474ee4's dependsOn, so this plan's step-1 fallback (a non-Claude seat report_blocks on 07474ee4) now forms a valid dependency wait instead of a dropped cycle. A Claude seat with Edit lands the two SCHEMA.md lines via the witnessed round trip. A Codex/gemini/grok seat follows step 1, blocks on task-07474ee438f34021a23809f9c764d15c, and auto-resumes when 07474ee4 is DONE/ARCHIVED, when the contest clears and the declared path lands without a witness.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 229.5,
+  "comments": [
+    {
+      "id": "comment-8bb580e71eee47eca2d639baa44e5520",
+      "author": "architect-26ba32c3",
+      "content": "Plan rev 1 (architect-26ba32c3, 2026-10-25): 3 steps, 1 file, light tier, medium effort.\n\nThe approach is a witnessed Edit round trip on the line-330 comment: 10000→1000→10000 via two Claude Edit calls. That gives this session a TOOL witness for contested docs/SCHEMA.md and leaves the bytes identical to today's 2/2 diff.\n\nTwo options from the description were not used:\n- A whole-file Write of identical content: the file is 110,992 bytes, so retyping it risks corruption.\n- Serena replace_content: it witnesses only inside a Claude stream.\n\nCodex, gemini and grok seats have an empty TOOL set. Step 1 therefore makes them report_blocked on 07474ee4 instead of trying. Once 07474ee4 is DONE or ARCHIVED, the declared path lands with no edit.\n\nSerialization: c2cb5cf7, 07474ee4 and 6b607b12 now dependsOn this task, because each also plans or claims SCHEMA.md. This removes c2cb5cf7's planned-path contest. 07474ee4's asserted contest stays, which is why the witness is needed.",
+      "timestamp": "2026-10-25T08:49:14.557Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T08:42:57.015Z",
+  "updatedAt": "2026-10-25T09:19:37.916Z",
+  "declaredFiles": [
+    "docs/SCHEMA.md"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-25T08:46:00.695Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-10-25T09:19:10.480Z",
+    "wallClockMs": 1989785
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "worker-9cda703c",
+    "worker-07cd2c56",
+    "qa-b0c1741e"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6-luna",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T08:49:07.480Z",
+  "planningNotes": {
+    "approachesConsidered": "The bytes are already final in the tree. The only obstacle is attribution: 07474ee4's stale ASSERTED claim contests docs/SCHEMA.md, and under skip-untouched a contested path needs this session's TOOL witness.\n\nRejected:\n- A whole-file Write of identical content: the file is 110,992 bytes, so retyping it risks corruption.\n- An identical-string Edit: it is refused, so there is no witness.\n- Serena replace_content: it witnesses only inside a Claude stream, and it can rewrite line endings.\n- moe.declare_files: it does not override a contest.\n- Clearing the contest: that needs 07474ee4 to become terminal, which is a human decision.\nChosen: an Edit round trip on one line, which leaves byte-identical content plus a witness.",
+    "codebaseInsights": "- scripts/moe-agent.sh landing (~3557-3569): `if pk in PEER and contested_policy == 'skip-untouched' and pk not in TOOL` skips the path with MOE_ATTR_CONTESTED_UNTOUCHED. The ASSERTED_FOREIGN skip does not apply to DECLARED paths, and this task already declares docs/SCHEMA.md.\n- TOOL harvest (~7650-7690): Edit/Write/MultiEdit/NotebookEdit complete tool_use blocks with a successful tool_result, plus Serena single-file editors. Codex/gemini/grok TOOL sets are empty.\n- Current diff: numstat 2/2. Lines 330 and 377 say 10000; HEAD says 1000 there. validators.ts:246 MAX_EPIC_RAIL_CHARS = 10000, and proposeRail.test.ts:131 pins toBe(10000).",
+    "risks": "- A codex seat cannot land this. Step 1 makes it block on 07474ee4 instead of trying.\n- A session death between the two Edits would leave 1000 on line 330. Step 2 retries before anything else; if a checkpoint ever lands the half state, the next session repeats step 2.\n- Serialization: c2cb5cf7, 07474ee4 and 6b607b12 also plan or claim SCHEMA.md, and all three now dependsOn this task (set 2026-10-25). That removes c2cb5cf7's planned-path contest; 07474ee4's asserted one remains, so the witness is still required.",
+    "keyFiles": [
+      "docs/SCHEMA.md",
+      "scripts/moe-agent.sh",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/tools/proposeRail.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T08:49:07.585Z",
+  "workStartedAt": "2026-10-25T08:50:05.512Z",
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T09:18:09Z",
+    "at": "2026-10-25T09:19:37.916Z"
+  },
+  "priorBlockedReason": "This session's available tool inventory has no Claude Edit/Write or Serena replace_content capability, so it cannot create the required contested-path TOOL witness. No file was edited. Reroute to a Claude seat with Edit/Write tooling, or wait until task-07474ee438f34021a23809f9c764d15c is DONE/ARCHIVED and the contest clears.",
+  "blockedOnTaskIds": null,
+  "reviewStartedAt": "2026-10-25T09:08:13.328Z",
+  "verification": {
+    "command": "grep -n \"10000\" docs/SCHEMA.md",
+    "exitCode": 0,
+    "outputTail": "330:  epicRails ... max 100 entries, 10000 chars each (see \"Epic rail limits\")\n377:An epic update ... at most 10000 UTF-16 code units each ...\n569:  description: string; ... (≤10000 chars; max 100 steps/plan)\n688:- Max 50 entries per step; max 100 steps per plan; max 10000 chars per step description.",
+    "reportedAt": "2026-10-25T09:08:13.328Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+    ".moe/tasks/task-333f14f4868343d9820109624a698194.json",
+    ".moe/tasks/task-b23c65b0bb3548fc95d46973b9d589cb.json"
+  ],
+  "completionSummary": "docs/SCHEMA.md now states the 10000 cap at line 330 (Epic interface comment) and line 377 (Epic rail limits paragraph). The file was witnessed through two Edit calls (10000→1000→10000), and the diff is byte-identical to the saved pre-edit diff (cmp=0, numstat 2/2). `grep -c '10000 chars each\\|at most 10000 UTF-16'` prints 2. Hits at lines 569 and 688 are unrelated, pre-existing step-description caps. No other file was changed. QA: confirm on the landing commit that `git show --stat <sha>` lists docs/SCHEMA.md with 2 insertions and 2 deletions. If it is missing, the witness failed, so reject.",
+  "commits": [
+    {
+      "sha": "0e67ab2fa7efa7dbf9f565c3b203bbe7e46ac8f5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-25T09:07:25Z",
+      "paths": [
+        ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+        ".moe/tasks/task-333f14f4868343d9820109624a698194.json",
+        "docs/SCHEMA.md"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-25T09:08:45.523Z",
+      "treeId": "321b84bc43ffb3efbdffdc0fe28663765b3a0ce6",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "bc45829eedc85e71c3eb4c29ef918f04a00a4412",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T09:18:09Z",
+      "paths": [
+        ".moe/tasks/task-333f14f4868343d9820109624a698194.json",
+        ".moe/tasks/task-b23c65b0bb3548fc95d46973b9d589cb.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T09:19:37.916Z",
+      "treeId": "6d1312876b644b81e17b862f3e8cb123f5d16fea",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/SCHEMA.md"
+  ],
+  "completedAt": "2026-10-25T09:19:10.480Z",
+  "reviewCompletedAt": "2026-10-25T09:19:10.480Z",
+  "reviewSummary": "Verified on completion commit 0e67ab2 (recorded in task.commits, on moe/work-2026-10-24). `git show --numstat` lists docs/SCHEMA.md 2 insertions / 2 deletions, so the TOOL witness worked and the contested path landed. The hunks are exactly line 330 (Epic interface epicRails comment, 1000→10000 chars each) and line 377 (\"Epic rail limits\" paragraph, 1000→10000 UTF-16 code units). No other hunk in SCHEMA.md. Re-ran `grep -n \"10000\" docs/SCHEMA.md`, exit 0, hits at 330/377 plus the pre-existing unrelated step-description caps at 569/688. `grep -c '10000 chars each\\|at most 10000 UTF-16'` = 2 at HEAD; the same grep for the 1000 text on 0e67ab2^ was 2, so the old text is gone. MAX_EPIC_RAIL_CHARS = 10000 in validators.ts:246, and proposeRail.test.ts:131 pins it with toBe(10000). Working tree docs/SCHEMA.md is clean against HEAD. The commit's only other paths are daemon-driven board state: this task's own JSON, and 07474ee4's JSON, which only drops this task from dependsOn (the cycle fix) and bumps updatedAt. No source, test or other doc file changed. No tests were needed or run for this two-line doc landing. The Moe-Contested trailer is expected, and the stat is the proof of landing. No oversize concern (4 doc lines).",
+  "requiredCheckAtDone": null
+}

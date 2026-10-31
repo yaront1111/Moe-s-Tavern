@@ -1,0 +1,258 @@
+{
+  "id": "task-1b7b6067a95f4078bfb2c780c2a598e9",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "[CQ-C04] Positive source cache",
+  "description": "Objective: Cache reusable source results by immutable content/config/instruction/analyzer dependencies.\n\nDeliverable: Positive source cache. This is task C04 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test\n\nDependency aliases (wired by Moe task ids after import): C03.",
+  "definitionOfDone": [
+    "Dirty content changes invalidate even when porcelain status stays unchanged.",
+    "Relevant lockfile/toolchain/config changes invalidate correct slices.",
+    "Cache loss/restart changes performance, not correctness.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create the cache core in a new packages/moe-daemon/src/context/sourceCache.ts, with its unit tests in a new packages/moe-daemon/src/context/sourceCache.test.ts. Steps 2-4 add the provider wrappers to the same two files.\n\nModule comment, kept short:\n- The cache is in-memory, bounded, positive-only and advisory.\n- Every key is derived from the immutable content, the analyzer identity and the exact request an answer depends on. A changed input therefore makes an old entry unreachable instead of stale.\n- Nothing is persisted: a miss, an eviction, clear() or a daemon restart only costs recomputation (DoD3).\n- Import nothing that touches the filesystem or spawns processes: only node:crypto, ../util/errors.js, and the provider modules wrapped in steps 2-4.\n\nAPI:\n- `export const SOURCE_CACHE_LIMITS = Object.freeze({ maxEntries: 2048, maxBytes: 33_554_432 })`.\n- `export class SourceCache`:\n  - `constructor(limits: Partial<{ maxEntries: number; maxBytes: number }> = {})`. limits must be a plain object with only those keys, each a positive safe integer. Otherwise throw invalidInput from ../util/errors.js, as repositorySource.ts sourceLimits does.\n  - `get<T>(key: string): T | undefined`. A hit moves the entry to most-recently-used and returns structuredClone of the stored value. Count hits and misses.\n  - `set(key: string, value: unknown): void`. Store structuredClone(value), sized as Buffer.byteLength(JSON.stringify(copy)). Then evict least-recently-used entries while entries > maxEntries or bytes > maxBytes, counting evictions.\n  - `clear(): void` drops every entry.\n  - `stats(): { entries: number; bytes: number; hits: number; misses: number; evictions: number }`.\n  - Map insertion order is the LRU order. There are no timers and no TTL: time is not a content dependency.\n- Error handling: set never throws, because the cache can never be allowed to fail a request. If cloning or sizing throws, or the size exceeds maxBytes, store nothing and drop any old entry under that key.\n- `export function sourceCacheKey(parts: readonly unknown[]): string` returns the lowercase sha256 hex of JSON.stringify(['moe-source-cache-v1', ...parts]). Callers pass only strings, numbers, booleans, null, arrays and plain objects, built in a fixed key order.\n- `export function isPositiveSource(item: { status: string; op: string; matches?: readonly unknown[] }): boolean`.\n  - True only for status 'served' on a read, or on a search with at least one match.\n  - Never positive: truncated, omitted, missing, refused, unavailable, and a zero-match search.\n  - Negatives belong to CQ-C05 (task-9ef257f58b7f4c4191f206f67bf3d865). Partial or failed answers depend on budgets and transient state.\n- `export function isPositiveAnswer(result: AnalyzerCallResult): boolean`, with the type from ./mcpStdioClient.js (CQ-C03b).\n  - True when ok is true, truncated is false, and the text is not blank and not just '[]' or '{}' (whitespace allowed inside and around).\n  - An empty analyzer answer may be a negative.\n\nUnit tests (table-driven):\n- C1: get returns an equal but distinct object. Mutating the returned value, or the original after set, never changes a later get.\n- C2: with maxEntries 2, run set a, set b, get a, set c. b is evicted, a and c remain, and evictions is 1.\n- C3: with a small maxBytes, an oversize value is not stored and its key's old entry is dropped. After any sequence, stats().bytes is at most maxBytes and equals the sum of the stored sizes.\n- C4: after clear(), and in a new instance (a restart), every get misses.\n- C5: the constructor refuses 0, -1, 1.5, '2', NaN, an unknown key and a non-plain object with INVALID_INPUT.\n- C6: sourceCacheKey is 64 lowercase hex characters. It is equal for equal parts, and different when any part, nested field or array order differs.\n- C7: truth tables for isPositiveSource and isPositiveAnswer. A served read of empty content '' is positive: the file exists. Whitespace-only, '[ ]' and '{ }' answers are not.\n- C8: static purity. Read the module source as text: it imports no 'fs', 'node:fs', 'fs/promises', 'node:fs/promises', 'child_process' or 'node:child_process'.\n\nIterate with `npx vitest run src/context/sourceCache.test.ts` in the Linux snapshot (step 5's recipe).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/context/sourceCache.ts",
+        "packages/moe-daemon/src/context/sourceCache.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/sourceCache.ts",
+        "packages/moe-daemon/src/context/sourceCache.test.ts"
+      ],
+      "note": "Core done: SourceCache (LRU via Map order, structuredClone in/out, set never throws, oversize/unclonable drops the key), sourceCacheKey, isPositiveSource and isPositiveAnswer. C1-C8 pass: 16/16 in a Linux snapshot (git archive HEAD 21d901c, native npm ci, node v24.21.0, env -i). The 735 dirty paths from peers are untouched; the worktree package.json differs from HEAD because of a peer's uncommitted edit, so the snapshot uses HEAD's own lockfile.",
+      "startedAt": "2026-10-29T20:22:30.276Z",
+      "completedAt": "2026-10-29T20:23:55.224Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the commit-source wrapper to sourceCache.ts:\n`export async function cachedRepositorySource(cache: SourceCache, projectRoot: string, commit: string, queries: SourceQuery[], options: SourceOptions = {}): Promise<RepositorySource>`\nIt wraps the landed CQ-C02 readRepositorySource. Put the merge in small shared helpers that take RESULTS rather than callbacks, so step 3's synchronous snapshot wrapper can reuse them unchanged.\n\nKeys. Build them only after validateSourceRequest(commit, queries, options.limits) has passed, with limits = { ...SOURCE_LIMITS, ...options.limits }:\n- read: ['git-read', projectRoot, commit, q.path, limits.maxFileBytes]\n- search: ['git-search', projectRoot, commit, q.literal, q.paths ?? null, limits.maxMatches, limits.maxSearchBytes]. Keep null and [] distinct, because the key is the exact request.\n- id and purpose are never in a key; a hit rebinds them.\n- timeBudgetMs and maxTotalBytes are not in a key either. A budget only makes an item unavailable, and the total cap is reapplied below.\n- The commit id is the content dependency. C02 reads committed bytes with --no-replace-objects, so its answers for one commit cannot change.\n- C02 slices are therefore per commit: a new commit, even a lockfile-only one, recomputes them. Cross-commit reuse would need a Git listing before every lookup; step 3's snapshot slices are the content-precise ones.\n\nAlgorithm:\n1. Error handling: if anything unexpected happens while preparing (a validation throw, a key that cannot be built), return the plain uncached call. That call throws the canonical caller error or returns the canonical result, so the cache never changes an error.\n2. Look up every key. If nothing hits, run readRepositorySource(projectRoot, commit, queries, options) once, store each positive item under its query's key, and return that result unchanged.\n3. If some keys miss, make ONE readRepositorySource call over just the missing queries, with the same options (budgets, limits, seams).\n   - If any of its items is 'unavailable' or 'omitted', or has reason 'time-budget', discard it and return the full uncached call instead, storing that call's positives. A batch failure or the total-byte cap can depend on which queries share a batch.\n   - Otherwise store the subset's positive items.\n4. Assemble the items in the original query order:\n   - A hit becomes { ...hit, id: q.id, purpose: q.purpose }; spreading keeps the stored key order.\n   - A miss is its subset item.\n   - Apply capTotal(items, limits.maxTotalBytes). CQ-C02b step 1 exports capTotal from repositorySource.ts. If it is not exported, export it there (a one-word additive change) and report that file in modifiedFiles.\n5. Return C02's result() envelope, with the same key order: { manifest: { commit }, items, complete: every item served, limitations, bytes: the item sum }. limitations is sorted and unique: 'committed-bytes-only', the subset's limitations, and 'literal-search-only' when any hit is a search.\n6. A full hit runs no Git at all. Say why in a code comment: the commit names immutable bytes, so a cache can only add availability (for example after the commit was deleted), never change an answer.\n\nTests go in sourceCache.test.ts and run against real temp repositories. Copy the compact fixture pattern of repositorySource.test.ts: a scrubbed GIT_* env, a temp dir, and cleanup in afterEach. Compare results with JSON.stringify, so key order is checked too.\n- G1 (DoD3):\n  - Commit C1 holds src/a.ts 'export const helper = 1' and src/b.ts.\n  - The batch is [read src/a.ts, search 'helper', read src/nope.ts (missing), search 'zzz' (no match)].\n  - These all give identical JSON: the uncached call, the first and second warm calls, a fresh SourceCache (a restart), and SourceCache({ maxEntries: 1 }) (constant eviction).\n  - Non-vacuity: the second warm call records exactly 2 hits, and the tiny cache records evictions.\n- G2 (work avoided): use run and head spies that delegate to runGit and runGitHead.\n  - On the second warm call, the two positives cause no cat-file or grep; only the negatives' work runs.\n  - A warm all-positive batch [read src/a.ts, search 'helper'] makes zero git calls.\n- G3 (subset failure):\n  - With src/a.ts cached, run [read src/a.ts, read src/b.ts] with a run seam that fails 'rev-parse --show-toplevel'.\n  - The result equals the uncached call with the same seam: every item 'unavailable', 'repository-unavailable' listed, and src/a.ts NOT served from the cache.\n  - Mock performance.now to a constant, as repositorySource.test.ts does, so the failure texts carry identical timings.\n- G4: a read of '../x' throws the same INVALID_INPUT as the uncached call, before any git call.\n- G5: commit C2 rewrites src/a.ts. The warm read at C2 returns the C2 bytes, equal to uncached; a read at C1 still hits with the C1 bytes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/sourceCache.ts",
+        "packages/moe-daemon/src/context/sourceCache.test.ts"
+      ],
+      "note": "Added cachedRepositorySource plus the shared, result-based merge helpers: missing, batchBound, remember, assemble, envelope and searched. capTotal was already exported by C02b, so repositorySource.ts is unchanged.\nG1-G5 run against real temp repos:\n- G1 also uses a renamed batch (other ids and purposes), so hit rebinding is covered. Warm hits total 6, and the tiny cache evicts.\n- G2: the second warm call runs only zzz's grep; a warm all-positive batch runs no Git at all.\n- G3: with a constant performance.now, the result equals the uncached call (all unavailable, repository-unavailable).\n- G4: INVALID_INPUT, with no git call.\n- G5: per-commit bytes, 2 hits and 2 misses.\nResult: 21/21 in the Linux snapshot.",
+      "startedAt": "2026-10-29T20:23:58.491Z",
+      "completedAt": "2026-10-29T20:25:14.464Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add the snapshot-source wrapper to sourceCache.ts:\n`export function cachedSnapshotSource(cache: SourceCache, snapshot: unknown, request: SnapshotRequest, queries: SourceQuery[], options: { limits?: Partial<SourceLimits> } = {}): SnapshotSource`.\nKeep it SYNCHRONOUS, like CQ-C02b's readSnapshotSource, so no other code runs between the wrapper's own verification and C02b's reads. This wrapper is DoD1's vehicle: snapshot overlays are the only dirty bytes any provider serves.\n\nPreparation. Error handling: anything unexpected returns the plain uncached readSnapshotSource(snapshot, request, queries, options), which throws or answers canonically.\n1. Call validateSourceRequest(request.commit, queries, options.limits).\n2. Call verifySourceSnapshot(snapshot) from ./snapshotManifest.js (CQ-C02b1). If it is not ok, return the uncached call: every item 'snapshot-unverifiable:<code>', and nothing stored.\n3. If the request is stale, return the uncached call ('snapshot-stale', or the canonical throw for a malformed base or overlay). Stale means v.commit !== request.commit, or a given request.base / request.overlay differs from v.identity.base / v.identity.overlay.\n4. Build the merged view from the VERIFIED copy only, as path → { file, layer }: base files first, overlay files replace them, and overlay delete entries remove them.\n5. Keys:\n   - Read P: if P is a merged file, ['snapshot-read', P, file.executable, file.sha256, limits.maxFileBytes]. Otherwise there is no key and the query is never cached, so C02b's explicit missing, refused and deleted-in-overlay statuses are recomputed every time.\n   - Search: ['snapshot-search', q.literal, q.paths ?? null, scopeDigest, limits.maxMatches, limits.maxSearchBytes].\n     - scopeDigest is the sha256 over every merged file in scope, in UTF-8 path-byte order, each framed as path, NUL, sha256, LF.\n     - When paths is absent or empty, every file is in scope. Otherwise a file is in scope when its path equals a scope or starts with that scope plus '/'.\n   - Commit, tree and layer digests are deliberately NOT in these keys. A slice depends only on its own bytes, and provenance is restamped on a hit.\n   - So a dirty edit whose porcelain status stays ' M' still changes that file's sha256 and every key that depends on it. A lockfile change touches only the lockfile read and the searches whose scope contains it.\n6. Merge as in step 2, with readSnapshotSource(snapshot, request, missingQueries, options) as the subset call.\n   - Guard: merge from, and store from, ONLY a result (subset or full) whose manifest equals { commit: v.commit, tree: v.tree, base: v.identity.base, overlay: v.identity.overlay }.\n   - If a subset's manifest differs, return the full uncached call unchanged. Store its positives only if its own manifest matches.\n   - This way a snapshot object that yields different bytes on a second read can never mix two snapshots or poison a key.\n7. Hit rebinding:\n   - A read becomes { ...hit, id, purpose, provenance: provenanceOf(P) }.\n   - A search becomes { ...hit, id, purpose, matches: hit.matches.map(m => ({ ...m, provenance: provenanceOf(m.path) })) }.\n   - provenanceOf(p) = { layer, manifest: that layer's v.identity digest, sha256: file.sha256 }, taken from the CURRENT merged view, so provenance always names the snapshot actually served.\n8. Envelope: C02b's own shape and key order. The manifest comes from v; then capTotal, complete and bytes. limitations is sorted and unique: 'snapshot-bytes', the subset's limitations, and 'literal-search-only' when any hit is a search.\n\nComment the known cost: the wrapper verifies once, and a call with any miss lets C02b verify again, because C02b's API takes the raw snapshot. A fully cached call never calls C02b.\n\nTests. Build raw snapshots with the LANDED producer: import validateImport from scripts/local-runner/source-snapshot.mjs repo-relatively from import.meta.url, as C02b's tests do, with describe.skipIf when scripts/ is absent. Each snapshot is {version: 1, commit, tree, base: validateImport(baseEntries), overlay: validateImport(overlayEntries), excluded: 0}. Compare JSON.stringify with the uncached readSnapshotSource throughout.\n- S1 (DoD1, real Git and the real R09b producer):\n  - A temp repo commits src/a.ts and src/b.ts.\n  - Write src/a.ts as A1 ('alpha1'). Take P1 from `git status --porcelain=v1`, then S1 from exportSourceSnapshot({ repoDir, commit }) in scripts/local-runner/source-export.mjs.\n  - Write src/a.ts as A2 ('bravo2': same length, different bytes). Take P2 and S2 the same way.\n  - Assert P1 === P2 (porcelain unchanged, the non-vacuity check) and that the S1 and S2 overlay digests differ.\n  - With one warm cache: src/a.ts reads A1 at S1 and A2 at S2; src/b.ts is a hit at S2; a search for 'alpha1', cached as a positive at S1, finds nothing at S2.\n  - Every result equals uncached.\n- S2 (DoD2, literal slices):\n  - Base: src/a.ts and src/util.ts (both containing 'helper'), package-lock.json and docs/x.md.\n  - Two snapshots differ only in the overlay bytes of package-lock.json; both versions contain 'helper', on different lines.\n  - Warm the first with [read src/a.ts, read package-lock.json, search 'helper' in ['src'], search 'helper' unscoped], then probe each query on the second.\n  - By stats() deltas: src/a.ts and the src-scoped search hit; the lockfile read and the unscoped search miss and serve the new bytes. Everything equals uncached.\n- S3: the same bytes sit in the base layer of one snapshot and the overlay layer of another. The read hits, and its provenance names the current layer and digest (equal to uncached).\n- S4 (never served from the cache):\n  - an overlay delete of a cached base file gives 'missing'/'deleted-in-overlay';\n  - a snapshot with one corrupted sha256 gives every item 'snapshot-unverifiable:SNAPSHOT_HASH_MISMATCH';\n  - a mismatched request.base gives 'snapshot-stale'.\n  - stats().entries does not change, and each result equals uncached.\n- S5 (DoD3):\n  - Across a sequence of snapshots, the uncached call and shared, fresh-per-call and maxEntries-1 caches give identical JSON.\n  - A total-cap case with limits.maxTotalBytes 1000: cache C (500 bytes) alone, then run [C, A (600), X (500)]. The full batch keeps C and X and omits A, while the subset [A, X] alone would omit X. The result must equal uncached.\n- S6 (cross-read guard): the landed verifier destructures raw.base once per call and admits accessor properties (plain prototype, exact own keys).\n  - Build a plain object whose base getter returns layer B only on its second read and layer A otherwise, with an empty overlay; A and B differ in src/a.ts.\n  - With src/b.ts cached from A, [read src/b.ts, read src/a.ts] must return A's bytes and A's manifest, equal to uncached over A, never a mix.\n  - If the landed verifier refuses accessor-backed input, record that in the step note: the guard is then unreachable by construction and stays as defense in depth.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/sourceCache.ts",
+        "packages/moe-daemon/src/context/sourceCache.test.ts"
+      ],
+      "note": "Added the synchronous cachedSnapshotSource and prepareSnapshot.\n- prepareSnapshot validates, runs its own verifySourceSnapshot, checks staleness and builds the merged view from the verified copies.\n- Keys: snapshot-read is (path, executable, sha256, maxFileBytes); snapshot-search adds a scopeDigest (path NUL sha256 LF, in path-byte order).\n- Guard: merge and store only from results whose manifest matches. Provenance is restamped from the current view.\nS1-S6 all pass (27/27 in total):\n- S1 uses real Git and the real R09b export. Porcelain 'M src/a.ts' is unchanged across the edit while the overlay digest differs.\n- S2 hit deltas: [1,0,1,0].\n- S3: two hits, provenance restamped to overlay.\n- S4: deleted, HASH_MISMATCH and stale cases leave the entry count unchanged.\n- S5 includes the total-cap case.\n- S6: the landed verifier ADMITS the accessor-backed input. The getter is read 3 times (wrapper verify, then the subset C02b, then the full C02b), and the result equals uncached over A, so the guard is reachable.",
+      "startedAt": "2026-10-29T20:25:15.486Z",
+      "completedAt": "2026-10-29T20:27:11.000Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add the semantic wrapper to sourceCache.ts:\n`export function cachedSemanticSource(cache: SourceCache, projectRoot: string, commit: string, queries: SemanticQuery[], options: <readSemanticSource's options type> = {}): Promise<SemanticSource>`.\nIt returns readSemanticSource(projectRoot, commit, queries, { ...options, open }) and edits nothing in CQ-C03's module. Its `open` decorates C03's open seam (default openAnalyzerSession from ./mcpStdioClient.js):\n- Error handling: a failed open passes through unchanged. C03 then serves its explicit 'semantic-unavailable:...' items with their C02 fallback, never anything from the cache.\n- A successful open returns a delegating PLAIN object { server: s.server, tools: s.tools, call, close: () => s.close() }. Never spread or subclass the session.\n- call(tool, args):\n  - key = ['semantic', projectRoot, commit, launch.command, s.server, the inputSchema of `tool` in s.tools (or null), tool, args, launch.maxResponseBytes].\n  - A hit returns the stored { ok: true, text, truncated: false }.\n  - A miss awaits s.call(tool, args) and stores the result only when isPositiveAnswer holds.\n- Explain the key parts in a code comment:\n  - content is the whole immutable commit. A semantic answer can depend on any file (imports, types, references) and on in-repo config and lockfiles, so any committed lockfile or config change gives a new key;\n  - toolchain/analyzer is the absolute analyzer command, server {name, version, protocolVersion} and that tool's inputSchema;\n  - instruction is tool, args and maxResponseBytes;\n  - excluded are launch.cwd, env, args and timeoutMs, which are temp paths and budgets.\n- Hits skip analyzer query work only. Materialization and analyzer startup still run on every call, because the analyzer's identity can only be validated from a live session; reusing a session belongs to activation. C03's fallback seam stays unchanged.\n- Contingency: if C03 landed without an `open` option, add an optional `cache?: SourceCache` to its options that wraps its per-query call the same way. That is an additive edit: report semanticSource.ts in modifiedFiles and explain it in the step note. If anything larger is needed, call moe.report_blocked with blockedOnTaskIds [task-8d00971692974bbdb2f8b3c3b181c46d].\n\nTests run through C03's seams, with no real Serena:\n- vi.stubEnv HOME and USERPROFILE to a temp dir, so no real ~/.serena is read or written.\n- serenaPath = process.execPath, an existing absolute executable.\n- A fake materialize returns { ok: true, materialized: { dir: <temp dir>, commit, tree, files, bytes, skipped, dispose } }.\n- A fake fallback seam returns a fixed result, so failure texts stay deterministic.\n- A fake open returns a scripted session:\n  - server { name: 'serena', version: '1.6.2', protocolVersion: '2025-06-18' };\n  - tools with Serena 1.6.2-shaped inputSchemas: find_symbol has name_path_pattern and relative_path; find_referencing_symbols has name_path and relative_path; get_symbols_overview has relative_path;\n  - a call counter;\n  - deterministic answers `${tool}:${JSON.stringify(args)}`.\n- Commit ids are fixed values such as 'c'.repeat(40).\n\nCompare JSON.stringify with the uncached readSemanticSource over the same seams:\n- M1 (reuse, DoD3): [symbol 'helper', overview 'src/a.ts'] at C1 makes 2 tool calls; the next call makes 0, with identical JSON. A fresh cache calls again and gives the same JSON.\n- M2 (DoD2 lockfile/config): another commit id C2, standing for a lockfile- or config-only commit, calls again.\n- M3 (DoD2 toolchain): each of server version '1.6.3', another serenaPath (a temp file with mode 0o755) and a find_symbol inputSchema with one extra property misses. Restoring the original identity hits again.\n- M4 (positive only):\n  - An answer '[]', a truncated answer and { ok: false, reason: 'tool-error' } are never stored: the tool is called again, and the statuses equal uncached.\n  - A failed open gives C03's explicit unavailable items with their fallbacks, equal to uncached, and the cache is untouched.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/sourceCache.ts",
+        "packages/moe-daemon/src/context/sourceCache.test.ts"
+      ],
+      "note": "Added cachedSemanticSource, which decorates C03's `open` seam. C03 landed with that seam, so semanticSource.ts is unchanged.\n- A failed open passes through unchanged.\n- A successful open returns a plain delegating session {server, tools, call, close}.\n- Key: ['semantic', root, commit, launch.command, s.server, the tool's inputSchema, tool, args, maxResponseBytes].\n- Only isPositiveAnswer answers are stored.\n- Key building goes through a shared fail-open `attempt` helper, which the snapshot wrapper also uses.\nTests M1-M4 (6 cases) run through the seams with HOME, USERPROFILE and SERENA_HOME stubbed per test (beforeEach, because afterEach unstubs):\n- M1: tool calls [2,0,2].\n- M2/M3: C2, version 1.6.3, another serenaPath, a wider find_symbol schema, then restore give [2,2,2,1,0].\n- M4: ' [ ] ', truncated and tool-error answers are never stored. A failed open leaves the cache stats all zero.\nEach answer equals uncached. Total: 33/33, tsc --noEmit exit 0 (Linux snapshot).\nSize: compacted to exactly 400 net lines (170 runtime + 230 tests) by merging statements and tightening comments. No test or assertion was dropped.",
+      "startedAt": "2026-10-29T20:27:11.963Z",
+      "completedAt": "2026-10-29T20:33:16.336Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, once and fresh, in a Linux-native snapshot (recipe: mem gotcha-daemon-linux-snapshot-gate).\n\nSnapshot setup:\n- `git archive HEAD` of the WHOLE repo into a mktemp dir. CQ-C02b and CQ-C03 must already be DONE and in HEAD.\n- Overlay ONLY packages/moe-daemon/src/context/sourceCache.ts and sourceCache.test.ts, plus any contingency file you reported in modifiedFiles (repositorySource.ts or semanticSource.ts).\n- Symlink a native packages/moe-daemon/node_modules, after checking that package.json and package-lock.json are equal modulo CR.\n- Run under `env -i HOME=$HOME PATH=<nvm node v24 bin>:/usr/local/bin:/usr/bin:/bin NO_COLOR=1`.\n\nChecks:\n- `cd packages/moe-daemon && npm test` must exit 0. Supply exactly that command, its exit code and its output tail to complete_task.\n- `npx tsc --noEmit` must exit 0.\n- cmp the overlaid files against the worktree before citing either run.\n\nMutation proof: on a scratch copy of the snapshot only, never the shared tree. Each mutant must turn its named test red, and the unmutated copy must stay green:\n- m1: drop file.sha256 from the snapshot read key → S1\n- m2: drop scopeDigest from the search key → S1/S2\n- m3: drop s.server from the semantic key → M3\n- m4: drop commit from the semantic key → M2\n- m5: store without the positivity check → G2/S4/M4\n- m6: return the stored object without structuredClone → C1\n- m7: drop 'omitted' from the fall-back rule → S5\n- m8: drop 'unavailable' from the fall-back rule → G3\n- m9: skip provenance restamping → S3\n- m10: drop the manifest guard → S6\nRecord each result in the step note.\n\nSize: measure the net diff, tests included. The cap is 400 net lines, QA's limit, with no size exception. If over, call moe.request_replan and name the split (core + commit wrapper | snapshot + semantic wrappers) rather than trimming tests.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/sourceCache.ts",
+        "packages/moe-daemon/src/context/sourceCache.test.ts"
+      ],
+      "note": "Gate (fresh): git archive of HEAD d53c62e (whole repo), overlaid with ONLY sourceCache.ts and sourceCache.test.ts (cmp ok). node_modules is symlinked to a native npm ci whose package.json and lock are identical to d53c62e. Run with node v24.21.0, env -i, NO_COLOR=1.\n- `cd packages/moe-daemon && npm test`: exit 0. 183 files passed; 5107 passed, 16 skipped.\n- `npx tsc --noEmit`: exit 0.\nThe first full run failed daemonGitDocs.test.ts, an existing contract that rejects the phrase 'runs no git', on my comment at sourceCache.ts:80. I reworded it to 'skips C02's reads entirely'.\nMutation proof, on a scratch copy only. Baseline 33/33; all 11 mutants KILLED; restored 33/33.\n- m1 (sha256 dropped from the read key): S1, S2, S5 red.\n- m2 (scopeDigest dropped): S1, S2, S5 red.\n- m3 (s.server dropped): M2-M3 red.\n- m4 (commit dropped from the semantic key): M2-M3 red.\n- m5a (store sources without the positivity check): G1 and G2 red. S4 does NOT catch it: S4's negatives are unkeyed (missing) or never reach remember (unverifiable or stale). The shared helper is covered by G1/G2.\n- m5b (store answers without the positivity check): M4 red.\n- m6 (no clone): C1 red.\n- m7 ('omitted' dropped): S5 red.\n- m8 ('unavailable' dropped): G3 red.\n- m9 (no provenance restamp): S3 red.\n- m10 (no manifest guard): S6 red.\nSize: 400 net (170 runtime + 230 tests), at the cap and not over it. No contingency file was touched.",
+      "startedAt": "2026-10-29T20:33:17.484Z",
+      "completedAt": "2026-10-29T20:37:35.763Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review. Load adversarial-self-review and walk this task's own diff. This is the last step.\n\nQuestions to answer:\n- Can any path return bytes whose content identity differs from the current source? Look for:\n  - a key missing its commit, sha256, scope digest or analyzer identity;\n  - a hit rebound with stale provenance;\n  - an entry stored from a result whose identity differs from its key.\n- Can a negative, partial, failed or budget-cut item ever be stored or served from the cache?\n- Can a warm answer differ from the uncached one in anything but availability? Check partial-merge order, the capTotal interplay, limitations, key order and thrown errors.\n- What if two calls race on one key, the snapshot object changes between reads, or a provider throws mid-merge? A double compute is benign; nothing may ever mix two sources.\n- Are memory and work bounded? Check the cache limits, key sizes bounded by provider validation, and that there are no timers or listeners.\n- Error handling: can a cache failure ever fail a request? It must fall open to the uncached call.\n\nRails:\n- no fs import or persistence;\n- no Git writes outside temp test repos;\n- no .moe edits;\n- none of the project's global forbiddenPatterns tokens in code or tests, including the prototype-key token;\n- no verified-local or isolation claim.\n\nReport every path in complete_step.modifiedFiles.\n\nWrite the task handoff memory with:\n- the final API and key namespaces for CQ-C05, whose negative entries reuse these keys and scope digests;\n- notes for CQ-C06;\n- for CQ-C11 activation: pass one daemon-owned SourceCache and measure with stats().",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/sourceCache.ts",
+        "packages/moe-daemon/src/context/sourceCache.test.ts"
+      ],
+      "note": "Adversarial self-review of the task's own diff (2 new untracked files; the provider files have no diff). No code change was needed.\n\nContent identity:\n- Every key carries its content identity:\n  - git-read/git-search: root + commit;\n  - snapshot-read: path, executable, sha256, maxFileBytes;\n  - snapshot-search: literal, paths, scopeDigest over in-scope path\\0sha256, caps;\n  - semantic: root, commit, launch.command, server, the tool's inputSchema, tool, args, maxResponseBytes.\n- Snapshot hits are restamped with the current view's provenance (S3).\n- Only results whose manifest equals the wrapper's verified identity are merged or stored (S6: an accessor-mutated snapshot).\n- Mutants m1-m10 (11 in all) were all killed.\n\nNegatives:\n- Only status 'served' (read, or search with at least 1 match) and ok, untruncated, non-empty analyzer answers are stored.\n- time-budget items are truncated or unavailable, so they are never stored.\n- Any subset item that is unavailable, omitted or time-budget falls back to the full uncached call.\n\nEquivalence:\n- Items are reassembled in query order and capTotal is reapplied.\n- The envelope is rebuilt with the provider's key order and sorted limitations, and 'literal-search-only' is added for search hits.\n- Every test compares JSON.stringify against the uncached provider.\n\nConcurrency:\n- A racing double compute is benign: last write wins, with the same content-keyed value.\n- Hits are structuredClone'd and nothing awaits between get and use.\n\nFail-open: key or prep errors go to the uncached call (attempt), set never throws, and provider throws propagate exactly as uncached.\n\nBounds:\n- maxEntries 2048 and maxBytes 32 MiB, with LRU eviction.\n- No timers or listeners; key sizes are bounded by provider validation.\n- Theoretical cost: a snapshot search hashes the scope per query (bounded by C02 limits). A snapshot miss verifies twice. A semantic hit still materializes and starts the analyzer (correctness first).\n- Residual: a dev analyzer rebuilt with an unchanged command, server and schema is only detected at restart, because the cache is in-memory only.\n\nRails, all clean:\n- No forbiddenPatterns tokens: grep exit 1.\n- No fs or child_process import (static test C8).\n- No .moe edits and no Git writes outside temp test repos.\n- No verified-local or isolation claim.",
+      "startedAt": "2026-10-29T20:37:36.959Z",
+      "completedAt": "2026-10-29T20:40:26.833Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Unblocked on the human's explicit, repeated instruction (\"unblock tasks\", then \"unblock\", 2026-10-27). Plan now instead of parking. Use prerequisites' landed code or approved plans where they exist. Otherwise use their task description, DoD and docs/plans/2026-10-24-ai-code-quality-and-context.md. Name every assumed interface in planningNotes. Keep dependsOn, so WORKING waits until the prerequisites are DONE. If a prerequisite's contract must be designed first, split it out (SPIDR, as with R10a) instead of report_blocked. Re-block only if any possible plan would breach a rail.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 239.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:32.232Z",
+  "updatedAt": "2026-10-29T20:49:49.316Z",
+  "dependsOn": [
+    "task-8d00971692974bbdb2f8b3c3b181c46d",
+    "task-311dbda408864b7597852e683076ca24"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-26T09:35:47.194Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 6,
+    "doneAt": "2026-10-29T20:49:06.266Z",
+    "wallClockMs": 299599072
+  },
+  "contextFetchedBy": [
+    "architect-1520cc31",
+    "architect-e4b7eee0",
+    "worker-b5749787",
+    "qa-952969be"
+  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Missing acceptance-critical contracts, not REPL silence. C03 is BLOCKED with no plan/API and waits on R10; analyzer capability/version identity, immutable input and result/fallback contracts do not exist. C04 must cache by those dependencies, not invent them. Independently, C04 DoD1 requires dirty-byte invalidation even when porcelain status is unchanged. The only landed daemon provider (src/context/repositorySource.ts) explicitly serves committed bytes only, manifest {commit}, limitation committed-bytes-only. C02b owns validated R09 base+overlay provenance/content hashes and is BLOCKED/unplanned. R09a's validator alone is not that adapter. A commit-only cache or mutable-worktree fallback would not satisfy C04. Added C02b to dependsOn while retaining C03; auto-resume when both named prerequisites land. Then plan bounded positive reuse against their actual APIs, preserving source revision checks and cold/warm equivalence. Details in task-task-1b7b6067a95f4078bfb2c780c2a598e9-handoff.",
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T16:54:42.990Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Hooks inside each provider's per-item computation (exact envelopes, per-item reuse). Rejected:\n- CQ-C02b's snapshotSource.ts and CQ-C03's semanticSource.ts do not exist yet, so submit_plan's existence gate refuses them as affectedFiles.\n- Listing them as newFiles would be false, and once they land plan reuse would report 'new-file-present' and reassess.\n- So integration goes through the providers' public APIs plus C03's open seam, in one new module. C02's landed file stays untouched too.\n2. Batch caching keyed by the whole-source identity (commit or snapshot digests). Rejected: it has no slices, so a lockfile edit would invalidate every literal read (DoD2).\n3. All-or-nothing batches. Rejected: one never-cached negative item would defeat every mixed batch. The partial merge instead falls back to the exact uncached call on unavailable, omitted or time-budget subset items.\n4. Cross-commit content-addressed C02 reads. Deferred: they need a Git listing before every lookup. C02 slices are per commit; snapshot slices are content-precise.\n5. Validating the analyzer before spawning it. Rejected: its identity is knowable only from a live session. A version read elsewhere, an mtime or a TTL would be metadata, not validation.\n6. Amending C02b to accept a pre-verified snapshot. Rejected: a forged VerifiedSnapshot would be caller-minted evidence. The accepted cost instead: a miss verifies twice, while a full hit verifies once and never calls C02b.\n7. Disk persistence or a knowledge store. Rejected by the rails and by DoD3.\n8. Caching negatives. That belongs to CQ-C05, which extends these keys.",
+    "codebaseInsights": "Landed C02 (repositorySource.ts):\n- Exports readRepositorySource, validateSourceRequest and SOURCE_LIMITS; SourceOptions has run, head and slots seams.\n- result() returns {manifest:{commit}, items, complete, limitations, bytes}.\n- Limitations: 'committed-bytes-only' always; 'literal-search-only' per scope-valid search; 'repository-unavailable' when open fails.\n- Reads use --no-replace-objects. openProjectGit failure texts embed ms timings, so mock performance.now when comparing.\n\nIn tree, C02b1 is WORKING at step 4/5 (snapshotManifest.ts):\n- verifySourceSnapshot returns {ok, snapshot: VerifiedSnapshot}: {commit, tree, identity{base, overlay}, base Map<path,{path, executable, size, sha256, data}>, overlay Map<path, file|{kind:'delete', path}>}.\n- It destructures raw.base and raw.overlay once per call and admits accessor properties (plain prototype, exact own keys).\n\nAssumed but NOT landed (names from the approved plans):\n- C02b (task-311dbda4), snapshotSource.ts:\n  - Synchronous readSnapshotSource(snapshot: unknown, request {commit, base?, overlay?}, queries, {limits}).\n  - Returns {manifest{commit, tree, base, overlay}, items with provenance {layer, manifest, sha256} (matches carry provenance too), complete, limitations (always 'snapshot-bytes'), bytes}.\n  - Reasons: 'snapshot-unverifiable:<code>', 'snapshot-stale', 'time-budget'.\n  - Its step 1 exports capTotal.\n- C03 (task-8d009716), semanticSource.ts:\n  - readSemanticSource(projectRoot, commit, queries, {limits, serenaPath, materialize, open, fallback, launcher}).\n  - open(launch, allowedTools) runs after materialize; each query calls session.call(tool, args).\n- C03b (task-465fb4b9), mcpStdioClient.ts: AnalyzerLaunch {command, args, cwd, env, timeoutMs, maxResponseBytes}; AnalyzerSession {server{name, version, protocolVersion}, tools[{name, inputSchema}], call, close}; AnalyzerCallResult.\n\nLanded R09 producers:\n- validateImport(unsealed entries) returns a frozen {entries (sealed), digest}.\n- exportSourceSnapshot({repoDir (absolute), commit}) returns a frozen {version:1, commit, tree, base, overlay, excluded}.\n\nDoD mapping:\n- DoD1: snapshot sha256 and scope-digest keys (S1, with porcelain proven unchanged).\n- DoD2: literal slices (S2) plus semantic commit and toolchain keys (M2, M3).\n- DoD3: uncached equivalence everywhere (G1, S5, M1), with an in-memory-only cache.",
+    "risks": "Equivalence is the invariant. Every test compares JSON.stringify output, key order included, against the uncached provider. Only availability may differ: a full C02 hit runs no Git, and hits avoid budget cut-offs.\n\nMerge pitfalls, each pinned by a test:\n- capTotal interplay (S5);\n- batch failures (G3);\n- the limitations union;\n- provenance restamping (S3);\n- the cross-read guard (S6).\n\nAnalyzer identity residual:\n- A dev build that keeps its version string and schemas (Serena reports 1.6.2.dev0) goes undetected until the daemon restarts, because the cache is in memory only.\n- So do language-server binaries swapped without a version change.\n- Document this in code; activation may add stronger identity.\n\nCost:\n- A snapshot miss verifies twice, which is O(bytes).\n- A semantic hit still materializes and starts the analyzer.\n\nPrerequisites must land with the assumed names. One-line adaptations are in scope; anything more means report_blocked naming the row. There are no cycles: C02b and C03 do not depend on C04.\n\nSize: at most 400 net lines including tests, with no exception. Keep tests table-driven; if over, request_replan with the named split.\n\nWSL: daemon tests run only in a Linux-native snapshot.\n\nRails:\n- no .moe edits;\n- no Git writes (temp test repos only);\n- no project forbiddenPatterns tokens, even in test strings;\n- no verified-local or isolation claim.",
+    "keyFiles": [
+      "packages/moe-daemon/src/context/repositorySource.ts",
+      "packages/moe-daemon/src/context/repositorySource.test.ts",
+      "packages/moe-daemon/src/context/snapshotManifest.ts",
+      "scripts/local-runner/source-snapshot.mjs",
+      "scripts/local-runner/source-export.mjs",
+      "packages/moe-daemon/src/context/snapshotSource.ts (CQ-C02b, pending)",
+      "packages/moe-daemon/src/context/semanticSource.ts (CQ-C03, pending)",
+      "packages/moe-daemon/src/context/mcpStdioClient.ts (CQ-C03b, pending)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T16:54:43.104Z",
+  "approvedPlanRevision": 1,
+  "commits": [
+    {
+      "sha": "b44295869a8bdcb9793aeaa2c75b9790ca47a583",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-e4b7eee0@2026-10-29T15:07:33Z",
+      "paths": [
+        ".moe/tasks/task-2720c13bc79b438e840b14cbba4fea50.json",
+        ".moe/tasks/task-7d0f7f082b6349cab75c62af3c8b1da4.json"
+      ],
+      "recordedBy": "architect-e4b7eee0",
+      "recordedAt": "2026-10-29T17:09:21.329Z",
+      "treeId": "157a399820c448fc070d231ad84310b5afbf3113",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "b0048c90b38d8676d1ccf119cb8077a7d9ef365a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b5749787@2026-10-29T20:16:12Z",
+      "paths": [
+        ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+        ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+        "packages/moe-daemon/src/context/sourceCache.test.ts",
+        "packages/moe-daemon/src/context/sourceCache.ts"
+      ],
+      "recordedBy": "worker-b5749787",
+      "recordedAt": "2026-10-29T20:43:45.152Z",
+      "treeId": "febfa8ae037e20e0f8e5d69800436fc6b4c14fca",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "434aa421900d975a0107ef555dc95a0271608b22",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T20:43:47Z",
+      "paths": [
+        ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T20:49:49.316Z",
+      "treeId": "9ba32ab38e0279160b9e1a02dce226970e0b67b1",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/context/sourceCache.ts",
+    "packages/moe-daemon/src/context/sourceCache.test.ts",
+    ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+    ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T20:43:47Z",
+    "at": "2026-10-29T20:49:49.316Z"
+  },
+  "workStartedAt": "2026-10-29T20:22:30.276Z",
+  "reviewStartedAt": "2026-10-29T20:43:19.067Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": " ✓ src/context/sourceCache.test.ts (33 tests) 522ms\n ...\n ✓ src/util/qaCommitPolicy.test.ts (8 tests) 4ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n\n Test Files  183 passed (183)\n      Tests  5107 passed | 16 skipped (5123)\n   Start at  22:42:00\n   Duration  21.30s (tests 91%, transform 4%, import 4%)\n[Linux-native snapshot: git archive of HEAD cc77607 plus the 2 owned files (cmp ok), native node_modules with an identical lock, env -i with node v24.21.0. npx tsc --noEmit exit 0.]",
+    "reportedAt": "2026-10-29T20:43:19.067Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-C04: positive-only, in-memory LRU source cache.\n\nFiles are new: src/context/sourceCache.ts (170 lines) and sourceCache.test.ts (230 lines, 33 tests), 400 net. No provider file changed.\n\nAPI:\n- SourceCache: maxEntries 2048 and maxBytes 32 MiB; structuredClone on get and set; set never throws; stats().\n- sourceCacheKey(parts), isPositiveSource, isPositiveAnswer.\n- cachedRepositorySource, cachedSnapshotSource and cachedSemanticSource are drop-ins for the C02, C02b and C03 providers.\n\nMerge rule:\n- On a full miss, run the uncached call.\n- Otherwise run one subset call. Any unavailable, omitted or time-budget item falls back to the full call.\n- Reassemble in query order, reapply capTotal, and rebuild the envelope in the provider's key order.\n- Every test asserts JSON equality with the uncached provider.\n\nKeys:\n- git-read and git-search carry (root, commit).\n- snapshot-read carries (path, executable, sha256, maxFileBytes). snapshot-search carries a scopeDigest over in-scope path\\0sha256 and a manifest guard; provenance is restamped.\n- semantic carries (root, commit, launch.command, server, the tool's inputSchema, tool, args, maxResponseBytes).\n\nDoD:\n1. Porcelain-unchanged dirty edits invalidate: S1, S2, S5.\n2. Lock, toolchain and config changes invalidate the right slices. Commit and snapshot identity cover the lock and config bytes. The analyzer command, server and schema cover the semantic toolchain (M2, M3).\n3. Loss or restart costs only performance: fail-open, with C1, C7 and the uncached equality checks.\n4. Gate: fresh, 183 files, 5107 passed | 16 skipped, exit 0; tsc exit 0.\n\nMutation proof: all 11 mutants killed. They dropped the sha256, the scopeDigest, the server or the commit from keys, the positivity checks, the clone, the omitted or unavailable fallbacks, the provenance restamp and the manifest guard.\n\nAdversarial review found no code issues. Residuals: a semantic hit still starts the analyzer; a snapshot miss verifies twice; a dev analyzer with an unchange",
+  "touchedFiles": [
+    "packages/moe-daemon/src/context/sourceCache.ts",
+    "packages/moe-daemon/src/context/sourceCache.test.ts"
+  ],
+  "completedAt": "2026-10-29T20:49:06.266Z",
+  "reviewCompletedAt": "2026-10-29T20:49:06.266Z",
+  "reviewSummary": "Reviewed completion b0048c9 on moe/work-2026-10-24 (contains ok). Diff: 2 new files, sourceCache.ts +170 and .test.ts +230 = 400 net (at the cap, not over). No provider file changed; worktree equals commit.\n\nGate, re-run fresh: Linux snapshot of git archive b0048c9, native node_modules with an equal lock, env -i, node v24.21.0. `cd packages/moe-daemon && npm test` exit 0: 183 files, 5107 passed | 16 skipped (sourceCache 33/33). tsc --noEmit exit 0. No forbiddenPatterns tokens.\n\nDoD:\n1. Dirty edit with porcelain unchanged: S1 runs real Git and the R09b export; porcelain stays 'M src/a.ts' while the overlay digest changes. Snapshot keys use sha256, and searches add a scopeDigest.\n2. S2: only the lockfile read and the unscoped search miss. M2/M3 cover commit, server version, analyzer command and inputSchema.\n3. Loss/restart: C4, G1, S5 and M1 each equal the uncached provider as JSON.\n4. Evidence matches the plan's command and reproduces.\n\nTraced the merge against the providers:\n- Positive items don't depend on batch-mates (classify uses each query's own prefixes).\n- A capped or failed subset falls back to the full call; limitations equal the uncached union.\n- A deleted scope that is also a directory prefix is refused by the verifier (SNAPSHOT_PATH_COLLISION).\n\nMy own mutants, all killed and restored (sha256sum -c OK): sha256 dropped from the read key, the scopeDigest framing, the manifest guard, inputSchema dropped from the semantic key, the literal-search-only limitation.\n\nAdvisory, plan-approved:\n- The semantic key omits launcher prefixArgs and the language-server cache (the documented dev-build residual).\n- A C02 full hit doesn't re-check the repository (affects availability only).\n- Not wired into the daemon yet; activation is CQ-C11.",
+  "requiredCheckAtDone": null
+}

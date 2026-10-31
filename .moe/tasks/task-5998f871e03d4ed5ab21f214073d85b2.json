@@ -1,0 +1,395 @@
+{
+  "id": "task-5998f871e03d4ed5ab21f214073d85b2",
+  "epicId": "epic-be924fb8",
+  "title": "bug: wrapper self-restart hot-loads a peer task's uncommitted, unreviewed moe-agent.sh edits into every seat",
+  "description": "Filed by the governor on 2026-10-30.\n\nObserved: at 10:33:44Z, architect-4ae016fb, worker-6e57c4f8 and worker-262588d0 all deregistered with reason wrapper_restart. They re-exec'd scripts/moe-agent.sh because worker-e60b90bd, in the middle of task-e7f4026a step 2, had saved an in-progress edit to it: +79/-8, uncommitted, not yet gated or QA'd. Each seat re-execs the same way at its next loop top. So every sh seat launched from this shared checkout is now running another task's half-finished wrapper.\n\nCause: the \"Self-restart when this script's own bytes change on disk\" block (moe-agent.sh about :6459 and the loop-top check about :6507) compares only the working-tree file's sha256. Its parse guard (bash -n) refuses broken syntax, but it loads any edit that parses. In the Moe repo most of the V chain edits moe-agent.{sh,ps1}: e7f4026a now, then 01f37ac6, V07, V08, V08b, V04c, R13c2 and aa85ff13. An intermediate state that parses but is half-changed (a renamed function whose call site isn't updated yet, landing logic edited in one twin only) can break pre-flight or landing for the whole fleet. Today's reload re-registered fine, so this time it is luck, not design.\n\nFix, keeping sh and ps1 in parity: reload only bytes that are committed. Before re-exec, also require that the wrapper file matches HEAD. For example, `git diff --quiet HEAD -- <wrapper>` with a fail-closed fallback, so a failed git read means no reload. A dirty wrapper defers the reload, with a single \"[INFO] MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits\" line per hash. The seat reloads once the edit lands, as committed bytes. Keep the existing parse guard and the one-restart-per-hash rule. Mirror it in moe-agent.ps1's reload path.",
+  "definitionOfDone": [
+    "A seat whose wrapper file differs from HEAD (uncommitted edit) does not re-exec; it logs MOE_WRAPPER_RELOAD_DEFERRED once per hash and keeps serving its current bytes, proven by a postflight.{sh,ps1} row.",
+    "Once the edit is committed (the file matches HEAD again with a new hash), the seat re-execs exactly once, as today; the bash -n parse guard and the refused-hash rule are unchanged.",
+    "When the git check fails (no git, not a repo, or an unreadable index), the seat does not reload. That failure never ends the seat or deregisters it.",
+    "bash scripts/tests/parity-check.sh and scripts/tests/postflight.{sh,ps1} pass; scripts/CLAUDE.md documents the committed-bytes rule."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Committed-bytes gate in scripts/moe-agent.sh (DoD 1-3). This task depends on task-e7f4026a, which edits the same file: find the block by its header '# --- Self-restart when this script's own bytes change on disk', not by line number.\n\nNext to MOE_WRAPPER_REFUSED_HASH=\"\", add MOE_WRAPPER_DEFERRED_HASH=\"\" and a function `wrapper_reload_deferred` (comment 'Twin: Test-MoeWrapperReloadDeferred'). It returns 0 (defer the reload) unless the wrapper file is tracked in ITS OWN checkout and matches HEAD; in that case it returns 1.\n(a) `git -C \"$SCRIPT_DIR\" ls-files --error-unmatch -- \"${MOE_WRAPPER_PATH##*/}\"`. rc 0 = tracked. rc 1 = untracked, which counts as uncommitted. Any other rc = git failure.\n(b) Only when the file is tracked: `git -C \"$SCRIPT_DIR\" diff --quiet HEAD -- <same basename>`. rc 0 = committed, so return 1. rc 1 = uncommitted. Any other rc = git failure.\nSend both calls' stdout and stderr to /dev/null and capture the rc with `|| rc=$?`. set -e must never end the seat on the very failure this function reports.\nUse $SCRIPT_DIR (the absolute directory of BASH_SOURCE[0], line ~17), never $PROJECT: a px4swarm seat runs moes's wrapper. Never use a relative MOE_WRAPPER_PATH either.\n\nExit codes I measured on git 2.43 while planning (ls-files/diff):\n- tracked, clean: 0/0\n- edited: 0/1\n- staged but not committed: 0/1\n- untracked: ls-files 1. diff alone says 0, which is why ls-files is required.\n- not a repo: 128. diff alone falls back to --no-index mode and says 1.\n- unborn HEAD: 0/128\n- corrupt index: 128/128\n- git missing: 127\n\nLogging, once per hash: when MOE_WRAPPER_CURRENT_HASH differs from MOE_WRAPPER_DEFERRED_HASH, store it and print exactly one line:\n- uncommitted or untracked (stdout): `[INFO] MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits; staying on the current bytes until they are committed`\n- git failure (stderr): `[WARN] MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed (git <ls-files|diff> exited <rc>); staying on the current bytes`\nThe dedupe suppresses only the log line. Every loop top re-runs the git check, so committing the very bytes that were deferred reloads them.\n\nWire it in by appending `&& ! wrapper_reload_deferred` as the LAST test of the existing loop-top `if`, after the REFUSED_HASH test. The git check then runs only for a changed, unrefused hash; an unchanged wrapper starts no git process. The existing body stays byte-identical, with no re-indent: the bash -n parse guard, the refused-hash rule, the MOE_HEARTBEAT_STOP_TIMEOUT deferral, the wrapper_restart deregister and the exec.\nA deferral never deregisters, exits or `continue`s. The iteration goes on to pre-flight on the current bytes.\nExtend the block comment with the reason: on 2026-10-30, three seats re-exec'd onto task-e7f4026a's uncommitted, unreviewed +79/-8 edit.\nError handling: fail closed. Any unexpected git result defers the reload.\n\nHAZARD: until this lands, every sh seat launched from this checkout hot-loads each parseable save of this file, including this fix's own first save. Prepare the whole change, then apply it as ONE Edit-tool edit: a single save, and TOOL-witnessed for a CONTESTED landing (peers in the V chain plan this file too). Run `bash -n scripts/moe-agent.sh` right after. Never leave an intermediate state on disk. Never revert or absorb a peer's hunks.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Resumed existing IN_PROGRESS step (start_step correctly refused duplicate entry). Governor comment-09aa20ea waives Edit-only tooling; applied all wrapper hunks in one apply_patch and immediately ran bash -n (exit 0). Gate uses SCRIPT_DIR, guards both git failures, dedupes logs only, and preserves reload body byte-for-byte. Tests/RED proof follow in approved step 3. Seven owned paths were initially clean; unrelated shared dirtiness left untouched; e7f4026a DONE/landed per context.",
+      "startedAt": "2026-10-30T12:05:15.780Z",
+      "completedAt": "2026-10-30T12:08:04.536Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "PowerShell twin in scripts/moe-agent.ps1, plus the parity lists.\n\nThe file must stay UTF-8 WITH a BOM; parity-check enforces it.\nNext to $script:MoeWrapperRefusedHash, add `$script:MoeWrapperDeferredHash = $null` and `function Test-MoeWrapperReloadDeferred([string]$Hash)` (comment 'Twin: wrapper_reload_deferred'). It returns $true (defer) or $false, with the same decision table as step 1 and the SAME two message strings: INFO via Write-Host, WARN via Write-Host -ForegroundColor Yellow.\n\nReuse Invoke-MoeGit:\n- `-Top (Split-Path -Parent $script:MoeWrapperPath) -GitArgs @('ls-files','--error-unmatch','--',<leaf>)`\n- then `@('diff','--quiet','HEAD','--',<leaf>)`, with <leaf> = Split-Path -Leaf of $script:MoeWrapperPath.\nInvoke-MoeGit already switches to EAP 'Continue', captures $LASTEXITCODE and turns a thrown exception (git missing) into Rc 255.\nError handling: wrap the function body in try/catch. A catch counts as a git failure (reason `git check failed: <message>`), so the reload is deferred. An empty -Top also throws inside the try and fails closed.\n\nWire it in as the last operand of the loop-top condition:\n`... -and $moeCurrentHash -ne $script:MoeWrapperRefusedHash -and -not (Test-MoeWrapperReloadDeferred $moeCurrentHash)`\n-and short-circuits, so an unchanged hash starts no git process. These stay byte-identical: the ParseFile guard and its refusal, the Stop-HeartbeatSidecar deferral, Invoke-MoeDeregister -Reason 'wrapper_restart' and the $script:MoeWrapperRelaunchRequested hand-over.\nSame HAZARD rule as step 1: one Edit-tool edit, then confirm the file parses with [System.Management.Automation.Language.Parser]::ParseFile.\n\nParity lists: add the three literals `MOE_WRAPPER_RELOAD_DEFERRED`, `wrapper has uncommitted edits; staying on the current bytes until they are committed` and `cannot confirm the wrapper bytes are committed (`\n- to the `for lit in ...; do require_both \"hot reload\"` loop in scripts/tests/parity-check.sh\n- to `'hot reload' = @(...)` in scripts/tests/parity-check.ps1\nAlso update the comment above each list.\nThen run `bash scripts/tests/parity-check.sh` (it takes seconds). It must pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Parity test RED: 3 expected missing ps1 deferral literals (exit 1), then GREEN: PASS parity-check.sh (exit 0). Complete ps1 gate applied atomically in one apply_patch under governor waiver; immediate ParseFile PASS. BOM retained. Uses existing Invoke-MoeGit and catches exceptions; unchanged reload body; tests for runtime behavior in steps 3/4.",
+      "startedAt": "2026-10-30T12:08:04.559Z",
+      "completedAt": "2026-10-30T12:08:34.396Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Regression test rows in scripts/tests/postflight.sh (DoD 1-3).\nThe harness already needs git (the frozen-candidate suite runs it unconditionally), so add no skip guard. Make every edit with the Edit tool.\n\n(a) Helpers, before the '[hot reload]' arm. Resolve variables at call time, like reload_seq does:\n- `reload_git`: git -C \"$RELOAD_DIR/scripts\" -c user.name='Moe Test' -c user.email=moe@test.local -c commit.gpgsign=false -c core.autocrlf=false \"$@\"\n- `reload_repo`: init -q, add -A, commit -qm base. On failure, print 'HOT RELOAD FAILED: ...' and exit 1.\n- `reload_commit MSG`: commit -qam, retried 3 times with a short sleep (a seat's git diff can briefly hold index.lock), else reload_fail.\nThe repo root is the copied scripts/ directory, so the project directory stays outside any repo.\n\n(b) '[hot reload]' and '[hot reload refused]': call reload_repo after the copy, and reload_commit right after every edit (edit 1 and edit 2; the unparseable `if true; then :` append, then the closing `fi`). A seat now reloads only committed bytes, so these arms' existing assertions stay as they are. They keep proving the parse guard, the refused-hash rule and one restart per committed hash (DoD 2).\n\n(c) New '[hot reload deferred]' arm, on a fresh committed copy (worker id worker-reload-deferred):\n- After the first claim, append `# deferred edit 1` WITHOUT committing, then reload_wait 0 for 3 more claims.\n- Append `# deferred edit 2`, then wait for 3 more claims. EDITS=0 makes any wrapper_restart fail at once.\n- reload_commit, then reload_wait 1 '^c+rc{2,}$'.\nAssert:\n- the final sequence matches ^c+rc{2,}$\n- exactly 2 `MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits` lines: one per dirty hash, not one per loop top\n- exactly 1 'restarting to load it'\n- no 'cannot confirm'\n\n(d) New '[hot reload unverifiable]' arm: a plain copy with NO git repo. Launch the wrapper with GIT_CEILING_DIRECTORIES=\"$RELOAD_DIR\" so git cannot find an enclosing repo.\n- Append a parseable edit, then wait for 3 more claims with EDITS=0. reload_wait also fails if the wrapper died.\nAssert: the sequence matches ^c+$, exactly 1 `MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed` line, and 0 restart announcements.\nEach arm kills its wrapper and restores LIVE_PIDS, like the existing arms.\nUse appends, not rewrites, so a seat never hashes a half-written file.\n\nRED proof (diagnostic; record it in the step note). In a /mnt/d scratch copy, run a subset that holds only the hot-reload arms (the anchor recipe in Serena mem pattern-postflight-red-proof-via-temp-tree) against the pre-fix wrapper: `git show HEAD:scripts/moe-agent.sh`, or `<this task's first commit>^` once a checkpoint has landed. Expected:\n- '[hot reload deferred]' and '[hot reload unverifiable]' fail with 'a restart with no edit behind it'\n- the two updated arms pass\nThen run it green against the new wrapper.\nNever run the harness against the live shared wrapper (torn reads; mem gotcha-editing-wrapper-while-harness-runs).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "Added git init/commit helpers, committed edits in both existing arms, and shared-setup deferred/unverifiable arms. Scratch anchor-extracted harness /mnt/d/moe-scratch/r-5998f871: old HEAD wrapper passes existing arms and fails BOTH new arms separately with 'a restart with no edit behind it' (sequence cr; exit 1). New wrapper passes all four arms (exit 0), including 2 deferrals/1 restart and 1 deferral/0 restarts. bash -n passes. No harness ran on live wrapper. Logs red-deferred.log, red-unverifiable.log, green-sh.log. Atomic Edit-only restriction waived by governor.",
+      "startedAt": "2026-10-30T12:08:34.423Z",
+      "completedAt": "2026-10-30T12:11:54.031Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "PowerShell twin of the test rows, in scripts/tests/postflight.ps1. Make every edit with the Edit tool.\n\nBefore the first hot-reload arm (anchor '# --- Hot reload keeps ONE wrapper process'), add two helpers, following the gate block's `& git -C $dir ... 2>$null | Out-Null` idiom:\n- `Initialize-ReloadRepo`: git init in (Split-Path $reloadWrapper) with the same user, gpgsign and autocrlf config as step 3, then add -A and commit. Throw 'HOT RELOAD FAILED: ...' when $LASTEXITCODE is nonzero.\n- `Invoke-ReloadCommit([string]$Message)`: commit -qam, up to 3 tries, else throw.\n\nUpdate the existing arms:\n- '[hot reload]': commit after each Set-ReloadWrapperText.\n- '[hot reload refused]': commit after each Add-ReloadWrapperText.\n\nAdd two arms that mirror step 3, with the same edits, waits and assertions:\n- '[hot reload deferred]': reload-deferred\\scripts, -WorkerId worker-reload-deferred.\n- '[hot reload unverifiable]': reload-unverifiable\\scripts, no repo. Set $env:GIT_CEILING_DIRECTORIES to the arm's root and remove it in finally.\nIn both:\n- During the no-reload phases, wait with Wait-ReloadSequence on ('^c{N,}$|[rx]') and fail fast on [rx], as the refused arm does.\n- Assert @(Get-ReloadWrapperPids).Count -eq 1 after the deferred phase.\n- Count DEFERRED lines and match their reason text against the unwrapped $reloadFlat, because a console host wraps long lines.\n- Expect exactly 2 'wrapper has uncommitted edits' lines, then '^c+rc+$' with exactly one restart announcement after the commit (deferred arm).\n- Expect exactly 1 'cannot confirm the wrapper bytes are committed' line and '^c+$' (unverifiable arm).\nEach arm clears FAKE_CLAIM_MODE and MOE_DISABLE_HEARTBEAT and kills its process tree in finally, as the existing arms do.\nError handling: check $LASTEXITCODE after every git call.\nOptional: a RED proof against the pre-fix moe-agent.ps1, using the ps1 anchor recipe from the same memory.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "PowerShell twin helpers and four arms implemented; ParseFile PASS, BOM preserved. Anchor-extracted scratch harness on Windows PowerShell 5.1: old HEAD wrapper passes two existing arms then fails each new arm separately with 'a deferred edit must not deregister' sequence cr (exit 1). New wrapper passes all four arms exit 0: 2 deferrals/1 restart and 1 deferral/0 restarts, each retains one wrapper process. Logs /mnt/d/moe-scratch/r-5998f871/{red-ps1-deferred,red-ps1-unverifiable,green-ps1}.log. No live-wrapper testing.",
+      "startedAt": "2026-10-30T12:11:54.055Z",
+      "completedAt": "2026-10-30T12:14:05.262Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Docs (DoD 4): add a **Hot reload** bullet to '## Wrapper behaviour' in scripts/CLAUDE.md, after the Heartbeat sidecar bullet. Keep it terse. It must say:\n- At the loop top (after the poll sleep, before any dispatch), a seat whose own wrapper file's sha256 changed since launch re-execs once per hash (sh `exec`, ps1 in-process supervisor), deregistering with reason `wrapper_restart`.\n- It reloads only COMMITTED bytes: the file must be tracked in the wrapper's own checkout, never the project's, and match HEAD (`git ls-files --error-unmatch`, then `git diff --quiet HEAD`).\n- An uncommitted edit in a shared checkout defers the reload: one `[INFO] MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits` line per hash. The seat keeps serving its current bytes and reloads once the edit is committed. A checkpoint (wip) commit counts as committed.\n- A failed check (no git; not a work tree, as with a plugin-bundled copy; unborn HEAD; unreadable index) also defers, with `[WARN] ... cannot confirm the wrapper bytes are committed (...)`, and never ends or deregisters the seat. Relaunch such a seat by hand to load new bytes.\n- Committed bytes that fail `bash -n` or ParseFile are refused once per hash (`MOE_WRAPPER_RELOAD_REFUSED`).\n- Tests: the four `[hot reload*]` arms of `postflight.{sh,ps1}`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/CLAUDE.md"
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md"
+      ],
+      "note": "Added terse Hot reload bullet immediately after Heartbeat sidecar: own-checkout committed tracked bytes, checkpoint semantics, once-per-hash INFO/WARN deferrals, nonrepo bundled-copy manual relaunch, parse refusal, and four twin harness arms. git diff --check exit 0. No runtime edits in this step.",
+      "startedAt": "2026-10-30T12:14:05.288Z",
+      "completedAt": "2026-10-30T12:14:07.286Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verification: the one command, run once. Its fresh output is the complete_task evidence, and QA re-runs it.\nFirst check that `git diff HEAD -- <the 7 owned paths>` contains only this task's hunks. If a live peer's hunk sits in moe-agent.{sh,ps1}, say so in the step note and coordinate; never strip it.\n\nFrom the repo root, run in the background with output redirected to a log, then poll. postflight.sh plus postflight.ps1 take roughly 25-40 minutes on WSL, and the foreground tool cap is 600 s:\n\nS=/mnt/d/moe-scratch/v-5998f871; rm -rf \"$S\" && mkdir -p \"$S\" && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/parity-check.sh scripts/tests/parity-check.ps1; do cp \"$f\" \"$S/$f\"; done && cd \"$S\" && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\v-5998f871\\scripts\\tests\\postflight.ps1'\n\nThe snapshot is HEAD plus this task's files, so peers' dirty bytes elsewhere in scripts/ can't redden the run. The env scrub and WSLENV keep the seat's MOE_*/CLAUDE* variables out of both harnesses (mem gotcha-qa-ps1-postflight-from-wsl). PowerShell needs a /mnt/d working directory.\nThe step passes only when the exit code is 0 and both harnesses print the '[hot reload]', '[hot reload refused]', '[hot reload deferred]' and '[hot reload unverifiable]' ok lines.\nIf a failure is outside the hot-reload arms, rerun it on a pure `git archive HEAD` snapshot before you blame this change (launch environment vs regression). A Windows Git Bash seat uses the same command with /d/ paths.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh full command exited 0. Governor-approved setup-only replacement comment-c649d4f9: mktemp scratch + wslpath (terminal prohibited original rm -rf), same checks/env/timeouts plus six cmp overlay checks. Snapshot /mnt/d/moe-scratch/v-5998f871.WhISiW; log /mnt/d/moe-scratch/r-5998f871/full-verification.log. PASS parity-check.sh, postflight.sh, postflight.ps1 (Windows PS5.1); all FOUR hot reload ok lines on BOTH twins. Full suites each report 74 frozen scenarios, owner guard 16, and completion-scope totals captured in log. Windows AD link/AE symlink cases have existing host-capability skips; none of the reload cases skipped. Only own hunks in seven paths; tested overlays still cmp-match source. No source changes.",
+      "startedAt": "2026-10-30T12:14:07.310Z",
+      "completedAt": "2026-10-30T12:44:30.533Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of this task's own diff, the one review pass. Load the adversarial-self-review skill, then check each point:\n(1) Twin parity: identical decision table and message strings in sh and ps1; each function's 'Twin:' comment names the other; parity-check covers the new code.\n(2) The existing parse guard, refused-hash, heartbeat-deferral, deregister and exec/hand-over bodies are byte-identical to HEAD: `git diff` shows only the added condition, the function, the variable and the comment.\n(3) Fail-closed: every rc outside {0,1} defers the reload; the untracked case defers; set -e can't fire; the ps1 catch defers. No path deregisters, exits or skips the iteration.\n(4) Deferral dedupe: only the log line is deduped; committing the same bytes reloads them; the git check runs only for a changed, unrefused hash.\n(5) Concurrency: two seats deferring the same hash; a commit racing a seat's git diff (index.lock); a whole-file write hashed half-written (a new hash is one more deferral, never a reload).\n(6) Repo identity: $SCRIPT_DIR and Split-Path of $PSCommandPath, never $PROJECT. Paths with spaces are quoted. The ps1 BOM is kept.\n(7) The tests would fail if the gate were removed or inverted (the RED proof from step 3), and none of them passes when the code does nothing.\nFix any finding inside the owned files, rerun the step-6 command if a fix touches a runtime or test file, and report every modified path in complete_step.modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/CLAUDE.md"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/CLAUDE.md"
+      ],
+      "note": "Adversarial pass complete; no new source edits (listed paths are cumulative task ownership). Seven-file diff +226/-8 net218. Verified identical twin decision tables/strings, quote-safe own-repo paths, per-process dedupe that never bypasses recheck, fail-closed rc/error paths, unchanged short-circuit order, BOMs. Byte comparison proves existing parse/refusal/heartbeat/deregister/exec bodies unchanged. Scratch gate matrices: Bash 8/8 and PS5.1 9/9 (clean, edited, staged, untracked, nonrepo, unborn, corrupt index, no git; PS empty-top). All new live tests fail old wrappers with improper deregister/restart, and all four rows pass each new twin; no-op/inverted gate cannot pass committed-reload rows. Fresh step-6 full command exited 0, all six tested overlays still cmp-match, diff-check/bash-n clean. Known out-of-scope residuals: architect-approved stale-offset in-place Bash rewrite (f31d415d; further sh saves must use same-filesystem rename) and separately filed check-to-exec TOCTOU task-69c024444381492c85878307df40c6e2 (real git-shim race proof: RELOAD then diff rc1). This gate checks mutable pathname at a point in time; it is not an atomic pinned-byte loader. No forbidden shared edits or hand commits.",
+      "startedAt": "2026-10-30T12:44:30.556Z",
+      "completedAt": "2026-10-30T12:47:03.844Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Block resolved by governor waiver comment-09aa20ea (12:09Z). The plan's \"Edit-tool edit\" lines are waived for non-Claude seats, because all 7 owned paths were clean at pre-flight and every contesting row is dep-gated and idle, so landing needs no TOOL witness. The atomic-save HAZARD rule still binds, tool-neutral: put each wrapper's whole change on disk as ONE write, either one apply_patch call or a full file checked outside the repo then a single mv, followed immediately by bash -n or ParseFile. A Claude seat may use the Edit tool as planned. The architect may object on the task.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-e7f4026abc0c4a8bb7632c8178ea7d70"
+  ],
+  "priority": "HIGH",
+  "order": 3,
+  "comments": [
+    {
+      "id": "comment-09aa20ead3504afea9da0e626ae4b678",
+      "author": "governor-693b7073",
+      "content": "@worker-55e6716a @architect-4ae016fb Governor waiver (12:09Z) for the plan's \"Edit-tool edit\" lines in steps 1-4. This follows the Codex contested-delivery precedent (2cf1c6be, R11e2).\n- Why the waiver is safe:\n  - This seat's 7 owned paths were clean at its pre-flight. I checked `git status -- scripts/` at 12:04:38Z.\n  - Every row that also plans those files is unassigned, idle and dep-gated: 01f37ac6, 9d277494, 7db14e2d, 724e31fa, 4fdc7590, 16bbf8ff, 2720c13b, 7f82e200, c4e076cd, 6f5cf10f, aa85ff13, b621ddc9. None can go live before this row is DONE, and most wait on it directly.\n  - So a Codex seat lands these paths without a TOOL witness. The witness clause is moot.\n- What still binds, tool-neutral: the atomic-save HAZARD rule. Prepare each wrapper's whole change first, then put it on disk as ONE write. Use either:\n  - (a) a single apply_patch call carrying every hunk, or\n  - (b) write the full new file outside the repo, check it there, then one `mv` over the target.\n  Run `bash -n scripts/moe-agent.sh`, or ParseFile for the .ps1, right after. Never leave an intermediate state on disk, and never use an in-place shell redirect on the live wrapper.\n- Steps 3-5 (postflight.{sh,ps1}, scripts/CLAUDE.md): apply_patch or a Serena editor is fine.\n- Architect: object here if the Edit-tool line had another purpose. Otherwise this waiver stands.",
+      "timestamp": "2026-10-30T12:06:28.556Z"
+    },
+    {
+      "id": "comment-c649d4f91c9347e2b200b30fda9dba8f",
+      "author": "governor-693b7073",
+      "content": "@worker-55e6716a Governor approval (12:21Z) for a setup-only substitution in step 6's verification. It changes what the checks run in, not what they check.\n- Scratch: `S=$(mktemp -d /mnt/d/moe-scratch/v-5998f871.XXXXXX)`, a fresh dir with no `rm -rf`. The old fixed dir stays in place as scratch.\n- PowerShell -File path: `\"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\"`.\n- Unchanged: the same git-archive snapshot, the same six-file overlay with cmp checks, `bash scripts/tests/parity-check.sh`, the postflight.sh suite and the postflight.ps1 suite, with the same env and timeouts. Nothing is skipped or narrowed.\n- In complete_task, quote the exact commands you ran, name this substitution, and give $S. QA can then rerun them exactly.\narchitect-4ae016fb: object here if step 6's fixed path mattered for anything beyond cleanup.",
+      "timestamp": "2026-10-30T12:16:29.511Z"
+    },
+    {
+      "id": "comment-7e14819708a94a75bba16bdb91511261",
+      "author": "architect-4ae016fb",
+      "content": "Architect disposition, for QA and later sessions (full text: chat msg-21eeabd0, which replies to msg-32987c45).\n1. I concur with the governor's waiver (comment-09aa20ea). The plan's \"one Edit-tool edit\" meant one save plus a TOOL witness. The skip-untouched idle-peer exception covers the landing: the paths were clean at pre-flight, and all 12 contesting rows are idle and dep-gated behind this task. Using apply_patch or a Serena editor is not a deviation.\n2. Known residual, outside this task's approved scope (not a DoD-1 reopen reason). bash reads moe-agent.sh's post-loop tail from disk. A seat that is deferring a reload can run stale-offset bytes when its main loop exits after an in-place rewrite of the file (reproduced in scratch). Single-shot seats already had this before this task; for looping seats this task makes the window longer. The fix (a `{ …; exit; }` group around the loop and its tail) goes in a follow-up bug, which I've asked the governor to file.\n3. Any further save of scripts/moe-agent.sh in this task: write the full file in a D: scratch dir, run bash -n, then one same-filesystem `mv -f` over the target. No in-place write. moe-agent.ps1 and the other paths are unaffected.",
+      "timestamp": "2026-10-30T12:23:40.891Z"
+    },
+    {
+      "id": "comment-e3cdb4fbb7624f7daa8be5660a66eb14",
+      "author": "governor-693b7073",
+      "content": "@qa-ba3f4f35 @architect-4ae016fb Governance scope disposition for QA's question (msg-7304d25f / msg-a6d1b7c9), recorded at 13:00Z. The planner hadn't answered in 8 minutes, and this row gates 42 others. The planner can overrule it here.\n1. The guarantee this row delivers is point-in-time. At each reload check, the seat verifies its wrapper against HEAD. If the file differs, it does not re-exec, and it logs MOE_WRAPPER_RELOAD_DEFERRED once per hash. That is DoD 1 as planned: the approved plan freezes the parse and handover bodies and specifies a point-in-time git check. It does NOT promise pinned-byte execution.\n2. A write that lands between a clean check and the exec, the check-to-exec race, is an ACCEPTED, TRACKED residual: task-69c02444. The human promoted it to PLANNING at 12:55Z, and it is laned behind f31d415d and 01f37ac6. The planner set the same precedent for this row's other residual, f31d415d: \"outside the approved scope... a known residual... not a reason to reopen\" (msg-21eeabd0).\n3. QA: judge DoD 1 as point-in-time. Name both residuals in the qa_approve summary, and do not describe execution as pinned to committed bytes. A defect inside the point-in-time contract is still a normal reject.",
+      "timestamp": "2026-10-30T12:58:50.504Z"
+    },
+    {
+      "id": "comment-61cca0493a214d568f6cd7e31925aeb3",
+      "author": "architect-4ae016fb",
+      "content": "Planner dispositions at REVIEW, for QA and later sessions (full text in #general msg-b28041b1 and msg-d25ff916).\n1. Check-to-exec race (task-69c02444) is an accepted residual of this slice, like f31d415d. It is not a reopen reason and not a DoD 1 failure.\n- The contract limits this slice to a point-in-time gate: intendedBehavior (re-exec only when ls-files rc 0, then diff --quiet HEAD rc 0) and invariants[0] (the parse/deregister/exec hand-over bodies stay byte-identical).\n- Both twins reload by path after the check, so a write in that window gets loaded. The parse guard always had the same window. Pinned-byte reload is 69c02444's design work.\n- Judge DoD 1 at the loop-top check, which the four [hot reload*] arms prove on both twins. Record it as a point-in-time committed check, not a pinned-byte guarantee.\n2. Step-6 setup substitution: I concur with comment-c649d4f9. The fixed path mattered only for the rm -rf reset. The mktemp/wslpath form (verification.command, snapshot v-5998f871.WhISiW) is the run of record for checkRefs[0], so QA reruns that form. I made no plan amendment: step 6 is COMPLETED.",
+      "timestamp": "2026-10-30T12:59:22.099Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T10:35:09.303Z",
+  "updatedAt": "2026-10-30T13:17:47.434Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T10:45:02.188Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T10:45:24.440Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 7,
+    "doneAt": "2026-10-30T13:16:49.468Z",
+    "wallClockMs": 9085028
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-55e6716a",
+    "governor-693b7073",
+    "qa-ba3f4f35"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T11:02:30.998Z",
+  "executionContract": {
+    "intendedBehavior": "At each loop top, a seat checks whether its wrapper file's sha256 differs from both its launch hash and its refused hash. If it does, the seat re-execs only when the file is tracked in the wrapper's own git checkout and matches HEAD: `git ls-files --error-unmatch` rc 0, then `git diff --quiet HEAD` rc 0.\nAn uncommitted or untracked change defers the reload, with one '[INFO] MOE_WRAPPER_RELOAD_DEFERRED: wrapper has uncommitted edits; staying on the current bytes until they are committed' line per hash.\nA git failure (any other rc: no git, not a work tree, unborn HEAD, unreadable index) defers too, with one '[WARN] MOE_WRAPPER_RELOAD_DEFERRED: cannot confirm the wrapper bytes are committed (<git cmd> exited <rc>); staying on the current bytes' line per hash.\nA deferred seat keeps serving its current bytes and stays registered. Once the bytes match HEAD, the existing parse guard and the single wrapper_restart re-exec run unchanged. sh and ps1 behave identically.",
+    "acceptanceCriteria": [
+      "A wrapper edit that differs from HEAD triggers no re-exec and no deregister; the seat keeps claiming and logs MOE_WRAPPER_RELOAD_DEFERRED once per dirty hash (postflight.{sh,ps1} '[hot reload deferred]': 2 dirty hashes give exactly 2 lines).",
+      "Committing that edit reloads exactly once (sequence ^c+rc{2,}$, one restart announcement). The '[hot reload]' and '[hot reload refused]' arms, now committing each edit, still pass unchanged, so the bash -n/ParseFile guard and the refused-hash rule hold.",
+      "A wrapper outside any git work tree, with GIT_CEILING_DIRECTORIES set, changes on disk: the seat neither reloads nor deregisters nor exits, and logs one 'cannot confirm the wrapper bytes are committed' line ('[hot reload unverifiable]').",
+      "bash scripts/tests/parity-check.sh and scripts/tests/postflight.{sh,ps1} pass. scripts/CLAUDE.md documents the committed-bytes rule."
+    ],
+    "invariants": [
+      "The parse guard, MOE_WRAPPER_REFUSED_HASH / $script:MoeWrapperRefusedHash refusal once per hash, the MOE_HEARTBEAT_STOP_TIMEOUT deferral, the wrapper_restart deregister and the exec / supervisor hand-over bodies stay byte-identical. The gate is one more short-circuit operand of the existing loop-top condition.",
+      "A deferral never calls deregister_worker, never exits and never continues the loop: the iteration goes on to pre-flight on the current bytes.",
+      "The git check runs only when the current hash differs from both the launch hash and the refused hash.",
+      "The deferral dedupe suppresses only the log line. Each loop top re-runs the check, so committing exactly the deferred bytes reloads them.",
+      "The repo checked is the one that holds the wrapper file: sh $SCRIPT_DIR, ps1 Split-Path -Parent $script:MoeWrapperPath. Never $PROJECT.",
+      "Fail closed: any git rc outside {0,1}, a thrown exception, or an untracked file means no reload."
+    ],
+    "compatibility": [
+      "No daemon, MCP or .moe/ change. The deregister reason stays wrapper_restart. The existing announcement and MOE_WRAPPER_RELOAD_REFUSED strings are unchanged.",
+      "Seats launched from a copy outside any git work tree (for example the plugin-bundled wrapper, which the JetBrains TerminalAgentLauncher uses when the project has no scripts/) no longer hot-reload, as DoD 3 requires. They load new bytes on their next relaunch."
+    ],
+    "approvedScope": [
+      "sh: wrapper_reload_deferred, MOE_WRAPPER_DEFERRED_HASH, and the loop-top condition operand `! wrapper_reload_deferred`.",
+      "ps1: Test-MoeWrapperReloadDeferred, $script:MoeWrapperDeferredHash, and the loop-top operand `-not (Test-MoeWrapperReloadDeferred $moeCurrentHash)`.",
+      "Test helpers reload_git, reload_repo and reload_commit (sh), and Initialize-ReloadRepo and Invoke-ReloadCommit (ps1). The two updated reload arms plus the new '[hot reload deferred]' and '[hot reload unverifiable]' arms in both harnesses.",
+      "The parity-check 'hot reload' literal lists and the scripts/CLAUDE.md Hot reload bullet."
+    ],
+    "reuse": [
+      "ps1 git calls go through the existing Invoke-MoeGit: EAP handling, rc capture, exception mapped to 255.",
+      "The tests reuse reload_seq, reload_wait and reload_fail and their ps1 twins, the existing fake proxy, and FAKE_CLAIM_MODE=idle.",
+      "No new env var or opt-out (YAGNI)."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh, '# --- Self-restart when this script's own bytes change on disk': MOE_WRAPPER_PATH=\"${BASH_SOURCE[0]:-$0}\", MOE_WRAPPER_LAUNCH_HASH and MOE_WRAPPER_REFUSED_HASH are set before the main while loop. The loop-top `if [ -n \"$MOE_WRAPPER_CURRENT_HASH\" ] && ... != \"$MOE_WRAPPER_REFUSED_HASH\" ]; then` holds the bash -n guard and the exec. SCRIPT_DIR (line ~17) is absolute. set -e is active.",
+      "scripts/moe-agent.ps1, the same header: $script:MoeWrapperPath = $PSCommandPath, with launch and refused hashes. The loop-top `if ($moeCurrentHash -and ... -ne $script:MoeWrapperRefusedHash)`. Invoke-MoeGit(-Top, -GitArgs[, -IndexFile, -MergeStderr]) returns @{Out; Rc}: EAP Continue, Rc 255 on an exception.",
+      "postflight.sh: the arms '[hot reload]' and '[hot reload refused]', with helpers reload_seq, reload_wait EDITS REGEX and reload_fail, resolved at call time. postflight.ps1 twins: Get-ReloadSequence, Wait-ReloadSequence, Set-ReloadWrapperText, Add-ReloadWrapperText and Get-ReloadWrapperPids. The frozen-candidate suite already runs git unconditionally in both harnesses.",
+      "parity-check.sh: `for lit in ...; do require_both \"hot reload\" \"$lit\"`. parity-check.ps1: 'hot reload' = @(...)."
+    ],
+    "checkRefs": [
+      "S=/mnt/d/moe-scratch/v-5998f871; rm -rf \"$S\" && mkdir -p \"$S\" && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/parity-check.sh scripts/tests/parity-check.ps1; do cp \"$f\" \"$S/$f\"; done && cd \"$S\" && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\v-5998f871\\scripts\\tests\\postflight.ps1'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) The task's example `git diff --quiet HEAD -- <wrapper>` alone. Rejected after measuring git 2.43: it exits 0 for an UNTRACKED file, and outside a repo it falls back to --no-index mode and exits 1. So `ls-files --error-unmatch` runs first, giving explicit tracked, untracked and failure states.\n(2) Comparing blobs with rev-parse HEAD:<path> against hash-object. Rejected: it never reads the index, so an 'unreadable index' (DoD 3) would not fail closed, and hash-object's filter semantics add risk.\n(3) `git status --porcelain`. Rejected: it means parsing output, and it needs --ignored to catch an ignored untracked copy.\n(4) Nesting the existing parse guard under a new if. Rejected: it re-indents about 40 lines. A short-circuit condition operand keeps the existing body byte-identical.\n(5) `--no-optional-locks` against git diff's index refresh. Measured: it does NOT stop diff's refresh_index_quietly. That refresh fires only when the one-path diff finds a stat-dirty file with the same content, so at most once, just before a reload. Accepted.\n(6) An opt-out env var or a chat alert. YAGNI, and the DoD asks for one log line.",
+    "codebaseInsights": "- Both wrappers capture the launch hash once, before the main loop. The loop-top check sits after the poll sleep and before dispatch.\n- sh hands over by `exec`. ps1 sets $script:MoeWrapperRelaunchRequested and its in-process supervisor reruns the file.\n- bash parses the main loop whole, so a running sh seat only gets new bytes through a reload (mem gotcha-bash-hot-reload-incremental-parse).\n- Invoke-MoeGit is the established ps1 git runner.\n- The postflight reload helpers resolve their variables at call time, so each arm just re-points RELOAD_DIR, RELOAD_PROJECT and reload_pid.\n- The JetBrains launcher prefers <project>/scripts/moe-agent.* and otherwise runs the plugin-bundled copy, which sits outside any repo. Those seats stop hot-reloading, per DoD 3.\n- This task dependsOn task-e7f4026a, whose edits to the same files must land first. Find code by block headers, not line numbers.",
+    "risks": "1. Bootstrap: seats still on old bytes hot-load each parseable save of moe-agent.{sh,ps1}, including the fix's own first save. Apply each wrapper change as ONE complete Edit, then syntax-check it at once.\n2. Peers in the V chain plan the same two files. Edit with the Edit tool so the CONTESTED landing can witness it. Never absorb or revert a peer's hunk. Check `git diff HEAD` before snapshotting.\n3. Test flakes:\n- The harness's commit can race a seat's git diff for index.lock (handled by the retry).\n- A temp dir inside a repo would turn the unverifiable arm into an 'uncommitted' one (hence GIT_CEILING_DIRECTORIES).\n- Use appends, not rewrites.\n- Never run a harness on the live tree.\n4. Semantics: a checkpoint (wip) commit counts as committed. The rule narrows hot-loading to committed bytes, not to reviewed ones; the docs say so.\n5. sh set -e: write every git call as `|| rc=$?`.\n6. ps1: EAP Stop applies outside Invoke-MoeGit, and the BOM must be kept.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1",
+      "scripts/CLAUDE.md",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T11:02:31.024Z",
+  "approvedPlanRevision": 1,
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T12:48:26Z",
+    "at": "2026-10-30T13:17:47.434Z"
+  },
+  "workStartedAt": "2026-10-30T12:05:15.780Z",
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "50ac4f004b21c05eae1d373ada8a7b76dcde965b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T12:04:17Z",
+      "paths": [
+        ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+        ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T12:06:21.737Z",
+      "treeId": "32a2398362a0e45c7760a2c7d78effc5fed0add2",
+      "status": "BLOCKED",
+      "pushed": true
+    },
+    {
+      "sha": "9a5426ac15d456cfb790acf86bfcf7c8e180e354",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T12:06:55Z",
+      "paths": [
+        ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+        ".moe/tasks/task-69c024444381492c85878307df40c6e2.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T12:48:18.130Z",
+      "treeId": "cd2b30baea41ec512bc4ad5a9de3968f8a61b20f",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "2a0fabc623014b1ec678219fea9adcdd5b44b3dd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T12:48:26Z",
+      "paths": [
+        ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
+        ".moe/tasks/task-3def080415d3495a8557b514d6a0ab2a.json",
+        ".moe/tasks/task-414eae5aa1f349f49852bf01f4e617db.json",
+        ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+        ".moe/tasks/task-69c024444381492c85878307df40c6e2.json",
+        ".moe/tasks/task-6f3f7fe97a91434c9143e52e57c6f302.json",
+        ".moe/tasks/task-7ee53957b90e459fb636948e5cecfa2a.json",
+        ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json",
+        ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json",
+        ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json",
+        ".moe/tasks/task-e27456ad67b64bc292080ea3a8b92f26.json",
+        ".moe/tasks/task-f0abb6d69bd8466982d7bbb6543e31bc.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T13:17:47.434Z",
+      "treeId": "9fd25775a798a471441e6fbc25be45dd16510277",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/CLAUDE.md",
+    ".moe/tasks/task-5998f871e03d4ed5ab21f214073d85b2.json",
+    ".moe/tasks/task-69c024444381492c85878307df40c6e2.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+    ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
+    ".moe/tasks/task-3def080415d3495a8557b514d6a0ab2a.json",
+    ".moe/tasks/task-414eae5aa1f349f49852bf01f4e617db.json",
+    ".moe/tasks/task-6f3f7fe97a91434c9143e52e57c6f302.json",
+    ".moe/tasks/task-7ee53957b90e459fb636948e5cecfa2a.json",
+    ".moe/tasks/task-80ed1fe8d1aa4b909e786633735d2fc6.json",
+    ".moe/tasks/task-b1aecb5403e64f4596bffbce7c36739c.json",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+    ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json",
+    ".moe/tasks/task-dd1ee586b90d4fc785434454b1423e76.json",
+    ".moe/tasks/task-e27456ad67b64bc292080ea3a8b92f26.json",
+    ".moe/tasks/task-f0abb6d69bd8466982d7bbb6543e31bc.json"
+  ],
+  "priorBlockedReason": "Approved plan revision 1 steps 1–4 explicitly mandate Claude Edit-tool saves/TOOL witnesses. This actual Codex session has apply_patch and Serena editors but no Edit/Write; current scripts/moe-agent.sh:8227–8231 still says Codex TOOL sets are empty. Cannot safely substitute an unwitnessed editor under that plan. Please reroute to an actual witnessed-editor seat or approve a tool-neutral atomic-edit amendment with a valid contested-path landing route. Architect notified in msg-32987c451ade489785f09b6a44167947. Step-1 started; no source edits, no tests run or claimed. All 7 owned paths clean; dependency e7f4026a DONE/landed, so neither peer dirtiness nor prerequisite is the blocker. Handoff and gotcha memories saved.",
+  "blockedOnTaskIds": null,
+  "reviewStartedAt": "2026-10-30T12:48:00.464Z",
+  "verification": {
+    "command": "S=$(mktemp -d /mnt/d/moe-scratch/v-5998f871.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/parity-check.sh scripts/tests/parity-check.ps1; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\"",
+    "exitCode": 0,
+    "outputTail": " a status=UNKNOWN checkpoint\n[scenario V] ok\n[scenario X] commitHooks=true + rejecting pre-commit hook yields a rescue ref\n[scenario X] ok\n[scenario Y] grok: config.toml written idempotently, headless argv, exit propagated, config never landed\n[scenario Y] ok\n[scenario Z] codex: headless exec argv without --full-auto, MOE_CODEX_SANDBOX, exit propagated, config never landed, polarity\n[scenario Z] ok\n[scenario AA] a taskless single-shot run never launches an unbound CLI\n[scenario AA] ok\n[scenario AB] a chat-only session that adopts a task refuses to land, loudly\n[scenario AB] ok\n[scenario AB2] a notification-only relaunch onto a retained BLOCKED hold refuses quietly\n[scenario AB2] ok\n[scenario AC] an edit to a CRLF-committed file lands under autocrlf=true, autocrlf=input and text=auto\n[scenario AC] ok\n[scenario AD] a CRLF-committed file rewritten, deleted, or replaced by a directory or a symlink after the snapshot still drops as MOE_ATTR_CONCURRENT\n[scenario AD] link variant skipped: this host cannot create symlinks\n[scenario AD] ok\n[scenario AE] skipped: this host cannot create symlinks\n[scenario AF] an unwitnessed own contested path lands only when clean at pre-flight and every contesting task is idle\n[scenario AF] ok\n[scenario AG] a declared, pre-flight-dirty contested path stays held and the session-ended line names the working remedy\n[scenario AG] ok\n[scenario AH] launch outage: the third fast exit releases the held task once, then taskless probes until a launch runs\n[scenario AH] ok\n[scenario AI] a held contested path reaches record_commit on both nothing landings\n[scenario AI] ok\n[scenario AJ] peel failures and rescue records retain held contested paths\n[scenario AJ1] ok\n[scenario AJ2] ok\n[scenario AJ] ok\ncommit-scope scenarios run: 41\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\nPASS postflight.ps1\n",
+    "reportedAt": "2026-10-30T12:48:00.464Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Implemented approved committed-bytes reload gate in both wrappers, once-per-hash dirty/git-failure deferrals, committed-edit test setup, four reload arms per twin, parity literals and documentation. Seven files +226/-8 net218; original parse/refusal/heartbeat/deregister/handover bodies byte-identical, BOMs preserved. Fresh full verification exit0: parity PASS; Bash postflight PASS (74 frozen,16 owner,42 commit-scope); Windows PS5.1 postflight PASS (74 frozen,16 owner,41 commit-scope). All four reload rows pass BOTH twins; existing Windows symlink-only skips disclosed. Both new rows separately assertion-fail pre-fix twins with improper restart/deregister; gate matrices Bash8/8, PS9/9. Snapshot /mnt/d/moe-scratch/v-5998f871.WhISiW; log /mnt/d/moe-scratch/r-5998f871/full-verification.log. Governor comment-c649d4f9 approved setup-only mktemp/wslpath substitution after terminal refused rm-rf; no checks skipped. Edit-tool waiver comment-09aa20ea uses idle-clean peer exception; seven paths clean at session preflight. Handoff saved. Separate residuals: architect-approved stale-offset Bash rewrite f31d415d (future sh saves via same-filesystem rename), plus filed check-to-exec race 69c02444; this approved gate is point-in-time, not a pinned-byte executor. No inline scope growth or peer edits.",
+  "completedAt": "2026-10-30T13:16:49.468Z",
+  "reviewCompletedAt": "2026-10-30T13:16:49.468Z",
+  "reviewSummary": "Reviewed completion 9a5426ac15d456cfb790acf86bfcf7c8e180e354 via git show/branch --contains on moe/work-2026-10-24; prior 50ac4f00 is board-only. Seven source/docs/test paths +226/-8 (net 218); all 130 archived scripts blobs match completion, with no QA source edits.\nRe-ran exact task.verification.command (authorized mktemp/wslpath setup): exit 0. bash scripts/tests/parity-check.sh PASS; MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh PASS (74 frozen, 16 owner, 42 commit-scope); Windows PowerShell 5.1 postflight.ps1 PASS (74/16/41). All four reload arms pass BOTH twins: two dirty hashes/two deferrals then one restart; nonrepo defers once without deregister; committed changes reload; parse-refusal preserved. Existing Windows AD link/AE symlink capability skips remain unverified, not passed; no reload skips.\nAlso PASS parity-check.ps1, bash -n, git show --check and extracted committed-gate matrices (Bash 8/8, PS 9/9: clean/dirty/staged/untracked/nonrepo/unborn/corrupt index/missing git, PS empty parent). Gate uses wrapper checkout; dedupe only affects logs; complete post-condition handover tails byte-identical; docs/BOMs verified.\nScope per comments 61cca049/e3cdb4fb: point-in-time committed check, NOT pinned-byte execution. Accepted residuals: task-f31d415d5185424ca5f7e375a8b15134 stale-offset Bash tail and task-69c024444381492c85878307df40c6e2 check-to-exec race (independently reproduced).\nSnapshot /mnt/d/moe-scratch/v-5998f871.OLYHsN; evidence /mnt/d/moe-scratch/qa-5998f871.F32VC2/verification.log. Complexity: lean already; net 0 lines to cut.",
+  "requiredCheckAtDone": null
+}

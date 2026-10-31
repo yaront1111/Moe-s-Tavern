@@ -1,0 +1,296 @@
+{
+  "id": "task-2c95c5d1d2bd4dcc9d16fbff1fdb9654",
+  "epicId": "epic-be924fb8",
+  "title": "bug: DEAD team members keep their team seats until the 30-min stale prune, so seats launched after a fleet restart run teamless and skip claimable rows",
+  "description": "Observed 2026-10-30, filed by governor-4764040b.\n\nWhat happened:\n- At 20:23Z the JetBrains plugin deregistered 16 seats with terminal_closed. Each became DEAD and its record was kept.\n- Worker team team-a94dc136 (\"moes\", maxSize 20) kept all 16 in memberIds, so it stayed full at 20/20.\n- Three seats launched after 20:24Z could not join: worker-632cd3f0, architect-915213a1 and architect-4ff0711c. The wrapper warned \"moe.join_team refused: ... this seat has NO team, so claim_next_task skips every epic a live worker already holds\".\n- worker-632cd3f0 was alive and polling every 30s. It still never claimed WT-04 (task-c20464ff). From 20:34Z WT-04 was the only claimable WORKING row and the head of the 28-row critical chain. It was skipped because worker-c0a1ac70 held WT-08T in the same epic and status.\n- At 20:42Z the governor removed the 16 DEAD members with moe.leave_team. The seat joined and claimed WT-04 within 5s.\n\nMechanism, as read from the code:\n- packages/moe-daemon/src/state/teamStore.ts addTeamMember refuses when `existing.memberIds.length >= existing.maxSize`, and that count includes DEAD members.\n- Membership is dropped, with a formerMemberIds tombstone, only by deleteWorker (state/workerStore.ts).\n- deleteWorker runs from the stale-worker sweep (state/sweeps.ts, Layer 3) once staleWorkerTimeoutMs (30 min) has passed, or at a restart purge.\n- Deregistration (moe.deregister_worker, the plugin's DEREGISTER_WORKER) marks the record DEAD and leaves its membership.\n- So after any IDE tab-close wave, new seats run teamless for up to about 35 minutes.\n\nConstraint: a hot reload deregisters with wrapper_restart and re-registers under the SAME id (every seat did this at 19:53Z). A DEAD member re-joining under its own id must keep working.\n\nThe fix is the planner's call. For example: count only non-DEAD members against maxSize, and on a join, evict the DEAD members to formerMemberIds the way deleteWorker does. The teamless claim filter itself is out of scope.",
+  "definitionOfDone": [
+    "Daemon regression test, RED on the parent: a team at maxSize whose members include DEAD workers accepts join_team from a new worker, and the team never holds more than maxSize non-DEAD members.",
+    "A DEAD member re-joining under its own id (the wrapper_restart path) still succeeds when the team is otherwise full.",
+    "Evicted DEAD members land in formerMemberIds, as deleteWorker does, and the teamless claim filter is unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED). Create packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts.\n\nModel the harness on tools/joinTeam.notification.test.ts:\n- `const h = new ToolTestHarness()`; beforeEach runs `h.init(); h.setupMoeFolder(); await h.state.load()`; afterEach runs `vi.restoreAllMocks(); h.cleanup()`.\n- Calls go through the tool handlers: joinTeamTool(h.state).handler({ teamId, workerId }, h.state), and deregisterWorkerTool(h.state).handler({ workerId, reason }, h.state).\n- Helper live(team): the memberIds whose record is not DEAD.\n- After EVERY successful join, assert live(team).length <= team.maxSize and memberIds.length <= team.maxSize. This is DoD 1's \"never more than maxSize non-DEAD members\".\n\nUse exact arrays and exact fields, never bare truthiness.\n\n(1) DoD 1, RED on the parent.\n    - Setup: team maxSize 3; join w-a, w-b and w-c; deregister w-a and w-b with reason 'terminal_closed'; snapshot both records.\n    - join('w-new') resolves.\n    - memberIds toEqual ['w-c','w-new'] and formerMemberIds toEqual ['w-a','w-b'].\n    - Each evicted record has status 'DEAD', teamId null and its snapshot lastActivityAt: eviction is not activity.\n    - getWorker('w-new').teamId equals the team id.\n(2) DoD 1, the cap on live members still holds.\n    - From (1)'s state, join('w-n2') resolves.\n    - Then join('w-n3') rejects /is full/, and h.state.getTeam(id) is deep-equal before and after, so a refused join writes nothing.\n(3) DoD 2, the wrapper_restart path.\n    - Setup: maxSize 2; join w-x and w-live; deregister w-x with 'wrapper_restart'.\n    - join('w-x') resolves; memberIds toEqual ['w-x','w-live'], unchanged.\n    - w-x has status 'IDLE'; w-live's record is deep-equal to before; formerMemberIds is absent or [].\n    - Then join('w-other') rejects /is full/.\n(4) DoD 3: tombstone parity with deleteWorker, and the claim filter is unchanged.\n    - After (1)'s eviction, resolveEffectiveTeam(h.state, 'w-a')?.id equals the team id. That is the claim filter's own resolver, from util/teamMembershipHeal.ts, which stays untouched.\n    - h.state.deleteWorker('w-b') then leaves exactly one 'w-b' in formerMemberIds, and memberIds is unchanged.\n    - join('w-a') while a seat is free resolves: memberIds gains 'w-a', findTombstonedTeam(h.state, 'w-a') is null, its status is 'IDLE', and its teamId is the team id.\n(5) A team below maxSize never evicts.\n    - Setup: maxSize 3; w-a DEAD and w-b live.\n    - join('w-c') gives memberIds ['w-a','w-b','w-c'], with no tombstone. That is today's behavior.\n\nRED proof, in a snapshot outside the checkout (global rail):\n    - S=$(mktemp -d), then `git archive HEAD | tar -x -C \"$S\"` (the whole repo).\n    - Copy in ONLY this new file.\n    - In $S/packages/moe-daemon, under `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1`, run `npm ci --no-audit --no-fund && npx vitest run src/tools/joinTeam.deadMembers.test.ts`.\n    - Expected: (1), (2) and (4) FAIL on 'is full'; (3) and (5) pass, because they pin today's behavior.\n    - Put the result lines in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts"
+      ],
+      "note": "Created joinTeam.deadMembers.test.ts (7 cases: DoD1 eviction, live cap + write-free refusal, DoD2 wrapper_restart re-join, tombstone parity + resolveEffectiveTeam + deleteWorker, below-maxSize no-evict, other-team teamId pointer kept, missing record not DEAD). RED proof in git-archive snapshot /tmp/tmp.unOUUgLV6Z (HEAD + only this file, env -i, node v24.21.0, npm ci rc 0): `Tests 4 failed | 3 passed (7)` — failures are the eviction, live-cap, claim-filter/tombstone and other-team-pointer cases, all `Error: Team Workers is full (max 3 members)` at teamStore.ts:152; the wrapper_restart re-join, below-maxSize and missing-record cases pass because they pin today's behavior. Dirty peer paths in the checkout (.moe/tasks/*, scripts/moe-agent.sh, scripts/tests/postflight.sh, worktree-landing.*, .moe/decisions/) were left untouched.",
+      "startedAt": "2026-10-30T21:07:29.116Z",
+      "completedAt": "2026-10-30T21:08:25.826Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix addTeamMember in packages/moe-daemon/src/state/teamStore.ts.\n\n(a) Keep the already-a-member early return first and unchanged. A DEAD member re-joining under its own id (wrapper_restart) keeps its seat (DoD 2), and joinTeam's handler then revives it to IDLE as today.\n\n(b) Replace the full check:\n    - When memberIds.length >= maxSize: let dead = the memberIds whose record exists with status 'DEAD'.\n    - If memberIds.length - dead.length >= maxSize, throw the SAME Error(`Team ${name} is full (max ${maxSize} members)`) BEFORE any write. The wrappers and the existing tests match that text, and a refused join stays write-free. That ordering is the existing \"refuse a full team BEFORE clearing the tombstone\" rule.\n    - Otherwise call a new local helper, evictDeadMembers(state, team, dead).\n    - A team below maxSize never evicts: today's behavior, byte for byte.\n\n(c) evictDeadMembers:\n    - One state.updateTeam(team.id, { memberIds: memberIds minus dead, formerMemberIds: withEvictionTombstones(team, dead) }). This is the same tombstone deleteWorker writes. Import withEvictionTombstones from ../util/teamMembershipHeal.js; that module imports StateManager as a type only, so there is no runtime cycle.\n    - For each evicted id whose record's teamId is this team: state.updateWorker(id, { teamId: null, lastActivityAt: worker.lastActivityAt }).\n      - The record stays DEAD and keeps lastActivityAt, so the stale prune and presence stay accurate.\n      - As after deleteWorker, the tombstone becomes its only membership trace.\n      - Error handling: wrap each update in try/catch and log logger.warn({ err, workerId }, ...). Use the key `err`, not `error`, so pino serializes it. A failed pointer repair must never fail the join, because the team write already freed the seats.\n    - For each id, state.appendActivity('TEAM_MEMBER_REMOVED', { teamId, workerId, reason: 'dead-member-evicted' }); then one logger.info naming the evicted ids.\n\n(d) Then the existing clearMembershipTombstone, re-read, old-team cleanup and add flow runs unchanged. The re-read picks up the eviction.\n\n(e) Add a short why-comment above the check: a DEAD record holds no seat, but it stays until staleWorkerTimeoutMs prunes it, so without this a tab-close wave left new seats teamless for about 35 min.\n\n(f) In packages/moe-daemon/src/types/schema.ts, update the Team.formerMemberIds doc comment only: tombstones are also written when a join into a full team evicts DEAD members, whose records keep DEAD.\n\nDo NOT change healTeamMembership, resolveEffectiveTeam, util/claimEligibility.ts or tools/claimNextTask.ts. DoD 3 requires the teamless claim filter to stay unchanged.\n\nThen run the step-1 command with the fixed files overlaid too: all five cases pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "addTeamMember now evicts DEAD members when the team is at maxSize: refusal (same `Team <name> is full (max N members)` text) is computed from memberIds minus DEAD BEFORE any write; otherwise new local evictDeadMembers does one updateTeam (memberIds minus dead, formerMemberIds via withEvictionTombstones), then per id updateWorker({teamId:null, lastActivityAt: unchanged}) only when the pointer is THIS team (try/catch, logger.warn with `err`), appendActivity TEAM_MEMBER_REMOVED reason dead-member-evicted, one logger.info. Below-maxSize and already-a-member paths are byte-for-byte unchanged. schema.ts: Team.formerMemberIds doc comment only. Untouched: teamMembershipHeal.ts, claimEligibility.ts, claimNextTask.ts. Snapshot /tmp/tmp.unOUUgLV6Z with fixes overlaid (cmp-verified): tsc rc 0; joinTeam.deadMembers + joinTeam.notification + teamMembershipHeal + workerType: 4 files, 84 tests passed. Governor's comment (removeTeamMember bumps lastActivityAt): not touched here (outside approvedScope); eviction path passes lastActivityAt explicitly so it does not refresh presence.",
+      "startedAt": "2026-10-30T21:08:26.826Z",
+      "completedAt": "2026-10-30T21:08:56.995Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Contract docs, docs/MCP_SERVER.md, section moe.join_team.\n\n(a) After the paragraph about DEAD revival, add 2-3 sentences:\n    - A DEAD member holds no seat. When a join finds the team at maxSize, every DEAD member is first evicted to the team's formerMemberIds tombstone, the way the stale prune would later. Its record keeps DEAD and its lastActivityAt, and its teamId is cleared.\n    - The join is refused only when the live, non-DEAD members already fill maxSize, and a refused join changes nothing.\n    - A DEAD member re-joining under its own id keeps its seat.\n\n(b) In the Errors list, change `Team is full (max N members)` to say: when the live members already fill maxSize.\n\nTouch nothing else in the file. Its other hunks may belong to peers, so keep the diff to this section.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md moe.join_team only: one new paragraph (DEAD member holds no seat; eviction to formerMemberIds with record kept DEAD + lastActivityAt + teamId cleared; refusal only when live members fill maxSize and changes nothing; wrapper_restart re-join keeps its seat; below maxSize never evicts) and the Errors line qualified. git diff -U0 shows exactly two hunks (@@ -2286,0 +2287,2 and @@ -2305 +2307), no other part of the file touched.",
+      "startedAt": "2026-10-30T21:08:58.131Z",
+      "completedAt": "2026-10-30T21:09:18.060Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run this ONE fresh command from the repo root in WSL. It never runs npm in the shared checkout (global rail), and its output is the complete_task evidence:\n\nS=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/teamStore.ts packages/moe-daemon/src/types/schema.ts packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts docs/MCP_SERVER.md; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/tools/joinTeam.deadMembers.test.ts src/tools/joinTeam.notification.test.ts src/util/teamMembershipHeal.test.ts src/tools/workerType.test.ts && npm test'\n\nThis row is currently its epic's final task. The epic is a standing bug bucket, so the full daemon suite is the gate and there is no whole-epic sweep.\n\nThe architect ran the same snapshot form at HEAD 920f9cca with no overlay: npm ci, tsc and the suite took 38 s, and the suite gave 214 files passed, 6239 tests passed and 20 skipped.\n\nExpected now:\n- tsc rc 0;\n- the four focused files all pass;\n- the full suite shows 215 files, every test passed, 20 skipped.\n\nIf a failure is in a file this task does not touch, re-run the same command with no overlay. If it fails there too, it is a peer failure: cite both runs, and do not change unrelated files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts"
+      ],
+      "note": "Plan verification command run verbatim, fresh, snapshot /tmp/tmp.L0SnLjEwkG (HEAD + 4 overlaid files, cmp-verified): VERIFY-RC=0; tsc rc 0; 4 focused files pass; full suite `Test Files 215 passed (215)`, `Tests 6249 passed | 20 skipped (6269)`, 37.4s. Full log at /tmp/moe-task-2c95-verify.log. 215 files matches the expected count; 6249 vs the architect's 6239+7 new = 6246 is +3 from peer tests landed since 920f9cca. No failures, so no no-overlay re-run was needed.",
+      "startedAt": "2026-10-30T21:09:19.015Z",
+      "completedAt": "2026-10-30T21:10:12.663Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's own diff (`git diff -- <the 4 files>`), read as an attacker. Record the answers in the step note.\n\n(1) Order: is any write done before the full-team refusal? The test-2 deep-equal pins this, but read the code too.\n\n(2) Two joins in a row: tool dispatch is serialized by the global state mutex, and the WebSocketServer JOIN path wraps addTeamMember in withMutex. Confirm that a second join sees the first join's eviction, so no double eviction and no lost member.\n\n(3) The joiner is never evicted: the already-a-member path returns first. An evicted id never receives a duplicate tombstone: withEvictionTombstones dedups, and deleteWorker only tombstones current memberIds.\n\n(4) A DEAD member whose teamId points at ANOTHER team keeps that pointer.\n\n(5) A missing record is never treated as DEAD. It is not evicted, same as today.\n\n(6) updateWorker on a DEAD record re-emits WORKER_DELETED. That is harmless, because boards already dropped it. Confirm lastActivityAt stays byte-identical.\n\n(7) The validateTeamUpdates rule (memberIds.length <= maxSize) holds at every write.\n\n(8) `git diff --stat` touches none of util/teamMembershipHeal.ts, util/claimEligibility.ts and tools/claimNextTask.ts (DoD 3).\n\n(9) Mutation check, in the snapshot:\n    - Make the eviction skip the tombstone: test (1) or (4) must fail.\n    - Make it skip the teamId reset: test (1) must fail.\n    - Make it evict when the team is below maxSize: test (5) must fail.\n    Record each result. Revert every mutant before re-running step 4 fresh.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review of `git diff` over the 4 files (checkout untouched by mutants; they ran only in the snapshot).\n(1) Order: the full branch only READS state (dead = filter over state.workers) until the refusal; the throw precedes evictDeadMembers and clearMembershipTombstone. Test 2 deep-equals the team around a refused join.\n(2) Concurrency: tool dispatch is under the global state mutex; WebSocketServer.ts:887 wraps addTeamMember in withMutex; healTeamMembership (claim path) is also in-mutex and keeps its own full-team early return. No await sits between reading `existing` and the updateTeam inside evictDeadMembers, and the second join re-reads state.teams, so it sees the first join's eviction: no double eviction, no lost member.\n(3) The joiner is never evicted (already-a-member returns first, so a joiner is never in `dead`). withEvictionTombstones dedups; deleteWorker only tombstones current memberIds, so a later prune adds no second tombstone (test 4: formerMemberIds stays ['w-a','w-b']).\n(4) Pointer repair only when worker.teamId === team.id; test 6 pins that a DEAD member pointing at another team keeps it.\n(5) A member with no record is not DEAD (`state.workers.get(id)?.status === 'DEAD'`): test 7, refused with the exact text and the team deep-equal.\n(6) updateWorker gets an explicit lastActivityAt = the stored value, so it stays byte-identical (tests 1/6 assert it); WORKER_DELETED re-emit on a DEAD record is harmless, boards already dropped it.\n(7) memberIds is only ever shrunk by the eviction write and then grown by one: validateTeamUpdates (memberIds.length <= maxSize) holds at both writes; a legacy over-full team is refused unless live < maxSize.\n(8) `git diff --stat` over util/teamMembershipHeal.ts, util/claimEligibility.ts and tools/claimNextTask.ts is empty (DoD 3).\nResidual (not fixed, noted): if a later write in the same join fails after the eviction write, the DEAD seats stay freed (correct: they held nothing) but the join errors; if the old-team cleanup or add fails the joiner is not seated. A failed pointer repair is logged, not thrown. healTeamMembership still skips a team whose memberIds are full (claim filter out of scope); the wrapper's join retry evicts instead.\n(9) Mutants in snapshot /tmp/tmp.L0SnLjEwkG, each reverted (cmp ok): A skip tombstone -> 3 failed (eviction, claim-filter/tombstone, other-team); B skip teamId reset -> 3 failed (same three); C evict below maxSize (`>= 0`) -> 1 failed (below-maxSize test). Unmutated: 7/7. Step 4 re-run fresh after reverting: snapshot /tmp/tmp.7T5qUJxeY1, VERIFY-RC=0, 215 files, 6249 passed, 20 skipped (log /tmp/moe-task-2c95-verify2.log).",
+      "startedAt": "2026-10-30T21:10:13.762Z",
+      "completedAt": "2026-10-30T21:11:40.249Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion from BACKLOG under the human's 2026-10-30 13:00Z delegation. At 20:23Z, DEAD seats counting against team maxSize left a coder teamless and the critical-chain head unclaimed. The defect recurs at every tab-close wave. It is daemon-side, outside the wrapper lane, so planning it runs in parallel with the critical path.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 316.7,
+  "comments": [
+    {
+      "id": "comment-66fa1633af4c464e9f8ae09f120dce65",
+      "author": "governor-4764040b",
+      "content": "@architect-4ff0711c Planner input from the filer, measured on the live board. It's a related detail, not a DoD change.\n\nteamStore.ts removeTeamMember calls `state.updateWorker(workerId, { teamId: null })` without passing lastActivityAt back, so the write counts as presence.\n- Evidence: my 16 leave_team calls at 20:42:10-20:42:23Z bumped every DEAD record's lastActivityAt to those exact times (list_workers at 20:56Z).\n- Effect: their stale prune moved from about 20:53Z to about 21:12Z.\n- joinTeam.ts refreshWorkerType already guards the same thing (\"lastActivityAt is passed back so a type change never counts as presence\").\n\nIf your fix evicts DEAD members at join time, keep that path from refreshing presence, or the evicted records outlive their prune by another staleWorkerTimeoutMs. Whether this goes into this row is your call.",
+      "timestamp": "2026-10-30T20:56:21.019Z"
+    },
+    {
+      "id": "comment-487938e933d44ec3989ce3cc759e008f",
+      "author": "architect-4ff0711c",
+      "content": "@governor-4764040b, reply to comment 20:56Z from planner architect-4ff0711c (plan rev 1).\n\n1. The eviction path already keeps presence. Step 2(c) evicts with `updateWorker(id, { teamId: null, lastActivityAt: worker.lastActivityAt })`, and the record stays DEAD, so evicted records keep their prune time. Test 1 asserts each evicted record's lastActivityAt equals its pre-join snapshot.\n2. The removeTeamMember bump (leave_team on a DEAD record) stays OUT of this row:\n   - worker-25da16b2 is already on step 2;\n   - approvedScope covers only addTeamMember's full check and the new eviction helper.\n\n   It is a separate one-line fix with one test: pass the record's own lastActivityAt back in removeTeamMember's teamId repair, as refreshWorkerType does. deleteTeam's member loop has the same shape. File it as its own row if you want it tracked.\n\n@worker-25da16b2: no change to your plan.",
+      "timestamp": "2026-10-30T21:08:45.448Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T20:43:22.675Z",
+  "updatedAt": "2026-10-30T21:17:11.335Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T20:43:49.179Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T20:54:52.649Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T21:16:52.594Z",
+    "wallClockMs": 1319945
+  },
+  "contextFetchedBy": [
+    "architect-4ff0711c",
+    "worker-25da16b2",
+    "qa-b29f7b3d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T21:06:30.983Z",
+  "executionContract": {
+    "intendedBehavior": "moe.join_team, and every addTeamMember caller, stops treating DEAD records as seat holders.\n\nWhen a worker that is not already a member joins a team at maxSize, every member whose worker record is DEAD is first evicted the way deleteWorker evicts:\n- removed from memberIds;\n- tombstoned in formerMemberIds through withEvictionTombstones;\n- its record's teamId cleared, with status DEAD and lastActivityAt kept.\n\nThe join is then refused only when the live members still fill maxSize. A refused join writes nothing.\n\nUnchanged:\n- a team below maxSize never evicts;\n- an existing member, including a DEAD member re-joining under its own id on the wrapper_restart path, keeps its seat through the idempotent early return, and joinTeam revives it to IDLE as today;\n- the teamless claim filter, healTeamMembership and resolveEffectiveTeam.",
+    "acceptanceCriteria": [
+      "A team at maxSize whose members include DEAD workers accepts join_team from a new worker. After every join, the team holds at most maxSize members and at most maxSize non-DEAD members.",
+      "A DEAD member re-joining under its own id succeeds when the team is otherwise full. Its seat and member order are unchanged, it is revived to IDLE, and nothing is evicted.",
+      "The evicted DEAD members land in formerMemberIds through withEvictionTombstones. Their records keep status DEAD and the same lastActivityAt, with teamId null. resolveEffectiveTeam still resolves them to the team, and a later deleteWorker leaves exactly one tombstone.",
+      "A team full of live members still refuses with `Team <name> is full (max N members)`, and the refusal leaves the team record deep-equal.",
+      "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts fails on the parent for the eviction cases and passes with the fix. The full daemon suite passes in a native snapshot."
+    ],
+    "invariants": [
+      "No write happens before the full-team refusal.",
+      "memberIds.length <= maxSize at every team write (validateTeamUpdates).",
+      "Untouched: util/teamMembershipHeal.ts, util/claimEligibility.ts and tools/claimNextTask.ts (the teamless claim filter).",
+      "The exact error text `Team ${name} is full (max ${maxSize} members)` is unchanged.",
+      "The MCP tool API is unchanged: same inputs and the same { team } reply (epic rail). Persisted .moe state stays backward-compatible, with no new fields (epic rail)."
+    ],
+    "compatibility": [
+      "Existing team files, including DEAD members left by older daemons, are evicted lazily on the next full-team join. A worker evicted this way and later pruned by deleteWorker keeps exactly one tombstone.",
+      "The wrappers' join retry and warning text are unchanged, and so are the plugin's JOIN_TEAM over /ws and the shared addTeamMember."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/state/teamStore.ts: addTeamMember's full check, plus a new local helper evictDeadMembers.",
+      "packages/moe-daemon/src/types/schema.ts: the Team.formerMemberIds doc comment only.",
+      "docs/MCP_SERVER.md: the moe.join_team section only.",
+      "New test file packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts."
+    ],
+    "reuse": [
+      "withEvictionTombstones (util/teamMembershipHeal.ts), the tombstone writer deleteWorker and purgeAllWorkers already use.",
+      "state.updateTeam and state.updateWorker with an explicit lastActivityAt (the refreshWorkerType pattern).",
+      "The ToolTestHarness, joinTeamTool and deregisterWorkerTool setup from joinTeam.notification.test.ts.",
+      "resolveEffectiveTeam / findTombstonedTeam to assert the claim filter's view."
+    ],
+    "sourceAssumptions": [
+      "state/teamStore.ts addTeamMember: the already-a-member early return, then `if (existing.memberIds.length >= existing.maxSize) throw`, then clearMembershipTombstone, the re-read, the old-team cleanup and updateTeam.",
+      "state/workerStore.ts deleteWorker: filters memberIds and tombstones the id with withEvictionTombstones(team, [workerId]).",
+      "state/workerLifecycle.ts deregisterWorker: updateWorker(id, { status: 'DEAD', currentTaskId: null }) keeps lastActivityAt and leaves membership.",
+      "state/validators.ts validateTeamUpdates: accepts memberIds and formerMemberIds together, and throws when memberIds.length > maxSize.",
+      "tools/joinTeam.ts: after addTeamMember succeeds, revives a DEAD joiner to IDLE."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/teamStore.ts packages/moe-daemon/src/types/schema.ts packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts docs/MCP_SERVER.md; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/tools/joinTeam.deadMembers.test.ts src/tools/joinTeam.notification.test.ts src/util/teamMembershipHeal.test.ts src/tools/workerType.test.ts && npm test'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: in addTeamMember, a non-member join that finds the team at maxSize evicts every DEAD member first. The eviction tombstones them to formerMemberIds with withEvictionTombstones, as deleteWorker does, and clears their teamId pointer with lastActivityAt kept. The join then counts only live members. Today's behavior is unchanged in every other state: below maxSize, a member re-joining, or a team full of live members.\n\nRejected:\n(1) Always count only non-DEAD members and never evict. memberIds would grow past maxSize, which breaks validateTeamUpdates (memberIds.length <= maxSize) and every memberIds consumer.\n(2) Evict only as many DEAD members as needed, oldest lastActivityAt first. That needs an ordering rule and buys nothing, because a non-member's join can evict a DEAD member that is mid-hot-reload only when live seats exceed maxSize, and then some live seat is teamless anyway. A reloading member that is not displaced re-joins idempotently. validateTeamUpdates keeps memberIds.length <= maxSize, so a full team needs exactly one seat.\n(3) A 120 s grace before a DEAD member's seat frees. A literal reading of DoD 1 (just-deregistered members) would fail it, and (2)'s reasoning makes it unnecessary.\n(4) Store the deregister reason on the Worker to tell wrapper_restart from terminal_closed. That is a schema change and unnecessary for the same reason.\n(5) Also let healTeamMembership evict. The claim path is out of scope (DoD 3), and a tombstoned worker already counts as a member through resolveEffectiveTeam.",
+    "codebaseInsights": "- addTeamMember (state/teamStore.ts) refuses at memberIds.length >= maxSize, counting DEAD members.\n- deregisterWorker (state/workerLifecycle.ts) marks the record DEAD and keeps its membership. Only deleteWorker (stale prune / DEAD prune) and purgeAllWorkers drop membership, each tombstoning through withEvictionTombstones (util/teamMembershipHeal.ts).\n- joinTeam's handler revives a DEAD joiner to IDLE after addTeamMember succeeds. Its already-a-member early return is the hot-reload re-join path.\n- validateTeamUpdates rejects any update leaving memberIds.length > maxSize, so a full team is exactly full.\n- updateWorker bumps lastActivityAt unless a value is passed. A DEAD record re-emits WORKER_DELETED.\n- Every existing 'is full' test uses live members: joinTeam.notification.test.ts, workerType.test.ts, teamMembershipHeal.test.ts. They keep passing.\n- A full daemon suite at HEAD 920f9cca in a native snapshot (node v24.21.0, env -i) gave 214 files, 6239 passed and 20 skipped, in 38 s including npm ci and tsc.",
+    "risks": "- Never run npm (ci, test or build) in the shared checkout: the daemon dist is the live runtime (global rail). Use the step-4 snapshot.\n- The refusal must stay write-free: compute dead and live before any updateTeam.\n- Keep the exact 'is full' message. The wrappers' warnings and three existing tests match it.\n- addTeamMember bumps lastActivityAt on join, so in tests snapshot the DEAD records AFTER the deregister and BEFORE the evicting join (mem:gotcha-daemon-team-membership-and-freshness).\n- In docs/MCP_SERVER.md, touch only the join_team section. Peers edit other hunks.\n- If WebSocketServer or another JOIN caller surfaces, it shares addTeamMember. No separate change is needed.\n- Log with `err`, not `error`, or pino logs {}.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/teamStore.ts",
+      "packages/moe-daemon/src/util/teamMembershipHeal.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "packages/moe-daemon/src/state/workerLifecycle.ts",
+      "packages/moe-daemon/src/tools/joinTeam.ts",
+      "packages/moe-daemon/src/tools/joinTeam.notification.test.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T21:06:31.003Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T21:07:29.116Z",
+  "reviewStartedAt": "2026-10-30T21:12:03.556Z",
+  "verification": {
+    "command": "S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/teamStore.ts packages/moe-daemon/src/types/schema.ts packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts docs/MCP_SERVER.md; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/tools/joinTeam.deadMembers.test.ts src/tools/joinTeam.notification.test.ts src/util/teamMembershipHeal.test.ts src/tools/workerType.test.ts && npm test'",
+    "exitCode": 0,
+    "outputTail": "snapshot /tmp/tmp.7T5qUJxeY1 ; tsc --noEmit rc 0 ; focused files joinTeam.deadMembers (7), joinTeam.notification, teamMembershipHeal, workerType all passed ; full suite: Test Files 215 passed (215) | Tests 6249 passed | 20 skipped (6269) | Duration 37.52s ; VERIFY-RC=0 (fresh re-run after mutation checks reverted; log /tmp/moe-task-2c95-verify2.log)",
+    "reportedAt": "2026-10-30T21:12:03.556Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts",
+    "packages/moe-daemon/src/state/teamStore.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-2c95c5d1d2bd4dcc9d16fbff1fdb9654.json",
+    ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+    ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json"
+  ],
+  "completionSummary": "A join into a full team now evicts DEAD members first, so DEAD seats no longer hold a team at maxSize. addTeamMember (state/teamStore.ts) computes dead = memberIds whose record is DEAD and refuses with the unchanged `Team <name> is full (max N members)` only when live members fill maxSize, before any write. Otherwise the new local evictDeadMembers does one updateTeam (memberIds minus dead, formerMemberIds via withEvictionTombstones, the deleteWorker tombstone). It then clears teamId on each evicted record that points at this team, passing lastActivityAt back so the record stays DEAD and the repair is not presence. A failed pointer repair is logged and never fails the join. An existing member, including a DEAD one re-joining under its own id (wrapper_restart), still hits the idempotent early return and keeps its seat. A team below maxSize never evicts. A member with no worker record is not DEAD. Untouched: teamMembershipHeal.ts, claimEligibility.ts, claimNextTask.ts, MCP API, persisted fields. Also changed: Team.formerMemberIds doc comment (schema.ts) and the moe.join_team section of docs/MCP_SERVER.md. New joinTeam.deadMembers.test.ts has 7 cases; on the parent 4 fail with \"is full\" and 3 pin today's behavior. Mutants skip-tombstone, skip-teamId-reset and evict-below-maxSize were each killed. Not changed (outside approved scope): removeTeamMember still bumps a DEAD record's lastActivityAt (governor's planner input); noted in the handoff.",
+  "commits": [
+    {
+      "sha": "757dcce4e62c38110200e7216d6bc9e398c10d39",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-30T21:06:41Z",
+      "paths": [
+        ".moe/tasks/task-2c95c5d1d2bd4dcc9d16fbff1fdb9654.json",
+        ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-30T21:12:20.962Z",
+      "treeId": "2ca9cfb2a3a5bdced13003e4794636a1ccc51c5f",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "3296a35a902bf2490ae3ad0b8c9928c97accacb4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b29f7b3d@2026-10-30T21:15:12Z",
+      "paths": [
+        ".moe/tasks/task-2c95c5d1d2bd4dcc9d16fbff1fdb9654.json",
+        ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json"
+      ],
+      "recordedBy": "qa-b29f7b3d",
+      "recordedAt": "2026-10-30T21:17:11.335Z",
+      "treeId": "b57571f73426479f02fa7cedbeb5fc258a61acca",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts",
+    "packages/moe-daemon/src/state/teamStore.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b29f7b3d@2026-10-30T21:15:12Z",
+    "at": "2026-10-30T21:17:11.335Z"
+  },
+  "completedAt": "2026-10-30T21:16:52.594Z",
+  "reviewCompletedAt": "2026-10-30T21:16:52.594Z",
+  "reviewSummary": "Approved. Reviewed completion 757dcce4 (on moe/work-2026-10-24, pushed, in task.commits); own non-board bytes ~+192 net (<400).\n\nRe-ran task.verification verbatim in a fresh git-archive snapshot (overlay files cmp-verified): VERIFY-RC=0, tsc rc 0; joinTeam.deadMembers (7), joinTeam.notification (7), teamMembershipHeal (13), workerType (57) pass; full suite 215 files passed, 6249 tests passed, 20 skipped.\nRED proof: with the parent's teamStore.ts in the snapshot, deadMembers.test.ts gives 4 failed (all `Team Workers is full (max 3 members)`) and 3 passed (the pin-today cases). Restored afterwards.\n\nDoD 1: a full team with DEAD members accepts a new worker; live and total members stay <= maxSize after every join; a refused join leaves the team deep-equal (tests 1, 2).\nDoD 2: a DEAD member re-joining under its own id (wrapper_restart) keeps its seat via the idempotent early return, is revived to IDLE, nothing is evicted, and the live peer is deep-equal (test 3).\nDoD 3: evicted members land in formerMemberIds via withEvictionTombstones; records keep DEAD and lastActivityAt, teamId cleared; resolveEffectiveTeam still resolves them; a later deleteWorker leaves one tombstone (test 4). teamMembershipHeal.ts, claimEligibility.ts and claimNextTask.ts are not in the commit.\n\nCode read: the full branch reads only until the throw, so nothing is written before the refusal; the error text is unchanged; a missing record is not DEAD; the teamId pointer is cleared only when it names this team, with an explicit lastActivityAt so it is not presence; a failed repair is logged and never fails the join. Joins run under the mutex (WebSocketServer.ts:887 and tool dispatch). Scope matches approvedScope.\n\nNon-blocking: removeTeamMember (leave_team on a DEAD record) still bumps lastActivityAt; the architect scoped it out, so it needs its own row. healTeamMembership still skips a full team; the wrapper's join retry now evicts instead. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}
