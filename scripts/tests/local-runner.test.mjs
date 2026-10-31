@@ -275,7 +275,7 @@ test('real hung process is killed by bounded timeout', { skip: process.platform 
 });
 
 // CQ-R06 owned VM lifecycle
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import {
   cleanupOwned, createLedger, deleteOwnedInstance, DELETE_TIMEOUT_MS, isOwnedInstanceName, jobLeaseResourceId,
   MAX_LAUNCH_TRIES, OWNED_NAME_PREFIX, ownedInstanceName, provisionOwned, QUERY_TIMEOUT_MS, queryOwnedInstance, reconcileOwned,
@@ -555,6 +555,20 @@ test('ledger updates are compare-and-swap atomic renames that leave no temp file
   for (const bad of ['relative/state', '', `${dir}\nx`, `${dir}\u0000`, null, 42]) {
     assert.throws(() => createLedger(bad), { code: 'LEDGER_INPUT_INVALID' });
   }
+});
+
+// Windows refuses a rename onto a file any handle holds open (EPERM), and every ledger reader opens records: certify's
+// recovery check polls the ledger while its controller child writes it.
+test('a ledger update outlasts a reader holding the record open', async t => {
+  const dir = path.join(scratch(t), 'ledger');
+  const ledger = createLedger(dir, { random: sequence() });
+  const reserved = await ledger.reserve(owner);
+  const reader = openSync(path.join(dir, `${nameAt(1)}.json`), 'r');
+  const released = new Promise(resolve => setTimeout(() => resolve(closeSync(reader)), 15));
+  try {
+    assert.equal((await ledger.update(reserved, { phase: 'launching', launchTries: 1 })).phase, 'launching');
+  } finally { await released; }
+  assert.deepEqual([(await ledger.read(nameAt(1))).phase, readdirSync(dir)], ['launching', [`${nameAt(1)}.json`]]);
 });
 
 test('provisionOwned makes launch intent durable before the platform launcher runs', async t => {
