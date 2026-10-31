@@ -1,0 +1,32 @@
+{
+  "id": "task-47d21b835b5e4f28bb08b17f83d22256",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: Linux multipass-snap prerequisite rejects a refresh-held snap, so pinning 1.17.0 with `snap refresh --hold` fails prerequisites and certify",
+  "description": "governor-693b7073 found this at 18:20Z while running R13's Linux certification on the operator's WSL2 host, at commit 3f87ff37 (snapshot ~/moe-certify-src).\n\nEvidence:\n- The operator installed the snap and pinned it: `sudo snap install multipass && sudo snap refresh --hold multipass`.\n- `snap list multipass --unicode=never --color=never` then prints `multipass  1.17.0  19760  latest/stable  canonical**  held`.\n- `cli.mjs prerequisites` exits 2. Every item is satisfied (KVM, interfaces, authenticated, driver qemu, resources, cache) except `multipass-snap`, with the action \"Install the Multipass 1.17.0 snap from the verified Canonical publisher with strict confinement (requires sudo).\"\n- Cause: probeSnap (scripts/local-runner/platform-linux.mjs:58-66) requires `notes === '-'`. Its comment treats every note as weaker confinement or an inactive snap. But `held` is snapd's refresh hold: it is neither a confinement mode nor an inactive snap.\n\nWhy it matters:\n- certified-provider.json pins versions [\"1.17.0\"], and 1.17.1 is already in the candidate channel.\n- A refresh hold is the natural way to keep the certified version when 1.17.1 reaches stable. Today it fails closed, and the action text sends the operator to reinstall a snap that is already correct.\n- The workaround is `sudo snap refresh --unhold multipass`.\n\nFix:\n- Accept a Notes column that is `-` or contains only `held` (snapd comma-separates notes).\n- Keep rejecting every other note (devmode, classic, jailmode, try, disabled, broken), alone or combined with `held`.\n- Update the probeSnap comment.\n- In docs/CERTIFICATION.md \"How to run it\" step 1, say that a refresh hold is allowed and keeps 1.17.0.\n\nIt depends on R13 because R13 holds scripts/tests/local-runner.test.mjs and docs/CERTIFICATION.md.",
+  "definitionOfDone": [
+    "probeSnap is satisfied for notes `-` and `held`. Any other note, alone or combined with `held` (e.g. `disabled,held`, `devmode`), stays unsatisfied with the existing action text.",
+    "A local-runner test covers `held` (satisfied), `held` combined with a weakening note (unsatisfied), and the existing rejected notes.",
+    "docs/CERTIFICATION.md says a `snap refresh --hold multipass` pin is allowed and keeps the certified 1.17.0.",
+    "`node --test scripts/tests/local-runner.test.mjs` exits 0 in a snapshot, never in the shared checkout, and its output is supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-f4811a729f9e436ba129a65c12d348c1"
+  ],
+  "priority": "LOW",
+  "order": 317.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-31T18:18:42.785Z",
+  "updatedAt": "2026-10-31T18:18:42.785Z"
+}

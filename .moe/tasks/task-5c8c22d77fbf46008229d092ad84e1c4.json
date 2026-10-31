@@ -68,7 +68,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -81,7 +81,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T17:35:21.867Z",
-  "updatedAt": "2026-10-31T18:02:54.355Z",
+  "updatedAt": "2026-10-31T18:18:42.020Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T17:42:17.457Z",
@@ -91,11 +91,14 @@
     "firstClaimAt": "2026-10-31T17:42:37.657Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-31T18:18:42.020Z",
+    "wallClockMs": 2164363
   },
   "contextFetchedBy": [
     "architect-66fd8127",
-    "worker-25da16b2"
+    "worker-25da16b2",
+    "qa-4398294e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -227,5 +230,9 @@
     "kind": "completion",
     "sessionId": "worker-25da16b2@2026-10-31T18:00:04Z",
     "at": "2026-10-31T18:02:54.355Z"
-  }
+  },
+  "completedAt": "2026-10-31T18:18:42.020Z",
+  "reviewCompletedAt": "2026-10-31T18:18:42.020Z",
+  "reviewSummary": "Approved. Reviewed completion commit 371fa36a (on moe/work-2026-10-24; proxy tree at HEAD == commit). Owned diff is +27/-1 LOC across 3 files: package.json build, new tsconfig.build.json, new src/distContents.test.ts. tsconfig.json unchanged.\n\nRe-ran the worker's verification command in a git-archive snapshot of 371fa36a (outside the repo, native npm ci in daemon+proxy, env -i, node v24.21.0): exit 0, 8 files / 316 tests passed, '11 packed, 0 test files'. dist holds exactly the 9 production files, 0 *.test.*. cmp of the 4 proxy config/test files vs the shared tree: identical.\n\nDoD 1: the 9 production dist files are byte-identical to a pre-fix `tsc -p tsconfig.json` build (cmp, same-depth outDir). npm pack lists dist/index.js and no test or spec path.\nDoD 2: mutants run against the guard. `tsc && tsc --noEmit` fails the dist scan. Dropping `tsc --noEmit` fails the type-check test. Adding an exclude to tsconfig.json fails the type-check test. All three killed. The final build was green again after restore.\nDoD 3: the snapshot gate above. The shared checkout was never built or tested.\nType coverage kept: a type error appended to utils.test.ts fails build with TS2322 (exit 1), and one in utils.ts fails it with exit 2. dist keeps its 9 files in both cases (emit runs first).\nCompatibility: buildScriptOrder.test.ts passes inside the 316. Callers still use `npm run build`.\n\nNotes, not blockers: the shared checkout's packages/moe-proxy/dist still has the stale test artifacts until a human rebuilds it, and the new guard fails there by design. The IDE bundle excludes were left as they are.",
+  "requiredCheckAtDone": null
 }
