@@ -829,6 +829,14 @@ echo "$$|$PWD|$(umask)|$(ulimit -n)|$(grep -c '^NoNewPrivs:.1' /proc/$$/status)|
 [ -e status ] && read s < status && exit $s
 exit 0
 `;
+// Each planted directory holds a valid project whose lockfile root entry mirrors package.json's install metadata, as npm
+// writes it. pyFiles renders name -> a JSON value, a Buffer, or a Python bytes expression (a string) for INSTALL's plant().
+const PROJECT = Object.freeze({ name: 'fixture', version: '1.0.0', dependencies: Object.freeze({ dep: '1.0.0' }) });
+const lockOf = (root, lockfileVersion = 3) => ({ lockfileVersion, packages: { '': root } });
+const PROJECT_FILES = Object.freeze({ 'package.json': PROJECT, 'package-lock.json': lockOf(PROJECT) });
+const bytesOf = value => Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value));
+const pyBytes = value => `bytes.fromhex('${bytesOf(value).toString('hex')}')`;
+const pyFiles = files => `{${Object.entries(files).map(([name, value]) => `${JSON.stringify(name)}: ${typeof value === 'string' ? value : pyBytes(value)}`).join(', ')}}`;
 const INSTALL = (list, dirs, more, manifest) => `log, tc, deps = (os.path.join(base, name) for name in ('install.log', 'tc', 'deps'))
 for sub in ('tc/bin', 'tc/lib/node_modules/npm/bin', 'deps'):
     os.makedirs(os.path.join(base, sub))
@@ -836,9 +844,14 @@ open(os.path.join(tc, 'lib/node_modules/npm/bin/npm-cli.js'), 'w').close()
 with open(os.path.join(tc, 'bin/node'), 'w') as f:
     f.write(${JSON.stringify(FAKE_NODE)}.replace('BASE', base))
 os.chmod(os.path.join(tc, 'bin/node'), 0o755)
+def plant(path, files):
+    os.makedirs(path, exist_ok=True)
+    for name, data in files.items():
+        os.makedirs(os.path.dirname(os.path.join(path, name)), exist_ok=True)
+        with open(os.path.join(path, name), 'wb') as f:
+            f.write(data)
 for name in ${JSON.stringify(dirs)}:
-    os.makedirs(os.path.join(workspace, name), exist_ok=True)
-    open(os.path.join(workspace, name, 'package-lock.json'), 'w').close()
+    plant(os.path.join(workspace, name), ${pyFiles(PROJECT_FILES)})
 ${list === null ? '' : `with open(os.path.join(deps, 'moe-dependencies.json'), 'w') as f:\n    f.write(${JSON.stringify(list)})\n`}${manifest ? "open(os.path.join(base, 'deps.manifest'), 'w').close()\n" : ''}def logged(argv, *args, job, record=m.relay):
     job['logged'] = len(open(log).read().splitlines()) if os.path.exists(log) else 0
     return record(argv, *args, job=job)
@@ -901,7 +914,12 @@ test('KI2 an install that fails, cannot start or outlives install_timeout exits 
     }
   });
 
-test('KI3 a malformed dependency list, or a missing, non-regular or symlinked lockfile, exits 81 before any install or frame',
+// reown (K4) already refuses any link or FIFO in the workspace with 65; without it the install preflight's own walk still
+// follows no link and reads no FIFO. OUTSIDE plants a valid project beside the workspace, for a link to reach.
+const NO_REOWN = 'm.reown = lambda *args, **kwargs: None\n';
+const OUTSIDE = `plant(os.path.join(base, 'out'), ${pyFiles(PROJECT_FILES)})\n`;
+
+test('KI3 a malformed dependency list, a missing, non-regular or symlinked lockfile, no package.json, or a shrinkwrap or .npmrc exits 81 before any install or frame',
   { skip: NO_GUEST, timeout: 60_000 }, t => {
     const planted = ['.', ...lockDirs(17)];
     const lists = [null, 'nope', '[]', JSON.stringify({ version: 1, dirs: ['.'], extra: 1 }), '{"version":1.0,"dirs":["."]}',
@@ -913,14 +931,15 @@ test('KI3 a malformed dependency list, or a missing, non-regular or symlinked lo
       refusedInstall(run, list?.slice(0, 80));
       assert.deepEqual(run.installs, [], list?.slice(0, 80));
     }
-    // reown (K4) already refuses any link in the workspace with 65; without it the lockfile walk still follows none.
-    const NO_REOWN = 'm.reown = lambda *args, **kwargs: None\n';
-    const outside = "os.makedirs(os.path.join(base, 'out'))\nopen(os.path.join(base, 'out', 'package-lock.json'), 'w').close()\n";
-    for (const [label, dirs, locks, more] of [['a missing lockfile', ['.', 'pkg'], ['.'], ''],
-      ['a lockfile that is a directory', ['pkg'], [], "os.makedirs(os.path.join(workspace, 'pkg', 'package-lock.json'))\n"],
-      ['a symlinked lockfile', ['pkg'], [], `${NO_REOWN}${outside}os.makedirs(os.path.join(workspace, 'pkg'))
-os.symlink(os.path.join(base, 'out', 'package-lock.json'), os.path.join(workspace, 'pkg', 'package-lock.json'))\n`],
-      ['a directory reached through a symlink', ['pkg'], [], `${NO_REOWN}${outside}os.symlink(os.path.join(base, 'out'), os.path.join(workspace, 'pkg'))\n`]]) {
+    const PKG = `plant(os.path.join(workspace, 'pkg'), ${pyFiles({ 'package.json': PROJECT })})\n`;
+    for (const [label, dirs, locks, more] of [['a missing lockfile', ['.', 'pkg'], ['.'], PKG],
+      ['a lockfile that is a directory', ['pkg'], [], `os.makedirs(os.path.join(workspace, 'pkg', 'package-lock.json'))\n${PKG}`],
+      ['a symlinked lockfile', ['pkg'], [], `${NO_REOWN}${OUTSIDE}os.makedirs(os.path.join(workspace, 'pkg'))
+os.symlink(os.path.join(base, 'out', 'package-lock.json'), os.path.join(workspace, 'pkg', 'package-lock.json'))\n${PKG}`],
+      ['a directory reached through a symlink', ['pkg'], [], `${NO_REOWN}${OUTSIDE}os.symlink(os.path.join(base, 'out'), os.path.join(workspace, 'pkg'))\n`],
+      // npm ci would install from these over the approved lockfile, or walk up from a directory with no package.json.
+      ['no package.json', ['.', 'pkg'], ['.', 'pkg'], "os.unlink(os.path.join(workspace, 'pkg', 'package.json'))\n"],
+      ...['npm-shrinkwrap.json', '.npmrc'].map(file => [`a planted ${file}`, ['.', 'pkg'], ['.', 'pkg'], `open(os.path.join(workspace, 'pkg', '${file}'), 'w').close()\n`])]) {
       const run = installRun(t, dirList(dirs), locks, { more });
       refusedInstall(run, label);
       assert.deepEqual(run.installs, [], label);
@@ -935,6 +954,137 @@ test('KI4 with no dependency manifest the check reaches relay() as before, with 
     assert.deepEqual([run.status, run.stdout.length, run.stray, run.installs, run.relays.length], [42, 0, [], [], 1], String(run.stderr));
     const [{ argv, job: { env, logged } }] = run.relays;
     assert.deepEqual([argv, logged, env.PATH], [['/bin/sh', '-c', CHECK.command], 0, `${join(run.dir, 'tc', 'bin')}:/usr/local/bin:/usr/bin:/bin`]);
+  });
+
+// task-5ed445ca: npm ci builds the root's dependency edges from package.json, then checks the tree against the lockfile
+// by version only, so a same-version file: spec or alias in an unprotected package.json installs bytes the lockfile
+// does not name for that dependency. Install metadata must equal the approved lockfile's root entry. Each row plants a
+// valid '.' first and the refused pkg second: the all-directories preflight then starts neither install, and pkg's
+// planted bytes stay as they were.
+const STUB_TGZ = 'file:../stub/dep-1.0.0.tgz'; // the locked dep's own name and version, from candidate bytes
+const DEPENDENCY_MAPS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
+const omit = (value, ...keys) => Object.fromEntries(Object.entries(value).filter(([key]) => !keys.includes(key)));
+const pkgRun = (t, files, more = '') => installRun(t, dirList(['.', 'pkg']), ['.', 'pkg'],
+  { more: `${more}plant(os.path.join(workspace, 'pkg'), ${pyFiles(files)})\n` });
+function refusedPkg(t, label, files, more) {
+  const run = pkgRun(t, files, more);
+  refusedInstall(run, label);
+  assert.deepEqual(run.installs, [], label);
+  for (const [name, value] of Object.entries(files)) {
+    if (typeof value !== 'string') assert.deepEqual(readFileSync(join(run.dir, 'ws', 'pkg', name)), bytesOf(value), label);
+  }
+}
+
+test('KI5 install metadata that differs from the lockfile root, or overrides, bundled dependencies or workspaces, exit 81 before any install or frame',
+  { skip: NO_GUEST, timeout: 120_000 }, t => {
+    const peer = optional => ({ ...PROJECT, peerDependencies: { dep: '1.0.0' }, peerDependenciesMeta: { dep: optional } });
+    for (const [label, manifest, root = PROJECT] of [
+      ...DEPENDENCY_MAPS.flatMap(key => [STUB_TGZ, 'file:../stub'].map(spec => [`${spec} in ${key}`, { ...PROJECT, [key]: { ...PROJECT[key], dep: spec } }])),
+      ['a changed range', { ...PROJECT, dependencies: { dep: '^1.0.0' } }],
+      ['an npm alias', { ...PROJECT, dependencies: { dep: 'npm:dep@1.0.0' } }],
+      ['an added dependency', { ...PROJECT, dependencies: { ...PROJECT.dependencies, extra: '1.0.0' } }],
+      ['a removed dependency', omit(PROJECT, 'dependencies')],
+      ['a dependency the lockfile root lacks', PROJECT, omit(PROJECT, 'dependencies')],
+      ['a non-string spec on both sides', { ...PROJECT, dependencies: { dep: 1 } }, { ...PROJECT, dependencies: { dep: 1 } }],
+      ...[null, [], 'x'].map(value => [`a ${JSON.stringify(value)} map for an absent one`, { ...PROJECT, devDependencies: value }]),
+      ['another name', { ...PROJECT, name: 'other' }],
+      ['no name', omit(PROJECT, 'name')],
+      ['a null name for an absent one', { ...PROJECT, name: null }, omit(PROJECT, 'name')],
+      ['another version', { ...PROJECT, version: '1.0.1' }],
+      ['no version', omit(PROJECT, 'version')],
+      ['a numeric version on both sides', { ...PROJECT, version: 1 }, { ...PROJECT, version: 1 }],
+      ['peerDependenciesMeta the lockfile root lacks', peer({ optional: true }), omit(peer(), 'peerDependenciesMeta')],
+      ['optional 1 for true', peer({ optional: 1 }), peer({ optional: true })],
+      ['optional "true" for true', peer({ optional: 'true' }), peer({ optional: true })],
+      ['a peerDependenciesMeta entry that is no object, on both sides', peer(true), peer(true)],
+      ...[{ dep: STUB_TGZ }, { other: { dep: STUB_TGZ } }, { dep: '$dep' }, {}, null, 'x'].map(overrides => [`overrides ${JSON.stringify(overrides)}`, { ...PROJECT, overrides }]),
+      ...['bundleDependencies', 'bundledDependencies'].flatMap(key => [['dep'], true, []].map(value => [`${key} ${JSON.stringify(value)}`, { ...PROJECT, [key]: value }])),
+      ['workspaces', { ...PROJECT, workspaces: ['stub'] }],
+      ['an array', [PROJECT]],
+    ]) {
+      refusedPkg(t, label, { 'package.json': manifest, 'package-lock.json': lockOf(root) });
+    }
+  });
+
+const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+const EMPTY_MAPS = Object.freeze({ devDependencies: {}, optionalDependencies: {}, peerDependencies: {}, peerDependenciesMeta: {} });
+const META = Object.freeze({ name: 'fixture', version: '1.0.0', dependencies: { dep: '1.0.0', other: '^2.0.0' }, devDependencies: { tool: '~3.1.0' },
+  optionalDependencies: { opt: '4.0.0' }, peerDependencies: { a: '>=1', b: '2.x' }, peerDependenciesMeta: { a: { optional: true }, b: { optional: false, note: [1, { x: null }] } } });
+const deepReversed = value => value?.constructor === Object ? Object.fromEntries(Object.entries(value).reverse().map(([key, entry]) => [key, deepReversed(entry)])) : value;
+
+test('KI6 install metadata equal to the lockfile root still installs every directory, whatever else package.json changes',
+  { skip: INSTALLS_RUN, timeout: 60_000 }, t => {
+    if (busy(t)) return;
+    const npmShaped = { ...PROJECT, description: 'd', license: 'MIT', engines: { node: '>=20' }, devDependencies: { tool: '3.1.0' } };
+    for (const [label, files] of [
+      ['script, description and private edits', { 'package.json': { ...PROJECT, scripts: { test: 'node t.js', postinstall: 'exit 1' }, description: 'd', private: true } }],
+      ['a lockfileVersion 2 lockfile, with its legacy dependencies section', { 'package-lock.json': { ...lockOf(PROJECT, 2), dependencies: { dep: { version: '1.0.0' } } } }],
+      ['a lockfile root with the other fields npm writes', { 'package.json': npmShaped, 'package-lock.json': { name: 'fixture', version: '1.0.0', lockfileVersion: 3, requires: true,
+        packages: { '': { ...omit(npmShaped, 'description'), hasInstallScript: true }, 'node_modules/dep': { version: '1.0.0', license: 'MIT' } } } }],
+      ['empty maps for absent ones', { 'package.json': { ...PROJECT, ...EMPTY_MAPS } }],
+      ['absent maps for empty ones', { 'package-lock.json': lockOf({ ...PROJECT, ...EMPTY_MAPS }) }],
+      ['every map, in another key order at every depth', { 'package.json': META, 'package-lock.json': lockOf(deepReversed(META)) }],
+      ['no name or version on either side', { 'package.json': omit(PROJECT, 'name', 'version'), 'package-lock.json': lockOf(omit(PROJECT, 'name', 'version')) }],
+      ['one BOM before each file', { 'package.json': Buffer.concat([BOM, bytesOf(PROJECT)]), 'package-lock.json': Buffer.concat([BOM, bytesOf(lockOf(PROJECT))]) }],
+      ['each file at its byte bound', { 'package.json': `${pyBytes(PROJECT)}.ljust(1048576)`, 'package-lock.json': `${pyBytes(lockOf(PROJECT))}.ljust(16777216)` }],
+    ]) {
+      const run = pkgRun(t, files);
+      assert.deepEqual([run.status, run.stdout.length, run.stray, run.installs.length, run.relays.length], [42, 0, [], 2, 1], `${label} ${run.stderr}`);
+    }
+  });
+
+// Both files are read strictly, so npm and the preflight never read one file two ways: each row breaks one file of pkg,
+// whose other file still matches it. text is a file's valid JSON; at(middle) puts middle where 0 is in {...good, x: 0}.
+const RESIZE_PKG = (name, change) => `target = os.path.join(workspace, 'pkg', '${name}')
+real_chunks = m.chunks
+def resized(fd, size):
+    if os.path.samestat(os.fstat(fd), os.stat(target)):
+        ${change}
+    return real_chunks(fd, size)
+m.chunks = resized
+`;
+function strictRows(name, good, bound) {
+  const text = JSON.stringify(good);
+  const marked = JSON.stringify({ ...good, x: 0 });
+  const at = middle => Buffer.concat([Buffer.from(marked.slice(0, -2)), Buffer.from(middle), Buffer.from(marked.slice(-1))]);
+  const [key] = Object.keys(good);
+  const target = `os.path.join(workspace, 'pkg', '${name}')`;
+  return [
+    ['malformed JSON', Buffer.from(text.slice(0, -1))],
+    ['trailing data', Buffer.from(`${text} x`)],
+    ['a repeated key, with the same value', Buffer.from(`{${JSON.stringify(key)}:${JSON.stringify(good[key])},${text.slice(1)}`)],
+    ['a repeated nested key, with the same value', Buffer.from(text.replace('"dep":"1.0.0"', '"dep":"1.0.0","dep":"1.0.0"'))],
+    ...['NaN', 'Infinity', '-Infinity'].map(constant => [constant, at(constant)]),
+    ['invalid UTF-8', at([0x22, 0xff, 0x22])],
+    ['an encoded surrogate', at([0x22, 0xed, 0xa0, 0x80, 0x22])],
+    ['two BOMs', Buffer.concat([BOM, BOM, Buffer.from(text)])],
+    ['nesting past the recursion limit', `${pyBytes(Buffer.from(marked.slice(0, -2)))} + b'[' * 100000 + b']' * 100000 + b'}'`],
+    ['one byte over its bound', `${pyBytes(good)}.ljust(${bound + 1})`],
+  ].map(([label, bytes]) => [label, { [name]: bytes }]).concat([
+    ['a FIFO', `${NO_REOWN}os.unlink(${target})\nos.mkfifo(${target})\n`],
+    ['a directory', `os.unlink(${target})\nos.makedirs(${target})\n`],
+    ['a symlink to a matching copy', `${NO_REOWN}${OUTSIDE}os.unlink(${target})\nos.symlink(os.path.join(base, 'out', '${name}'), ${target})\n`],
+    ['a file that grows while it is read', RESIZE_PKG(name, "open(target, 'a').write(' ')")],
+    ['a file that shrinks while it is read', RESIZE_PKG(name, 'os.truncate(target, 1)')],
+  ].map(([label, more]) => [label, {}, more])).map(([label, ...row]) => [`${name}: ${label}`, ...row]);
+}
+
+test('KI7 a lockfile or package.json that is malformed, oversized, not regular or resized while read, or a lockfile with no v2/v3 root entry, exits 81 before any install or frame',
+  { skip: NO_GUEST, timeout: 120_000 }, t => {
+    const shapes = [
+      ...[1, 4, true, '3', null].map(version => [`lockfileVersion ${JSON.stringify(version)}`, lockOf(PROJECT, version)]),
+      ['lockfileVersion 3.0', Buffer.from(JSON.stringify(lockOf(PROJECT)).replace('"lockfileVersion":3', '"lockfileVersion":3.0'))],
+      ['no lockfileVersion', omit(lockOf(PROJECT), 'lockfileVersion')],
+      ['no packages', omit(lockOf(PROJECT), 'packages')],
+      ...[[PROJECT], null].map(packages => [`packages ${JSON.stringify(packages)?.slice(0, 20)}`, { lockfileVersion: 3, packages }]),
+      ['no root entry', { lockfileVersion: 3, packages: { 'node_modules/dep': { version: '1.0.0' } } }],
+      ...[[PROJECT], null, 'x'].map(root => [`a root entry ${JSON.stringify(root).slice(0, 20)}`, { lockfileVersion: 3, packages: { '': root } }]),
+      ['an array', [lockOf(PROJECT)]],
+    ].map(([label, lock]) => [`package-lock.json: ${label}`, { 'package-lock.json': lock }]);
+    for (const [label, files, more] of [...strictRows('package.json', PROJECT, 1048576), ...strictRows('package-lock.json', lockOf(PROJECT), 16777216), ...shapes,
+      ...[null, 'x', 1].map(manifest => [`package.json: ${JSON.stringify(manifest)}`, { 'package.json': bytesOf(manifest) }])]) {
+      refusedPkg(t, label, files, more);
+    }
   });
 
 // CQ-R11c: the host check session. C1-C2 cover guest-bridge.mjs's checkArgv and checkFrame, C3-C6 runCheckSession through
@@ -1664,7 +1814,7 @@ test('DC3 the tree is exactly the verified content-v2 files plus moe-dependencie
 });
 
 test('DC4 OFFLINE_INSTALL_ARGS is the frozen offline npm ci flag set, and the byte bounds are fixed', () => {
-  assert.deepEqual(OFFLINE_INSTALL_ARGS, ['--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0']);
+  assert.deepEqual(OFFLINE_INSTALL_ARGS, ['--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0', '--workspaces=false']);
   assert.ok(Object.isFrozen(OFFLINE_INSTALL_ARGS));
   assert.deepEqual([MAX_PACKAGE_BYTES, MAX_DEPENDENCY_BYTES], [67_108_864, MAX_IMPORT_BYTES - 65_536]);
 });
@@ -1742,3 +1892,47 @@ test('DC5 the host npm installs the fixture offline from the read-only tree, wit
   assert.notEqual(missing.code, 0, missing.output);
   assert.deepEqual([requests, listing(treeDir)], [[], before]);
 });
+
+// task-5ed445ca with the real npm: the supervisor's own run_install and GUARD run the host's node and npm (the pinned
+// toolchain in the gate) as the test user, netns False, over a tree buildDependencyCache built from an unchanged registry
+// lock in which a depends on b, nested under it. A same-version candidate tarball named by a file: spec for a, or by an
+// override for b, exits 81 with nothing installed, whether or not the tree holds the locked tarballs. Unguarded, npm
+// 11.19.1 installs the file: spec's tarball. Under the override it kept the locked bytes (it refuses an override of a
+// direct dependency and resolves the spec from a's folder), but overrides are refused outright all the same. The honest
+// manifest installs the cached registry bytes, and no planted file changes.
+test('KI8 with the real npm, a file: spec or override naming a same-version candidate tarball installs nothing, and the honest manifest installs the cached bytes',
+  { skip: INSTALLS_RUN || NO_NPM, timeout: 180_000 }, async t => {
+    if (busy(t)) return;
+    const [a, b] = ['moe-fixture-a', 'moe-fixture-b'];
+    const at = { [a]: ['node_modules', a], [b]: ['node_modules', a, 'node_modules', b] };
+    const manifestA = JSON.stringify({ name: a, version: '1.0.0', dependencies: { [b]: '1.0.0' } });
+    const cached = { [a]: tgz({ 'package/package.json': manifestA }), [b]: tarball(b) };
+    const stubOf = name => tgz({ 'package/package.json': JSON.stringify({ name, version: '1.0.0', scripts: { postinstall: `node -e "require('fs').writeFileSync('../../stub-ran.txt','x')"` } }),
+      'package/stub.txt': 'candidate bytes\n' });
+    const project = { name: 'moe-ki8', version: '1.0.0', dependencies: { [a]: '1.0.0' } };
+    const lockBytes = lock({ '': project, [at[a].join('/')]: entryOf(a, cached[a], { dependencies: { [b]: '1.0.0' } }), [at[b].join('/')]: entryOf(b, cached[b]) });
+    const { tree } = await buildDependencyCache({ lockfiles: [{ dir: '.', bytes: lockBytes }], cpu: process.arch, cacheDir: join(scratchDir(t), 'cache') },
+      { fetch: fixtureFetch(servedBy(cached)).fetch });
+    const full = Object.fromEntries(tree.entries.map(({ path, data }) => [path, Buffer.from(data)]));
+    const run = (manifest, cache) => {
+      const files = { 'package.json': bytesOf(manifest), 'package-lock.json': lockBytes, ...Object.fromEntries([a, b].map(name => [`stub/${name}-1.0.0.tgz`, stubOf(name)])) };
+      const result = installRun(t, null, [], { toolchain: JSON.stringify(dirname(dirname(process.execPath))), timeout: 25,
+        more: `plant(deps, ${pyFiles(cache)})\nplant(workspace, ${pyFiles(files)})\n` });
+      const ws = join(result.dir, 'ws');
+      const listed = name => existsSync(join(ws, ...at[name])) ? readdirSync(join(ws, ...at[name])).filter(file => file !== 'node_modules').sort() : null;
+      return Object.assign(result, { kept: Object.entries(files).every(([file, bytes]) => readFileSync(join(ws, file)).equals(bytes)),
+        installed: existsSync(join(ws, 'node_modules')) ? [a, b].map(listed) : null, ran: existsSync(join(ws, 'stub-ran.txt')),
+        manifests: [a, b].map(name => listed(name) && readFileSync(join(ws, ...at[name], 'package.json'), 'utf8')) });
+    };
+    const honest = run(project, full);
+    assert.deepEqual([honest.status, honest.stray, honest.relays.length, honest.kept, honest.installed, honest.manifests, honest.ran],
+      [42, [], 1, true, [['package.json'], ['package.json']], [manifestA, manifestOf(b)], false], String(honest.stderr));
+    for (const [label, manifest] of [['a file: spec', { ...project, dependencies: { [a]: `file:stub/${a}-1.0.0.tgz` } }],
+      ['an override', { ...project, overrides: { [b]: `file:../../stub/${b}-1.0.0.tgz` } }]]) {
+      for (const [cacheLabel, cache] of [['the tree', full], ['an empty tree', { 'moe-dependencies.json': full['moe-dependencies.json'] }]]) {
+        const refused = run(manifest, cache);
+        refusedInstall(refused, `${label} over ${cacheLabel}`);
+        assert.deepEqual([refused.kept, refused.installed, refused.ran], [true, null, false], `${label} over ${cacheLabel}`);
+      }
+    }
+  });

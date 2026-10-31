@@ -24,7 +24,9 @@
 # blob once the job is reaped; CQ-R11c classifies the run as inconclusive. CQ-R11e5: when this run's 'dependencies' mode
 # wrote its manifest, `npm ci` from that offline tree runs for each listed lockfile directory as the check job would, after
 # the re-own and the protected mounts. 81 (before hello, no frame, no job; CQ-R11c reports infra-failure) is a malformed
-# directory list, a missing or linked lockfile, or an install that failed, could not start or outlived INSTALL_TIMEOUT.
+# directory list, a missing, linked, non-regular, malformed or oversized lockfile or package.json, a package.json whose
+# install metadata differs from its lockfile's root entry or that sets overrides, bundled dependencies or workspaces,
+# an npm-shrinkwrap.json or .npmrc beside them, or an install that failed, could not start or outlived INSTALL_TIMEOUT.
 # Mode 'verify' (CQ-R11f): reads no stdin and writes one {kind: 'verified', changed} frame, the count of manifest paths no
 # longer holding their materialized bytes and exec bit; 65 a missing or malformed manifest or workspace root, 74 a gone
 # host, each with no frame.
@@ -951,7 +953,16 @@ INSTALL_TIMEOUT = 900  # seconds per directory
 MAX_DEPENDENCY_DIRS = 16  # dependency-cache.mjs MAX_LOCKFILES
 MAX_DEPENDENCY_LIST_BYTES = 65536
 # dependency-cache.mjs OFFLINE_INSTALL_ARGS, which KI1 pins: --offline never fetches and --ignore-scripts runs no script.
-OFFLINE_INSTALL_ARGS = ('--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0')
+OFFLINE_INSTALL_ARGS = ('--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0',
+                        '--workspaces=false')
+MAX_PACKAGE_JSON_BYTES = 1048576
+MAX_LOCKFILE_BYTES = 16777216  # dependency-cache.mjs MAX_LOCKFILE_BYTES
+# Besides name and version, what npm ci builds the root project's dependency edges from.
+DEPENDENCY_MAPS = ('dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies')
+# Resolution controls npm ci reads from package.json that no lockfile root comparison approves: overrides replace locked
+# specs, npm ci still installs a root-bundled dependency whose lockfile entry host admission skips as inBundle, and
+# workspaces add link edges host admission refuses.
+UNAPPROVED_CONTROLS = ('overrides', 'bundleDependencies', 'bundledDependencies', 'workspaces')
 
 
 def protected_path(path):
@@ -1166,16 +1177,88 @@ def run_install(argv, env, spawn, timeout):
     return exited and child.returncode == 0
 
 
-# Every listed lockfile is checked before any install runs: a regular file by blob_oid's walk, so no link is followed.
-# Each cwd is a path GUARD's root chdir follows, which is safe: reown refused every link in the workspace, and since then
-# only the pinned npm, running no scripts, has run as the check identity.
+def unique_keys(pairs):
+    # json.loads' object_pairs_hook. npm's JSON.parse keeps a repeated key's last value: refuse rather than guess.
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise ValueError('a repeated key')
+    return value
+
+
+def no_constant(name):
+    raise ValueError(name + ' is not JSON')  # json.loads' parse_constant, for NaN, Infinity and -Infinity
+
+
+def read_json(root, path, limit):
+    # The JSON value of the regular file of at most limit bytes at path under the root fd, opened by blob_oid's walk, so
+    # no symlink is followed. One leading BOM is dropped, as npm drops it. Anything else that is not strict UTF-8 JSON
+    # raises ValueError, as do a repeated key, NaN or Infinity, and a file that is not regular, too big or grows while
+    # it is read; one that shrinks raises OSError, and nesting past the recursion limit RecursionError.
+    fds = []
+    try:
+        *parents, name = path.split('/')
+        for part in parents:
+            fds.append(os.open(part, WALK, dir_fd=fds[-1] if fds else root))
+        fds.append(os.open(name, READ, dir_fd=fds[-1] if fds else root))
+        info = os.fstat(fds[-1])
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise ValueError('not a bounded regular file')
+        data = b''.join(chunks(fds[-1], info.st_size))
+        if os.read(fds[-1], 1):
+            raise ValueError('the file grew while it was read')
+    finally:
+        for fd in fds:
+            os.close(fd)
+    return json.loads(data.decode('utf-8-sig'), object_pairs_hook=unique_keys, parse_constant=no_constant)
+
+
+def install_metadata(value):
+    # What npm ci builds a root project's edges from, as one comparable string, or None if any of it is malformed: name
+    # and version, each absent or a string, the dependency maps of string specs and peerDependenciesMeta of objects. npm
+    # leaves every empty map but devDependencies out of a lockfile root, so an absent map reads as {}; null, an array or
+    # a scalar never does, and json.dumps keeps true apart from 1.
+    if type(value) is not dict:
+        return None
+    maps = {key: value.get(key, {}) for key in (*DEPENDENCY_MAPS, 'peerDependenciesMeta')}
+    if not (all(type(value.get(key, '')) is str for key in ('name', 'version'))
+            and all(type(entries) is dict for entries in maps.values())
+            and all(type(spec) is str for key in DEPENDENCY_MAPS for spec in maps[key].values())
+            and all(type(meta) is dict for meta in maps['peerDependenciesMeta'].values())):
+        return None
+    return json.dumps([value.get('name'), value.get('version'), maps], sort_keys=True)
+
+
+def approved_project(root, at):
+    # The lockfile's root entry is the authority: packages[''] of a lockfileVersion 2 or 3 lockfile (an exact int, never
+    # true or 2.0), whose install metadata package.json must equal, with no unapproved control besides.
+    lock = read_json(root, at + 'package-lock.json', MAX_LOCKFILE_BYTES)
+    package = read_json(root, at + 'package.json', MAX_PACKAGE_JSON_BYTES)
+    if not (type(lock) is dict and type(lock.get('lockfileVersion')) is int and lock['lockfileVersion'] in (2, 3)
+            and type(lock.get('packages')) is dict):
+        return False
+    locked = install_metadata(lock['packages'].get(''))
+    return (locked is not None and install_metadata(package) == locked
+            and not any(key in package for key in UNAPPROVED_CONTROLS))
+
+
+# Every listed directory is checked before any install runs: approved_project reads its lockfile and package.json by
+# blob_oid's walk, so no link is followed, and it holds no npm-shrinkwrap.json or .npmrc. npm ci would install candidate
+# bytes from either: it prefers a shrinkwrap to the approved lockfile, and an .npmrc's dry-run keeps a committed
+# node_modules. With no package.json, or inside a parent's workspaces (OFFLINE_INSTALL_ARGS sets --workspaces=false), it
+# installs a parent's lockfile. It also builds the root's dependency edges from package.json, then checks the tree it
+# resolves against the lockfile by version only: a same-version file: spec, alias or override there would install bytes
+# the lockfile does not name for that dependency, so package.json must ask for exactly what the lockfile root records.
+# Each cwd is a path GUARD's root chdir follows, which is safe: reown refused every link in the workspace (so lexists
+# follows none either), and since then only the pinned npm, running no scripts, has run as the check identity.
 def install_dependencies(workspace, tree, toolchain, env, spawn, timeout):
     try:
         dirs = dependency_dirs(tree)
         root = os.open(workspace, WALK)
         try:
-            if not all(blob_oid(root, 'package-lock.json' if name == '.' else name + '/package-lock.json') for name in dirs):
-                return False
+            for at in ('' if name == '.' else name + '/' for name in dirs):
+                if not approved_project(root, at) or any(
+                        os.path.lexists(os.path.join(workspace, at + file)) for file in ('npm-shrinkwrap.json', '.npmrc')):
+                    return False
         finally:
             os.close(root)
         argv = [toolchain + '/bin/node', toolchain + '/lib/node_modules/npm/bin/npm-cli.js', 'ci', *OFFLINE_INSTALL_ARGS,
